@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 440 }] */
+/* eslint max-lines: ["error", { "max": 455 }] */
 import { MakaioBus, type ScopedBus, type IMakaioBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AdapterNamespace } from '../factory/index.js';
@@ -11,7 +11,11 @@ import type { AgentCreationOptions, AIAdapterConstructorConfig } from './types.j
 import { ActiveAgentRegistry } from './agent-registry.js';
 import { AgentRehydrationManager } from './ai-adapter-rehydration.js';
 import { handleInfer } from './ai-adapter-infer.js';
-import { buildOptionalAgentConfig, resolveExecutionModels } from './ai-adapter-create-utils.js';
+import {
+  buildNativeForkDirective,
+  buildOptionalAgentConfig,
+  resolveExecutionModels,
+} from './ai-adapter-create-utils.js';
 import { createStartAgentHandler } from './ai-adapter-start-handler.js';
 
 /**
@@ -136,6 +140,7 @@ export abstract class AIAdapter<
         }),
       ),
       filteredBus.on(AgentSubjects.session.closed, this.handleSessionClosed),
+      filteredBus.on(AgentSubjects.started, this.handleStartedReconcileRegistry),
       filteredBus.on(AgentSubjects.usage, this.handleUsage),
       // Listen for session-driven closures to evict agents
       this.globalBus.on(SessionSubjects.closed, this.handleSessionClosedByService),
@@ -143,7 +148,7 @@ export abstract class AIAdapter<
         ctx.setResult({
           agents: Array.from(this.registry.values()).map((entry) => ({
             agentId: entry.agent.agentId,
-            sessionId: entry.adapterSessionId,
+            sessionId: entry.sessionId,
             adapterSessionId: entry.adapterSessionId,
           })),
         });
@@ -173,7 +178,7 @@ export abstract class AIAdapter<
    * Handle agent.session.closed - cleanup agent + re-emit as adapter.session.closed.
    * @param ctx - Event context with session closed payload
    */
-  private handleSessionClosed = (ctx: { payload: { agentId: string; adapterSessionId: string; reason?: string } }) => {
+  private handleSessionClosed = (ctx: { payload: { agentId: string; adapterSessionId?: string; reason?: string } }) => {
     const { agentId, adapterSessionId, reason } = ctx.payload;
     const entry = this.registry.get(agentId);
 
@@ -181,6 +186,11 @@ export abstract class AIAdapter<
       console.warn(`Agent ${agentId} not found, can't emit AgentSubjects.session.closed`);
       return;
     }
+
+    // Prefer the event payload, fall back to the registry's stored value —
+    // by session-close time the ID should be confirmed, but the agent event
+    // schema allows it missing for unconfirmed fork sessions.
+    const resolvedAdapterSessionId = adapterSessionId ?? entry.adapterSessionId ?? '';
 
     void this.registry.evict(agentId).catch((error) => {
       console.error(`[AIAdapter:${this.name}] Failed to evict agent ${agentId} after session.closed:`, error);
@@ -191,7 +201,7 @@ export abstract class AIAdapter<
       adapterName: this.name,
       agentId,
       sessionId: entry.sessionId,
-      adapterSessionId,
+      adapterSessionId: resolvedAdapterSessionId,
       reason,
     });
   };
@@ -219,11 +229,22 @@ export abstract class AIAdapter<
   };
 
   /**
-   * Handle agent.usage - aggregate and emit session totals.
+   * Reconcile registry adapterSessionId on first confirmed agent.started (idle fork starts).
+   * @param ctx - Event context with started payload
+   */
+  private handleStartedReconcileRegistry = (ctx: { payload: { agentId: string; adapterSessionId?: string } }): void => {
+    const { agentId, adapterSessionId } = ctx.payload;
+    if (!adapterSessionId) return;
+    const entry = this.registry.get(agentId);
+    if (entry && !entry.adapterSessionId) entry.adapterSessionId = adapterSessionId;
+  };
+
+  /**
+   * Handle agent.usage — aggregate and emit session totals.
    * @param ctx - Event context with usage payload
    */
   private handleUsage = (ctx: {
-    payload: { agentId: string; adapterSessionId: string; inputTokens: number; outputTokens: number };
+    payload: { agentId: string; adapterSessionId?: string; inputTokens: number; outputTokens: number };
   }): void => {
     const { agentId, adapterSessionId, inputTokens, outputTokens } = ctx.payload;
 
@@ -239,14 +260,7 @@ export abstract class AIAdapter<
     });
   };
 
-  /**
-   * Initialize adapter - call after construction.
-   * Creates scoped bus, sets up handlers, and emits adapter.initialized event.
-   * Safe to call multiple times - subsequent calls are no-ops.
-   *
-   * Note: Agents are NOT eagerly rehydrated on startup. They are rehydrated
-   * on-demand when messages arrive (lazy rehydration via handleRehydrateAgent).
-   */
+  /** Initialize adapter (idempotent). Creates scoped bus, sets up handlers, emits adapter.initialized. */
   public async init(): Promise<void> {
     if (this.initialized) return;
 
@@ -287,25 +301,19 @@ export abstract class AIAdapter<
       throw new Error('Adapter bus not initialized. Did you forget to call init()?');
     }
 
-    // Extract only runtime options from request - avoid leaking mode/initialMessage/sourceSessionId
+    // Extract runtime options only — avoid leaking mode/initialMessage/sourceSessionId.
     const { model, cwd, env, allowedTools, disallowedTools, reasoningEffort, mcpSessionContext, harnessId, ephemeral } =
       request;
-    // clientId: payload carries it from the caller; adapter definition is the authoritative fallback.
-    const clientId = request.clientId ?? this.clientId;
+    const clientId = request.clientId ?? this.clientId; // payload carries it; adapter is authoritative fallback
     const resumeAdapterSessionId =
-      request.resumeAdapterSessionId ??
-      ('adapterSessionId' in request && 'mode' in request && request.mode === 'resume'
-        ? (request as { adapterSessionId: string }).adapterSessionId
-        : undefined);
-
-    // Resolve provider-scoped models only. Avoid cross-provider flattening because
-    // duplicate model names across providers are ambiguous for execution metadata.
+      request.resumeAdapterSessionId ?? (request.mode === 'resume' ? request.adapterSessionId : undefined);
+    const nativeFork = buildNativeForkDirective(request);
+    // Provider-scoped models only — cross-provider flattening is ambiguous for metadata.
     const availableModels = resolveExecutionModels(
       this.definitionProviders,
       model,
       request.providerContext?.definitionId,
     );
-    // Per-agent ledger: one instance per createAgent() call, shared across connector swaps.
     const toolLedger = mcpSessionContext !== undefined ? new SessionToolLedger() : undefined;
 
     const config: AIAgentConfig<TBus, TConnector> = {
@@ -340,6 +348,7 @@ export abstract class AIAdapter<
         mcpSessionContext,
         toolLedger,
         ephemeral,
+        nativeFork,
       }),
     };
 

@@ -76,6 +76,7 @@ export function registerImportSessionHandler(
       isJsonl,
       adapterName: registeredAdapterName,
       adapterId,
+      machineId: registration.machineId,
       sourceFilePath: session.logFilePath,
       persistedLogFilePath: session.logFilePath,
       // On-demand historical import defaults to backfill; observed hook

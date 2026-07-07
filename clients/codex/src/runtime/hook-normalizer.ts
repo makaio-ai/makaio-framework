@@ -153,10 +153,14 @@ function extractPrompt(payload: Record<string, unknown>): string | undefined {
  * Returns `null` for unknown or not-yet-modeled event names so the caller
  * skips global emission and keeps the event raw-only in `client:codex.*`.
  * @param raw - Raw hook payload delivered on `client:codex.hook.received`
+ * @param machineId - Stable runtime identity of the observing machine,
+ *   caller-supplied by the owning client runtime. Stamped onto
+ *   `client.session.started` so downstream storage receives the owning
+ *   machine's identity without deriving it from the writer process.
  * @returns Normalized event with subject and typed payload, or `null` when
  *   the event name is unknown
  */
-export function normalizeCodexHook(raw: RawClientHookPayload): CodexNormalizedEvent | null {
+export function normalizeCodexHook(raw: RawClientHookPayload, machineId?: string): CodexNormalizedEvent | null {
   const subject = CODEX_EVENT_MAP.get(raw.eventName);
   if (subject === undefined) {
     return null;
@@ -172,7 +176,7 @@ export function normalizeCodexHook(raw: RawClientHookPayload): CodexNormalizedEv
 
   switch (subject) {
     case ClientSubjects.session.started:
-      return { subject, payload: { ...base } };
+      return { subject, payload: { ...base, ...(machineId !== undefined && { machineId }) } };
 
     case ClientSubjects.session.userPrompt.submitted:
       return { subject, payload: { ...base, prompt: extractPrompt(raw.payload) } };

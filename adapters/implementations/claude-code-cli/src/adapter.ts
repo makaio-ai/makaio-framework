@@ -55,6 +55,8 @@ export class ClaudeCodeCliAdapter extends AIAdapter<ClaudeCodeCliConnectorBus, C
         'systemPrompt:override',
         'systemPrompt:append',
         'structuredOutput',
+        'session:resume',
+        'session:fork',
       ],
       ...config,
       namespace: ClaudeCodeCliConnectorNamespace,

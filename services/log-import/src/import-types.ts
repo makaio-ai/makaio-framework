@@ -28,6 +28,13 @@ export interface ImportSegmentTreeContext {
   /** Log file path on disk; only the root segment owns it. */
   logFilePath?: string | null;
   /**
+   * Machine identifier of the machine that owns the imported sessions.
+   * Always caller-supplied; never derived inside import handlers.
+   * Pass `undefined` to omit (leaves stored value untouched).
+   * Pass `null` to explicitly store NULL.
+   */
+  machineId?: string | null;
+  /**
    * Marker stamped on the `session.turn.*` events emitted for ingested turns.
    * Defaults to `'backfill'` (historical/watcher imports); hook-triggered
    * live ingestion passes `'live'`.
@@ -56,6 +63,13 @@ export interface PersistImportResultContext {
   adapterName: string;
   /** Log file path on disk; only the root segment owns it. */
   logFilePath?: string | null;
+  /**
+   * Machine identifier of the machine that owns the imported sessions.
+   * Always caller-supplied; never derived inside import handlers.
+   * Pass `undefined` to omit (leaves stored value untouched).
+   * Pass `null` to explicitly store NULL.
+   */
+  machineId?: string | null;
   /**
    * Marker stamped on the `session.turn.*` events emitted for ingested turns.
    * Defaults to `'backfill'` (historical/watcher imports); hook-triggered

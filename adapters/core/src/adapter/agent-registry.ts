@@ -30,8 +30,11 @@ export interface ActiveAgentEntry<
   agent: TAgent;
   /** Makaio session ID. */
   sessionId: string;
-  /** Provider-specific session ID. */
-  adapterSessionId: string;
+  /**
+   * Provider-specific session ID.
+   * `undefined` for idle fork starts until the provider confirms via first dispatch.
+   */
+  adapterSessionId: string | undefined;
   /** Cumulative usage totals for this agent. */
   usage: AgentUsageTotals;
 }
@@ -62,6 +65,16 @@ export class ActiveAgentRegistry<
   TAgent extends AIAgent<TBus, TConnector> = AIAgent<TBus, TConnector>,
 > {
   private readonly entries = new Map<string, ActiveAgentEntry<TBus, TConnector, TAgent>>();
+  /**
+   * Provider-native session IDs claimed by in-flight startAgent calls.
+   *
+   * Prevents TOCTOU races where two concurrent resume-attach requests both
+   * pass the live-writer guard before either agent finishes starting. A
+   * claim is atomically checked and inserted in `claimAdapterSession()`,
+   * auto-cleared by `set()` (which replaces the claim with a real entry),
+   * and explicitly released via `releaseAdapterSessionClaim()` on failure.
+   */
+  private readonly pendingAdapterSessionClaims = new Set<string>();
   private readonly globalBus: IMakaioBus;
   private readonly adapterName: string;
 
@@ -71,11 +84,72 @@ export class ActiveAgentRegistry<
   }
 
   /**
+   * Atomically claim a provider-native session ID for an in-flight start.
+   *
+   * Returns `true` when the claim succeeds (no registered entry or pending
+   * claim already holds the same `adapterSessionId`). Returns `false` when
+   * the session is already occupied. The claim is automatically cleared
+   * when `set()` registers the real entry, or explicitly via
+   * `releaseAdapterSessionClaim()` on failure.
+   * @param adapterSessionId - Provider-native session ID to claim
+   * @returns `true` if the claim was granted
+   */
+  public claimAdapterSession(adapterSessionId: string): boolean {
+    if (this.pendingAdapterSessionClaims.has(adapterSessionId)) {
+      return false;
+    }
+    for (const entry of this.entries.values()) {
+      if (entry.adapterSessionId === adapterSessionId) {
+        return false;
+      }
+    }
+    this.pendingAdapterSessionClaims.add(adapterSessionId);
+    return true;
+  }
+
+  /**
+   * Release a previously granted adapter session claim without registering
+   * an entry. Used when `startOrInitializeAgent` fails after a successful
+   * claim.
+   * @param adapterSessionId - Provider-native session ID to release
+   */
+  public releaseAdapterSessionClaim(adapterSessionId: string): void {
+    this.pendingAdapterSessionClaims.delete(adapterSessionId);
+  }
+
+  /**
+   * Check whether a provider-native session ID is held by a registered
+   * entry or a pending claim.
+   *
+   * Used by the `listAgents` response consumer (`adapterSessionHasLiveWriter`)
+   * to see in-flight starts as occupied sessions.
+   * @param adapterSessionId - Provider-native session ID to probe
+   * @returns `true` when the session is occupied or claimed
+   */
+  public hasAdapterSession(adapterSessionId: string): boolean {
+    if (this.pendingAdapterSessionClaims.has(adapterSessionId)) {
+      return true;
+    }
+    for (const entry of this.entries.values()) {
+      if (entry.adapterSessionId === adapterSessionId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Register a new agent entry.
+   *
+   * Automatically clears any pending adapter session claim for the entry's
+   * `adapterSessionId`, replacing the claim with the real registry entry.
    * @param agentId - Agent identifier
    * @param entry - Registry entry to store
    */
   public set(agentId: string, entry: ActiveAgentEntry<TBus, TConnector, TAgent>): void {
+    if (entry.adapterSessionId !== undefined) {
+      this.pendingAdapterSessionClaims.delete(entry.adapterSessionId);
+    }
     this.entries.set(agentId, entry);
   }
 
@@ -97,10 +171,12 @@ export class ActiveAgentRegistry<
   }
 
   /**
-   * Clear all entries (used after closeAsync has already closed all agents).
+   * Clear all entries and pending claims (used after closeAsync has already
+   * closed all agents).
    */
   public clear(): void {
     this.entries.clear();
+    this.pendingAdapterSessionClaims.clear();
   }
 
   /**

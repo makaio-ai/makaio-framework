@@ -91,6 +91,25 @@ describe('CodexClientSessionService', () => {
       });
     });
 
+    it('stamps caller-supplied machineId onto client.session.started payloads', async () => {
+      // Tear down the default service and create one with a machineId.
+      await service.destroy();
+      service = new CodexClientSessionService(bus, undefined, 'machine-codex-99');
+      await service.init();
+
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
+
+      await emitRawHook(bus, 'SessionStart', { session_id: 'sess-machine' });
+      cleanup();
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({
+        clientId: 'codex',
+        adapterSessionId: 'sess-machine',
+        machineId: 'machine-codex-99',
+      });
+    });
+
     it('emits client.session.userPrompt.submitted for UserPromptSubmit', async () => {
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.userPrompt.submitted);
 

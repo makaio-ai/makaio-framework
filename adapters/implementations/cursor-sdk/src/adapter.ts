@@ -55,7 +55,7 @@ export class CursorSdkAdapter extends AIAdapter<CursorSdkBus, CursorSdkConnector
     super({
       ...config,
       name: CursorSdkAdapterName,
-      capabilities: ['tools', 'streaming', 'modelSwitchInSession'],
+      capabilities: ['tools', 'streaming', 'modelSwitchInSession', 'session:resume'],
       namespace: CursorSdkNamespace,
       agentFactory: (agentConfig) => new CursorSdkAgent(agentConfig),
       configFactory: CursorSdkConfig.getConfig,

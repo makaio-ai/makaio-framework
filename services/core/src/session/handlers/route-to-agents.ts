@@ -5,8 +5,12 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import { PreferencesSubjects } from '../../preferences/storage-namespace.js';
+import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import {
+  applyCwdChangeTemplate,
+  DEFAULT_CWD_CHANGE_NOTIFICATION,
+  readCwdChangeNotificationPref,
+} from './cwd-change-notification.js';
 import type {
   IMakaioSession,
   Message,
@@ -15,36 +19,12 @@ import type {
   ResponseSchemaDescriptor,
   SessionContext,
 } from '@makaio/contracts';
-import { HookAbortError } from '@makaio/hooks';
+import { getHookAbortError } from './hook-abort-error.js';
 import type { Turn } from '../entities/turn.js';
 import { assembleForkContext } from '../context/assemble-fork-context.js';
-
-/**
- * User-configurable CWD change notification preference.
- *
- * Stored under category `'chat-display'` with context key `'cwdChangeNotification'`.
- */
-export interface CwdChangeNotificationPreference {
-  /** Whether to inject a CWD change message into agent context at all. */
-  enabled: boolean;
-  /**
-   * Message template. Supports `{oldCwd}` and `{newCwd}` placeholders
-   * which are replaced with the actual directory paths at routing time.
-   */
-  template: string;
-}
-
-/** Preference category shared with other chat display settings. */
-const CWD_CHANGE_PREF_CATEGORY = 'chat-display';
-
-/** Preference context key within the category. */
-const CWD_CHANGE_PREF_KEY = 'cwdChangeNotification';
-
-/** Default notification config when no preference is stored. */
-export const DEFAULT_CWD_CHANGE_NOTIFICATION: CwdChangeNotificationPreference = {
-  enabled: true,
-  template: 'User changed working directory from {oldCwd} to {newCwd}',
-};
+import type { AssembleForkContextCapabilities } from '../context/assemble-fork-context.js';
+import { convertSessionMessage } from '../context/convert-session-message.js';
+import { getFullConversation } from '../context/get-full-conversation.js';
 
 /**
  * Interface for turn context enrichment.
@@ -92,51 +72,45 @@ interface RouteToSingleAgentInput {
 }
 
 /**
- * Interpolate `{oldCwd}` and `{newCwd}` placeholders in a CWD change message template.
- * @param template - Template string with optional placeholders
- * @param oldCwd - Previous working directory path
- * @param newCwd - New working directory path
- * @returns Interpolated message string
+ * Resolve native fork capabilities for all target agents.
+ * @param bus - Bus instance for adapter capability queries
+ * @param session - Session being routed
+ * @param agents - Target agents that would receive the same fork context
+ * @returns Capability signals for fork context assembly
  */
-function applyCwdChangeTemplate(template: string, oldCwd: string, newCwd: string): string {
-  return template.replace(/\{oldCwd\}/g, oldCwd).replace(/\{newCwd\}/g, newCwd);
-}
-
-/**
- * Runtime guard for CWD notification preferences loaded from untyped storage.
- * @param value - Unknown stored preference value
- * @returns True when the value matches CwdChangeNotificationPreference
- */
-function isCwdChangeNotificationPreference(value: unknown): value is CwdChangeNotificationPreference {
-  if (typeof value !== 'object' || value === null) {
-    return false;
+async function resolveForkContextCapabilities(
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  agents: MakaioSessionAgent[],
+): Promise<AssembleForkContextCapabilities | undefined> {
+  if (session.parentSessionId === undefined) {
+    return undefined;
   }
-  const record = value as Record<string, unknown>;
-  return typeof record.enabled === 'boolean' && typeof record.template === 'string';
-}
 
-/**
- * Read the CWD change notification preference via bus, falling back to the default.
- * @param bus - Bus instance for preferences lookup
- * @returns Resolved preference (never throws; falls back to default on error)
- */
-async function readCwdChangeNotificationPref(bus: IMakaioBus): Promise<CwdChangeNotificationPreference> {
-  try {
-    const result = await bus.request(PreferencesSubjects.get, {
-      key: { scope: 'global', surface: 'ui', context: CWD_CHANGE_PREF_KEY },
-      category: CWD_CHANGE_PREF_CATEGORY,
-    });
-    if (result.value !== null && result.value !== undefined) {
-      if (isCwdChangeNotificationPreference(result.value)) {
-        return result.value;
+  const adapterIds = [...new Set(agents.map((agent) => agent.adapterId))];
+  if (adapterIds.length === 0) {
+    return { adapterSupportsNativeFork: false, midHistoryForkSupported: false };
+  }
+
+  const results = await Promise.all(
+    adapterIds.map(async (adapterId) => {
+      try {
+        const result = await bus.requestOptional(AdapterSubjects.getCapabilities, { adapterId });
+        const capabilities = result.handled ? new Set(result.data.capabilities) : new Set<string>();
+        return {
+          supportsNativeFork: capabilities.has('session:fork'),
+          supportsMidHistoryFork: capabilities.has('session:forkAtMessage'),
+        };
+      } catch {
+        return { supportsNativeFork: false, supportsMidHistoryFork: false };
       }
-      // Stored value is malformed for this key; use safe default.
-      return DEFAULT_CWD_CHANGE_NOTIFICATION;
-    }
-  } catch {
-    // PreferencesService unavailable — fall back to default
-  }
-  return DEFAULT_CWD_CHANGE_NOTIFICATION;
+    }),
+  );
+
+  return {
+    adapterSupportsNativeFork: results.every((r) => r.supportsNativeFork),
+    midHistoryForkSupported: results.every((r) => r.supportsMidHistoryFork),
+  };
 }
 
 /**
@@ -180,15 +154,205 @@ function buildAgentContext(input: PerAgentContextInput): SessionContext | undefi
 }
 
 /**
+ * Shared payload for a single agent send + acknowledged emission.
+ */
+interface SendAndAcknowledgePayload {
+  agentId: string;
+  adapterId: string;
+  message: MessageInput;
+  deliveryMode: 'enqueue' | 'immediate' | undefined;
+  messageId: string;
+  turnId: string;
+  sessionId: string;
+  sessionContext: SessionContext | undefined;
+  responseSchema?: ResponseSchemaDescriptor;
+  turn: Turn;
+}
+
+/**
+ * Send a message to one agent and emit `user_message.acknowledged` on success.
+ *
+ * This is the single source of truth for the send + acknowledge sequence shared
+ * by the native-attempt path and the standard dispatch path.
+ * @param bus - Bus instance
+ * @param payload - All fields required for the bus call and the acknowledgement
+ */
+async function sendAndAcknowledge(bus: IMakaioBus, payload: SendAndAcknowledgePayload): Promise<void> {
+  const {
+    agentId,
+    adapterId,
+    message,
+    deliveryMode,
+    messageId,
+    turnId,
+    sessionId,
+    sessionContext,
+    responseSchema,
+    turn,
+  } = payload;
+  await bus.request(AgentSubjects.sendMessage, {
+    agentId,
+    adapterId,
+    message,
+    deliveryMode,
+    messageId,
+    turnId,
+    sessionId,
+    sessionContext,
+    ...(responseSchema !== undefined && { responseSchema }),
+  });
+  await bus.emit(SessionSubjects.user_message.acknowledged, {
+    sessionId: turn.sessionId,
+    turnId: turn.turnId,
+    turnNumber: turn.turnNumber,
+    messageId,
+    agentId,
+  });
+}
+
+/**
+ * Build degraded native retry context from persisted history.
+ *
+ * The current user message is routed separately as `message`; it may already
+ * be persisted before routing starts, so it must not also appear in injected
+ * retry history.
+ * @param bus - Bus instance
+ * @param session - Session to build context for
+ * @param currentMessageId - Current user message ID to exclude from history
+ * @returns SessionContext with filtered messageHistory and fresh-mode signal
+ */
+async function buildNativeFallbackContext(
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  currentMessageId: string,
+): Promise<SessionContext> {
+  const contextResult = await getFullConversation(bus, session.sessionId);
+  const messageHistory = contextResult.messages
+    .filter((storedMessage) => storedMessage.messageId !== currentMessageId)
+    .map(convertSessionMessage);
+
+  return {
+    messageHistory,
+    isFirstTurn: true,
+  };
+}
+
+/**
+ * Attempt a native send and return the context to use for the actual dispatch.
+ *
+ * When `nativeContext.nativeLocality.kind === 'native'` this function makes a
+ * speculative bus call. On success it emits `user_message.acknowledged` and
+ * returns `null` to signal that routing is already complete. On send failure
+ * it builds a fresh-with-history context and returns it so the caller can
+ * retry once on the standard path.
+ *
+ * Only the `AgentSubjects.sendMessage` call is covered by the degrade
+ * catch. An acknowledgement listener failure after a successful send is NOT
+ * treated as a native delivery failure — it propagates to the caller so that
+ * a successfully delivered message is never re-sent on the fallback path.
+ * @param bus - Bus instance
+ * @param session - Session for history building on degrade
+ * @param payload - Shared request fields for the bus call
+ * @param nativeContext - Agent context carrying a native locality verdict
+ * @returns `null` when native send succeeded (caller must return); degraded
+ *   context when it failed (caller must retry on the standard path)
+ */
+async function attemptNativeSendOrDegrade(
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  payload: {
+    agentId: string;
+    adapterId: string;
+    message: MessageInput;
+    deliveryMode: 'enqueue' | 'immediate' | undefined;
+    messageId: string;
+    turnId: string;
+    sessionId: string;
+    responseSchema?: ResponseSchemaDescriptor;
+    turn: Turn;
+  },
+  nativeContext: SessionContext,
+): Promise<SessionContext | null> {
+  const { agentId, adapterId, message, deliveryMode, messageId, turnId, sessionId, responseSchema, turn } = payload;
+
+  // The degrade catch must only cover the actual send — an acknowledgement
+  // failure after a successful delivery must NOT trigger a fallback resend
+  // (that would duplicate the turn in the provider session). Ack errors
+  // propagate to the caller's outer catch, matching the standard-dispatch
+  // path's semantics where ack failures surface as agent errors.
+  try {
+    await bus.request(AgentSubjects.sendMessage, {
+      agentId,
+      adapterId,
+      message,
+      deliveryMode,
+      messageId,
+      turnId,
+      sessionId,
+      sessionContext: nativeContext,
+      ...(responseSchema !== undefined && { responseSchema }),
+    });
+  } catch (error) {
+    if (getHookAbortError(error)) {
+      throw error;
+    }
+    // Native send failed — build degraded context so the caller can retry.
+    const freshContext = await buildNativeFallbackContext(bus, session, messageId);
+    return {
+      ...nativeContext,
+      ...freshContext,
+      nativeLocality: { kind: 'degrade', reason: 'native-attempt-failed' },
+      nativeFork: undefined,
+    };
+  }
+
+  // Send succeeded — emit acknowledgement outside the degrade try/catch.
+  await bus.emit(SessionSubjects.user_message.acknowledged, {
+    sessionId: turn.sessionId,
+    turnId: turn.turnId,
+    turnNumber: turn.turnNumber,
+    messageId,
+    agentId,
+  });
+
+  return null; // Native send succeeded — caller should return immediately.
+}
+
+/**
  * Route one message to one agent and handle lifecycle side effects.
+ *
+ * When the outbound context carries `nativeLocality.kind === 'native'` and the
+ * adapter rejects the request, the call is retried exactly once with a degraded
+ * context (kind: 'degrade', reason: 'native-attempt-failed') and freshly built
+ * message history. If the retry also fails, the error propagates to the standard
+ * error handler and the agent is marked as errored.
  * @param input - Routing payload and lifecycle dependencies for one agent
  */
 async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void> {
-  const { bus, session, turn, message, messageId, deliveryMode, onTurnComplete, agent, agentContext, responseSchema } =
-    input;
+  const { bus, session, turn, message, messageId, deliveryMode, onTurnComplete, agent, responseSchema } = input;
+  let { agentContext } = input;
+
+  const basePayload = {
+    agentId: agent.agentId,
+    adapterId: agent.adapterId,
+    message,
+    deliveryMode,
+    messageId,
+    turnId: turn.turnId,
+    sessionId: session.sessionId,
+    responseSchema,
+    turn,
+  };
 
   try {
-    await bus.request(AgentSubjects.sendMessage, {
+    // One-shot degrade retry: null on success, else a fallback retry context.
+    if (agentContext?.nativeLocality?.kind === 'native') {
+      const fallback = await attemptNativeSendOrDegrade(bus, session, basePayload, agentContext);
+      if (fallback === null) return;
+      agentContext = fallback;
+    }
+
+    await sendAndAcknowledge(bus, {
       agentId: agent.agentId,
       adapterId: agent.adapterId,
       message,
@@ -197,18 +361,11 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
       turnId: turn.turnId,
       sessionId: session.sessionId,
       sessionContext: agentContext,
-      ...(responseSchema !== undefined && { responseSchema }),
-    });
-
-    await bus.emit(SessionSubjects.user_message.acknowledged, {
-      sessionId: turn.sessionId,
-      turnId: turn.turnId,
-      turnNumber: turn.turnNumber,
-      messageId,
-      agentId: agent.agentId,
+      responseSchema,
+      turn,
     });
   } catch (error) {
-    if (error instanceof HookAbortError) {
+    if (getHookAbortError(error)) {
       await bus.emit(SessionSubjects.user_message.completed, {
         sessionId: turn.sessionId,
         turnId: turn.turnId,
@@ -244,50 +401,103 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
 }
 
 /**
+ * Options for routing a message to target agents.
+ */
+export interface RouteToAgentsOptions {
+  /** Bus instance for communication. */
+  readonly bus: IMakaioBus;
+  /** Session metadata (for fork detection). */
+  readonly session: IMakaioSession;
+  /** Target agents to route to. */
+  readonly agents: MakaioSessionAgent[];
+  /** Message content to send. */
+  readonly message: MessageInput;
+  /** Message identifier. */
+  readonly messageId: string;
+  /** Turn tracking object. */
+  readonly turn: Turn;
+  /** How to deliver the message. */
+  readonly deliveryMode: 'enqueue' | 'immediate' | undefined;
+  /** Callback when turn completes (all agents done). */
+  readonly onTurnComplete: (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
+  /** Session context with curated messageHistory and decision signals. */
+  readonly sessionContext?: SessionContext;
+  /** Optional enricher for immediate message context. */
+  readonly turnContextEnricher?: ITurnContextEnricher;
+  /** Whether this is the first message in a new turn. */
+  readonly isNewTurn?: boolean;
+  /** Context enriched with messageHistory for agents that were just recovered. */
+  readonly recoveryContext?: SessionContext;
+  /** Set of agent IDs that were recovered in this handler invocation. */
+  readonly recoveredAgentIds?: ReadonlySet<string>;
+  /** Set of agent IDs that swapped connector due to cwd mismatch. */
+  readonly swappedAgentIds?: ReadonlySet<string>;
+  /** Previous/new cwd metadata keyed by agent ID. */
+  readonly swappedAgentCwd?: ReadonlyMap<string, CwdSwapMeta>;
+  /** Curated history for agents forced into fresh mode. */
+  readonly freshMessageHistory?: Message[];
+  /** Optional structured output descriptor for the turn. */
+  readonly responseSchema?: ResponseSchemaDescriptor;
+  /** Stable machine identity of the current host process for locality evaluation. */
+  readonly localMachineId?: string;
+}
+
+/**
  * Route a message to target agents via agent.sendMessage.
  *
  * Fans out to all agents in parallel. On routing failure, marks agent as errored
  * and checks for turn completion.
  *
  * For fork sessions on their first turn, assembles projected context from parent chain.
- * @param bus - Bus instance for communication
- * @param session - Session metadata (for fork detection)
- * @param agents - Target agents to route to
- * @param message - Message content to send
- * @param messageId - Message identifier
- * @param turn - Turn tracking object
- * @param deliveryMode - How to deliver the message
- * @param onTurnComplete - Callback when turn completes (all agents done)
- * @param sessionContext - Session context with curated messageHistory and decision signals
- * @param turnContextEnricher - Optional enricher for immediate message context
- * @param isNewTurn - Whether this is the first message in a new turn
- * @param recoveryContext - Context enriched with messageHistory for agents that were just recovered
- * @param recoveredAgentIds - Set of agent IDs that were recovered in this handler invocation
- * @param swappedAgentIds - Set of agent IDs that swapped connector due to cwd mismatch
- * @param swappedAgentCwd - Previous/new cwd metadata keyed by agent ID
- * @param freshMessageHistory - Curated history for agents forced into fresh mode
- * @param responseSchema - Optional structured output descriptor for the turn
+ * @param options - Routing options including bus, session, agents, message, and lifecycle dependencies
  */
-export async function routeToAgents(
-  bus: IMakaioBus,
-  session: IMakaioSession,
-  agents: MakaioSessionAgent[],
-  message: MessageInput,
-  messageId: string,
-  turn: Turn,
-  deliveryMode: 'enqueue' | 'immediate' | undefined,
-  onTurnComplete: (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>,
-  sessionContext?: SessionContext,
-  turnContextEnricher?: ITurnContextEnricher,
-  isNewTurn?: boolean,
-  recoveryContext?: SessionContext,
-  recoveredAgentIds?: ReadonlySet<string>,
-  swappedAgentIds?: ReadonlySet<string>,
-  swappedAgentCwd?: ReadonlyMap<string, CwdSwapMeta>,
-  freshMessageHistory?: Message[],
-  responseSchema?: ResponseSchemaDescriptor,
-): Promise<void> {
-  const forkEnrichedContext = await assembleForkContext(bus, session, session.sessionId, sessionContext, isNewTurn);
+export async function routeToAgents(options: RouteToAgentsOptions): Promise<void> {
+  const {
+    bus,
+    session,
+    agents,
+    message,
+    messageId,
+    turn,
+    deliveryMode,
+    onTurnComplete,
+    sessionContext,
+    turnContextEnricher,
+    isNewTurn,
+    recoveryContext,
+    recoveredAgentIds,
+    swappedAgentIds,
+    swappedAgentCwd,
+    freshMessageHistory,
+    responseSchema,
+    localMachineId,
+  } = options;
+  const forkContextCapabilities = await resolveForkContextCapabilities(bus, session, agents);
+  let forkEnrichedContext = await assembleForkContext(
+    bus,
+    session,
+    session.sessionId,
+    sessionContext,
+    isNewTurn,
+    localMachineId,
+    forkContextCapabilities,
+  );
+
+  // Invariant: nativeFork is only consumable on the startAgent path. This
+  // function dispatches exclusively via sendMessage (agents are already
+  // running), so a native fork directive can never reach the provider. Degrade
+  // to fresh-with-history so the child session starts with the projected
+  // parent conversation instead of an empty context.
+  if (forkEnrichedContext?.nativeFork) {
+    const contextResult = await getFullConversation(bus, session.sessionId);
+    const messageHistory = contextResult.messages.map(convertSessionMessage);
+    forkEnrichedContext = {
+      ...forkEnrichedContext,
+      messageHistory,
+      nativeFork: undefined,
+      nativeLocality: { kind: 'degrade', reason: 'agent-already-started' },
+    };
+  }
 
   const enrichedMessageHistory = turnContextEnricher
     ? await turnContextEnricher.enrichForDeliveryMode(forkEnrichedContext?.messageHistory, turn.turnId, deliveryMode)

@@ -135,9 +135,16 @@ function timestampConflictClause(
  * @param sessions - Dialect-resolved sessions table object.
  * @param startedAt - The real start timestamp from the import, or undefined to keep existing
  * @param dialect - Storage dialect of the target database (branches only the metadata merge expression).
+ * @param machineId - Tri-state machine identity: `undefined` preserves the existing value,
+ *   `null` explicitly clears it (relinquish ownership), non-null string fills if absent.
  * @returns Drizzle `set` object for `onConflictDoUpdate`
  */
-function buildImportConflictSet(sessions: SessionsTable, startedAt: number | undefined, dialect: StorageDialect) {
+function buildImportConflictSet(
+  sessions: SessionsTable,
+  startedAt: number | undefined,
+  dialect: StorageDialect,
+  machineId: string | null | undefined,
+) {
   return {
     // Lifecycle status is only converged while the row is still a plain
     // discovery stub. A hook-first 'tracking' row resolves the COALESCE to
@@ -178,6 +185,16 @@ function buildImportConflictSet(sessions: SessionsTable, startedAt: number | und
     isSidechain: sql`COALESCE(excluded.is_sidechain, ${sessions.isSidechain})`,
     // Newer identity observation wins when supplied; absent input keeps the stored one.
     lastClientIdentityObservation: sql`COALESCE(excluded.last_client_identity_observation, ${sessions.lastClientIdentityObservation})`,
+    // Tri-state machineId: undefined preserves existing, null explicitly clears,
+    // non-null string fills if absent (existing wins). The excluded row cannot
+    // distinguish null from undefined (both are SQL NULL), so the branch is
+    // resolved at the TypeScript level before the SQL is built.
+    machineId:
+      machineId === undefined
+        ? sql`${sessions.machineId}`
+        : machineId === null
+          ? sql`NULL`
+          : sql`COALESCE(${sessions.machineId}, excluded.machine_id)`,
     // Hook-first metadata is preserved; import enrichment merges, never overwrites (AC14).
     metadata: buildMetadataMergeExpression(sessions, dialect),
     createdAt: timestampConflictClause(sessions.createdAt, startedAt, sessions),
@@ -235,6 +252,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
       lastClientIdentityObservation,
       importStatus,
       isSidechain,
+      machineId,
     } = ctx.payload;
 
     const nowMs = nextDiscoveredAt();
@@ -270,6 +288,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
         metadata: metadata ?? null,
         lastClientIdentityObservation: serializeClientIdentityObservation(lastClientIdentityObservation),
         isSidechain: isSidechain ?? null,
+        machineId: machineId ?? null,
         createdAt,
         lastActivityAt: createdAt,
       })
@@ -278,7 +297,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
         // cannot participate in the `(source, adapterSessionId)` invariant, so
         // this handler does not merge them into a sourced import.
         target: [sessions.source, sessions.adapterSessionId],
-        set: buildImportConflictSet(sessions, startedAt, dialect),
+        set: buildImportConflictSet(sessions, startedAt, dialect, machineId),
       })
       .returning({
         sessionId: sessions.sessionId,
@@ -316,7 +335,7 @@ async function emitImportUpsertLifecycleEvent(
   created: boolean,
   branchKind: BranchKind | null,
   createdAt: number,
-  source: string,
+  source: string | undefined,
 ): Promise<void> {
   if (created) {
     const resolvedParentSessionId = await resolveParentSession(db, row.sessionId, row.parentExternalSessionId, source);
@@ -366,10 +385,10 @@ async function resolveParentSession(
   db: MakaioDatabase,
   newSessionId: string,
   parentExternalSessionId: string | null,
-  source: string,
+  source: string | undefined,
 ): Promise<string | null> {
   const { sessions } = resolveSchema(db, sessionStorageSchema);
-  if (parentExternalSessionId === null) {
+  if (parentExternalSessionId === null || source === undefined) {
     return null;
   }
 

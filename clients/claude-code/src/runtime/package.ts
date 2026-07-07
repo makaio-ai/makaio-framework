@@ -48,5 +48,5 @@ export const claudeCodeClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
    * @param ctx - Runtime package context
    * @returns Uninitialized Claude Code client service
    */
-  create: (ctx) => new ClaudeCodeClientService(ctx.bus),
+  create: (ctx) => new ClaudeCodeClientService(ctx.bus, ctx.machineId),
 };

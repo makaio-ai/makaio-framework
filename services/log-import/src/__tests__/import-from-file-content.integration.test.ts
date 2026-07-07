@@ -722,4 +722,91 @@ describe('importFromFileContent (integration)', () => {
     expect(importUpserts).toHaveLength(1);
     expect(importUpserts[0].startedAt).toBe(STARTED_AT_MS);
   });
+
+  it('stamps caller-supplied machineId on importUpsert payloads', async () => {
+    const fixture = await createOpenCodeFixtureSession({
+      fixtureDir: OPENCODE_FIXTURE_DIR,
+      adapterId: 'opencode-machineid-test',
+      adapterName: ADAPTER_NAME,
+    });
+    fixtureCleanups.push(fixture.cleanup);
+    const { importUpserts } = registerStorageHandlers();
+
+    await importFromFileContent({
+      bus: MakaioBus,
+      importer: fixture.importer,
+      content: fixture.sessionContent,
+      isJsonl: false,
+      adapterName: ADAPTER_NAME,
+      adapterId: 'opencode-machineid-test',
+      sourceFilePath: fixture.sessionFilePath,
+      persistedLogFilePath: fixture.sessionFilePath,
+      machineId: 'hook-owner-machine',
+    });
+
+    expect(importUpserts).toHaveLength(1);
+    expect(importUpserts[0].machineId).toBe('hook-owner-machine');
+  });
+
+  it('omits machineId from importUpsert payload when not provided', async () => {
+    const fixture = await createOpenCodeFixtureSession({
+      fixtureDir: OPENCODE_FIXTURE_DIR,
+      adapterId: 'opencode-no-machineid-test',
+      adapterName: ADAPTER_NAME,
+    });
+    fixtureCleanups.push(fixture.cleanup);
+    const { importUpserts } = registerStorageHandlers();
+
+    await importFromFileContent({
+      bus: MakaioBus,
+      importer: fixture.importer,
+      content: fixture.sessionContent,
+      isJsonl: false,
+      adapterName: ADAPTER_NAME,
+      adapterId: 'opencode-no-machineid-test',
+      sourceFilePath: fixture.sessionFilePath,
+      persistedLogFilePath: fixture.sessionFilePath,
+    });
+
+    expect(importUpserts).toHaveLength(1);
+    expect(importUpserts[0].machineId).toBeUndefined();
+  });
+
+  it('stamps machineId on all segments in a compaction tree via importSegmentTree', async () => {
+    const { importUpserts } = registerStorageHandlers();
+
+    const segment = {
+      adapterSessionId: 'session-machineid-root',
+      lineage: {
+        kind: 'root' as const,
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+      },
+      messages: [],
+      children: [
+        {
+          adapterSessionId: 'session-machineid-child',
+          lineage: {
+            kind: 'subagent' as const,
+            parentAdapterSessionId: 'session-machineid-root',
+            forkPointMessageId: null,
+          },
+          messages: [],
+        },
+      ],
+    };
+
+    await importSegmentTree(MakaioBus, segment, {
+      adapterId: 'adapter-machineid-test',
+      adapterName: ADAPTER_NAME,
+      model: null,
+      cwd: null,
+      machineId: 'central-server-machine',
+    });
+
+    // Both root and child must carry the caller-supplied machineId
+    expect(importUpserts).toHaveLength(2);
+    expect(importUpserts[0].machineId).toBe('central-server-machine');
+    expect(importUpserts[1].machineId).toBe('central-server-machine');
+  });
 });

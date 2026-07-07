@@ -88,20 +88,19 @@ export abstract class ClaudeCodeAgent<
   N extends string = string,
   TConnector extends AIAgentConnector<ClaudeConnectorBus<N>> = AIAgentConnector<ClaudeConnectorBus<N>>,
 > extends AIAgent<ClaudeConnectorBus<N>, TConnector> {
-  /**
-   * Whether this adapter supports native session resume.
-   * Claude SDK has first-class resume via Options.resume.
-   * @returns true - Claude SDK supports native session resume
-   */
+  /** @returns true — Claude SDK supports native session resume via Options.resume. */
   protected override supportsNativeResume(): boolean {
+    return true;
+  }
+
+  /** @returns true — Claude adapters support native session fork via their connector start paths. */
+  protected override supportsNativeFork(): boolean {
     return true;
   }
 
   /**
    * Return the connector namespace subjects for this adapter.
-   *
-   * Implemented by concrete subclasses to return the subjects registered
-   * under their specific namespace name (e.g. adapter:claude-code).
+   * Implemented by concrete subclasses for their specific namespace (e.g. adapter:claude-code).
    * @returns Subjects from the concrete adapter namespace
    */
   protected abstract getSubjects(): ClaudeConnectorNamespace<N>['subjects'];
@@ -120,7 +119,7 @@ export abstract class ClaudeCodeAgent<
   private currentReasoningContent = '';
   /** Current tool call info for step.started content */
   private currentToolCall: { toolCallId: string; name: string; args: Record<string, unknown> } | null = null;
-  /** Track toolCallId to blockIndex for correlation between step.started and step.finished */
+  /** toolCallId → blockIndex for correlation between step.started and step.finished */
   private toolBlockIndexMap = new Map<string, number>();
   /** Accumulated tool args JSON during streaming */
   private currentToolArgsJson = '';

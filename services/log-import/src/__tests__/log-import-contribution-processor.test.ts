@@ -204,4 +204,28 @@ describe('createLogImportContributionProcessor', () => {
     // No activation — stopped should be silently ignored.
     await expect(processor.processStopped?.('unknown-package')).resolves.toBeUndefined();
   });
+
+  it('stamps ctx.machineId on the LogImporterRegistration so scan/import-file handlers attribute sessions correctly', async () => {
+    const processor = createLogImportContributionProcessor();
+    const pkg = makePkg('machine-aware-extension');
+
+    await processor.processActivated('machine-aware-extension', pkg, makeContext(registry));
+
+    const registration = registry.getImporter('package:machine-aware-extension');
+    expect(registration?.machineId).toBe('machine-1');
+  });
+
+  it('stamps ctx.machineId on the orchestrator config so importUpsert payloads are attributed correctly', async () => {
+    const processor = createLogImportContributionProcessor();
+    const pkg = makePkg('machine-aware-orchestrator-extension', {
+      LogOrchestratorClass: CapturingOrchestrator,
+    });
+
+    await processor.processActivated('machine-aware-orchestrator-extension', pkg, makeContext(registry));
+
+    const factory = registry.getImporter('package:machine-aware-orchestrator-extension')?.orchestratorFactory;
+    const orchestrator = factory?.('import') as CapturingOrchestrator | undefined;
+
+    expect(orchestrator?.config.machineId).toBe('machine-1');
+  });
 });

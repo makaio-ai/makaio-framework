@@ -85,6 +85,33 @@ describe('ClaudeCodeClientService', () => {
     });
   });
 
+  it('stamps caller-supplied machineId onto client.session.started payloads', async () => {
+    // Tear down the default service and create one with a machineId.
+    await service.destroy();
+    service = new ClaudeCodeClientService(bus, 'machine-test-42');
+    await service.init();
+
+    const received: unknown[] = [];
+    const cleanup = bus.on(ClientSubjects.session.started, ({ payload }) => {
+      received.push(payload);
+    });
+
+    await bus.emit(ClaudeCodeClientSubjects.hook.received, {
+      eventName: CLAUDE_CODE_HOOK_SESSION_START,
+      receivedAt: RECEIVED_AT,
+      payload: { session_id: SESSION_ID },
+    });
+
+    cleanup();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      clientId: 'claude-code',
+      adapterSessionId: SESSION_ID,
+      machineId: 'machine-test-42',
+    });
+  });
+
   it('clears native session credentials when sessionConfig.destroy is requested', async () => {
     const sessionDir = await makeTempDir('makaio-claude-session-');
     await fs.writeFile(path.join(sessionDir, '.credentials.json'), '{"token":"stale"}', 'utf-8');

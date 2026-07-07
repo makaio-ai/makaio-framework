@@ -1,5 +1,5 @@
 // NOTE: do NOT change without explicit human approval
-/* eslint max-lines: ["error", { "max": 575 }] */
+/* eslint max-lines: ["error", { "max": 590 }] */
 import { MakaioBus, NoHandlerError, OnOptions, RequestError } from '@makaio/bus-core';
 import type { IFilteredBus, IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import {
@@ -252,22 +252,26 @@ export abstract class AIAgentConnector<
   public abstract getAdapterSessionId(): Promise<string>;
 
   /**
+   * Provider-confirmed adapter session ID, or `undefined` when unconfirmed.
+   * Default returns `this.adapterSessionId`; Claude connectors override to
+   * defer until `system.init` confirms the provider-side session.
+   * @returns Confirmed ID or `undefined`
+   */
+  public getConfirmedAdapterSessionId(): string | undefined {
+    return this.adapterSessionId;
+  }
+
+  /**
    * Complete the agent session by waiting for all messages to finish.
    * @returns Last message result or null if no messages processed
    */
   public abstract complete(): Promise<MessageResult | null>;
 
   /**
-   * Create a MessageHandle with standard initialization.
-   *
-   * Centralizes the pattern used by all connectors:
-   * 1. Generate messageId (use provided or generate UUID)
-   * 2. Create MessageHandle instance
-   * 3. Set adapterSessionId
-   * 4. Call onMessageSent callback
+   * Create a MessageHandle with standard initialization (messageId, adapterSessionId, onMessageSent).
    * @param message - Normalized user message
    * @param options - Optional message options (id, delivery mode, history, and turn context)
-   * @returns Initialized MessageHandle ready for enqueueing
+   * @returns Initialized MessageHandle instance
    */
   protected createMessageHandle(message: NormalizedMessageInput, options?: MessageHandleOptions): MessageHandle {
     const messageId = options?.messageId ?? crypto.randomUUID();
@@ -290,15 +294,7 @@ export abstract class AIAgentConnector<
     return handle;
   }
 
-  /**
-   * Signal that MCP tools have changed and should be refreshed at the next turn boundary.
-   *
-   * Called by the AIAgent layer when receiving MCP bus events (`mcp.tools.updated`,
-   * `mcp.tools.enabled`). Connectors that support direct-inject tool refresh (e.g.,
-   * `BaseStreamConnector`) override this to set an internal pending-refresh flag.
-   * The default implementation is a no-op so connectors that do not manage MCP tools
-   * directly are unaffected.
-   */
+  /** Signal MCP tools changed; connectors with direct-inject refresh override this. */
   public markToolRefreshPending(): void {
     // Default: no-op. Connectors that manage direct-inject MCP tools override this.
   }

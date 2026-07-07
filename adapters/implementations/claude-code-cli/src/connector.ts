@@ -133,6 +133,7 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
       resolveTurnExecutionContext: () => this.resolveTurnExecutionContext(),
       firstOutputTimeoutMs: this.timeouts.values.initialization,
       resumeAdapterSessionId: this.config.resumeAdapterSessionId,
+      nativeFork: cliConfig.nativeFork,
       predeterminedSessionId: this.config.adapterSessionId,
       mcpUpstreamServers: cliConfig.mcpUpstreamServers,
       makaioSessionId: this.sessionId,
@@ -269,6 +270,17 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
     if (this.session) return;
     await this.initializeSession();
     this.adapterSessionId = await this.session!.getAdapterSessionId();
+  }
+
+  /**
+   * Return the provider-confirmed session ID from the underlying Claude CLI session.
+   *
+   * Returns `undefined` for idle fork sessions until `system.init` arrives,
+   * allowing upstream persistence to defer writing the adapter session ID.
+   * @returns Confirmed adapter session ID or `undefined`
+   */
+  public override getConfirmedAdapterSessionId(): string | undefined {
+    return this.session?.getConfirmedSessionId();
   }
 
   /**

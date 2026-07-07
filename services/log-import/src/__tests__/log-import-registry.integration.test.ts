@@ -47,7 +47,7 @@ interface CapturedImportStatus {
 /** Payload shape captured from SessionStorageSubjects.importUpsert during scan. */
 interface CapturedScanUpsert {
   externalSessionId: string;
-  source: string;
+  source: string | undefined;
   startedAt?: number;
 }
 
@@ -666,6 +666,41 @@ describe('log-import registry (integration)', () => {
 
       // No messages were persisted during scan
       expect(messageUpserts).toHaveLength(0);
+    });
+
+    it('stamps machineId from registration on scan importUpsert payloads', async () => {
+      const fixture = await createOpenCodeFixtureSession({
+        fixtureDir: OPENCODE_FIXTURE_DIR,
+        adapterId: 'scan-machineid-adapter',
+        adapterName: ADAPTER_NAME,
+        logDirectory: 'scanRoot',
+      });
+      fixtureCleanups.push(fixture.cleanup);
+
+      await registry.register({
+        id: 'scan-machineid-adapter',
+        adapterName: ADAPTER_NAME,
+        displayName: 'OpenCode',
+        source: 'adapter',
+        importer: fixture.importer,
+        logFilePattern: '**/storage/session/*/*.json',
+        machineId: 'remote-owner-machine',
+      });
+
+      const scanUpserts: Array<Record<string, unknown>> = [];
+
+      cleanups.push(
+        MakaioBus.on(SessionStorageSubjects.importUpsert, (ctx) => {
+          scanUpserts.push({ ...ctx.payload });
+          ctx.setResult({ sessionId: crypto.randomUUID(), created: true });
+        }),
+      );
+
+      await MakaioBus.request(LogImportSubjects.scan, { adapterName: ADAPTER_NAME });
+
+      expect(scanUpserts).toHaveLength(1);
+      // machineId must come from the registration, not from any central-server identity
+      expect(scanUpserts[0].machineId).toBe('remote-owner-machine');
     });
   });
 });

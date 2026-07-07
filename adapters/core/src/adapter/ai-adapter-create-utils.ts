@@ -4,8 +4,9 @@
  * Extracted to keep ai-adapter.ts below the ESLint line-count ceiling.
  */
 
-import type { AIModel } from '@makaio/contracts';
+import { SessionContextSchema, type AIModel, type NativeForkDirective } from '@makaio/contracts';
 import type { AIAgentConfig } from '../agent/types.js';
+import type { AgentCreationOptions } from './types.js';
 import type { AdapterProviderDefinition } from '../types/index.js';
 import { UNRESOLVED_PROVIDER_DEFINITION_ID } from '../utils/index.js';
 
@@ -29,15 +30,15 @@ export type OptionalAgentRuntimeFields = Partial<
     | 'mcpSessionContext'
     | 'toolLedger'
     | 'ephemeral'
+    | 'nativeFork'
   >
 >;
 
 /**
  * Build optional runtime fields for `AIAgentConfig` from a flat bag of candidates.
  *
- * Centralising the `...(x !== undefined && { x })` spread pattern here keeps
- * `createAgent` below the ESLint complexity ceiling while preserving
- * type-safe undefined-stripping semantics.
+ * Centralising the undefined-stripping spread pattern here keeps `createAgent` below
+ * the ESLint complexity ceiling while preserving type-safe semantics.
  *
  * Precedence: `cwd` overrides `platformCwd`; `env` is merged over `platformEnv` key-by-key.
  * @param opts - Candidate optional fields; only defined values are included
@@ -51,25 +52,41 @@ export function buildOptionalAgentConfig(
 ): OptionalAgentRuntimeFields {
   const env =
     opts.platformEnv !== undefined || opts.env !== undefined ? { ...opts.platformEnv, ...opts.env } : undefined;
+  // Strip undefined values. Object.entries + filter avoids per-field conditionals that
+  // inflate ESLint complexity. Fields retain their original keys from the opts object.
+  const direct = stripUndefined({
+    model: opts.model,
+    allowedTools: opts.allowedTools,
+    disallowedTools: opts.disallowedTools,
+    allowedDirectories: opts.allowedDirectories,
+    adapterSessionId: opts.adapterSessionId,
+    resumeAdapterSessionId: opts.resumeAdapterSessionId,
+    reasoningEffort: opts.reasoningEffort,
+    adapterConfig: opts.adapterConfig,
+    harnessId: opts.harnessId,
+    clientId: opts.clientId,
+    clientProfileName: opts.clientProfileName,
+    mcpSessionContext: opts.mcpSessionContext,
+    toolLedger: opts.toolLedger,
+    ephemeral: opts.ephemeral,
+    nativeFork: opts.nativeFork,
+  });
   return {
     ...(opts.platformCwd !== undefined && { cwd: opts.platformCwd }),
     ...(env !== undefined && { env }),
-    ...(opts.model !== undefined && { model: opts.model }),
     ...(opts.cwd !== undefined && { cwd: opts.cwd }),
-    ...(opts.allowedTools !== undefined && { allowedTools: opts.allowedTools }),
-    ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
-    ...(opts.allowedDirectories !== undefined && { allowedDirectories: opts.allowedDirectories }),
-    ...(opts.adapterSessionId !== undefined && { adapterSessionId: opts.adapterSessionId }),
-    ...(opts.reasoningEffort !== undefined && { reasoningEffort: opts.reasoningEffort }),
-    ...(opts.adapterConfig !== undefined && { adapterConfig: opts.adapterConfig }),
-    ...(opts.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: opts.resumeAdapterSessionId }),
-    ...(opts.harnessId !== undefined && { harnessId: opts.harnessId }),
-    ...(opts.clientId !== undefined && { clientId: opts.clientId }),
-    ...(opts.clientProfileName !== undefined && { clientProfileName: opts.clientProfileName }),
-    ...(opts.mcpSessionContext !== undefined && { mcpSessionContext: opts.mcpSessionContext }),
-    ...(opts.toolLedger !== undefined && { toolLedger: opts.toolLedger }),
-    ...(opts.ephemeral !== undefined && { ephemeral: opts.ephemeral }),
+    ...direct,
   };
+}
+
+/**
+ * Return a shallow copy of `obj` with all `undefined` values removed.
+ * Used to keep `buildOptionalAgentConfig` below ESLint's complexity ceiling.
+ * @param obj - Plain object whose undefined entries should be dropped
+ * @returns New object with only defined values
+ */
+function stripUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
 /**
@@ -117,4 +134,27 @@ export function resolveExecutionModels(
   }
 
   return matchingProviders[0]?.definition.availableModels;
+}
+
+/**
+ * Build the provider-native fork directive from orchestrator-approved context.
+ *
+ * Raw fork-mode request fields identify what the caller asked for. They are not
+ * proof that a provider-native branch is safe on this machine. The session
+ * orchestrator evaluates locality and structural constraints, then reflects the
+ * approved provider directive as `sessionContext.nativeFork` only when
+ * `sessionContext.nativeLocality.kind === 'native'`.
+ * @param request - Agent creation options from the startAgent pipeline
+ * @returns Approved fork directive, or undefined when native fork is not approved
+ */
+export function buildNativeForkDirective(request: AgentCreationOptions): NativeForkDirective | undefined {
+  if (request.mode !== 'fork') {
+    return undefined;
+  }
+  const sessionContext = request.sessionContext;
+  const parsedSessionContext = sessionContext !== undefined ? SessionContextSchema.parse(sessionContext) : undefined;
+  if (parsedSessionContext?.nativeLocality?.kind !== 'native') {
+    return undefined;
+  }
+  return parsedSessionContext.nativeFork;
 }

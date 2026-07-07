@@ -168,6 +168,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       providerConfig: resolvedProviderConfig,
       systemPrompt: this.runtimeSystemPrompt,
       resumeAdapterSessionId: this.config.resumeAdapterSessionId,
+      nativeFork: agentConfig.nativeFork,
       predeterminedSessionId: this.config.adapterSessionId,
       mcpUpstreamServers: agentConfig.mcpUpstreamServers,
       // Emit SDK events through connector for proper metadata injection
@@ -430,6 +431,17 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     }
     await this.initializeSession(options?.responseSchema);
     this.adapterSessionId = await this.session!.getAdapterSessionId();
+  }
+
+  /**
+   * Return the provider-confirmed session ID from the underlying Claude session.
+   *
+   * Returns `undefined` for idle fork sessions until `system.init` arrives,
+   * allowing upstream persistence to defer writing the adapter session ID.
+   * @returns Confirmed adapter session ID or `undefined`
+   */
+  public override getConfirmedAdapterSessionId(): string | undefined {
+    return this.session?.getConfirmedSessionId();
   }
 
   /**

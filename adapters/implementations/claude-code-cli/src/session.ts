@@ -14,7 +14,7 @@ import { buildTextPrompt, extractMessageText } from '@makaio/ai-adapters-claude-
 import { DeferredPromise } from '@makaio/utils';
 import type { CliStdioTransport } from './utils/createStdioTransport.js';
 import { createStdioTransport } from './utils/createStdioTransport.js';
-import { buildCliArgs } from './utils/buildCliArgs.js';
+import { assertCliNativeForkSupported, buildCliArgs } from './utils/buildCliArgs.js';
 import { ClaudeConnectorTurn, type IQueryInterruptable } from './turn.js';
 import { ClaudeCodeCliConnectorSubjects } from './namespace/index.js';
 import type {
@@ -82,6 +82,8 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   protected declare currentTurn?: ClaudeConnectorTurn;
   private deferredSessionId = new DeferredPromise<string>();
   private confirmedSessionId = false;
+  /** True while a fork directive is pending but `system.init` has not yet confirmed the child session ID. */
+  private awaitingForkConfirmation = false;
   /** Adapter session ID currently registered with the MCP bridge service, if any */
   private registeredMcpSessionId?: string;
   /** Emitter callback provided by the connector for metadata injection */
@@ -242,6 +244,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     // Keep local session identity aligned with resume when available to ensure
     // MCP approval routing and adapter metadata use the same adapterSessionId.
     this.sessionId = config.predeterminedSessionId ?? config.resumeAdapterSessionId ?? globalThis.crypto.randomUUID();
+    this.awaitingForkConfirmation = config.nativeFork !== undefined;
     this.deferredSessionId.resolve(this.sessionId);
   }
 
@@ -294,11 +297,16 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * @param mergedContent - Optional content from superseded/merged messages (for immediate mode)
    */
   public async startTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
+    const { resumeId, sessionIdForMcp } = this.resolveTurnSessionIdentity(mergedContent);
+    // Fork directive only applies on the initial CLI invocation: rotations resume the fork child
+    // via the confirmed session ID rather than re-forking the source session.
+    const nativeFork = resumeId === undefined ? this.config.nativeFork : undefined;
+    assertCliNativeForkSupported(nativeFork);
+
     // Notify connector that turn is starting
     this.onTurnStart?.(handle);
 
     const prompt = buildTextPrompt(handle, mergedContent);
-    const { resumeId, sessionIdForMcp } = this.resolveTurnSessionIdentity(mergedContent);
     const executionContext = await this.resolveAndPersistTurnExecutionContext();
     const mcpResult = await this.registerMcpContextAndBuildConfig(sessionIdForMcp, executionContext.env);
     const mcpConfig = mcpResult?.config;
@@ -308,6 +316,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       config: {
         ...this.config,
         resumeAdapterSessionId: resumeId,
+        nativeFork,
         responseSchema: handle.responseSchema,
       },
       prompt,
@@ -403,7 +412,11 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     if (sdkMessage.type === 'system' && sdkMessage.subtype === 'init') {
       if (!this.confirmedSessionId) {
         this.confirmedSessionId = true;
+        this.awaitingForkConfirmation = false;
         this.sessionId = sdkMessage.session_id;
+        // Consume the native fork directive: the child session is now confirmed,
+        // so restarts must resume the child, not re-fork the source.
+        this.config.nativeFork = undefined;
         // Re-resolve with the confirmed ID (replace the preliminary promise)
         this.deferredSessionId = new DeferredPromise<string>();
         this.deferredSessionId.resolve(sdkMessage.session_id);
@@ -484,6 +497,24 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   public override async getAdapterSessionId(): Promise<string> {
     if (this.confirmedSessionId) return this.sessionId!;
     return this.deferredSessionId.getPromise();
+  }
+
+  /**
+   * Return the provider-confirmed session ID, or `undefined` when unconfirmed.
+   *
+   * For non-fork sessions the locally-generated ID is authoritative (the CLI
+   * will echo it back in `system.init`) so it is returned immediately.
+   * For fork sessions the provider assigns a new child ID, so this returns
+   * `undefined` until `system.init` confirms it.
+   *
+   * Unlike {@link getAdapterSessionId} this never blocks — it reflects the
+   * current confirmation state synchronously.
+   * @returns Confirmed session ID or `undefined`
+   */
+  public getConfirmedSessionId(): string | undefined {
+    if (this.confirmedSessionId) return this.sessionId;
+    // Non-fork: local ID is authoritative; fork: wait for system.init.
+    return this.awaitingForkConfirmation ? undefined : this.sessionId;
   }
 
   /**

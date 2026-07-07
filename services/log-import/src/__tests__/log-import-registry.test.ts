@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { CapabilitySubjects } from '@makaio/contracts';
 import { LogImportSubjects } from '../namespace.js';
-import type { LogImportConfig, LogImportOrchestrator, LogImportRegistration } from '@makaio/ai-adapters-core';
+import type {
+  LogImportConfig,
+  LogImportOrchestrator,
+  LogImportRegistration,
+  LogOrchestratorConfig,
+} from '@makaio/ai-adapters-core';
 import { CapabilityService } from '@makaio/services-core/capability';
 import { LogImportRegistry } from '../log-import-registry.js';
 import type { LogImporterRegistration } from '../types.js';
@@ -49,6 +54,30 @@ const TEST_PROVIDER_REGISTRATION: LogImportRegistration = {
   displayName: 'Provider Importer',
   LogImporterClass: TestProviderImporter,
   LogOrchestratorClass: TestOrchestrator,
+  logFilePattern: '**/*.jsonl',
+};
+
+/** Orchestrator that exposes its constructor config for assertion. */
+class CapturingOrchestrator implements LogImportOrchestrator {
+  public constructor(public readonly config: LogOrchestratorConfig) {}
+  public isRunning(): boolean {
+    return false;
+  }
+  public async start(): Promise<void> {
+    return undefined;
+  }
+  public stop(): void {
+    return undefined;
+  }
+  public dispose(): void {
+    return undefined;
+  }
+}
+
+const TEST_CAPTURING_REGISTRATION: LogImportRegistration = {
+  displayName: 'Capturing Importer',
+  LogImporterClass: TestProviderImporter,
+  LogOrchestratorClass: CapturingOrchestrator,
   logFilePattern: '**/*.jsonl',
 };
 
@@ -413,6 +442,40 @@ describe('LogImportRegistry', () => {
       } finally {
         warnSpy.mockRestore();
       }
+    });
+
+    it('stamps provider.machineId on the LogImporterRegistration so scan/import-file handlers attribute sessions correctly', async () => {
+      await MakaioBus.emit(CapabilitySubjects.register, {
+        capabilityId: 'log-import',
+        provider: {
+          id: 'machine-provider',
+          displayName: 'Machine Provider',
+          adapterName: 'machine-tool',
+          registration: TEST_PROVIDER_REGISTRATION,
+          machineId: 'test-machine-id',
+        },
+      });
+
+      const registration = registry.getImporter('machine-provider');
+      expect(registration?.machineId).toBe('test-machine-id');
+    });
+
+    it('stamps provider.machineId on the orchestrator config so importUpsert payloads are attributed correctly', async () => {
+      await MakaioBus.emit(CapabilitySubjects.register, {
+        capabilityId: 'log-import',
+        provider: {
+          id: 'machine-provider',
+          displayName: 'Machine Provider',
+          adapterName: 'machine-tool',
+          registration: TEST_CAPTURING_REGISTRATION,
+          logImportConfig: { enabled: true } satisfies LogImportConfig,
+          machineId: 'test-machine-id',
+        },
+      });
+
+      const registration = registry.getImporter('machine-provider');
+      const orchestrator = registration?.orchestratorFactory?.('import') as CapturingOrchestrator | undefined;
+      expect(orchestrator?.config.machineId).toBe('test-machine-id');
     });
   });
 

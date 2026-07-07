@@ -32,6 +32,15 @@ const SessionDiscoveredMetadataSchema = BaseAdapterEventSchema.merge(SessionMeta
 
   /** Unix ms timestamp of when the session started in the external tool. */
   startedAt: z.number().finite().optional(),
+
+  /**
+   * Machine identifier of the machine that owns this session.
+   * Stamped by the emitting adapter at discovery time so the import handler
+   * can persist locality without independently resolving machine identity.
+   * Optional — adapters that do not yet supply a machine id omit this field,
+   * which leaves the stored `machineId` untouched.
+   */
+  machineId: z.string().nullable().optional(),
 });
 
 export const SessionDiscoveredSchema = SessionDiscoveredMetadataSchema.and(SessionLineageSchema);

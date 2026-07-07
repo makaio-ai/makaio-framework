@@ -1,5 +1,5 @@
 import type { AIAgentConnector } from '../connector/agent-connector.js';
-import type { AgentContext } from '../agent/types.js';
+import type { AgentContext, AgentIdentity } from '../agent/types.js';
 import type {
   ExtractSubjectPayload,
   HandlerForSubjectDefinition,
@@ -101,14 +101,14 @@ export function createConnectorEventMapping<
   nestedMessageProp: TNestedMessageProp,
   discriminator: TDiscriminator,
   handlers: ConnectorEventHandlers<TMessage, TDiscriminator>,
-  enrich: <TIn extends object>(payload: TIn) => Promise<TIn & AgentContext>,
+  enrich: <TIn extends object>(payload: TIn) => Promise<TIn & AgentIdentity>,
 ): () => void {
   // Create the emit helper that handlers can use
   const createEmitFn =
     (enrichedPayload: object): ConnectorEmitFn =>
     async (subject, payload) => {
       // Merge the base enrichment (agentId, messageId, etc) with the provided payload
-      const baseContext = enrichedPayload as AgentContext & { messageId?: string };
+      const baseContext = enrichedPayload as AgentIdentity & { messageId?: string };
       const enrichedEmitPayload = {
         ...payload,
         agentId: baseContext.agentId,
@@ -145,7 +145,7 @@ export function createConnectorEventMapping<
     } else {
       // Subject definition passthrough - emit to scoped bus
       // Strip sessionId: connector events use adapterSessionId only (sessionId is Makaio orchestration-level)
-      const { sessionId: _, ...connectorPayload } = enrichedMessage as AgentContext & { sessionId?: string };
+      const { sessionId: _, ...connectorPayload } = enrichedMessage as AgentIdentity & { sessionId?: string };
       await globalBus.emit(
         handlerOrSubject as Parameters<IMakaioBus['emit']>[0],
         connectorPayload as Parameters<IMakaioBus['emit']>[1],

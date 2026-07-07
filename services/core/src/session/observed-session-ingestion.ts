@@ -387,6 +387,7 @@ export class ObservedSessionIngestionService {
       clientId: payload.clientId,
       cwd: payload.cwd ?? null,
       ...(payload.transcriptPath !== undefined ? { logFilePath: payload.transcriptPath } : {}),
+      ...(payload.machineId !== undefined ? { machineId: payload.machineId } : {}),
       startedAt: payload.observedAt,
       importStatus,
       ...(metadata !== undefined ? { metadata } : {}),

@@ -237,16 +237,18 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    // Must not throw — best-effort guarantee
-    await expect(agent.initialize()).resolves.toBeUndefined();
+    // Must not throw — best-effort guarantee. Non-fork sessions return the
+    // locally-authoritative session ID immediately.
+    await expect(agent.initialize()).resolves.toEqual(expect.any(String));
   });
 
   it('initialize() succeeds when no handler is registered for runtime.observe', async () => {
     const agent = await makeAgent({ sessionId: 'framework-session-no-handler' });
     agents.push(agent);
 
-    // No handler registered — requestOptional returns { handled: false }
-    await expect(agent.initialize()).resolves.toBeUndefined();
+    // No handler registered — requestOptional returns { handled: false }.
+    // Non-fork sessions return the locally-authoritative session ID immediately.
+    await expect(agent.initialize()).resolves.toEqual(expect.any(String));
   });
 
   it('retries runtime observation from the next lifecycle signal after an unhandled initialize observation', async () => {

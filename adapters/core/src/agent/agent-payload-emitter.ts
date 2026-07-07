@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
-import type { AgentContext } from './types.js';
+import type { AgentContext, AgentIdentity } from './types.js';
 
 interface AgentPayloadEventMetadata {
   clientId?: string;
@@ -38,8 +38,6 @@ export interface AgentPayloadEmitterConfig {
   getLastKnownAdapterSessionId: () => string | undefined;
   /** Persist latest adapterSessionId after resolution. */
   setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void;
-  /** Async fallback to wait for adapter session ID. */
-  getAdapterSessionId: () => Promise<string>;
   /** Live event metadata defaults resolved from current runtime state. */
   getEventMetadataDefaults: () => AgentPayloadEventMetadata;
 }
@@ -59,6 +57,52 @@ export class AgentPayloadEmitter {
   }
 
   /**
+   * Resolve the confirmed adapter session ID from synchronous sources.
+   *
+   * `getConnectorAdapterSessionId` delegates to `getConfirmedAdapterSessionId()`
+   * which returns `undefined` for unconfirmed fork sessions — the provider has
+   * not yet assigned the child session ID. For non-fork sessions (fresh, resume,
+   * non-Claude adapters) the locally-determined ID is authoritative and returned
+   * immediately.
+   *
+   * The `lastKnownAdapterSessionId` bridges connector swaps: when the old
+   * connector is gone and the new one is not yet wired, the cached value carries
+   * the confirmed ID from the previous connector.
+   *
+   * No async fallback is used. `connector.getAdapterSessionId()` may resolve
+   * with a provisional placeholder for fork sessions. Enrichment must never
+   * stamp unconfirmed IDs — omitting the field is safe since R8 schemas allow
+   * it optional.
+   * @returns Confirmed adapter session ID or `undefined`
+   */
+  private resolveConfirmedAdapterSessionId(): string | undefined {
+    const id = this.config.getConnectorAdapterSessionId() ?? this.config.getLastKnownAdapterSessionId();
+    if (id !== undefined) {
+      this.config.setLastKnownAdapterSessionId(id);
+    }
+    return id;
+  }
+
+  /**
+   * Resolve event metadata fields, merging caller-provided values over live defaults.
+   * @param payload - Payload fields that may carry metadata overrides
+   * @param includeMetadata - Whether to include analytics metadata at all
+   * @returns Resolved metadata fields
+   */
+  private resolveEventMetadata(
+    payload: Partial<AgentPayloadEventMetadata>,
+    includeMetadata: boolean,
+  ): AgentPayloadEventMetadata {
+    if (!includeMetadata) return {};
+    const defaults = this.config.getEventMetadataDefaults();
+    return {
+      clientId: payload.clientId ?? defaults.clientId,
+      providerConfigId: payload.providerConfigId ?? defaults.providerConfigId,
+      occurredAt: payload.occurredAt ?? defaults.occurredAt,
+    };
+  }
+
+  /**
    * Enrich payload with agent context fields.
    * @param payload - Base payload to enrich
    * @param overrideMessageId - Explicit messageId override from caller payload
@@ -69,25 +113,15 @@ export class AgentPayloadEmitter {
     payload: T,
     overrideMessageId?: string,
     options?: EmitGlobalOptions,
-  ): Promise<T & AgentContext & AgentPayloadEventFields> {
+  ): Promise<T & AgentIdentity & AgentPayloadEventFields> {
     const payloadEventFields = payload as Partial<AgentPayloadEventFields>;
     const messageId = overrideMessageId ?? this.config.getCurrentMessageId();
     const turnId = payloadEventFields.turnId ?? this.config.getCurrentTurnId();
-    const includeEventMetadata = options?.includeEventMetadata ?? true;
-    const eventMetadataDefaults = includeEventMetadata ? this.config.getEventMetadataDefaults() : {};
-    const adapterSessionId =
-      this.config.getConnectorAdapterSessionId() ??
-      this.config.getLastKnownAdapterSessionId() ??
-      (await this.config.getAdapterSessionId());
-    const clientId = includeEventMetadata ? (payloadEventFields.clientId ?? eventMetadataDefaults.clientId) : undefined;
-    const providerConfigId = includeEventMetadata
-      ? (payloadEventFields.providerConfigId ?? eventMetadataDefaults.providerConfigId)
-      : undefined;
-    const occurredAt = includeEventMetadata
-      ? (payloadEventFields.occurredAt ?? eventMetadataDefaults.occurredAt)
-      : undefined;
-
-    this.config.setLastKnownAdapterSessionId(adapterSessionId);
+    const adapterSessionId = this.resolveConfirmedAdapterSessionId();
+    const { clientId, providerConfigId, occurredAt } = this.resolveEventMetadata(
+      payloadEventFields,
+      options?.includeEventMetadata ?? true,
+    );
 
     const base = this.config.getAgentContextBase();
     return {
@@ -95,7 +129,7 @@ export class AgentPayloadEmitter {
       agentId: base.agentId,
       adapterId: base.adapterId,
       adapterName: base.adapterName,
-      adapterSessionId,
+      ...(adapterSessionId !== undefined && { adapterSessionId }),
       ...(messageId !== undefined && { messageId }),
       ...(turnId !== undefined && { turnId }),
       ...(base.sessionId !== undefined && { sessionId: base.sessionId }),

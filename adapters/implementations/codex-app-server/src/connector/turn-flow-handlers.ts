@@ -12,7 +12,13 @@
 
 import type { ProcessingState, MessageHandle, MessageResult } from '@makaio/ai-adapters-core';
 import { UserMessageQueue, markCompletedWithFinalResult } from '@makaio/ai-adapters-core';
-import type { TurnCompletedNotification, ThreadStartedNotification } from '../protocol/generated/v2/index.js';
+import type {
+  ThreadForkResponse,
+  ThreadResumeResponse,
+  ThreadStartedNotification,
+  ThreadStartResponse,
+  TurnCompletedNotification,
+} from '../protocol/generated/v2/index.js';
 import { CodexAppServerSubjects, type CodexAppServerBus } from '../namespaces/index.js';
 import { CodexAppServerThread } from '../thread.js';
 import { CodexAppServerTurn } from '../turn.js';
@@ -22,8 +28,15 @@ import { fetchToolsForCodex, type ThreadStartParamsWithDynamicTools } from '../d
 import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
 import type { ApprovalPolicy, SandboxMode, ReasoningEffort } from './types.js';
 import type { ReasoningEffort as CodexReasoningEffort } from '../protocol/generated/ReasoningEffort.js';
-import type { AIReasoningLevel } from '@makaio/contracts';
+import type { AIReasoningLevel, NativeForkDirective } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
+
+type ThreadLifecycleResponse = ThreadForkResponse | ThreadResumeResponse | ThreadStartResponse;
+
+interface ThreadStartedDeferred {
+  promise: Promise<string>;
+  resolve: (id: string) => void;
+}
 
 /**
  * Maps canonical {@link AIReasoningLevel} values to Codex protocol {@link CodexReasoningEffort} strings.
@@ -42,7 +55,7 @@ export interface TurnFlowContext {
   getCurrentTurn: () => CodexAppServerTurn | undefined;
   /** Replaces (or clears) the active turn. */
   setCurrentTurn: (turn: CodexAppServerTurn | undefined) => void;
-  /** Returns the active thread, or `undefined` before `thread/started`. */
+  /** Returns the active thread, or `undefined` before thread startup completes. */
   getThread: () => CodexAppServerThread | undefined;
   /** Replaces (or clears) the active thread. */
   setThread: (thread: CodexAppServerThread | undefined) => void;
@@ -62,11 +75,11 @@ export interface TurnFlowContext {
   setAdapterSessionId: (id: string) => void;
   /**
    * Holds the deferred promise created in `startThread` so `getAdapterSessionId()`
-   * can await it when called before `thread/started` arrives.
+   * can await it when called before the thread ID is registered.
    */
-  getThreadStartedDeferred: () => { promise: Promise<string>; resolve: (id: string) => void } | undefined;
+  getThreadStartedDeferred: () => ThreadStartedDeferred | undefined;
   /** Replaces (or clears) the deferred thread-started promise. */
-  setThreadStartedDeferred: (deferred: { promise: Promise<string>; resolve: (id: string) => void } | undefined) => void;
+  setThreadStartedDeferred: (deferred: ThreadStartedDeferred | undefined) => void;
   /** Message queue shared with the connector's `sendMessage` path. */
   messageQueue: UserMessageQueue;
   /** The JSON-RPC client, guaranteed non-null when turn flow methods are called. */
@@ -101,50 +114,170 @@ export interface TurnFlowContext {
   allowedTools?: readonly string[];
   /** Runtime denylist for registry tools. Takes precedence over allowedTools. */
   disallowedTools?: readonly string[];
+  /**
+   * Previous adapter session ID for native resume.
+   *
+   * When set, `startThread` sends `thread/resume` instead of `thread/start`.
+   * Ignored when {@link nativeFork} is also set.
+   */
+  resumeAdapterSessionId?: string;
+  /**
+   * Native fork directive from the session orchestrator.
+   *
+   * When set without `forkPointMessageId`, `startThread` sends `thread/fork`
+   * instead of `thread/start`. Codex app-server supports only tip forks; a
+   * directive with `forkPointMessageId` is rejected before `thread/fork`.
+   * Takes precedence over {@link resumeAdapterSessionId}.
+   *
+   * One-shot invariant: the Codex connector enforces one-shot consumption
+   * structurally — `startThread` is guarded by `if (!this.thread)` in the
+   * connector, so it runs at most once per connector lifetime. Unlike the
+   * CLI and SDK adapters (which consume the directive by clearing
+   * `config.nativeFork` after `system.init`), Codex relies on the thread
+   * guard because the JSON-RPC thread is a persistent connection, not a
+   * per-turn subprocess.
+   */
+  nativeFork?: NativeForkDirective;
 }
 
 /**
- * Launch the ACP `thread/start` request, await the corresponding `thread/started`
- * notification, and populate the connector's `adapterSessionId`.
+ * Creates the deferred used by callers waiting for a provider thread ID during startup.
+ * @returns Deferred promise and resolver for the thread ID
+ */
+function createThreadStartedDeferred(): ThreadStartedDeferred {
+  let resolveThreadStarted: (id: string) => void = () => {};
+  const promise = new Promise<string>((resolve) => {
+    resolveThreadStarted = resolve;
+  });
+
+  return { promise, resolve: resolveThreadStarted };
+}
+
+/**
+ * Extracts the provider thread ID from a thread lifecycle JSON-RPC response.
+ * @param response - Response from `thread/start`, `thread/resume`, or `thread/fork`
+ * @returns Provider thread ID
+ */
+function extractResponseThreadId(response: ThreadLifecycleResponse): string {
+  const threadId = response.thread?.id;
+  if (!threadId) {
+    throw new Error('Codex app-server thread lifecycle response is missing thread.id');
+  }
+  return threadId;
+}
+
+/**
+ * Register a thread ID from either the JSON-RPC response or the later notification.
+ * @param ctx - Turn flow context
+ * @param threadId - Provider thread ID to register
+ */
+async function registerThreadStarted(ctx: TurnFlowContext, threadId: string): Promise<void> {
+  const existingThread = ctx.getThread();
+  if (existingThread?.threadId !== undefined) {
+    if (existingThread.threadId === threadId) {
+      ctx.setAdapterSessionId(threadId);
+      ctx.getThreadStartedDeferred()?.resolve(threadId);
+      return;
+    }
+    throw new Error(
+      `Codex app-server thread ID mismatch: active thread is ${existingThread.threadId}, received ${threadId}`,
+    );
+  }
+
+  ctx.setAdapterSessionId(threadId);
+  ctx.getThreadStartedDeferred()?.resolve(threadId);
+
+  const thread =
+    existingThread ??
+    new CodexAppServerThread({
+      bus: ctx.bus,
+      adapterId: ctx.adapterId,
+      agentId: ctx.agentId,
+    });
+  ctx.setThread(thread);
+
+  await thread.handleThreadStarted(threadId);
+}
+
+/**
+ * Rejects native fork directives that Codex app-server cannot represent safely.
+ * @param nativeFork - Native fork directive to validate
+ */
+function assertSupportedNativeFork(nativeFork: NativeForkDirective): void {
+  if (nativeFork.forkPointMessageId === undefined) return;
+
+  throw new Error(
+    `Codex app-server native fork only supports tip forks; forkPointMessageId ${nativeFork.forkPointMessageId} ` +
+      `cannot be sent to thread/fork for source thread ${nativeFork.sourceAdapterSessionId}`,
+  );
+}
+
+/**
+ * Launch the appropriate ACP thread-start request, await the corresponding
+ * JSON-RPC response, and populate the connector's `adapterSessionId`.
  *
- * A deferred promise is created before the request so the notification handler
- * can resolve it even if it fires before `await threadStartedPromise` is reached.
+ * Method selection (highest precedence first):
+ * - `nativeFork` present without `forkPointMessageId` → `thread/fork`
+ * - `resumeAdapterSessionId` present → `thread/resume` (continue existing thread)
+ * - Otherwise → `thread/start` (create a new thread)
+ *
+ * Only the stable `threadId` parameter is used for resume and fork — the
+ * `path` and `history` params are explicitly avoided as they are unstable.
+ *
+ * A deferred promise is created before the request so `getAdapterSessionId()`
+ * can wait while the request is in flight. The JSON-RPC response is authoritative
+ * for startup completion; a later matching `thread/started` notification is an
+ * idempotent confirmation.
  * On error the deferred is cleared to prevent `getAdapterSessionId()` from hanging.
  * @param ctx - Turn flow context
  */
 export async function startThread(ctx: TurnFlowContext): Promise<void> {
-  let resolve: (threadId: string) => void;
-  const threadStartedPromise = new Promise<string>((res) => {
-    resolve = res;
-  });
-  ctx.setThreadStartedDeferred({ promise: threadStartedPromise, resolve: resolve! });
+  ctx.setThreadStartedDeferred(createThreadStartedDeferred());
 
   try {
-    const dynamicTools = await fetchToolsForCodex(ctx.globalBus, ctx.adapterId, ctx.adapterName, {
-      allowedTools: ctx.allowedTools,
-      disallowedTools: ctx.disallowedTools,
-    });
+    let response: ThreadLifecycleResponse;
+    if (ctx.nativeFork !== undefined) {
+      assertSupportedNativeFork(ctx.nativeFork);
+      response = await ctx.getJsonRpcClient().request<ThreadForkResponse>('thread/fork', {
+        threadId: ctx.nativeFork.sourceAdapterSessionId,
+        ...(ctx.nativeFork.targetWorkingDirectory !== undefined && { cwd: ctx.nativeFork.targetWorkingDirectory }),
+      });
+    } else if (ctx.resumeAdapterSessionId !== undefined) {
+      const cwd = ctx.cwd;
+      response = await ctx.getJsonRpcClient().request<ThreadResumeResponse>('thread/resume', {
+        threadId: ctx.resumeAdapterSessionId,
+        ...(cwd !== undefined && { cwd }),
+      });
+    } else {
+      const dynamicTools = await fetchToolsForCodex(ctx.globalBus, ctx.adapterId, ctx.adapterName, {
+        allowedTools: ctx.allowedTools,
+        disallowedTools: ctx.disallowedTools,
+      });
 
-    const threadStartParams: ThreadStartParamsWithDynamicTools = {
-      model: ctx.getModel() ?? null,
-      modelProvider: null,
-      cwd: ctx.cwd ?? null,
-      approvalPolicy: ctx.getApprovalPolicy() ?? null,
-      sandbox: ctx.getSandboxMode() ?? null,
-      config: null,
-      baseInstructions: ctx.resolveSystemPrompt(),
-      developerInstructions: null,
-      experimentalRawEvents: false,
-      dynamicTools: dynamicTools.length > 0 ? dynamicTools : undefined,
-    };
+      const threadStartParams: ThreadStartParamsWithDynamicTools = {
+        model: ctx.getModel() ?? null,
+        modelProvider: null,
+        cwd: ctx.cwd ?? null,
+        approvalPolicy: ctx.getApprovalPolicy() ?? null,
+        sandbox: ctx.getSandboxMode() ?? null,
+        config: null,
+        baseInstructions: ctx.resolveSystemPrompt(),
+        developerInstructions: null,
+        experimentalRawEvents: false,
+        dynamicTools: dynamicTools.length > 0 ? dynamicTools : undefined,
+      };
 
-    await ctx.getJsonRpcClient().request('thread/start', threadStartParams);
+      response = await ctx.getJsonRpcClient().request<ThreadStartResponse>('thread/start', threadStartParams);
+    }
 
-    const threadId = await threadStartedPromise;
-    ctx.setAdapterSessionId(threadId);
+    await registerThreadStarted(ctx, extractResponseThreadId(response));
     ctx.setThreadStartedDeferred(undefined);
   } catch (error) {
     // Clear deferred so getAdapterSessionId() throws rather than awaiting a hung promise.
+    // Failed native resume/fork attempts intentionally rethrow without a local
+    // fallback: degrading to fresh-with-history is an orchestration decision
+    // (session routing retries once with injected history), and the adapter
+    // must not silently change fork semantics on its own.
     ctx.setThreadStartedDeferred(undefined);
     throw error;
   }
@@ -241,18 +374,7 @@ export async function processQueue(ctx: TurnFlowContext): Promise<void> {
 export async function onThreadStarted(ctx: TurnFlowContext, notification: ThreadStartedNotification): Promise<void> {
   const threadId = extractThreadId(notification);
 
-  ctx.setAdapterSessionId(threadId);
-  ctx.getThreadStartedDeferred()?.resolve(threadId);
-
-  ctx.setThread(
-    new CodexAppServerThread({
-      bus: ctx.bus,
-      adapterId: ctx.adapterId,
-      agentId: ctx.agentId,
-    }),
-  );
-
-  await ctx.getThread()!.handleThreadStarted(threadId);
+  await registerThreadStarted(ctx, threadId);
 }
 
 /**

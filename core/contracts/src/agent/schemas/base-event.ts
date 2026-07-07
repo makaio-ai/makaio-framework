@@ -17,8 +17,15 @@ export const BaseAgentEventSchema = z.object({
   /** Makaio session ID (NOT provider's native session ID) */
   sessionId: z.string().optional(),
 
-  /** Provider's native session ID (e.g., Claude conversation ID) */
-  adapterSessionId: z.string(),
+  /**
+   * Provider's native session ID (e.g., Claude conversation ID).
+   *
+   * Optional because unconfirmed fork sessions have not yet received the
+   * provider-assigned child session ID at the time early lifecycle events
+   * (e.g. `user_message.sent`) are emitted.  The payload emitter omits
+   * the field entirely until the provider confirms the fork.
+   */
+  adapterSessionId: z.string().optional(),
 
   /** User message ID being processed (for correlation with user_message lifecycle events) */
   messageId: z.string().optional(),

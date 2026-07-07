@@ -113,6 +113,7 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
   assignDefinedSessionField(session, 'targetWorkingDirectory', update.targetWorkingDirectory);
   assignDefinedSessionField(session, 'createdAt', update.createdAt);
   assignDefinedSessionField(session, 'lastActivityAt', update.lastActivityAt);
+  assignDefinedSessionField(session, 'machineId', update.machineId);
 
   assignNullableSessionField(session, 'executionTargetId', update.executionTargetId);
   assignNullableSessionField(session, 'approvalPolicyOverride', update.approvalPolicyOverride);

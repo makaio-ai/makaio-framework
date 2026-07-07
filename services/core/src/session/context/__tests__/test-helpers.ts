@@ -139,13 +139,13 @@ export function mockGetTurnsBySession(
  * @param id - Message ID
  * @param role - Message role
  * @param content - Text content
- * @param options - Optional overrides for sessionId and timestamp
+ * @param options - Optional overrides for sessionId, timestamp, and adapterMessageId
  */
 export function createMessage(
   id: string,
   role: 'user' | 'assistant',
   content: string,
-  options: { sessionId?: string; timestamp?: number } = {},
+  options: { sessionId?: string; timestamp?: number; adapterMessageId?: string } = {},
 ): SessionMessage {
   return {
     messageId: id,
@@ -155,6 +155,7 @@ export function createMessage(
     contentText: content,
     blocks: [{ type: 'text', content }],
     timestamp: options.timestamp ?? Date.now(),
+    ...(options.adapterMessageId !== undefined && { adapterMessageId: options.adapterMessageId }),
   };
 }
 

@@ -40,6 +40,19 @@ export const RehydrateAgentSchema = {
 
     /** Optional persisted native session ID for resume-capable connectors */
     adapterSessionId: z.string().optional(),
+
+    /**
+     * Provider-native session ID to resume.
+     *
+     * When present the adapter creates the connector in native-resume mode so
+     * the provider session continues where it left off. The caller (service
+     * layer) is responsible for evaluating locality before setting this field;
+     * the adapter trusts it without re-evaluation.
+     *
+     * Distinct from `adapterSessionId` which is always forwarded as an identity
+     * marker regardless of whether native resume is intended.
+     */
+    resumeAdapterSessionId: z.string().optional(),
   }),
 
   /** Empty response - success is implicit, errors throw */

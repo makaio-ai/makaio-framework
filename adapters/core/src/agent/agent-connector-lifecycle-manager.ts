@@ -162,7 +162,15 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       throw wiringError;
     }
 
-    this.config.setLastKnownAdapterSessionId(newConnector.adapterSessionId);
+    // Cache only the provider-confirmed ID so the enrichment invariant
+    // (payloads only ever carry confirmed adapter session IDs) is preserved.
+    // For fork-unconfirmed connectors getConfirmedAdapterSessionId() returns
+    // undefined — skip the write so the previous confirmed cache stays
+    // available for enrichment during the swap gap.
+    const confirmedAdapterSessionId = newConnector.getConfirmedAdapterSessionId();
+    if (confirmedAdapterSessionId !== undefined) {
+      this.config.setLastKnownAdapterSessionId(confirmedAdapterSessionId);
+    }
     for (const cleanup of oldWiringCleanups) {
       try {
         cleanup();

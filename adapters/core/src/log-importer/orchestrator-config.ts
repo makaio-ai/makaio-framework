@@ -11,6 +11,13 @@ export interface LogOrchestratorConfig {
   adapterId: string;
   adapterName: string;
   checkMakaioManaged?: (sessionId: string) => Promise<boolean>;
+  /**
+   * Machine identifier of the machine running this orchestrator.
+   * Caller-supplied at construction time; stamped on every
+   * `storage:session.importUpsert` payload so imported sessions are
+   * attributed to the correct machine. Pass `undefined` to omit.
+   */
+  machineId?: string | null;
 }
 
 /** Result of parsing a log file. */

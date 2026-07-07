@@ -70,6 +70,15 @@ export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend
    * used to enrich session registration.
    */
   cwd: z.string().optional(),
+  /**
+   * Stable runtime identity of the machine that observed/owns this session.
+   *
+   * Caller-supplied by the client runtime that runs on the owning machine.
+   * Storage handlers must never derive this value from the writer process
+   * because ingestion may be performed by central or downstream servers.
+   * Used by the native-locality evaluator to decide resume/fork vs degrade.
+   */
+  machineId: z.string().optional(),
 });
 
 export type ClientSessionStarted = z.infer<typeof ClientSessionStartedSchema>;

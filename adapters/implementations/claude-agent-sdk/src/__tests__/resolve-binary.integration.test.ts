@@ -222,7 +222,8 @@ describe('ClaudeSdkConnector — client.resolveBinary integration', () => {
     // No handler registered — requestOptional returns { handled: false }
     const agent = await makeAgent('claude-code');
     agents.push(agent);
-    await expect(agent.initialize()).resolves.toBeUndefined();
+    // Non-fork sessions return the locally-authoritative session ID immediately.
+    await expect(agent.initialize()).resolves.toEqual(expect.any(String));
 
     expect(capturedOptions).toHaveLength(1);
     expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBeUndefined();

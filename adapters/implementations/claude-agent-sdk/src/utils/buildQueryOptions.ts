@@ -6,7 +6,7 @@ import type {
   McpStdioServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import { Options } from '@anthropic-ai/claude-agent-sdk';
-import type { McpResolvedServer, ResponseSchemaDescriptor } from '@makaio/contracts';
+import type { McpResolvedServer, NativeForkDirective, ResponseSchemaDescriptor } from '@makaio/contracts';
 import { ClaudeSessionConfig } from '../types/index.js';
 import { SessionLifecycle, type AIReasoningLevel } from '@makaio/ai-adapters-core';
 
@@ -24,6 +24,12 @@ interface BuildQueryOptionsArgs {
   sessionId: string;
   /** Previous adapter session ID for resume attempts. */
   resumeAdapterSessionId?: string;
+  /**
+   * Native fork directive from the session orchestrator.
+   * When set, maps to SDK `forkSession` (tip) or `resumeSessionAt` (mid-history).
+   * Takes precedence over `resumeAdapterSessionId` when both are present.
+   */
+  nativeFork?: NativeForkDirective;
   /** Optional structured output descriptor. */
   responseSchema?: ResponseSchemaDescriptor;
   /**
@@ -150,6 +156,45 @@ function resolveMaxThinkingTokens(reasoningEffort: AIReasoningLevel | undefined)
 }
 
 /**
+ * Resolve the session identity fields for the SDK query.
+ *
+ * Priority (highest to lowest):
+ * 1. Native tip fork → `resume` + `forkSession: true` (branch from tip of source session)
+ * 2. Native mid-history fork → `resume` + `resumeSessionAt` + `forkSession: true`
+ *    (branch from a specific message)
+ * 3. Resume → `resume` (continue the same session)
+ * 4. New session → `sessionId` (create a fresh session)
+ *
+ * The native fork paths take precedence over plain resume because fork mode is
+ * an explicit orchestrator decision, not a fallback.
+ * @param sessionId - Local session ID (used for new sessions only)
+ * @param resumeAdapterSessionId - Provider session to resume (ignored when nativeFork is set)
+ * @param nativeFork - Native fork directive from the session orchestrator
+ * @returns Partial SDK Options with the correct session identity fields
+ */
+function resolveSessionIdentityOptions(
+  sessionId: string,
+  resumeAdapterSessionId: string | undefined,
+  nativeFork: NativeForkDirective | undefined,
+): Partial<Options> {
+  if (nativeFork !== undefined) {
+    const { sourceAdapterSessionId, forkPointMessageId } = nativeFork;
+    if (forkPointMessageId !== undefined) {
+      // Mid-history fork: resume up to the specified message, then branch.
+      return { resume: sourceAdapterSessionId, resumeSessionAt: forkPointMessageId, forkSession: true };
+    }
+    // Tip fork: resume to tip and branch.
+    return { resume: sourceAdapterSessionId, forkSession: true };
+  }
+
+  if (resumeAdapterSessionId !== undefined) {
+    return { resume: resumeAdapterSessionId };
+  }
+
+  return { sessionId };
+}
+
+/**
  * Build query options for SDK query() call.
  * Extracted to avoid duplication between initialize() and createQuery().
  * @param args - Arguments for building query options
@@ -161,6 +206,7 @@ export function buildQueryOptions({
   config,
   sessionId,
   resumeAdapterSessionId,
+  nativeFork,
   responseSchema,
   mcpServerPort,
 }: BuildQueryOptionsArgs): Options {
@@ -183,11 +229,13 @@ export function buildQueryOptions({
     mcpServerPort,
   );
 
+  const sessionIdentity = resolveSessionIdentityOptions(sessionId, resumeAdapterSessionId, nativeFork);
+
   return {
     ...(config.providerConfig?.queryOptions ?? {}),
     cwd: config.cwd,
     model: config.model,
-    ...(resumeAdapterSessionId === undefined ? { sessionId } : { resume: resumeAdapterSessionId }),
+    ...sessionIdentity,
     extraArgs,
     env: config.env,
     ...(maxThinkingTokens !== undefined && { maxThinkingTokens }),

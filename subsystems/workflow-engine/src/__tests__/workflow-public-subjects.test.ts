@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
 import {
+  SessionSubjects,
   WorkerNodeSubjects,
   type IWorkflowRunner,
   type WorkflowExecutionScope,
@@ -392,5 +393,82 @@ describe('workflow public subjects', () => {
     } else if (expectedStatus === 'cancelled') {
       expect(execution?.reason).toBe('cancelled by remote runner');
     }
+  });
+});
+
+describe('workflow start with parentSessionId', () => {
+  let setup: WorkflowExecutorTestSetup | undefined;
+
+  beforeEach(async () => {
+    setup = await setupWorkflowExecutorTest();
+  });
+
+  afterEach(async () => {
+    if (setup) {
+      await teardownWorkflowExecutorTest(setup);
+      setup = undefined;
+    }
+  });
+
+  it('rejects with a clear error before creating any coordinator session when parentSessionId is stale', async () => {
+    if (!setup) throw new Error('Workflow executor test setup did not initialize.');
+
+    const workflow = createWorkflowDefinition({
+      id: 'start-stale-parent',
+      name: 'Start Stale Parent',
+      steps: [],
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    // Track coordinator session creation attempts — should be zero for a stale parent.
+    const coordinatorSessionIds: string[] = [];
+    const offCreate = MakaioBus.on(SessionSubjects.created, (ctx) => {
+      coordinatorSessionIds.push(ctx.payload.sessionId);
+    });
+
+    try {
+      await expect(
+        MakaioBus.request(WorkflowSubjects.start, {
+          workflowId: workflow.id,
+          parentSessionId: 'session-does-not-exist',
+        }),
+      ).rejects.toThrow('Parent session not found: session-does-not-exist');
+      // No coordinator session must have been created before the error was thrown.
+      expect(coordinatorSessionIds).toHaveLength(0);
+    } finally {
+      offCreate();
+    }
+  });
+
+  it('accepts a valid parentSessionId and records it on the coordinator session', async () => {
+    if (!setup) throw new Error('Workflow executor test setup did not initialize.');
+
+    const workflow = createWorkflowDefinition({
+      id: 'start-valid-parent',
+      name: 'Start Valid Parent',
+      steps: [],
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    // Create a real parent session through the session service.
+    const { sessionId: parentSessionId } = await MakaioBus.request(SessionSubjects.create, {
+      title: 'Parent Session',
+    });
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      parentSessionId,
+    });
+
+    // The run context must record the coordinator session that was created as a
+    // child of the supplied parent.
+    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(runContext).not.toBeNull();
+
+    // Verify the coordinator session was created with the parent linked.
+    const { session } = await MakaioBus.request(SessionSubjects.get, {
+      sessionId: runContext!.coordinatorSessionId,
+    });
+    expect(session?.parentSessionId).toBe(parentSessionId);
   });
 });

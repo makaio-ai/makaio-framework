@@ -166,6 +166,30 @@ export interface ConformanceTestConfig<
      * **Free-Tier Adapters**: `false` (no usage tracking)
      */
     supportsUsageMetrics?: boolean;
+
+    /**
+     * Supports provider-native session resume.
+     *
+     * When enabled, the adapter can resume a prior provider session by its
+     * `adapterSessionId` without injecting the full message history. The SDK
+     * manages conversation state natively.
+     *
+     * **Claude Code**: `true` (resumes via Claude Agent SDK session IDs)
+     * **Stateless Adapters**: `false` (always replay history)
+     */
+    nativeResume?: boolean;
+
+    /**
+     * Supports provider-native session fork.
+     *
+     * When enabled, the adapter can branch from an existing provider session
+     * at an optional message checkpoint, creating a diverging conversation
+     * without replaying history into a fresh session.
+     *
+     * **Claude Code**: `true` (forks via Claude Agent SDK branching API)
+     * **Stateless Adapters**: `false` (always replay history for fork)
+     */
+    nativeFork?: boolean;
   };
 
   /**

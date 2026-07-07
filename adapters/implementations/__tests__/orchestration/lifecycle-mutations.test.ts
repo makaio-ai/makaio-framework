@@ -124,7 +124,8 @@ describe('Orchestration: lifecycle mutations', async () => {
 
       const agentId = response.agentId;
       const adapterId = response.adapterId;
-      const adapterSessionId = response.adapterSessionId;
+      // Start with initial message always confirms the session ID immediately.
+      const adapterSessionId = response.adapterSessionId!;
 
       // ── Step 2: Attempt cwd.change during active turn → rejection ───
       // Fire immediately before awaiting completion — turn is still active

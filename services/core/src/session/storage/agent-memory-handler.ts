@@ -3,27 +3,39 @@ import type { MakaioSessionAgent } from '@makaio/contracts';
 import { AgentStorageSubjects } from './agent-namespace.js';
 
 /**
+ * Named options for {@link applyRuntimeUpdate}.
+ *
+ * Every field is optional; omitting a field leaves the corresponding agent
+ * property unchanged.
+ */
+interface RuntimeUpdateOptions {
+  /** Current runtime adapter instance ID. */
+  adapterId?: string;
+  /** Provider-confirmed session ID. */
+  adapterSessionId?: string;
+  /** New working directory. */
+  cwd?: string;
+  /** New model identifier. */
+  model?: string;
+  /** Directory restrictions. */
+  allowedDirectories?: string[];
+  /** New provider config UUID. */
+  providerConfigId?: string;
+}
+
+/**
  * Apply runtime field updates to an agent record.
  *
  * Returns `false` when none of the mutable fields are provided (no-op guard).
  * @param agent - Agent record to mutate in-place
- * @param adapterId - Current runtime adapter instance ID, or `undefined` to leave unchanged
- * @param cwd - New working directory, or `undefined` to leave unchanged
- * @param model - New model identifier, or `undefined` to leave unchanged
- * @param allowedDirectories - Directory restrictions, or `undefined` to leave unchanged
- * @param providerConfigId - New provider config UUID, or `undefined` to leave unchanged
+ * @param options - Fields to update; omit a key to leave that field unchanged
  * @returns `true` if at least one field was updated, `false` otherwise
  */
-function applyRuntimeUpdate(
-  agent: MakaioSessionAgent,
-  adapterId: string | undefined,
-  cwd: string | undefined,
-  model: string | undefined,
-  allowedDirectories: string[] | undefined,
-  providerConfigId: string | undefined,
-): boolean {
+function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOptions): boolean {
+  const { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = options;
   if (
     adapterId === undefined &&
+    adapterSessionId === undefined &&
     cwd === undefined &&
     model === undefined &&
     allowedDirectories === undefined &&
@@ -32,6 +44,7 @@ function applyRuntimeUpdate(
     return false;
   }
   if (adapterId !== undefined) agent.adapterId = adapterId;
+  if (adapterSessionId !== undefined) agent.adapterSessionId = adapterSessionId;
   if (cwd !== undefined) agent.cwd = cwd;
   if (model !== undefined) agent.model = model;
   if (allowedDirectories !== undefined) agent.allowedDirectories = allowedDirectories;
@@ -129,8 +142,10 @@ export function registerMemoryAgentStorage(bus: IMakaioBus): () => void {
         ctx.setResult({ success: false });
         return;
       }
-      const { adapterId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
-      if (!applyRuntimeUpdate(agent, adapterId, cwd, model, allowedDirectories, providerConfigId)) {
+      const { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
+      if (
+        !applyRuntimeUpdate(agent, { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId })
+      ) {
         ctx.setResult({ success: false });
         return;
       }

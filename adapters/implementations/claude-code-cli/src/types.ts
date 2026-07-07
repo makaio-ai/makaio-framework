@@ -5,7 +5,13 @@ import type {
   MessageHandle,
   MessageResult,
 } from '@makaio/ai-adapters-core';
-import type { McpResolvedServer, McpSessionContext, ResponseSchemaDescriptor, SystemPrompt } from '@makaio/contracts';
+import type {
+  McpResolvedServer,
+  McpSessionContext,
+  NativeForkDirective,
+  ResponseSchemaDescriptor,
+  SystemPrompt,
+} from '@makaio/contracts';
 import type { ClaudeCodeCliConnectorBus } from './namespace/index.js';
 import type { ClaudeCodeCliProviderConfig } from './schemas.js';
 
@@ -44,6 +50,12 @@ export type ClaudeCliAgentConfig = BaseAgentConnectorConfig<ClaudeCodeCliConnect
   allowedTools?: string[];
   /** Disallowed Claude tool names or patterns to pass via `--disallowedTools`. */
   disallowedTools?: string[];
+  /**
+   * Native fork directive from the session orchestrator.
+   * Forwarded from the agent config into the connector and then to the CLI session.
+   * The CLI adapter supports tip-only fork via `--resume <source> --fork-session`.
+   */
+  nativeFork?: NativeForkDirective;
 };
 
 /**
@@ -94,6 +106,13 @@ export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCod
   resumeAdapterSessionId?: string;
   /** Predetermined session ID (from swapConnector) */
   predeterminedSessionId?: string;
+  /**
+   * Native fork directive from the session orchestrator.
+   * When set, the CLI adapter uses `--resume <sourceId> --fork-session` to branch
+   * from the tip of the source session. Mid-history fork (`forkPointMessageId`) is
+   * not supported by the CLI and will throw at buildCliArgs time.
+   */
+  nativeFork?: NativeForkDirective;
   /**
    * System prompt to pass to the CLI.
    * - Plain string → `--system-prompt`

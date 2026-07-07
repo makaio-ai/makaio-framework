@@ -23,7 +23,6 @@ describe('AgentPayloadEmitter', () => {
       getConnectorAdapterSessionId: () => 'adapter-session-1',
       getLastKnownAdapterSessionId: () => undefined,
       setLastKnownAdapterSessionId: () => {},
-      getAdapterSessionId: async () => 'adapter-session-1',
       getEventMetadataDefaults: () => ({
         clientId: 'client-1',
         providerConfigId: 'provider-config-1',
@@ -71,7 +70,6 @@ describe('AgentPayloadEmitter', () => {
       getConnectorAdapterSessionId: () => 'adapter-session-1',
       getLastKnownAdapterSessionId: () => undefined,
       setLastKnownAdapterSessionId: () => {},
-      getAdapterSessionId: async () => 'adapter-session-1',
       getEventMetadataDefaults: () => ({}),
     });
 
@@ -109,7 +107,6 @@ describe('AgentPayloadEmitter', () => {
       getConnectorAdapterSessionId: () => 'adapter-session-1',
       getLastKnownAdapterSessionId: () => undefined,
       setLastKnownAdapterSessionId: () => {},
-      getAdapterSessionId: async () => 'adapter-session-1',
       getEventMetadataDefaults: () => ({
         clientId: 'live-client',
         providerConfigId: 'live-provider-config',
@@ -176,7 +173,6 @@ describe('AgentPayloadEmitter', () => {
       getConnectorAdapterSessionId: () => 'adapter-session-1',
       getLastKnownAdapterSessionId: () => undefined,
       setLastKnownAdapterSessionId: () => {},
-      getAdapterSessionId: async () => 'adapter-session-1',
       getEventMetadataDefaults: () => ({
         clientId: 'live-client',
         providerConfigId: 'live-provider-config',
@@ -210,9 +206,8 @@ describe('AgentPayloadEmitter', () => {
     ]);
   });
 
-  it('captures analytics metadata defaults before waiting for adapter session resolution', async () => {
+  it('omits adapterSessionId when no confirmed source is available (unconfirmed fork)', async () => {
     const emittedPayloads: unknown[] = [];
-    let occurredAt = 1_744_123_456_789;
     const emitter = new AgentPayloadEmitter({
       globalBus: {
         emit: async (_subject: unknown, payload: unknown) => {
@@ -229,14 +224,10 @@ describe('AgentPayloadEmitter', () => {
       getConnectorAdapterSessionId: () => undefined,
       getLastKnownAdapterSessionId: () => undefined,
       setLastKnownAdapterSessionId: () => {},
-      getAdapterSessionId: async () => {
-        occurredAt = 1_744_123_499_999;
-        return 'adapter-session-1';
-      },
       getEventMetadataDefaults: () => ({
         clientId: 'client-1',
         providerConfigId: 'provider-config-1',
-        occurredAt,
+        occurredAt: 1_744_123_456_789,
       }),
     });
 
@@ -250,13 +241,140 @@ describe('AgentPayloadEmitter', () => {
         agentId: 'agent-1',
         adapterId: 'adapter-1',
         adapterName: 'test-adapter',
-        adapterSessionId: 'adapter-session-1',
         messageId: 'current-message-id',
         clientId: 'client-1',
         providerConfigId: 'provider-config-1',
         occurredAt: 1_744_123_456_789,
       },
     ]);
+    // adapterSessionId must NOT be present
+    expect(emittedPayloads[0]).not.toHaveProperty('adapterSessionId');
+  });
+
+  it('omits adapterSessionId when connector is unconfirmed and no lastKnown is cached', async () => {
+    // Scenario: fresh fork child, no prior connector — both sources are empty.
+    // The field must be omitted (not stamped with a placeholder).
+    const emittedPayloads: unknown[] = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async (_subject: unknown, payload: unknown) => {
+          emittedPayloads.push(payload);
+        },
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+      }),
+      getCurrentMessageId: () => 'msg-1',
+      getCurrentTurnId: () => undefined,
+      getConnectorAdapterSessionId: () => undefined, // unconfirmed fork
+      getLastKnownAdapterSessionId: () => undefined, // no prior cache
+      setLastKnownAdapterSessionId: () => {},
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    await emitter.emitGlobal(AgentSubjects.message, { content: 'hello' });
+    expect(emittedPayloads[0]).not.toHaveProperty('adapterSessionId');
+  });
+
+  it('stamps cached lastKnown adapterSessionId during swap gap (unconfirmed connector + confirmed cache)', async () => {
+    // Scenario: connector swap just happened; the new connector is
+    // fork-unconfirmed but the previous confirmed session ID was cached.
+    // The cached ID is legitimate (written only from confirmed sources)
+    // and must be stamped to maintain event continuity during the swap gap.
+    const emittedPayloads: unknown[] = [];
+    const storedIds: Array<string | undefined> = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async (_subject: unknown, payload: unknown) => {
+          emittedPayloads.push(payload);
+        },
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+      }),
+      getCurrentMessageId: () => 'msg-1',
+      getCurrentTurnId: () => undefined,
+      getConnectorAdapterSessionId: () => undefined, // new connector not yet confirmed
+      getLastKnownAdapterSessionId: () => 'previous-confirmed-session', // cached from old connector
+      setLastKnownAdapterSessionId: (id) => {
+        storedIds.push(id);
+      },
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    await emitter.emitGlobal(AgentSubjects.message, { content: 'during-swap' });
+    expect(emittedPayloads[0]).toHaveProperty('adapterSessionId', 'previous-confirmed-session');
+    // The cache write re-affirms the same confirmed value
+    expect(storedIds).toContain('previous-confirmed-session');
+  });
+
+  it('stamps confirmed adapterSessionId after fork confirmation', async () => {
+    const emittedPayloads: unknown[] = [];
+    let confirmedId: string | undefined;
+    const storedIds: Array<string | undefined> = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async (_subject: unknown, payload: unknown) => {
+          emittedPayloads.push(payload);
+        },
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+      }),
+      getCurrentMessageId: () => 'msg-1',
+      getCurrentTurnId: () => undefined,
+      getConnectorAdapterSessionId: () => confirmedId,
+      getLastKnownAdapterSessionId: () => undefined,
+      setLastKnownAdapterSessionId: (id) => {
+        storedIds.push(id);
+      },
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    // Pre-confirmation: no adapterSessionId
+    await emitter.emitGlobal(AgentSubjects.message, { content: 'pre' });
+    expect(emittedPayloads[0]).not.toHaveProperty('adapterSessionId');
+
+    // Simulate system.init confirmation
+    confirmedId = 'confirmed-child-session';
+    await emitter.emitGlobal(AgentSubjects.message, { content: 'post' });
+    expect(emittedPayloads[1]).toHaveProperty('adapterSessionId', 'confirmed-child-session');
+    expect(storedIds).toContain('confirmed-child-session');
+  });
+
+  it('stamps locally-authoritative adapterSessionId immediately for non-fork agents', async () => {
+    const emittedPayloads: unknown[] = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async (_subject: unknown, payload: unknown) => {
+          emittedPayloads.push(payload);
+        },
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+      }),
+      getCurrentMessageId: () => 'msg-1',
+      getCurrentTurnId: () => undefined,
+      // Non-fork: getConfirmedAdapterSessionId returns the local ID immediately
+      getConnectorAdapterSessionId: () => 'local-authoritative-id',
+      getLastKnownAdapterSessionId: () => undefined,
+      setLastKnownAdapterSessionId: () => {},
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    await emitter.emitGlobal(AgentSubjects.message, { content: 'hello' });
+    expect(emittedPayloads[0]).toHaveProperty('adapterSessionId', 'local-authoritative-id');
   });
 
   it('routes adapter logs through the emitter without requesting analytics metadata', async () => {

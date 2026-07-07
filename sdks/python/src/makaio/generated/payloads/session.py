@@ -9,9 +9,9 @@ from typing import Any, Literal, Union
 class SessionAgentAddedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     session_id: str
+    adapter_session_id: str | None = None
     cwd: str | None = None
     model: str | None = None
     role: Literal["lead", "member"] | None = None
@@ -29,6 +29,7 @@ class SessionCreatedPayload:
 @dataclass(frozen=True)
 class SessionRestartAgentsRequest:
     session_id: str
+    machine_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,31 @@ class SessionSendMessageRequestSessionContextMessageHistoryItem:
 
 
 @dataclass(frozen=True)
+class SessionSendMessageRequestSessionContextNativeFork:
+    source_adapter_session_id: str
+    source_session_id: str
+    fork_point_message_id: str | None = None
+    target_working_directory: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionSendMessageRequestSessionContextNativeLocalityVariantA:
+    kind: Literal["native"]
+
+
+@dataclass(frozen=True)
+class SessionSendMessageRequestSessionContextNativeLocalityVariantB:
+    kind: Literal["degrade"]
+    reason: Literal["adapter-unsupported", "adapter-mismatch", "no-adapter-session", "missing-machine-id", "machine-mismatch", "cwd-mismatch", "transforms-present", "compression-present", "connector-swap", "mid-history-unsupported", "hybrid-imported-orchestrated", "native-attempt-failed", "agent-already-started", "fork-point-unresolvable"]
+
+
+@dataclass(frozen=True)
+class SessionSendMessageRequestSessionContextNativeLocalityVariantC:
+    kind: Literal["foreign"]
+    machine_id: str
+
+
+@dataclass(frozen=True)
 class SessionSendMessageRequestSessionContext:
     cache_strategy: Literal["auto", "systemPrompt", "fullPrefix"] | None = None
     extracted_context: Any | None = None
@@ -74,6 +100,8 @@ class SessionSendMessageRequestSessionContext:
     has_new_transforms: bool | None = None
     is_first_turn: bool | None = None
     message_history: list[SessionSendMessageRequestSessionContextMessageHistoryItem] | None = None
+    native_fork: SessionSendMessageRequestSessionContextNativeFork | None = None
+    native_locality: Union[SessionSendMessageRequestSessionContextNativeLocalityVariantA, SessionSendMessageRequestSessionContextNativeLocalityVariantB, SessionSendMessageRequestSessionContextNativeLocalityVariantC] | None = None
     turn_context: dict[str, Any] | None = None
 
 

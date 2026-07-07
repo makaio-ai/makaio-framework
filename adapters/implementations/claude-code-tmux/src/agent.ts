@@ -82,10 +82,12 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
    * Initialize the connector and publish runtime evidence once the tmux-backed
    * Claude Code session ID is known.
    * @param options - Optional initialization options.
+   * @returns Confirmed adapter session ID, or `undefined` for unconfirmed fork sessions.
    */
-  public override async initialize(options?: StartAgentOptions): Promise<void> {
-    await super.initialize(options);
+  public override async initialize(options?: StartAgentOptions): Promise<string | undefined> {
+    const confirmedId = await super.initialize(options);
     this.observeCurrentRuntime();
+    return confirmedId;
   }
 
   /**

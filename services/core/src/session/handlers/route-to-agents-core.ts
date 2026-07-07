@@ -18,7 +18,7 @@ import type {
   ResponseSchemaDescriptor,
   SessionContext,
 } from '@makaio/contracts';
-import { HookAbortError } from '@makaio/hooks';
+import { getHookAbortError } from './hook-abort-error.js';
 import type { Turn } from '../entities/turn.js';
 import type { TurnCompleteCallback } from '../session-turn-manager.js';
 
@@ -28,6 +28,12 @@ import type { TurnCompleteCallback } from '../session-turn-manager.js';
  * Fans out to all agents in parallel. On routing failure, marks the agent
  * as errored and checks for turn completion. On `HookAbortError`, marks
  * the agent as completed with `cancelled` outcome.
+ *
+ * Contract: `sessionContext` must not carry a `nativeFork` directive. This
+ * function dispatches exclusively via `agent.sendMessage`, which never
+ * consumes the directive — fork directives are consumed only on the
+ * `startAgent` path. Callers assembling fork contexts must degrade them to
+ * fresh-with-history first (see `routeToAgents`).
  * @param bus - Bus instance for communication
  * @param session - Session metadata (for session ID)
  * @param agents - Target agents to route to
@@ -73,7 +79,7 @@ export async function routeToAgentsCore(
         agentId: agent.agentId,
       });
     } catch (error) {
-      if (error instanceof HookAbortError) {
+      if (getHookAbortError(error) !== undefined) {
         await bus.emit(SessionSubjects.user_message.completed, {
           sessionId: turn.sessionId,
           turnId: turn.turnId,

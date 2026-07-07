@@ -134,6 +134,50 @@ describe('MakaioSessionService - Lifecycle', () => {
       expect(session).toMatchObject({ metadata });
     });
 
+    it('sets rootSessionId for direct child sessions through session.create', async () => {
+      const { sessionId: root } = await MakaioBus.request(SessionSubjects.create, {});
+      const { sessionId: child } = await MakaioBus.request(SessionSubjects.create, { parentSessionId: root });
+
+      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId: child });
+      expect(session?.rootSessionId).toBe(root);
+    });
+
+    it('propagates rootSessionId for nested child sessions through session.create', async () => {
+      const { sessionId: root } = await MakaioBus.request(SessionSubjects.create, {});
+      const { sessionId: mid } = await MakaioBus.request(SessionSubjects.create, { parentSessionId: root });
+      const { sessionId: leaf } = await MakaioBus.request(SessionSubjects.create, { parentSessionId: mid });
+
+      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId: leaf });
+      expect(session?.rootSessionId).toBe(root);
+    });
+
+    it('throws when parentSessionId does not exist', async () => {
+      await expect(
+        MakaioBus.request(SessionSubjects.create, { parentSessionId: 'non-existent-parent-id' }),
+      ).rejects.toThrow('Parent session not found: non-existent-parent-id');
+    });
+
+    it('stamps caller-supplied machineId on created session', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, { machineId: 'test-machine-42' });
+
+      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+      expect(session?.machineId).toBe('test-machine-42');
+    });
+
+    it('stamps host machineId on fork child sessions', async () => {
+      const cleanup = registerForkHandler(MakaioBus, 'fork-machine');
+      const { sessionId: sourceSessionId } = await MakaioBus.request(SessionSubjects.create, {});
+
+      try {
+        const { sessionId: childSessionId } = await MakaioBus.request(SessionSubjects.fork, { sourceSessionId });
+        const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId: childSessionId });
+
+        expect(session?.machineId).toBe('fork-machine');
+      } finally {
+        cleanup();
+      }
+    });
+
     it('returns existing session when provided sessionId already exists', async () => {
       const providedSessionId = `session-${crypto.randomUUID()}`;
       const { sessionId: firstId } = await MakaioBus.request(SessionSubjects.create, {

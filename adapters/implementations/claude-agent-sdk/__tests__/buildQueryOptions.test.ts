@@ -73,6 +73,65 @@ describe('buildQueryOptions — resume behaviour', () => {
   });
 });
 
+describe('buildQueryOptions — native fork behaviour', () => {
+  it('tip fork: emits resume + forkSession:true, no sessionId', () => {
+    const config = makeMinimalConfig();
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'local-session-id',
+      nativeFork: {
+        sourceSessionId: 'makaio-source',
+        sourceAdapterSessionId: 'provider-source',
+      },
+    });
+
+    expect(options.resume).toBe('provider-source');
+    expect(options.forkSession).toBe(true);
+    expect(options).not.toHaveProperty('sessionId');
+    expect(options).not.toHaveProperty('resumeSessionAt');
+  });
+
+  it('mid-history fork: emits resume + resumeSessionAt + forkSession:true, no sessionId', () => {
+    const config = makeMinimalConfig();
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'local-session-id',
+      nativeFork: {
+        sourceSessionId: 'makaio-source',
+        sourceAdapterSessionId: 'provider-source',
+        forkPointMessageId: 'msg-checkpoint',
+      },
+    });
+
+    expect(options.resume).toBe('provider-source');
+    expect(options.resumeSessionAt).toBe('msg-checkpoint');
+    expect(options.forkSession).toBe(true);
+    expect(options).not.toHaveProperty('sessionId');
+  });
+
+  it('nativeFork takes precedence over resumeAdapterSessionId', () => {
+    const config = makeMinimalConfig();
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'local-session-id',
+      resumeAdapterSessionId: 'ignored-resume',
+      nativeFork: {
+        sourceSessionId: 'makaio-source',
+        sourceAdapterSessionId: 'provider-source',
+      },
+    });
+
+    expect(options.resume).toBe('provider-source');
+    expect(options.forkSession).toBe(true);
+  });
+});
+
 describe('buildQueryOptions — maxThinkingTokens behaviour', () => {
   it('omits maxThinkingTokens when reasoningEffort is not configured', () => {
     const config = makeMinimalConfig(); // no reasoningEffort

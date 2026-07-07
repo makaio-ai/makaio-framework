@@ -157,6 +157,14 @@ export class MockConnector implements Partial<AIAgentConnector> {
   }
 
   /**
+   * Return mock confirmed session ID.
+   * @returns Always returns 'test-session-id' for mocks.
+   */
+  public getConfirmedAdapterSessionId(): string | undefined {
+    return 'test-session-id';
+  }
+
+  /**
    * Start a mock session and return an acknowledged message handle.
    * @param message - Normalized user message
    * @param options - Optional connector start options

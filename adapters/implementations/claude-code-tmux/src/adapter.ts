@@ -60,7 +60,7 @@ export class ClaudeCodeTmuxAdapter extends AIAdapter<
     const { providerConfigDefaults, ...adapterConfig } = config ?? {};
     super({
       name: ADAPTER_NAME,
-      capabilities: ['tools', 'systemPrompt:override', 'systemPrompt:append'],
+      capabilities: ['tools', 'systemPrompt:override', 'systemPrompt:append', 'session:resume'],
       ...adapterConfig,
       namespace: ClaudeCodeTmuxConnectorNamespace,
       agentFactory: (agentConfig) => new ClaudeCodeTmuxAgent(agentConfig),

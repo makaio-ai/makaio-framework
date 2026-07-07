@@ -41,4 +41,20 @@ describe('BaseAgentEventSchema', () => {
       adapterSessionId: 'adapter-session-1',
     });
   });
+
+  it('accepts missing adapterSessionId for unconfirmed fork sessions', () => {
+    const result = BaseAgentEventSchema.safeParse({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      adapterName: 'claude-code',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      adapterName: 'claude-code',
+    });
+    expect(result.data!.adapterSessionId).toBeUndefined();
+  });
 });

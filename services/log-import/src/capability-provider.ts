@@ -63,6 +63,8 @@ interface CapabilityLogImportProvider {
   adapterName: string;
   registration: AdapterLogImportRegistration;
   logImportConfig?: LogImportConfig;
+  /** Machine identifier forwarded from the product descriptor at registration time. */
+  machineId?: string | null;
 }
 
 /**
@@ -103,12 +105,14 @@ function isLogImportProvider(provider: unknown): provider is CapabilityLogImport
  * @param adapterId - Runtime adapter UUID
  * @param adapterName - Stable adapter name
  * @param logImportConfig - Optional per-adapter log import configuration
+ * @param machineId - Machine identifier forwarded from the product descriptor
  * @returns Normalized orchestrator configuration
  */
 function buildOrchestratorConfig(
   adapterId: string,
   adapterName: string,
   logImportConfig?: LogImportConfig,
+  machineId?: string | null,
 ): LogOrchestratorConfig {
   return {
     enabled: logImportConfig?.enabled ?? true,
@@ -117,6 +121,7 @@ function buildOrchestratorConfig(
     adapterId,
     adapterName,
     checkMakaioManaged: logImportConfig?.checkMakaioManaged,
+    machineId,
   };
 }
 
@@ -127,6 +132,7 @@ function buildOrchestratorConfig(
  * @param logImportConfig - Optional per-adapter log import configuration
  * @param LogOrchestratorClass - Import-mode orchestrator class, when supported
  * @param LogDiscoveryOrchestratorClass - Discovery-mode orchestrator class, when supported
+ * @param machineId - Machine identifier forwarded from the product descriptor
  * @returns Orchestrator factory, or null when the provider has no orchestrators
  */
 export function buildOrchestratorFactory(
@@ -135,12 +141,13 @@ export function buildOrchestratorFactory(
   logImportConfig: LogImportConfig | undefined,
   LogOrchestratorClass: LogOrchestratorConstructor | undefined,
   LogDiscoveryOrchestratorClass: LogOrchestratorConstructor | undefined,
+  machineId?: string | null,
 ): OrchestratorFactory | null {
   if (!LogOrchestratorClass && !LogDiscoveryOrchestratorClass) {
     return null;
   }
 
-  const config = buildOrchestratorConfig(adapterId, adapterName, logImportConfig);
+  const config = buildOrchestratorConfig(adapterId, adapterName, logImportConfig, machineId);
 
   return (mode: Exclude<LogImportMode, 'disabled'>): LogImportOrchestrator | null => {
     if (!config.enabled) {
@@ -227,6 +234,7 @@ export async function registerFromProvider(
     }),
     logFilePattern: providerValue.registration.logFilePattern,
     clientId: providerValue.registration.clientId,
+    machineId: providerValue.machineId,
   });
 
   const factory = buildOrchestratorFactory(
@@ -235,6 +243,7 @@ export async function registerFromProvider(
     providerValue.logImportConfig,
     providerValue.registration.LogOrchestratorClass,
     providerValue.registration.LogDiscoveryOrchestratorClass,
+    providerValue.machineId,
   );
   if (factory) {
     registrar.setOrchestratorFactory(providerValue.id, factory);

@@ -14,7 +14,12 @@ import type { BaseAgentConnectorConfig, AIAgentConfig } from '../agent/types.js'
 import type { AIAgentConnector } from '../agent/index.js';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { ExtractSubjectPayload } from '@makaio/core';
-import { AdapterSubjects, type ProviderContext } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  type NativeForkDirective,
+  type ProviderContext,
+  type SessionContext,
+} from '@makaio/contracts';
 
 /** Payload type for adapter.startAgent requests. */
 export type StartAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubjects.startAgent>;
@@ -55,6 +60,43 @@ export type AgentCreationOptions = Omit<
   resumeAdapterSessionId?: string;
   /** Unresolved provider context (credential refs, not plaintext). */
   providerContext?: ProviderContext;
+  /**
+   * Source Makaio session ID when mode is 'fork'.
+   * Forwarded verbatim from the fork-mode startAgent request.
+   */
+  sourceSessionId?: string;
+  /**
+   * Provider-native source session ID when mode is 'fork'.
+   * Forwarded verbatim from the fork-mode startAgent request.
+   */
+  sourceAdapterSessionId?: string;
+  /**
+   * Optional provider-native checkpoint message ID for the fork point.
+   * Forwarded verbatim from the fork-mode startAgent request.
+   */
+  forkPointMessageId?: string;
+  /**
+   * Optional working directory override for the forked session.
+   * Forwarded verbatim from the fork-mode startAgent request.
+   */
+  targetWorkingDirectory?: string;
+  /**
+   * Orchestrator-assembled session context carrying fork directives,
+   * native-locality decisions, and other session-scoped metadata.
+   *
+   * Present when the session orchestrator attaches context to a startAgent
+   * request (e.g. fork-mode locality evaluation).
+   */
+  sessionContext?: SessionContext;
+  /**
+   * Provider-native fork directive assembled from the startAgent fork-mode fields.
+   *
+   * Present when the adapter is started in fork mode and a native fork is feasible.
+   * When `mode` is 'fork', `buildNativeForkDirective()` constructs this from the
+   * individual fork fields above. When pre-built (e.g. from rehydration), it is
+   * passed through directly.
+   */
+  nativeFork?: NativeForkDirective;
 };
 
 /**

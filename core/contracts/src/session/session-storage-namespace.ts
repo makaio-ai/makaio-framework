@@ -71,6 +71,16 @@ export const SessionStorageSetRequestSchema = z
     }
   });
 
+/**
+ * Shared Zod field for `machineId` on session storage write payloads.
+ *
+ * Stable runtime machine identity that owns the provider-native session store.
+ * Caller-supplied by the owning hook/runtime. Storage handlers must never
+ * derive this from the writer process because imports may be performed by
+ * central or downstream servers.
+ */
+const MachineIdFieldSchema = z.string().nullable().optional();
+
 const SessionStorageUpdateRequestPayloadSchema = z.object({
   sessionId: z.string(),
   status: z.enum(['active', 'closed', 'archived', 'discovered']).optional(),
@@ -96,6 +106,8 @@ const SessionStorageUpdateRequestPayloadSchema = z.object({
    * overwriting an existing tool-call assignment; null explicitly clears it.
    */
   spawningToolCallId: z.string().nullable().optional(),
+  /** {@inheritDoc MachineIdFieldSchema} */
+  machineId: MachineIdFieldSchema,
 });
 // Intentionally no `validateClientAccountObservationRequirement(...)` here:
 // partial updates have no previous-row context, so the authoritative transition
@@ -168,9 +180,11 @@ const ImportUpsertBaseSchema = z.object({
    * defined incoming value over the stored one.
    */
   isSidechain: z.boolean().optional(),
+  /** {@inheritDoc MachineIdFieldSchema} */
+  machineId: MachineIdFieldSchema,
 });
 
-const ImportUpsertRequestSchema = z.discriminatedUnion('kind', [
+export const ImportUpsertRequestSchema = z.discriminatedUnion('kind', [
   ImportUpsertBaseSchema.merge(RootSessionLineageSchema),
   ImportUpsertBaseSchema.merge(ForkSessionLineageSchema),
   ImportUpsertBaseSchema.merge(SubagentSessionLineageSchema),

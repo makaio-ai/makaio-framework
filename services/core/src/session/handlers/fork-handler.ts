@@ -156,9 +156,10 @@ function validatePipelineTransforms(transforms: ForkTransforms): void {
  * Creates a new session with parent reference. The forked session starts
  * empty - its full conversation is assembled by traversing the parent chain.
  * @param bus - Bus instance for communication
+ * @param machineId - Stable runtime machine identity to stamp on child sessions
  * @returns Cleanup function to unsubscribe
  */
-export function registerForkHandler(bus: IMakaioBus): () => void {
+export function registerForkHandler(bus: IMakaioBus, machineId?: string): () => void {
   return bus.on(SessionSubjects.fork, async (ctx) => {
     const {
       sourceSessionId,
@@ -217,6 +218,7 @@ export function registerForkHandler(bus: IMakaioBus): () => void {
       forkPointMessageId: fromMessageId,
       branchKind,
       forkTransforms: transforms,
+      ...(machineId !== undefined && { machineId }),
       ...(name ? { title: name } : {}),
       ...(targetWorkingDirectory ? { targetWorkingDirectory } : {}),
       ...(metadata ? { metadata } : {}),

@@ -5,6 +5,7 @@ import type {
   McpRuntimeSessionContext,
   McpSessionContext,
   Message,
+  NativeForkDirective,
   ProviderContext,
   ResponseSchemaDescriptor,
   SessionContext,
@@ -136,6 +137,13 @@ export interface BaseAgentConnectorConfig<
   /** Previous adapter session ID for resume attempts. */
   resumeAdapterSessionId?: string;
 
+  /**
+   * Provider-native fork directive approved by session orchestration.
+   * When present, native-fork capable connectors should branch from the source
+   * provider session instead of starting fresh with replayed history.
+   */
+  nativeFork?: NativeForkDirective;
+
   /** Resolved harness ID for tool policy lookup. */
   harnessId?: string;
 
@@ -244,6 +252,19 @@ export interface AIAgentConfig<
    * are not needed and would be actively harmful.
    */
   ephemeral?: boolean;
+
+  /**
+   * Native fork directive from the orchestrator.
+   *
+   * When present, the adapter should use the provider's branching API
+   * rather than replaying history into a fresh session.
+   * Populated by AIAdapter.createAgent when the startAgent mode is 'fork'.
+   *
+   * AIAgent forwards this through config-factory input so standardized adapter
+   * config factories can carry it into connector config. Adapter code must not
+   * derive this from raw fork-mode request fields.
+   */
+  nativeFork?: NativeForkDirective;
 
   /**
    * Config factory - transforms partial input into full adapter-specific config.

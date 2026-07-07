@@ -1,10 +1,18 @@
+import type { IMakaioBus } from '@makaio/bus-core';
+import { AdapterSubjects } from '@makaio/contracts';
 import type {
   AdapterRuntimeOptions,
+  AgentRole,
   AgentSelectionBase,
   AIReasoningLevel,
+  MessageInput,
   ProviderContext,
   ResolvedAgentConfig,
+  SessionContext,
+  StartAgentRequest,
+  StartAgentResponse,
 } from '@makaio/contracts';
+import { activateProviderContext } from '../../provider-context/index.js';
 
 /** Runtime options plus model, providerContext, and reasoningEffort. */
 export type ExtractableRuntimeOptions = Partial<
@@ -75,6 +83,40 @@ export function mergeRuntimeOptions(
   return { runtimeOptions, mergedModel, mergedCwd };
 }
 
+/** Effective cwd result after session-fallback resolution. */
+export interface EffectiveAttachCwd {
+  /** Resolved cwd: explicit override or stored session cwd. */
+  readonly effectiveCwd: string | undefined;
+  /** Runtime options with the effective cwd populated. */
+  readonly effectiveRuntimeOptions: ExtractableRuntimeOptions;
+}
+
+/**
+ * Resolve the effective attach working directory and produce runtime options
+ * that always carry the resolved cwd.
+ *
+ * An attach without an explicit cwd means "attach where the session lives",
+ * not "attach in the adapter's platform default". The returned
+ * `effectiveRuntimeOptions` carries the resolved cwd so the downstream
+ * startAgent request never falls back to the adapter default.
+ * @param mergedCwd - Explicit cwd from the agent selection, or undefined
+ * @param sessionCwd - Stored working directory on the session record
+ * @param runtimeOptions - Merged runtime options from the agent selection
+ * @returns Effective cwd and runtime options with the cwd populated
+ */
+export function resolveEffectiveAttachCwd(
+  mergedCwd: string | undefined,
+  sessionCwd: string | undefined,
+  runtimeOptions: ExtractableRuntimeOptions,
+): EffectiveAttachCwd {
+  const effectiveCwd = mergedCwd ?? sessionCwd;
+  const effectiveRuntimeOptions: ExtractableRuntimeOptions =
+    effectiveCwd !== undefined && runtimeOptions.cwd === undefined
+      ? { ...runtimeOptions, cwd: effectiveCwd }
+      : runtimeOptions;
+  return { effectiveCwd, effectiveRuntimeOptions };
+}
+
 /**
  * Removes keys whose value is `undefined` from an object literal.
  * @param obj - Object potentially containing `undefined` values
@@ -82,4 +124,124 @@ export function mergeRuntimeOptions(
  */
 function omitUndefined<T extends object>(obj: T): Partial<T> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
+/**
+ * Builds the startAgent request payload.
+ *
+ * When `resumeAdapterSessionId` is provided the request uses `mode: 'resume'`
+ * so the adapter can attempt native session continuation rather than starting
+ * a fresh context. If the adapter cannot honour the resume it falls back to
+ * its default behaviour internally.
+ *
+ * For branching conversations, use session.fork to create a new session with
+ * copied history, then attach agents to the new session.
+ *
+ * When `sessionContext` is provided (non-native resume paths), the locality
+ * verdict is forwarded so adapters can act on it (e.g. inject history).
+ * @param adapterId - Target adapter ID
+ * @param sessionId - Target session ID
+ * @param initialMessage - Initial message content
+ * @param role - Agent role
+ * @param runtimeOptions - Runtime configuration options (may include model, providerContext, reasoningEffort)
+ * @param resumeAdapterSessionId - Adapter session ID to resume (enables resume mode)
+ * @param harnessId - Resolved harness ID for tool policy lookup
+ * @param sessionContext - Session context carrying locality verdict for non-native paths
+ * @returns StartAgentRequest payload
+ */
+export function buildStartAgentRequest(
+  adapterId: string,
+  sessionId: string,
+  initialMessage: MessageInput | undefined,
+  role: AgentRole,
+  runtimeOptions: ExtractableRuntimeOptions,
+  resumeAdapterSessionId?: string,
+  harnessId?: string,
+  sessionContext?: SessionContext,
+): StartAgentRequest {
+  if (resumeAdapterSessionId) {
+    return {
+      mode: 'resume',
+      adapterId,
+      sessionId,
+      adapterSessionId: resumeAdapterSessionId,
+      role,
+      ...runtimeOptions,
+      ...(initialMessage !== undefined && { initialMessage }),
+      ...(harnessId !== undefined && { harnessId }),
+    };
+  }
+  return {
+    adapterId,
+    sessionId,
+    role,
+    ...runtimeOptions,
+    ...(initialMessage !== undefined && { initialMessage }),
+    ...(harnessId !== undefined && { harnessId }),
+    ...(sessionContext !== undefined && { sessionContext }),
+  };
+}
+
+/** Input bundle for launching an agent after all attach parameters have been resolved. */
+export interface LaunchAttachAgentInput {
+  readonly adapterId: string;
+  readonly sessionId: string;
+  readonly initialMessage: MessageInput | undefined;
+  readonly role: AgentRole;
+  readonly effectiveRuntimeOptions: ExtractableRuntimeOptions;
+  readonly resumeAdapterSessionId: string | undefined;
+  readonly harnessId: string | undefined;
+  readonly attachSessionContext: SessionContext | undefined;
+  readonly providerContext: ProviderContext | undefined;
+}
+
+/**
+ * Build the startAgent request, activate provider credentials if needed, dispatch
+ * the request, and surface any startup failure as a thrown error.
+ *
+ * Groups the three tightly-coupled startup operations — request construction,
+ * credential activation, and adapter dispatch — into a single named step so
+ * `attachAgent` reads as a clear orchestration of resolved-inputs → launch →
+ * persist-identity → turn-setup.
+ *
+ * Startup failures are surfaced directly to the caller (UI/SDK) rather than
+ * entering a degrade-and-retry path — that belongs to the coordinator layer.
+ * @param bus - Bus instance for credential activation and adapter dispatch
+ * @param input - All resolved attach parameters required to construct and send the request
+ * @returns The successful startAgent response containing agentId, adapterId, and optional messageId
+ */
+export async function launchAttachAgent(
+  bus: IMakaioBus,
+  input: LaunchAttachAgentInput,
+): Promise<Extract<StartAgentResponse, { success: true }>> {
+  const {
+    adapterId,
+    sessionId,
+    initialMessage,
+    role,
+    effectiveRuntimeOptions,
+    resumeAdapterSessionId,
+    harnessId,
+    attachSessionContext,
+    providerContext,
+  } = input;
+
+  const startAgentRequest = buildStartAgentRequest(
+    adapterId,
+    sessionId,
+    initialMessage,
+    role,
+    effectiveRuntimeOptions,
+    resumeAdapterSessionId,
+    harnessId,
+    attachSessionContext,
+  );
+  if (providerContext !== undefined) {
+    await activateProviderContext(bus, providerContext);
+  }
+  const startResult = await bus.request(AdapterSubjects.startAgent, startAgentRequest);
+  if (!startResult.success) {
+    throw new Error(`[attach-handler] Failed to start agent: ${startResult.message}`);
+  }
+  return startResult;
 }

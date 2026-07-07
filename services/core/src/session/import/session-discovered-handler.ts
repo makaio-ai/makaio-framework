@@ -52,6 +52,7 @@ export function registerSessionDiscoveredHandler(bus: IMakaioBus): () => void {
       title,
       logFilePath,
       startedAt,
+      machineId,
       kind,
       parentAdapterSessionId,
       forkPointMessageId,
@@ -71,6 +72,7 @@ export function registerSessionDiscoveredHandler(bus: IMakaioBus): () => void {
       ...(title !== undefined ? { title } : {}),
       ...(logFilePath !== undefined ? { logFilePath } : {}),
       ...(startedAt !== undefined ? { startedAt } : {}),
+      ...(machineId !== undefined ? { machineId } : {}),
       ...lineage,
     });
   });

@@ -21,8 +21,8 @@ export const GetAgentSchema = {
         agentId: z.string(),
         /** Makaio session ID */
         sessionId: z.string(),
-        /** Adapter's provider session ID */
-        adapterSessionId: z.string(),
+        /** Adapter's provider session ID. May be undefined for idle fork starts. */
+        adapterSessionId: z.string().optional(),
       })
       .nullable(),
   }),
