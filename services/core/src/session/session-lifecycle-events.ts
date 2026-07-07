@@ -14,7 +14,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
-import type { MakaioSessionEvent, SessionEventType } from '@makaio/contracts';
+import type { MakaioSessionEvent, NativeLocalityVerdict, SessionEventType } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { SessionEventStorageSubjects } from './session-events/index.js';
 
@@ -181,6 +181,99 @@ async function appendSubscriptionLifecycleEvent(
   } catch (error) {
     console.warn('[session-lifecycle-events] Failed to persist subscription lifecycle event', {
       type: args.type,
+      sessionId: args.sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+// ============================================================================
+// Locality degradation event helpers
+// ============================================================================
+
+/**
+ * Arguments for {@link emitLocalityDegradeEvent}.
+ */
+export interface LocalityDegradeEventArgs {
+  /** Session the degradation belongs to. */
+  sessionId: string;
+  /** Whether the degradation occurred during a resume (attach) or fork. */
+  intent: 'resume' | 'fork';
+  /** The non-native verdict that triggered the degradation. */
+  verdict: NativeLocalityVerdict;
+  /** Agent ID involved, when cheaply available. */
+  agentId?: string;
+  /** Adapter instance ID, when cheaply available. */
+  adapterId?: string;
+  /** Turn ID when available (attach-time degrades have no turn yet). */
+  turnId?: string;
+}
+
+/**
+ * Persist a `locality.degraded` event row and emit the live bus event.
+ *
+ * Called at each degrade site where a native resume or fork falls back to
+ * history injection. The helper is best-effort: a storage outage must not
+ * prevent the degrade flow from proceeding. Native verdicts are silently
+ * ignored (they are not degradations).
+ * @param bus - Bus for persistence and live emission
+ * @param args - Degrade event fields
+ */
+export async function emitLocalityDegradeEvent(bus: IMakaioBus, args: LocalityDegradeEventArgs): Promise<void> {
+  const { verdict } = args;
+  // Native verdicts are not degradations — nothing to emit.
+  if (verdict.kind === 'native') {
+    return;
+  }
+
+  // Generate identity once so the persisted row and live bus event share
+  // the same eventId and timestamp — consumers can deduplicate reliably.
+  const eventId = crypto.randomUUID();
+  const timestamp = Date.now();
+
+  // Shared envelope fields present on every variant.
+  const shared = {
+    sessionId: args.sessionId,
+    eventId,
+    timestamp,
+    intent: args.intent,
+    ...(args.agentId !== undefined && { agentId: args.agentId }),
+    ...(args.adapterId !== undefined && { adapterId: args.adapterId }),
+    ...(args.turnId !== undefined && { turnId: args.turnId }),
+  };
+
+  // Build the payload as a properly narrowed discriminated union so
+  // both the Zod runtime schema and the TS type are satisfied.
+  const payload =
+    verdict.kind === 'degrade'
+      ? { ...shared, verdictKind: 'degrade' as const, reason: verdict.reason }
+      : { ...shared, verdictKind: 'foreign' as const, foreignMachineId: verdict.machineId };
+
+  // Persist-then-emit: row is durable before consumers observe the event.
+  // Best-effort: storage failures do not block the degrade flow.
+  try {
+    await appendSessionLifecycleEvent(bus, {
+      type: 'locality.degraded',
+      sessionId: args.sessionId,
+      eventId,
+      timestamp,
+      payload,
+    });
+  } catch (error) {
+    console.warn('[session-lifecycle-events] Failed to persist locality.degraded event', {
+      sessionId: args.sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Live emission for reactive UI (e.g. timeline notices).
+  // Best-effort: a faulty subscriber must not turn a non-critical notice
+  // into an unhandled rejection at the degrade site (all callers use
+  // fire-and-forget `void emitLocalityDegradeEvent(...)`).
+  try {
+    await bus.emit(SessionSubjects.locality.degraded, payload);
+  } catch (error) {
+    console.warn('[session-lifecycle-events] Failed to emit live locality.degraded event', {
       sessionId: args.sessionId,
       error: error instanceof Error ? error.message : String(error),
     });

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   ImportUpsertRequestSchema,
+  MakaioSessionEventSchema,
   MakaioSessionSchema,
   NativeLocalityVerdictSchema,
+  SESSION_EVENT_TYPES,
   SessionContextSchema,
 } from '@makaio/contracts';
 
@@ -69,5 +71,81 @@ describe('native session locality contracts', () => {
         cwd: '/repo',
       }),
     ).toThrow();
+  });
+
+  describe('locality.degraded event schema', () => {
+    it('is listed in CORE_SESSION_EVENT_TYPES', () => {
+      expect(SESSION_EVENT_TYPES).toContain('locality.degraded');
+    });
+
+    it('round-trips a degrade event with all fields', () => {
+      const raw = {
+        sessionId: 'session-1',
+        eventId: 'evt-1',
+        timestamp: Date.now(),
+        type: 'locality.degraded',
+        payload: {
+          intent: 'resume',
+          verdictKind: 'degrade',
+          reason: 'cwd-mismatch',
+          agentId: 'agent-1',
+          adapterId: 'adapter-1',
+          turnId: 'turn-1',
+        },
+      };
+
+      const parsed = MakaioSessionEventSchema.parse(raw);
+      expect(parsed).toMatchObject(raw);
+    });
+
+    it('round-trips a foreign verdict event without reason', () => {
+      const raw = {
+        sessionId: 'session-1',
+        eventId: 'evt-2',
+        timestamp: Date.now(),
+        type: 'locality.degraded',
+        payload: {
+          intent: 'fork',
+          verdictKind: 'foreign',
+          foreignMachineId: 'remote-machine',
+        },
+      };
+
+      const parsed = MakaioSessionEventSchema.parse(raw);
+      expect(parsed).toMatchObject(raw);
+    });
+
+    it('round-trips a minimal degrade event (only required fields)', () => {
+      const raw = {
+        sessionId: 'session-1',
+        eventId: 'evt-3',
+        timestamp: Date.now(),
+        type: 'locality.degraded',
+        payload: {
+          intent: 'resume',
+          verdictKind: 'degrade',
+          reason: 'adapter-unsupported',
+        },
+      };
+
+      const parsed = MakaioSessionEventSchema.parse(raw);
+      expect(parsed).toMatchObject(raw);
+    });
+
+    it('rejects invalid degrade reasons', () => {
+      expect(() =>
+        MakaioSessionEventSchema.parse({
+          sessionId: 'session-1',
+          eventId: 'evt-4',
+          timestamp: Date.now(),
+          type: 'locality.degraded',
+          payload: {
+            intent: 'resume',
+            verdictKind: 'degrade',
+            reason: 'invented-reason',
+          },
+        }),
+      ).toThrow();
+    });
   });
 });

@@ -24,6 +24,25 @@ import {
 } from './shared.js';
 
 /**
+ * Poll until a condition is met, with a bounded timeout.
+ *
+ * Replaces fixed `setTimeout` waits — eliminates both the DRY violation
+ * and CI flakiness from hard-coded delays.
+ * @param predicate - Condition to wait for
+ * @param timeoutMs - Maximum time to wait before failing
+ * @param intervalMs - Polling interval
+ */
+async function waitUntil(predicate: () => boolean, timeoutMs = 500, intervalMs = 10): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`waitUntil timed out after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/**
  * Registers the common mock trio needed by every native-locality test:
  * session.get handler, adapter.startAgent handler, and the attach handler
  * itself. Returns the `receivedRequests` array for startAgent assertions.
@@ -656,6 +675,198 @@ describe('registerAttachHandler - native locality', () => {
       const req = receivedRequests[0];
       expect(req.mode).toBe('resume');
       expect(req).not.toHaveProperty('sessionContext');
+    });
+  });
+
+  describe('locality.degraded bus event emission', () => {
+    /**
+     * Captures `session.locality.degraded` events emitted during a test.
+     * @param testCtx - Test context for cleanup tracking
+     * @returns Array that receives emitted payloads
+     */
+    function captureDegradeEvents(testCtx: AttachHandlerTestContext): Array<{
+      sessionId: string;
+      eventId: string;
+      timestamp: number;
+      intent: string;
+      verdictKind: string;
+      reason?: string;
+      foreignMachineId?: string;
+    }> {
+      const captured: Array<{
+        sessionId: string;
+        eventId: string;
+        timestamp: number;
+        intent: string;
+        verdictKind: string;
+        reason?: string;
+        foreignMachineId?: string;
+      }> = [];
+      testCtx.trackUnsubscribe(
+        MakaioBus.on(SessionSubjects.locality.degraded, ({ payload }) => {
+          captured.push(payload);
+        }),
+      );
+      return captured;
+    }
+
+    it('emits locality.degraded with reason when adapter is unsupported', async () => {
+      ctx.setDefaultAdapterCapabilities([]);
+      const captured = captureDegradeEvents(ctx);
+      setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+      });
+
+      // Wait for async emit to settle.
+      await waitUntil(() => captured.length >= 1);
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        sessionId,
+        intent: 'resume',
+        verdictKind: 'degrade',
+        reason: 'adapter-unsupported',
+      });
+    });
+
+    it('emits locality.degraded with foreign verdictKind for remote machine', async () => {
+      const captured = captureDegradeEvents(ctx);
+      setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: remoteMachine,
+          adapterSessionId: nativeAdapterSessionId,
+        }),
+        localMachine,
+      );
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+      });
+
+      await waitUntil(() => captured.length >= 1);
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        sessionId,
+        intent: 'resume',
+        verdictKind: 'foreign',
+        foreignMachineId: remoteMachine,
+      });
+    });
+
+    it('emits locality.degraded for agent-already-started live-writer guard', async () => {
+      const captured = captureDegradeEvents(ctx);
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AdapterSubjects.listAgents, (context) => {
+          context.setResult({
+            agents: [{ agentId: 'existing-agent', sessionId, adapterSessionId: nativeAdapterSessionId }],
+          });
+        }),
+      );
+      setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+        }),
+        localMachine,
+      );
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+      });
+
+      await waitUntil(() => captured.length >= 1);
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        sessionId,
+        intent: 'resume',
+        verdictKind: 'degrade',
+        reason: 'agent-already-started',
+      });
+    });
+
+    it('carries stable eventId and timestamp in both the persisted row and the live event', async () => {
+      ctx.setDefaultAdapterCapabilities([]);
+      const captured = captureDegradeEvents(ctx);
+
+      // Capture the persisted event via the storage append subject.
+      const persisted: MakaioSessionEvent[] = [];
+      ctx.trackUnsubscribe(
+        MakaioBus.on(SessionEventStorageSubjects.append, (context) => {
+          persisted.push(context.payload.event);
+          context.setResult({ success: true });
+        }),
+      );
+
+      setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+      });
+
+      await waitUntil(() => captured.length >= 1 && persisted.length >= 1);
+
+      expect(persisted).toHaveLength(1);
+      expect(captured).toHaveLength(1);
+
+      // The same eventId and timestamp must appear in both paths.
+      expect(captured[0].eventId).toBe(persisted[0].eventId);
+      expect(captured[0].timestamp).toBe(persisted[0].timestamp);
+      expect(typeof captured[0].eventId).toBe('string');
+      expect(captured[0].eventId.length).toBeGreaterThan(0);
+      expect(typeof captured[0].timestamp).toBe('number');
+    });
+
+    it('does not emit locality.degraded for native resume', async () => {
+      const captured = captureDegradeEvents(ctx);
+      setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+      });
+
+      // Absence assertion: give async paths a generous window to settle
+      // before asserting no events were emitted.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(captured).toHaveLength(0);
     });
   });
 });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { BranchKindSchema } from './primitives.js';
 import { OrchestratorSchemas, type TurnIngestionMarker, type TurnInitiator } from './orchestrator.js';
 import type { TurnUsage } from './message.js';
+import { NativeLocalityReasonSchema } from '../native-locality.js';
 
 /**
  * Extend a schema with sessionId for session-scoped events.
@@ -128,6 +129,51 @@ const CoreSessionEventSchema = z.discriminatedUnion('type', [
       compressedMessageIds: z.array(z.string()).optional(),
     }),
   }),
+  // Locality degradation events
+  SessionEventEnvelopeSchema.extend({
+    type: z.literal('locality.degraded'),
+    payload: z.discriminatedUnion('verdictKind', [
+      z.object({
+        /**
+         * Whether the degradation occurred during a resume (attach) or fork.
+         */
+        intent: z.enum(['resume', 'fork']),
+        /**
+         * Local session with a structural constraint preventing native
+         * operation; {@link reason} explains why.
+         */
+        verdictKind: z.literal('degrade'),
+        /** Why native operation was degraded. */
+        reason: NativeLocalityReasonSchema,
+        /** Agent ID involved in the degradation, when cheaply available. */
+        agentId: z.string().optional(),
+        /** Adapter instance ID, when cheaply available. */
+        adapterId: z.string().optional(),
+        /** Turn ID when available (attach-time degrades have no turn yet). */
+        turnId: z.string().optional(),
+      }),
+      z.object({
+        /**
+         * Whether the degradation occurred during a resume (attach) or fork.
+         */
+        intent: z.enum(['resume', 'fork']),
+        /**
+         * Session's provider-native store lives on another machine;
+         * {@link foreignMachineId} carries the owning machine identity
+         * (persisted for diagnostics, never rendered in the UI).
+         */
+        verdictKind: z.literal('foreign'),
+        /** Machine ID that owns the provider-native session store. */
+        foreignMachineId: z.string(),
+        /** Agent ID involved in the degradation, when cheaply available. */
+        agentId: z.string().optional(),
+        /** Adapter instance ID, when cheaply available. */
+        adapterId: z.string().optional(),
+        /** Turn ID when available (attach-time degrades have no turn yet). */
+        turnId: z.string().optional(),
+      }),
+    ]),
+  }),
 ]);
 
 /**
@@ -153,6 +199,8 @@ const CORE_SESSION_EVENT_TYPES = [
   'branch.merged',
   // Compression events
   'squash',
+  // Locality degradation events
+  'locality.degraded',
 ] as const;
 
 export const SESSION_EVENT_TYPES = CORE_SESSION_EVENT_TYPES;
@@ -312,6 +360,43 @@ export interface SessionEventTypeMap {
     tokensAfter?: number;
     compressedMessageIds?: string[];
   };
+
+  /**
+   * Native locality degradation event.
+   *
+   * Discriminated union on `verdictKind`: `degrade` carries `reason`,
+   * `foreign` carries `foreignMachineId`. This makes illegal cross-field
+   * combinations unrepresentable at compile time.
+   */
+  'locality.degraded':
+    | {
+        /** Whether the degradation occurred during a resume (attach) or fork. */
+        intent: 'resume' | 'fork';
+        /** Structural constraint preventing native operation. */
+        verdictKind: 'degrade';
+        /** Why native operation was degraded. */
+        reason: z.infer<typeof NativeLocalityReasonSchema>;
+        /** Agent ID involved, when cheaply available. */
+        agentId?: string;
+        /** Adapter instance ID, when cheaply available. */
+        adapterId?: string;
+        /** Turn ID when available (attach-time degrades have no turn yet). */
+        turnId?: string;
+      }
+    | {
+        /** Whether the degradation occurred during a resume (attach) or fork. */
+        intent: 'resume' | 'fork';
+        /** Session's provider-native store lives on another machine. */
+        verdictKind: 'foreign';
+        /** Machine ID that owns the provider-native session store. */
+        foreignMachineId: string;
+        /** Agent ID involved, when cheaply available. */
+        agentId?: string;
+        /** Adapter instance ID, when cheaply available. */
+        adapterId?: string;
+        /** Turn ID when available (attach-time degrades have no turn yet). */
+        turnId?: string;
+      };
 
   /**
    * Emitted on the parent session when a Claude Code compaction boundary is
