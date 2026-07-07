@@ -56,6 +56,27 @@ export type ClientSessionObservedBase = z.infer<typeof ClientSessionObservedBase
  * This is a normalized observed signal — not a command. The session may not
  * yet be linked to a framework session at emission time.
  */
+/**
+ * Closed set of session start modes a client runtime can report.
+ *
+ * Narrower than the agent-level {@link StartMode}: a client can distinguish
+ * `'fresh'` (new session) from `'fork'` (fork child), `'resume'`
+ * (continuation of an existing session), `'clear'` (conversation cleared),
+ * and `'compact'` (context compacted), but cannot know `'rotation'`
+ * (a framework-level concept).
+ *
+ * Maps 1:1 to the Claude Code SDK `SessionStartHookInput.source` union:
+ * `'startup'` → `'fresh'`, `'resume'` → `'resume'` or `'fork'` (after
+ * transcript sniff), `'clear'` → `'clear'`, `'compact'` → `'compact'`.
+ */
+export const CLIENT_SESSION_START_MODES = ['fresh', 'fork', 'resume', 'clear', 'compact'] as const;
+
+/** Zod schema for the client-reported session start mode. */
+export const ClientSessionStartModeSchema = z.enum(CLIENT_SESSION_START_MODES);
+
+/** Client-reported session start mode discriminator. */
+export type ClientSessionStartMode = z.infer<typeof ClientSessionStartModeSchema>;
+
 export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend({
   /**
    * Absolute path to the client's transcript/log file as reported by the
@@ -79,6 +100,23 @@ export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend
    * Used by the native-locality evaluator to decide resume/fork vs degrade.
    */
   machineId: z.string().optional(),
+  /**
+   * How this session was started, if the emitter can determine it.
+   *
+   * Absent when the signal source cannot distinguish start modes (e.g.
+   * raw native hooks that carry no fork/resume indicator). When present,
+   * `'fork'` signals that this session is a fork child and
+   * {@link parentAdapterSessionId} carries the parent's adapter session id.
+   */
+  startMode: ClientSessionStartModeSchema.optional(),
+  /**
+   * Adapter session id of the parent session, when this session is a fork
+   * child (`startMode === 'fork'`).
+   *
+   * Absent for non-fork sessions and when the emitter cannot determine the
+   * parent identity.
+   */
+  parentAdapterSessionId: z.string().optional(),
 });
 
 export type ClientSessionStarted = z.infer<typeof ClientSessionStartedSchema>;

@@ -16,6 +16,8 @@ import { z } from 'zod';
 import {
   CapabilitySubjects,
   ClientSubjects,
+  FORK_SESSION_LINEAGE_KIND,
+  ROOT_SESSION_LINEAGE_KIND,
   SessionRecordMetadataSchema,
   TurnIngestionMarkerSchema,
   type ClientRuntimeStarted,
@@ -378,10 +380,33 @@ export class ObservedSessionIngestionService {
       ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
       ...(payload.transcriptPath !== undefined ? { transcriptPath: payload.transcriptPath } : {}),
     });
+
+    // Derive lineage discriminant from the optional fork signal. When the
+    // emitter reports startMode === 'fork' with a parent adapter session id,
+    // register as a fork child immediately — forkPointMessageId is null at
+    // this stage and gets enriched later by the transcript import (fill-once).
+    const forkParent =
+      payload.startMode === 'fork' &&
+      payload.parentAdapterSessionId !== undefined &&
+      payload.parentAdapterSessionId.length > 0
+        ? payload.parentAdapterSessionId
+        : undefined;
+
+    const lineage =
+      forkParent !== undefined
+        ? {
+            kind: FORK_SESSION_LINEAGE_KIND,
+            parentAdapterSessionId: forkParent,
+            forkPointMessageId: null,
+          }
+        : {
+            kind: ROOT_SESSION_LINEAGE_KIND,
+            parentAdapterSessionId: null,
+            forkPointMessageId: null,
+          };
+
     const result = await this.bus.requestOptional(SessionStorageSubjects.importUpsert, {
-      kind: 'root',
-      parentAdapterSessionId: null,
-      forkPointMessageId: null,
+      ...lineage,
       externalSessionId: adapterSessionId,
       source: importer.adapterName,
       clientId: payload.clientId,

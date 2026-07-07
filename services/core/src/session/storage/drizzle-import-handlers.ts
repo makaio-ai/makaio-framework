@@ -175,9 +175,13 @@ function buildImportConflictSet(
     // re-scan can supply data that was absent on first discovery.
     targetWorkingDirectory: sql`COALESCE(excluded.target_working_directory, ${sessions.targetWorkingDirectory})`,
     title: sql`COALESCE(excluded.title, ${sessions.title})`,
-    forkPointMessageId: sql`COALESCE(excluded.fork_point_message_id, ${sessions.forkPointMessageId})`,
-    parentExternalSessionId: sql`COALESCE(excluded.parent_external_session_id, ${sessions.parentExternalSessionId})`,
-    branchKind: sql`COALESCE(excluded.branch_kind, ${sessions.branchKind})`,
+    // Fork lineage identity fields use existing-wins (strict): once set
+    // by hook-first fork registration, later imports cannot overwrite them.
+    // forkPointMessageId is fill-once: null at hook-first registration,
+    // enriched exactly once by the transcript import.
+    forkPointMessageId: sql`COALESCE(${sessions.forkPointMessageId}, excluded.fork_point_message_id)`,
+    parentExternalSessionId: sql`COALESCE(${sessions.parentExternalSessionId}, excluded.parent_external_session_id)`,
+    branchKind: sql`COALESCE(${sessions.branchKind}, excluded.branch_kind)`,
     adapterId: sql`COALESCE(excluded.adapter_id, ${sessions.adapterId})`,
     clientId: sql`COALESCE(excluded.client_id, ${sessions.clientId})`,
     // Enrichment prefers a defined incoming sidechain flag over the stored one

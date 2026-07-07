@@ -97,6 +97,72 @@ describe('normalizeClaudeCodeHook', () => {
       expect(Object.keys(result.payload)).not.toContain('transcriptPath');
       expect(Object.keys(result.payload)).not.toContain('cwd');
     });
+
+    it('maps source:"startup" to startMode:"fresh"', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SESSION_START, { session_id: SESSION_ID, source: 'startup' })),
+      );
+
+      const payload = (result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.started }>)
+        .payload;
+      expect(payload.startMode).toBe('fresh');
+    });
+
+    it('maps source:"resume" to startMode:"resume"', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SESSION_START, { session_id: SESSION_ID, source: 'resume' })),
+      );
+
+      const payload = (result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.started }>)
+        .payload;
+      expect(payload.startMode).toBe('resume');
+    });
+
+    it('maps source:"clear" to startMode:"clear"', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SESSION_START, { session_id: SESSION_ID, source: 'clear' })),
+      );
+
+      const payload = (result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.started }>)
+        .payload;
+      expect(payload.startMode).toBe('clear');
+    });
+
+    it('maps source:"compact" to startMode:"compact"', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SESSION_START, { session_id: SESSION_ID, source: 'compact' })),
+      );
+
+      const payload = (result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.started }>)
+        .payload;
+      expect(payload.startMode).toBe('compact');
+    });
+
+    it('omits startMode when source is absent', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SESSION_START, { session_id: SESSION_ID })),
+      );
+
+      expect(Object.keys(result.payload)).not.toContain('startMode');
+    });
+
+    it('omits startMode for unknown source values (forward-compatible)', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(
+          makeRaw(CLAUDE_CODE_HOOK_SESSION_START, { session_id: SESSION_ID, source: 'future-value' }),
+        ),
+      );
+
+      expect(Object.keys(result.payload)).not.toContain('startMode');
+    });
+
+    it('omits startMode when source is non-string', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SESSION_START, { session_id: SESSION_ID, source: 42 })),
+      );
+
+      expect(Object.keys(result.payload)).not.toContain('startMode');
+    });
   });
 
   describe('UserPromptSubmit', () => {

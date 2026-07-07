@@ -382,4 +382,114 @@ describe('ObservedSessionIngestionService', () => {
     await emitTurnCompleted({ adapterSessionId: lastTracked, transcriptPath: `/logs/${lastTracked}.jsonl` });
     expect(importFileRequests).toHaveLength(1);
   });
+
+  // -------------------------------------------------------------------------
+  // Fork lineage registration at SessionStart
+  // -------------------------------------------------------------------------
+
+  it('registers a fork child with fork lineage when startMode is fork', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'fork-child-1',
+      startMode: 'fork',
+      parentAdapterSessionId: 'parent-ext-1',
+      cwd: '/repo',
+    });
+
+    const session = await getObservedSession('fork-child-1');
+    expect(session).not.toBeNull();
+    expect(session?.branchKind).toBe('fork');
+    expect(session?.parentExternalSessionId).toBe('parent-ext-1');
+  });
+
+  it('registers as root when startMode is absent (observed-only, no fork signal)', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'observed-root-1',
+      cwd: '/repo',
+    });
+
+    const session = await getObservedSession('observed-root-1');
+    expect(session).not.toBeNull();
+    expect(session?.branchKind).toBeUndefined();
+    expect(session?.parentExternalSessionId).toBeUndefined();
+  });
+
+  it('registers as root when startMode is fresh', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'fresh-root-1',
+      startMode: 'fresh',
+      cwd: '/repo',
+    });
+
+    const session = await getObservedSession('fresh-root-1');
+    expect(session).not.toBeNull();
+    expect(session?.branchKind).toBeUndefined();
+    expect(session?.parentExternalSessionId).toBeUndefined();
+  });
+
+  it('registers as root when startMode is resume', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'resume-root-1',
+      startMode: 'resume',
+      cwd: '/repo',
+    });
+
+    const session = await getObservedSession('resume-root-1');
+    expect(session).not.toBeNull();
+    // Resume does not create fork lineage
+    expect(session?.branchKind).toBeUndefined();
+  });
+
+  it('registers as root when startMode is clear', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'clear-root-1',
+      startMode: 'clear',
+      cwd: '/repo',
+    });
+
+    const session = await getObservedSession('clear-root-1');
+    expect(session).not.toBeNull();
+    // Clear does not create fork lineage
+    expect(session?.branchKind).toBeUndefined();
+  });
+
+  it('registers as root when startMode is compact', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'compact-root-1',
+      startMode: 'compact',
+      cwd: '/repo',
+    });
+
+    const session = await getObservedSession('compact-root-1');
+    expect(session).not.toBeNull();
+    // Compact does not create fork lineage
+    expect(session?.branchKind).toBeUndefined();
+  });
+
+  it('does not register as fork when startMode is fork but parentAdapterSessionId is absent', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'fork-no-parent-1',
+      startMode: 'fork',
+      // parentAdapterSessionId deliberately omitted
+      cwd: '/repo',
+    });
+
+    const session = await getObservedSession('fork-no-parent-1');
+    expect(session).not.toBeNull();
+    // Falls back to root since parent is missing
+    expect(session?.branchKind).toBeUndefined();
+  });
 });

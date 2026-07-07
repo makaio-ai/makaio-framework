@@ -28,6 +28,7 @@ import { ClientSubjects, pickNonEmptyString } from '@makaio/subsystem-client';
 import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import type {
   ClientSessionStarted,
+  ClientSessionStartMode,
   ClientSessionUserPromptSubmitted,
   ClientSessionTurnStarted,
   ClientSessionTurnCompleted,
@@ -113,6 +114,7 @@ export function normalizeClaudeCodeHook(raw: RawClientHookPayload, machineId?: s
     case CLAUDE_CODE_HOOK_SESSION_START: {
       const transcriptPath = resolveTranscriptPath(raw.payload);
       const cwd = resolveCwd(raw.payload);
+      const startMode = resolveStartMode(raw.payload);
       return [
         {
           subject: ClientSubjects.session.started,
@@ -121,6 +123,7 @@ export function normalizeClaudeCodeHook(raw: RawClientHookPayload, machineId?: s
             ...(transcriptPath !== undefined && { transcriptPath }),
             ...(cwd !== undefined && { cwd }),
             ...(machineId !== undefined && { machineId }),
+            ...(startMode !== undefined && { startMode }),
           },
         },
       ];
@@ -271,4 +274,41 @@ function resolveToolSuccess(payload: Record<string, unknown>): boolean | undefin
   const code = payload['exit_code'];
   if (typeof code !== 'number') return undefined;
   return code === 0;
+}
+
+/**
+ * Map from the Claude Code SDK `SessionStartHookInput.source` union to the
+ * framework-level {@link ClientSessionStartMode}.
+ *
+ * - `'startup'` → `'fresh'` (brand-new session)
+ * - `'resume'`  → `'resume'` (tentative; caller upgrades to `'fork'` after
+ *   transcript sniff when foreign session IDs are found)
+ * - `'clear'`   → `'clear'` (conversation cleared, same session ID)
+ * - `'compact'` → `'compact'` (context compacted, same session ID)
+ *
+ * Vendor values not in this map yield `undefined`, leaving `startMode`
+ * absent from the normalized payload — safe for forward compatibility when
+ * Anthropic adds new source values.
+ */
+const VENDOR_SOURCE_TO_START_MODE: Readonly<Record<string, ClientSessionStartMode>> = {
+  startup: 'fresh',
+  resume: 'resume',
+  clear: 'clear',
+  compact: 'compact',
+};
+
+/**
+ * Extract the `source` field from a `SessionStart` hook payload and map it
+ * to a {@link ClientSessionStartMode}.
+ *
+ * Returns `undefined` when the field is absent, non-string, or not a
+ * recognized value — keeping the normalizer tolerant of future SDK
+ * additions.
+ * @param payload - Raw `SessionStart` hook payload
+ * @returns Mapped start mode, or `undefined` when the source is unknown
+ */
+function resolveStartMode(payload: Record<string, unknown>): ClientSessionStartMode | undefined {
+  const source = payload['source'];
+  if (typeof source !== 'string') return undefined;
+  return VENDOR_SOURCE_TO_START_MODE[source];
 }

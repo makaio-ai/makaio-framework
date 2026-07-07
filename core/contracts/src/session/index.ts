@@ -188,3 +188,12 @@ export {
   type NativeLocalityReason,
   type NativeLocalityVerdict,
 } from './native-locality.js';
+
+// Extraction-exclusion metadata contract
+export {
+  EXTRACTION_EXCLUSION_KEY,
+  buildExtractionExclusionMetadata,
+  isExtractionExcluded,
+  type ExtractionExclusionKey,
+  type ExtractionExclusionMetadata,
+} from './extraction-exclusion.js';

@@ -73,13 +73,18 @@ import {
   type ClientHookHandleResponse,
   type RawClientHookPayload,
 } from '@makaio/subsystem-client';
-import { ClientAccountIdentifierSchema, type ClientRuntimeStarted } from '@makaio/contracts/client';
+import {
+  ClientAccountIdentifierSchema,
+  type ClientRuntimeStarted,
+  type ClientSessionStarted,
+} from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';
 import { z } from 'zod';
 import { ClaudeCodeClientSettings } from './client-settings.js';
 import { handleClaudeCodeConfigPrime } from './config-prime-handler.js';
 import { normalizeClaudeCodeHook, type ClaudeCodeNormalizedEvent } from './hook-normalizer.js';
+import { sniffTranscriptFork } from './fork-sniff.js';
 import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from './statusline-normalizer.js';
 import { ClaudeCodeClientSubjects } from './namespace.js';
 import { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
@@ -660,7 +665,7 @@ export class ClaudeCodeClientService extends BaseService {
    */
   private async emitNormalizedEvent(normalized: ClaudeCodeNormalizedEvent): Promise<void> {
     switch (normalized.subject) {
-      case ClientSubjects.session.started:
+      case ClientSubjects.session.started: {
         if (
           normalized.payload.adapterSessionId !== undefined &&
           this.managedAdapterSessionIds.has(normalized.payload.adapterSessionId)
@@ -670,8 +675,10 @@ export class ClaudeCodeClientService extends BaseService {
           // consumers receive exactly one started event per session.
           break;
         }
-        await this.bus.emit(ClientSubjects.session.started, normalized.payload);
+        const enriched = await this.enrichForkLineage(normalized.payload);
+        await this.bus.emit(ClientSubjects.session.started, enriched);
         break;
+      }
       case ClientSubjects.session.userPrompt.submitted:
         await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
         break;
@@ -690,6 +697,48 @@ export class ClaudeCodeClientService extends BaseService {
       default:
         throwUnhandledNormalizedEvent(normalized);
     }
+  }
+
+  /**
+   * Enrich a `client.session.started` payload with fork lineage when the
+   * normalizer reported `startMode: 'resume'` and a transcript path is
+   * available.
+   *
+   * A Claude Code fork child fires `SessionStart` with `source: 'resume'`
+   * and a new `session_id`, but its transcript already contains JSONL lines
+   * copied from the parent session.  Those inherited lines carry the
+   * **parent's** `sessionId` on user-type records.  This method performs a
+   * bounded read of the transcript head to detect that foreign ID, upgrading
+   * `startMode` from `'resume'` to `'fork'` and populating
+   * `parentAdapterSessionId`.
+   *
+   * Runs **after** the managed-session suppression gate (so adapter-managed
+   * sessions are already filtered out) and **before** bus emission.
+   *
+   * On any sniff error the payload is returned unchanged — hook processing
+   * must never be blocked by a sniff failure.
+   * @param payload - Normalized `client.session.started` payload
+   * @returns The payload, potentially enriched with fork lineage fields
+   */
+  private async enrichForkLineage(payload: ClientSessionStarted): Promise<ClientSessionStarted> {
+    // Only sniff when the normalizer mapped source:'resume' and we have
+    // both a transcript path and a session ID to compare against.
+    if (
+      payload.startMode !== 'resume' ||
+      payload.transcriptPath === undefined ||
+      payload.adapterSessionId === undefined
+    ) {
+      return payload;
+    }
+
+    const sniffResult = await sniffTranscriptFork(payload.transcriptPath, payload.adapterSessionId);
+    if (sniffResult === undefined) return payload;
+
+    return {
+      ...payload,
+      startMode: 'fork',
+      parentAdapterSessionId: sniffResult.parentAdapterSessionId,
+    };
   }
 }
 

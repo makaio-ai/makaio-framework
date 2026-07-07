@@ -123,8 +123,10 @@ export type {
   ClientRuntimeStarted,
 } from './runtime-observation.js';
 export {
+  CLIENT_SESSION_START_MODES,
   ClientSessionObservedBaseSchema,
   ClientSessionStartedSchema,
+  ClientSessionStartModeSchema,
   ClientSessionToolPostSchema,
   ClientSessionToolPreSchema,
   ClientSessionTurnCompletedSchema,
@@ -135,6 +137,7 @@ export {
 export type {
   ClientSessionObservedBase,
   ClientSessionStarted,
+  ClientSessionStartMode,
   ClientSessionToolPost,
   ClientSessionToolPre,
   ClientSessionTurnCompleted,
