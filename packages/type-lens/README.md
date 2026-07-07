@@ -60,11 +60,60 @@ analyzer.dispose();
 ```typescript
 import { TypeAnalyzer } from '@makaio/type-lens';
 
-const ta = new TypeAnalyzer({ tsConfigFilePath: '/workspace/tsconfig.json' });
-const shape = await ta.analyzeType('IMakaioSession', '/workspace/src/session.ts');
-// shape.properties: ResolvedTypeProperty[]
-ta.dispose();
+const ta = new TypeAnalyzer({
+  entryPoints: ['/workspace/src/session.ts'],
+  tsconfigPath: '/workspace/tsconfig.json',
+});
+const analysis = ta.analyzeDeclarationAt('/workspace/src/session.ts', 'IMakaioSession');
+// analysis.resolvedShape: ResolvedTypeShape (flattened property table)
+// analysis.composition: TypeCompositionNode (how the type is constructed)
 ```
+
+### Run the enrichment pass
+
+After building a syntactic index with `IndexEngine`, the optional **enrichment
+pass** layers checker-backed semantic data onto the existing index records:
+
+```typescript
+import { runEnrichmentPass } from '@makaio/type-lens';
+
+await runEnrichmentPass(index, analyzer, {
+  scopePath: '/workspace',
+});
+```
+
+The enrichment pass mutates the index in place and produces:
+
+- **`calls` edges** — Checker-resolved call-graph edges attributed to their
+  containing declaration (method, function, or arrow variable). These appear in
+  `index.outgoing` / `index.incoming` alongside the existing `extends` /
+  `implements` edges.
+- **Re-resolved heritage edges** — Existing regex-derived `extends` /
+  `implements` edges are replaced with checker-resolved ones that follow
+  the full alias chain.
+- **Resolved type shapes** — Exported `type` and `interface` symbols receive a
+  `resolvedShape` field (`ResolvedTypeShape`) containing the flattened property
+  table after following all composition (Omit, Pick, intersection, extension).
+  Shapes exceeding the property limit are recorded as `{ kind: 'omitted' }`.
+- **Embeddable units** — Every symbol receives a canonical, deterministic text
+  representation (`EmbeddableUnit`) designed for embedding. The text is
+  assembled in a fixed order (header, signature, doc, shape, body excerpt) with
+  no timestamps or absolute paths so identical source always produces identical
+  text. Each unit carries a `version` stamp (`ENRICHMENT_VERSION`) that changes
+  only when the generation logic changes.
+
+#### Opt-in contract
+
+Enrichment is opt-in: pass `options.enrichment` to `IndexEngine.fullIndex()`.
+Incremental indexes (`incrementalIndex`) clear the enrichment stamp to signal
+that re-enrichment is needed.
+
+#### Determinism guarantee
+
+Embeddable unit text is deterministic: given the same source file content and
+compiler configuration, the same text is produced regardless of execution
+environment or wall-clock time. This allows stable embedding vector comparison
+across index runs.
 
 ## API Overview
 
@@ -75,6 +124,7 @@ ta.dispose();
 | `createAliasHash()` | Compute a stable branch-scoped SHA-1 symbol identity hash |
 | `TsciAnalyzer` | `ts-morph` backed language analyzer implementing `LanguageAnalyzer` |
 | `TypeAnalyzer` | Resolves a named type to its property shape using the TypeScript type checker |
+| `runEnrichmentPass()` | Semantic enrichment over a syntactic index: call edges, heritage re-resolution, resolved shapes, embeddable units |
 | `searchIndex()` | Keyword search with optional semantic re-ranking |
 | `traceGraph()` | Traverse the dependency-edge graph from a symbol |
 | `matchesPathPrefix()` / `resolveTraceRoot()` | Path helpers for graph traversal |
@@ -107,6 +157,7 @@ The package exposes granular sub-paths for selective imports:
 | `./type-analysis` | `TypeAnalyzer` and resolved type shapes |
 | `./tsci-analyzer` | `TsciAnalyzer` |
 | `./schemas` | Zod schemas |
+| `./enrichment-pass` | `runEnrichmentPass` and `EnrichmentOptions` |
 | `./storage/vector-math` | Cosine similarity and Float32 encoding |
 
 ## Installation

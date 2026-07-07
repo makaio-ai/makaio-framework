@@ -8,6 +8,7 @@ export {
   TS_EXTENSIONS,
 } from './index-engine.js';
 export type { IndexEngineOptions, IndexStoreOperations } from './index-engine.js';
+export { EDGE_RELATIONS } from './index-types.js';
 export type {
   EdgeRelation,
   IndexedSymbolRecord,
@@ -57,7 +58,11 @@ export {
   DescribeFileResponseSchema,
   DescribeSymbolRequestSchema,
   DescribeSymbolResponseSchema,
+  EmbeddableUnitSchema,
+  ENRICHMENT_VERSION,
   MemberInfoSchema,
+  ResolvedTypePropertySchema,
+  ResolvedTypeShapeSchema,
   SymbolDetailSchema,
   SymbolKindSchema,
   SymbolNodeSchema,
@@ -67,12 +72,13 @@ export type {
   DescribeFileResponse,
   DescribeSymbolRequest,
   DescribeSymbolResponse,
+  EmbeddableUnit,
   MemberInfo,
   SymbolDetail,
   SymbolKind,
   SymbolNode,
 } from './schemas.js';
-export type { LanguageAnalyzer, MethodCallTarget } from './types.js';
+export type { FileCallEdge, LanguageAnalyzer, MethodCallTarget } from './types.js';
 export { createSymbolId, generateId } from './symbol-id.js';
 export { CONTINUITY_ALGORITHM_VERSION, DEFAULT_CONTINUITY_CONFIG } from './continuity-config.js';
 export type { ContinuityConfig } from './continuity-config.js';
@@ -98,11 +104,13 @@ export {
   shouldIndexTypeviewSourceFile,
 } from './source-filter.js';
 export type { TypeviewSourceFilterOptions } from './source-filter.js';
-export { TypeAnalyzer } from './type-analysis.js';
+export { runEnrichmentPass } from './enrichment-pass.js';
+export type { EnrichmentOptions } from './enrichment-pass.js';
+export { TypeAnalyzer, asCompilerProgram } from './type-analysis.js';
 export type {
-  ResolvedTypeProperty,
-  ResolvedTypeShape,
+  CompilerProgramLike,
   TypeAliasAnalysis,
   TypeAnalyzerOptions,
   TypeCompositionNode,
 } from './type-analysis.js';
+export type { ResolvedTypeProperty, ResolvedTypeShape } from './schemas.js';

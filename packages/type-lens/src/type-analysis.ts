@@ -1,5 +1,6 @@
 import path from 'node:path';
 import ts from 'typescript';
+import type { ResolvedTypeShape } from './schemas.js';
 
 export interface TypeAnalyzerOptions {
   /** Public API entrypoint files that export the symbols being analyzed. */
@@ -19,25 +20,6 @@ export interface TypeCompositionNode {
   children: TypeCompositionNode[];
 }
 
-export interface ResolvedTypeProperty {
-  /** Property name in the resolved object shape. */
-  name: string;
-  /** Rendered TypeScript type for the property. */
-  type: string;
-  /** Whether the property remains optional after type resolution. */
-  optional: boolean;
-}
-
-export type ResolvedTypeShape =
-  | {
-      kind: 'object';
-      properties: ResolvedTypeProperty[];
-    }
-  | {
-      kind: 'omitted';
-      reason: string;
-    };
-
 export interface TypeAliasAnalysis {
   /** Public type alias symbol name. */
   symbolName: string;
@@ -54,7 +36,46 @@ const TYPE_FORMAT_FLAGS =
   ts.TypeFormatFlags.WriteArrayAsGenericType;
 
 /**
- * Compiler-backed analyzer for public TypeScript type aliases.
+ * Structural interface for a TypeScript compiler program.
+ *
+ * Decouples {@link TypeAnalyzer.fromProgram} and heritage-resolution helpers
+ * from the nominal `ts.Program` type so callers that hold a structurally
+ * identical program object (e.g. the `compilerObject` returned by ts-morph,
+ * which is typed under `@ts-morph/common`'s re-declared TypeScript namespace)
+ * can pass it without a double-cast.
+ *
+ * At runtime these objects are the same `ts.Program` instance; only the
+ * declaration-level nominal brand differs.  The member return types are
+ * intentionally `unknown` rather than `ts.TypeChecker` / `ts.SourceFile` —
+ * those nominal types would reintroduce the very mismatch this interface
+ * exists to avoid.  Consumers cast the object to `ts.Program` at the
+ * boundary where full nominal typing resumes.
+ */
+export interface CompilerProgramLike {
+  /** Obtain the type checker for semantic queries. */
+  getTypeChecker(): unknown;
+  /** Retrieve a parsed source file by its file name. */
+  getSourceFile(fileName: string): unknown;
+}
+
+/**
+ * Bridge a {@link CompilerProgramLike} to the nominal `ts.Program` type.
+ *
+ * At runtime the object IS a `ts.Program` — the nominal type gap exists only
+ * in declaration files (e.g. `@ts-morph/common` re-declares the TypeScript
+ * namespace).  This helper centralizes the single unavoidable assertion so
+ * call-sites stay clean.
+ * @param program - Structurally compatible program object.
+ * @returns The same object typed as `ts.Program`.
+ */
+export function asCompilerProgram(program: CompilerProgramLike): ts.Program {
+  // Safe: CompilerProgramLike is a strict subset of ts.Program, and at
+  // runtime the object is always a genuine ts.Program instance.
+  return program as ts.Program;
+}
+
+/**
+ * Compiler-backed analyzer for TypeScript type aliases and interfaces.
  */
 export class TypeAnalyzer {
   private readonly program: ts.Program;
@@ -63,43 +84,154 @@ export class TypeAnalyzer {
   private readonly maxShapeProperties: number;
 
   /**
+   * Creates a TypeAnalyzer that wraps an externally provided TypeScript program.
+   *
+   * Use this factory when the caller already owns a compiled program (e.g. from
+   * ts-morph or a language-service host). The analyzer skips `ts.createProgram`
+   * and reuses the existing type checker.
+   *
+   * The parameter accepts {@link CompilerProgramLike} rather than the nominal
+   * `ts.Program` to avoid type mismatches when the program originates from a
+   * wrapper library (e.g. ts-morph) that re-declares the TypeScript namespace.
+   *
+   * Export-lookup via {@link analyzeExportedTypeAlias} is unavailable on
+   * analyzers created through this factory because no entrypoints are
+   * configured. Use {@link analyzeDeclarationAt} instead.
+   * @param program - Pre-compiled TypeScript program (or structurally
+   *   compatible object such as ts-morph's `compilerObject`).
+   * @param options - Optional rendering limits.
+   * @returns A TypeAnalyzer bound to the provided program.
+   */
+  public static fromProgram(program: CompilerProgramLike, options?: { maxShapeProperties?: number }): TypeAnalyzer {
+    // The structural interface guarantees getTypeChecker/getSourceFile are
+    // present.  At runtime the object is always a genuine ts.Program; the
+    // cast bridges the nominal declaration gap only.
+    return new TypeAnalyzer(
+      {
+        entryPoints: [],
+        maxShapeProperties: options?.maxShapeProperties,
+      },
+      program as ts.Program,
+    );
+  }
+
+  /**
    * Creates a TypeScript program for exported API type analysis.
    * @param options - Entry points, optional tsconfig, and rendering limits.
+   * @param existingProgram - When provided, reuses this program instead of creating one.
    */
-  public constructor(options: TypeAnalyzerOptions) {
+  public constructor(options: TypeAnalyzerOptions, existingProgram?: ts.Program) {
     this.entryPoints = options.entryPoints.map((entryPoint) => path.resolve(entryPoint));
     this.maxShapeProperties = options.maxShapeProperties ?? DEFAULT_MAX_SHAPE_PROPERTIES;
 
-    const parsedConfig = options.tsconfigPath ? parseTsConfig(options.tsconfigPath) : undefined;
-    this.program = ts.createProgram({
-      rootNames: this.entryPoints,
-      options: parsedConfig?.options ?? {
-        module: ts.ModuleKind.ESNext,
-        moduleResolution: ts.ModuleResolutionKind.Bundler,
-        noEmit: true,
-        skipLibCheck: true,
-        strict: true,
-        target: ts.ScriptTarget.ESNext,
-      },
-    });
+    if (existingProgram) {
+      this.program = existingProgram;
+    } else {
+      const parsedConfig = options.tsconfigPath ? parseTsConfig(options.tsconfigPath) : undefined;
+      this.program = ts.createProgram({
+        rootNames: this.entryPoints,
+        options: parsedConfig?.options ?? {
+          module: ts.ModuleKind.ESNext,
+          moduleResolution: ts.ModuleResolutionKind.Bundler,
+          noEmit: true,
+          skipLibCheck: true,
+          strict: true,
+          target: ts.ScriptTarget.ESNext,
+        },
+      });
+    }
     this.checker = this.program.getTypeChecker();
   }
 
   /**
    * Resolves a public exported type alias by symbol name.
+   *
+   * Requires at least one configured entrypoint. Use {@link analyzeDeclarationAt}
+   * for analyzers created via {@link TypeAnalyzer.fromProgram}.
    * @param symbolName - Exported type alias name.
    * @returns Type alias composition and resolved shape when the symbol exists.
    */
   public analyzeExportedTypeAlias(symbolName: string): TypeAliasAnalysis | undefined {
+    if (this.entryPoints.length === 0) {
+      throw new Error(
+        'analyzeExportedTypeAlias requires configured entryPoints. ' +
+          'Use analyzeDeclarationAt for analyzers created via TypeAnalyzer.fromProgram.',
+      );
+    }
+
     const declaration = this.findExportedTypeAlias(symbolName);
     if (!declaration) return undefined;
 
+    return this.analyzeTypeAliasDeclaration(declaration);
+  }
+
+  /**
+   * Locates a type alias or interface declaration by name in a source file and
+   * analyzes its composition tree and resolved shape.
+   *
+   * The file must be part of the analyzer's program (either via entrypoints or
+   * through the program provided to {@link TypeAnalyzer.fromProgram}).
+   * @param filePath - Absolute path to the source file containing the declaration.
+   * @param symbolName - Name of the type alias or interface to analyze.
+   * @returns Analysis result, or undefined when no matching declaration is found.
+   */
+  public analyzeDeclarationAt(filePath: string, symbolName: string): TypeAliasAnalysis | undefined {
+    const resolved = path.resolve(filePath);
+    const sourceFile = this.program.getSourceFile(resolved);
+    if (!sourceFile) return undefined;
+
+    for (const statement of sourceFile.statements) {
+      if (ts.isTypeAliasDeclaration(statement) && statement.name.text === symbolName) {
+        return this.analyzeTypeAliasDeclaration(statement);
+      }
+      if (ts.isInterfaceDeclaration(statement) && statement.name.text === symbolName) {
+        return this.analyzeInterfaceDeclaration(statement);
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Analyzes a type alias declaration into a composition tree and resolved shape.
+   * @param declaration - TypeScript type alias declaration node.
+   * @returns Composition and resolved shape analysis.
+   */
+  private analyzeTypeAliasDeclaration(declaration: ts.TypeAliasDeclaration): TypeAliasAnalysis {
+    const symbolName = declaration.name.text;
     const rootSymbol = this.checker.getSymbolAtLocation(declaration.name);
     const expansionPath = rootSymbol ? new Set([this.resolveAlias(rootSymbol)]) : new Set<ts.Symbol>();
     const composition: TypeCompositionNode = {
       text: symbolName,
       symbolName,
       children: [this.analyzeTypeNode(declaration.type, expansionPath)],
+    };
+
+    return {
+      symbolName,
+      composition,
+      resolvedShape: this.resolveShape(this.checker.getTypeAtLocation(declaration.name), declaration),
+    };
+  }
+
+  /**
+   * Analyzes an interface declaration into a composition tree and resolved shape.
+   *
+   * Heritage chains (extends clauses) are rendered as composition children.
+   * The resolved shape flattens inherited properties via the checker's
+   * `getPropertiesOfType`.
+   * @param declaration - TypeScript interface declaration node.
+   * @returns Composition and resolved shape analysis.
+   */
+  private analyzeInterfaceDeclaration(declaration: ts.InterfaceDeclaration): TypeAliasAnalysis {
+    const symbolName = declaration.name.text;
+    const rootSymbol = this.checker.getSymbolAtLocation(declaration.name);
+    const expansionPath = rootSymbol ? new Set([this.resolveAlias(rootSymbol)]) : new Set<ts.Symbol>();
+    const children = this.childrenFromDeclaration(declaration, expansionPath);
+    const composition: TypeCompositionNode = {
+      text: symbolName,
+      symbolName,
+      children,
     };
 
     return {
@@ -159,26 +291,7 @@ export class TypeAnalyzer {
    * @returns Composition tree node.
    */
   private analyzeTypeReference(node: ts.TypeReferenceNode, expansionPath: ReadonlySet<ts.Symbol>): TypeCompositionNode {
-    const referencedSymbol = this.checker.getSymbolAtLocation(node.typeName);
-    const resolvedSymbol = referencedSymbol ? this.resolveAlias(referencedSymbol) : undefined;
-    const symbolName = resolvedSymbol?.getName();
-    const declaration = resolvedSymbol?.declarations?.[0];
-    const isLocalDeclaration = declaration ? this.isLocalDeclaration(declaration) : false;
-    const children = (node.typeArguments ?? []).map((typeArgument) =>
-      this.analyzeTypeNode(typeArgument, expansionPath),
-    );
-
-    if (isLocalDeclaration && declaration && resolvedSymbol && !expansionPath.has(resolvedSymbol)) {
-      const childExpansionPath = new Set(expansionPath);
-      childExpansionPath.add(resolvedSymbol);
-      children.push(...this.childrenFromDeclaration(declaration, childExpansionPath));
-    }
-
-    return {
-      text: node.getText(),
-      symbolName: isLocalDeclaration ? symbolName : undefined,
-      children,
-    };
+    return this.analyzeReferencedTypeExpression(node.getText(), node.typeName, node.typeArguments, expansionPath);
   }
 
   /**
@@ -198,10 +311,57 @@ export class TypeAnalyzer {
     if (ts.isInterfaceDeclaration(declaration)) {
       return (declaration.heritageClauses ?? [])
         .flatMap((clause) => clause.types)
-        .map((heritageType) => this.analyzeTypeNode(heritageType, expansionPath));
+        .map((heritageType) => this.analyzeHeritageType(heritageType, expansionPath));
     }
 
     return [];
+  }
+
+  /**
+   * Builds a composition node for an interface heritage reference.
+   * @param node - Heritage type expression.
+   * @param expansionPath - Local symbols already expanded on the current recursion path.
+   * @returns Composition tree node.
+   */
+  private analyzeHeritageType(
+    node: ts.ExpressionWithTypeArguments,
+    expansionPath: ReadonlySet<ts.Symbol>,
+  ): TypeCompositionNode {
+    return this.analyzeReferencedTypeExpression(node.getText(), node.expression, node.typeArguments, expansionPath);
+  }
+
+  /**
+   * Builds a composition node for a local type reference-like expression.
+   * @param text - Human-readable type expression text.
+   * @param symbolNode - Node whose symbol represents the referenced type.
+   * @param typeArguments - Generic type arguments supplied to the reference.
+   * @param expansionPath - Local symbols already expanded on the current recursion path.
+   * @returns Composition tree node.
+   */
+  private analyzeReferencedTypeExpression(
+    text: string,
+    symbolNode: ts.Node,
+    typeArguments: readonly ts.TypeNode[] | undefined,
+    expansionPath: ReadonlySet<ts.Symbol>,
+  ): TypeCompositionNode {
+    const referencedSymbol = this.checker.getSymbolAtLocation(symbolNode);
+    const resolvedSymbol = referencedSymbol ? this.resolveAlias(referencedSymbol) : undefined;
+    const symbolName = resolvedSymbol?.getName();
+    const declaration = resolvedSymbol?.declarations?.[0];
+    const isLocalDeclaration = declaration ? this.isLocalDeclaration(declaration) : false;
+    const children = (typeArguments ?? []).map((typeArgument) => this.analyzeTypeNode(typeArgument, expansionPath));
+
+    if (isLocalDeclaration && declaration && resolvedSymbol && !expansionPath.has(resolvedSymbol)) {
+      const childExpansionPath = new Set(expansionPath);
+      childExpansionPath.add(resolvedSymbol);
+      children.push(...this.childrenFromDeclaration(declaration, childExpansionPath));
+    }
+
+    return {
+      text,
+      symbolName: isLocalDeclaration ? symbolName : undefined,
+      children,
+    };
   }
 
   /**

@@ -1,8 +1,8 @@
 import * as path from 'node:path';
-import { Project, SyntaxKind, type ClassDeclaration, type Node, type SourceFile } from 'ts-morph';
+import { Project, SyntaxKind, type CallExpression, type ClassDeclaration, type Node, type SourceFile } from 'ts-morph';
 import QuickLRU from 'quick-lru';
 import type { SymbolNode, SymbolKind, MemberInfo } from './schemas.js';
-import type { LanguageAnalyzer, MethodCallTarget } from './types.js';
+import type { FileCallEdge, LanguageAnalyzer, MethodCallTarget } from './types.js';
 import {
   extractMembers as extractMembersFromSource,
   extractDocSummary as extractDocSummaryFromSource,
@@ -20,6 +20,16 @@ import {
   extractEnums,
   findMethodNode,
 } from './symbol-extractor.js';
+
+/** Caller attribution for a call expression within a source file. */
+type CallerAttribution = {
+  /** Containing class of the calling code, or null for free functions / file-level code. */
+  callerClassName: string | null;
+  /** Name of the calling method, function, or arrow-function variable. Null for top-level statements. */
+  callerName: string | null;
+  /** 1-based line of the indexed caller declaration, or undefined for top-level/unindexed calls. */
+  callerDeclarationLine?: number;
+};
 
 /** Default max cached source files before LRU eviction. */
 export const DEFAULT_CACHE_SIZE = 50;
@@ -86,6 +96,14 @@ export class TsciAnalyzer implements LanguageAnalyzer {
   }
 
   /**
+   * Get the configured maximum number of source files retained in the LRU cache.
+   * @returns Current cache max size.
+   */
+  public getCacheMaxSize(): number {
+    return this.cache.maxSize;
+  }
+
+  /**
    * Resize the source-file LRU cache in-place.
    *
    * Call this before a cold full-index pass to prevent eviction-driven
@@ -137,6 +155,36 @@ export class TsciAnalyzer implements LanguageAnalyzer {
     for (const sourceFile of this.project.getSourceFiles()) {
       this.project.removeSourceFile(sourceFile);
     }
+  }
+
+  /**
+   * Obtain the underlying TypeScript compiler program.
+   *
+   * Useful for passing to {@link TypeAnalyzer.fromProgram} without exposing the
+   * ts-morph Project itself. The returned program is a snapshot — the caller
+   * must not cache it across source-file mutations.
+   * @returns The TypeScript compiler program from the ts-morph project.
+   */
+  public getCompilerProgram() {
+    // The ts-morph Project uses the same runtime typescript package, but
+    // @ts-morph/common re-declares the TypeScript namespace in its own .d.ts
+    // file, creating a nominal type mismatch.  The compilerObject is
+    // structurally identical to the typescript package's ts.Program at runtime;
+    // callers that need the canonical ts.Program type should bridge via
+    // structurally typed helper parameters.
+    return this.project.getProgram().compilerObject;
+  }
+
+  /**
+   * Ensure a source file is loaded into the project for checker resolution.
+   *
+   * Unlike {@link parseFile}, this only materialises the file in the ts-morph
+   * Project so it participates in checker queries. No symbol extraction is
+   * performed.
+   * @param file - Absolute file path to touch.
+   */
+  public touchFile(file: string): void {
+    this.getSourceFile(file);
   }
 
   /**
@@ -223,11 +271,17 @@ export class TsciAnalyzer implements LanguageAnalyzer {
    * @param file - Absolute file path
    * @param name - Symbol name to extract docs from
    * @param kind - Symbol kind
+   * @param namespacePath - Containing class/namespace for method symbols.
    * @returns JSDoc description or undefined if none found
    */
-  public async extractDocSummary(file: string, name: string, kind: SymbolKind): Promise<string | undefined> {
+  public async extractDocSummary(
+    file: string,
+    name: string,
+    kind: SymbolKind,
+    namespacePath?: string | null,
+  ): Promise<string | undefined> {
     const sourceFile = this.getSourceFile(file);
-    return extractDocSummaryFromSource(sourceFile, name, kind);
+    return extractDocSummaryFromSource(sourceFile, name, kind, namespacePath ?? null);
   }
 
   /**
@@ -319,57 +373,357 @@ export class TsciAnalyzer implements LanguageAnalyzer {
     const targets: MethodCallTarget[] = [];
 
     for (const callExpr of callExprs) {
-      try {
-        const localSym = callExpr.getExpression().getSymbol();
-        // Follow the full alias chain to the canonical declaration.
-        // A single hop misses barrel re-exports where the chain is deeper than one level.
-        // Loop until the symbol stabilises (aliased === self) or there is no further alias.
-        let sym = localSym;
-        while (sym) {
-          const aliased = sym.getAliasedSymbol();
-          if (!aliased || aliased === sym) break;
-          sym = aliased;
-        }
-        const declarations = sym?.getDeclarations();
-        if (!declarations || declarations.length === 0) continue;
+      if (this.isDecoratorMetadataCall(callExpr)) continue;
 
-        // Take the last declaration — for overloads, the implementation body follows the overload stubs.
-        const decl = declarations[declarations.length - 1];
-        const targetPath = decl.getSourceFile().getFilePath();
+      const resolved = this.resolveCallExpression(callExpr, scopePath, includePackages);
+      if (!resolved) continue;
 
-        if (!isEligibleFile(targetPath, scopePath, includePackages)) continue;
+      const key = `${resolved.file}:${resolved.className}:${resolved.methodName}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-        // Walk parent chain to find containing class, if any.
-        let containingClassName: string | null = null;
-        let parent = decl.getParent();
-        while (parent) {
-          if (parent.getKind() === SyntaxKind.ClassDeclaration) {
-            const name = (parent as ClassDeclaration).getName?.();
-            containingClassName = name ?? null;
-            break;
-          }
-          parent = parent.getParent();
-        }
-
-        // Determine the method/function name from the declaration node.
-        const declName = (decl as { getName?: () => string | undefined }).getName?.();
-        if (!declName) continue;
-
-        const key = `${targetPath}:${containingClassName}:${declName}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        targets.push({
-          file: targetPath,
-          className: containingClassName,
-          methodName: declName,
-          line: decl.getStartLineNumber(),
-        });
-      } catch {
-        // Silently skip unresolvable calls per plan's catch-per-node strategy.
-      }
+      targets.push(resolved);
     }
 
     return targets;
+  }
+
+  /**
+   * Resolve all outgoing calls across an entire source file, attributing each
+   * call to its containing declaration (method, function, or arrow variable).
+   *
+   * Only follows calls whose declaration resolves to a file within `scopePath`
+   * (or a file whose package matches `includePackages`). Unresolvable or
+   * external calls are silently skipped.
+   * @param file - Absolute file path to scan
+   * @param scopePath - Workspace root for filtering
+   * @param includePackages - Optional package allowlist
+   * @returns Resolved call edges attributed to their callers
+   */
+  public async resolveFileCallEdges(
+    file: string,
+    scopePath: string,
+    includePackages?: string[],
+  ): Promise<FileCallEdge[]> {
+    const sourceFile = this.getSourceFile(file);
+    const callExprs = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression);
+    const seen = new Set<string>();
+    const edges: FileCallEdge[] = [];
+
+    for (const callExpr of callExprs) {
+      if (this.isDecoratorMetadataCall(callExpr)) continue;
+
+      const target = this.resolveCallExpression(callExpr, scopePath, includePackages);
+      if (!target) continue;
+
+      const callLine = callExpr.getStartLineNumber();
+      const caller = this.attributeCallToCaller(callExpr);
+      const callerKey =
+        caller.callerName === null
+          ? `top-level:${callExpr.getStart()}`
+          : `${caller.callerClassName}:${caller.callerName}`;
+      const key = [callerKey, caller.callerDeclarationLine, target.file, target.className, target.methodName].join(':');
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      edges.push({ ...caller, callLine, target });
+    }
+
+    return edges;
+  }
+
+  /**
+   * Resolve a single call expression to its declaration-site target.
+   *
+   * Follows the full alias chain to the canonical declaration (handles barrel
+   * re-exports). Returns null for unresolvable calls or calls outside the scope.
+   * @param callExpr - The ts-morph CallExpression node to resolve
+   * @param scopePath - Workspace root for filtering
+   * @param includePackages - Optional package allowlist
+   * @returns Resolved target, or null when skipped
+   */
+  private resolveCallExpression(
+    callExpr: CallExpression,
+    scopePath: string,
+    includePackages?: string[],
+  ): MethodCallTarget | null {
+    try {
+      const localSym = callExpr.getExpression().getSymbol();
+      // Follow the full alias chain to the canonical declaration.
+      // A single hop misses barrel re-exports where the chain is deeper than one level.
+      // Loop until the symbol stabilises (aliased === self) or there is no further alias.
+      let sym = localSym;
+      while (sym) {
+        const aliased = sym.getAliasedSymbol();
+        if (!aliased || aliased === sym) break;
+        sym = aliased;
+      }
+      const declarations = sym?.getDeclarations();
+      if (!declarations || declarations.length === 0) return null;
+
+      // Take the last declaration — for overloads, the implementation body follows the overload stubs.
+      const decl = declarations[declarations.length - 1];
+      const targetPath = decl.getSourceFile().getFilePath();
+
+      if (!isEligibleFile(targetPath, scopePath, includePackages)) return null;
+
+      const identity = this.getIndexedCallableIdentity(decl);
+      if (!identity) return null;
+
+      return {
+        file: targetPath,
+        className: identity.className,
+        methodName: identity.name,
+        line: decl.getStartLineNumber(),
+      };
+    } catch {
+      // Silently skip unresolvable calls per plan's catch-per-node strategy.
+      return null;
+    }
+  }
+
+  /**
+   * Attribute a call expression to its containing declaration.
+   *
+   * Walks ancestors of the call to find the nearest enclosing method, function,
+   * or arrow-function variable. Returns class name and method/function name.
+   * @param callExpr - The call expression to attribute
+   * @returns Caller class name and method/function name (both nullable)
+   */
+  private attributeCallToCaller(callExpr: CallExpression): CallerAttribution {
+    let node: Node | undefined = callExpr.getParent();
+
+    while (node) {
+      const result = this.tryAttributeNode(node, callExpr);
+      if (result) return result;
+      node = node.getParent();
+    }
+
+    // Top-level statement or unattributable
+    return { callerClassName: null, callerName: null };
+  }
+
+  /**
+   * Try to attribute a call to a single ancestor node.
+   *
+   * Returns a {@link CallerAttribution} when the node is a recognizable
+   * declaration boundary (method, property, function, or top-level variable),
+   * or null to continue walking.
+   * @param node - Ancestor node to inspect
+   * @param callExpr - Original call expression being attributed
+   * @returns Attribution if the node is a declaration boundary, null otherwise
+   */
+  private tryAttributeNode(node: Node, callExpr: CallExpression): CallerAttribution | null {
+    const kind = node.getKind();
+
+    // Method declaration inside a class: always a function boundary.
+    if (kind === SyntaxKind.MethodDeclaration) {
+      const memberName = (node as { getName?: () => string | undefined }).getName?.() ?? null;
+      const className = this.getParentClassName(node);
+      if (!className) return null;
+      return {
+        callerClassName: className,
+        callerName: memberName,
+        callerDeclarationLine: node.getStartLineNumber(),
+      };
+    }
+
+    // Property declaration inside a class: only a boundary when the
+    // initializer is a function/arrow (e.g. `action = () => { ... }`).
+    // Plain field initializers like `field = someCall()` must fall through
+    // so the call is not mis-attributed to the property name.
+    if (kind === SyntaxKind.PropertyDeclaration) {
+      return this.tryAttributePropertyDeclaration(node, callExpr);
+    }
+
+    // Standalone function declaration
+    if (kind === SyntaxKind.FunctionDeclaration) {
+      if (!this.hasSourceFileParent(node)) return null;
+      const fnName = (node as { getName?: () => string | undefined }).getName?.() ?? null;
+      return {
+        callerClassName: null,
+        callerName: fnName,
+        callerDeclarationLine: node.getStartLineNumber(),
+      };
+    }
+
+    // Top-level variable declaration with function/arrow initializer
+    if (kind === SyntaxKind.VariableDeclaration) {
+      return this.tryAttributeTopLevelVariableDeclaration(node, callExpr);
+    }
+
+    return null;
+  }
+
+  /**
+   * Attribute a call to a class property only when that property owns a
+   * function-like initializer.
+   * @param node - Property declaration ancestor to inspect.
+   * @param callExpr - Original call expression being attributed.
+   * @returns Attribution for arrow/function-expression properties, otherwise null.
+   */
+  private tryAttributePropertyDeclaration(node: Node, callExpr: CallExpression): CallerAttribution | null {
+    const initializer = (node as { getInitializer?: () => Node | undefined }).getInitializer?.();
+    if (!initializer || !this.isFunctionInitializerContainingCall(initializer, callExpr)) return null;
+
+    const memberName = (node as { getName?: () => string | undefined }).getName?.() ?? null;
+    const className = this.getParentClassName(node);
+    if (!className) return null;
+    return {
+      callerClassName: className,
+      callerName: memberName,
+      callerDeclarationLine: node.getStartLineNumber(),
+    };
+  }
+
+  /**
+   * Attribute a call to a top-level variable only when the variable owns a
+   * function-like initializer.
+   * @param node - Variable declaration ancestor to inspect.
+   * @param callExpr - Original call expression being attributed.
+   * @returns Attribution for top-level arrow/function-expression variables, otherwise null.
+   */
+  private tryAttributeTopLevelVariableDeclaration(node: Node, callExpr: CallExpression): CallerAttribution | null {
+    if (!this.isTopLevelVariableDeclaration(node)) return null;
+
+    const initializer = (node as { getInitializer?: () => Node | undefined }).getInitializer?.();
+    if (!initializer || !this.isFunctionInitializerContainingCall(initializer, callExpr)) return null;
+
+    const varName = (node as { getName?: () => string | undefined }).getName?.() ?? null;
+    return {
+      callerClassName: null,
+      callerName: varName,
+      callerDeclarationLine: node.getStartLineNumber(),
+    };
+  }
+
+  /**
+   * Resolve a declaration to an indexed callable identity.
+   *
+   * Local/nested declarations are deliberately excluded because the index only
+   * contains top-level functions, top-level arrow/function variables, and
+   * top-level class members. Reporting a local declaration by file/name would let
+   * enrichment attach it to an unrelated indexed top-level symbol with the same
+   * name.
+   * @param declaration - Resolved call target declaration.
+   * @returns Indexed callable identity, or null for unindexed local declarations.
+   */
+  private getIndexedCallableIdentity(declaration: Node): { className: string | null; name: string } | null {
+    const kind = declaration.getKind();
+
+    switch (kind) {
+      case SyntaxKind.MethodDeclaration:
+      case SyntaxKind.PropertyDeclaration:
+        return this.getIndexedClassMemberIdentity(declaration);
+      case SyntaxKind.FunctionDeclaration:
+        return this.getIndexedTopLevelFunctionIdentity(declaration);
+      case SyntaxKind.VariableDeclaration:
+        return this.getIndexedTopLevelVariableIdentity(declaration);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Resolve an indexed class member declaration identity.
+   * @param declaration - Method or property declaration.
+   * @returns Class-member identity, or null when the class is not indexed.
+   */
+  private getIndexedClassMemberIdentity(declaration: Node): { className: string; name: string } | null {
+    const className = this.getParentClassName(declaration);
+    const name = (declaration as { getName?: () => string | undefined }).getName?.();
+    return className && name ? { className, name } : null;
+  }
+
+  /**
+   * Resolve an indexed top-level function declaration identity.
+   * @param declaration - Function declaration.
+   * @returns Top-level function identity, or null for nested functions.
+   */
+  private getIndexedTopLevelFunctionIdentity(declaration: Node): { className: null; name: string } | null {
+    if (!this.hasSourceFileParent(declaration)) return null;
+    const name = (declaration as { getName?: () => string | undefined }).getName?.();
+    return name ? { className: null, name } : null;
+  }
+
+  /**
+   * Resolve an indexed top-level variable-function declaration identity.
+   * @param declaration - Variable declaration.
+   * @returns Top-level variable function identity, or null for nested variables.
+   */
+  private getIndexedTopLevelVariableIdentity(declaration: Node): { className: null; name: string } | null {
+    if (!this.isTopLevelVariableDeclaration(declaration)) return null;
+
+    const name = (declaration as { getName?: () => string | undefined }).getName?.();
+    return name ? { className: null, name } : null;
+  }
+
+  /**
+   * Check whether a variable declaration is an indexed top-level declaration.
+   * @param declaration - Variable declaration candidate.
+   * @returns True when the variable statement is a direct child of the source file.
+   */
+  private isTopLevelVariableDeclaration(declaration: Node): boolean {
+    const parent = declaration.getParent();
+    return (
+      parent?.getKind() === SyntaxKind.VariableDeclarationList &&
+      parent.getParent()?.getKind() === SyntaxKind.VariableStatement &&
+      this.hasSourceFileParent(parent.getParent())
+    );
+  }
+
+  /**
+   * Check whether an initializer is a function-like owner for the given call.
+   *
+   * Plain initializers such as `const value = util()` and `field = util()`
+   * execute at file/class initialization time, not within an indexed function
+   * symbol. Only arrow-function and function-expression initializers own calls.
+   * @param initializer - Variable or property initializer to inspect
+   * @param callExpr - Call expression being attributed
+   * @returns True when the call is inside a function-like initializer
+   */
+  private isFunctionInitializerContainingCall(initializer: Node, callExpr: CallExpression): boolean {
+    const kind = initializer.getKind();
+    if (kind !== SyntaxKind.ArrowFunction && kind !== SyntaxKind.FunctionExpression) return false;
+
+    let node: Node | undefined = callExpr;
+    while (node) {
+      if (node === initializer) return true;
+      node = node.getParent();
+    }
+
+    return false;
+  }
+
+  /**
+   * Check whether a call belongs to decorator metadata rather than executable
+   * function/method code.
+   * @param callExpr - Call expression being considered for call-edge enrichment.
+   * @returns True when the call is nested inside a decorator expression.
+   */
+  private isDecoratorMetadataCall(callExpr: CallExpression): boolean {
+    return callExpr.getAncestors().some((ancestor) => ancestor.getKind() === SyntaxKind.Decorator);
+  }
+
+  /**
+   * Extract the class name from a node's direct parent, when that class is indexed.
+   * @param node - Node whose parent to inspect
+   * @returns Class name or null if the parent is not a top-level class declaration.
+   */
+  private getParentClassName(node: Node): string | null {
+    const classNode = node.getParent();
+    if (classNode?.getKind() === SyntaxKind.ClassDeclaration && this.hasSourceFileParent(classNode)) {
+      return (classNode as ClassDeclaration).getName?.() ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * Check whether a node is a direct child of the source file.
+   * @param node - Node to inspect.
+   * @returns True when the node's parent is the source file.
+   */
+  private hasSourceFileParent(node: Node | undefined): boolean {
+    return node?.getParent()?.getKind() === SyntaxKind.SourceFile;
   }
 }

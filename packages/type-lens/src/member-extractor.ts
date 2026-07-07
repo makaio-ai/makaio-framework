@@ -1,7 +1,8 @@
-import type { SourceFile, ClassDeclaration, InterfaceDeclaration } from 'ts-morph';
+import type { SourceFile, ClassDeclaration, InterfaceDeclaration, JSDocableNode, PropertyDeclaration } from 'ts-morph';
 import { Node, SyntaxKind } from 'ts-morph';
 import type { MemberInfo, SymbolKind, SymbolNode } from './schemas.js';
 import { generateId } from './symbol-id.js';
+import { findDeclaration as findIndexedDeclaration } from './symbol-extractor.js';
 
 /**
  * Type guard to check if a Node is a ClassDeclaration or InterfaceDeclaration.
@@ -26,15 +27,14 @@ export function findDeclaration(sourceFile: SourceFile, name: string, kind: Symb
     case 'interface':
       return sourceFile.getInterface(name);
     case 'function':
-      return sourceFile.getFunction(name);
+      return findIndexedDeclaration(sourceFile, name, kind) ?? undefined;
     case 'type':
       return sourceFile.getTypeAlias(name);
     case 'enum':
       return sourceFile.getEnum(name);
     case 'method':
-      // Method symbols are resolved via extractMethodBody(), not findDeclaration().
-      // This returns undefined so callers like findSymbolPosition() and extractDocSummary()
-      // gracefully return null/undefined for method-kind queries.
+      // Method symbols need their containing class namespace, so callers resolve
+      // them through method-specific helpers rather than this top-level lookup.
       return undefined;
     default:
       return undefined;
@@ -118,20 +118,10 @@ export function extractExecutableMembers(classDeclaration: ClassDeclaration, rel
   }
 
   for (const prop of classDeclaration.getProperties()) {
-    const initializer = prop.getInitializer();
-    if (
-      !initializer ||
-      (initializer.getKind() !== SyntaxKind.ArrowFunction && initializer.getKind() !== SyntaxKind.FunctionExpression)
-    ) {
-      continue;
-    }
-
-    const name = prop.getName();
-    const fnNode = initializer.asKind(SyntaxKind.ArrowFunction) ?? initializer.asKind(SyntaxKind.FunctionExpression);
-    // fnNode is guaranteed non-null here: the enclosing if-guard already
-    // checked that the initializer kind is ArrowFunction or FunctionExpression.
+    const fnNode = getExecutablePropertyInitializer(prop);
     if (!fnNode) continue;
 
+    const name = prop.getName();
     const params = fnNode.getParameters().map((p) => `${p.getName()}: ${p.getType().getText()}`);
     const returnType = fnNode.getReturnType().getText();
 
@@ -155,16 +145,22 @@ export function extractExecutableMembers(classDeclaration: ClassDeclaration, rel
  * @param sourceFile - The source file
  * @param name - Symbol name
  * @param kind - Symbol kind
+ * @param namespacePath - Containing class/namespace for method symbols.
  * @returns JSDoc description or undefined
  */
-export function extractDocSummary(sourceFile: SourceFile, name: string, kind: SymbolKind): string | undefined {
-  const node = findDeclaration(sourceFile, name, kind);
-  if (!node) return undefined;
+export function extractDocSummary(
+  sourceFile: SourceFile,
+  name: string,
+  kind: SymbolKind,
+  namespacePath?: string | null,
+): string | undefined {
+  const docNode =
+    kind === 'method'
+      ? findMethodDocNode(sourceFile, namespacePath ?? null, name)
+      : findDocNode(findDeclaration(sourceFile, name, kind));
+  if (!docNode) return undefined;
 
-  // Use ts-morph's built-in type guard instead of unsafe cast
-  if (!Node.isJSDocable(node)) return undefined;
-
-  const jsDocs = node.getJsDocs();
+  const jsDocs = docNode.getJsDocs();
   if (jsDocs.length === 0) return undefined;
 
   const description = jsDocs[0].getDescription?.();
@@ -175,5 +171,63 @@ export function extractDocSummary(sourceFile: SourceFile, name: string, kind: Sy
       .trim()
       .replace(/\n\s*\n/g, '\n')
       .slice(0, 500) || undefined
+  );
+}
+
+/**
+ * Locate the node that owns JSDoc for a declaration.
+ *
+ * Variable-declared functions are indexed by their {@link SyntaxKind.VariableDeclaration},
+ * but JSDoc belongs to the owning variable statement.
+ * @param node - Declaration resolved for the symbol.
+ * @returns JSDocable node, or undefined when the symbol has no supported doc owner.
+ */
+function findDocNode(node: Node | undefined): JSDocableNode | undefined {
+  if (!node) return undefined;
+  if (Node.isJSDocable(node)) return node;
+
+  if (node.getKind() !== SyntaxKind.VariableDeclaration) return undefined;
+  const statement = node.getParent()?.getParent();
+  return statement && Node.isJSDocable(statement) ? statement : undefined;
+}
+
+/**
+ * Locate the JSDoc owner for an indexed class method symbol.
+ * @param sourceFile - Source file containing the class.
+ * @param className - Containing class name from the symbol namespace.
+ * @param methodName - Method symbol name.
+ * @returns JSDocable method/property node, or undefined when no indexed member matches.
+ */
+function findMethodDocNode(
+  sourceFile: SourceFile,
+  className: string | null,
+  methodName: string,
+): JSDocableNode | undefined {
+  if (!className) return undefined;
+  const classDeclaration = sourceFile.getClass(className);
+  if (!classDeclaration) return undefined;
+
+  const method = classDeclaration
+    .getMethods()
+    .find((candidate) => candidate.getName() === methodName && candidate.getBody() !== undefined);
+  if (method && Node.isJSDocable(method)) return method;
+
+  const property = classDeclaration.getProperties().find((candidate) => {
+    if (candidate.getName() !== methodName) return false;
+    return getExecutablePropertyInitializer(candidate) !== undefined;
+  });
+
+  return property && Node.isJSDocable(property) ? property : undefined;
+}
+
+/**
+ * Resolve the initializer that makes a class property indexable as an executable method.
+ * @param property - Class property to inspect.
+ * @returns Arrow/function-expression initializer, or undefined for non-executable properties.
+ */
+function getExecutablePropertyInitializer(property: PropertyDeclaration) {
+  return (
+    property.getInitializerIfKind(SyntaxKind.ArrowFunction) ??
+    property.getInitializerIfKind(SyntaxKind.FunctionExpression)
   );
 }

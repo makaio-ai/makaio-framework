@@ -1,6 +1,26 @@
 import type { SymbolNode, SymbolKind, MemberInfo } from './schemas.js';
 
 /**
+ * A single resolved call site attributed to its containing declaration.
+ *
+ * Produced by {@link LanguageAnalyzer.resolveFileCallEdges} to represent every
+ * in-scope call found in a source file, together with the caller context
+ * (class name and method/function name).
+ */
+export interface FileCallEdge {
+  /** Containing class of the calling code, or null for free functions / file-level code. */
+  callerClassName: string | null;
+  /** Name of the calling method, function, or arrow-function variable. Null for top-level statements. */
+  callerName: string | null;
+  /** 1-based line of the indexed caller declaration, when the caller is indexed. */
+  callerDeclarationLine?: number;
+  /** 1-based line of the call expression. */
+  callLine: number;
+  /** Resolved declaration site of the callee. */
+  target: MethodCallTarget;
+}
+
+/**
  * A resolved outgoing call from one method to another.
  */
 export interface MethodCallTarget {
@@ -31,8 +51,20 @@ export interface LanguageAnalyzer {
   /** Extract members from a symbol (for hover/detail) */
   extractMembers(file: string, name: string, kind: SymbolKind): Promise<MemberInfo[]>;
 
-  /** Extract JSDoc summary */
-  extractDocSummary(file: string, name: string, kind: SymbolKind): Promise<string | undefined>;
+  /**
+   * Extract JSDoc summary.
+   * @param file - Absolute file path.
+   * @param name - Symbol name.
+   * @param kind - Symbol kind.
+   * @param namespacePath - Containing class/namespace for method symbols, or null for top-level symbols.
+   * @returns JSDoc description or undefined when no summary is available.
+   */
+  extractDocSummary(
+    file: string,
+    name: string,
+    kind: SymbolKind,
+    namespacePath?: string | null,
+  ): Promise<string | undefined>;
 
   /** Find symbol position (1-based line/column). */
   findSymbolPosition(file: string, name: string, kind?: SymbolKind): Promise<{ line: number; column: number } | null>;
@@ -76,6 +108,20 @@ export interface LanguageAnalyzer {
     scopePath: string,
     includePackages?: string[],
   ): Promise<MethodCallTarget[]>;
+
+  /**
+   * Resolve all outgoing calls across an entire source file, attributing each
+   * call to its containing declaration (method, function, or arrow variable).
+   *
+   * Only follows calls whose declaration resolves to a file within `scopePath`
+   * (or a file whose package matches `includePackages`). Unresolvable or
+   * external calls are silently skipped.
+   * @param file - Absolute file path to scan
+   * @param scopePath - Workspace root for filtering
+   * @param includePackages - Optional package allowlist
+   * @returns Resolved call edges attributed to their callers
+   */
+  resolveFileCallEdges?(file: string, scopePath: string, includePackages?: string[]): Promise<FileCallEdge[]>;
 
   /**
    * Reconfigure path-alias resolution for the current workspace.

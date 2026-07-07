@@ -20,6 +20,8 @@ import type {
 } from './index-types.js';
 import { compareRecords, isPathWithinRoot } from './index-utils.js';
 import { TS_EXTENSIONS } from './index-types.js';
+import { appendEdge } from './index-helpers.js';
+import { runEnrichmentPass, type EnrichmentOptions } from './enrichment-pass.js';
 
 export { TS_EXTENSIONS };
 
@@ -116,6 +118,7 @@ export function createBaseIndexStoreOperations(): IndexStoreOperations {
         symbolIdByAliasHash: new Map(source.symbolIdByAliasHash),
         outgoing: new Map([...source.outgoing.entries()].map(([id, edges]) => [id, [...edges]])),
         incoming: new Map([...source.incoming.entries()].map(([id, edges]) => [id, [...edges]])),
+        enrichment: source.enrichment ? { ...source.enrichment } : undefined,
       };
     },
     removeFile(index: ScopeIndexRecord, filePath: string): void {
@@ -140,6 +143,44 @@ export function createBaseIndexStoreOperations(): IndexStoreOperations {
     },
   };
   return ops;
+}
+
+/**
+ * Clone a scope index for in-place enrichment.
+ *
+ * Store-level clones may share symbol record payloads because those records are
+ * immutable for storage operations. Enrichment is different: it mutates records
+ * and graph maps in place, so failure isolation requires independent record
+ * objects as well as independent collection containers.
+ * @param source - Syntactic scope index to enrich.
+ * @returns Mutable scratch copy for semantic enrichment.
+ */
+function cloneScopeIndexForEnrichment(source: ScopeIndexRecord): ScopeIndexRecord {
+  return {
+    scope: source.scope,
+    indexedAt: source.indexedAt,
+    symbolsById: new Map(
+      [...source.symbolsById.entries()].map(([id, record]) => [
+        id,
+        {
+          ...record,
+          symbol: { ...record.symbol },
+          resolvedShape:
+            record.resolvedShape?.kind === 'object'
+              ? { kind: 'object', properties: record.resolvedShape.properties.map((property) => ({ ...property })) }
+              : record.resolvedShape
+                ? { ...record.resolvedShape }
+                : undefined,
+          embeddableUnit: record.embeddableUnit ? { ...record.embeddableUnit } : undefined,
+        },
+      ]),
+    ),
+    symbolIdsByFile: new Map([...source.symbolIdsByFile.entries()].map(([filePath, ids]) => [filePath, [...ids]])),
+    symbolIdByAliasHash: new Map(source.symbolIdByAliasHash),
+    outgoing: new Map([...source.outgoing.entries()].map(([id, edges]) => [id, edges.map((edge) => ({ ...edge }))])),
+    incoming: new Map([...source.incoming.entries()].map(([id, edges]) => [id, edges.map((edge) => ({ ...edge }))])),
+    enrichment: source.enrichment ? { ...source.enrichment } : undefined,
+  };
 }
 
 /** Constructor options for IndexEngine. */
@@ -182,6 +223,10 @@ export class IndexEngine {
    * @param store - IndexStore operations used to create/clone/mutate index records.
    * @param previous - Optional previous ScopeIndexRecord used to seed symbol
    *   continuity. Pass undefined for a cold first-time index.
+   * @param options - Optional configuration for post-index passes. When
+   *   `options.enrichment` is set, runs the semantic enrichment pass after
+   *   graph construction to attach call edges, resolved shapes, and
+   *   embeddable units.
    * @returns Fully populated ScopeIndexRecord and accumulated lineage rows.
    *   Caller is responsible for storing the index and persisting the lineage rows.
    */
@@ -190,9 +235,10 @@ export class IndexEngine {
     filePaths: string[],
     store: IndexStoreOperations,
     previous?: ScopeIndexRecord,
+    options?: { enrichment?: EnrichmentOptions },
   ): Promise<{ index: ScopeIndexRecord; lineageRows: PersistedLineageRow[] }> {
     const normalizedFilePaths = this.normalizeFilePaths(filePaths);
-    const index = store.createEmptyScopeIndex(scope);
+    let index = store.createEmptyScopeIndex(scope);
     const continuity = createContinuityState(previous?.symbolsById.values() ?? []);
     const lineageRows: PersistedLineageRow[] = [];
     console.info(`[IndexEngine] Found ${normalizedFilePaths.length} files to index in ${scope.path}`);
@@ -209,6 +255,20 @@ export class IndexEngine {
       }
     }
     this.rebuildGraph(index);
+
+    if (options?.enrichment) {
+      const enrichedIndex = cloneScopeIndexForEnrichment(index);
+      try {
+        await runEnrichmentPass(enrichedIndex, this.analyzer, options.enrichment);
+        index = enrichedIndex;
+      } catch (error) {
+        // Enrichment is additive semantic metadata; fullIndex must still return
+        // the syntactic index so callers can persist/search the baseline graph
+        // and retry enrichment later.
+        console.warn('[IndexEngine] Semantic enrichment failed; returning syntactic index', error);
+      }
+    }
+
     index.indexedAt = Date.now();
     return { index, lineageRows };
   }
@@ -242,6 +302,10 @@ export class IndexEngine {
       );
     }
     const index = store.cloneScopeIndex(scope, existing);
+    // Stale semantic data must not masquerade as fresh — the syntactic fields
+    // enrichment populated remain, but the freshness stamp is cleared so
+    // consumers can detect that re-enrichment is needed.
+    delete index.enrichment;
     const continuity = createContinuityState(existing.symbolsById.values());
 
     for (const change of changeBatch.changes) {
@@ -369,13 +433,7 @@ export class IndexEngine {
         if (seen.has(key)) continue;
         seen.add(key);
 
-        const outgoingBucket = outgoing.get(edge.fromSymbolId) ?? [];
-        outgoingBucket.push(edge);
-        outgoing.set(edge.fromSymbolId, outgoingBucket);
-
-        const incomingBucket = incoming.get(edge.toSymbolId) ?? [];
-        incomingBucket.push(edge);
-        incoming.set(edge.toSymbolId, incomingBucket);
+        appendEdge(outgoing, incoming, edge);
       }
     }
 

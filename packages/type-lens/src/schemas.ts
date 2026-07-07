@@ -97,3 +97,47 @@ export const DescribeFileResponseSchema = z.object({
   tokenEstimate: z.number(),
 });
 export type DescribeFileResponse = z.infer<typeof DescribeFileResponseSchema>;
+
+// ============================================================
+// Enrichment Schemas
+// ============================================================
+
+/** Version stamp for enrichment output semantics. Bump when edge/shape/unit generation logic changes. */
+export const ENRICHMENT_VERSION = 'v1';
+
+/** Property entry within a checker-resolved object shape. */
+export const ResolvedTypePropertySchema = z.object({
+  /** Property name in the resolved object shape. */
+  name: z.string(),
+  /** Rendered TypeScript type for the property. */
+  type: z.string(),
+  /** Whether the property remains optional after type resolution. */
+  optional: z.boolean(),
+});
+export type ResolvedTypeProperty = z.infer<typeof ResolvedTypePropertySchema>;
+
+/** Checker-resolved type shape: either a concrete object or an omitted placeholder. */
+export const ResolvedTypeShapeSchema = z.discriminatedUnion('kind', [
+  z.object({
+    /** Discriminator for a fully resolved object shape. */
+    kind: z.literal('object'),
+    /** Resolved property list. */
+    properties: z.array(ResolvedTypePropertySchema),
+  }),
+  z.object({
+    /** Discriminator for an omitted shape. */
+    kind: z.literal('omitted'),
+    /** Human-readable explanation for why the shape was omitted. */
+    reason: z.string(),
+  }),
+]);
+export type ResolvedTypeShape = z.infer<typeof ResolvedTypeShapeSchema>;
+
+/** Canonical, deterministic text representation of a symbol for embedding. */
+export const EmbeddableUnitSchema = z.object({
+  /** Enrichment format version the text was generated under. */
+  version: z.string(),
+  /** Canonical, deterministic text representation of the symbol for embedding. */
+  text: z.string(),
+});
+export type EmbeddableUnit = z.infer<typeof EmbeddableUnitSchema>;
