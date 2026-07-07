@@ -508,6 +508,7 @@ class AgentStartedPayload:
     agent_id: str
     cwd: str | None
     model: str | None
+    start_mode: Literal["fresh", "resume", "fork", "rotation"]
     adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None

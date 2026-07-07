@@ -51,6 +51,7 @@ describe('registerHooks', () => {
       ...BASE,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     expect(cb).toHaveBeenCalledOnce();
@@ -71,6 +72,7 @@ describe('registerHooks', () => {
       sessionId: 'other-session',
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     expect(cb).not.toHaveBeenCalled();
@@ -213,6 +215,7 @@ describe('registerHooks', () => {
       ...BASE,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     expect(cb1).toHaveBeenCalledOnce();
@@ -233,6 +236,7 @@ describe('registerHooks', () => {
       ...BASE,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     expect(cb).not.toHaveBeenCalled();
@@ -293,6 +297,7 @@ describe('registerHooks', () => {
       ...BASE,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     // Give the microtask queue a tick to resolve the async callback.

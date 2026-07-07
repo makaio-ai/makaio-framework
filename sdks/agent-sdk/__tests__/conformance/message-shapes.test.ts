@@ -50,7 +50,11 @@ function normaliseResultMessage(
 describe('agent.started maps to system init message', () => {
   it('produces an SDKSystemMessage with subtype "init"', () => {
     const state = createAccumulatorState();
-    const result = mapBusEventToSdkMessage('agent.started', { ...BASE, model: 'sonnet', cwd: '/tmp' }, state);
+    const result = mapBusEventToSdkMessage(
+      'agent.started',
+      { ...BASE, model: 'sonnet', cwd: '/tmp', startMode: 'fresh' },
+      state,
+    );
     expect(result).toMatchSnapshot();
   });
 
@@ -58,7 +62,7 @@ describe('agent.started maps to system init message', () => {
     const state = createAccumulatorState();
     const result = mapBusEventToSdkMessage(
       'agent.started',
-      { ...BASE, model: 'opus', cwd: '/workspace/project' },
+      { ...BASE, model: 'opus', cwd: '/workspace/project', startMode: 'fresh' },
       state,
     );
     expect(result).toMatchSnapshot();

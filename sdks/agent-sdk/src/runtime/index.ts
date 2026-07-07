@@ -78,7 +78,10 @@ export {
 
 export { tool } from '../shared/index.js';
 
-export type { HookEvent, HookEventData, HookCallback, HookConfig } from '../shared/index.js';
+export type { HookEvent, HookEventData, HookCallback, HookConfig, RegisterHooksOptions } from '../shared/index.js';
+
+export { START_MODES } from '../shared/index.js';
+export type { StartMode } from '../shared/index.js';
 
 // ---------------------------------------------------------------------------
 // Runtime-specific exports.
@@ -116,7 +119,7 @@ import type {
   McpServerStatus,
   AccountInfo,
 } from '../shared/types.js';
-import type { HookConfig } from '../shared/hooks.js';
+import type { HookConfig, RegisterHooksOptions } from '../shared/hooks.js';
 
 export { supportedCommands };
 
@@ -226,11 +229,19 @@ export async function accountInfo(adapterName?: string): Promise<AccountInfo> {
  * For each hook event in `hooks` that has a Makaio bus equivalent, this
  * function registers a `bus.on()` handler filtered to the given `sessionId`.
  * Hook events without a bus equivalent are silently ignored.
+ *
+ * `SessionStart` hooks default to `['fresh', 'fork']` — pass
+ * `options.startModes` to override.
  * @param sessionId - Session ID used to filter bus events.
  * @param hooks - Map of hook event names to callbacks.
+ * @param options - Optional registration options (e.g. startModes filter).
  * @returns A cleanup function that removes all registered subscriptions.
  */
-export async function registerHooks(sessionId: string, hooks: HookConfig): Promise<() => void> {
+export async function registerHooks(
+  sessionId: string,
+  hooks: HookConfig,
+  options?: RegisterHooksOptions,
+): Promise<() => void> {
   const bus = await ensureRuntime();
-  return registerHooksShared(bus, sessionId, hooks);
+  return registerHooksShared(bus, sessionId, hooks, options);
 }

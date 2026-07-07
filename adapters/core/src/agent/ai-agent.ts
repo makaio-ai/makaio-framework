@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 1110 }] */
+/* eslint max-lines: ["error", { "max": 1160 }] */
 import type { IMakaioBus, OnOptions, ScopedBus } from '@makaio/bus-core';
 import { MakaioBus } from '@makaio/bus-core';
 import type { SetRequired } from 'type-fest';
@@ -53,6 +53,7 @@ import {
   SessionSubjects,
   type SessionContext,
   type SessionMessageBlock,
+  type StartMode,
   type StepType,
   type BlockData,
   type SystemPrompt,
@@ -156,6 +157,15 @@ export abstract class AIAgent<
   private latestMessageCompletion?: Promise<MessageResult>;
   /** Current content block index within the turn, reset on each turn start */
   private currentBlockIndex = 0;
+  /**
+   * Start mode for the next `emitStart()` call (consume-on-read).
+   *
+   * Set before dispatch; {@link emitStart} reads and clears the slot so
+   * subsequent calls within the same dispatch (e.g. Copilot SDK sub-turns)
+   * fall back to `'rotation'`. The `undefined` initial value is safe —
+   * every first-start path sets the mode before the connector fires.
+   */
+  private pendingStartMode: StartMode | undefined;
   /** Normalized config with defaults applied */
   protected readonly config: SetRequired<AIAgentConfig<TBus, TConnector>, 'globalBus'>;
   /** Available models for context window lookup */
@@ -204,6 +214,8 @@ export abstract class AIAgent<
       globalBus: this.globalBus,
       getConnector: () => this.connector,
       shouldUseNativeResume: this.shouldUseNativeResume.bind(this),
+      hasResumeTarget: () => this.config.resumeAdapterSessionId !== undefined,
+      setPendingStartMode: this.setPendingStartMode.bind(this),
       onMessageHandle: this.onMessageHandle.bind(this),
       onBeforeDispatch: () => this.runtimeMutationManager.applyStagedMutations(),
       ephemeral: this.config.ephemeral,
@@ -412,15 +424,40 @@ export abstract class AIAgent<
     this.initialized = true;
   }
 
+  /**
+   * Emit `agent.started` with the pending start mode (consume-on-read).
+   *
+   * Reads and clears {@link pendingStartMode}; subsequent calls within
+   * the same dispatch fall back to `'rotation'`.
+   * @param event - Optional additional fields to merge into the payload
+   */
   protected async emitStart(
-    event?: Omit<AgentStarted, 'agentId' | 'adapterId' | 'adapterName' | 'adapterSessionId' | 'model' | 'cwd'>,
+    event?: Omit<
+      AgentStarted,
+      'agentId' | 'adapterId' | 'adapterName' | 'adapterSessionId' | 'model' | 'cwd' | 'startMode'
+    >,
   ) {
+    const startMode = this.pendingStartMode ?? 'rotation';
+    this.pendingStartMode = undefined;
     this.currentBlockIndex = 0;
     await this.lifecycleEmitter.emitStart({
       model: this.connector.model,
       cwd: this.connector.cwd,
+      startMode,
       ...event,
     });
+  }
+
+  /**
+   * Set the start mode for the next `emitStart()` invocation.
+   *
+   * Called by the turn executor or `initialize()` before dispatching to
+   * the connector. The value is consumed (cleared) by the first
+   * `emitStart()` call, enforcing the one-shot invariant.
+   * @param mode - The start mode to embed in the next `agent.started` event
+   */
+  public setPendingStartMode(mode: StartMode): void {
+    this.pendingStartMode = mode;
   }
 
   protected async emitCompletion(result: Omit<z.infer<typeof AgentSchemas.complete>, keyof AgentContext>) {
@@ -903,11 +940,8 @@ export abstract class AIAgent<
     return false;
   }
   /**
-   * Whether this adapter supports provider-native session fork. Override in
-   * concrete agents that can branch from an existing provider session.
-   * Declaration half of the capability-honesty contract: the runtime gate is
-   * the orchestrator's `session:fork` token query, so a directive never
-   * reaches an incapable agent; conformance asserts token ⇔ self-report.
+   * Whether this adapter supports provider-native session fork.
+   * Override in concrete agents that can branch from an existing provider session.
    * @returns true if native fork is supported
    */
   protected supportsNativeFork(): boolean {
@@ -949,9 +983,25 @@ export abstract class AIAgent<
     if (options?.systemPrompt !== undefined && this.runtimeSystemPrompt === undefined) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
+    // Capture fork directive before init() consumes it (one-shot invariant).
+    const preInitNativeFork = this.config.nativeFork;
     if (!this.initialized) {
       await this.init();
     }
+    // Derive start mode so emitStart() carries the correct mode.
+    const sessionContext = options?.sessionContext;
+    const enrichedCtx =
+      preInitNativeFork && !sessionContext?.nativeFork
+        ? { ...sessionContext, nativeFork: preInitNativeFork }
+        : sessionContext;
+    const hasResumeTarget = this.config.resumeAdapterSessionId !== undefined;
+    const initMode = AgentTurnExecutor.deriveStartMode(
+      enrichedCtx,
+      this.shouldUseNativeResume(enrichedCtx),
+      hasResumeTarget,
+    );
+    this.setPendingStartMode(initMode);
+
     const connector = this.ensureConnector();
     await connector.initialize(options);
     return connector.getConfirmedAdapterSessionId();

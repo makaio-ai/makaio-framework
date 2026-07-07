@@ -24,6 +24,7 @@ function startedEvent(adapterSessionId: string): NormalizedEvent {
       adapterSessionId,
       model: 'test-model',
       cwd: null,
+      startMode: 'fresh',
     },
   };
 }

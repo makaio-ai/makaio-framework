@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, START_MODES, type StartMode } from '@makaio/contracts';
 import type { EventHandler } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
@@ -52,6 +52,32 @@ export interface HookConfig {
   readonly [event: string]: HookCallback | readonly HookCallback[];
 }
 
+/**
+ * Options for {@link registerHooks}.
+ */
+export interface RegisterHooksOptions {
+  /**
+   * Start modes that fire `SessionStart` hooks.
+   *
+   * By default only `['fresh', 'fork']` — resume and rotation are
+   * filtered out so that SessionStart hooks behave as "session
+   * initialisation" hooks rather than "every turn" hooks.
+   *
+   * Override to widen or narrow the filter:
+   * - `['fresh']` — only brand-new sessions (e.g. content injectors)
+   * - `START_MODES` — all modes (e.g. provider-lifecycle telemetry)
+   * Defaults to `['fresh', 'fork']`.
+   */
+  startModes?: readonly StartMode[];
+}
+
+/**
+ * Default start modes for SessionStart hook filtering.
+ * Resume and rotation are excluded so hooks fire only on fresh
+ * session starts and forks, not on every turn.
+ */
+const DEFAULT_SESSION_START_MODES: readonly StartMode[] = ['fresh', 'fork'];
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -91,6 +117,41 @@ const makeHandler =
       });
     }
   };
+
+/**
+ * Build a SessionStart handler that filters by `startMode` before
+ * invoking callbacks.
+ *
+ * The `agent.started` event carries a `startMode` discriminator that
+ * indicates *why* the event fired (fresh session, resume, fork, or
+ * rotation). This wrapper inspects that field and short-circuits when
+ * the mode is not in the allowed set.
+ * @param callbacks - SessionStart callbacks to invoke on match.
+ * @param allowedModes - Set of start modes that should fire.
+ * @returns A bus-compatible event handler with start mode filtering.
+ */
+const makeSessionStartHandler = (
+  callbacks: readonly HookCallback[],
+  allowedModes: ReadonlySet<StartMode>,
+): EventHandler<Record<string, unknown>> => {
+  const inner = makeHandler('SessionStart', callbacks);
+  return (ctx): void => {
+    const raw = ctx.payload['startMode'];
+    if (typeof raw !== 'string' || !isStartMode(raw) || !allowedModes.has(raw)) {
+      return;
+    }
+    inner(ctx);
+  };
+};
+
+/**
+ * Type guard for StartMode string values.
+ * @param value - Value to check.
+ * @returns True when value is a valid StartMode.
+ */
+function isStartMode(value: string): value is StartMode {
+  return (START_MODES as readonly string[]).includes(value);
+}
 
 // ---------------------------------------------------------------------------
 // Subject map
@@ -148,16 +209,27 @@ const subscribeHookSubject = <Subject extends HookSubject>(
  * present in the config, both callback sets are independently subscribed to
  * the same subject.
  *
+ * `SessionStart` maps to `agent.started` with a **start mode filter**:
+ * by default only `['fresh', 'fork']` modes fire the hook. Pass
+ * `options.startModes` to override (e.g. `START_MODES` for all modes).
+ *
  * The returned cleanup function unsubscribes all registered handlers in a
  * single call.
  * @param bus - The Makaio bus instance to subscribe on.
  * @param sessionId - Session ID used to filter bus events.
  * @param hooks - Map of hook event names to callbacks.
+ * @param options - Optional registration options (e.g. startModes filter).
  * @returns A cleanup function that removes all registered subscriptions.
  */
-export function registerHooks(bus: IMakaioBus, sessionId: string, hooks: HookConfig): () => void {
+export function registerHooks(
+  bus: IMakaioBus,
+  sessionId: string,
+  hooks: HookConfig,
+  options?: RegisterHooksOptions,
+): () => void {
   const filter = { sessionId };
   const unsubscribers: Array<() => void> = [];
+  const startModes = new Set(options?.startModes ?? DEFAULT_SESSION_START_MODES);
 
   for (const [eventName, callbackEntry] of Object.entries(hooks)) {
     if (!Object.hasOwn(HOOK_SUBJECT_MAP, eventName)) {
@@ -171,7 +243,9 @@ export function registerHooks(bus: IMakaioBus, sessionId: string, hooks: HookCon
 
     if (callbacks.length === 0) continue;
 
-    const handler = makeHandler(hookEvent, callbacks);
+    const handler =
+      hookEvent === 'SessionStart' ? makeSessionStartHandler(callbacks, startModes) : makeHandler(hookEvent, callbacks);
+
     unsubscribers.push(subscribeHookSubject(bus, subject, handler, filter));
   }
 

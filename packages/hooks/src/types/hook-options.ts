@@ -1,5 +1,5 @@
 import type { SubjectDefinition } from '@makaio/core';
-import type { StepType } from '@makaio/contracts';
+import type { StartMode, StepType } from '@makaio/contracts';
 
 /**
  * Base options shared by all hooks.
@@ -65,5 +65,24 @@ export interface PostStepHookOptions extends BaseHookOptions {
 
 export type PreToolUseHookOptions = BaseHookOptions;
 export type PostToolUseHookOptions = BaseHookOptions;
-export type SessionStartHookOptions = BaseHookOptions;
+
+/**
+ * Options for SessionStart hook.
+ *
+ * SessionStart hooks fire on `agent.started` events filtered by
+ * {@link startModes}. The default filter is `['fresh', 'fork']` so that
+ * hooks behave as session-initialisation hooks rather than per-turn hooks.
+ */
+export interface SessionStartHookOptions extends BaseHookOptions {
+  /**
+   * Start modes that trigger this hook.
+   *
+   * - `['fresh']` — only brand-new sessions (e.g. content injectors)
+   * - `['fresh', 'fork']` — new sessions and forks (default)
+   * - `START_MODES` — all modes (e.g. provider-lifecycle telemetry)
+   * Defaults to `['fresh', 'fork']`.
+   */
+  startModes?: readonly StartMode[];
+}
+
 export type SessionEndHookOptions = BaseHookOptions;

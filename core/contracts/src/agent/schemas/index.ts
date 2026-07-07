@@ -5,7 +5,15 @@ export { BaseAgentEventSchema, type BaseAgentEvent } from './base-event.js';
 export { UserMessageSentSchema, type UserMessageSent } from './user-message-sent.js';
 export { UserMessageAcknowledgedSchema, type UserMessageAcknowledged } from './user-message-acknowledged.js';
 export { UserMessageCompletedSchema, type UserMessageCompleted } from './user-message-completed.js';
-export { SessionMetadataSchema, StartedSchema, type SessionMetadata, type AgentStarted } from './started.js';
+export {
+  SessionMetadataSchema,
+  StartedSchema,
+  StartModeSchema,
+  START_MODES,
+  type SessionMetadata,
+  type AgentStarted,
+  type StartMode,
+} from './started.js';
 export { ModelChangedSchema, type ModelChanged } from './model-changed.js';
 export { CompleteSchema, type AgentComplete } from './complete.js';
 export { IdleSchema, type IdlePayload } from './idle.js';

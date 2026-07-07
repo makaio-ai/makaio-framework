@@ -14,7 +14,7 @@
  */
 
 import type { NormalizedEvent, ImportMetadata } from '@makaio/ai-adapters-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type StartMode } from '@makaio/contracts';
 
 // =============================================================================
 // CONSTANTS
@@ -47,6 +47,16 @@ export interface NormalizationContext {
 export type ToolNameResolver = (toolCallId: string) => string | undefined;
 
 /**
+ * Start modes representable by a Copilot `assistant.turn_start` event.
+ *
+ * Copilot logs carry no fork concept and `session.resume` records are
+ * skipped, so a turn start can only mean a brand-new session (`fresh`,
+ * first turn start in the stream) or a subsequent turn within the same
+ * logical session (`rotation`).
+ */
+export type TurnStartMode = Extract<StartMode, 'fresh' | 'rotation'>;
+
+/**
  * Raw GitHub Copilot log record structure (wrapper around SDK events).
  *
  * This interface mirrors the SDK's SessionEvent structure but with `Record<string, unknown>`
@@ -70,6 +80,14 @@ export interface NormalizeOptions {
   cwd?: string | null;
   toolNameResolver?: ToolNameResolver;
   accumulatedMessage?: string;
+  /**
+   * Whether the current record is the first `assistant.turn_start` in the
+   * stream. Callers iterating a log MUST set this to `true` for the first
+   * turn start so it is labeled `startMode: 'fresh'` (`session.start`
+   * records are skipped, so this turn start represents the session start).
+   * Subsequent turn starts are labeled `'rotation'` (the default).
+   */
+  isFirstTurnStart?: boolean;
 }
 
 // =============================================================================
@@ -141,6 +159,9 @@ function normalizeArgs(rawArgs: unknown): Record<string, unknown> {
  * Normalize assistant.turn_start event to agent.started.
  * @param _data - The turn start event data (unused, present for signature consistency)
  * @param ctx - Normalization context with session/adapter info
+ * @param startMode - Why this start happened: `'fresh'` for the first turn
+ * start in the stream (represents the session start), `'rotation'` for
+ * subsequent turn starts within the same logical session
  * @param model - Model name to include in started payload
  * @param cwd - Working directory to include in started payload
  * @returns Normalized event for agent.started subject
@@ -148,10 +169,14 @@ function normalizeArgs(rawArgs: unknown): Record<string, unknown> {
 export function normalizeAssistantTurnStart(
   _data: AssistantTurnStartData,
   ctx: NormalizationContext,
+  startMode: TurnStartMode,
   model?: string | null,
   cwd?: string | null,
 ): NormalizedEvent {
-  return { subject: AgentSubjects.started, payload: { ...ctx, model: model ?? null, cwd: cwd ?? null } };
+  return {
+    subject: AgentSubjects.started,
+    payload: { ...ctx, model: model ?? null, cwd: cwd ?? null, startMode },
+  };
 }
 
 /**
@@ -370,7 +395,7 @@ export function normalizeGitHubCopilotLogRecord(
   ctx: NormalizationContext,
   options?: NormalizeOptions,
 ): NormalizedEvent[] {
-  const { model, cwd, toolNameResolver, accumulatedMessage } = options ?? {};
+  const { model, cwd, toolNameResolver, accumulatedMessage, isFirstTurnStart } = options ?? {};
 
   // Skip known lifecycle/metadata events
   if (SKIPPED_EVENT_TYPES.has(record.type)) return [];
@@ -379,7 +404,15 @@ export function normalizeGitHubCopilotLogRecord(
   // Type assertions are safe here - see JSDoc above for rationale
   switch (record.type) {
     case 'assistant.turn_start':
-      return [normalizeAssistantTurnStart(record.data as AssistantTurnStartData, ctx, model, cwd)];
+      return [
+        normalizeAssistantTurnStart(
+          record.data as AssistantTurnStartData,
+          ctx,
+          isFirstTurnStart ? 'fresh' : 'rotation',
+          model,
+          cwd,
+        ),
+      ];
     case 'assistant.message':
       return normalizeAssistantMessage(record.data as AssistantMessageData, ctx);
     case 'tool.user_requested':

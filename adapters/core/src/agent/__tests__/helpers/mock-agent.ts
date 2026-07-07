@@ -13,7 +13,7 @@ import { MessageHandle } from '../../../message-handle/index.js';
 import type { ProcessingState } from '../../../message-handle/types.js';
 import type { AIModel, AIReasoningLevel, ReasoningLevelMap } from '../../../types/ai-model.js';
 import type { NormalizedMessageInput } from '../../../utils/index.js';
-import type { McpSessionContext, ProviderContext } from '@makaio/contracts';
+import type { McpSessionContext, NativeForkDirective, ProviderContext } from '@makaio/contracts';
 import type { LedgerSessionContext } from '../../session-tool-ledger.js';
 
 /**
@@ -272,6 +272,17 @@ export class TestableAgent extends AIAgent {
     // @ts-expect-error -- the factory always produces MockConnector instances; narrowing is safe here
     this.currentConnector = connector;
   }
+
+  /**
+   * Public accessor for the protected `emitStart` — test-only.
+   *
+   * Allows tests to verify the consume-on-read behavior of
+   * {@link AIAgent.pendingStartMode} without going through the
+   * full connector lifecycle.
+   */
+  public testEmitStart(): Promise<void> {
+    return this.emitStart();
+  }
 }
 
 /**
@@ -302,6 +313,10 @@ export interface CreateTestableAgentOptions {
   providerContext?: ProviderContext;
   /** Initial MCP session context persisted on the agent config. */
   mcpSessionContext?: McpSessionContext | LedgerSessionContext;
+  /** Fork directive carried on the agent config (consumed one-shot by init). */
+  nativeFork?: NativeForkDirective;
+  /** Resume adapter session ID for native-resume scenarios. */
+  resumeAdapterSessionId?: string;
 }
 
 /**
@@ -320,6 +335,8 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     initialReasoningEffort,
     providerContext,
     mcpSessionContext,
+    nativeFork,
+    resumeAdapterSessionId,
   } = options;
   const { bus: mockBus } = createMockScopedBus();
   const resolveSupportedReasoningLevels = (model: string): ReasoningLevelMap | undefined =>
@@ -340,6 +357,8 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     availableModels,
     providerContext,
     mcpSessionContext,
+    nativeFork,
+    resumeAdapterSessionId,
     configFactory: async (input) => ({
       bus: mockBus,
       agentId,
