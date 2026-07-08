@@ -4,6 +4,7 @@ import type { ImportStatus, ImportUpsertRequest } from '@makaio/contracts/sessio
 import { SessionStorageSubjects } from './namespace.js';
 import { kindToBranchKind } from '../import/lineage-utils.js';
 import { createMonotonicClock } from './monotonic-clock.js';
+import { resolveImportCreateStatus } from './import-lifecycle.js';
 
 type PopulateAgents = (bus: IMakaioBus, sessionId: string) => Promise<MakaioSessionAgent[]>;
 type CloneSession = (session: IMakaioSession) => IMakaioSession;
@@ -53,7 +54,58 @@ function assignDefinedSessionField<K extends keyof IMakaioSession>(
 }
 
 /**
- * Builds the canonical imported session shape for a first discovery.
+ * Check whether a session's lifecycle status is owned and must not be
+ * overwritten by import convergence.
+ * @param session - Current session record
+ * @returns `true` when the status must be preserved
+ */
+function shouldPreserveImportUpsertLifecycleStatus(session: IMakaioSession): boolean {
+  return (
+    session.status === 'closed' ||
+    session.status === 'archived' ||
+    (session.status === 'active' && session.isImported === true)
+  );
+}
+
+/**
+ * Apply lifecycle status changes during import upsert convergence.
+ *
+ * Terminal statuses (closed, archived) and already-imported active rows are
+ * never overwritten by discovery enrichment.
+ * A `'live'` activation promotes discovered sessions to active.
+ * Without live activation, a discovered import status resets the session
+ * to discovered only while it is still lifecycle-discovered.
+ * @param session - Existing session being converged
+ * @param nextImportStatus - Merged import status after convergence
+ * @param activation - Activation intent from the upsert payload
+ */
+function applyImportUpsertLifecycle(
+  session: IMakaioSession,
+  nextImportStatus: ImportStatus,
+  activation: ImportUpsertRequest['activation'],
+): void {
+  if (shouldPreserveImportUpsertLifecycleStatus(session)) {
+    return;
+  }
+
+  if (activation === 'live') {
+    if (session.status === 'discovered') {
+      session.status = 'active';
+    }
+    return;
+  }
+
+  if (nextImportStatus === 'discovered') {
+    session.status = 'discovered';
+  }
+}
+
+/**
+ * Builds the canonical imported session shape for a first import.
+ *
+ * The initial lifecycle status is `'discovered'` by default; when the
+ * payload carries `activation: 'live'` the session is created directly
+ * as `'active'` (see {@link resolveImportCreateStatus}).
  * @param payload - Import upsert request payload
  * @param sessionId - New Makaio session ID
  * @param discoveredAt - Discovery timestamp
@@ -67,7 +119,7 @@ function createImportedSession(payload: ImportUpsertRequest, sessionId: string, 
     createdAt,
     lastActivityAt: createdAt,
     agents: [],
-    status: 'discovered',
+    status: resolveImportCreateStatus(payload),
     branchKind,
     adapterName: payload.source,
     adapterSessionId: payload.externalSessionId,
@@ -82,7 +134,7 @@ function createImportedSession(payload: ImportUpsertRequest, sessionId: string, 
     logFilePath: payload.logFilePath ?? undefined,
     discoveredAt,
     // Hook-first registration may open the row directly in 'tracking';
-    // lifecycle `status` stays 'discovered' either way (parity with Drizzle).
+    // live activation controls whether the lifecycle starts active.
     importStatus: payload.importStatus ?? 'discovered',
     forkPointMessageId: payload.forkPointMessageId ?? undefined,
     metadata: payload.metadata,
@@ -102,9 +154,7 @@ function convergeImportIdentity(session: IMakaioSession, payload: ImportUpsertRe
   // Status precedence is monotonic: watcher discovery can upgrade to hook
   // tracking, but later discovery enrichment cannot downgrade tracking/imported.
   const nextImportStatus = mergeImportStatus(session.importStatus, payload.importStatus);
-  if (nextImportStatus === 'discovered') {
-    session.status = 'discovered';
-  }
+  applyImportUpsertLifecycle(session, nextImportStatus, payload.activation);
   session.isImported = true;
   session.importStatus = nextImportStatus;
   session.adapterName ??= payload.source;

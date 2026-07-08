@@ -126,6 +126,8 @@ export const SessionStorageUpdateSchema = {
 
 // ─── Import upsert schemas ──────────────────────────────────────────────────
 
+const ImportUpsertActivationSchema = z.enum(['live']);
+
 const ImportUpsertBaseSchema = z.object({
   /** External tool's session identifier (becomes adapterSessionId on the sessions row). */
   externalSessionId: z.string(),
@@ -172,6 +174,16 @@ const ImportUpsertBaseSchema = z.object({
    * excluded here: that transition is owned by `updateImportStatus`.
    */
   importStatus: z.enum(['discovered', 'tracking']).optional(),
+  /**
+   * Lifecycle activation intent for live external observations.
+   *
+   * `'live'` means the caller has observed an externally running session and
+   * storage may create it as active or promote an existing discovered row to
+   * active. Storage handlers must preserve closed and archived sessions.
+   *
+   * This is separate from importStatus and from log-import ingestion markers.
+   */
+  activation: ImportUpsertActivationSchema.optional(),
   /**
    * Whether the external tool marked this session as a sidechain/subagent
    * perspective (e.g. Claude Code's per-record `isSidechain` flag).
@@ -378,9 +390,10 @@ export const SessionStorageNamespace = createContractStorageNamespace('session',
     // ─── Import-related subjects ────────────────────────────────────────
 
     /**
-     * Creates or updates an imported session record. On first discovery, creates a new
-     * session with `status='discovered'`. On subsequent calls, enriches existing records
-     * with COALESCE semantics so later scans can supply previously-unknown values without
+     * Creates or updates an imported session record. On first import, creates a new
+     * session with `status='discovered'` by default, or `status='active'` when live
+     * activation is requested. On subsequent calls, enriches existing records with
+     * COALESCE semantics so later scans can supply previously-unknown values without
      * overwriting already-populated ones.
      *
      * Subject: `storage:session.importUpsert`

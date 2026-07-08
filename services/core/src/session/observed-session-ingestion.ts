@@ -569,6 +569,7 @@ export class ObservedSessionIngestionService {
       ...(payload.machineId !== undefined ? { machineId: payload.machineId } : {}),
       startedAt: payload.observedAt,
       importStatus,
+      activation: importStatus === 'tracking' ? 'live' : undefined,
       ...(metadata !== undefined ? { metadata } : {}),
     });
     if (!result.handled) {

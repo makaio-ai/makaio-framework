@@ -183,6 +183,7 @@ describe('ObservedSessionIngestionService', () => {
     expect(session?.source).toBe(ADAPTER_NAME);
     expect(session?.clientId).toBe(CLIENT_ID);
     expect(session?.importStatus).toBe('tracking');
+    expect(session?.status).toBe('active');
     expect(session?.metadata).toEqual({ hookVersion: 1, keep: true });
     expect(session?.logFilePath).toBe('/logs/ext-1.jsonl');
     expect(session?.targetWorkingDirectory).toBe('/repo');
@@ -244,6 +245,7 @@ describe('ObservedSessionIngestionService', () => {
 
     const session = await getObservedSession('ext-1');
     expect(session).not.toBeNull();
+    expect(session?.status).toBe('discovered');
     expect(session?.importStatus).toBe('discovered');
     expect(session?.clientId).toBe(CLIENT_ID);
     expect(session?.targetWorkingDirectory).toBe('/private');
@@ -475,6 +477,34 @@ describe('ObservedSessionIngestionService', () => {
     expect(session).not.toBeNull();
     // Compact does not create fork lineage
     expect(session?.branchKind).toBeUndefined();
+  });
+
+  it('does not reactivate a closed observed session on repeated live start observations', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      transcriptPath: '/logs/ext-1.jsonl',
+      cwd: '/repo',
+    });
+
+    const first = await getObservedSession('ext-1');
+    expect(first).not.toBeNull();
+    expect(first?.status).toBe('active');
+
+    await MakaioBus.request(SessionStorageSubjects.update, {
+      sessionId: first!.sessionId,
+      status: 'closed',
+    });
+
+    await emitSessionStarted({
+      transcriptPath: '/logs/ext-1.jsonl',
+      cwd: '/repo-again',
+    });
+
+    const second = await getObservedSession('ext-1');
+    expect(second?.sessionId).toBe(first?.sessionId);
+    expect(second?.status).toBe('closed');
+    expect(second?.targetWorkingDirectory).toBe('/repo-again');
   });
 
   it('does not register as fork when startMode is fork but parentAdapterSessionId is absent', async () => {

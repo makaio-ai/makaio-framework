@@ -11,6 +11,8 @@
  *   watcher-style calls.
  * - updateImportStatus 'imported' still promotes lifecycle status
  *   discovered → active (tracking → imported parity).
+ * - live activation creates or promotes live observed sessions to active.
+ * - closed and archived imported rows are never resurrected by importUpsert.
  *
  * Runs against BOTH storage backends (in-memory handlers and Drizzle over a
  * temp SQLite database) to pin behavioral parity.
@@ -233,5 +235,221 @@ describe.each(backends)('session.importUpsert unified registration seam [$name]'
     const after = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
     expect(after.session?.status).toBe('active');
     expect(after.session?.importStatus).toBe('imported');
+  });
+
+  it("creates a live tracking import as lifecycle status 'active'", async () => {
+    const { sessionId, created } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-live-create',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      importStatus: 'tracking',
+      activation: 'live',
+    });
+
+    expect(created).toBe(true);
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(session?.status).toBe('active');
+    expect(session?.importStatus).toBe('tracking');
+  });
+
+  it('keeps an active live-created row active when a later no-activation call upgrades importStatus', async () => {
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-active-import-status-upgrade',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      activation: 'live',
+    });
+
+    const before = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(before.session?.status).toBe('active');
+    expect(before.session?.importStatus).toBe('discovered');
+
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-active-import-status-upgrade',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      importStatus: 'tracking',
+    });
+
+    const after = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(after.session?.status).toBe('active');
+    expect(after.session?.importStatus).toBe('tracking');
+  });
+
+  it('keeps an active live-created row active during later discovery-only enrichment', async () => {
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-active-discovery-enrichment',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      activation: 'live',
+    });
+
+    const before = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(before.session?.status).toBe('active');
+    expect(before.session?.importStatus).toBe('discovered');
+
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-active-discovery-enrichment',
+      source: 'claude-code-cli',
+      cwd: '/repo-again',
+    });
+
+    const after = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(after.session?.status).toBe('active');
+    expect(after.session?.importStatus).toBe('discovered');
+    expect(after.session?.targetWorkingDirectory).toBe('/repo-again');
+  });
+
+  it('promotes a discovered tracking import to active when live activation is observed', async () => {
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-live-promote',
+      source: 'claude-code-cli',
+      cwd: null,
+      importStatus: 'tracking',
+    });
+
+    const before = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(before.session?.status).toBe('discovered');
+    expect(before.session?.importStatus).toBe('tracking');
+
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-live-promote',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      importStatus: 'tracking',
+      activation: 'live',
+    });
+
+    const after = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(after.session?.status).toBe('active');
+    expect(after.session?.importStatus).toBe('tracking');
+    expect(after.session?.targetWorkingDirectory).toBe('/repo');
+  });
+
+  it('does not resurrect closed discovered imports during import-upsert enrichment without activation', async () => {
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-enrich-closed',
+      source: 'claude-code-cli',
+      cwd: null,
+    });
+
+    const initial = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(initial.session?.status).toBe('discovered');
+    expect(initial.session?.importStatus).toBe('discovered');
+
+    await MakaioBus.request(SessionStorageSubjects.update, {
+      sessionId,
+      status: 'closed',
+    });
+
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-enrich-closed',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+    });
+
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(session?.status).toBe('closed');
+    expect(session?.importStatus).toBe('discovered');
+    expect(session?.targetWorkingDirectory).toBe('/repo');
+  });
+
+  it('does not resurrect archived discovered imports during import-upsert enrichment without activation', async () => {
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-enrich-archived',
+      source: 'claude-code-cli',
+      cwd: null,
+    });
+
+    const initial = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(initial.session?.status).toBe('discovered');
+    expect(initial.session?.importStatus).toBe('discovered');
+
+    await MakaioBus.request(SessionStorageSubjects.update, {
+      sessionId,
+      status: 'archived',
+    });
+
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-enrich-archived',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+    });
+
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(session?.status).toBe('archived');
+    expect(session?.importStatus).toBe('discovered');
+    expect(session?.targetWorkingDirectory).toBe('/repo');
+  });
+
+  it('does not resurrect closed imported sessions during import-upsert enrichment', async () => {
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-live-closed',
+      source: 'claude-code-cli',
+      cwd: null,
+      importStatus: 'tracking',
+      activation: 'live',
+    });
+
+    await MakaioBus.request(SessionStorageSubjects.update, {
+      sessionId,
+      status: 'closed',
+    });
+
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-live-closed',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      importStatus: 'tracking',
+      activation: 'live',
+    });
+
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(session?.status).toBe('closed');
+    expect(session?.importStatus).toBe('tracking');
+    expect(session?.targetWorkingDirectory).toBe('/repo');
+  });
+
+  it('does not resurrect archived imported sessions during import-upsert enrichment', async () => {
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-live-archived',
+      source: 'claude-code-cli',
+      cwd: null,
+      importStatus: 'tracking',
+      activation: 'live',
+    });
+
+    await MakaioBus.request(SessionStorageSubjects.update, {
+      sessionId,
+      status: 'archived',
+    });
+
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      ...ROOT_LINEAGE,
+      externalSessionId: 'ext-live-archived',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      importStatus: 'tracking',
+      activation: 'live',
+    });
+
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(session?.status).toBe('archived');
+    expect(session?.importStatus).toBe('tracking');
+    expect(session?.targetWorkingDirectory).toBe('/repo');
   });
 });
