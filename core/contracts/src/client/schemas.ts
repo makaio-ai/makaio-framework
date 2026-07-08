@@ -22,7 +22,11 @@ import {
   ClientVersionChangedSchema,
 } from './binary-management.js';
 import { AbsolutePathSchema, NonEmptyStringSchema } from './primitives.js';
-import { ClientRuntimeObserveSchema, ClientRuntimeStartedSchema } from './runtime-observation.js';
+import {
+  ClientRuntimeObserveSchema,
+  ClientRuntimeStartedSchema,
+  ClientRuntimeIsAdapterManagedSchema,
+} from './runtime-observation.js';
 import {
   ClientAccountIdentifierSchema,
   ClientAccountObserveSchema,
@@ -56,6 +60,7 @@ export type {
 export const ClientSchemas = {
   'runtime.observe': ClientRuntimeObserveSchema,
   'runtime.started': ClientRuntimeStartedSchema,
+  'runtime.isAdapterManaged': ClientRuntimeIsAdapterManagedSchema,
   scan: {
     request: z.object({
       targets: z.array(ClientScanTargetSchema).optional(),

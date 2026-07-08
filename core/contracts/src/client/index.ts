@@ -109,6 +109,7 @@ export type {
 } from './binary-management.js';
 export {
   ClientRuntimeEvidenceBaseSchema,
+  ClientRuntimeIsAdapterManagedSchema,
   ClientRuntimeObserveSchema,
   ClientRuntimeSourceLayerSchema,
   ClientRuntimeSourceSchema,
@@ -116,6 +117,8 @@ export {
 } from './runtime-observation.js';
 export type {
   ClientRuntimeEvidenceBase,
+  ClientRuntimeIsAdapterManagedRequest,
+  ClientRuntimeIsAdapterManagedResponse,
   ClientRuntimeObserveRequest,
   ClientRuntimeObserveResponse,
   ClientRuntimeSource,

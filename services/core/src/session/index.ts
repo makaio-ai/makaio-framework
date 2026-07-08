@@ -133,8 +133,9 @@ export {
 // canonical schemas live with the log-import service). Exported so the
 // owning service's conformance tests can pin the mirror against the
 // canonical schemas; not part of the supported public session API.
-export { LogImportTriggerSubjects } from './observed-session-ingestion.js';
+export { LogImportTriggerSubjects, isTrackingStub } from './observed-session-ingestion.js';
 export { isPolicyDiscoveredObservedSession } from './observed-session-ingestion.js';
+export { ObservedSessionIngestionService } from './observed-session-ingestion.js';
 export {
   OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID,
   registerObservedSessionIngestionPolicyProvider,

@@ -13,6 +13,7 @@ import type { ContributionProcessor } from '@makaio/kernel';
 import type { OrchestratorFactory } from './types.js';
 import { LogImportRegistryToken } from './package.js';
 import { classifyLogImporterSource } from './log-import-source.js';
+import { buildOrchestratorConfig } from './orchestrator-config-builder.js';
 
 /**
  * Narrowed shape of the `logImport.config` field on a `MakaioNodeExtension<IMakaioBus>`.
@@ -47,31 +48,6 @@ interface LogImportContributionConfig {
 }
 
 /**
- * Build the orchestrator config for a package-contributed importer.
- * @param importerId - Unique registry ID for this importer.
- * @param adapterName - Stable adapter name for the orchestrator config.
- * @param logImportConfig - Optional runtime log-import configuration.
- * @param machineId - Machine identifier from the extension context.
- * @returns Normalized orchestrator configuration.
- */
-function buildOrchestratorConfig(
-  importerId: string,
-  adapterName: string,
-  logImportConfig?: LogImportConfig,
-  machineId?: string,
-): LogOrchestratorConfig {
-  return {
-    enabled: logImportConfig?.enabled ?? true,
-    pollIntervalMs: logImportConfig?.pollIntervalMs,
-    eventsPerSecond: logImportConfig?.eventsPerSecond,
-    adapterId: importerId,
-    adapterName,
-    checkMakaioManaged: logImportConfig?.checkMakaioManaged,
-    machineId,
-  };
-}
-
-/**
  * Build an orchestrator factory for a package-contributed log importer.
  *
  * Returns `null` when neither orchestrator class is declared — in that case
@@ -91,7 +67,13 @@ function buildOrchestratorFactory(
   if (!config.LogOrchestratorClass && !config.LogDiscoveryOrchestratorClass) {
     return null;
   }
-  const orchestratorConfig = buildOrchestratorConfig(importerId, adapterName, config.logImportConfig, machineId);
+  const orchestratorConfig = buildOrchestratorConfig({
+    adapterId: importerId,
+    adapterName,
+    logImportConfig: config.logImportConfig,
+    machineId,
+    clientId: config.clientId,
+  });
   return (mode) => {
     if (!orchestratorConfig.enabled) {
       return null;

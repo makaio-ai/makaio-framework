@@ -151,3 +151,47 @@ export const ClientRuntimeStartedSchema = ClientRuntimeEvidenceBaseSchema.extend
 });
 
 export type ClientRuntimeStarted = z.infer<typeof ClientRuntimeStartedSchema>;
+
+/**
+ * Request and response schemas for `client.runtime.isAdapterManaged`.
+ *
+ * Query the runtime registry to determine whether an adapter session ID
+ * was bound by an adapter-layer observation (`source.layer === 'adapter'`)
+ * of the **current process**. This is present-tense runtime truth — it
+ * does NOT merely check whether a runtime record exists for the pair.
+ *
+ * The distinction matters because `client.runtime.observe` is also emitted
+ * by non-adapter layers (e.g. `client-hook` observations forwarded from
+ * the hook bridge), and those sessions must remain importable. Only
+ * adapter-layer observations mark the pair as adapter-owned in the
+ * in-memory provenance set.
+ *
+ * **Provenance is intentionally in-memory-only.** After a restart,
+ * adapter-managed processes are re-observed by the adapter layer and the
+ * provenance set is rebuilt. Hydrated records from a prior process do not
+ * count as "currently managed."
+ *
+ * Primary consumer: the log-importer skip predicate, which needs to
+ * distinguish adapter-managed sessions from externally observed sessions
+ * that share the same storage fingerprint (`isImported: true`,
+ * `importStatus: 'tracking'`, `clientId` set).
+ */
+export const ClientRuntimeIsAdapterManagedSchema = {
+  request: z.object({
+    /** Raw adapter session ID to look up. */
+    adapterSessionId: NonEmptyStringSchema,
+    /** Stable client identifier (e.g. `'claude-code'`). */
+    clientId: NonEmptyStringSchema,
+  }),
+  response: z.object({
+    /**
+     * `true` when the `(adapterSessionId, clientId)` pair was bound by an
+     * adapter-layer observation of the current process — the session is
+     * adapter-managed and must not be imported by the log importer.
+     */
+    managed: z.boolean(),
+  }),
+};
+
+export type ClientRuntimeIsAdapterManagedRequest = z.infer<typeof ClientRuntimeIsAdapterManagedSchema.request>;
+export type ClientRuntimeIsAdapterManagedResponse = z.infer<typeof ClientRuntimeIsAdapterManagedSchema.response>;

@@ -81,6 +81,12 @@ export class ClientRuntimeService extends BaseService {
       ctx.setResult({ results });
     });
     this.registerHandler(ClientSubjects.runtime.observe, (ctx) => this.handleRuntimeObserve(ctx));
+    this.registerHandler(ClientSubjects.runtime.isAdapterManaged, (ctx) => {
+      const { adapterSessionId, clientId } = ctx.payload;
+      ctx.setResult({
+        managed: this.runtimeRegistry.hasAdapterSession(adapterSessionId, clientId),
+      });
+    });
     this.registerHandler(ClientSubjects.wiring.list, async (ctx) => {
       const results = await this.listWirings(ctx.payload);
       ctx.setResult({ results });
@@ -183,6 +189,15 @@ export class ClientRuntimeService extends BaseService {
     }
 
     const { record, ...result } = await this.runtimeRegistry.upsertRuntime(payload);
+
+    // Mark adapter-owned provenance when the observation comes from the
+    // adapter layer. This populates the in-memory set that backs
+    // `hasAdapterSession` / `isAdapterManaged`, ensuring only adapter-layer
+    // observations (not client-hook or statusline observations) cause the
+    // skip predicate to fire.
+    if (payload.source.layer === 'adapter' && payload.adapterSessionId !== undefined) {
+      this.runtimeRegistry.markAdapterOwned(payload.adapterSessionId, payload.clientId);
+    }
 
     if (result.created || result.promoted) {
       await this.bus.emit(ClientSubjects.runtime.started, {

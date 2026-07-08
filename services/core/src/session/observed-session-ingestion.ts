@@ -17,6 +17,7 @@ import {
   CapabilitySubjects,
   ClientSubjects,
   FORK_SESSION_LINEAGE_KIND,
+  MessageStorageSubjects,
   ROOT_SESSION_LINEAGE_KIND,
   SessionRecordMetadataSchema,
   TurnIngestionMarkerSchema,
@@ -166,6 +167,28 @@ export function isPolicyDiscoveredObservedSession(session: Pick<IMakaioSession, 
 }
 
 /**
+ * Check whether a stored session is a hook-first tracking stub.
+ *
+ * A tracking stub is the session row created by
+ * `ObservedSessionIngestionService.handleSessionStarted` when the
+ * `SessionStart` hook fires before the suppression gate is populated.
+ * Its fingerprint is:
+ * - `isImported: true` (set by `importUpsert`)
+ * - `importStatus: 'tracking'` (live-followed observed session)
+ * - `clientId` is present (hook-observed, not watcher-discovered)
+ *
+ * This predicate is the single source of truth for stub identification
+ * across reconciliation and diagnostic paths. Externally observed
+ * terminal sessions share this fingerprint, but they never trigger
+ * `client.runtime.started` — the caller discriminates by context.
+ * @param session - Stored session row to inspect
+ * @returns True when the session matches the tracking-stub fingerprint
+ */
+export function isTrackingStub(session: Pick<IMakaioSession, 'isImported' | 'importStatus' | 'clientId'>): boolean {
+  return session.isImported === true && session.importStatus === 'tracking' && session.clientId !== undefined;
+}
+
+/**
  * Bridges observed client sessions into the canonical session model.
  *
  * Responsibilities:
@@ -224,8 +247,16 @@ export class ObservedSessionIngestionService {
    */
   public constructor(private readonly bus: IMakaioBus = MakaioBus) {
     this.cleanups.push(
-      this.bus.on(ClientSubjects.runtime.started, (ctx) => {
-        this.handleRuntimeStarted(ctx.payload);
+      this.bus.on(ClientSubjects.runtime.started, async (ctx) => {
+        try {
+          await this.handleRuntimeStarted(ctx.payload);
+        } catch (error) {
+          console.warn('[ObservedSessionIngestion] Failed to handle runtime started', {
+            clientId: ctx.payload.clientId,
+            adapterSessionId: ctx.payload.adapterSessionId,
+            error,
+          });
+        }
       }),
       this.bus.on(ClientSubjects.session.started, async (ctx) => {
         try {
@@ -280,7 +311,8 @@ export class ObservedSessionIngestionService {
   }
 
   /**
-   * Record adapter-managed sessions in the suppression gate.
+   * Record adapter-managed sessions in the suppression gate and reconcile
+   * any hook-first tracking stub.
    *
    * Unlike the per-client gates inside the client services, this component
    * does not filter by `clientId`: it is client-agnostic, and an adapter
@@ -288,22 +320,144 @@ export class ObservedSessionIngestionService {
    * of which client runtime reported it. Non-adapter source layers (e.g.
    * `'supervisor'`, `'statusline'`) never suppress — they observe sessions
    * the managed path does not own.
+   *
+   * **Stub reconciliation:** When the `SessionStart` hook fires before this
+   * gate is populated (hook-first ingestion race), `handleSessionStarted`
+   * creates a tracking stub via `importUpsert`. This stub and the live
+   * session row coexist as duplicates. `client.runtime.started` is the
+   * authoritative, guaranteed-to-arrive signal that the adapter session is
+   * managed. On arrival, any existing tracking stub for the same
+   * `(source, adapterSessionId)` is reconciled: deleted when inert, or
+   * preserved when it already carries imported messages (native takeover
+   * of an externally observed session — see the content guard below).
+   *
+   * Externally observed terminal sessions share the same storage fingerprint
+   * (`isImported: true`, `importStatus: 'tracking'`, `clientId` set) but
+   * never trigger `client.runtime.started` for their `adapterSessionId` —
+   * they are observed via hooks only, without a `client.runtime.observe`
+   * preceding them. Therefore `client.runtime.started` itself is the
+   * discriminator: if we receive it for an adapterSessionId, the session is
+   * adapter-managed and any tracking stub is a racy artifact.
    * @param payload - `client.runtime.started` payload
    */
-  private handleRuntimeStarted(payload: ClientRuntimeStarted): void {
+  private async handleRuntimeStarted(payload: ClientRuntimeStarted): Promise<void> {
     if (payload.source.layer !== 'adapter' || payload.adapterSessionId === undefined) {
       return;
     }
-    if (this.managedAdapterSessionIds.has(payload.adapterSessionId)) {
+    const alreadyKnown = this.managedAdapterSessionIds.has(payload.adapterSessionId);
+    if (!alreadyKnown) {
+      if (this.managedAdapterSessionIds.size >= MANAGED_SESSION_CAP) {
+        const oldest = this.managedAdapterSessionIds.values().next().value;
+        if (oldest !== undefined) {
+          this.managedAdapterSessionIds.delete(oldest);
+        }
+      }
+      this.managedAdapterSessionIds.add(payload.adapterSessionId);
+    }
+
+    // ── Stub reconciliation ───────────────────────────────────────────
+    // Runs on EVERY adapter runtime.started, deliberately without an
+    // `alreadyKnown` early exit: a hook handler that passed the (empty)
+    // suppression gate may still have its importUpsert in flight when the
+    // first runtime.started is processed. The double-check in
+    // `handleSessionStarted` (post-upsert) closes the remaining window
+    // for the reverse interleaving; this runtime-side reconciliation is
+    // defense-in-depth so both sides catch any interleaving order.
+    // Reconciliation is idempotent and cheap on the repeat path (one
+    // indexed lookup that misses).
+    await this.reconcileTrackingStub(payload.clientId, payload.adapterSessionId);
+  }
+
+  /**
+   * Reconcile a hook-first tracking stub for a managed adapter session.
+   *
+   * Looks up a tracking stub by `(source, adapterSessionId)` and deletes it
+   * when it carries no imported messages (pure race artifact). Stubs with
+   * content are preserved (native takeover of an externally observed session).
+   * When message storage is unavailable (unhandled lookup), the stub is
+   * preserved defensively to avoid data loss.
+   *
+   * Called from two sites to close the in-flight importUpsert window:
+   * - `handleRuntimeStarted`: runtime side adds to gate, then reconciles.
+   * - `handleSessionStarted`: hook side writes storage, then reconciles
+   *   (post-upsert double-check when the gate was populated concurrently).
+   * @param clientId - Client identity for importer resolution
+   * @param adapterSessionId - External adapter session ID to reconcile
+   */
+  private async reconcileTrackingStub(clientId: string, adapterSessionId: string): Promise<void> {
+    const importer = await this.resolveImporter(clientId);
+    if (importer === null) return;
+
+    const stubLookup = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId,
+      source: importer.adapterName,
+    });
+    if (!stubLookup.handled || stubLookup.data.session === null) return;
+
+    const stub = stubLookup.data.session;
+    if (!isTrackingStub(stub)) return;
+
+    // Content guard: only delete inert stubs. A tracking stub that already
+    // carries imported messages is NOT a pure race artifact — it is an
+    // externally observed terminal session whose adapterSessionId was later
+    // claimed by a native --resume (native takeover). Deleting it would
+    // destroy real imported history.
+    //
+    // When messages exist, the row is preserved as imported history. Further
+    // duplicate-import suppression is handled by the runtime-truth check
+    // (`client.runtime.isAdapterManaged`): the importer's skip predicate
+    // queries the runtime registry and skips sessions that are
+    // adapter-managed, so the presence of this preserved row does not cause
+    // double-ingestion.
+    const messageLookup = await this.bus.requestOptional(MessageStorageSubjects.getBySession, {
+      sessionId: stub.sessionId,
+      limit: 1,
+    });
+
+    // Fix 5: unhandled message lookup = unknown → preserve defensively.
+    // Only a handled lookup that confirms zero messages justifies deletion.
+    if (!messageLookup.handled) {
+      debugLog('Preserved tracking stub because message storage is unavailable', {
+        adapterSessionId,
+        source: importer.adapterName,
+        sessionId: stub.sessionId,
+      });
       return;
     }
-    if (this.managedAdapterSessionIds.size >= MANAGED_SESSION_CAP) {
-      const oldest = this.managedAdapterSessionIds.values().next().value;
-      if (oldest !== undefined) {
-        this.managedAdapterSessionIds.delete(oldest);
-      }
+
+    if (messageLookup.data.messages.length > 0) {
+      debugLog('Preserved tracking stub with imported content (native takeover)', {
+        adapterSessionId,
+        source: importer.adapterName,
+        sessionId: stub.sessionId,
+      });
+      return;
     }
-    this.managedAdapterSessionIds.add(payload.adapterSessionId);
+
+    // No messages — pure race artifact. Delete so the live session row
+    // (source=NULL, isImported=false) is the sole representative.
+    //
+    // Mid-flight import window: if `persistImportResultTree` is currently
+    // in flight (importUpsert converged the row, messages not yet written),
+    // this delete removes the session before messages land. The import side
+    // handles this via a post-persist re-check in the Claude Code
+    // orchestrator (`deleteImportedResultTree`): after persistence completes
+    // it re-evaluates the managed verdict and deletes its own sessions when
+    // the verdict flipped. Together, the two halves converge every
+    // interleaving: managed → only the live row survives; external → only
+    // the import row survives.
+    //
+    // Takeover × mid-flight collision (same-ID native resume of a
+    // just-observed session whose transcript import is in flight) remains
+    // deliberately unspecified until a takeover feature exists.
+    const deleteResult = await this.bus.requestOptional(SessionStorageSubjects.delete, { sessionId: stub.sessionId });
+    if (deleteResult.handled) {
+      debugLog('Reconciled hook-first tracking stub', {
+        adapterSessionId,
+        source: importer.adapterName,
+        deletedSessionId: stub.sessionId,
+      });
+    }
   }
 
   /**
@@ -421,6 +575,16 @@ export class ObservedSessionIngestionService {
       // Session storage not registered yet (boot window / degraded host) —
       // the watcher or a later import re-registers idempotently.
       debugLog('Session storage unavailable; skipped observed-session registration', { adapterSessionId });
+      return;
+    }
+
+    // Post-upsert double-check: the gate-check above (managedAdapterSessionIds)
+    // and the importUpsert are not atomic — runtime.started may have populated
+    // the gate between the two. Both sides now reconcile: the runtime side adds
+    // to the gate then checks storage; the hook side writes storage then checks
+    // the gate. Every interleaving order is caught by one of the two sides.
+    if (this.managedAdapterSessionIds.has(adapterSessionId)) {
+      await this.reconcileTrackingStub(payload.clientId, adapterSessionId);
     }
   }
 
