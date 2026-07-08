@@ -1,4 +1,8 @@
-/* eslint max-lines: ["error", { "max": 1160 }] */
+/* eslint max-lines: ["error", { "max": 600, "skipBlankLines": true, "skipComments": true }] */
+// AIAgent is the composition root and protected-API facade for all adapter
+// agents: collaborator wiring plus thin delegates for subclasses. That facade
+// role justifies exceeding the repo-wide max-lines default; substantial logic
+// belongs in the agent-* collaborator modules, not here.
 import type { IMakaioBus, OnOptions, ScopedBus } from '@makaio/bus-core';
 import { MakaioBus } from '@makaio/bus-core';
 import type { SetRequired } from 'type-fest';
@@ -25,7 +29,6 @@ import type {
   StartAgentOptions,
 } from './types.js';
 import type { NormalizedMessageInput } from '../utils/index.js';
-import { createSentinelProviderContext } from '../utils/index.js';
 import type { MessageHandle, MessageResult } from '../message-handle/index.js';
 import { z } from 'zod';
 import {
@@ -45,10 +48,7 @@ import {
   type AgentStarted,
   AgentSubjects,
   type MessageInput,
-  type McpRuntimeSessionContext,
-  type McpSessionContext,
   McpSubjects,
-  type ReasoningLevelMap,
   type ProviderContext,
   SessionSubjects,
   type SessionContext,
@@ -58,14 +58,16 @@ import {
   type BlockData,
   type SystemPrompt,
 } from '@makaio/contracts';
-import { RateLimitError, AuthenticationError, ModelUnavailableError, QuotaExceededError } from '@makaio/core';
 import type { ConfigFactoryInput } from '../adapter/index.js';
 import { AIAgentConnector } from '../connector/index.js';
 import { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import { ToolCallTracker, type ResolveHints } from './tool-call-tracker.js';
+import type { ToolOutputResult } from './agent-event-bridge.js';
+import { buildConfigFactoryInput, resolveSupportedReasoningLevels } from './agent-config-input.js';
+import type { AgentConnectorConfigOverrides } from './types.js';
+import { createStructuredOutputTerminalTransform } from './agent-structured-output-retry.js';
 import type { AIModel } from '../types/ai-model.js';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
-import type { LedgerSessionContext } from './session-tool-ledger.js';
 import { AgentEventBridge } from './agent-event-bridge.js';
 import { AgentTurnExecutor } from './agent-turn-executor.js';
 import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
@@ -76,41 +78,12 @@ import { AgentLifecycleEmitter } from './agent-lifecycle-emitter.js';
 import {
   createAgentConnectorLifecycleManager,
   createAgentEventBridge,
+  createAgentLifecycleEmitter,
   createAgentPayloadEmitter,
   createAgentRuntimeMutationManager,
   createAgentTurnExecutor,
 } from './agent-internal-factories.js';
 import { AgentStructuredOutputManager } from './agent-structured-output-manager.js';
-
-/**
- * Extract typed error category from known Makaio error subclasses.
- * @param error - Error emitted by connector/runtime code
- * @returns Structured error category when available
- */
-function extractErrorCategory(
-  error: Error,
-):
-  | RateLimitError['code']
-  | AuthenticationError['code']
-  | ModelUnavailableError['code']
-  | QuotaExceededError['code']
-  | undefined {
-  if (
-    error instanceof RateLimitError ||
-    error instanceof AuthenticationError ||
-    error instanceof ModelUnavailableError ||
-    error instanceof QuotaExceededError
-  ) {
-    return error.code;
-  }
-  return undefined;
-}
-
-interface ToolOutputResolution {
-  toolCallId: string;
-  toolName: string;
-  args?: Record<string, unknown>;
-}
 
 /**
  * Abstract base class for AI agents.
@@ -135,8 +108,10 @@ export abstract class AIAgent<
   private initialized = false;
   /** Runtime system prompt captured from start/initialize, preserved across connector swaps. */
   private runtimeSystemPrompt?: SystemPrompt;
-  /** Tracks message lifecycle and emits turn events. */
-  protected readonly lifecycleTracker: MessageLifecycleTracker;
+  /** Tracks message lifecycle and emits turn events (emission is lazy — safe as field initializer). */
+  protected readonly lifecycleTracker = new MessageLifecycleTracker({
+    emitGlobal: this.emitGlobal.bind(this),
+  });
   /** Tracks tool.use → tool.output correlation across adapters. */
   protected readonly toolCallTracker = new ToolCallTracker();
   /** Event-focused helper for usage/tool/step emissions. */
@@ -179,28 +154,21 @@ export abstract class AIAgent<
   public constructor(config: AIAgentConfig<TBus, TConnector>) {
     this.config = { ...config, globalBus: config.globalBus ?? MakaioBus };
     this.availableModels = config.availableModels;
-    // Initialize lifecycle tracker with bound emit function
-    this.lifecycleTracker = new MessageLifecycleTracker({
-      emitGlobal: this.emitGlobal.bind(this),
-    });
+    const setLastKnownAdapterSessionId = (adapterSessionId: string | undefined) => {
+      this.lastKnownAdapterSessionId = adapterSessionId;
+    };
     this.payloadEmitter = createAgentPayloadEmitter({
       globalBus: this.globalBus,
-      getAgentContextBase: () => ({
-        agentId: this.agentId,
-        adapterId: this.adapterId,
-        adapterName: this.adapterName,
-        sessionId: this.sessionId,
-      }),
+      getAgentContextBase: this.getAgentContextBase.bind(this),
       lifecycleTracker: this.lifecycleTracker,
       getConnectorAdapterSessionId: () => this.connector?.getConfirmedAdapterSessionId(),
       getLastKnownAdapterSessionId: () => this.lastKnownAdapterSessionId,
-      setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => {
-        this.lastKnownAdapterSessionId = adapterSessionId;
-      },
+      setLastKnownAdapterSessionId,
       getEventMetadataDefaults: this.getEventMetadataDefaults.bind(this),
     });
+    const emitGlobal = this.payloadEmitter.emitGlobal.bind(this.payloadEmitter);
     this.eventBridge = createAgentEventBridge({
-      emitGlobal: this.payloadEmitter.emitGlobal.bind(this.payloadEmitter),
+      emitGlobal,
       toolCallTracker: this.toolCallTracker,
       getBlockIndex: this.getBlockIndex.bind(this),
       incrementBlockIndex: this.incrementBlockIndex.bind(this),
@@ -226,14 +194,12 @@ export abstract class AIAgent<
       globalBus: this.globalBus,
       getConnector: () => this.connector,
       swapConnector: this.swapConnector.bind(this),
-      emitGlobal: this.payloadEmitter.emitGlobal.bind(this.payloadEmitter),
+      emitGlobal,
       getProviderContext: () => this.config.providerContext,
       setProviderContext: (providerContext: ProviderContext) => void (this.config.providerContext = providerContext),
       setReasoningEffort: (reasoningEffort) => void (this.config.reasoningEffort = reasoningEffort),
       setMcpSessionContext: (mcpSessionContext) => (this.config.mcpSessionContext = mcpSessionContext),
-      resolveSupportedReasoningLevels: (model: string) => {
-        return this.getSupportedReasoningLevels(model);
-      },
+      resolveSupportedReasoningLevels: (model: string) => resolveSupportedReasoningLevels(this.availableModels, model),
     });
     this.connectorLifecycleManager = createAgentConnectorLifecycleManager<TBus, TConnector>({
       agentId: this.agentId,
@@ -242,18 +208,36 @@ export abstract class AIAgent<
       connectorFactory: this.config.connectorFactory,
       createOnMessageSent: this.createOnMessageSent.bind(this),
       wireEvents: this.wireEvents.bind(this),
-      emitGlobal: this.payloadEmitter.emitGlobal.bind(this.payloadEmitter),
+      emitGlobal,
       getConnector: () => this.connector,
       setConnector: (connector: TConnector) => {
         this.connector = connector;
       },
       getRuntimeSystemPrompt: () => this.runtimeSystemPrompt,
-      setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => {
-        this.lastKnownAdapterSessionId = adapterSessionId;
-      },
+      setLastKnownAdapterSessionId,
     });
-    this.lifecycleEmitter = this.createLifecycleEmitter();
-    this.structuredOutputManager = this.createStructuredOutputManager();
+    this.lifecycleEmitter = createAgentLifecycleEmitter({
+      agentId: this.agentId,
+      globalBus: this.globalBus,
+      emitGlobal,
+      onBeforeEmitCompletion: this.onBeforeEmitCompletion.bind(this),
+      clearToolCallTracker: () => this.toolCallTracker.clear(),
+    });
+    this.structuredOutputManager = new AgentStructuredOutputManager({
+      bus: this.globalBus,
+      agentId: this.agentId,
+      adapterId: this.adapterId,
+      adapterCapabilities: this.capabilities,
+    });
+  }
+
+  private getAgentContextBase() {
+    return {
+      agentId: this.agentId,
+      adapterId: this.adapterId,
+      adapterName: this.adapterName,
+      sessionId: this.sessionId,
+    };
   }
 
   private getEventMetadataDefaults() {
@@ -262,37 +246,6 @@ export abstract class AIAgent<
       providerConfigId: this.connector?.providerConfigId ?? this.config.providerContext?.providerConfigId,
       occurredAt: Date.now(),
     };
-  }
-
-  private createLifecycleEmitter(): AgentLifecycleEmitter {
-    return new AgentLifecycleEmitter({
-      agentId: this.agentId,
-      globalBus: this.globalBus,
-      emitStarted: async (payload) => {
-        await this.payloadEmitter.emitGlobal(AgentSubjects.started, payload);
-      },
-      emitComplete: async (payload) => {
-        await this.payloadEmitter.emitGlobal(AgentSubjects.complete, payload);
-      },
-      emitSessionClosed: async (payload) => {
-        await this.payloadEmitter.emitGlobal(AgentSubjects.session.closed, payload);
-      },
-      onBeforeEmitCompletion: this.onBeforeEmitCompletion.bind(this),
-      clearToolCallTracker: () => this.toolCallTracker.clear(),
-    });
-  }
-
-  /**
-   * Create the structured-output manager for this agent.
-   * @returns Configured manager instance
-   */
-  private createStructuredOutputManager(): AgentStructuredOutputManager {
-    return new AgentStructuredOutputManager({
-      bus: this.globalBus,
-      agentId: this.agentId,
-      adapterId: this.adapterId,
-      adapterCapabilities: this.capabilities,
-    });
   }
   // ── Public getters (external API) ──────────────────────────────────────────
   /** @returns Unique agent identifier */
@@ -373,21 +326,23 @@ export abstract class AIAgent<
           nativeTools: this.nativeTools,
           model: this.connector?.model ?? this.confirmedModel ?? this.initialModel,
         }),
+        // Runtime mutation requests unwrap the ctx envelope and delegate straight
+        // to the mutation manager, which owns native-vs-swap decision logic.
         onCwdChange: async (ctx: RequestContext<AgentCwdChangeRequestPayload, AgentCwdChangeResponsePayload>) => {
-          await this.handleCwdChange(ctx);
+          ctx.setResult(await this.runtimeMutationManager.handleCwdChange(ctx.payload));
         },
         onModelChange: async (ctx: RequestContext<AgentModelChangeRequestPayload, AgentModelChangeResponsePayload>) => {
-          await this.handleModelChange(ctx);
+          ctx.setResult(await this.runtimeMutationManager.handleModelChange(ctx.payload));
         },
         onMcpServersSet: async (
           ctx: RequestContext<AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload>,
         ) => {
-          await this.handleMcpServersSet(ctx);
+          ctx.setResult(await this.runtimeMutationManager.handleMcpServersSet(ctx.payload));
         },
         onCredentialChange: async (
           ctx: RequestContext<AgentCredentialChangeRequestPayload, AgentCredentialChangeResponsePayload>,
         ) => {
-          await this.handleCredentialChanged(ctx);
+          ctx.setResult(await this.runtimeMutationManager.handleCredentialChanged(ctx.payload));
         },
       }),
       ...this.structuredOutputManager.registerDefaultHandlers(),
@@ -563,7 +518,7 @@ export abstract class AIAgent<
    * @param hints - Hints for correlation (nativeId and/or toolName)
    * @returns Resolved toolCallId, toolName (falls back to 'unknown'), and args from the matched tool.use call
    */
-  protected async emitToolOutput(output: string, hints: ResolveHints): Promise<ToolOutputResolution> {
+  protected async emitToolOutput(output: string, hints: ResolveHints): Promise<ToolOutputResult> {
     return this.eventBridge.emitToolOutput(output, hints);
   }
 
@@ -690,16 +645,7 @@ export abstract class AIAgent<
    * @param configOverrides - Optional config overrides (e.g., new cwd, model)
    * @throws Error if connector is currently processing a turn
    */
-  public async swapConnector(
-    configOverrides?: Partial<{
-      cwd: string;
-      model: string;
-      providerContext: ProviderContext;
-      adapterSessionId: string;
-      resumeAdapterSessionId: string;
-      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-    }>,
-  ): Promise<void> {
+  public async swapConnector(configOverrides?: AgentConnectorConfigOverrides): Promise<void> {
     await this.connectorLifecycleManager.swapConnector(configOverrides);
     if (configOverrides?.providerContext !== undefined) {
       // Persist successful provider overrides so later swaps rebuild from the
@@ -712,82 +658,21 @@ export abstract class AIAgent<
   }
 
   /**
-   * Resolve the supported reasoning levels for a given model name.
-   *
-   * Centralised lookup into `availableModels` so callers do not repeat the
-   * find/optional-chain pattern inline.
-   * @param model - Model name to look up, or `undefined` to return `undefined`
-   * @returns The `supportedReasoningLevels` map for the model, or `undefined`
-   */
-  private getSupportedReasoningLevels(model?: string): ReasoningLevelMap | undefined {
-    if (!model) return undefined;
-    return this.availableModels?.find((entry) => entry.name === model)?.supportedReasoningLevels;
-  }
-
-  /**
    * Build config factory input from agent config with optional overrides.
    *
-   * Explicitly maps AIAgentConfig fields to ConfigFactoryInput — avoids
-   * accidentally forwarding adapter-only fields (capabilities, nativeTools, etc.)
-   * into the factory.
+   * Delegates to {@link buildConfigFactoryInput} with live connector-derived
+   * values (reasoning effort) and the agent's error sink.
    * @param overrides - Optional field overrides (e.g., cwd, model, adapterSessionId)
    * @returns ConfigFactoryInput ready for config factory
    */
-  private buildConfigInput(
-    overrides?: Partial<{
-      cwd: string;
-      model: string;
-      providerContext: ProviderContext;
-      adapterSessionId: string;
-      resumeAdapterSessionId: string;
-      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-    }>,
-  ): ConfigFactoryInput<TBus> {
-    const cfg = this.config;
-    const currentReasoningEffort = this.connector?.currentReasoningEffort ?? cfg.reasoningEffort;
-    // providerContext is required by ConfigFactoryInput. Priority:
-    //   1. Explicit override (e.g. provider swap on model change)
-    //   2. Agent config value (set by orchestrator at start time, or updated by setProviderContext)
-    //   3. Sentinel fallback for rehydration and tests that bypass orchestrator provider setup
-    const pendingProviderContext = overrides?.providerContext ?? cfg.providerContext;
-    if (pendingProviderContext === undefined) {
-      console.warn(
-        `[AIAgent] No providerContext available for agent "${cfg.agentId}" — falling back to sentinel. ` +
-          'This indicates the orchestrator did not populate a provider context before calling startAgent.',
-      );
-    }
-    const providerContext: ProviderContext = pendingProviderContext ?? createSentinelProviderContext();
-    return {
-      bus: cfg.adapterBus,
-      globalBus: cfg.globalBus,
-      agentId: cfg.agentId,
-      adapterId: cfg.adapterId,
-      adapterName: cfg.adapterName,
-      providerContext,
-      model: overrides?.model ?? cfg.model,
-      cwd: overrides?.cwd ?? cfg.cwd,
-      env: cfg.env,
-      adapterSessionId: overrides?.adapterSessionId ?? cfg.adapterSessionId,
-      sessionId: cfg.sessionId,
-      resumeAdapterSessionId: overrides?.resumeAdapterSessionId ?? cfg.resumeAdapterSessionId,
-      reasoningEffort: currentReasoningEffort,
-      supportedReasoningLevels: this.getSupportedReasoningLevels(overrides?.model ?? cfg.model),
-      allowedTools: cfg.allowedTools,
-      disallowedTools: cfg.disallowedTools,
-      allowedDirectories: cfg.allowedDirectories,
-      providerConfig: cfg.adapterConfig,
-      mcpSessionContext: overrides?.mcpSessionContext ?? cfg.mcpSessionContext,
-      toolLedger: cfg.toolLedger,
-      ...(cfg.nativeFork !== undefined && { nativeFork: cfg.nativeFork }),
-      ephemeral: cfg.ephemeral,
-      clientId: cfg.clientId,
-      clientProfileName: cfg.clientProfileName,
-      harnessId: cfg.harnessId,
-      errorHandler: (error: Error, _terminate: boolean) => {
-        const errorCategory = extractErrorCategory(error);
-        this.emitError({ error: error.message, ...(errorCategory && { errorCategory }) });
-      },
-    };
+  private buildConfigInput(overrides?: AgentConnectorConfigOverrides): ConfigFactoryInput<TBus> {
+    return buildConfigFactoryInput({
+      config: this.config,
+      availableModels: this.availableModels,
+      currentReasoningEffort: this.connector?.currentReasoningEffort ?? this.config.reasoningEffort,
+      emitError: this.emitError.bind(this),
+      overrides,
+    });
   }
 
   /**
@@ -804,50 +689,6 @@ export abstract class AIAgent<
         deliveryMode: handle.deliveryMode,
       });
     };
-  }
-
-  /**
-   * Handle agent.cwd.change request — prefers native in-place change, falls back to connector swap.
-   * @param ctx - Request context with newCwd payload
-   */
-  private async handleCwdChange(
-    ctx: RequestContext<AgentCwdChangeRequestPayload, AgentCwdChangeResponsePayload>,
-  ): Promise<void> {
-    const result = await this.runtimeMutationManager.handleCwdChange(ctx.payload);
-    ctx.setResult(result);
-  }
-
-  /**
-   * Handle agent.model.change request — prefers native in-place change, falls back to connector swap.
-   * @param ctx - Request context with newModel payload
-   */
-  private async handleModelChange(
-    ctx: RequestContext<AgentModelChangeRequestPayload, AgentModelChangeResponsePayload>,
-  ): Promise<void> {
-    const result = await this.runtimeMutationManager.handleModelChange(ctx.payload);
-    ctx.setResult(result);
-  }
-
-  /**
-   * Handle agent.mcp.servers.set request — rebuilds immediately when idle or stages for the next turn.
-   * @param ctx - Request context with replacement MCP session context
-   */
-  private async handleMcpServersSet(
-    ctx: RequestContext<AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload>,
-  ): Promise<void> {
-    const result = await this.runtimeMutationManager.handleMcpServersSet(ctx.payload);
-    ctx.setResult(result);
-  }
-
-  /**
-   * Handle agent.credential.change request — defers when a turn is active, otherwise swaps connector.
-   * @param ctx - Request context with credential change payload
-   */
-  private async handleCredentialChanged(
-    ctx: RequestContext<AgentCredentialChangeRequestPayload, AgentCredentialChangeResponsePayload>,
-  ): Promise<void> {
-    const result = await this.runtimeMutationManager.handleCredentialChanged(ctx.payload);
-    ctx.setResult(result);
   }
 
   /**
@@ -1017,49 +858,13 @@ export abstract class AIAgent<
     const transformTerminal =
       responseSchema === undefined
         ? undefined
-        : async (result: MessageResult): Promise<MessageResult> => {
-            if (result.outcome !== 'completed') return result;
-
-            const validated = await this.structuredOutputManager.validateTerminalResult({
-              responseSchema,
-              message: result.result?.message,
-              sessionId: this.sessionId,
-              retryTurn: async ({ attemptNumber, validationErrors }) => {
-                const connector = this.connector;
-                if (!connector) return '';
-                // Internal retry emissions are provisional. SessionBridge persists
-                // structured-output turns from the validated agent.complete.message
-                // so invalid attempt blocks cannot be flushed as the assistant turn.
-                const retryHandle = await connector.sendMessage(messageHandle.message, {
-                  deliveryMode: 'enqueue',
-                  internalRetry: true,
-                  messageId: `${messageHandle.messageId}:structured-output-retry:${attemptNumber}`,
-                  messageHistory: messageHandle.messageHistory,
-                  responseSchema,
-                  turnContext: {
-                    ...messageHandle.turnContext,
-                    structuredOutputRetry: {
-                      attemptNumber,
-                      validationErrors,
-                      instruction:
-                        'Previous output did not match the requested JSON schema. Respond only with corrected JSON.',
-                    },
-                  },
-                });
-                const retryResult = await retryHandle.waitForCompletion();
-                return retryResult.result?.message ?? '';
-              },
-            });
-
-            return {
-              ...result,
-              result:
-                result.result !== null && result.result !== undefined
-                  ? { ...result.result, message: validated.message }
-                  : result.result,
-              structuredOutputValidation: validated.structuredOutputValidation,
-            };
-          };
+        : createStructuredOutputTerminalTransform({
+            structuredOutputManager: this.structuredOutputManager,
+            getConnector: () => this.connector,
+            sessionId: this.sessionId,
+            messageHandle,
+            responseSchema,
+          });
 
     this.lifecycleTracker.track(
       messageHandle,

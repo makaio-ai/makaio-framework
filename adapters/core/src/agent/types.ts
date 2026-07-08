@@ -446,3 +446,18 @@ export interface ContextWindowInput {
   /** Cached tokens (optional, reduces cost but still in context) */
   cachedTokens?: number;
 }
+
+/**
+ * Per-call overrides for connector (re)creation paths.
+ *
+ * Shared by `AIAgent.swapConnector`, config-input assembly, and the connector
+ * lifecycle factory so the override surface cannot drift between them.
+ */
+export type AgentConnectorConfigOverrides = Partial<{
+  cwd: string;
+  model: string;
+  providerContext: ProviderContext;
+  adapterSessionId: string;
+  resumeAdapterSessionId: string;
+  mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
+}>;

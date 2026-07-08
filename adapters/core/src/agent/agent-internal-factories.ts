@@ -14,8 +14,9 @@ import type { LedgerSessionContext } from './session-tool-ledger.js';
 import type { ConfigFactoryInput } from '../adapter/index.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
-import type { BaseAgentConnectorConfig, StartAgentOptions } from './types.js';
+import type { AgentConnectorConfigOverrides, BaseAgentConnectorConfig, StartAgentOptions } from './types.js';
 import { AgentEventBridge } from './agent-event-bridge.js';
+import { AgentLifecycleEmitter, type AgentLifecycleEmitterConfig } from './agent-lifecycle-emitter.js';
 import { AgentPayloadEmitter, type AgentPayloadEmitterConfig } from './agent-payload-emitter.js';
 import { AgentTurnExecutor } from './agent-turn-executor.js';
 import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
@@ -93,6 +94,42 @@ export function createAgentEventBridge(config: {
 }
 
 /**
+ * Input bundle for {@link createAgentLifecycleEmitter}.
+ * Derives from {@link AgentLifecycleEmitterConfig} but replaces the three
+ * subject-specific emit callbacks with a single `emitGlobal` — the factory
+ * assembles the per-subject emitters.
+ */
+export type CreateLifecycleEmitterInput = Omit<
+  AgentLifecycleEmitterConfig,
+  'emitStarted' | 'emitComplete' | 'emitSessionClosed'
+> & {
+  emitGlobal: AgentPayloadEmitter['emitGlobal'];
+};
+
+/**
+ * Create the stateful lifecycle emitter for start/complete/error/session.closed.
+ * @param config - Lifecycle emission dependency bundle
+ * @returns Configured lifecycle emitter
+ */
+export function createAgentLifecycleEmitter(config: CreateLifecycleEmitterInput): AgentLifecycleEmitter {
+  return new AgentLifecycleEmitter({
+    agentId: config.agentId,
+    globalBus: config.globalBus,
+    emitStarted: async (payload) => {
+      await config.emitGlobal(AgentSubjects.started, payload);
+    },
+    emitComplete: async (payload) => {
+      await config.emitGlobal(AgentSubjects.complete, payload);
+    },
+    emitSessionClosed: async (payload) => {
+      await config.emitGlobal(AgentSubjects.session.closed, payload);
+    },
+    onBeforeEmitCompletion: config.onBeforeEmitCompletion,
+    clearToolCallTracker: config.clearToolCallTracker,
+  });
+}
+
+/**
  * Create shared turn executor.
  * @param config - Turn execution dependency bundle
  * @returns Configured turn executor
@@ -130,14 +167,7 @@ export function createAgentRuntimeMutationManager(config: {
   sessionId?: string;
   globalBus: IMakaioBus;
   getConnector: () => AIAgentConnector;
-  swapConnector: (
-    configOverrides?: Partial<{
-      cwd: string;
-      model: string;
-      providerContext: ProviderContext;
-      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-    }>,
-  ) => Promise<void>;
+  swapConnector: (configOverrides?: AgentConnectorConfigOverrides) => Promise<void>;
   emitGlobal: AgentPayloadEmitter['emitGlobal'];
   getProviderContext: () => ProviderContext | undefined;
   setProviderContext: (providerContext: ProviderContext) => void;
@@ -177,16 +207,7 @@ export function createAgentConnectorLifecycleManager<
   TConnector extends AIAgentConnector<TBus>,
 >(config: {
   agentId: string;
-  buildConfigInput: (
-    overrides?: Partial<{
-      cwd: string;
-      model: string;
-      providerContext: ProviderContext;
-      adapterSessionId: string;
-      resumeAdapterSessionId: string;
-      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-    }>,
-  ) => ConfigFactoryInput<TBus>;
+  buildConfigInput: (overrides?: AgentConnectorConfigOverrides) => ConfigFactoryInput<TBus>;
   configFactory: (input: ConfigFactoryInput<TBus>) => Promise<BaseAgentConnectorConfig<TBus> & { adapterId: string }>;
   connectorFactory: (
     config: BaseAgentConnectorConfig<TBus> & { adapterId: string },
