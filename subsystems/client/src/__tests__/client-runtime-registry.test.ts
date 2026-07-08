@@ -758,3 +758,108 @@ describe('RuntimeMap.delete — secondary index cleanup (RO-5)', () => {
     expect(found?.clientRuntimeId).toBe('rt-del-5b');
   });
 });
+
+// ---------------------------------------------------------------------------
+// RuntimeMap.adapterOwnedSessions — provenance-based hasAdapterSession
+// ---------------------------------------------------------------------------
+
+describe('RuntimeMap.adapterOwnedSessions — provenance-based hasAdapterSession', () => {
+  /**
+   * Build a minimal {@link ClientRuntimeRecord} for use in RuntimeMap tests.
+   * @param overrides - Fields to override sensible defaults
+   * @returns Minimal runtime record
+   */
+  function makeRecord(
+    overrides: Partial<ClientRuntimeRecord> & Pick<ClientRuntimeRecord, 'clientRuntimeId' | 'clientId'>,
+  ): ClientRuntimeRecord {
+    return {
+      status: 'started',
+      observedAt: BASE_OBSERVED_AT,
+      createdAt: BASE_OBSERVED_AT,
+      updatedAt: BASE_OBSERVED_AT,
+      ...overrides,
+    };
+  }
+
+  let map: RuntimeMap;
+
+  beforeEach(() => {
+    map = new RuntimeMap();
+  });
+
+  it('hasAdapterSession returns false when record exists but markAdapterOwned was not called', () => {
+    const record = makeRecord({
+      clientRuntimeId: 'rt-prov-1',
+      clientId: 'claude-code',
+      adapterSessionId: 'adapter-hook-sess',
+    });
+    map.set(record);
+
+    // Evidence index has the entry, but provenance set does not.
+    expect(map.hasAdapterSession('adapter-hook-sess', 'claude-code')).toBe(false);
+  });
+
+  it('hasAdapterSession returns true after markAdapterOwned is called', () => {
+    const record = makeRecord({
+      clientRuntimeId: 'rt-prov-2',
+      clientId: 'claude-code',
+      adapterSessionId: 'adapter-owned-sess',
+    });
+    map.set(record);
+    map.markAdapterOwned('adapter-owned-sess', 'claude-code');
+
+    expect(map.hasAdapterSession('adapter-owned-sess', 'claude-code')).toBe(true);
+  });
+
+  it('delete clears the adapter-owned provenance entry', () => {
+    const record = makeRecord({
+      clientRuntimeId: 'rt-prov-3',
+      clientId: 'claude-code',
+      adapterSessionId: 'adapter-del-prov',
+    });
+    map.set(record);
+    map.markAdapterOwned('adapter-del-prov', 'claude-code');
+
+    expect(map.hasAdapterSession('adapter-del-prov', 'claude-code')).toBe(true);
+
+    map.delete('rt-prov-3');
+
+    expect(map.hasAdapterSession('adapter-del-prov', 'claude-code')).toBe(false);
+  });
+
+  it('clear clears all adapter-owned provenance entries', () => {
+    const record = makeRecord({
+      clientRuntimeId: 'rt-prov-4',
+      clientId: 'claude-code',
+      adapterSessionId: 'adapter-clear-prov',
+    });
+    map.set(record);
+    map.markAdapterOwned('adapter-clear-prov', 'claude-code');
+
+    map.clear();
+
+    expect(map.hasAdapterSession('adapter-clear-prov', 'claude-code')).toBe(false);
+  });
+
+  it('setFromStorage does NOT populate the adapter-owned provenance set', () => {
+    const record = makeRecord({
+      clientRuntimeId: 'rt-prov-5',
+      clientId: 'claude-code',
+      adapterSessionId: 'adapter-hydrated',
+      updatedAt: Date.now() - 1_000, // fresh — within any reasonable threshold
+    });
+    map.setFromStorage(record, Date.now(), 24 * 60 * 60 * 1_000);
+
+    // Evidence index is populated (fresh record), but provenance set is not.
+    const found = map.findByEvidence(undefined, undefined, 'adapter-hydrated', 'claude-code');
+    expect(found).toBeDefined();
+    expect(map.hasAdapterSession('adapter-hydrated', 'claude-code')).toBe(false);
+  });
+
+  it('adapter-owned status is scoped to (adapterSessionId, clientId) pair', () => {
+    map.markAdapterOwned('shared-adapter-sess', 'claude-code');
+
+    expect(map.hasAdapterSession('shared-adapter-sess', 'claude-code')).toBe(true);
+    expect(map.hasAdapterSession('shared-adapter-sess', 'codex')).toBe(false);
+  });
+});

@@ -258,6 +258,42 @@ export class ClientRuntimeRegistry {
   }
 
   /**
+   * Mark an `(adapterSessionId, clientId)` pair as adapter-owned.
+   *
+   * The service layer calls this when a `client.runtime.observe` arrives
+   * with `source.layer === 'adapter'` and an `adapterSessionId`. This
+   * populates the in-memory provenance set that backs
+   * {@link hasAdapterSession}.
+   *
+   * The registry deliberately does not inspect source-layer metadata
+   * itself — it speaks the vocabulary of "adapter-owned," and the service
+   * layer decides when that label applies.
+   * @param adapterSessionId - Raw adapter session ID
+   * @param clientId - Stable client identifier
+   */
+  public markAdapterOwned(adapterSessionId: string, clientId: string): void {
+    this.runtimeMap.markAdapterOwned(adapterSessionId, clientId);
+  }
+
+  /**
+   * Check whether an `(adapterSessionId, clientId)` pair was bound by an
+   * adapter-layer observation of the **current process**.
+   *
+   * This is the in-memory runtime-truth lookup used by the
+   * `client.runtime.isAdapterManaged` handler. It returns `true` only
+   * when {@link markAdapterOwned} was called for this pair — NOT merely
+   * when a runtime record with a matching `adapterSessionId` exists in
+   * the evidence index. This distinction prevents hook-bridge observations
+   * (layer `'client-hook'`) from being falsely classified as adapter-managed.
+   * @param adapterSessionId - Raw adapter session ID
+   * @param clientId - Stable client identifier
+   * @returns `true` when the pair was marked adapter-owned in this process
+   */
+  public hasAdapterSession(adapterSessionId: string, clientId: string): boolean {
+    return this.runtimeMap.hasAdapterSession(adapterSessionId, clientId);
+  }
+
+  /**
    * Remove all in-memory state.
    *
    * Does not touch persisted records — the storage layer is authoritative

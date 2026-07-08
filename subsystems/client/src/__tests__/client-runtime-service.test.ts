@@ -581,6 +581,138 @@ describe('ClientRuntimeService', () => {
     });
   });
 
+  describe('runtime.isAdapterManaged', () => {
+    it('returns managed=true for an observed adapter session', async () => {
+      // Register a runtime with an adapterSessionId via runtime.observe.
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'adapter', producer: 'claude-code-adapter' },
+        observedAt: 1_700_000_000_000,
+        pid: 11111,
+        adapterSessionId: 'adapter-session-managed',
+      });
+
+      const result = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'adapter-session-managed',
+        clientId: 'claude-code',
+      });
+      expect(result.managed).toBe(true);
+    });
+
+    it('returns managed=false for an unknown adapterSessionId', async () => {
+      const result = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'unknown-session',
+        clientId: 'claude-code',
+      });
+      expect(result.managed).toBe(false);
+    });
+
+    it('returns managed=false for a known session but wrong clientId', async () => {
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'adapter', producer: 'claude-code-adapter' },
+        observedAt: 1_700_000_000_000,
+        pid: 22222,
+        adapterSessionId: 'adapter-session-cc',
+      });
+
+      // Query with a different clientId.
+      const result = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'adapter-session-cc',
+        clientId: 'codex',
+      });
+      expect(result.managed).toBe(false);
+    });
+
+    it('returns managed=false for a client-hook observation with adapterSessionId', async () => {
+      // Hook-bridge observations carry adapterSessionId from hook metadata
+      // but must NOT cause the session to be considered adapter-managed.
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'client-hook', producer: 'hook-bridge' },
+        observedAt: 1_700_000_000_000,
+        adapterSessionId: 'hook-observed-session',
+      });
+
+      const result = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'hook-observed-session',
+        clientId: 'claude-code',
+      });
+      expect(result.managed).toBe(false);
+    });
+
+    it('returns managed=true after adapter observation follows a hook observation', async () => {
+      // Phase 1: hook-bridge observes first — must not mark as managed.
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'client-hook', producer: 'hook-bridge' },
+        observedAt: 1_700_000_000_000,
+        adapterSessionId: 'hook-then-adapter-session',
+      });
+
+      const before = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'hook-then-adapter-session',
+        clientId: 'claude-code',
+      });
+      expect(before.managed).toBe(false);
+
+      // Phase 2: adapter observes with same adapterSessionId — marks as managed.
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'adapter', producer: 'claude-code-adapter' },
+        observedAt: 1_700_000_001_000,
+        adapterSessionId: 'hook-then-adapter-session',
+      });
+
+      const after = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'hook-then-adapter-session',
+        clientId: 'claude-code',
+      });
+      expect(after.managed).toBe(true);
+    });
+
+    it('hook observation after adapter observation does not revoke managed status', async () => {
+      // Adapter observes first — marks as managed.
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'adapter', producer: 'claude-code-adapter' },
+        observedAt: 1_700_000_000_000,
+        pid: 33333,
+        adapterSessionId: 'adapter-then-hook-session',
+      });
+
+      // Hook observation arrives later for the same adapterSessionId.
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'client-hook', producer: 'hook-bridge' },
+        observedAt: 1_700_000_002_000,
+        adapterSessionId: 'adapter-then-hook-session',
+      });
+
+      const result = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'adapter-then-hook-session',
+        clientId: 'claude-code',
+      });
+      expect(result.managed).toBe(true);
+    });
+
+    it('statusline observation with adapterSessionId does not mark as managed', async () => {
+      await bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'claude-code',
+        source: { layer: 'statusline', producer: 'status-watcher' },
+        observedAt: 1_700_000_000_000,
+        pid: 44444,
+        adapterSessionId: 'statusline-observed-session',
+      });
+
+      const result = await bus.request(ClientSubjects.runtime.isAdapterManaged, {
+        adapterSessionId: 'statusline-observed-session',
+        clientId: 'claude-code',
+      });
+      expect(result.managed).toBe(false);
+    });
+  });
+
   describe('account.activate and account.getActive', () => {
     it('account.getActive returns null when no activation has been signalled', async () => {
       const result = await bus.request(ClientSubjects.account.getActive, {

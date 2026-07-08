@@ -4,7 +4,8 @@
  * Defines the global `client.*` namespace for scan, account observation
  * (`client.account.observe`, `client.account.activate`, `client.account.getActive`),
  * usage ingestion/snapshot, runtime observation (`client.runtime.observe`,
- * `client.runtime.started`), observed session semantics subjects
+ * `client.runtime.started`, `client.runtime.isAdapterManaged`),
+ * observed session semantics subjects
  * (`client.session.started`, `client.session.userPrompt.submitted`,
  * `client.session.turn.started`, `client.session.turn.completed`,
  * `client.session.tool.pre`, `client.session.tool.post`), the global

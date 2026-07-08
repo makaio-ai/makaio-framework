@@ -12,7 +12,6 @@ import type {
   LogImportConfig,
   LogImportOrchestrator,
   LogImportRegistration as AdapterLogImportRegistration,
-  LogOrchestratorConfig,
   LogOrchestratorConstructor,
 } from '@makaio/ai-adapters-core';
 import { CapabilitySubjects } from '@makaio/contracts';
@@ -21,6 +20,7 @@ import { LogImportSubjects } from './namespace.js';
 import type { LogImportMode } from './schemas/index.js';
 import type { LogImporterRegistration, OrchestratorFactory } from './types.js';
 import { classifyLogImporterSource } from './log-import-source.js';
+import { buildOrchestratorConfig } from './orchestrator-config-builder.js';
 
 /**
  * Minimal registry API required to register providers from capability events.
@@ -98,34 +98,6 @@ function isLogImportProvider(provider: unknown): provider is CapabilityLogImport
 // ---------------------------------------------------------------------------
 
 /**
- * Build orchestrator config from adapter runtime metadata.
- *
- * The returned config preserves the adapter-level enable flag so persisted
- * modes cannot restart an importer that runtime config disabled.
- * @param adapterId - Runtime adapter UUID
- * @param adapterName - Stable adapter name
- * @param logImportConfig - Optional per-adapter log import configuration
- * @param machineId - Machine identifier forwarded from the product descriptor
- * @returns Normalized orchestrator configuration
- */
-function buildOrchestratorConfig(
-  adapterId: string,
-  adapterName: string,
-  logImportConfig?: LogImportConfig,
-  machineId?: string | null,
-): LogOrchestratorConfig {
-  return {
-    enabled: logImportConfig?.enabled ?? true,
-    pollIntervalMs: logImportConfig?.pollIntervalMs,
-    eventsPerSecond: logImportConfig?.eventsPerSecond,
-    adapterId,
-    adapterName,
-    checkMakaioManaged: logImportConfig?.checkMakaioManaged,
-    machineId,
-  };
-}
-
-/**
  * Build the orchestrator factory for a registered provider when classes exist.
  * @param adapterId - Runtime adapter UUID
  * @param adapterName - Stable adapter name
@@ -133,6 +105,7 @@ function buildOrchestratorConfig(
  * @param LogOrchestratorClass - Import-mode orchestrator class, when supported
  * @param LogDiscoveryOrchestratorClass - Discovery-mode orchestrator class, when supported
  * @param machineId - Machine identifier forwarded from the product descriptor
+ * @param clientId - Stable client id for runtime-truth skip detection
  * @returns Orchestrator factory, or null when the provider has no orchestrators
  */
 export function buildOrchestratorFactory(
@@ -142,12 +115,13 @@ export function buildOrchestratorFactory(
   LogOrchestratorClass: LogOrchestratorConstructor | undefined,
   LogDiscoveryOrchestratorClass: LogOrchestratorConstructor | undefined,
   machineId?: string | null,
+  clientId?: string,
 ): OrchestratorFactory | null {
   if (!LogOrchestratorClass && !LogDiscoveryOrchestratorClass) {
     return null;
   }
 
-  const config = buildOrchestratorConfig(adapterId, adapterName, logImportConfig, machineId);
+  const config = buildOrchestratorConfig({ adapterId, adapterName, logImportConfig, machineId, clientId });
 
   return (mode: Exclude<LogImportMode, 'disabled'>): LogImportOrchestrator | null => {
     if (!config.enabled) {
@@ -244,6 +218,7 @@ export async function registerFromProvider(
     providerValue.registration.LogOrchestratorClass,
     providerValue.registration.LogDiscoveryOrchestratorClass,
     providerValue.machineId,
+    providerValue.registration.clientId,
   );
   if (factory) {
     registrar.setOrchestratorFactory(providerValue.id, factory);

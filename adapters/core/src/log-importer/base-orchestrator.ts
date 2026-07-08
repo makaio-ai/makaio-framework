@@ -1,5 +1,6 @@
 /** Base orchestrator for log import across adapters. @packageDocumentation */
 import { MakaioBus } from '@makaio/bus-core';
+import { ClientSubjects } from '@makaio/contracts';
 
 import { ImportCursorStorageSubjects } from './cursor-storage.js';
 import { LogImportEventQueue } from './event-queue.js';
@@ -39,8 +40,11 @@ export type { LogOrchestratorConfig, ParseFileResult } from './orchestrator-conf
  * @typeParam TState - The adapter's resumable state type (default: unknown)
  */
 export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
-  protected readonly config: Required<Omit<LogOrchestratorConfig, 'checkMakaioManaged' | 'directory' | 'machineId'>> & {
+  protected readonly config: Required<
+    Omit<LogOrchestratorConfig, 'checkMakaioManaged' | 'clientId' | 'directory' | 'machineId'>
+  > & {
     checkMakaioManaged?: LogOrchestratorConfig['checkMakaioManaged'];
+    clientId?: string;
     directory?: string;
     machineId?: string | null;
   };
@@ -58,6 +62,7 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
   private unsubscribeChange?: () => void;
   private unsubscribeError?: () => void;
   private unsubscribeDeleted?: () => void;
+  private unsubscribeRuntimeStarted?: () => void;
   private readonly stats = new LogImportStats();
   private readonly watcherTasks = new WatcherTaskTracker();
   private progressTimer?: ReturnType<typeof setInterval>;
@@ -75,6 +80,7 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
       adapterId: config.adapterId,
       adapterName: config.adapterName,
       checkMakaioManaged: config.checkMakaioManaged,
+      clientId: config.clientId,
       machineId: config.machineId,
     };
 
@@ -206,6 +212,16 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
       );
     });
 
+    // Invalidate a cached false-negative verdict when a runtime announces
+    // itself as adapter-managed. This closes the window where the cache
+    // pinned a "not managed" result from a check that ran before the
+    // runtime registered via client.runtime.observe.
+    this.unsubscribeRuntimeStarted = MakaioBus.on(ClientSubjects.runtime.started, (ctx) => {
+      if (ctx.payload.source.layer === 'adapter' && ctx.payload.adapterSessionId !== undefined) {
+        this.managedSessionCache.invalidate(ctx.payload.adapterSessionId);
+      }
+    });
+
     await this.watcher.start();
   }
 
@@ -218,9 +234,11 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
     this.unsubscribeChange?.();
     this.unsubscribeError?.();
     this.unsubscribeDeleted?.();
+    this.unsubscribeRuntimeStarted?.();
     this.unsubscribeChange = undefined;
     this.unsubscribeError = undefined;
     this.unsubscribeDeleted = undefined;
+    this.unsubscribeRuntimeStarted = undefined;
 
     this.watcher.stop();
     await this.watcherTasks.drain();
@@ -241,9 +259,17 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
   // Static Utilities
   // ─────────────────────────────────────────────────────────────────────────────
 
-  /** @returns Function that checks if a session is Makaio-managed. */
-  public static createDefaultCheckMakaioManaged(): (sessionId: string) => Promise<boolean> {
-    return createDefaultCheckMakaioManaged();
+  /**
+   * Create the default native-session detector.
+   *
+   * When `clientId` is provided, the detector also queries the runtime
+   * registry (`client.runtime.isAdapterManaged`) to detect adapter-managed
+   * sessions even when the DB only contains a hook-first tracking stub.
+   * @param clientId - Stable client identifier (e.g. `'claude-code'`)
+   * @returns Function that checks if a session is Makaio-managed
+   */
+  public static createDefaultCheckMakaioManaged(clientId?: string): (sessionId: string) => Promise<boolean> {
+    return createDefaultCheckMakaioManaged(clientId);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

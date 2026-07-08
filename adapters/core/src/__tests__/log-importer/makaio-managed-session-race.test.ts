@@ -1,40 +1,38 @@
 /**
- * Proof tests for the hook-first import-upsert race in the managed-session
- * skip predicate — documenting CURRENT behaviour, not the desired invariant.
+ * Invariant tests for the hook-first ingestion race repair.
  *
- * Scenario: An adapter-managed session starts and the CLI-process SessionStart
- * hook fires BEFORE `client.runtime.started` populates the in-memory
- * suppression gate. `ObservedSessionIngestionService.handleSessionStarted`
- * then creates a stub row via `importUpsert` with `isImported: true` and
- * `importStatus: 'tracking'`. When the log importer later calls
- * `createDefaultCheckMakaioManaged()` (predicate: `!session.isImported`),
- * the stub does not match — the importer proceeds and writes transcript
- * turns on top of the live turns from the SessionBridge.
+ * The repair consists of three cooperating mechanisms:
  *
- * Why this is NOT fixed here by widening the predicate: the stub's storage
- * fingerprint (`isImported: true`, `importStatus: 'tracking'`, `clientId`
- * set) is byte-identical to the registration of an EXTERNALLY observed
- * terminal session, whose transcript content the importer MUST import.
- * A fingerprint-based skip would silently disable the observed-sessions
- * feature. The real fix needs a runtime-truth contract ("is this
- * adapterSessionId currently adapter-managed?") or must prevent the
- * identity-forking stub at its source — tracked as a dedicated
- * ingestion-seam invariant issue.
+ * 1. **Runtime-truth skip predicate** — `createDefaultCheckMakaioManaged(clientId)`
+ *    queries `client.runtime.isAdapterManaged` so the importer skips
+ *    adapter-managed sessions even when the DB only has a tracking stub.
  *
- * These tests exercise the REAL memory storage handlers and the REAL
- * `createDefaultCheckMakaioManaged` predicate — no mocks. If a test here
- * starts failing, the skip seam's semantics changed: re-evaluate both the
- * race and the observed-sessions import path together.
+ * 2. **Stub reconciliation** — `ObservedSessionIngestionService.handleRuntimeStarted`
+ *    deletes the racy tracking stub when `client.runtime.started` arrives.
+ *
+ * 3. **Cache invalidation** — `MakaioManagedSessionCache.invalidate()` evicts
+ *    a stale false-negative verdict so the next `isSkipped` call re-evaluates.
+ *
+ * All tests exercise REAL memory storage handlers and REAL predicates — no
+ * mocks. The `client.runtime.isAdapterManaged` handler is a minimal in-test
+ * registration that mirrors the runtime registry's lookup (production handler
+ * lives in `ClientRuntimeService`).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionSubjects } from '@makaio/contracts';
+import { ClientSubjects, MessageStorageSubjects, SessionSubjects } from '@makaio/contracts';
+import type { ClientRuntimeSourceLayer } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/services-core/session';
-import { registerMemorySessionStorage } from '@makaio/services-core/session';
+import { registerMemorySessionStorage, registerMemoryMessageStorage } from '@makaio/services-core/session';
 import {
   createDefaultCheckMakaioManaged,
   MakaioManagedSessionCache,
 } from '../../log-importer/makaio-managed-session.js';
+import {
+  ObservedSessionIngestionService,
+  LogImportTriggerSubjects,
+  isTrackingStub,
+} from '@makaio/services-core/session';
 
 /** Adapter session ID shared between hook and importer paths. */
 const ADAPTER_SESSION_ID = 'race-session-ext-1';
@@ -42,6 +40,15 @@ const ADAPTER_SESSION_ID = 'race-session-ext-1';
 const SOURCE = 'claude-code';
 /** Client id reported by the observed hook events. */
 const CLIENT_ID = 'claude-code';
+
+/**
+ * In-test set of adapter session IDs considered "runtime-managed".
+ *
+ * Mirrors the `byAdapterSessionClientId` index in the real
+ * `ClientRuntimeRegistry` — the production handler delegates to
+ * `runtimeRegistry.hasAdapterSession()`.
+ */
+const runtimeManagedSessions = new Set<string>();
 
 /**
  * Bridge `SessionSubjects.getByAdapterSessionId` (CRUD level) to
@@ -62,9 +69,22 @@ function registerCrudGetByAdapterSessionIdPassthrough(): () => void {
 }
 
 /**
+ * Register a minimal `client.runtime.isAdapterManaged` handler backed
+ * by the in-test `runtimeManagedSessions` set.
+ * @returns Cleanup function
+ */
+function registerRuntimeIsAdapterManagedHandler(): () => void {
+  return MakaioBus.on(ClientSubjects.runtime.isAdapterManaged, (ctx) => {
+    const key = `${ctx.payload.adapterSessionId} ${ctx.payload.clientId}`;
+    const managed = runtimeManagedSessions.has(key);
+    ctx.setResult({ managed });
+  });
+}
+
+/**
  * Register the hook-first stub exactly as
  * `ObservedSessionIngestionService.handleSessionStarted` does when the
- * suppression gate has not been populated yet (observed-session-ingestion.ts).
+ * suppression gate has not been populated yet.
  * @param adapterSessionId - External adapter session id for the stub
  */
 async function registerHookFirstStub(adapterSessionId: string): Promise<void> {
@@ -77,65 +97,79 @@ async function registerHookFirstStub(adapterSessionId: string): Promise<void> {
     clientId: CLIENT_ID,
     cwd: '/workspace',
     startedAt: Date.now(),
-    // importStatus 'tracking' is what decideImportStatus returns by default
-    // when no policy provider restricts to 'discovered'.
     importStatus: 'tracking',
   });
   expect(upsertResult.created).toBe(true);
 }
 
-describe('hook-first importUpsert race vs. managed-session skip', () => {
+/**
+ * Mark an adapter session as runtime-managed in the in-test registry.
+ * @param adapterSessionId - External adapter session ID
+ * @param clientId - Client identity
+ */
+function markRuntimeManaged(adapterSessionId: string, clientId: string): void {
+  runtimeManagedSessions.add(`${adapterSessionId} ${clientId}`);
+}
+
+describe('hook-first importUpsert race — repaired invariant', () => {
   let cleanupStorage: () => void;
+  let cleanupMessageStorage: () => void;
   let cleanupCrud: () => void;
+  let cleanupRuntimeHandler: () => void;
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
+    runtimeManagedSessions.clear();
     cleanupStorage = registerMemorySessionStorage(MakaioBus);
+    cleanupMessageStorage = registerMemoryMessageStorage(MakaioBus);
     cleanupCrud = registerCrudGetByAdapterSessionIdPassthrough();
+    cleanupRuntimeHandler = registerRuntimeIsAdapterManagedHandler();
   });
 
   afterEach(() => {
+    cleanupRuntimeHandler();
     cleanupCrud();
+    cleanupMessageStorage();
     cleanupStorage();
     MakaioBus.__resetHandlers?.();
+    runtimeManagedSessions.clear();
   });
 
-  it('KNOWN RACE: a hook-first tracking stub is NOT recognised as managed — the importer would double-write', async () => {
+  // ── Runtime-truth skip predicate ────────────────────────────────────────
+
+  it('skip-check with runtime truth recognises an adapter-managed session despite the tracking stub', async () => {
     await registerHookFirstStub(ADAPTER_SESSION_ID);
 
-    // Verify the stub carries the racy fingerprint.
+    // Verify the stub has the racy fingerprint.
     const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
       adapterSessionId: ADAPTER_SESSION_ID,
       source: SOURCE,
     });
     expect(session).not.toBeNull();
-    expect(session!.isImported).toBe(true);
-    expect(session!.importStatus).toBe('tracking');
-    expect(session!.clientId).toBe(CLIENT_ID);
+    expect(isTrackingStub(session!)).toBe(true);
 
-    const checkManaged = createDefaultCheckMakaioManaged();
+    // Mark the session as runtime-managed (simulates client.runtime.observe
+    // having registered the runtime record).
+    markRuntimeManaged(ADAPTER_SESSION_ID, CLIENT_ID);
 
-    // CURRENT behaviour: the predicate only checks `!isImported`, so the
-    // adapter-managed session raced by its own SessionStart hook is treated
-    // as importable. This is the documented double-ingestion gap; the fix
-    // lives at the ingestion seam, not in this predicate (see file header).
-    expect(await checkManaged(ADAPTER_SESSION_ID)).toBe(false);
+    // The runtime-truth-aware check recognises it as managed.
+    const checkManaged = createDefaultCheckMakaioManaged(CLIENT_ID);
+    expect(await checkManaged(ADAPTER_SESSION_ID)).toBe(true);
   });
 
-  it('externally observed sessions share the exact stub fingerprint and MUST stay importable', async () => {
+  it('externally observed sessions (no runtime record) MUST stay importable', async () => {
     // An external terminal session observed via hooks produces the identical
-    // registration — same clientId, same importStatus 'tracking'. Its
-    // transcript content is imported through the very path the skip check
-    // guards, so ANY fingerprint-based skip would break observed-session
-    // content import. This is the invariant that rejected the naive fix.
+    // storage fingerprint. It does NOT have a runtime record because
+    // external sessions are never registered via client.runtime.observe.
     await registerHookFirstStub('external-observed-session-1');
 
-    const checkManaged = createDefaultCheckMakaioManaged();
+    // No runtime record → runtime-truth returns false → storage truth
+    // sees isImported=true → result is "not managed" → importable.
+    const checkManaged = createDefaultCheckMakaioManaged(CLIENT_ID);
     expect(await checkManaged('external-observed-session-1')).toBe(false);
   });
 
   it('does NOT skip a discovery-scan session (no clientId, importStatus discovered)', async () => {
-    // Pure watcher-discovered session — importable, never skipped.
     await MakaioBus.request(SessionStorageSubjects.importUpsert, {
       kind: 'root',
       parentAdapterSessionId: null,
@@ -145,16 +179,13 @@ describe('hook-first importUpsert race vs. managed-session skip', () => {
       cwd: '/workspace',
       startedAt: Date.now(),
       importStatus: 'discovered',
-      // No clientId — watcher discovery does not set it
     });
 
-    const checkManaged = createDefaultCheckMakaioManaged();
+    const checkManaged = createDefaultCheckMakaioManaged(CLIENT_ID);
     expect(await checkManaged('scan-session-1')).toBe(false);
   });
 
   it('still skips a runtime-created session (isImported false)', async () => {
-    // Runtime-managed session created via session.set (not importUpsert).
-    // This is the existing happy path that must remain correct.
     await MakaioBus.request(SessionStorageSubjects.set, {
       sessionId: 'runtime-session-1',
       session: {
@@ -169,24 +200,307 @@ describe('hook-first importUpsert race vs. managed-session skip', () => {
       },
     });
 
-    const checkManaged = createDefaultCheckMakaioManaged();
+    const checkManaged = createDefaultCheckMakaioManaged(CLIENT_ID);
     expect(await checkManaged('runtime-ext-1')).toBe(true);
   });
 
-  it('KNOWN RACE: the cache pins the racy verdict permanently', async () => {
+  // ── Cache invalidation ─────────────────────────────────────────────────
+
+  it('cache delivers correct verdict after invalidation', async () => {
     await registerHookFirstStub(ADAPTER_SESSION_ID);
 
     const cache = new MakaioManagedSessionCache();
-    const checkManaged = createDefaultCheckMakaioManaged();
     const skipped: string[] = [];
 
-    // First evaluation returns the racy 'not managed' verdict …
-    expect(await cache.isSkipped(ADAPTER_SESSION_ID, checkManaged, (id) => skipped.push(id))).toBe(false);
+    // Phase 1: no runtime record → "not managed" → cached as false.
+    const checkNoRuntime = createDefaultCheckMakaioManaged(CLIENT_ID);
+    expect(await cache.isSkipped(ADAPTER_SESSION_ID, checkNoRuntime, (id) => skipped.push(id))).toBe(false);
     expect(skipped).toHaveLength(0);
 
-    // … and the cache keeps returning it even if the runtime gate would be
-    // populated by now — the second consequence of the race: a later,
-    // correct verdict can never overrule the cached one.
-    expect(await cache.isSkipped(ADAPTER_SESSION_ID, checkManaged, (id) => skipped.push(id))).toBe(false);
+    // Phase 2: runtime record arrives → invalidate cache → re-evaluate.
+    markRuntimeManaged(ADAPTER_SESSION_ID, CLIENT_ID);
+    cache.invalidate(ADAPTER_SESSION_ID);
+
+    const checkWithRuntime = createDefaultCheckMakaioManaged(CLIENT_ID);
+    expect(await cache.isSkipped(ADAPTER_SESSION_ID, checkWithRuntime, (id) => skipped.push(id))).toBe(true);
+    expect(skipped).toContain(ADAPTER_SESSION_ID);
+  });
+
+  it('invalidation mid-flight causes awaiting caller to re-evaluate with fresh result', async () => {
+    const cache = new MakaioManagedSessionCache();
+    const skipped: string[] = [];
+
+    // Track how many times the check function is called to verify
+    // re-evaluation actually happens.
+    let checkCallCount = 0;
+
+    // A check whose resolution we control — simulates a storage-truth check
+    // that started before the runtime registered.
+    let resolveStaleCheck: (isManaged: boolean) => void = () => {};
+    const staleCheck = (): Promise<boolean> => {
+      checkCallCount += 1;
+      if (checkCallCount === 1) {
+        // First call: returns a controllable promise (the stale check).
+        return new Promise((r) => (resolveStaleCheck = r));
+      }
+      // Re-evaluation call: runtime is now registered, so return true.
+      return Promise.resolve(true);
+    };
+
+    const firstCall = cache.isSkipped(ADAPTER_SESSION_ID, staleCheck, (id) => skipped.push(id));
+
+    // runtime.started arrives mid-flight → invalidate evicts the pending
+    // entry AND bumps the generation so the stale verdict is not persisted.
+    cache.invalidate(ADAPTER_SESSION_ID);
+    resolveStaleCheck(false);
+
+    // The first caller now detects the generation mismatch and
+    // re-evaluates — receiving the FRESH result (true), not the stale one.
+    expect(await firstCall).toBe(true);
+    expect(checkCallCount).toBe(2);
+    expect(skipped).toContain(ADAPTER_SESSION_ID);
+  });
+
+  // ── Stub reconciliation on client.runtime.started ──────────────────────
+
+  describe('stub reconciliation via ObservedSessionIngestionService', () => {
+    let ingestionService: ObservedSessionIngestionService;
+    let cleanupImporterListing: () => void;
+
+    /**
+     * Emit a `client.runtime.started` event with sensible defaults.
+     *
+     * Centralises the boilerplate payload so tests read as intent, not
+     * bus-wiring details.
+     * @param overrides - Fields to override on the default payload
+     */
+    async function emitRuntimeStarted(
+      overrides: Partial<{
+        clientRuntimeId: string;
+        clientId: string;
+        adapterSessionId: string;
+        layer: ClientRuntimeSourceLayer;
+        producer: string;
+      }> = {},
+    ): Promise<void> {
+      await MakaioBus.emit(ClientSubjects.runtime.started, {
+        clientRuntimeId: overrides.clientRuntimeId ?? 'rt-default',
+        clientId: overrides.clientId ?? CLIENT_ID,
+        status: 'started',
+        source: {
+          layer: overrides.layer ?? 'adapter',
+          producer: overrides.producer ?? 'claude-code-adapter',
+        },
+        observedAt: Date.now(),
+        adapterSessionId: overrides.adapterSessionId ?? ADAPTER_SESSION_ID,
+      });
+    }
+
+    /**
+     * Assert that a tracking stub has been deleted from storage.
+     * @param adapterSessionId - Adapter session ID to look up
+     */
+    async function expectStubDeleted(adapterSessionId: string): Promise<void> {
+      const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId,
+        source: SOURCE,
+      });
+      expect(session).toBeNull();
+    }
+
+    /**
+     * Assert that a tracking stub still exists in storage.
+     * @param adapterSessionId - Adapter session ID to look up
+     */
+    async function expectStubExists(adapterSessionId: string): Promise<void> {
+      const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId,
+        source: SOURCE,
+      });
+      expect(session).not.toBeNull();
+      expect(isTrackingStub(session!)).toBe(true);
+    }
+
+    beforeEach(() => {
+      // Register a minimal log-import.listImporters handler so the ingestion
+      // service can resolve CLIENT_ID → SOURCE (adapter name).
+      cleanupImporterListing = MakaioBus.on(LogImportTriggerSubjects.listImporters, (ctx) => {
+        ctx.setResult({
+          importers: [{ adapterName: SOURCE, clientId: CLIENT_ID }],
+        });
+      });
+
+      ingestionService = new ObservedSessionIngestionService(MakaioBus);
+    });
+
+    afterEach(() => {
+      ingestionService.destroy();
+      cleanupImporterListing();
+    });
+
+    it('deletes a tracking stub when client.runtime.started fires for its adapterSessionId', async () => {
+      await registerHookFirstStub(ADAPTER_SESSION_ID);
+      await expectStubExists(ADAPTER_SESSION_ID);
+
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-1' });
+
+      // Wait for the async handler to reconcile the stub.
+      await vi.waitFor(() => expectStubDeleted(ADAPTER_SESSION_ID));
+    });
+
+    it('does NOT delete a stub for an externally observed session (no runtime.started)', async () => {
+      // An externally observed session gets a tracking stub via the same
+      // path (client.session.started → importUpsert). It never triggers
+      // client.runtime.started for its adapterSessionId, so the stub must
+      // persist and remain importable.
+      await registerHookFirstStub('external-observed-session-2');
+
+      // Emit runtime.started for a DIFFERENT adapterSessionId.
+      await emitRuntimeStarted({
+        clientRuntimeId: 'rt-2',
+        adapterSessionId: 'some-other-managed-session',
+      });
+
+      // Negative case: stub MUST survive. A bounded sleep is necessary
+      // because vi.waitFor cannot prove the absence of a future event.
+      await new Promise((r) => setTimeout(r, 50));
+      await expectStubExists('external-observed-session-2');
+    });
+
+    it('preserves a tracking stub that carries imported messages (native takeover)', async () => {
+      const stubAdapterSessionId = 'takeover-session-1';
+      await registerHookFirstStub(stubAdapterSessionId);
+
+      // Look up the stub to get its internal sessionId.
+      const { session: stub } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId: stubAdapterSessionId,
+        source: SOURCE,
+      });
+      expect(stub).not.toBeNull();
+      expect(isTrackingStub(stub!)).toBe(true);
+
+      // Attach a message to the stub — simulates imported history from an
+      // externally observed terminal session that shares the adapterSessionId
+      // with a later native --resume.
+      await MakaioBus.request(MessageStorageSubjects.append, {
+        message: {
+          sessionId: stub!.sessionId,
+          turnId: null,
+          role: 'user',
+          contentText: 'imported history message',
+          blocks: [{ type: 'text', content: 'imported history message' }],
+          timestamp: Date.now(),
+        },
+        emitEvent: false,
+      });
+
+      await emitRuntimeStarted({
+        clientRuntimeId: 'rt-takeover',
+        adapterSessionId: stubAdapterSessionId,
+      });
+
+      // Negative case: stub MUST survive because it carries content.
+      await new Promise((r) => setTimeout(r, 50));
+      await expectStubExists(stubAdapterSessionId);
+
+      // Messages must still be attached.
+      const { messages } = await MakaioBus.request(MessageStorageSubjects.getBySession, {
+        sessionId: stub!.sessionId,
+        limit: 10,
+      });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.contentText).toBe('imported history message');
+    });
+
+    it('ignores non-adapter source layers (supervisor, statusline)', async () => {
+      await registerHookFirstStub(ADAPTER_SESSION_ID);
+
+      await emitRuntimeStarted({
+        clientRuntimeId: 'rt-3',
+        layer: 'statusline',
+        producer: 'status-watcher',
+      });
+
+      // Negative case: non-adapter layers must not trigger reconciliation.
+      await new Promise((r) => setTimeout(r, 50));
+      await expectStubExists(ADAPTER_SESSION_ID);
+    });
+
+    it('post-upsert double-check: hook-side stub is reconciled when gate is populated after upsert', async () => {
+      // Simulate the interleaving where:
+      // 1. handleSessionStarted passes the empty gate check
+      // 2. runtime.started populates the gate
+      // 3. handleSessionStarted completes importUpsert
+      // 4. The post-upsert double-check detects the gate and reconciles
+      //
+      // We approximate this by: populating the gate via runtime.started
+      // first, then emitting client.session.started to exercise the hook
+      // path. When the gate is already populated, handleSessionStarted
+      // suppresses the upsert entirely; to test the post-upsert path we
+      // must create the stub first (before the gate) and then emit
+      // runtime.started which adds to the gate and reconciles.
+      //
+      // The strongest deterministic test: register stub directly, populate
+      // gate via runtime.started, then verify the stub is cleaned up by
+      // the runtime-side reconciliation (which is the same reconcileTrackingStub
+      // method invoked by the post-upsert double-check).
+      await registerHookFirstStub(ADAPTER_SESSION_ID);
+      await expectStubExists(ADAPTER_SESSION_ID);
+
+      // Now emit runtime.started — this populates the gate AND reconciles.
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-interleave' });
+
+      await vi.waitFor(() => expectStubDeleted(ADAPTER_SESSION_ID));
+
+      // Emit client.session.started for the same adapterSessionId — the
+      // gate is now populated so the hook handler skips the upsert entirely,
+      // confirming no orphan stub can be created post-gate-population.
+      await MakaioBus.emit(ClientSubjects.session.started, {
+        clientId: CLIENT_ID,
+        adapterSessionId: ADAPTER_SESSION_ID,
+        source: 'session-start',
+        observedAt: Date.now(),
+      });
+
+      // Allow async handler to run.
+      await new Promise((r) => setTimeout(r, 50));
+
+      // No stub should exist — the gate suppressed the upsert.
+      await expectStubDeleted(ADAPTER_SESSION_ID);
+    });
+  });
+
+  // ── isTrackingStub predicate ───────────────────────────────────────────
+
+  describe('isTrackingStub', () => {
+    it('returns true for a hook-first tracking stub', () => {
+      expect(
+        isTrackingStub({
+          isImported: true,
+          importStatus: 'tracking',
+          clientId: CLIENT_ID,
+        }),
+      ).toBe(true);
+    });
+
+    it('returns false for a discovery-scan session', () => {
+      expect(
+        isTrackingStub({
+          isImported: true,
+          importStatus: 'discovered',
+          clientId: undefined,
+        }),
+      ).toBe(false);
+    });
+
+    it('returns false for a native session', () => {
+      expect(
+        isTrackingStub({
+          isImported: false,
+          importStatus: undefined,
+          clientId: undefined,
+        }),
+      ).toBe(false);
+    });
   });
 });
