@@ -1,6 +1,6 @@
 import type { ScopedBus } from '@makaio/bus-core';
-import type { McpRuntimeSessionContext, McpSessionContext, ProviderContext, SystemPrompt } from '@makaio/contracts';
-import type { LedgerSessionContext } from './session-tool-ledger.js';
+import type { SystemPrompt } from '@makaio/contracts';
+import type { AgentConnectorConfigOverrides } from './types.js';
 import type { ConfigFactoryInput } from '../adapter/index.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
@@ -16,16 +16,7 @@ export interface AgentConnectorLifecycleManagerConfig<
   /** Stable agent identifier (used for diagnostics). */
   agentId: string;
   /** Create config input for connector/config factories. */
-  buildConfigInput: (
-    overrides?: Partial<{
-      cwd: string;
-      model: string;
-      providerContext: ProviderContext;
-      adapterSessionId: string;
-      resumeAdapterSessionId: string;
-      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-    }>,
-  ) => ConfigFactoryInput<TBus>;
+  buildConfigInput: (overrides?: AgentConnectorConfigOverrides) => ConfigFactoryInput<TBus>;
   /** Adapter config factory from AIAgent config. */
   configFactory: (input: ConfigFactoryInput<TBus>) => Promise<BaseAgentConnectorConfig<TBus> & { adapterId: string }>;
   /** Connector factory from AIAgent config. */
@@ -108,16 +99,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * Uses create-before-close pattern with rollback to preserve availability.
    * @param configOverrides - Optional runtime override fields
    */
-  public async swapConnector(
-    configOverrides?: Partial<{
-      cwd: string;
-      model: string;
-      providerContext: ProviderContext;
-      adapterSessionId: string;
-      resumeAdapterSessionId: string;
-      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-    }>,
-  ): Promise<void> {
+  public async swapConnector(configOverrides?: AgentConnectorConfigOverrides): Promise<void> {
     const currentConnector = this.config.getConnector();
     if (currentConnector.getProcessingState() !== 'idle') {
       throw new Error(`Cannot swap connector while processing (state: ${currentConnector.getProcessingState()})`);

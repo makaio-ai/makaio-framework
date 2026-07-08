@@ -27,6 +27,9 @@ export {
 export { AgentLifecycleEmitter, type AgentLifecycleEmitterConfig } from './agent-lifecycle-emitter.js';
 export { AgentPayloadEmitter, type AgentPayloadEmitterConfig } from './agent-payload-emitter.js';
 export { registerAgentBusHandlers, type AgentBusHandlerRegistrarConfig } from './agent-bus-handler-registrar.js';
+// Part of the public AIAgent.swapConnector signature; the decomposition
+// internals behind it (config-input builder, retry transform) stay unexported.
+export type { AgentConnectorConfigOverrides } from './types.js';
 export { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
 export type { AgentRuntimeMutationManagerConfig } from './agent-runtime-mutation-manager-config.js';
 export { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
