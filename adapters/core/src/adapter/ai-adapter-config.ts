@@ -97,6 +97,15 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
    * Passed through unchanged so connectors can track injection and mcp_call usage.
    */
   toolLedger?: ISessionToolLedger;
+
+  /**
+   * When true, the agent is ephemeral (one-shot, not a resume/fork target).
+   *
+   * Ephemeral agents skip PreUserMessage hooks and are never resumed or forked
+   * natively. Connectors should disable session persistence for ephemeral agents
+   * so no transcript is written to the provider's session store.
+   */
+  ephemeral?: boolean;
 }
 
 /**

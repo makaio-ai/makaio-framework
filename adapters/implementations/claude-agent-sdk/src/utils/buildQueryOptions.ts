@@ -240,7 +240,7 @@ export function buildQueryOptions({
     env: config.env,
     ...(maxThinkingTokens !== undefined && { maxThinkingTokens }),
     includePartialMessages: true,
-    persistSession: config.providerConfig?.queryOptions?.persistSession ?? false,
+    persistSession: config.ephemeral ? false : (config.providerConfig?.queryOptions?.persistSession ?? true),
     stderr: (data) => console.warn(data),
     canUseTool: createToolApprovalHandler(),
     abortController,

@@ -165,4 +165,14 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
    * transport and tool routing for each upstream server natively.
    */
   mcpUpstreamServers?: McpResolvedServer[];
+
+  /**
+   * When true, the session is ephemeral and must not persist its transcript.
+   *
+   * Ephemeral one-shot agents are by contract never resume/fork targets, so
+   * writing a transcript to the provider's session store is wasteful and could
+   * create orphaned session files. Connectors set `persistSession: false` in the
+   * SDK query when this flag is set.
+   */
+  ephemeral?: boolean;
 }

@@ -5,7 +5,7 @@
  * `ConformanceTestConfig.capabilities` are consistent with what the adapter
  * actually exposes at runtime via its declared capability strings.
  *
- * Two invariant families are covered:
+ * Three invariant families are covered:
  *
  * 1. **Capability declaration honesty** — `config.capabilities.nativeResume`
  *    and `config.capabilities.nativeFork` must exactly match the adapter's
@@ -16,6 +16,16 @@
  *    full orchestration stack, the child session's `adapterSessionId` must
  *    differ from the source session's `adapterSessionId`. This guards against
  *    adapters that silently collapse fork into resume.
+ *    Note: this test sends NO sessionContext and is intentionally an ID isolation
+ *    test — the fork request without nativeLocality context is a structural check,
+ *    not a history-fidelity check. The adapter should produce a new session ID
+ *    regardless of whether it carries parent history.
+ *    Runs only for adapters that declare `nativeFork: true`.
+ *
+ * 3. **Fork history fidelity** — when a fork request is sent with a production-form
+ *    sessionContext (nativeLocality + nativeFork directive), the child session must
+ *    carry the parent's conversation history and be able to recall context established
+ *    in the parent turn.
  *    Runs only for adapters that declare `nativeFork: true`.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -257,5 +267,132 @@ describe('Native fork session-ID isolation', async () => {
       `Adapter '${adapterName}' source session's adapterSessionId was overwritten after the fork child's turn 2. ` +
         `Expected '${sourceAdapterSessionId}' but found '${sourceSessionAfterTurn2?.adapterSessionId}'.`,
     ).toBe(sourceAdapterSessionId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. Fork history fidelity (requires real API call, skipped when nativeFork=false)
+// ---------------------------------------------------------------------------
+
+describe('Native fork history fidelity', async () => {
+  const ctx = await getOrchestrationTestContext(adapterName);
+  const nativeFork = ctx.testConfig.capabilities?.nativeFork;
+  const primaryModelRef = ctx.testConfig.options?.primaryModel;
+  const timeout = ctx.testConfig.options?.defaultTimeout ?? 60_000;
+
+  // A run-unique codeword planted in the parent session to verify child history.
+  const codeword = `XYZZY-${crypto.randomUUID()}`;
+
+  let sourceAdapterSessionId: string | undefined;
+  let sourceSessionId: string | undefined;
+  let childCompleteMessage: string | undefined;
+  let setupFailed = false;
+
+  beforeAll(async () => {
+    if (!nativeFork) return;
+
+    try {
+      // Step 1: Start the source (parent) session and embed the unique codeword.
+      const modelRef = resolveModelRef(primaryModelRef, ctx.testConfig.testProviderContext);
+      // Shared model/providerContext params for the parent-start and fork requests.
+      const modelParams = {
+        ...('model' in modelRef && modelRef.model !== undefined ? { model: modelRef.model } : {}),
+        ...('providerContext' in modelRef ? { providerContext: modelRef.providerContext } : {}),
+      };
+      const sourceResponse = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: ctx.adapterId,
+        role: 'lead',
+        initialMessage: `The secret codeword is: ${codeword}. Acknowledge by replying with just "OK".`,
+        systemPrompt: 'You are a helpful assistant. Keep responses very brief. Do not use any tools.',
+        ...modelParams,
+      });
+
+      if (!sourceResponse.success) {
+        setupFailed = true;
+        return;
+      }
+
+      // Step 2: Wait for the parent turn to complete so we have a stable transcript.
+      if (sourceResponse.messageId) {
+        await MakaioBus.once(AgentSubjects.complete, {
+          filter: { messageId: sourceResponse.messageId },
+          timeoutMs: timeout,
+        });
+      }
+
+      sourceAdapterSessionId = sourceResponse.adapterSessionId ?? undefined;
+      sourceSessionId = sourceResponse.sessionId ?? undefined;
+
+      if (!sourceAdapterSessionId || !sourceSessionId) {
+        setupFailed = true;
+        return;
+      }
+
+      // Step 3: Send a production-form fork request with nativeLocality + nativeFork directive
+      // so the adapter can locate the parent transcript and branch from it.
+      const forkResponse = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: ctx.adapterId,
+        role: 'lead',
+        mode: 'fork',
+        sessionId: sourceSessionId,
+        sourceSessionId,
+        sourceAdapterSessionId,
+        initialMessage: 'What was the secret codeword I told you earlier? Reply with the codeword only.',
+        systemPrompt: 'You are a helpful assistant. Keep responses very brief. Do not use any tools.',
+        // Production-form sessionContext: locality verdict + fork directive.
+        // This is the path the real session orchestrator takes, which enables the
+        // adapter to use the provider's branching API with full parent history.
+        sessionContext: {
+          nativeLocality: { kind: 'native' },
+          nativeFork: {
+            sourceSessionId,
+            sourceAdapterSessionId,
+          },
+          isFirstTurn: true,
+        },
+        ...modelParams,
+      });
+
+      if (!forkResponse.success) {
+        setupFailed = true;
+        return;
+      }
+
+      // Step 4: Wait for the child turn to complete and capture the reply.
+      if (forkResponse.messageId) {
+        const childComplete = await MakaioBus.once(AgentSubjects.complete, {
+          filter: { messageId: forkResponse.messageId },
+          timeoutMs: timeout,
+        });
+        childCompleteMessage = childComplete?.payload.message;
+      }
+    } catch {
+      setupFailed = true;
+    }
+  }, timeout * 2);
+
+  afterAll(async () => {
+    await ctx.adapter.close?.();
+  });
+
+  it('fork child carries parent conversation history (codeword recall)', { timeout: timeout * 2 }, () => {
+    if (!nativeFork) {
+      // Adapter does not declare native fork — skip history-fidelity assertion.
+      expect(nativeFork).toBeFalsy();
+      return;
+    }
+
+    if (setupFailed) {
+      throw new Error(`[native-session-conformance] Fork history-fidelity setup failed for '${adapterName}'.`);
+    }
+
+    expect(childCompleteMessage).toBeDefined();
+    expect(
+      childCompleteMessage,
+      `Adapter '${adapterName}' fork child did not carry parent history. ` +
+        `Expected the response to contain the codeword '${codeword}' established in the parent turn, ` +
+        `but got: "${childCompleteMessage}". ` +
+        'Ensure persistSession is enabled for non-ephemeral sessions so the provider stores the transcript.',
+    ).toContain(codeword);
   });
 });
