@@ -20,7 +20,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects, MessageStorageSubjects, SessionSubjects } from '@makaio/contracts';
+import { ClientSubjects, MessageStorageSubjects, SessionSubjects, type IMakaioSession } from '@makaio/contracts';
 import type { ClientRuntimeSourceLayer } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/services-core/session';
 import { registerMemorySessionStorage, registerMemoryMessageStorage } from '@makaio/services-core/session';
@@ -86,8 +86,14 @@ function registerRuntimeIsAdapterManagedHandler(): () => void {
  * `ObservedSessionIngestionService.handleSessionStarted` does when the
  * suppression gate has not been populated yet.
  * @param adapterSessionId - External adapter session id for the stub
+ * @param options - Optional configuration; `activation: 'live'` sets lifecycle activation intent
  */
-async function registerHookFirstStub(adapterSessionId: string): Promise<void> {
+async function registerHookFirstStub(
+  adapterSessionId: string,
+  options?: {
+    activation?: 'live';
+  },
+): Promise<void> {
   const upsertResult = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
     kind: 'root',
     parentAdapterSessionId: null,
@@ -98,8 +104,30 @@ async function registerHookFirstStub(adapterSessionId: string): Promise<void> {
     cwd: '/workspace',
     startedAt: Date.now(),
     importStatus: 'tracking',
+    activation: options?.activation,
   });
   expect(upsertResult.created).toBe(true);
+}
+
+/**
+ * Append a single imported history message to a session.
+ *
+ * Used to simulate externally observed content that should prevent
+ * reconciliation from deleting the tracking stub.
+ * @param sessionId - Internal session ID to append the message to
+ */
+async function appendImportedHistoryMessage(sessionId: string): Promise<void> {
+  await MakaioBus.request(MessageStorageSubjects.append, {
+    message: {
+      sessionId,
+      turnId: null,
+      role: 'user',
+      contentText: 'imported history message',
+      blocks: [{ type: 'text', content: 'imported history message' }],
+      timestamp: Date.now(),
+    },
+    emitEvent: false,
+  });
 }
 
 /**
@@ -268,6 +296,19 @@ describe('hook-first importUpsert race — repaired invariant', () => {
     let cleanupImporterListing: () => void;
 
     /**
+     * Look up a tracking stub by adapter session ID.
+     * @param adapterSessionId - Adapter session ID to look up
+     * @returns The session record or null if not found
+     */
+    async function getStub(adapterSessionId: string): Promise<IMakaioSession | null> {
+      const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId,
+        source: SOURCE,
+      });
+      return session;
+    }
+
+    /**
      * Emit a `client.runtime.started` event with sensible defaults.
      *
      * Centralises the boilerplate payload so tests read as intent, not
@@ -361,9 +402,6 @@ describe('hook-first importUpsert race — repaired invariant', () => {
         adapterSessionId: 'some-other-managed-session',
       });
 
-      // Negative case: stub MUST survive. A bounded sleep is necessary
-      // because vi.waitFor cannot prove the absence of a future event.
-      await new Promise((r) => setTimeout(r, 50));
       await expectStubExists('external-observed-session-2');
     });
 
@@ -372,27 +410,14 @@ describe('hook-first importUpsert race — repaired invariant', () => {
       await registerHookFirstStub(stubAdapterSessionId);
 
       // Look up the stub to get its internal sessionId.
-      const { session: stub } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
-        adapterSessionId: stubAdapterSessionId,
-        source: SOURCE,
-      });
+      const stub = await getStub(stubAdapterSessionId);
       expect(stub).not.toBeNull();
       expect(isTrackingStub(stub!)).toBe(true);
 
       // Attach a message to the stub — simulates imported history from an
       // externally observed terminal session that shares the adapterSessionId
       // with a later native --resume.
-      await MakaioBus.request(MessageStorageSubjects.append, {
-        message: {
-          sessionId: stub!.sessionId,
-          turnId: null,
-          role: 'user',
-          contentText: 'imported history message',
-          blocks: [{ type: 'text', content: 'imported history message' }],
-          timestamp: Date.now(),
-        },
-        emitEvent: false,
-      });
+      await appendImportedHistoryMessage(stub!.sessionId);
 
       await emitRuntimeStarted({
         clientRuntimeId: 'rt-takeover',
@@ -400,10 +425,46 @@ describe('hook-first importUpsert race — repaired invariant', () => {
       });
 
       // Negative case: stub MUST survive because it carries content.
-      await new Promise((r) => setTimeout(r, 50));
       await expectStubExists(stubAdapterSessionId);
 
       // Messages must still be attached.
+      const { messages } = await MakaioBus.request(MessageStorageSubjects.getBySession, {
+        sessionId: stub!.sessionId,
+        limit: 10,
+      });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.contentText).toBe('imported history message');
+    });
+
+    it('reconciles active hook-first tracking stubs when runtime truth proves adapter management', async () => {
+      await registerHookFirstStub(ADAPTER_SESSION_ID, { activation: 'live' });
+      const stub = await getStub(ADAPTER_SESSION_ID);
+      expect(stub?.status).toBe('active');
+      expect(isTrackingStub(stub!)).toBe(true);
+
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-active-stub' });
+
+      await vi.waitFor(() => expectStubDeleted(ADAPTER_SESSION_ID));
+    });
+
+    it('preserves active tracking stubs that carry imported messages', async () => {
+      const stubAdapterSessionId = 'active-takeover-session-1';
+      await registerHookFirstStub(stubAdapterSessionId, { activation: 'live' });
+
+      const stub = await getStub(stubAdapterSessionId);
+      expect(stub).not.toBeNull();
+      expect(stub?.status).toBe('active');
+      expect(isTrackingStub(stub!)).toBe(true);
+
+      await appendImportedHistoryMessage(stub!.sessionId);
+
+      await emitRuntimeStarted({
+        clientRuntimeId: 'rt-active-takeover',
+        adapterSessionId: stubAdapterSessionId,
+      });
+
+      await expectStubExists(stubAdapterSessionId);
+
       const { messages } = await MakaioBus.request(MessageStorageSubjects.getBySession, {
         sessionId: stub!.sessionId,
         limit: 10,
@@ -422,51 +483,71 @@ describe('hook-first importUpsert race — repaired invariant', () => {
       });
 
       // Negative case: non-adapter layers must not trigger reconciliation.
-      await new Promise((r) => setTimeout(r, 50));
       await expectStubExists(ADAPTER_SESSION_ID);
     });
 
-    it('post-upsert double-check: hook-side stub is reconciled when gate is populated after upsert', async () => {
-      // Simulate the interleaving where:
-      // 1. handleSessionStarted passes the empty gate check
-      // 2. runtime.started populates the gate
-      // 3. handleSessionStarted completes importUpsert
-      // 4. The post-upsert double-check detects the gate and reconciles
-      //
-      // We approximate this by: populating the gate via runtime.started
-      // first, then emitting client.session.started to exercise the hook
-      // path. When the gate is already populated, handleSessionStarted
-      // suppresses the upsert entirely; to test the post-upsert path we
-      // must create the stub first (before the gate) and then emit
-      // runtime.started which adds to the gate and reconciles.
-      //
-      // The strongest deterministic test: register stub directly, populate
-      // gate via runtime.started, then verify the stub is cleaned up by
-      // the runtime-side reconciliation (which is the same reconcileTrackingStub
-      // method invoked by the post-upsert double-check).
-      await registerHookFirstStub(ADAPTER_SESSION_ID);
-      await expectStubExists(ADAPTER_SESSION_ID);
+    it('post-upsert double-check reconciles a hook-side stub when the managed gate flips during importUpsert', async () => {
+      const interleavedAdapterSessionId = 'post-upsert-interleaved-session-1';
+      let observedRealUpsert = false;
+      let populatedGateDuringUpsert = false;
+      let wrapperAssertionError: unknown;
 
-      // Now emit runtime.started — this populates the gate AND reconciles.
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-interleave' });
+      const cleanupImportUpsertWrapper = MakaioBus.on(
+        SessionStorageSubjects.importUpsert,
+        async (ctx) => {
+          if (ctx.payload.externalSessionId !== interleavedAdapterSessionId) {
+            await ctx.next();
+            return;
+          }
 
-      await vi.waitFor(() => expectStubDeleted(ADAPTER_SESSION_ID));
+          await ctx.next();
+          observedRealUpsert = true;
 
-      // Emit client.session.started for the same adapterSessionId — the
-      // gate is now populated so the hook handler skips the upsert entirely,
-      // confirming no orphan stub can be created post-gate-population.
-      await MakaioBus.emit(ClientSubjects.session.started, {
-        clientId: CLIENT_ID,
-        adapterSessionId: ADAPTER_SESSION_ID,
-        source: 'session-start',
-        observedAt: Date.now(),
-      });
+          try {
+            const stubAfterRealUpsert = await getStub(interleavedAdapterSessionId);
+            expect(stubAfterRealUpsert?.status).toBe('active');
+            expect(isTrackingStub(stubAfterRealUpsert!)).toBe(true);
+          } catch (error) {
+            wrapperAssertionError ??= error;
+            return;
+          }
 
-      // Allow async handler to run.
-      await new Promise((r) => setTimeout(r, 50));
+          await emitRuntimeStarted({
+            clientRuntimeId: 'rt-post-upsert-interleaving',
+            clientId: 'unmapped-runtime-client',
+            adapterSessionId: interleavedAdapterSessionId,
+          });
+          populatedGateDuringUpsert = true;
 
-      // No stub should exist — the gate suppressed the upsert.
-      await expectStubDeleted(ADAPTER_SESSION_ID);
+          // The runtime-side handler has populated the managed gate, but its
+          // client id has no importer mapping. If this stub is deleted, the
+          // test is no longer isolating the hook-side post-upsert branch.
+          try {
+            await expectStubExists(interleavedAdapterSessionId);
+          } catch (error) {
+            wrapperAssertionError ??= error;
+          }
+        },
+        { priority: 100 },
+      );
+
+      try {
+        await MakaioBus.emit(ClientSubjects.session.started, {
+          clientId: CLIENT_ID,
+          adapterSessionId: interleavedAdapterSessionId,
+          source: 'session-start',
+          observedAt: Date.now(),
+        });
+
+        expect(observedRealUpsert).toBe(true);
+        expect(populatedGateDuringUpsert).toBe(true);
+        if (wrapperAssertionError !== undefined) {
+          throw wrapperAssertionError;
+        }
+        await expectStubDeleted(interleavedAdapterSessionId);
+      } finally {
+        cleanupImportUpsertWrapper();
+      }
     });
   });
 

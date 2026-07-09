@@ -63,6 +63,12 @@ describe('published contract exports (session ingestion surface)', () => {
       expectTypeOf<ImportUpsertRequest['metadata']>().not.toBeNever();
       expectTypeOf<ImportUpsertRequest['lastClientIdentityObservation']>().not.toBeNever();
     });
+
+    it('exposes activation on ImportUpsertRequest', () => {
+      expectTypeOf<ImportUpsertRequest['activation']>().toEqualTypeOf<'live' | undefined>();
+      const activation: ImportUpsertRequest['activation'] = 'live';
+      expect(activation).toBe('live');
+    });
   });
 
   describe('@makaio/contracts/client', () => {

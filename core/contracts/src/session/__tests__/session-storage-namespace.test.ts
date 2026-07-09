@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ImportUpsertRequestSchema,
   SessionStorageNamespace,
   SessionStorageSetRequestSchema,
   SessionStorageSetSessionSchema,
@@ -141,6 +142,34 @@ describe('importUpsert request schema', () => {
         path: ['importStatus'],
       }),
     );
+  });
+
+  it("accepts activation: 'live' on a root import-upsert request", () => {
+    const parsed = ImportUpsertRequestSchema.parse({
+      kind: 'root',
+      externalSessionId: 'external-live-1',
+      source: 'claude-code-cli',
+      cwd: '/repo',
+      parentAdapterSessionId: null,
+      forkPointMessageId: null,
+      importStatus: 'tracking',
+      activation: 'live',
+    });
+    expect(parsed.activation).toBe('live');
+  });
+
+  it('rejects unknown activation values', () => {
+    expect(() =>
+      ImportUpsertRequestSchema.parse({
+        kind: 'root',
+        externalSessionId: 'external-live-2',
+        source: 'claude-code-cli',
+        cwd: '/repo',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        activation: 'background',
+      }),
+    ).toThrow();
   });
 });
 

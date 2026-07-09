@@ -1,13 +1,14 @@
 import { eq, desc, and, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { getRawSqlExecutor, resolveSchema, type MakaioDatabase, type StorageDialect } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, type BranchKind, type IMakaioSession } from '@makaio/contracts';
+import { SessionSubjects, type BranchKind, type IMakaioSession, type ImportUpsertRequest } from '@makaio/contracts';
 import { SessionStorageSubjects } from './namespace.js';
 import { sessionStorageSchema } from './schema.variants.js';
 import { mapAgentsBySession, mapToSession } from './drizzle-utils.js';
 import { kindToBranchKind } from '../import/lineage-utils.js';
 import type { SessionHandlerDeps } from './drizzle-handler.js';
 import { createMonotonicClock } from './monotonic-clock.js';
+import { resolveImportCreateStatus } from './import-lifecycle.js';
 
 const nextDiscoveredAt = createMonotonicClock();
 
@@ -125,6 +126,63 @@ function timestampConflictClause(
 }
 
 /**
+ * Build the import-status merge expression shared by `importStatus` and
+ * lifecycle conflict handling.
+ *
+ * The precedence must match the memory backend: imported before tracking
+ * before discovered. Lifecycle decisions that depend on import status must use
+ * this richer-state merge, not plain COALESCE, or Drizzle can downgrade active
+ * rows when a later call upgrades importStatus from discovered to tracking.
+ * @param sessions - Dialect-resolved sessions table object
+ * @returns SQL CASE expression yielding the merged import status
+ */
+function buildImportStatusMergeExpression(sessions: SessionsTable): SQL {
+  return sql`
+    CASE
+      WHEN ${sessions.importStatus} = 'imported' OR excluded.import_status = 'imported' THEN 'imported'
+      WHEN ${sessions.importStatus} = 'tracking' OR excluded.import_status = 'tracking' THEN 'tracking'
+      ELSE COALESCE(${sessions.importStatus}, excluded.import_status, 'discovered')
+    END
+  `;
+}
+
+/**
+ * Build the conflict-resolution SQL CASE for the `status` column.
+ *
+ * - `activation === 'live'`: promotes `'discovered'` rows to `'active'`; all
+ *   other statuses are left untouched (no downgrade).
+ * - Otherwise (standard enrichment): preserves terminal statuses (`closed`,
+ *   `archived`) and already-imported active rows, and only overwrites `status`
+ *   when the row is still a plain discovery stub after import-status
+ *   precedence. Non-imported active rows may still converge into imports.
+ * @param sessions - Dialect-resolved sessions table object
+ * @param activation - Lifecycle activation intent from the import request
+ * @returns SQL CASE expression for the `status` conflict SET column
+ */
+function buildImportConflictStatusExpression(
+  sessions: SessionsTable,
+  activation: ImportUpsertRequest['activation'],
+): SQL {
+  if (activation === 'live') {
+    return sql`
+      CASE
+        WHEN ${sessions.status} = 'discovered' THEN 'active'
+        ELSE ${sessions.status}
+      END
+    `;
+  }
+
+  return sql`
+    CASE
+      WHEN ${sessions.status} IN ('closed', 'archived') THEN ${sessions.status}
+      WHEN ${sessions.status} = 'active' AND ${sessions.isImported} = TRUE THEN ${sessions.status}
+      WHEN ${buildImportStatusMergeExpression(sessions)} = 'discovered' THEN excluded.status
+      ELSE ${sessions.status}
+    END
+  `;
+}
+
+/**
  * Build the conflict-merge SET clause for the import UPSERT.
  *
  * Converges an existing row into the canonical imported-session shape and
@@ -137,6 +195,7 @@ function timestampConflictClause(
  * @param dialect - Storage dialect of the target database (branches only the metadata merge expression).
  * @param machineId - Tri-state machine identity: `undefined` preserves the existing value,
  *   `null` explicitly clears it (relinquish ownership), non-null string fills if absent.
+ * @param activation - Lifecycle activation intent from the import request
  * @returns Drizzle `set` object for `onConflictDoUpdate`
  */
 function buildImportConflictSet(
@@ -144,28 +203,14 @@ function buildImportConflictSet(
   startedAt: number | undefined,
   dialect: StorageDialect,
   machineId: string | null | undefined,
+  activation: ImportUpsertRequest['activation'],
 ) {
   return {
-    // Lifecycle status is only converged while the row is still a plain
-    // discovery stub. A hook-first 'tracking' row resolves the COALESCE to
-    // 'tracking', so later watcher enrichment (excluded 'discovered') keeps
-    // the existing status untouched — no downgrade, no re-stubbing.
-    status: sql`
-      CASE
-        WHEN COALESCE(${sessions.importStatus}, excluded.import_status) = 'discovered' THEN excluded.status
-        ELSE ${sessions.status}
-      END
-    `,
+    status: buildImportConflictStatusExpression(sessions, activation),
     isImported: true,
     // Status precedence is monotonic: watcher discovery can upgrade to hook
     // tracking, but later discovery enrichment cannot downgrade tracking/imported.
-    importStatus: sql`
-      CASE
-        WHEN ${sessions.importStatus} = 'imported' OR excluded.import_status = 'imported' THEN 'imported'
-        WHEN ${sessions.importStatus} = 'tracking' OR excluded.import_status = 'tracking' THEN 'tracking'
-        ELSE COALESCE(${sessions.importStatus}, excluded.import_status, 'discovered')
-      END
-    `,
+    importStatus: buildImportStatusMergeExpression(sessions),
     adapterName: sql`COALESCE(${sessions.adapterName}, excluded.adapter_name)`,
     discoveredAt: sql`COALESCE(${sessions.discoveredAt}, excluded.discovered_at)`,
     // Immutable identity fields: keep existing value, fall back to new.
@@ -210,8 +255,11 @@ function buildImportConflictSet(
  * Register handler for storage:session.importUpsert.
  *
  * Single-statement UPSERT that creates or enriches an imported session.
- * On first discovery: inserts a new session with `status='discovered'`,
- * `isImported=true`, and `importStatus='discovered'`.
+ * On first import: inserts a new session with `isImported=true`; the import
+ * status defaults to `'discovered'` unless the caller supplies a richer
+ * allowed value. The lifecycle `status` defaults to `'discovered'`; when the
+ * payload carries `activation: 'live'` the row is created directly as
+ * `'active'` (see {@link resolveImportCreateStatus}).
  * On conflict (same `source` + `adapterSessionId`): converges existing rows
  * into the canonical imported-session shape and merges enrichment fields so
  * that later scans can supply previously-unknown values.
@@ -240,6 +288,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
   const { dialect } = getRawSqlExecutor(db);
 
   return bus.on(SessionStorageSubjects.importUpsert, async (ctx) => {
+    const payload = ctx.payload;
     const {
       externalSessionId,
       source,
@@ -257,7 +306,8 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
       importStatus,
       isSidechain,
       machineId,
-    } = ctx.payload;
+      activation,
+    } = payload;
 
     const nowMs = nextDiscoveredAt();
     const sessionId = crypto.randomUUID();
@@ -274,7 +324,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
       .insert(sessions)
       .values({
         sessionId,
-        status: 'discovered',
+        status: resolveImportCreateStatus(payload),
         isImported: true,
         importStatus: importStatus ?? 'discovered',
         adapterName: source,
@@ -301,7 +351,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
         // cannot participate in the `(source, adapterSessionId)` invariant, so
         // this handler does not merge them into a sourced import.
         target: [sessions.source, sessions.adapterSessionId],
-        set: buildImportConflictSet(sessions, startedAt, dialect, machineId),
+        set: buildImportConflictSet(sessions, startedAt, dialect, machineId, activation),
       })
       .returning({
         sessionId: sessions.sessionId,
