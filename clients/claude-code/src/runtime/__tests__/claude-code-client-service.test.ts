@@ -649,6 +649,61 @@ describe('ClaudeCodeClientService', () => {
       });
     });
 
+    it('refreshes a late Makaio session ID without changing the pinned fallback account', async () => {
+      const snapshots: ClientSessionUsageSnapshot[] = [];
+      let sessionAvailable = false;
+      let getActiveCallCount = 0;
+      const lateSession = {
+        sessionId: 'framework-session-late',
+        createdAt: RECEIVED_AT,
+        lastActivityAt: RECEIVED_AT,
+        agents: [],
+        status: 'active' as const,
+        adapterSessionId: SESSION_ID,
+        clientId: 'claude-code',
+      };
+
+      const cleanups = [
+        bus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+          ctx.setResult({ session: sessionAvailable ? (lateSession as never) : null });
+        }),
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          getActiveCallCount++;
+          ctx.setResult({
+            identity: {
+              clientAccountId: 'ca-pinned-fallback',
+              identifiers: [{ scheme: 'account-id', value: 'user-pinned', strength: 'strong' }],
+            },
+          });
+        }),
+        bus.on(ClientSubjects.session.usage.snapshot, ({ payload }) => {
+          snapshots.push(payload);
+        }),
+      ];
+
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: SESSION_ID,
+        cost: { total_cost_usd: 1 },
+      });
+      sessionAvailable = true;
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: SESSION_ID,
+        cost: { total_cost_usd: 2 },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(snapshots).toHaveLength(2);
+      expect(snapshots[0]).toMatchObject({ clientAccountId: 'ca-pinned-fallback', totalCost: 1 });
+      expect(snapshots[0]?.sessionId).toBeUndefined();
+      expect(snapshots[1]).toMatchObject({
+        clientAccountId: 'ca-pinned-fallback',
+        sessionId: 'framework-session-late',
+        totalCost: 2,
+      });
+      expect(getActiveCallCount).toBe(1);
+    });
+
     it('emits client.usage.ingest using account.getActive when session storage returns null session', async () => {
       const ingestCalls: ClientUsageIngestRequest[] = [];
 

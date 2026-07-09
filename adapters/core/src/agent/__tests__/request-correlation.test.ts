@@ -49,6 +49,8 @@ describe('provider request correlation', () => {
   });
 
   it('rejects arbitrary or invalid identifiers before building headers', () => {
+    const withUnknownField = { llmCallId: 'call-1', prompt: 'private content' };
+    expect(() => buildFactoryUsageCorrelationHeaders(withUnknownField)).toThrow();
     expect(() =>
       buildFactoryUsageCorrelationHeaders({
         llmCallId: 'call-1',

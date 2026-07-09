@@ -359,6 +359,11 @@
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {

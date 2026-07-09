@@ -134,6 +134,8 @@ export function normalizeClaudeCodeSessionUsage(
   sessionId?: string,
 ): ClientSessionUsageSnapshot | null {
   const adapterSessionId = nonEmptyString(raw.session_id);
+  const normalizedClientAccountId = nonEmptyString(clientAccountId);
+  const normalizedSessionId = nonEmptyString(sessionId);
   if (adapterSessionId === undefined) {
     return null;
   }
@@ -150,8 +152,8 @@ export function normalizeClaudeCodeSessionUsage(
 
   return {
     clientId: CLIENT_ID,
-    clientAccountId,
-    sessionId,
+    clientAccountId: normalizedClientAccountId,
+    sessionId: normalizedSessionId,
     adapterSessionId,
     source: SOURCE,
     observedAt: Date.now(),

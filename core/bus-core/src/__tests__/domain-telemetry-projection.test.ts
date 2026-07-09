@@ -78,7 +78,7 @@ describe('domain subject telemetry projection', () => {
       'llm.cost.provenance': 'estimated',
       'llm.duration_ms': 450,
     });
-    expect(Object.keys(fact.attributes).some((key) => key.startsWith('quota'))).toBe(false);
+    expect(Object.keys(fact.attributes).some((key) => key.includes('quota'))).toBe(false);
   });
 
   it('projects exact workflow frame/session correlation identifiers', () => {

@@ -356,6 +356,17 @@ describe('normalizeClaudeCodeSessionUsage', () => {
     expect(result?.clientAccountId).toBeUndefined();
   });
 
+  it('normalizes empty optional identity fields out of the snapshot', () => {
+    const result = normalizeClaudeCodeSessionUsage(
+      makeRawStatusline({ context_window: { current_usage: { input_tokens: 10 } } }),
+      '   ',
+      '',
+    );
+
+    expect(result?.clientAccountId).toBeUndefined();
+    expect(result?.sessionId).toBeUndefined();
+  });
+
   it('keeps quota windows out of session usage snapshots', () => {
     const result = normalizeClaudeCodeSessionUsage(
       makeRawStatusline({

@@ -589,18 +589,9 @@ export class ClaudeCodeClientService extends BaseService {
 
     // 1. Check session identity cache (pinned on first resolution).
     let identity: StatuslineIdentityContext | null = this.sessionIdentityCache.get(adapterSessionId) ?? null;
-    let makaioSessionId = identity?.sessionId;
-
-    // 2. Primary path: resolve identity from a linked Makaio session.
-    if (!identity) {
-      const sessionResult = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
-        adapterSessionId,
-      });
-      if (sessionResult.handled && sessionResult.data.session) {
-        makaioSessionId = sessionResult.data.session.sessionId;
-        identity = resolveIdentityFromSession(sessionResult.data.session);
-      }
-    }
+    const sessionResolution = await this.resolveStatuslineSession(adapterSessionId, identity);
+    identity = sessionResolution.identity;
+    let makaioSessionId = sessionResolution.sessionId;
 
     // 3. Fallback: use the active account identity signalled by the account-manager.
     //    This covers standalone Claude Code (no session exists yet or no storage
@@ -620,7 +611,8 @@ export class ClaudeCodeClientService extends BaseService {
     if (identity && cacheEpoch === this.sessionIdentityCacheEpoch) {
       const cachedIdentity = this.sessionIdentityCache.get(adapterSessionId);
       if (cachedIdentity) {
-        identity = cachedIdentity;
+        identity = attachSessionId(cachedIdentity, makaioSessionId);
+        this.sessionIdentityCache.set(adapterSessionId, identity);
       } else {
         if (this.sessionIdentityCache.size >= SESSION_IDENTITY_CACHE_CAP) {
           const oldest = this.sessionIdentityCache.keys().next().value;
@@ -631,6 +623,7 @@ export class ClaudeCodeClientService extends BaseService {
         this.sessionIdentityCache.set(adapterSessionId, identity);
       }
     }
+    makaioSessionId = identity?.sessionId ?? makaioSessionId;
 
     const sessionUsage = normalizeClaudeCodeSessionUsage(raw, identity?.clientAccountId, makaioSessionId);
     if (sessionUsage) {
@@ -643,6 +636,30 @@ export class ClaudeCodeClientService extends BaseService {
     if (!normalized) return;
 
     await this.bus.requestOptional(ClientSubjects.usage.ingest, normalized);
+  }
+
+  /**
+   * Resolve the Makaio session while preserving a previously pinned account.
+   * Cached fallback identities without a session ID keep probing until the
+   * corresponding session becomes available.
+   * @param adapterSessionId - Native Claude Code session identifier
+   * @param identity - Account identity already pinned for this native session
+   * @returns Resolved identity and optional Makaio session identifier
+   */
+  private async resolveStatuslineSession(
+    adapterSessionId: string,
+    identity: StatuslineIdentityContext | null,
+  ): Promise<{ identity: StatuslineIdentityContext | null; sessionId: string | undefined }> {
+    if (identity?.sessionId !== undefined) return { identity, sessionId: identity.sessionId };
+
+    const result = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, { adapterSessionId });
+    const session = result.handled ? result.data.session : null;
+    if (!session) return { identity, sessionId: undefined };
+
+    return {
+      identity: identity ? attachSessionId(identity, session.sessionId) : resolveIdentityFromSession(session),
+      sessionId: session.sessionId,
+    };
   }
 
   /**
@@ -788,7 +805,7 @@ function attachSessionId(
   identity: StatuslineIdentityContext,
   sessionId: string | undefined,
 ): StatuslineIdentityContext {
-  return sessionId === undefined ? identity : { ...identity, sessionId };
+  return sessionId === undefined || identity.sessionId === sessionId ? identity : { ...identity, sessionId };
 }
 
 /**
