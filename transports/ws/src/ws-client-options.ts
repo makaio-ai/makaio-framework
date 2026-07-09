@@ -75,6 +75,10 @@ export interface WebSocketClientTransportOptions {
    * Bounds the WebSocket upgrade so a server (or intermediary) that accepts
    * the TCP connection but never answers cannot wedge the reconnect loop.
    * Also passed as `handshakeTimeout` to the default `ws` factory.
+   *
+   * This bound starts after `createWebSocket` resolves with a socket instance.
+   * Custom async factories that may block before returning a socket should
+   * enforce their own factory-level timeout.
    * @defaultValue 30000
    */
   connectTimeoutMs?: number;
