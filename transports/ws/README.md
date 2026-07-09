@@ -118,6 +118,8 @@ const transport = new WebSocketClientTransport({
   url: 'ws://localhost:8080',
   auth: new HmacAuth({ secret: 'your-secret' }),
   autoReconnect: { baseMs: 1_000, maxMs: 10_000 },
+  connectTimeoutMs: 30_000, // bound per connect attempt (default); prevents a
+  // never-answered upgrade from wedging the reconnect loop
 });
 ```
 

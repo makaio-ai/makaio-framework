@@ -69,6 +69,17 @@ export interface WebSocketClientTransportOptions {
   autoReconnect?: WebSocketClientTransportReconnectOptions | false;
 
   /**
+   * Maximum time in milliseconds a single connect attempt may wait for the
+   * socket to open before the attempt is failed and the socket discarded.
+   *
+   * Bounds the WebSocket upgrade so a server (or intermediary) that accepts
+   * the TCP connection but never answers cannot wedge the reconnect loop.
+   * Also passed as `handshakeTimeout` to the default `ws` factory.
+   * @defaultValue 30000
+   */
+  connectTimeoutMs?: number;
+
+  /**
    * WebSocket constructor factory.
    *
    * Defaults to the `ws` package's `WebSocket` loaded via dynamic import.
@@ -106,6 +117,14 @@ export interface WebSocketClientTransportOptions {
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
+
+/**
+ * Default bound for a single connect attempt's socket-open wait.
+ *
+ * Applied when {@link WebSocketClientTransportOptions.connectTimeoutMs} is
+ * not supplied.
+ */
+export const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 /**
  * Plain JSON codec applied when no `codec` option is supplied.

@@ -88,4 +88,22 @@ describe('waitForSocketOpen', () => {
     ws.emit('close', new Event('close'));
     await expect(promise).rejects.toThrow('WebSocket closed before opening');
   });
+
+  it('rejects after timeoutMs when the socket never leaves CONNECTING', { timeout: 1000 }, async () => {
+    const ws = new MockWebSocket();
+    ws.readyState = 0; // CONNECTING — no event will ever fire
+    await expect(waitForSocketOpen(ws, 40)).rejects.toThrow('timed out');
+    // Listeners must be cleaned up on the timeout path too.
+    expect(ws.listeners.get('open')?.size ?? 0).toBe(0);
+    expect(ws.listeners.get('error')?.size ?? 0).toBe(0);
+    expect(ws.listeners.get('close')?.size ?? 0).toBe(0);
+  });
+
+  it('resolves when open fires before the timeout', { timeout: 1000 }, async () => {
+    const ws = new MockWebSocket();
+    ws.readyState = 0;
+    const promise = waitForSocketOpen(ws, 5000);
+    ws.emit('open', new Event('open'));
+    await expect(promise).resolves.toBeUndefined();
+  });
 });

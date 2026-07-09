@@ -41,12 +41,15 @@ export async function sendEncoded(message: BusMessage, codec: ClientTransportCod
  *
  * Resolves immediately when the socket is already open. Rejects if the
  * socket emits an `error` event or closes before opening (e.g. network drop
- * during the TCP handshake). All three listeners are removed in every path
- * so no listeners leak after the promise settles.
+ * during the TCP handshake), or when `timeoutMs` elapses first — a server
+ * that accepts the TCP connection but never answers the upgrade fires no
+ * event at all, so the wait must be bounded. All listeners and the timer are
+ * removed in every path so nothing leaks after the promise settles.
  * @param ws - WebSocket to wait on
+ * @param timeoutMs - Maximum time to wait for the `open` event; omit for no bound
  * @returns Promise that resolves when the socket is open
  */
-export function waitForSocketOpen(ws: WebSocketLike): Promise<void> {
+export function waitForSocketOpen(ws: WebSocketLike, timeoutMs?: number): Promise<void> {
   if (ws.readyState === 1) {
     return Promise.resolve();
   }
@@ -56,6 +59,9 @@ export function waitForSocketOpen(ws: WebSocketLike): Promise<void> {
   }
   return new Promise<void>((resolve, reject) => {
     const cleanup = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
       ws.removeEventListener('open', onOpen);
       ws.removeEventListener('error', onError);
       ws.removeEventListener('close', onClose);
@@ -72,6 +78,13 @@ export function waitForSocketOpen(ws: WebSocketLike): Promise<void> {
       cleanup();
       reject(new Error('WebSocket closed before opening'));
     };
+    const timer =
+      timeoutMs !== undefined
+        ? setTimeout(() => {
+            cleanup();
+            reject(new Error(`WebSocket open timed out after ${timeoutMs}ms`));
+          }, timeoutMs)
+        : undefined;
     ws.addEventListener('open', onOpen);
     ws.addEventListener('error', onError);
     ws.addEventListener('close', onClose);
