@@ -678,11 +678,11 @@ export const WorkflowSchemas = {
   'frame.sessionLinked': z
     .object({
       /** Execution this frame belongs to. */
-      executionId: z.string(),
+      executionId: observability.attribute(z.string(), 'makaio.execution.id'),
       /** Unique frame identifier within the execution. */
-      frameId: z.string(),
+      frameId: observability.attribute(z.string(), 'makaio.frame.id'),
       /** Agent session created for this frame. */
-      sessionId: z.string(),
+      sessionId: observability.attribute(z.string(), 'makaio.session.id'),
     })
     .strict(),
 

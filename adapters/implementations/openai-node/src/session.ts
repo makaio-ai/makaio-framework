@@ -4,6 +4,8 @@ import {
   serializeTurnContext,
   formatContextBlocksAsText,
   type AIReasoningLevel,
+  bindProviderRequestCorrelation,
+  buildFactoryUsageCorrelationHeaders,
 } from '@makaio/ai-adapters-core';
 import { blocksToContentParts } from './utils/blockToContentPart.js';
 import { OpenAIConnectorTurn } from './turn.js';
@@ -365,6 +367,12 @@ export class OpenAIConnectorSession extends BaseStreamSession<
     abortSignal: AbortSignal,
     adapterSessionId: string,
   ): Promise<void> {
+    const handle = turn.getMessageHandle();
+    const requestCorrelation = bindProviderRequestCorrelation(handle.requestCorrelation, {
+      sessionId: this.config.sessionId,
+      messageId: handle.messageId,
+      llmCallId: crypto.randomUUID(),
+    });
     // Derive capability from the live reasoning effort set by the mutation
     // manager rather than from the config snapshot frozen at session construction.
     // After changeModelInPlace + changeReasoningInPlace, currentReasoningEffort
@@ -394,7 +402,14 @@ export class OpenAIConnectorSession extends BaseStreamSession<
         cacheStrategy: this.currentCacheStrategy,
         systemPrompt: this.config.systemPrompt,
       }),
-      { signal: abortSignal },
+      {
+        signal: abortSignal,
+        // Trust is an explicit provider-config decision. Gateway URLs are deployment-specific,
+        // so URL matching cannot establish trust and would reject legitimate custom domains.
+        ...(this.config.requestCorrelationHeaders === 'factory-v1'
+          ? { headers: buildFactoryUsageCorrelationHeaders(requestCorrelation) }
+          : {}),
+      },
     );
 
     await turn.markStepStarted();
@@ -407,6 +422,7 @@ export class OpenAIConnectorSession extends BaseStreamSession<
         adapterName: this.config.adapterName,
         adapterSessionId,
         model: this.currentModel,
+        requestCorrelation,
         logLowLevelEvent: this.config.logLowLevelEvent,
         hiddenToolCallNames: this.shouldUseStructuredOutputFinalizer()
           ? [STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME]

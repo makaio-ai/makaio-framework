@@ -52,8 +52,8 @@ export interface SpanDraft {
   readonly spanId: string;
   /** Parent span identifier when this span is a child. */
   readonly parentSpanId?: string;
-  /** Makaio execution identifier this span covers. */
-  readonly executionId: string;
+  /** Makaio workflow execution identifier; absent for standalone session traces. */
+  readonly executionId?: string;
   /** Optional workflow frame identifier. */
   readonly frameId?: string;
   /** Optional session identifier. */

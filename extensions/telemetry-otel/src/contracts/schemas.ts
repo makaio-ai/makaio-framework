@@ -46,7 +46,7 @@ export const SpanDraftSchema = z
   .object({
     spanId: z.string().min(1),
     parentSpanId: z.string().min(1).optional(),
-    executionId: z.string().min(1),
+    executionId: z.string().min(1).optional(),
     frameId: z.string().min(1).optional(),
     sessionId: z.string().min(1).optional(),
     namespace: z.string().min(1).optional(),

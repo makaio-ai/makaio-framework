@@ -30,7 +30,7 @@ export {
   type ToolOutput,
   type ToolCompleted,
 } from './tool.js';
-export { UsageSchema, type Usage } from './usage.js';
+export { UsageCostProvenanceSchema, UsageSchema, type Usage, type UsageCostProvenance } from './usage.js';
 export { TurnStartedSchema, TurnCompletedSchema, type TurnStarted, type TurnCompleted } from './turn.js';
 export { ContextWindowUpdatedSchema, type ContextWindowUpdated } from './context-window.js';
 export {

@@ -19,6 +19,15 @@ export const AnthropicSdkProviderConfigSchema = z.object({
     description: 'Override the default Anthropic API URL',
   }),
   /**
+   * Opt into the Factory Gateway's content-free correlation header contract.
+   * Disabled by default so internal identifiers are never sent to arbitrary
+   * Anthropic-compatible endpoints.
+   */
+  requestCorrelationHeaders: z.literal('factory-v1').optional().meta({
+    title: 'Request correlation headers',
+    description: 'Send the Factory Gateway v1 usage-correlation header allowlist',
+  }),
+  /**
    * Maximum number of tokens to generate per request.
    * Defaults to 32,000 when not set.
    */

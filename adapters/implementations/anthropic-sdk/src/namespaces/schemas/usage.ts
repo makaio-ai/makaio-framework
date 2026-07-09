@@ -7,6 +7,12 @@ import { z } from 'zod';
  */
 export const UsageEventSchema = z.object({
   eventType: z.literal('usage'),
+  /** Runtime-generated identifier for this concrete provider request. */
+  llmCallId: z.string().optional(),
+  /** Workflow execution that caused the request, when known. */
+  executionId: z.string().optional(),
+  /** Workflow frame/station that caused the request, when known. */
+  frameId: z.string().optional(),
   /** Number of tokens in the prompt (input) */
   prompt_tokens: z.number(),
   /** Number of tokens in the generated completion (output) */

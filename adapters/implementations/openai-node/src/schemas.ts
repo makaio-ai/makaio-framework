@@ -22,6 +22,16 @@ export const OpenAINodeProviderConfigSchema = z.object({
   }),
 
   /**
+   * Opt into the Factory Gateway's content-free correlation header contract.
+   * Disabled by default so internal identifiers are never sent to arbitrary
+   * OpenAI-compatible endpoints.
+   */
+  requestCorrelationHeaders: z.literal('factory-v1').optional().meta({
+    title: 'Request correlation headers',
+    description: 'Send the Factory Gateway v1 usage-correlation header allowlist',
+  }),
+
+  /**
    * Whether the provider accepts `response_format: json_schema` alongside
    * `tools` in the same request.
    *

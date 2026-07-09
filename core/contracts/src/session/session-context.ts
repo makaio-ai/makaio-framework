@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { MessageSchema, JsonValueSchema } from '../shared/index.js';
 import { NativeLocalityVerdictSchema, NativeForkDirectiveSchema } from './native-locality.js';
+import { RequestCorrelationContextSchema } from './request-correlation.js';
 
 export const CACHE_STRATEGIES = ['auto', 'systemPrompt', 'fullPrefix'] as const;
 export type CacheStrategy = (typeof CACHE_STRATEGIES)[number];
@@ -63,6 +64,15 @@ export const SessionContextSchema = z.object({
    * LLM-facing message using serializeTurnContext().
    */
   turnContext: z.record(z.string(), JsonValueSchema).optional(),
+
+  /**
+   * Content-free transport correlation for outbound provider requests.
+   *
+   * Unlike `turnContext`, adapters MUST NOT include these identifiers in model
+   * input. SDK adapters may project only their documented allowlist to request
+   * headers for usage correlation.
+   */
+  requestCorrelation: RequestCorrelationContextSchema.optional(),
 
   /**
    * Pre-evaluated locality verdict for the current session.

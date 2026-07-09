@@ -16,13 +16,12 @@
  * cleared whenever `account.activate` fires for Claude Code, so an account
  * switch between turns causes the next statusline event to re-resolve identity
  * against the newly active account.  When both an
- * identity and rate-limit data are present, the payload is passed to
- * {@link normalizeClaudeCodeStatusline} together with the resolved identity
- * context and the resulting request is forwarded to `client.usage.ingest`.
- * Payloads without a `session_id`, sessions that have not yet been linked to a
- * client account, or sessions without stored identity evidence are silently
- * skipped — the raw event remains observable on
- * `client:claude-code.statusline.received`.
+ * identity and rate-limit data are present, the quota window is forwarded to
+ * `client.usage.ingest`. Session-local tokens, cost, duration, context, and
+ * code-change measurements are emitted independently on
+ * `client.session.usage.snapshot`, including for sessions without a resolved
+ * account. Payloads without a `session_id` remain observable only on the raw
+ * `client:claude-code.statusline.received` subject.
  *
  * Also registers request handlers for all six `config.*` subjects, delegating
  * to a per-request {@link ClaudeCodeClientSettings} instance scoped to the
@@ -85,7 +84,11 @@ import { ClaudeCodeClientSettings } from './client-settings.js';
 import { handleClaudeCodeConfigPrime } from './config-prime-handler.js';
 import { normalizeClaudeCodeHook, type ClaudeCodeNormalizedEvent } from './hook-normalizer.js';
 import { sniffTranscriptFork } from './fork-sniff.js';
-import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from './statusline-normalizer.js';
+import {
+  normalizeClaudeCodeSessionUsage,
+  normalizeClaudeCodeStatusline,
+  type StatuslineIdentityContext,
+} from './statusline-normalizer.js';
 import { ClaudeCodeClientSubjects } from './namespace.js';
 import { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
 import { clearClaudeCodeNativeCredentialsForSession } from './native-credentials.js';
@@ -550,8 +553,8 @@ export class ClaudeCodeClientService extends BaseService {
   }
 
   /**
-   * Receive a raw statusline payload and forward it to `client.usage.ingest`
-   * when an account identity can be resolved.
+   * Receive a raw statusline payload and emit independent session usage and
+   * account quota observations.
    *
    * Identity resolution proceeds in two stages and is cached per `session_id`
    * to avoid repeated bus lookups within the same turn.  The cache is cleared
@@ -573,8 +576,9 @@ export class ClaudeCodeClientService extends BaseService {
    * account-manager has already signalled the active identity via
    * `client.account.activate`.
    *
-   * When neither stage resolves an identity the method returns early and the
-   * raw event remains observable on `client:claude-code.statusline.received`.
+   * Session-local usage does not require an account identity and is emitted
+   * whenever the payload contains supported measurements. Account quota
+   * windows still require the resolved identity.
    * @param raw - Raw statusline payload delivered on
    *   `client:claude-code.statusline.received`
    */
@@ -585,6 +589,7 @@ export class ClaudeCodeClientService extends BaseService {
 
     // 1. Check session identity cache (pinned on first resolution).
     let identity: StatuslineIdentityContext | null = this.sessionIdentityCache.get(adapterSessionId) ?? null;
+    let makaioSessionId = identity?.sessionId;
 
     // 2. Primary path: resolve identity from a linked Makaio session.
     if (!identity) {
@@ -592,6 +597,7 @@ export class ClaudeCodeClientService extends BaseService {
         adapterSessionId,
       });
       if (sessionResult.handled && sessionResult.data.session) {
+        makaioSessionId = sessionResult.data.session.sessionId;
         identity = resolveIdentityFromSession(sessionResult.data.session);
       }
     }
@@ -604,7 +610,7 @@ export class ClaudeCodeClientService extends BaseService {
         clientId: CLIENT_ID,
       });
       if (activeResult.handled && activeResult.data.identity) {
-        identity = activeResult.data.identity;
+        identity = attachSessionId(activeResult.data.identity, makaioSessionId);
       }
     }
 
@@ -624,6 +630,11 @@ export class ClaudeCodeClientService extends BaseService {
         }
         this.sessionIdentityCache.set(adapterSessionId, identity);
       }
+    }
+
+    const sessionUsage = normalizeClaudeCodeSessionUsage(raw, identity?.clientAccountId, makaioSessionId);
+    if (sessionUsage) {
+      await this.bus.emit(ClientSubjects.session.usage.snapshot, sessionUsage);
     }
 
     if (!identity) return;
@@ -768,6 +779,19 @@ function isResolveBinaryMissingGlobalBinary(error: unknown): boolean {
 }
 
 /**
+ * Attach a resolved Makaio session without changing standalone identities.
+ * @param identity - Resolved client account identity
+ * @param sessionId - Optional Makaio session identifier
+ * @returns Identity enriched with the session identifier when available
+ */
+function attachSessionId(
+  identity: StatuslineIdentityContext,
+  sessionId: string | undefined,
+): StatuslineIdentityContext {
+  return sessionId === undefined ? identity : { ...identity, sessionId };
+}
+
+/**
  * Extract a {@link StatuslineIdentityContext} from a session record.
  *
  * Reads the `clientAccountId` field and parses the `identifiers` array from
@@ -779,6 +803,7 @@ function isResolveBinaryMissingGlobalBinary(error: unknown): boolean {
 // Structural param type is intentional — this private helper accepts the
 // subset of session fields it needs rather than coupling to a storage entity.
 function resolveIdentityFromSession(session: {
+  sessionId: string;
   clientAccountId?: string;
   lastClientIdentityObservation?: { payload: Record<string, unknown> };
 }): StatuslineIdentityContext | null {
@@ -803,6 +828,7 @@ function resolveIdentityFromSession(session: {
 
   return {
     clientAccountId,
+    sessionId: session.sessionId,
     identifiers,
     displayLabel: typeof displayLabel === 'string' && displayLabel.trim().length > 0 ? displayLabel.trim() : undefined,
   };

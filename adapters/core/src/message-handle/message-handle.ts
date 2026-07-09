@@ -5,6 +5,7 @@ import type {
   Message,
   MessageDeliveryMode,
   ResponseSchemaDescriptor,
+  RequestCorrelationContext,
 } from '@makaio/contracts';
 import type { MessageResult, MessageState } from './types.js';
 import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
@@ -63,6 +64,8 @@ export class MessageHandle {
     public readonly internalRetry = false,
     /** Caller-expressed caching intent for the injected history prefix */
     cacheStrategy?: CacheStrategy,
+    /** Content-free transport correlation for provider requests. */
+    public readonly requestCorrelation?: RequestCorrelationContext,
   ) {
     this.deferredCompletion = new DeferredPromise<MessageResult>();
     this.deferredAcknowledgement = new DeferredPromise<boolean>();

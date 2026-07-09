@@ -26,7 +26,15 @@ describe('SpanCollector', () => {
       1100,
     );
     collector.onAgentUsage({
+      agentId: 'review-agent',
+      adapterId: 'adapter-instance-1',
+      adapterName: 'claude-code',
       sessionId: 'sess-child',
+      adapterSessionId: 'native-session-1',
+      messageId: 'message-1',
+      turnId: 'turn-1',
+      clientId: 'claude-code',
+      providerConfigId: 'anthropic-oauth',
       provider: 'openai',
       model: 'gpt-5.4',
       inputTokens: 10,
@@ -39,6 +47,7 @@ describe('SpanCollector', () => {
       costUnitType: 'tokens',
       cost: 0.0123,
       currency: 'USD',
+      costProvenance: 'estimated',
       duration: 250,
     });
     collector.onFrameSessionLinked({
@@ -64,7 +73,18 @@ describe('SpanCollector', () => {
             'llm.tokens.reasoning': 3,
             'llm.cost.estimated': 0.0123,
             'llm.cost.currency': 'USD',
+            'llm.cost.provenance': 'estimated',
+            'llm.cost.units': 33,
+            'llm.cost.unit_type': 'tokens',
             'llm.duration_ms': 250,
+            'makaio.agent.id': 'review-agent',
+            'makaio.adapter.id': 'adapter-instance-1',
+            'makaio.adapter.name': 'claude-code',
+            'makaio.adapter.session_id': 'native-session-1',
+            'makaio.message.id': 'message-1',
+            'makaio.turn.id': 'turn-1',
+            'makaio.client.id': 'claude-code',
+            'makaio.provider.config_id': 'anthropic-oauth',
           }),
         }),
       ]),
@@ -134,6 +154,56 @@ describe('SpanCollector', () => {
       ]),
     );
     expect(wfxB?.some((draft) => draft.name === 'LLM call gpt-5.4')).toBe(false);
+  });
+
+  it('uses explicit request correlation without waiting for frame.sessionLinked', async () => {
+    const exported: SpanDraft[][] = [];
+    let now = 1500;
+    const collector = new SpanCollector({
+      now: () => now,
+      orphanTimeoutMs: 30_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        exported.push(drafts);
+      },
+    });
+
+    await collector.onExecutionStarted({ executionId: 'wfx-direct', workflowId: 'wf-1' }, 1000);
+    collector.onFrameStarted(
+      {
+        executionId: 'wfx-direct',
+        frameId: 'frame-direct',
+        nodeId: 'review',
+        nodeType: 'station',
+        path: ['frame-direct'],
+      },
+      1100,
+    );
+    collector.onAgentUsage({
+      llmCallId: 'call-direct',
+      executionId: 'wfx-direct',
+      frameId: 'frame-direct',
+      sessionId: 'session-direct',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 10,
+      inputCachedTokens: 2,
+      outputTokens: 5,
+      reasoningTokens: 0,
+      totalTokens: 15,
+      costUnits: 15,
+      costUnitType: 'tokens',
+    });
+    now = 40_000;
+    await collector.sweepOrphans();
+    expect(exported).toHaveLength(0);
+    await collector.onExecutionCompleted({ executionId: 'wfx-direct', totalDuration: 1000 }, 2000);
+
+    const usage = exported[0]?.find((draft) => draft.subject === 'usage');
+    expect(usage).toMatchObject({
+      parentSpanId: 'frame:wfx-direct:frame-direct',
+      attributes: expect.objectContaining({ 'makaio.llm_call.id': 'call-direct' }),
+    });
   });
 
   it('uses agent usage occurredAt as the LLM span end time', async () => {
@@ -248,7 +318,7 @@ describe('SpanCollector', () => {
     );
   });
 
-  it('drops stale unlinked session events without exporting them as orphans', async () => {
+  it('exports stale unlinked session events once and does not re-parent them after the timeout', async () => {
     const exported: SpanDraft[][] = [];
     let nowMs = 1200;
     const collector = new SpanCollector({
@@ -294,8 +364,156 @@ describe('SpanCollector', () => {
     });
     await collector.onExecutionCompleted({ executionId: 'wfx-stale-session', totalDuration: 6000 }, 7000);
 
-    expect(exported[0]?.some((draft) => draft.spanId.startsWith('llm:wfx-stale-session'))).toBe(false);
-    expect(exported[0]?.some((draft) => draft.spanId.startsWith('tool:wfx-stale-session'))).toBe(false);
+    expect(exported).toHaveLength(2);
+    expect(exported[0]?.some((draft) => draft.subject === 'usage')).toBe(true);
+    expect(exported[0]?.some((draft) => draft.subject === 'tool')).toBe(true);
+    expect(exported[1]?.some((draft) => draft.spanId.startsWith('llm:wfx-stale-session'))).toBe(false);
+    expect(exported[1]?.some((draft) => draft.spanId.startsWith('tool:wfx-stale-session'))).toBe(false);
+  });
+
+  it('expires unresolved session events individually while preserving fresh events for a late link', async () => {
+    const exported: SpanDraft[][] = [];
+    let nowMs = 1000;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        exported.push(drafts);
+      },
+    });
+
+    await collector.onExecutionStarted({ executionId: 'wfx-partial-expiry', workflowId: 'wf-partial-expiry' }, 500);
+    collector.onFrameStarted(
+      {
+        executionId: 'wfx-partial-expiry',
+        frameId: 'frame-partial-expiry',
+        nodeId: 'review',
+        nodeType: 'station',
+        path: ['frame-partial-expiry'],
+      },
+      600,
+    );
+    collector.onAgentUsage({
+      sessionId: 'sess-partial-expiry',
+      provider: 'openai',
+      model: 'old-model',
+      inputTokens: 10,
+      inputCachedTokens: 0,
+      outputTokens: 5,
+      reasoningTokens: 0,
+      totalTokens: 15,
+      costUnits: 15,
+      costUnitType: 'tokens',
+    });
+    nowMs = 4000;
+    collector.onAgentUsage({
+      sessionId: 'sess-partial-expiry',
+      provider: 'openai',
+      model: 'fresh-model',
+      inputTokens: 20,
+      inputCachedTokens: 0,
+      outputTokens: 10,
+      reasoningTokens: 0,
+      totalTokens: 30,
+      costUnits: 30,
+      costUnitType: 'tokens',
+    });
+
+    nowMs = 7000;
+    await collector.sweepOrphans();
+    collector.onFrameSessionLinked({
+      executionId: 'wfx-partial-expiry',
+      frameId: 'frame-partial-expiry',
+      sessionId: 'sess-partial-expiry',
+    });
+    await collector.onExecutionCompleted({ executionId: 'wfx-partial-expiry', totalDuration: 6500 }, 7000);
+
+    expect(exported).toHaveLength(2);
+    expect(exported[0]?.some((draft) => draft.name === 'LLM call old-model')).toBe(true);
+    expect(exported[0]?.some((draft) => draft.name === 'LLM call fresh-model')).toBe(false);
+    expect(exported[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'LLM call fresh-model',
+          parentSpanId: 'frame:wfx-partial-expiry:frame-partial-expiry',
+        }),
+      ]),
+    );
+    expect(exported[1]?.some((draft) => draft.name === 'LLM call old-model')).toBe(false);
+  });
+
+  it('defers usage to its explicit execution instead of a session-linked execution', async () => {
+    const exported: SpanDraft[][] = [];
+    const collector = new SpanCollector({
+      now: () => 1500,
+      orphanTimeoutMs: 30_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        exported.push(drafts);
+      },
+    });
+
+    await collector.onExecutionStarted({ executionId: 'wfx-session-owner', workflowId: 'wf-session-owner' }, 1000);
+    collector.onFrameStarted(
+      {
+        executionId: 'wfx-session-owner',
+        frameId: 'frame-session-owner',
+        nodeId: 'owner',
+        nodeType: 'station',
+        path: ['frame-session-owner'],
+      },
+      1100,
+    );
+    collector.onFrameSessionLinked({
+      executionId: 'wfx-session-owner',
+      frameId: 'frame-session-owner',
+      sessionId: 'sess-shared',
+    });
+    collector.onAgentUsage({
+      llmCallId: 'call-explicit',
+      executionId: 'wfx-explicit-owner',
+      frameId: 'frame-explicit-owner',
+      sessionId: 'sess-shared',
+      provider: 'anthropic',
+      model: 'claude-explicit',
+      inputTokens: 10,
+      inputCachedTokens: 0,
+      outputTokens: 5,
+      reasoningTokens: 0,
+      totalTokens: 15,
+      costUnits: 15,
+      costUnitType: 'tokens',
+    });
+    await collector.onExecutionCompleted({ executionId: 'wfx-session-owner', totalDuration: 1000 }, 2000);
+
+    await collector.onExecutionStarted({ executionId: 'wfx-explicit-owner', workflowId: 'wf-explicit-owner' }, 2100);
+    collector.onFrameStarted(
+      {
+        executionId: 'wfx-explicit-owner',
+        frameId: 'frame-explicit-owner',
+        nodeId: 'explicit',
+        nodeType: 'station',
+        path: ['frame-explicit-owner'],
+      },
+      2200,
+    );
+    await collector.onExecutionCompleted({ executionId: 'wfx-explicit-owner', totalDuration: 1000 }, 3100);
+
+    expect(exported).toHaveLength(2);
+    expect(exported[0]?.some((draft) => draft.subject === 'usage')).toBe(false);
+    expect(exported[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'LLM call claude-explicit',
+          parentSpanId: 'frame:wfx-explicit-owner:frame-explicit-owner',
+          attributes: expect.objectContaining({
+            'makaio.execution.id': 'wfx-explicit-owner',
+            'makaio.llm_call.id': 'call-explicit',
+          }),
+        }),
+      ]),
+    );
   });
 
   it('does not attach an unknown session to the only open execution', async () => {
@@ -328,8 +546,9 @@ describe('SpanCollector', () => {
     await collector.sweepOrphans();
     await collector.onExecutionCompleted({ executionId: 'wfx-single', totalDuration: 6000 }, 7000);
 
-    expect(exported).toHaveLength(1);
-    expect(exported[0]?.some((draft) => draft.name === 'LLM call gpt-5.4')).toBe(false);
+    expect(exported).toHaveLength(2);
+    expect(exported[0]?.some((draft) => draft.name === 'LLM call gpt-5.4')).toBe(true);
+    expect(exported[1]?.some((draft) => draft.name === 'LLM call gpt-5.4')).toBe(false);
   });
 
   it('correlates agent tool spans by session and tool call id', async () => {
@@ -791,7 +1010,7 @@ describe('SpanCollector', () => {
     );
   });
 
-  it('drops unlinked session events on sweep when orphanTimeoutMs is zero', async () => {
+  it('retains unlinked session events for a late frame link when orphanTimeoutMs is zero', async () => {
     const exported: SpanDraft[][] = [];
     const collector = new SpanCollector({
       now: () => 60_000,
@@ -835,8 +1054,118 @@ describe('SpanCollector', () => {
     });
     await collector.onExecutionCompleted({ executionId: 'wfx-zero-session', totalDuration: 59000 }, 60_000);
 
-    expect(exported[0]?.some((draft) => draft.spanId.startsWith('llm:wfx-zero-session'))).toBe(false);
-    expect(exported[0]?.some((draft) => draft.spanId.startsWith('tool:wfx-zero-session'))).toBe(false);
+    expect(exported[0]?.some((draft) => draft.spanId.startsWith('llm:wfx-zero-session'))).toBe(true);
+    expect(exported[0]?.some((draft) => draft.spanId.startsWith('tool:wfx-zero-session'))).toBe(true);
+  });
+
+  it('exports unlinked local sessions as standalone trace segments after the correlation timeout', async () => {
+    const exported: SpanDraft[][] = [];
+    let nowMs = 1000;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        exported.push(drafts);
+      },
+    });
+
+    collector.onAgentUsage({
+      agentId: 'local-agent',
+      adapterId: 'local-adapter-1',
+      adapterName: 'claude-code',
+      clientId: 'claude-code',
+      sessionId: 'sess-local',
+      adapterSessionId: 'native-local',
+      providerConfigId: 'anthropic-oauth',
+      turnId: 'turn-local',
+      provider: 'anthropic',
+      model: 'claude-opus-4-6',
+      inputTokens: 10,
+      inputCachedTokens: 5,
+      outputTokens: 4,
+      reasoningTokens: 0,
+      totalTokens: 14,
+      costUnits: 14,
+      costUnitType: 'tokens',
+      occurredAt: 1200,
+      duration: 200,
+    });
+    collector.onAgentToolStarted({
+      sessionId: 'sess-local',
+      toolName: 'read',
+      toolCallId: 'call-local',
+      occurredAt: 1250,
+    });
+    collector.onAgentToolCompleted({
+      sessionId: 'sess-local',
+      toolName: 'read',
+      toolCallId: 'call-local',
+      success: true,
+      occurredAt: 1300,
+    });
+
+    nowMs = 7_000;
+    await collector.sweepOrphans();
+    await collector.sweepOrphans();
+
+    expect(exported).toHaveLength(1);
+    const [root, llm, tool] = exported[0] ?? [];
+    expect(root).toMatchObject({
+      sessionId: 'sess-local',
+      subject: 'session',
+      attributes: expect.objectContaining({ 'makaio.trace.scope': 'standalone' }),
+    });
+    expect(root?.executionId).toBeUndefined();
+    expect(llm).toMatchObject({
+      parentSpanId: root?.spanId,
+      subject: 'usage',
+      attributes: expect.objectContaining({
+        'makaio.client.id': 'claude-code',
+        'makaio.provider.config_id': 'anthropic-oauth',
+      }),
+    });
+    expect(llm?.executionId).toBeUndefined();
+    expect(tool).toMatchObject({
+      parentSpanId: root?.spanId,
+      subject: 'tool',
+    });
+    expect(tool?.executionId).toBeUndefined();
+  });
+
+  it('flushes pending standalone session usage on shutdown when timeout promotion is disabled', async () => {
+    const exported: SpanDraft[][] = [];
+    const collector = new SpanCollector({
+      now: () => 5_000,
+      orphanTimeoutMs: 0,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        exported.push(drafts);
+      },
+    });
+
+    collector.onAgentUsage({
+      sessionId: 'sess-shutdown-local',
+      provider: 'openai',
+      model: 'gpt-5.4',
+      inputTokens: 10,
+      inputCachedTokens: 1,
+      outputTokens: 20,
+      reasoningTokens: 0,
+      totalTokens: 31,
+      costUnits: 31,
+      costUnitType: 'tokens',
+    });
+
+    await collector.flushAll();
+
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ subject: 'session', sessionId: 'sess-shutdown-local' }),
+        expect.objectContaining({ subject: 'usage', sessionId: 'sess-shutdown-local' }),
+      ]),
+    );
   });
 
   it('force-flushes the oldest execution with error status when maxOpenExecutions is reached', async () => {

@@ -135,6 +135,13 @@ Tool execution routes through the approval system:
 | `OpenAISessionConfig` | Session configuration type |
 | `createTestConfig` | Conformance test suite configuration |
 
+Provider settings may set `requestCorrelationHeaders: "factory-v1"` when
+`baseUrl` targets a trusted Factory Gateway. The adapter then projects only the
+content-free `SessionContext.requestCorrelation` allowlist plus runtime-owned
+session, message, and per-request LLM-call IDs to `x-factory-*` headers. The
+option is disabled by default so these identifiers are never sent to arbitrary
+OpenAI-compatible endpoints.
+
 ### Runtime Contribution
 
 Runtime registration is contributed by `@makaio/adapter-openai-node/server`.

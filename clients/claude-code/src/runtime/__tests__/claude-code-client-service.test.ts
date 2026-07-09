@@ -7,6 +7,7 @@ import { ClientSubjects } from '@makaio/subsystem-client';
 import {
   type ClientAccountIdentifier,
   type ClientRuntimeStarted,
+  type ClientSessionUsageSnapshot,
   type ClientUsageIngestRequest,
 } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/contracts/session';
@@ -418,6 +419,37 @@ describe('ClaudeCodeClientService', () => {
     expect(rawEvents[0]).toMatchObject({ session_id: SESSION_ID });
   });
 
+  it('emits rich session usage without requiring an account or quota handler', async () => {
+    const snapshots: ClientSessionUsageSnapshot[] = [];
+    const cleanup = bus.on(ClientSubjects.session.usage.snapshot, ({ payload }) => {
+      snapshots.push(payload);
+    });
+
+    await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      session_id: SESSION_ID,
+      model: { id: 'claude-opus-4-6' },
+      context_window: {
+        total_input_tokens: 80_000,
+        current_usage: { input_tokens: 120, output_tokens: 45, cache_read_input_tokens: 2_400 },
+      },
+      cost: { total_cost_usd: 12.68, total_api_duration_ms: 348_000 },
+    });
+
+    cleanup();
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      clientId: 'claude-code',
+      adapterSessionId: SESSION_ID,
+      modelId: 'claude-opus-4-6',
+      latestRequestInputTokens: 120,
+      currentContextInputTokens: 80_000,
+      totalCost: 12.68,
+      costProvenance: 'client-reported',
+    });
+    expect(snapshots[0]?.clientAccountId).toBeUndefined();
+  });
+
   describe('statusline ingestion via session-account identity', () => {
     /**
      * Build a minimal session stub with `clientAccountId` and a stored identity
@@ -493,6 +525,7 @@ describe('ClaudeCodeClientService', () => {
 
     it('does not emit client.usage.ingest when session has no clientAccountId', async () => {
       const ingestCalls: unknown[] = [];
+      const snapshots: ClientSessionUsageSnapshot[] = [];
 
       const session = makeLinkedSession(SESSION_ID, 'client-account-42');
       // Remove clientAccountId to simulate a session that has not yet been linked
@@ -506,16 +539,27 @@ describe('ClaudeCodeClientService', () => {
           ingestCalls.push(ctx.payload);
           ctx.setResult({ clientAccountId: 'ca-unused', snapshot: {} as never });
         }),
+        bus.on(ClientSubjects.session.usage.snapshot, ({ payload }) => {
+          snapshots.push(payload);
+        }),
       ];
 
       await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
         session_id: SESSION_ID,
         rate_limits: { five_hour: { used_percentage: 50, resets_at: 1_738_425_600 } },
+        cost: { total_cost_usd: 1.25 },
       });
 
       for (const cleanup of cleanups) cleanup();
 
       expect(ingestCalls).toHaveLength(0);
+      expect(snapshots).toEqual([
+        expect.objectContaining({
+          adapterSessionId: SESSION_ID,
+          sessionId: 'framework-session-001',
+          totalCost: 1.25,
+        }),
+      ]);
     });
 
     it('does not emit client.usage.ingest when statusline payload has no session_id', async () => {

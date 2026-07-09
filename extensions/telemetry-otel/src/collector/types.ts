@@ -9,6 +9,37 @@
 
 import type { SpanDraftStatus } from '../contracts/types.js';
 
+/** Subset of `agent.usage` consumed by the collector. */
+export interface AgentUsagePayload {
+  readonly llmCallId?: string;
+  readonly executionId?: string;
+  readonly frameId?: string;
+  readonly agentId?: string;
+  readonly adapterId?: string;
+  readonly adapterName?: string;
+  readonly sessionId?: string;
+  readonly adapterSessionId?: string;
+  readonly messageId?: string;
+  readonly turnId?: string;
+  readonly clientId?: string;
+  readonly providerConfigId?: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly inputTokens: number;
+  readonly inputCachedTokens: number;
+  readonly cacheWriteTokens?: number;
+  readonly outputTokens: number;
+  readonly reasoningTokens: number;
+  readonly totalTokens: number;
+  readonly costUnits: number;
+  readonly costUnitType: 'requests' | 'tokens';
+  readonly cost?: number;
+  readonly currency?: string;
+  readonly costProvenance?: 'provider-reported' | 'client-reported' | 'estimated';
+  readonly duration?: number;
+  readonly occurredAt?: number;
+}
+
 /**
  * Metadata captured from a `workflow.frame.started` event and retained for the
  * duration of the frame.
@@ -45,6 +76,18 @@ export interface FrameRecord {
  * waits for the matching `frame.sessionLinked` event.
  */
 export interface BufferedUsage {
+  /** Runtime-generated identifier for one concrete provider API request. */
+  readonly llmCallId: string | undefined;
+  /** Authoritative workflow execution supplied by the provider request context. */
+  readonly executionId: string | undefined;
+  /** Workflow frame supplied directly by the provider request context. */
+  readonly frameId: string | undefined;
+  /** Agent identifier from the usage event. */
+  readonly agentId: string | undefined;
+  /** Adapter instance identifier from the usage event. */
+  readonly adapterId: string | undefined;
+  /** Adapter type/name from the usage event. */
+  readonly adapterName: string | undefined;
   /**
    * Session identifier from the usage event.
    *
@@ -52,6 +95,16 @@ export interface BufferedUsage {
    * be promoted to an orphan span on the next orphan sweep.
    */
   readonly sessionId: string | undefined;
+  /** Provider-native session identifier when known. */
+  readonly adapterSessionId: string | undefined;
+  /** User message identifier when known. */
+  readonly messageId: string | undefined;
+  /** Turn identifier when known. */
+  readonly turnId: string | undefined;
+  /** Owning client/CLI identifier when known. */
+  readonly clientId: string | undefined;
+  /** Resolved provider configuration identifier when known. */
+  readonly providerConfigId: string | undefined;
   /** LLM provider name (e.g. `'openai'`, `'anthropic'`). */
   readonly provider: string;
   /** Model identifier (e.g. `'gpt-5.4'`). */
@@ -76,6 +129,8 @@ export interface BufferedUsage {
   readonly cost: number | undefined;
   /** Optional ISO-style currency code for {@link cost}. */
   readonly currency: string | undefined;
+  /** Provenance of the optional monetary cost. */
+  readonly costProvenance: 'provider-reported' | 'client-reported' | 'estimated' | undefined;
   /**
    * Optional API call latency in milliseconds.
    *
@@ -179,12 +234,12 @@ export interface CollectorOptions {
   readonly now: () => number;
   /**
    * Time in milliseconds after which execution-owned sessionless events are
-   * promoted to orphan spans and unlinked sessioned events are discarded.
+   * promoted to orphan spans and unlinked sessioned events are exported as
+   * standalone trace segments.
    *
-   * Sessioned events cannot be exported without a proven execution owner, so the
-   * collector retains them only within this timeout window. When set to `0`,
-   * only orphan promotion is disabled; unresolved sessioned events are dropped
-   * on each sweep.
+   * The timeout remains a late-correlation window for `frame.sessionLinked`.
+   * When set to `0`, unresolved sessioned events remain buffered until a link
+   * arrives or the service flushes during shutdown.
    */
   readonly orphanTimeoutMs: number;
   /**

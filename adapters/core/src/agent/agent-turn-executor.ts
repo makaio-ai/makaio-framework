@@ -3,6 +3,7 @@ import {
   SessionContextSchema,
   type MessageInput,
   type ResponseSchemaDescriptor,
+  type RequestCorrelationContext,
   type SessionContext,
   type StartMode,
 } from '@makaio/contracts';
@@ -72,6 +73,24 @@ interface PreUserMessageTurnResult {
 interface PreUserMessageTurnInput extends PreUserMessageTurnResult {
   cwd: string;
   messageId?: string;
+}
+
+/**
+ * Merge orchestrator correlation with runtime-owned identifiers.
+ * Undefined runtime fields do not erase an explicitly supplied value.
+ * @param context - Optional correlation supplied by session orchestration
+ * @param runtime - Identifiers owned by the current runtime dispatch
+ * @returns Merged correlation, or undefined when no identifier is available
+ */
+function buildRequestCorrelation(
+  context: RequestCorrelationContext | undefined,
+  runtime: RequestCorrelationContext,
+): RequestCorrelationContext | undefined {
+  const merged = { ...context };
+  for (const [field, value] of Object.entries(runtime)) {
+    if (value !== undefined) merged[field as keyof RequestCorrelationContext] = value;
+  }
+  return Object.keys(merged).length === 0 ? undefined : merged;
 }
 
 /**
@@ -195,6 +214,11 @@ export class AgentTurnExecutor {
         payload.responseSchema,
         this.adapterCapabilities,
       ),
+      requestCorrelation: buildRequestCorrelation(hookResult.sessionContext?.requestCorrelation, {
+        sessionId: this.sessionId,
+        turnId: payload.turnId,
+        messageId: payload.messageId,
+      }),
       ...(payload.responseSchema !== undefined && { responseSchema: payload.responseSchema }),
     });
 
@@ -243,6 +267,9 @@ export class AgentTurnExecutor {
         responseSchema,
         this.adapterCapabilities,
       ),
+      requestCorrelation: buildRequestCorrelation(hookResult.sessionContext?.requestCorrelation, {
+        sessionId: this.sessionId,
+      }),
       ...(responseSchema !== undefined && { responseSchema }),
     };
 

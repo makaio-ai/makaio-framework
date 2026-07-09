@@ -215,6 +215,60 @@ describe('AgentTurnExecutor', () => {
     );
   });
 
+  it('keeps request correlation separate from prompt context and binds runtime IDs', async () => {
+    const sendMessage = vi.fn(
+      async () =>
+        new MessageHandle('message-runtime', { role: 'user', blocks: [{ type: 'text', content: 'hello' }] }, 'enqueue'),
+    );
+    const connector: Partial<AIAgentConnector> = {
+      cwd: '/tmp',
+      sendMessage: sendMessage as AIAgentConnector['sendMessage'],
+    };
+    const executor = new AgentTurnExecutor({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      sessionId: 'session-runtime',
+      globalBus: {} as IMakaioBus,
+      getConnector: () => connector as AIAgentConnector,
+      shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
+      onMessageHandle: async () => {},
+    });
+
+    await executor.executeSendMessage({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      message: 'hello',
+      messageId: 'message-runtime',
+      turnId: 'turn-runtime',
+      sessionContext: {
+        turnContext: { promptVisible: 'yes' },
+        requestCorrelation: {
+          sessionId: 'stale-session',
+          turnId: 'stale-turn',
+          messageId: 'stale-message',
+          executionId: 'execution-1',
+          frameId: 'frame-1',
+        },
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        turnContext: { promptVisible: 'yes' },
+        requestCorrelation: {
+          sessionId: 'session-runtime',
+          turnId: 'turn-runtime',
+          messageId: 'message-runtime',
+          executionId: 'execution-1',
+          frameId: 'frame-1',
+        },
+      }),
+    );
+  });
+
   it('passes each request turnId to onMessageHandle when connector dispatch overlaps', async () => {
     const firstHandle = new MessageHandle(
       'm-overlap-1',

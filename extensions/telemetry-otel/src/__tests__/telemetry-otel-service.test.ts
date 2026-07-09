@@ -128,6 +128,65 @@ describe('TelemetryOtelService', () => {
     }
   });
 
+  it('exports standalone local session usage during service shutdown', async () => {
+    const exported: SpanDraft[][] = [];
+    const service = new TelemetryOtelService({
+      bus: MakaioBus,
+      config: baseConfig({ orphanTimeoutMs: 0 }),
+      emitter: {
+        emit: async (drafts) => {
+          exported.push([...drafts]);
+        },
+      },
+      now: () => 2000,
+    });
+
+    await service.init();
+    await MakaioBus.emit(AgentSubjects.usage, {
+      agentId: 'local-agent',
+      adapterId: 'adapter-instance-1',
+      adapterName: 'claude-code',
+      clientId: 'claude-code',
+      sessionId: 'local-session-1',
+      adapterSessionId: 'native-local-session-1',
+      providerConfigId: 'anthropic-oauth',
+      turnId: 'turn-1',
+      provider: 'anthropic',
+      model: 'claude-opus-4-6',
+      inputTokens: 10,
+      inputCachedTokens: 5,
+      outputTokens: 4,
+      reasoningTokens: 0,
+      totalTokens: 14,
+      costUnits: 14,
+      costUnitType: 'tokens',
+      cost: 0.05,
+      currency: 'USD',
+      costProvenance: 'client-reported',
+    });
+
+    await service.destroy();
+
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ subject: 'session', sessionId: 'local-session-1' }),
+        expect.objectContaining({
+          subject: 'usage',
+          attributes: expect.objectContaining({
+            'makaio.client.id': 'claude-code',
+            'makaio.adapter.name': 'claude-code',
+            'makaio.provider.config_id': 'anthropic-oauth',
+            'makaio.turn.id': 'turn-1',
+            'llm.cost.unit_type': 'tokens',
+            'llm.cost.provenance': 'client-reported',
+          }),
+        }),
+      ]),
+    );
+    expect(exported[0]?.find((draft) => draft.subject === 'usage')?.executionId).toBeUndefined();
+  });
+
   it('uses workflow execution event timestamps instead of handler receipt time', async () => {
     const exported: SpanDraft[][] = [];
     const service = new TelemetryOtelService({

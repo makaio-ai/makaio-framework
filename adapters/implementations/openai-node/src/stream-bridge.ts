@@ -404,8 +404,19 @@ export async function processStream(
   };
 
   const emitEvent: EventEmitter = async (event) => {
+    const correlatedEvent =
+      event.eventType === 'usage' && config.requestCorrelation !== undefined
+        ? {
+            ...event,
+            llmCallId: config.requestCorrelation.llmCallId,
+            ...(config.requestCorrelation.executionId !== undefined
+              ? { executionId: config.requestCorrelation.executionId }
+              : {}),
+            ...(config.requestCorrelation.frameId !== undefined ? { frameId: config.requestCorrelation.frameId } : {}),
+          }
+        : event;
     await config.bus.emit(OpenAINodeConnectorSubjects.sdk.event, {
-      event,
+      event: correlatedEvent,
       ...metadata,
     });
   };

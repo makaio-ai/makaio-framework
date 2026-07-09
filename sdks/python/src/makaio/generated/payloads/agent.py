@@ -455,6 +455,15 @@ class AgentSendMessageRequestSessionContextNativeLocalityVariantC:
 
 
 @dataclass(frozen=True)
+class AgentSendMessageRequestSessionContextRequestCorrelation:
+    execution_id: str | None = None
+    frame_id: str | None = None
+    message_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True)
 class AgentSendMessageRequestSessionContext:
     cache_strategy: Literal["auto", "systemPrompt", "fullPrefix"] | None = None
     extracted_context: Any | None = None
@@ -465,6 +474,7 @@ class AgentSendMessageRequestSessionContext:
     message_history: list[AgentSendMessageRequestSessionContextMessageHistoryItem] | None = None
     native_fork: AgentSendMessageRequestSessionContextNativeFork | None = None
     native_locality: Union[AgentSendMessageRequestSessionContextNativeLocalityVariantA, AgentSendMessageRequestSessionContextNativeLocalityVariantB, AgentSendMessageRequestSessionContextNativeLocalityVariantC] | None = None
+    request_correlation: AgentSendMessageRequestSessionContextRequestCorrelation | None = None
     turn_context: dict[str, Any] | None = None
 
 
@@ -1106,8 +1116,12 @@ class AgentUsagePayload:
     client_id: str | None = None
     context_window: float | None = None
     cost: float | None = None
+    cost_provenance: Literal["provider-reported", "client-reported", "estimated"] | None = None
     currency: str | None = None
     duration: float | None = None
+    execution_id: str | None = None
+    frame_id: str | None = None
+    llm_call_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
     provider_config_id: str | None = None

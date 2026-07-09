@@ -142,6 +142,7 @@ export type {
   ISessionToolLedger,
   ToolLedgerEntry,
   LedgerSessionContext,
+  ProviderRequestCorrelation,
   AIAgentConfig,
   AgentContext,
   AgentIdentity,
@@ -153,6 +154,12 @@ export type {
   ConnectorSendMessageOptions,
   ConnectorStartOptions,
   ExecutionContext,
+} from './agent/index.js';
+
+export {
+  bindProviderRequestCorrelation,
+  buildFactoryUsageCorrelationHeaders,
+  FactoryUsageCorrelationHeaders,
 } from './agent/index.js';
 
 // AI Adapter base class

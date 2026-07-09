@@ -420,17 +420,23 @@ describe('openai-node connector/session', () => {
 
     const executeApiCall = Reflect.get(session, 'executeApiCall') as
       | ((
-          turn: { markStepStarted: () => Promise<void>; markStepFinished: () => Promise<void> },
+          turn: {
+            getMessageHandle: () => MessageHandle;
+            markStepStarted: () => Promise<void>;
+            markStepFinished: () => Promise<void>;
+          },
           signal: AbortSignal,
           adapterSessionId: string,
         ) => Promise<void>)
       | undefined;
     expect(executeApiCall).toBeTypeOf('function');
+    const handle = new MessageHandle('message-1', normalizeMessageInput('hello'), 'enqueue');
 
     try {
       await executeApiCall?.call(
         session,
         {
+          getMessageHandle: () => handle,
           markStepStarted: async () => {},
           markStepFinished: async () => {},
         },

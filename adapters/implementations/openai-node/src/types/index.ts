@@ -5,6 +5,7 @@ import {
   type AIReasoningLevel,
   type ReasoningLevelMap,
   type MessageResult,
+  type ProviderRequestCorrelation,
 } from '@makaio/ai-adapters-core';
 import type { OpenAINodeProviderSettings } from '../schemas.js';
 import { type ExtractSubjectPayload, type ExtractSubjectResponse } from '@makaio/core';
@@ -72,6 +73,8 @@ export interface StreamBridgeConfig {
   model: string;
   /** Tool names that stay internal and are omitted from public tool lifecycle events. */
   hiddenToolCallNames?: readonly string[];
+  /** Correlation bound to this concrete provider request. */
+  requestCorrelation?: ProviderRequestCorrelation;
 
   logLowLevelEvent?: (event: unknown) => void;
 }
@@ -115,6 +118,8 @@ export interface OpenAISessionConfig {
   env: Record<string, string>;
   client: OpenAI;
   openAITools: ChatCompletionTool[];
+  /** Explicit opt-in for trusted Factory Gateway correlation headers. */
+  requestCorrelationHeaders?: 'factory-v1';
   /** Resolved system prompt string to prepend to messages */
   systemPrompt?: string;
   /**

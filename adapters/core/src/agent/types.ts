@@ -8,6 +8,7 @@ import type {
   NativeForkDirective,
   ProviderContext,
   ResponseSchemaDescriptor,
+  RequestCorrelationContext,
   SessionContext,
   SystemPrompt,
 } from '@makaio/contracts';
@@ -353,6 +354,11 @@ export type StartAgentOptions = AgentSendMessageOptions;
  * Inherits responseSchema from AgentSendMessageOptions.
  */
 export interface ConnectorSendMessageOptions extends AgentSendMessageOptions {
+  /**
+   * Content-free provider transport correlation. This is carried on the
+   * message handle and never materialized into the LLM-facing message.
+   */
+  requestCorrelation?: RequestCorrelationContext;
   /**
    * Turn-scoped context assembled by PreUserMessage hooks and the orchestrator.
    * Extracted from sessionContext.turnContext by AIAgent.

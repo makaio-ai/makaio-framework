@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { observability } from '@makaio/core';
 
 /**
  * Base agent event fields.
@@ -6,16 +7,16 @@ import { z } from 'zod';
  */
 export const BaseAgentEventSchema = z.object({
   /** Unique agent identifier (required) */
-  agentId: z.string(),
+  agentId: observability.attribute(z.string(), 'makaio.agent.id'),
 
   /** Adapter instance identifier (required) */
-  adapterId: z.string(),
+  adapterId: observability.attribute(z.string(), 'makaio.adapter.id'),
 
   /** Adapter type name (e.g., 'claude-code') (required) */
-  adapterName: z.string(),
+  adapterName: observability.attribute(z.string(), 'makaio.adapter.name'),
 
   /** Makaio session ID (NOT provider's native session ID) */
-  sessionId: z.string().optional(),
+  sessionId: observability.attribute(z.string(), 'makaio.session.id').optional(),
 
   /**
    * Provider's native session ID (e.g., Claude conversation ID).
@@ -25,22 +26,22 @@ export const BaseAgentEventSchema = z.object({
    * (e.g. `user_message.sent`) are emitted.  The payload emitter omits
    * the field entirely until the provider confirms the fork.
    */
-  adapterSessionId: z.string().optional(),
+  adapterSessionId: observability.attribute(z.string(), 'makaio.adapter.session_id').optional(),
 
   /** User message ID being processed (for correlation with user_message lifecycle events) */
-  messageId: z.string().optional(),
+  messageId: observability.attribute(z.string(), 'makaio.message.id').optional(),
 
   /** Turn ID from the session orchestrator. Optional for backward compatibility. */
-  turnId: z.string().optional(),
+  turnId: observability.attribute(z.string(), 'makaio.turn.id').optional(),
 
   /** Client identifier for the owning application/runtime when known. */
-  clientId: z.string().optional(),
+  clientId: observability.attribute(z.string(), 'makaio.client.id').optional(),
 
   /** Resolved provider configuration identifier when known. */
-  providerConfigId: z.string().optional(),
+  providerConfigId: observability.attribute(z.string(), 'makaio.provider.config_id').optional(),
 
   /** Event occurrence timestamp in epoch milliseconds when known. */
-  occurredAt: z.number().optional(),
+  occurredAt: observability.attribute(z.number(), 'event.occurred_at').optional(),
 });
 
 export type BaseAgentEvent = z.infer<typeof BaseAgentEventSchema>;

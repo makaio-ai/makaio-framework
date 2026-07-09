@@ -284,6 +284,7 @@ export abstract class AIAgentConnector<
       options?.responseSchema,
       options?.internalRetry ?? false,
       options?.cacheStrategy,
+      options?.requestCorrelation === undefined ? undefined : { ...options.requestCorrelation, messageId },
     );
     handle.adapterSessionId = this.adapterSessionId;
     // Suppress user_message.sent for internal retry turns — the retry is an

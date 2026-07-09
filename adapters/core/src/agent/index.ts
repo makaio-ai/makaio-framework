@@ -37,6 +37,12 @@ export { ToolCallTracker, type ResolveHints } from './tool-call-tracker.js';
 export { SessionToolLedger } from './session-tool-ledger.js';
 export type { ISessionToolLedger, ToolLedgerEntry, LedgerSessionContext } from './session-tool-ledger.js';
 export { extractMcpCallTarget, isMcpCallTool } from './mcp-call-extractor.js';
+export {
+  bindProviderRequestCorrelation,
+  buildFactoryUsageCorrelationHeaders,
+  FactoryUsageCorrelationHeaders,
+} from './request-correlation.js';
+export type { ProviderRequestCorrelation } from './request-correlation.js';
 export type { AIAgentConfig, AgentContext, AgentIdentity, NormalizedCallUsage } from './types.js';
 // Re-export MessageHandle from message-handle folder
 export { MessageHandle } from '../message-handle/index.js';

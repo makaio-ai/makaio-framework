@@ -13,15 +13,23 @@
  * 6. `onExecutionCompleted` / `onExecutionFailed` / `onExecutionCancelled` —
  *    flushes all span drafts for the execution and removes it from memory.
  * 7. `sweepOrphans` — call periodically; promotes stale sessionless agent
- *    events to orphan spans and drops stale sessioned events that never linked,
- *    without terminating still-active executions.
+ *    events to execution orphans and exports unlinked sessioned events as
+ *    standalone trace segments without terminating still-active executions.
  * @packageDocumentation
  */
 
 import type { SpanDraft } from '../contracts/types.js';
 import { SpanBuilder } from './span-builder.js';
 import { SessionIndex } from './session-index.js';
+import { buildStandaloneSessionTrace } from './standalone-session-traces.js';
+import {
+  createUnresolvedUsage,
+  groupUsageBySession,
+  partitionStaleSessionEvents,
+  partitionUsageForExecution,
+} from './unresolved-events.js';
 import type {
+  AgentUsagePayload,
   BufferedToolCall,
   BufferedUsage,
   CollectorOptions,
@@ -30,6 +38,8 @@ import type {
   UnresolvedToolCall,
   UnresolvedUsage,
 } from './types.js';
+
+export type { AgentUsagePayload } from './types.js';
 
 /**
  * Payload shape for `workflow.execution.started`.
@@ -115,30 +125,6 @@ export interface FrameSessionLinkedPayload {
 }
 
 /**
- * Subset of the `agent.usage` event consumed by the collector.
- *
- * Mirrors the fields on `UsageSchema` that are relevant to span construction.
- * `sessionId` is optional because the base event schema marks it as such.
- */
-export interface AgentUsagePayload {
-  readonly sessionId?: string;
-  readonly provider: string;
-  readonly model: string;
-  readonly inputTokens: number;
-  readonly inputCachedTokens: number;
-  readonly cacheWriteTokens?: number;
-  readonly outputTokens: number;
-  readonly reasoningTokens: number;
-  readonly totalTokens: number;
-  readonly costUnits: number;
-  readonly costUnitType: 'requests' | 'tokens';
-  readonly cost?: number;
-  readonly currency?: string;
-  readonly duration?: number;
-  readonly occurredAt?: number;
-}
-
-/**
  * Payload shape for `agent.tool.started`.
  */
 export interface AgentToolStartedPayload {
@@ -171,7 +157,9 @@ export class SpanCollector {
   private readonly executions = new Map<string, OpenExecution>();
   private readonly sessionIndex = new SessionIndex();
   private readonly unresolvedUsageBySession = new Map<string, UnresolvedUsage[]>();
+  private readonly unresolvedUsageByExecution = new Map<string, UnresolvedUsage[]>();
   private readonly unresolvedToolsBySession = new Map<string, Map<string, UnresolvedToolCall>>();
+  private standaloneSegmentSequence = 0;
   /**
    * Orphan spans that have been emitted out-of-band during `sweepOrphans`.
    * Stored per executionId so they can be appended when the execution flushes.
@@ -209,7 +197,7 @@ export class SpanCollector {
       }
     }
 
-    this.executions.set(payload.executionId, {
+    const execution: OpenExecution = {
       executionId: payload.executionId,
       workflowId: payload.workflowId,
       startedAt,
@@ -218,7 +206,9 @@ export class SpanCollector {
       pendingTools: new Map(),
       sessionFrameMap: new Map(),
       usageSequence: 0,
-    });
+    };
+    this.executions.set(payload.executionId, execution);
+    this.replayUnresolvedUsageForExecution(execution);
 
     return eviction;
   }
@@ -344,15 +334,22 @@ export class SpanCollector {
    */
   public onAgentUsage(payload: AgentUsagePayload): void {
     const now = this.options.now();
-    const unresolved = this.createUnresolvedUsage(payload, now);
-    const execution = this.resolveExecutionForSession(payload.sessionId);
+    const unresolved = createUnresolvedUsage(payload, now);
+    const execution =
+      payload.executionId !== undefined
+        ? this.executions.get(payload.executionId)
+        : this.resolveExecutionForSession(payload.sessionId);
 
     if (execution !== undefined) {
       this.bufferUsageOnExecution(execution, unresolved);
       return;
     }
 
-    if (payload.sessionId !== undefined) {
+    if (payload.executionId !== undefined) {
+      const existing = this.unresolvedUsageByExecution.get(payload.executionId) ?? [];
+      existing.push(unresolved);
+      this.unresolvedUsageByExecution.set(payload.executionId, existing);
+    } else if (payload.sessionId !== undefined) {
       const existing = this.unresolvedUsageBySession.get(payload.sessionId) ?? [];
       existing.push(unresolved);
       this.unresolvedUsageBySession.set(payload.sessionId, existing);
@@ -464,6 +461,8 @@ export class SpanCollector {
     for (const executionId of executionIds) {
       await this.onExecutionFailed({ executionId, error: 'Service shutdown' }, this.options.now());
     }
+    await this.flushStaleStandaloneSessions(this.options.now(), 0);
+    await this.flushStaleUnopenedExecutions(this.options.now(), 0);
   }
 
   /**
@@ -475,14 +474,13 @@ export class SpanCollector {
    *
    * Sessioned events that have not yet received `frame.sessionLinked` remain
    * buffered until this same timeout expires. After that point the collector
-   * discards them because no execution owner can be proven.
+   * exports them as standalone session trace segments.
    */
   public async sweepOrphans(): Promise<void> {
     const now = this.options.now();
     const { orphanTimeoutMs } = this.options;
 
     if (orphanTimeoutMs === 0) {
-      this.sweepUnresolvedSessionEvents(now, 0);
       return;
     }
 
@@ -492,9 +490,11 @@ export class SpanCollector {
       for (const usage of execution.pendingUsage) {
         const age = now - usage.ingestedAt;
         const isStale = age >= orphanTimeoutMs;
-        const sessionResolved = usage.sessionId !== undefined && execution.sessionFrameMap.has(usage.sessionId);
+        const frameResolved =
+          usage.frameId !== undefined ||
+          (usage.sessionId !== undefined && execution.sessionFrameMap.has(usage.sessionId));
 
-        if (!isStale || sessionResolved) {
+        if (!isStale || frameResolved) {
           remaining.push(usage);
           continue;
         }
@@ -521,7 +521,8 @@ export class SpanCollector {
       }
     }
 
-    this.sweepUnresolvedSessionEvents(now, orphanTimeoutMs);
+    await this.flushStaleStandaloneSessions(now, orphanTimeoutMs);
+    await this.flushStaleUnopenedExecutions(now, orphanTimeoutMs);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -584,7 +585,8 @@ export class SpanCollector {
 
     // Resolve pending usage events against their session→frame mappings
     for (const usage of execution.pendingUsage) {
-      const frameId = usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined;
+      const frameId =
+        usage.frameId ?? (usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined);
       drafts.push(this.buildUsageSpan(execution, usage, frameId));
     }
 
@@ -603,8 +605,6 @@ export class SpanCollector {
     this.executions.delete(executionId);
     this.sessionIndex.evictExecution(executionId);
     this.emittedOrphans.delete(executionId);
-    this.clearUnlinkedAgentEventsWhenIdle();
-
     await this.options.emit(drafts);
   }
 
@@ -665,8 +665,20 @@ export class SpanCollector {
       outputTokens: usage.outputTokens,
       reasoningTokens: usage.reasoningTokens,
       totalTokens: usage.totalTokens,
+      agentId: usage.agentId,
+      adapterId: usage.adapterId,
+      adapterName: usage.adapterName,
+      adapterSessionId: usage.adapterSessionId,
+      messageId: usage.messageId,
+      turnId: usage.turnId,
+      clientId: usage.clientId,
+      providerConfigId: usage.providerConfigId,
+      llmCallId: usage.llmCallId,
+      costUnits: usage.costUnits,
+      costUnitType: usage.costUnitType,
       cost: usage.cost,
       currency: usage.currency,
+      costProvenance: usage.costProvenance,
       duration: usage.duration,
       startedAt,
       endedAt,
@@ -701,27 +713,6 @@ export class SpanCollector {
     });
   }
 
-  private createUnresolvedUsage(payload: AgentUsagePayload, ingestedAt: number): UnresolvedUsage {
-    return {
-      sessionId: payload.sessionId,
-      provider: payload.provider,
-      model: payload.model,
-      inputTokens: payload.inputTokens,
-      inputCachedTokens: payload.inputCachedTokens,
-      cacheWriteTokens: payload.cacheWriteTokens,
-      outputTokens: payload.outputTokens,
-      reasoningTokens: payload.reasoningTokens,
-      totalTokens: payload.totalTokens,
-      costUnits: payload.costUnits,
-      costUnitType: payload.costUnitType,
-      cost: payload.cost,
-      currency: payload.currency,
-      duration: payload.duration,
-      occurredAt: payload.occurredAt,
-      ingestedAt,
-    };
-  }
-
   private resolveExecutionForSession(sessionId: string | undefined): OpenExecution | undefined {
     if (sessionId !== undefined) {
       const link = this.sessionIndex.lookup(sessionId);
@@ -751,10 +742,18 @@ export class SpanCollector {
       return;
     }
 
-    for (const usage of usages) {
+    const { matched, retained } = partitionUsageForExecution(usages, execution.executionId, true);
+    for (const usage of matched) {
       this.bufferUsageOnExecution(execution, usage);
     }
-    this.unresolvedUsageBySession.delete(sessionId);
+    if (retained.length === 0) this.unresolvedUsageBySession.delete(sessionId);
+    else this.unresolvedUsageBySession.set(sessionId, retained);
+  }
+
+  private replayUnresolvedUsageForExecution(execution: OpenExecution): void {
+    const usages = this.unresolvedUsageByExecution.get(execution.executionId) ?? [];
+    for (const usage of usages) this.bufferUsageOnExecution(execution, usage);
+    this.unresolvedUsageByExecution.delete(execution.executionId);
   }
 
   private bufferToolOnExecution(execution: OpenExecution, tool: BufferedToolCall): void {
@@ -818,37 +817,48 @@ export class SpanCollector {
     this.unresolvedToolsBySession.delete(sessionId);
   }
 
-  private sweepUnresolvedSessionEvents(now: number, orphanTimeoutMs: number): void {
-    for (const [sessionId, usages] of this.unresolvedUsageBySession) {
-      const retained = usages.filter((usage) => now - usage.ingestedAt < orphanTimeoutMs);
-      if (retained.length === 0) {
-        this.unresolvedUsageBySession.delete(sessionId);
-        continue;
-      }
-      if (retained.length !== usages.length) {
-        this.unresolvedUsageBySession.set(sessionId, retained);
-      }
-    }
-
-    for (const [sessionId, tools] of this.unresolvedToolsBySession) {
-      for (const [key, tool] of tools) {
-        if (now - tool.ingestedAt >= orphanTimeoutMs) {
-          tools.delete(key);
-        }
-      }
-      if (tools.size === 0) {
-        this.unresolvedToolsBySession.delete(sessionId);
-      }
+  private async flushStaleStandaloneSessions(now: number, timeoutMs: number): Promise<void> {
+    const sessionIds = new Set([...this.unresolvedUsageBySession.keys(), ...this.unresolvedToolsBySession.keys()]);
+    for (const sessionId of sessionIds) {
+      const usages = this.unresolvedUsageBySession.get(sessionId) ?? [];
+      const tools = this.unresolvedToolsBySession.get(sessionId) ?? new Map();
+      const { expiredUsages, retainedUsages, expiredTools, retainedTools } = partitionStaleSessionEvents(
+        usages,
+        tools,
+        now,
+        timeoutMs,
+      );
+      if (retainedUsages.length === 0) this.unresolvedUsageBySession.delete(sessionId);
+      else this.unresolvedUsageBySession.set(sessionId, retainedUsages);
+      if (retainedTools.size === 0) this.unresolvedToolsBySession.delete(sessionId);
+      else this.unresolvedToolsBySession.set(sessionId, retainedTools);
+      await this.flushStandaloneSession(sessionId, expiredUsages, expiredTools, now);
     }
   }
 
-  private clearUnlinkedAgentEventsWhenIdle(): void {
-    if (this.executions.size !== 0) {
+  private async flushStandaloneSession(
+    sessionId: string,
+    usages: readonly UnresolvedUsage[],
+    tools: readonly UnresolvedToolCall[],
+    fallbackEndedAt: number,
+  ): Promise<void> {
+    if (usages.length === 0 && tools.length === 0) {
       return;
     }
 
-    this.unresolvedUsageBySession.clear();
-    this.unresolvedToolsBySession.clear();
+    const segment = this.standaloneSegmentSequence++;
+    await this.options.emit(buildStandaloneSessionTrace({ sessionId, segment, usages, tools, fallbackEndedAt }));
+  }
+
+  private async flushStaleUnopenedExecutions(now: number, timeoutMs: number): Promise<void> {
+    for (const [executionId, usages] of this.unresolvedUsageByExecution) {
+      const { expiredUsages, retainedUsages } = partitionStaleSessionEvents(usages, new Map(), now, timeoutMs);
+      if (retainedUsages.length === 0) this.unresolvedUsageByExecution.delete(executionId);
+      else this.unresolvedUsageByExecution.set(executionId, retainedUsages);
+      for (const [sessionId, grouped] of groupUsageBySession(expiredUsages, executionId)) {
+        await this.flushStandaloneSession(sessionId, grouped, [], now);
+      }
+    }
   }
 
   private toolKey(sessionId: string | undefined, toolCallId: string): string {
@@ -924,7 +934,8 @@ export class SpanCollector {
 
     // Resolve pending usage events against their session→frame mappings
     for (const usage of execution.pendingUsage) {
-      const frameId = usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined;
+      const frameId =
+        usage.frameId ?? (usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined);
       drafts.push(this.buildUsageSpan(execution, usage, frameId));
     }
 
@@ -943,8 +954,6 @@ export class SpanCollector {
     this.executions.delete(executionId);
     this.sessionIndex.evictExecution(executionId);
     this.emittedOrphans.delete(executionId);
-    this.clearUnlinkedAgentEventsWhenIdle();
-
     await this.options.emit(drafts);
   }
 }

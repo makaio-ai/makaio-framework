@@ -72,7 +72,18 @@ function buildEventEmitter(
   metadata: { adapterName: string; agentId: string; adapterId: string; adapterSessionId?: string },
 ): EventEmitter {
   return async (event) => {
-    await config.bus.emit(AnthropicSdkConnectorSubjects.sdk.event, { event, ...metadata });
+    const correlatedEvent =
+      event.eventType === 'usage' && config.requestCorrelation !== undefined
+        ? {
+            ...event,
+            llmCallId: config.requestCorrelation.llmCallId,
+            ...(config.requestCorrelation.executionId !== undefined
+              ? { executionId: config.requestCorrelation.executionId }
+              : {}),
+            ...(config.requestCorrelation.frameId !== undefined ? { frameId: config.requestCorrelation.frameId } : {}),
+          }
+        : event;
+    await config.bus.emit(AnthropicSdkConnectorSubjects.sdk.event, { event: correlatedEvent, ...metadata });
   };
 }
 

@@ -45,6 +45,8 @@ export type {
 } from './schemas/extension-context.js';
 export { CACHE_STRATEGIES, SessionContextSchema } from './session-context.js';
 export type { CacheStrategy, SessionContext } from './session-context.js';
+export { RequestCorrelationContextSchema } from './request-correlation.js';
+export type { RequestCorrelationContext } from './request-correlation.js';
 export {
   UI_WARNINGS_CATEGORY,
   CONNECTOR_SWAP_WARNING_SUPPRESSED_KEY,

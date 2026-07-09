@@ -46,6 +46,7 @@ import {
   ClientWiringEntrySchema,
 } from './session-observed.js';
 import { ClientConfigPrimeSchema, ClientProfileSchemas, ClientSessionConfigSchemas } from './profile.js';
+import { ClientSessionUsageSnapshotSchema } from './session-usage.js';
 
 export { ClientExecutionContextSchema, ClientResolveBinarySchema } from './binary-resolution.js';
 export type {
@@ -118,6 +119,8 @@ export const ClientSchemas = {
   },
   'usage.ingest': ClientUsageIngestSchema,
   'usage.snapshot': ClientUsageSnapshotSchema,
+  // Session-local model usage — distinct from account quota windows above.
+  'session.usage.snapshot': ClientSessionUsageSnapshotSchema,
   // Observed session semantics — normalized lifecycle signals from adapters
   'session.started': ClientSessionStartedSchema,
   'session.userPrompt.submitted': ClientSessionUserPromptSubmittedSchema,
