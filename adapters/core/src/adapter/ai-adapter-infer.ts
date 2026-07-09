@@ -186,6 +186,7 @@ async function validateInferStructuredOutput<TBus extends ScopedBus<string>, TCo
         internalRetry: true,
         messageId: `${startResult.messageHandle.messageId}:structured-output-retry:${attemptNumber}`,
         responseSchema,
+        requestCorrelation: startResult.messageHandle.requestCorrelation,
         turnContext: {
           ...startResult.messageHandle.turnContext,
           structuredOutputRetry: {
