@@ -224,8 +224,15 @@ export function resolveHeartbeatConfig(
   if (heartbeat === false) {
     return false;
   }
-  return {
-    intervalMs: heartbeat?.intervalMs ?? DEFAULT_HEARTBEAT.intervalMs,
-    timeoutMs: heartbeat?.timeoutMs ?? DEFAULT_HEARTBEAT.timeoutMs,
-  };
+  const intervalMs = heartbeat?.intervalMs ?? DEFAULT_HEARTBEAT.intervalMs;
+  const timeoutMs = heartbeat?.timeoutMs ?? DEFAULT_HEARTBEAT.timeoutMs;
+
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    throw new RangeError(`heartbeat.intervalMs must be a finite number > 0 (got ${String(intervalMs)})`);
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError(`heartbeat.timeoutMs must be a finite number > 0 (got ${String(timeoutMs)})`);
+  }
+
+  return { intervalMs, timeoutMs };
 }

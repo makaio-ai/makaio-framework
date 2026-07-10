@@ -80,12 +80,13 @@ function unrefTimer(timer: ReturnType<typeof setInterval> | ReturnType<typeof se
 /**
  * Start the liveness watchdog on a connected socket.
  *
- * Tracks inbound evidence (`message` events and pong frames). Every
- * `config.intervalMs`: when no evidence arrived within the last interval, a
- * ping probe is sent and a `config.timeoutMs` deadline armed; evidence clears
- * the deadline, expiry stops the watchdog and terminates the socket. The
- * watchdog self-stops when the socket closes and is inert for sockets
- * without ping support.
+ * Tracks inbound evidence (`message` events and pong frames). A resettable
+ * idle timer fires exactly `config.intervalMs` after the most recent inbound
+ * evidence; when it fires a ping probe is sent and a `config.timeoutMs`
+ * deadline armed. Evidence clears the deadline and re-arms the idle timer;
+ * deadline expiry stops the watchdog and terminates the socket. The watchdog
+ * self-stops when the socket closes and is inert for sockets without ping
+ * support.
  * @param ws - Connected socket to supervise
  * @param config - Resolved heartbeat timing configuration
  * @param ctx - Transport logging context
@@ -103,8 +104,52 @@ export function startHeartbeatWatchdog(
 
   let stopped = false;
   let lastInboundAt = Date.now();
-  let interval: ReturnType<typeof setInterval> | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let probeDeadline: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Schedule the idle check to fire `config.intervalMs` after the most
+   * recent inbound evidence. Only called when no idle timer is pending:
+   * a pending timer that fires too early (because fresher evidence moved
+   * `lastInboundAt` forward) lazily re-schedules itself in `onIdleTick`
+   * instead of being reset on every message — keeping the per-message
+   * hot path free of timer churn.
+   */
+  const scheduleIdleCheck = (): void => {
+    if (stopped) return;
+    const elapsed = Date.now() - lastInboundAt;
+    const delay = Math.max(0, config.intervalMs - elapsed);
+    idleTimer = setTimeout(onIdleTick, delay);
+    unrefTimer(idleTimer);
+  };
+
+  /** Terminate the socket after the probe deadline expires with no evidence. */
+  const onDeadlineExpired = (): void => {
+    probeDeadline = null;
+    stop();
+    if (ctx.debug) {
+      console.warn(
+        `[WebSocketClientTransport:${ctx.name}] ${new Date().toISOString()} Heartbeat deadline expired (no message/pong within ${config.timeoutMs}ms) — terminating socket`,
+      );
+    }
+    ws.terminate();
+  };
+
+  /** Fired when `intervalMs` has elapsed since the last inbound evidence. */
+  const onIdleTick = (): void => {
+    idleTimer = null;
+    if (stopped) return;
+    if (probeDeadline !== null) return; // Probe already in flight; its deadline decides.
+    if (Date.now() - lastInboundAt < config.intervalMs) {
+      // Evidence arrived after we were scheduled but before we fired.
+      scheduleIdleCheck();
+      return;
+    }
+    if (ws.readyState !== 1) return; // Not open — close handling owns this.
+    ws.ping();
+    probeDeadline = setTimeout(onDeadlineExpired, config.timeoutMs);
+    unrefTimer(probeDeadline);
+  };
 
   /** Inbound evidence (message or pong): the peer is alive right now. */
   const onEvidence = (): void => {
@@ -112,6 +157,11 @@ export function startHeartbeatWatchdog(
     if (probeDeadline !== null) {
       clearTimeout(probeDeadline);
       probeDeadline = null;
+    }
+    // Re-arm only when no idle timer is pending (i.e. after a probe was
+    // sent); otherwise the pending timer lazily re-schedules on fire.
+    if (idleTimer === null) {
+      scheduleIdleCheck();
     }
   };
 
@@ -125,9 +175,9 @@ export function startHeartbeatWatchdog(
       return;
     }
     stopped = true;
-    if (interval !== null) {
-      clearInterval(interval);
-      interval = null;
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
     }
     if (probeDeadline !== null) {
       clearTimeout(probeDeadline);
@@ -142,35 +192,7 @@ export function startHeartbeatWatchdog(
   ws.on('pong', onEvidence);
   ws.addEventListener('close', onClose);
 
-  interval = setInterval(() => {
-    if (probeDeadline !== null) {
-      // A probe is already in flight; its deadline decides.
-      return;
-    }
-    if (Date.now() - lastInboundAt < config.intervalMs) {
-      // Fresh inbound evidence — no probe needed this cycle.
-      return;
-    }
-    if (ws.readyState !== 1) {
-      // Not open (yet/anymore) — pinging would throw; close handling owns this.
-      return;
-    }
-    ws.ping();
-    probeDeadline = setTimeout(() => {
-      probeDeadline = null;
-      // Stop first so no timer can fire on the terminated socket, then
-      // terminate (not close: a dead peer never answers a close handshake).
-      stop();
-      if (ctx.debug) {
-        console.warn(
-          `[WebSocketClientTransport:${ctx.name}] ${new Date().toISOString()} Heartbeat deadline expired (no message/pong within ${config.timeoutMs}ms) — terminating socket`,
-        );
-      }
-      ws.terminate();
-    }, config.timeoutMs);
-    unrefTimer(probeDeadline);
-  }, config.intervalMs);
-  unrefTimer(interval);
+  scheduleIdleCheck();
 
   return stop;
 }

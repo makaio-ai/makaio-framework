@@ -243,13 +243,6 @@ export async function connectOnce(deps: ConnectionDeps): Promise<void> {
 
     deps.setAuthComplete(true);
 
-    // Supervise the established connection for half-open failure. No handle
-    // is stored: the watchdog self-stops on the socket's close event, and
-    // every failure path below closes the socket this attempt owns.
-    if (deps.heartbeat !== false) {
-      startHeartbeatWatchdog(ws, deps.heartbeat, deps);
-    }
-
     if (deps.debug) {
       console.info(`[WebSocketClientTransport:${deps.name}] Connected to ${deps.url}`);
     }
@@ -264,6 +257,15 @@ export async function connectOnce(deps: ConnectionDeps): Promise<void> {
           `[WebSocketClientTransport:${deps.name}] Replayed ${deps.localSubscriptions.size} subscription(s)`,
         );
       }
+    }
+
+    // Arm the heartbeat watchdog AFTER subscription replay so that every
+    // async gap (codec encode, socket write) has settled before the watchdog
+    // can fire. This guarantees the caller's close-listener (no-reconnect or
+    // reconnect-loop) is installed before the earliest possible watchdog
+    // termination, preserving the lifecycle-ordering contract.
+    if (deps.heartbeat !== false) {
+      startHeartbeatWatchdog(ws, deps.heartbeat, deps);
     }
 
     // Notify after auth + subscription replay so that reconnect handlers

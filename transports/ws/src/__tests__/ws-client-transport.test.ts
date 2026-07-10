@@ -991,9 +991,13 @@ describe('WebSocketClientTransport — heartbeat watchdog', () => {
   it('recovers a half-open connection end-to-end', { timeout: 10_000 }, async () => {
     const onConnected = vi.fn();
     const onDisconnected = vi.fn();
+
+    // Flip autoPong to true BEFORE the reconnect loop creates the next
+    // socket so the replacement is responsive from the start — eliminates
+    // the race where a second dead socket is created before the flag flips.
     const { transport, created, autoPong } = makeHeartbeatTransport({
       heartbeat: { intervalMs: 30, timeoutMs: 30 },
-      autoReconnect: { baseMs: 10, maxMs: 20 },
+      autoReconnect: { baseMs: 50, maxMs: 50 },
       autoPong: false, // Half-open: established but the peer never answers.
       onConnected,
       onDisconnected,
@@ -1010,14 +1014,25 @@ describe('WebSocketClientTransport — heartbeat watchdog', () => {
     );
     expect(created[0].terminated).toBe(true);
 
-    // The connection heals: sockets created from now on answer pings.
+    // Flip before the backoff sleep (50 ms) expires so the next socket is
+    // guaranteed to be responsive — no intermediate dead socket is created.
     autoPong.value = true;
+
     await waitForCondition(
       () => onConnected.mock.calls.length >= 2,
       3000,
       'transport did not reconnect after the watchdog terminated the socket',
     );
     await waitForCondition(() => transport.isReady(), 3000, 'transport did not become ready after recovery');
+
+    // Hold through a full heartbeat cycle (intervalMs + timeoutMs) to prove
+    // the replacement socket stays healthy — not just transiently connected.
+    const connectedCountAfterRecovery = onConnected.mock.calls.length;
+    const disconnectedCountAfterRecovery = onDisconnected.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 30 + 30 + 20));
+    expect(transport.isReady()).toBe(true);
+    expect(onDisconnected.mock.calls.length).toBe(disconnectedCountAfterRecovery);
+    expect(onConnected.mock.calls.length).toBe(connectedCountAfterRecovery);
 
     await transport.disconnect();
   });
