@@ -1,6 +1,13 @@
-import { eq, and, desc, gte, lte, count, sum } from 'drizzle-orm';
-import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
-import type { WorkLogExecutionSummary, WorkLogStats, JsonValue, WorkflowArtifactBinding } from '@makaio/contracts';
+import { eq, and, desc, gte, lte, count, sum, notInArray, sql } from 'drizzle-orm';
+import { executeTransaction, getDatabaseDialect, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import {
+  WorkLogFrameEntrySchema,
+  type WorkLogExecutionSummary,
+  type WorkLogFrameEntry,
+  type WorkLogStats,
+  type JsonValue,
+  type WorkflowArtifactBinding,
+} from '@makaio/contracts';
 import type {
   InsertWorklogSummary,
   SelectWorklogSummary,
@@ -11,6 +18,24 @@ import type {
   SelectWorklogGateEvent,
 } from '../storage/schema.js';
 import { workflowEngineSchema } from '../storage/schema.variants.js';
+
+type WorklogStorageTransaction = Parameters<Parameters<typeof executeTransaction>[1]>[0];
+type WorklogSummariesTable = typeof workflowEngineSchema.sqlite.worklogSummaries;
+type WorklogFrameEntriesTable = typeof workflowEngineSchema.sqlite.worklogFrameEntries;
+
+/** Aggregate usage values owned by WorkLog frame telemetry. */
+export interface WorklogTokenTotals {
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly totalEstimatedCost: number;
+  readonly hasMeasurements: boolean;
+}
+
+/** Summary fields owned by execution lifecycle projections and settlement. */
+export type WorklogSummaryLifecycleUpdate = Pick<
+  InsertWorklogSummary,
+  'workflowId' | 'workflowName' | 'status' | 'startedAt' | 'completedAt' | 'durationMs' | 'error' | 'failedNodeId'
+>;
 
 // ─────────────────────────────────────────────────────────────
 // Row → domain mappers
@@ -45,9 +70,9 @@ function mapSummary(row: SelectWorklogSummary): WorkLogExecutionSummary {
 /**
  * Upsert a WorkLog execution summary row.
  *
- * Called when an `execution.started` event is received to create the initial
- * row, and again on `execution.completed`, `execution.failed`, and
- * `execution.cancelled` to update terminal status fields.
+ * This is the unconditional storage primitive. Event projections use
+ * {@link upsertAdvisoryWorklogSummary} so they cannot overwrite an
+ * authoritative terminal settlement.
  * @param db - Drizzle database instance.
  * @param summary - The summary values to insert or update.
  */
@@ -57,6 +82,66 @@ export async function upsertWorklogSummary(db: MakaioDatabase, summary: InsertWo
     target: worklogSummaries.executionId,
     set: summary,
   });
+}
+
+/**
+ * Insert an advisory running summary only when no row exists.
+ *
+ * Atomic external registration owns the initial summary identity. A delayed or
+ * mismatched `execution.started` event may fill a missing projection row, but
+ * must never rewrite registration fields that are already durable.
+ * @param db - Drizzle database instance.
+ * @param summary - Running summary values.
+ */
+export async function insertRunningWorklogSummaryIfAbsent(
+  db: MakaioDatabase,
+  summary: InsertWorklogSummary & { status: 'running' },
+): Promise<void> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
+  await db.insert(worklogSummaries).values(summary).onConflictDoNothing();
+}
+
+/**
+ * Upsert an advisory WorkLog summary without overwriting an authoritative terminal row.
+ *
+ * The status predicate is part of the conflict update itself. A projection
+ * that read a running row before an external settlement therefore cannot
+ * overwrite the terminal row after that settlement commits.
+ * @param db - Drizzle database instance.
+ * @param summary - Advisory summary values.
+ */
+export async function upsertAdvisoryWorklogSummary(db: MakaioDatabase, summary: InsertWorklogSummary): Promise<void> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
+  await db
+    .insert(worklogSummaries)
+    .values(summary)
+    .onConflictDoUpdate({
+      target: worklogSummaries.executionId,
+      set: worklogSummaryLifecycleUpdateValues(summary),
+      setWhere: notInArray(worklogSummaries.status, ['completed', 'failed', 'cancelled']),
+    });
+}
+
+/**
+ * Select the execution-lifecycle fields that may be changed by a summary upsert.
+ *
+ * Aggregate usage has a separate authority: it is derived from WorkLog frames
+ * only after serializing on the summary row. Conflict updates must therefore
+ * preserve the usage values already stored by a concurrent reaggregation.
+ * @param summary - Complete summary insert values.
+ * @returns Lifecycle-only conflict update values.
+ */
+export function worklogSummaryLifecycleUpdateValues(summary: InsertWorklogSummary): WorklogSummaryLifecycleUpdate {
+  return {
+    workflowId: summary.workflowId,
+    workflowName: summary.workflowName,
+    status: summary.status,
+    startedAt: summary.startedAt,
+    completedAt: summary.completedAt,
+    durationMs: summary.durationMs,
+    error: summary.error,
+    failedNodeId: summary.failedNodeId,
+  };
 }
 
 /**
@@ -134,8 +219,9 @@ export async function listWorklogSummaries(
 /**
  * Upsert a WorkLog frame entry row.
  *
- * Called on `frame.started`, `frame.completed`, and `frame.failed` events to
- * create or update the frame's projection entry.
+ * This is the unconditional storage primitive. Event projections use
+ * {@link upsertAdvisoryWorklogFrameEntry} to preserve authoritative terminal
+ * rows.
  * @param db - Drizzle database instance.
  * @param entry - Frame entry values to insert or update.
  */
@@ -148,6 +234,46 @@ export async function upsertWorklogFrameEntry(db: MakaioDatabase, entry: InsertW
 }
 
 /**
+ * Insert an advisory running frame only when no row exists.
+ *
+ * Atomic registration owns immutable frame metadata. A `frame.started` event
+ * can repair a missing projection, but redelivery must not alter an existing
+ * frame's node, path, attempt, branch, or start timestamp.
+ * @param db - Drizzle database instance.
+ * @param entry - Running frame values.
+ */
+export async function insertRunningWorklogFrameIfAbsent(
+  db: MakaioDatabase,
+  entry: InsertWorklogFrameEntry & { status: 'running' },
+): Promise<void> {
+  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
+  await db.insert(worklogFrameEntries).values(entry).onConflictDoNothing();
+}
+
+/**
+ * Upsert an advisory WorkLog frame without overwriting an authoritative terminal row.
+ *
+ * The status predicate is evaluated by the database during the conflict
+ * update, closing the read-then-write race in terminal event projections.
+ * @param db - Drizzle database instance.
+ * @param entry - Advisory frame values.
+ */
+export async function upsertAdvisoryWorklogFrameEntry(
+  db: MakaioDatabase,
+  entry: InsertWorklogFrameEntry,
+): Promise<void> {
+  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
+  await db
+    .insert(worklogFrameEntries)
+    .values(entry)
+    .onConflictDoUpdate({
+      target: worklogFrameEntries.frameId,
+      set: entry,
+      setWhere: notInArray(worklogFrameEntries.status, ['completed', 'failed', 'skipped', 'cancelled']),
+    });
+}
+
+/**
  * Retrieve a single WorkLog frame entry by frame ID.
  *
  * Used by terminal-event projections (`frame.completed`, `frame.failed`) to
@@ -157,13 +283,47 @@ export async function upsertWorklogFrameEntry(db: MakaioDatabase, entry: InsertW
  * @param frameId - Frame identifier to look up.
  * @returns The frame entry row, or `null` when not found.
  */
-export async function getWorklogFrameEntry(
+export async function getWorklogFrameEntryRow(
   db: MakaioDatabase,
   frameId: string,
 ): Promise<SelectWorklogFrameEntry | null> {
   const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
   const rows = await db.select().from(worklogFrameEntries).where(eq(worklogFrameEntries.frameId, frameId)).limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Retrieve one WorkLog frame entry as its public contract shape.
+ *
+ * Database nulls are normalised to absent optional fields before the value is
+ * returned through the public WorkLog RPC. Parsing also protects the RPC from
+ * exposing a row that does not satisfy the published projection contract.
+ * @param db - Drizzle database instance.
+ * @param frameId - Frame identifier to look up.
+ * @returns The mapped frame entry, or `null` when not found.
+ */
+export async function getWorklogFrameEntry(db: MakaioDatabase, frameId: string): Promise<WorkLogFrameEntry | null> {
+  const row = await getWorklogFrameEntryRow(db, frameId);
+  if (row === null) return null;
+
+  return WorkLogFrameEntrySchema.parse({
+    executionId: row.executionId,
+    frameId: row.frameId,
+    nodeId: row.nodeId,
+    nodeType: row.nodeType,
+    path: row.path,
+    status: row.status,
+    attempt: row.attempt,
+    iteration: row.iteration ?? undefined,
+    branchKey: row.branchKey ?? undefined,
+    startedAt: row.startedAt ?? undefined,
+    completedAt: row.completedAt ?? undefined,
+    durationMs: row.durationMs ?? undefined,
+    inputTokens: row.inputTokens ?? undefined,
+    outputTokens: row.outputTokens ?? undefined,
+    estimatedCost: row.estimatedCost ?? undefined,
+    error: row.error ?? undefined,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -259,38 +419,154 @@ export function buildGateEventId(executionId: string, nodeId: string, frameId: s
 }
 
 // ─────────────────────────────────────────────────────────────
-// Token aggregation helper
+// Token aggregation helpers
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Re-aggregate token totals from all frame entries for an execution using a
- * single SQL aggregate query instead of loading every row into JS memory.
+ * Acquire the summary row as the serialization point for usage aggregation.
  *
- * Called after a `frame.completed` event that carries token telemetry so the
- * WorkLog summary stays accurate without loading all frames from memory.
- * @param db - Drizzle database instance.
- * @param executionId - Execution identifier to aggregate.
- * @returns Aggregated token sums and cost.
+ * A self-update is the portable lock seam: PostgreSQL holds a row lock until
+ * the transaction ends, while SQLite acquires its writer lock. Callers must
+ * aggregate frames only after this operation resolves so a waiter observes
+ * every frame and summary write committed by the previous lock owner.
+ * @param tx - Active storage transaction.
+ * @param worklogSummaries - Dialect-resolved summary table.
+ * @param executionId - Execution whose summary row should be locked.
+ * @returns The current summary row, or `undefined` when none exists.
  */
-export async function aggregateTokenTotals(
-  db: MakaioDatabase,
+export async function lockWorklogSummaryForUsage(
+  tx: WorklogStorageTransaction,
+  worklogSummaries: WorklogSummariesTable,
   executionId: string,
-): Promise<{ totalInputTokens: number; totalOutputTokens: number; totalEstimatedCost: number }> {
-  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
-  const [row] = await db
+): Promise<SelectWorklogSummary | undefined> {
+  const [summary] = await tx
+    .update(worklogSummaries)
+    .set({ totalInputTokens: worklogSummaries.totalInputTokens })
+    .where(eq(worklogSummaries.executionId, executionId))
+    .returning();
+  return summary;
+}
+
+/**
+ * Aggregate usage from every WorkLog frame in the current transaction.
+ * @param tx - Active storage transaction that already owns the summary lock.
+ * @param worklogFrameEntries - Dialect-resolved frame table.
+ * @param executionId - Execution identifier to aggregate.
+ * @returns Aggregated token sums and estimated cost.
+ */
+export async function aggregateTokenTotalsInTransaction(
+  tx: WorklogStorageTransaction,
+  worklogFrameEntries: WorklogFrameEntriesTable,
+  executionId: string,
+): Promise<WorklogTokenTotals> {
+  const [row] = await tx
     .select({
       totalInputTokens: sum(worklogFrameEntries.inputTokens),
       totalOutputTokens: sum(worklogFrameEntries.outputTokens),
       totalEstimatedCost: sum(worklogFrameEntries.estimatedCost),
+      measuredInputTokens: count(worklogFrameEntries.inputTokens),
+      measuredOutputTokens: count(worklogFrameEntries.outputTokens),
+      measuredCosts: count(worklogFrameEntries.estimatedCost),
     })
     .from(worklogFrameEntries)
     .where(eq(worklogFrameEntries.executionId, executionId));
 
   return {
-    totalInputTokens: row?.totalInputTokens !== null ? Number(row?.totalInputTokens) : 0,
-    totalOutputTokens: row?.totalOutputTokens !== null ? Number(row?.totalOutputTokens) : 0,
-    totalEstimatedCost: row?.totalEstimatedCost !== null ? Number(row?.totalEstimatedCost) : 0,
+    totalInputTokens: Number(row?.totalInputTokens ?? 0),
+    totalOutputTokens: Number(row?.totalOutputTokens ?? 0),
+    totalEstimatedCost: Number(row?.totalEstimatedCost ?? 0),
+    hasMeasurements:
+      Number(row?.measuredInputTokens ?? 0) > 0 ||
+      Number(row?.measuredOutputTokens ?? 0) > 0 ||
+      Number(row?.measuredCosts ?? 0) > 0,
   };
+}
+
+/**
+ * Return whether an aggregate contains telemetry worth materializing.
+ * @param totals - Recomputed token and cost totals.
+ * @returns Whether at least one frame supplied a token or cost measurement.
+ */
+export function hasMeasuredTokenTotals(totals: WorklogTokenTotals): boolean {
+  return totals.hasMeasurements;
+}
+
+/**
+ * Update only usage-owned fields while the caller owns the summary lock.
+ * @param tx - Active storage transaction.
+ * @param worklogSummaries - Dialect-resolved summary table.
+ * @param executionId - Execution whose totals should be updated.
+ * @param totals - Recomputed token and cost totals.
+ */
+export async function updateWorklogSummaryTokenTotalsInTransaction(
+  tx: WorklogStorageTransaction,
+  worklogSummaries: WorklogSummariesTable,
+  executionId: string,
+  totals: WorklogTokenTotals,
+): Promise<void> {
+  await tx
+    .update(worklogSummaries)
+    .set({
+      totalInputTokens: totals.totalInputTokens,
+      totalOutputTokens: totals.totalOutputTokens,
+      totalEstimatedCost: totals.totalEstimatedCost,
+    })
+    .where(eq(worklogSummaries.executionId, executionId));
+}
+
+/**
+ * Recompute SQLite usage in one writer-serialized statement, avoiding an
+ * advisory projection transaction that spans awaits and runtime checkpoints.
+ * @param db - SQLite database handle.
+ * @param worklogSummaries - Dialect-resolved summary table.
+ * @param worklogFrameEntries - Dialect-resolved frame table.
+ * @param executionId - Execution identifier to aggregate.
+ */
+async function reaggregateSqliteTokenTotalsInSingleStatement(
+  db: MakaioDatabase,
+  worklogSummaries: WorklogSummariesTable,
+  worklogFrameEntries: WorklogFrameEntriesTable,
+  executionId: string,
+): Promise<void> {
+  const totalInputTokens = sql<number>`coalesce((select sum(${worklogFrameEntries.inputTokens}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
+  const totalOutputTokens = sql<number>`coalesce((select sum(${worklogFrameEntries.outputTokens}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
+  const totalEstimatedCost = sql<number>`coalesce((select sum(${worklogFrameEntries.estimatedCost}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
+  const hasMeasurements = sql`exists(
+    select 1 from ${worklogFrameEntries}
+    where ${worklogFrameEntries.executionId} = ${executionId}
+      and (${worklogFrameEntries.inputTokens} is not null
+        or ${worklogFrameEntries.outputTokens} is not null
+        or ${worklogFrameEntries.estimatedCost} is not null)
+  )`;
+  await db
+    .update(worklogSummaries)
+    .set({ totalInputTokens, totalOutputTokens, totalEstimatedCost })
+    .where(and(eq(worklogSummaries.executionId, executionId), hasMeasurements));
+}
+
+/**
+ * Re-aggregate frame usage into an existing WorkLog summary atomically.
+ *
+ * PostgreSQL locks before aggregating; SQLite computes and writes in one
+ * writer-serialized statement. Terminal summaries remain eligible because
+ * usage may arrive after the execution lifecycle has completed.
+ * @param db - Drizzle database instance.
+ * @param executionId - Execution identifier to aggregate.
+ */
+export async function reaggregateTokenTotals(db: MakaioDatabase, executionId: string): Promise<void> {
+  const { worklogSummaries, worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
+  if (getDatabaseDialect(db) === 'sqlite') {
+    await reaggregateSqliteTokenTotalsInSingleStatement(db, worklogSummaries, worklogFrameEntries, executionId);
+    return;
+  }
+  await executeTransaction(db, async (tx) => {
+    const summary = await lockWorklogSummaryForUsage(tx, worklogSummaries, executionId);
+    if (summary === undefined) return;
+    const totals = await aggregateTokenTotalsInTransaction(tx, worklogFrameEntries, executionId);
+    if (hasMeasuredTokenTotals(totals)) {
+      await updateWorklogSummaryTokenTotalsInTransaction(tx, worklogSummaries, executionId, totals);
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────

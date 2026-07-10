@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { observability } from '@makaio/core';
 import { EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
 
 /**
@@ -31,18 +32,18 @@ import { EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
  */
 export const ClientSessionObservedBaseSchema = z.object({
   /** Stable client ID (e.g. `'claude-code'`). */
-  clientId: NonEmptyStringSchema,
+  clientId: observability.attribute(NonEmptyStringSchema, 'makaio.client.id'),
   /**
    * How the observation was captured (e.g. `'native-hook'`,
    * `'adapter-derived'`).
    */
-  source: NonEmptyStringSchema,
+  source: observability.attribute(NonEmptyStringSchema, 'makaio.client.lifecycle.source'),
   /** Unix epoch timestamp in milliseconds when the signal was captured. */
-  observedAt: EpochMillisecondsSchema,
+  observedAt: observability.attribute(EpochMillisecondsSchema, 'event.observed_at'),
   /** Framework session ID, if already resolved at emission time. */
-  sessionId: z.string().optional(),
+  sessionId: observability.attribute(z.string(), 'makaio.session.id').optional(),
   /** Raw session identifier from the client runtime, if available. */
-  adapterSessionId: z.string().optional(),
+  adapterSessionId: observability.attribute(z.string(), 'makaio.adapter.session_id').optional(),
   /** Arbitrary pass-through metadata from the adapter. */
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
@@ -99,7 +100,7 @@ export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend
    * because ingestion may be performed by central or downstream servers.
    * Used by the native-locality evaluator to decide resume/fork vs degrade.
    */
-  machineId: z.string().optional(),
+  machineId: observability.attribute(z.string(), 'makaio.machine.id').optional(),
   /**
    * How this session was started, if the emitter can determine it.
    *
@@ -108,7 +109,7 @@ export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend
    * `'fork'` signals that this session is a fork child and
    * {@link parentAdapterSessionId} carries the parent's adapter session id.
    */
-  startMode: ClientSessionStartModeSchema.optional(),
+  startMode: observability.attribute(ClientSessionStartModeSchema, 'makaio.session.start_mode').optional(),
   /**
    * Adapter session id of the parent session, when this session is a fork
    * child (`startMode === 'fork'`).
@@ -116,7 +117,7 @@ export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend
    * Absent for non-fork sessions and when the emitter cannot determine the
    * parent identity.
    */
-  parentAdapterSessionId: z.string().optional(),
+  parentAdapterSessionId: observability.attribute(z.string(), 'makaio.session.parent_adapter_session_id').optional(),
 });
 
 export type ClientSessionStarted = z.infer<typeof ClientSessionStartedSchema>;
@@ -176,9 +177,9 @@ export type ClientSessionTurnCompleted = z.infer<typeof ClientSessionTurnComplet
  */
 export const ClientSessionToolPreSchema = ClientSessionObservedBaseSchema.extend({
   /** Tool name as reported by the client runtime (e.g. `'bash'`). */
-  toolName: NonEmptyStringSchema.optional(),
+  toolName: observability.attribute(NonEmptyStringSchema, 'tool.name').optional(),
   /** Opaque tool-call correlation ID assigned by the client runtime. */
-  toolCallId: NonEmptyStringSchema.optional(),
+  toolCallId: observability.attribute(NonEmptyStringSchema, 'tool.call_id').optional(),
 });
 
 export type ClientSessionToolPre = z.infer<typeof ClientSessionToolPreSchema>;
@@ -192,14 +193,14 @@ export type ClientSessionToolPre = z.infer<typeof ClientSessionToolPreSchema>;
  */
 export const ClientSessionToolPostSchema = ClientSessionObservedBaseSchema.extend({
   /** Tool name as reported by the client runtime (e.g. `'bash'`). */
-  toolName: NonEmptyStringSchema.optional(),
+  toolName: observability.attribute(NonEmptyStringSchema, 'tool.name').optional(),
   /** Opaque tool-call correlation ID assigned by the client runtime. */
-  toolCallId: NonEmptyStringSchema.optional(),
+  toolCallId: observability.attribute(NonEmptyStringSchema, 'tool.call_id').optional(),
   /**
    * Whether the tool call succeeded, as observed by the adapter.
    * Absent when the adapter cannot determine the outcome.
    */
-  success: z.boolean().optional(),
+  success: observability.attribute(z.boolean(), 'tool.success').optional(),
 });
 
 export type ClientSessionToolPost = z.infer<typeof ClientSessionToolPostSchema>;

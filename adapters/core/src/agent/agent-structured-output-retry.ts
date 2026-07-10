@@ -52,6 +52,7 @@ export function createStructuredOutputTerminalTransform(
           messageId: `${messageHandle.messageId}:structured-output-retry:${attemptNumber}`,
           messageHistory: messageHandle.messageHistory,
           responseSchema,
+          requestCorrelation: messageHandle.requestCorrelation,
           turnContext: {
             ...messageHandle.turnContext,
             structuredOutputRetry: {

@@ -92,6 +92,15 @@ class SessionSendMessageRequestSessionContextNativeLocalityVariantC:
 
 
 @dataclass(frozen=True)
+class SessionSendMessageRequestSessionContextRequestCorrelation:
+    execution_id: str | None = None
+    frame_id: str | None = None
+    message_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True)
 class SessionSendMessageRequestSessionContext:
     cache_strategy: Literal["auto", "systemPrompt", "fullPrefix"] | None = None
     extracted_context: Any | None = None
@@ -102,6 +111,7 @@ class SessionSendMessageRequestSessionContext:
     message_history: list[SessionSendMessageRequestSessionContextMessageHistoryItem] | None = None
     native_fork: SessionSendMessageRequestSessionContextNativeFork | None = None
     native_locality: Union[SessionSendMessageRequestSessionContextNativeLocalityVariantA, SessionSendMessageRequestSessionContextNativeLocalityVariantB, SessionSendMessageRequestSessionContextNativeLocalityVariantC] | None = None
+    request_correlation: SessionSendMessageRequestSessionContextRequestCorrelation | None = None
     turn_context: dict[str, Any] | None = None
 
 

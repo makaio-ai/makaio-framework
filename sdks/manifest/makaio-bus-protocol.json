@@ -12,18 +12,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "error": {
@@ -40,6 +65,11 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "outcome": {
@@ -47,9 +77,19 @@
             "type": "string"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "structuredOutputValidation": {
@@ -110,6 +150,11 @@
             ]
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -128,21 +173,46 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "cachedTokens": {
             "type": "number"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "currentTokens": {
@@ -156,9 +226,19 @@
             "type": "number"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "percentage": {
@@ -167,12 +247,27 @@
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -191,15 +286,35 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "changeSequence": {
@@ -208,6 +323,11 @@
             "type": "integer"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "credentialRefs": {
@@ -223,18 +343,43 @@
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -294,39 +439,89 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "newCwd": {
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "skipWarning": {
             "type": "boolean"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -361,39 +556,89 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "newCwd": {
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "previousCwd": {
             "type": "string"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -452,33 +697,83 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -497,33 +792,83 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -572,18 +917,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "mcpSessionContext": {
@@ -850,15 +1220,35 @@
             "type": "object"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnActiveBehavior": {
@@ -866,6 +1256,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -903,36 +1298,86 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "content": {
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -951,36 +1396,86 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "text": {
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -1032,30 +1527,70 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "newModel": {
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "providerContext": {
@@ -1123,6 +1658,11 @@
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "skipWarning": {
@@ -1133,6 +1673,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -1233,21 +1778,51 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "newModel": {
@@ -1258,6 +1833,11 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "previousModel": {
@@ -1268,12 +1848,27 @@
             "type": "string"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -1292,36 +1887,86 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "content": {
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -1340,36 +1985,86 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "content": {
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -2573,6 +3268,42 @@
                   }
                 ]
               },
+              "requestCorrelation": {
+                "additionalProperties": false,
+                "properties": {
+                  "executionId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "frameId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "messageId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "turnId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
               "turnContext": {
                 "additionalProperties": {
                   "$ref": "#/$defs/__schema0"
@@ -2617,36 +3348,86 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "reason": {
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -2665,18 +3446,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "cwd": {
@@ -2690,6 +3496,11 @@
             ]
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "model": {
@@ -2703,12 +3514,27 @@
             ]
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "startMode": {
@@ -2716,6 +3542,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -2734,21 +3565,46 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "blockIndex": {
             "type": "number"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "content": {
@@ -2998,12 +3854,27 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "stepType": {
@@ -3011,6 +3882,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -3029,15 +3905,35 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "blockData": {
@@ -3087,6 +3983,11 @@
             "type": "number"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "content": {
@@ -3336,12 +4237,27 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "stepType": {
@@ -3349,6 +4265,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -3616,15 +4537,35 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "args": {
@@ -3635,15 +4576,35 @@
             "type": "object"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "result": {
@@ -3675,6 +4636,11 @@
             ]
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "success": {
@@ -3687,6 +4653,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -3705,15 +4676,35 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "args": {
@@ -3724,21 +4715,46 @@
             "type": "object"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "output": {
             "type": "string"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "toolCallId": {
@@ -3748,6 +4764,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -3766,30 +4787,75 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "toolCallId": {
@@ -3799,6 +4865,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -3817,15 +4888,35 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "args": {
@@ -3836,18 +4927,43 @@
             "type": "object"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "toolCallId": {
@@ -3857,6 +4973,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -3875,15 +4996,35 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "args": {
@@ -3894,15 +5035,35 @@
             "type": "object"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "reasoning": {
@@ -3918,6 +5079,11 @@
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -3979,18 +5145,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "error": {
@@ -4003,6 +5194,11 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "outcome": {
@@ -4010,9 +5206,19 @@
             "type": "string"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "structuredOutputValidation": {
@@ -4073,6 +5279,11 @@
             ]
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -4091,18 +5302,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "content": {
@@ -4375,15 +5611,35 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -4402,70 +5658,213 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "audioInputTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.audio_input",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "audioOutputTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.audio_output",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "cacheWriteTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.cache_write",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "contextWindow": {
+            "makaio.observability": {
+              "attributeName": "llm.context.window_size",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "cost": {
+            "makaio.observability": {
+              "attributeName": "llm.cost.amount",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
+          "costProvenance": {
+            "enum": ["provider-reported", "client-reported", "estimated"],
+            "makaio.observability": {
+              "attributeName": "llm.cost.provenance",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
           "costUnits": {
+            "makaio.observability": {
+              "attributeName": "llm.cost.units",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "costUnitType": {
             "enum": ["requests", "tokens"],
+            "makaio.observability": {
+              "attributeName": "llm.cost.unit_type",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "currency": {
+            "makaio.observability": {
+              "attributeName": "llm.cost.currency",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "duration": {
+            "makaio.observability": {
+              "attributeName": "llm.duration_ms",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
+          "executionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.execution.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "frameId": {
+            "makaio.observability": {
+              "attributeName": "makaio.frame.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
           "inputCachedTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.cached_input",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "inputTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.input",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
+          "llmCallId": {
+            "makaio.observability": {
+              "attributeName": "makaio.llm_call.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
           "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "model": {
+            "makaio.observability": {
+              "attributeName": "llm.model",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "outputTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.output",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "provider": {
+            "makaio.observability": {
+              "attributeName": "llm.provider",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "quota": {
@@ -4491,18 +5890,43 @@
             "type": "object"
           },
           "reasoningTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.reasoning",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "serviceTier": {
+            "makaio.observability": {
+              "attributeName": "llm.service_tier",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "totalTokens": {
+            "makaio.observability": {
+              "attributeName": "llm.tokens.total",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -4534,18 +5958,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "mergedFrom": {
@@ -4558,15 +6007,35 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -4585,18 +6054,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "error": {
@@ -4609,6 +6103,11 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "outcome": {
@@ -4616,15 +6115,30 @@
             "type": "string"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "supersededBy": {
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -4643,18 +6157,43 @@
         "additionalProperties": false,
         "properties": {
           "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "content": {
@@ -4925,15 +6464,35 @@
             "type": "string"
           },
           "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "number"
           },
           "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           },
           "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
             "type": "string"
           }
         },
@@ -7554,6 +9113,42 @@
                     "type": "object"
                   }
                 ]
+              },
+              "requestCorrelation": {
+                "additionalProperties": false,
+                "properties": {
+                  "executionId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "frameId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "messageId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  },
+                  "turnId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[\\u0020-\\u007e]*$",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
               },
               "turnContext": {
                 "additionalProperties": {

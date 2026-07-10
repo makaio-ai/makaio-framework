@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { observability } from '@makaio/core';
 import { CredentialRefSchema } from '../../config/credential-ref.js';
 import { CredentialChangeSequenceSchema } from '../../credential/change-sequence.js';
 import { BaseAgentEventSchema } from './base-event.js';
@@ -14,7 +15,7 @@ import { BaseAgentEventSchema } from './base-event.js';
 export const CredentialChangeSchema = {
   request: BaseAgentEventSchema.extend({
     /** Provider config UUID whose credentials changed. */
-    providerConfigId: z.string(),
+    providerConfigId: observability.attribute(z.string(), 'makaio.provider.config_id'),
     /** Provider definition ID (e.g., `'anthropic'`). */
     definitionId: z.string(),
     /** Monotonic per-provider-config change token used to reject stale fan-out. */

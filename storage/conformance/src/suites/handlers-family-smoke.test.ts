@@ -14,6 +14,7 @@
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { WorkflowSubjects } from '@makaio/contracts';
 import { registerDrizzleWorkflowStorage, WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import {
   registerDrizzleSupervisorRuntimeStorage,
@@ -117,6 +118,61 @@ describeStorageConformance('handlers-family-smoke', (config) => {
       expect(getResult.workflow).not.toBeNull();
       expect(getResult.workflow?.id).toBe(workflow.id);
       expect(getResult.workflow?.name).toBe(workflow.name);
+    });
+
+    it('registers and settles an external execution with an exact WorkLog frame', async () => {
+      const executionId = `wfx-ext-conformance-${crypto.randomUUID()}`;
+      const frameId = `${executionId}:station`;
+      await MakaioBus.request(WorkflowStorageSubjects.setExternalExecutionStart, {
+        execution: {
+          id: executionId,
+          workflowId: 'conformance-external-workflow',
+          status: 'running',
+          inputs: {},
+          startedAt: 1_000,
+          scope: { type: 'global' },
+        },
+        frame: {
+          executionId,
+          frameId,
+          nodeId: 'station',
+          nodeType: 'station',
+          path: [frameId],
+          status: 'running',
+          attempt: 0,
+          startedAt: 1_000,
+        },
+      });
+
+      await expect(
+        MakaioBus.request(WorkflowStorageSubjects.settleExternalExecution, {
+          executionId,
+          status: 'completed',
+          completedAt: 1_250,
+          frame: {
+            executionId,
+            frameId,
+            nodeId: 'station',
+            nodeType: 'station',
+            path: [frameId],
+            status: 'completed',
+            attempt: 0,
+            startedAt: 1_000,
+            completedAt: 1_250,
+            durationMs: 250,
+          },
+        }),
+      ).resolves.toEqual({ success: true });
+
+      await expect(MakaioBus.request(WorkflowSubjects.worklog.frame.get, { frameId })).resolves.toMatchObject({
+        frame: {
+          executionId,
+          frameId,
+          status: 'completed',
+          completedAt: 1_250,
+          durationMs: 250,
+        },
+      });
     });
   });
 

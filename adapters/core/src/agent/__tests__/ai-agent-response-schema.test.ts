@@ -180,6 +180,13 @@ describe('AIAgent responseSchema scoping', () => {
 
     try {
       const startResult = await agent.start('return json', {
+        sessionContext: {
+          requestCorrelation: {
+            turnId: 'turn-structured-retry',
+            executionId: 'execution-structured-retry',
+            frameId: 'frame-structured-retry',
+          },
+        },
         responseSchema: {
           schema: {
             type: 'object',
@@ -210,6 +217,14 @@ describe('AIAgent responseSchema scoping', () => {
       if (!retryHandle) {
         throw new Error('Expected structured-output retry handle');
       }
+
+      expect(retryHandle.requestCorrelation).toEqual({
+        sessionId: 'session-response-schema-retry-priority',
+        turnId: 'turn-structured-retry',
+        messageId: retryHandle.messageId,
+        executionId: 'execution-structured-retry',
+        frameId: 'frame-structured-retry',
+      });
 
       expect(connector.queue.dequeue()).toBe(retryHandle);
       expect(connector.queue.dequeue()?.messageId).toBe('queued-follow-up');

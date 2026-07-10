@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
-import { WorkflowArtifactBindingSchema } from './schemas.js';
-import { WorkflowStepTypeSchema } from './step-runner.js';
+import { WorkflowArtifactBindingSchema, WorkflowNodeTypeSchema } from './schemas.js';
 
 // ─────────────────────────────────────────────────────────────
 // WorkLog Projection
@@ -71,7 +70,7 @@ export const WorkLogFrameEntrySchema = z.object({
   /** Node identifier from the workflow definition. */
   nodeId: z.string().min(1),
   /** Node type discriminant — determines which telemetry fields are populated. */
-  nodeType: WorkflowStepTypeSchema,
+  nodeType: WorkflowNodeTypeSchema,
   /**
    * Ordered path of frame IDs from the root frame to this frame (inclusive).
    * Mirrors `WorkflowFrameState.path` for tree correlation without querying

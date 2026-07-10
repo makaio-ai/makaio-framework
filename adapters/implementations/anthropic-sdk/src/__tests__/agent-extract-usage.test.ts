@@ -128,4 +128,13 @@ describe('AnthropicSdkAgent.extractUsagePayload', () => {
 
     expect(result.costUnits).toBe(200);
   });
+
+  it('preserves request-level workflow correlation on normalized usage', () => {
+    const agent = makeAgent();
+    const result = agent.callExtractUsagePayload(
+      makeUsageEvent({ llmCallId: 'call-1', executionId: 'execution-1', frameId: 'frame-1' }),
+    );
+
+    expect(result).toMatchObject({ llmCallId: 'call-1', executionId: 'execution-1', frameId: 'frame-1' });
+  });
 });

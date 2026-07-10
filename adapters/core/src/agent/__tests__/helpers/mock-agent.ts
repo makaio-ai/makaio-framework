@@ -212,6 +212,10 @@ export class MockConnector implements Partial<AIAgentConnector> {
       options?.turnContext,
       options?.responseSchema,
       options?.internalRetry ?? false,
+      options?.cacheStrategy,
+      options?.requestCorrelation === undefined
+        ? undefined
+        : { ...options.requestCorrelation, messageId: options?.messageId ?? 'mock-message-id' },
     );
     handle.adapterSessionId = 'test-session-id';
     handle.markAcknowledged(true);

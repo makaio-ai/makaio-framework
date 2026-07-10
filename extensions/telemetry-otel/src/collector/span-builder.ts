@@ -47,10 +47,28 @@ export interface BuildFrameSpanInput {
 
 /** Input bag for {@link SpanBuilder.buildLlmSpan}. */
 export interface BuildLlmSpanInput {
+  /** Runtime-generated identifier for one concrete provider API request. */
+  readonly llmCallId?: string;
   /** Workflow execution identifier. */
   readonly executionId: string;
   /** Agent session identifier. */
   readonly sessionId: string;
+  /** Agent identifier. */
+  readonly agentId?: string;
+  /** Adapter instance identifier. */
+  readonly adapterId?: string;
+  /** Adapter type/name. */
+  readonly adapterName?: string;
+  /** Provider-native session identifier. */
+  readonly adapterSessionId?: string;
+  /** User message identifier. */
+  readonly messageId?: string;
+  /** Turn identifier. */
+  readonly turnId?: string;
+  /** Owning client/CLI identifier. */
+  readonly clientId?: string;
+  /** Resolved provider configuration identifier. */
+  readonly providerConfigId?: string;
   /**
    * Frame identifier this LLM call belongs to.
    *
@@ -75,10 +93,16 @@ export interface BuildLlmSpanInput {
   readonly reasoningTokens: number;
   /** Total token count. */
   readonly totalTokens: number;
+  /** Cost quantity in the supplied unit type. */
+  readonly costUnits: number;
+  /** Unit type for {@link costUnits}. */
+  readonly costUnitType: 'requests' | 'tokens';
   /** Optional estimated monetary cost. */
   readonly cost?: number;
   /** Optional currency for {@link cost}. */
   readonly currency?: string;
+  /** Provenance of the optional monetary cost. */
+  readonly costProvenance?: 'provider-reported' | 'client-reported' | 'estimated';
   /** Optional API call latency in milliseconds. */
   readonly duration?: number;
   /** Span start time in Unix milliseconds. */
@@ -111,12 +135,60 @@ export interface BuildToolSpanInput {
   readonly orphaned: boolean;
 }
 
+/** Input bag for {@link SpanBuilder.buildStandaloneSessionSpan}. */
+export interface BuildStandaloneSessionSpanInput {
+  /** Agent session identifier. */
+  readonly sessionId: string;
+  /** Monotonic collector-local segment number. */
+  readonly segment: number;
+  /** Span start time in Unix milliseconds. */
+  readonly startedAt: number;
+  /** Span end time in Unix milliseconds. */
+  readonly endedAt: number;
+}
+
+/** Input bag for {@link SpanBuilder.buildStandaloneLlmSpan}. */
+export type BuildStandaloneLlmSpanInput = Omit<BuildLlmSpanInput, 'executionId' | 'frameId' | 'orphaned'> & {
+  /** Monotonic collector-local segment number. */
+  readonly segment: number;
+};
+
+/** Input bag for {@link SpanBuilder.buildStandaloneToolSpan}. */
+export type BuildStandaloneToolSpanInput = Omit<BuildToolSpanInput, 'executionId' | 'frameId' | 'orphaned'> & {
+  /** Monotonic collector-local segment number. */
+  readonly segment: number;
+};
+
+/**
+ * Add one optional scalar attribute without leaking `undefined` into a draft.
+ * @param attributes - Mutable span attribute map
+ * @param key - OTel attribute name
+ * @param value - Optional scalar value
+ */
+function setOptionalAttribute(
+  attributes: Record<string, string | number | boolean | null>,
+  key: string,
+  value: string | number | undefined,
+): void {
+  if (value !== undefined) attributes[key] = value;
+}
+
 /**
  * Stateless factory for {@link SpanDraft} construction.
  *
  * All public methods are `static` so callers do not need an instance.
  */
 export class SpanBuilder {
+  /**
+   * Returns the stable root span ID for one standalone session segment.
+   * @param sessionId - Agent session identifier.
+   * @param segment - Collector-local segment number.
+   * @returns Stable string span ID for the standalone session segment.
+   */
+  public static standaloneSessionSpanId(sessionId: string, segment: number): string {
+    return `session:${sessionId}:${segment}`;
+  }
+
   /**
    * Returns the stable span ID for a workflow execution root span.
    * @param executionId - Workflow execution identifier.
@@ -156,6 +228,33 @@ export class SpanBuilder {
    */
   public static toolSpanId(executionId: string, sessionId: string, toolCallId: string): string {
     return `tool:${executionId}:${sessionId}:${toolCallId}`;
+  }
+
+  /**
+   * Builds a root span for a session that was not linked to a workflow before
+   * the correlation window closed.
+   * @param input - Standalone session identity, segment, and timing.
+   * @returns Root span for a standalone session trace segment.
+   */
+  public static buildStandaloneSessionSpan(input: BuildStandaloneSessionSpanInput): SpanDraft {
+    return {
+      spanId: SpanBuilder.standaloneSessionSpanId(input.sessionId, input.segment),
+      sessionId: input.sessionId,
+      namespace: 'agent',
+      subject: 'session',
+      name: `Agent session ${input.sessionId}`,
+      kind: 'internal',
+      status: 'ok',
+      startedAt: input.startedAt,
+      endedAt: input.endedAt,
+      attributes: {
+        'makaio.session.id': input.sessionId,
+        'makaio.trace.scope': 'standalone',
+        'makaio.trace.segment': input.segment,
+      },
+      links: [],
+      events: [],
+    };
   }
 
   /**
@@ -234,6 +333,8 @@ export class SpanBuilder {
       input.frameId !== undefined ? SpanBuilder.frameSpanId(input.executionId, input.frameId) : undefined;
 
     const attributes: Record<string, string | number | boolean | null> = {
+      'makaio.execution.id': input.executionId,
+      'makaio.session.id': input.sessionId,
       'llm.provider': input.provider,
       'llm.model': input.model,
       'llm.tokens.input': input.inputTokens,
@@ -241,16 +342,35 @@ export class SpanBuilder {
       'llm.tokens.output': input.outputTokens,
       'llm.tokens.reasoning': input.reasoningTokens,
       'llm.tokens.total': input.totalTokens,
+      'llm.cost.units': input.costUnits,
+      'llm.cost.unit_type': input.costUnitType,
     };
+
+    setOptionalAttribute(attributes, 'makaio.agent.id', input.agentId);
+    setOptionalAttribute(attributes, 'makaio.adapter.id', input.adapterId);
+    setOptionalAttribute(attributes, 'makaio.adapter.name', input.adapterName);
+    setOptionalAttribute(attributes, 'makaio.adapter.session_id', input.adapterSessionId);
+    setOptionalAttribute(attributes, 'makaio.message.id', input.messageId);
+    setOptionalAttribute(attributes, 'makaio.turn.id', input.turnId);
+    setOptionalAttribute(attributes, 'makaio.client.id', input.clientId);
+    setOptionalAttribute(attributes, 'makaio.provider.config_id', input.providerConfigId);
+    setOptionalAttribute(attributes, 'makaio.llm_call.id', input.llmCallId);
+    setOptionalAttribute(attributes, 'makaio.frame.id', input.frameId);
 
     if (input.cacheWriteTokens !== undefined) {
       attributes['llm.tokens.cache_write'] = input.cacheWriteTokens;
     }
     if (input.cost !== undefined) {
-      attributes['llm.cost.estimated'] = input.cost;
+      attributes['llm.cost.amount'] = input.cost;
+      if (input.costProvenance === undefined || input.costProvenance === 'estimated') {
+        attributes['llm.cost.estimated'] = input.cost;
+      }
     }
     if (input.currency !== undefined) {
       attributes['llm.cost.currency'] = input.currency;
+    }
+    if (input.costProvenance !== undefined) {
+      attributes['llm.cost.provenance'] = input.costProvenance;
     }
     if (input.duration !== undefined) {
       attributes['llm.duration_ms'] = input.duration;
@@ -264,6 +384,7 @@ export class SpanBuilder {
       spanId: SpanBuilder.llmSpanId(input.executionId, input.sessionId, input.sequence),
       parentSpanId,
       executionId: input.executionId,
+      frameId: input.frameId,
       sessionId: input.sessionId,
       namespace: 'agent',
       subject: 'usage',
@@ -275,6 +396,34 @@ export class SpanBuilder {
       attributes,
       links: [],
       events: [],
+    };
+  }
+
+  /**
+   * Builds an LLM span parented to a standalone session root.
+   * @param input - Session usage metadata, timing, and standalone segment.
+   * @returns LLM span without a workflow execution identifier.
+   */
+  public static buildStandaloneLlmSpan(input: BuildStandaloneLlmSpanInput): SpanDraft {
+    const syntheticExecutionId = `standalone:${input.sessionId}:${input.segment}`;
+    const workflowDraft = SpanBuilder.buildLlmSpan({
+      ...input,
+      executionId: syntheticExecutionId,
+      frameId: undefined,
+      orphaned: false,
+    });
+    const { executionId: _executionId, ...standaloneDraft } = workflowDraft;
+    const { ['makaio.execution.id']: _syntheticExecutionId, ...standaloneAttributes } = workflowDraft.attributes;
+
+    return {
+      ...standaloneDraft,
+      spanId: `llm:${SpanBuilder.standaloneSessionSpanId(input.sessionId, input.segment)}:${input.sequence}`,
+      parentSpanId: SpanBuilder.standaloneSessionSpanId(input.sessionId, input.segment),
+      attributes: {
+        ...standaloneAttributes,
+        'makaio.trace.scope': 'standalone',
+        'makaio.trace.segment': input.segment,
+      },
     };
   }
 
@@ -313,6 +462,34 @@ export class SpanBuilder {
       attributes,
       links: [],
       events: [],
+    };
+  }
+
+  /**
+   * Builds a tool span parented to a standalone session root.
+   * @param input - Tool metadata, timing, and standalone segment.
+   * @returns Tool span without a workflow execution identifier.
+   */
+  public static buildStandaloneToolSpan(input: BuildStandaloneToolSpanInput): SpanDraft {
+    const syntheticExecutionId = `standalone:${input.sessionId}:${input.segment}`;
+    const workflowDraft = SpanBuilder.buildToolSpan({
+      ...input,
+      executionId: syntheticExecutionId,
+      frameId: undefined,
+      orphaned: false,
+    });
+    const { executionId: _executionId, ...standaloneDraft } = workflowDraft;
+    const { ['makaio.execution.id']: _syntheticExecutionId, ...standaloneAttributes } = workflowDraft.attributes;
+
+    return {
+      ...standaloneDraft,
+      spanId: `tool:${SpanBuilder.standaloneSessionSpanId(input.sessionId, input.segment)}:${input.toolCallId}`,
+      parentSpanId: SpanBuilder.standaloneSessionSpanId(input.sessionId, input.segment),
+      attributes: {
+        ...standaloneAttributes,
+        'makaio.trace.scope': 'standalone',
+        'makaio.trace.segment': input.segment,
+      },
     };
   }
 }

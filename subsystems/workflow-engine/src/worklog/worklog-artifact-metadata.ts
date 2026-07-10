@@ -1,7 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ArtifactSubjects, type WorkflowArtifactBinding } from '@makaio/contracts';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
-import { getWorklogFrameEntry } from './worklog-storage.js';
+import { getWorklogFrameEntryRow } from './worklog-storage.js';
 
 interface ArtifactUpdatedRef {
   kind: string;
@@ -30,7 +30,7 @@ export async function resolveArtifactWriteMetadata(
   artifactRef: ArtifactUpdatedRef,
   revision: string | undefined,
 ): Promise<ResolvedArtifactWriteMetadata | null> {
-  const frame = await getWorklogFrameEntry(db, frameId);
+  const frame = await getWorklogFrameEntryRow(db, frameId);
   if (frame === null || revision === undefined) {
     return null;
   }

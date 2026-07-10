@@ -128,6 +128,113 @@ describe('TelemetryOtelService', () => {
     }
   });
 
+  it('exports standalone local session usage during service shutdown', async () => {
+    const exported: SpanDraft[][] = [];
+    const service = new TelemetryOtelService({
+      bus: MakaioBus,
+      config: baseConfig({ orphanTimeoutMs: 0 }),
+      emitter: {
+        emit: async (drafts) => {
+          exported.push([...drafts]);
+        },
+      },
+      now: () => 2000,
+    });
+
+    await service.init();
+    await MakaioBus.emit(AgentSubjects.usage, {
+      agentId: 'local-agent',
+      adapterId: 'adapter-instance-1',
+      adapterName: 'claude-code',
+      clientId: 'claude-code',
+      sessionId: 'local-session-1',
+      adapterSessionId: 'native-local-session-1',
+      providerConfigId: 'anthropic-oauth',
+      turnId: 'turn-1',
+      provider: 'anthropic',
+      model: 'claude-opus-4-6',
+      inputTokens: 10,
+      inputCachedTokens: 5,
+      outputTokens: 4,
+      reasoningTokens: 0,
+      totalTokens: 14,
+      costUnits: 14,
+      costUnitType: 'tokens',
+      cost: 0.05,
+      currency: 'USD',
+      costProvenance: 'client-reported',
+    });
+
+    await service.destroy();
+
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ subject: 'session', sessionId: 'local-session-1' }),
+        expect.objectContaining({
+          subject: 'usage',
+          attributes: expect.objectContaining({
+            'makaio.client.id': 'claude-code',
+            'makaio.adapter.name': 'claude-code',
+            'makaio.provider.config_id': 'anthropic-oauth',
+            'makaio.turn.id': 'turn-1',
+            'llm.cost.unit_type': 'tokens',
+            'llm.cost.provenance': 'client-reported',
+          }),
+        }),
+      ]),
+    );
+    expect(exported[0]?.find((draft) => draft.subject === 'usage')?.executionId).toBeUndefined();
+  });
+
+  it('retries restored standalone telemetry before shutting down the emitter', async () => {
+    const exported: SpanDraft[][] = [];
+    const shutdown = vi.fn(async () => {});
+    let attempts = 0;
+    const service = new TelemetryOtelService({
+      bus: MakaioBus,
+      config: baseConfig({ orphanTimeoutMs: 0 }),
+      emitter: {
+        emit: async (drafts) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('transient shutdown export failure');
+          exported.push([...drafts]);
+        },
+        shutdown,
+      },
+      now: () => 2_000,
+    });
+
+    await service.init();
+    await MakaioBus.emit(AgentSubjects.usage, {
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      adapterName: 'anthropic',
+      sessionId: 'local-session-shutdown-retry',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 1,
+      inputCachedTokens: 0,
+      outputTokens: 1,
+      reasoningTokens: 0,
+      totalTokens: 2,
+      costUnits: 2,
+      costUnitType: 'tokens',
+    });
+
+    await service.destroy();
+
+    expect(attempts).toBe(2);
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ subject: 'session', sessionId: 'local-session-shutdown-retry' }),
+        expect.objectContaining({ subject: 'usage', sessionId: 'local-session-shutdown-retry' }),
+      ]),
+    );
+    expect(shutdown).toHaveBeenCalledOnce();
+  });
+
   it('uses workflow execution event timestamps instead of handler receipt time', async () => {
     const exported: SpanDraft[][] = [];
     const service = new TelemetryOtelService({
@@ -422,6 +529,146 @@ describe('TelemetryOtelService', () => {
     } finally {
       releaseExport();
       await (destroyEvent ?? service.destroy());
+    }
+  });
+
+  it('coalesces scheduled sweeps and awaits the active sweep before shutdown', async () => {
+    vi.useFakeTimers();
+    const attemptedRootSpanIds: string[] = [];
+    const shutdown = vi.fn(async () => {});
+    let nowMs = 1_000;
+    let releaseFirstExport = (): void => {};
+    let markFirstExportStarted = (): void => {};
+    const firstExportGate = new Promise<void>((resolve) => {
+      releaseFirstExport = resolve;
+    });
+    const firstExportStarted = new Promise<void>((resolve) => {
+      markFirstExportStarted = resolve;
+    });
+    const service = new TelemetryOtelService({
+      bus: MakaioBus,
+      config: baseConfig({
+        orphanTimeoutMs: 5_000,
+        batchConfig: { maxExportBatchSize: 512, scheduledDelayMs: 10, exportTimeoutMs: 30_000 },
+      }),
+      emitter: {
+        emit: async (drafts) => {
+          const root = drafts.find((draft) => draft.subject === 'session');
+          if (root !== undefined) attemptedRootSpanIds.push(root.spanId);
+          if (attemptedRootSpanIds.length === 1) {
+            markFirstExportStarted();
+            await firstExportGate;
+          }
+        },
+        shutdown,
+      },
+      now: () => nowMs,
+    });
+    let destroy: Promise<void> | undefined;
+
+    try {
+      await service.init();
+      const emitUsage = () =>
+        MakaioBus.emit(AgentSubjects.usage, {
+          agentId: 'agent-1',
+          adapterId: 'adapter-1',
+          adapterName: 'anthropic',
+          executionId: 'wfx-service-concurrent-sweep',
+          sessionId: 'sess-service-concurrent-sweep',
+          provider: 'anthropic',
+          model: 'claude-test',
+          inputTokens: 1,
+          inputCachedTokens: 0,
+          outputTokens: 1,
+          reasoningTokens: 0,
+          totalTokens: 2,
+          costUnits: 2,
+          costUnitType: 'tokens' as const,
+        });
+
+      await emitUsage();
+      nowMs = 6_000;
+      await vi.advanceTimersByTimeAsync(10);
+      await firstExportStarted;
+      await emitUsage();
+      nowMs = 11_000;
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(attemptedRootSpanIds).toEqual(['session:sess-service-concurrent-sweep:0']);
+      destroy = service.destroy();
+      await Promise.resolve();
+      expect(shutdown).not.toHaveBeenCalled();
+
+      releaseFirstExport();
+      await destroy;
+
+      expect(attemptedRootSpanIds).toEqual([
+        'session:sess-service-concurrent-sweep:0',
+        'session:sess-service-concurrent-sweep:1',
+      ]);
+      expect(shutdown).toHaveBeenCalledOnce();
+    } finally {
+      releaseFirstExport();
+      await (destroy ?? service.destroy());
+      vi.useRealTimers();
+    }
+  });
+
+  it('handles scheduled sweep failures and retries the restored batch on the next tick', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const attemptedRootSpanIds: string[] = [];
+    let nowMs = 1_000;
+    let attempts = 0;
+    const service = new TelemetryOtelService({
+      bus: MakaioBus,
+      config: baseConfig({
+        orphanTimeoutMs: 5_000,
+        batchConfig: { maxExportBatchSize: 512, scheduledDelayMs: 10, exportTimeoutMs: 30_000 },
+      }),
+      emitter: {
+        emit: async (drafts) => {
+          attempts += 1;
+          const root = drafts.find((draft) => draft.subject === 'session');
+          if (root !== undefined) attemptedRootSpanIds.push(root.spanId);
+          if (attempts === 1) throw new Error('scheduled export failed');
+        },
+      },
+      now: () => nowMs,
+    });
+
+    try {
+      await service.init();
+      await MakaioBus.emit(AgentSubjects.usage, {
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'anthropic',
+        sessionId: 'sess-scheduled-retry',
+        provider: 'anthropic',
+        model: 'claude-test',
+        inputTokens: 1,
+        inputCachedTokens: 0,
+        outputTokens: 1,
+        reasoningTokens: 0,
+        totalTokens: 2,
+        costUnits: 2,
+        costUnitType: 'tokens',
+      });
+      nowMs = 6_000;
+
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(attempts).toBe(2);
+      expect(attemptedRootSpanIds).toEqual(['session:sess-scheduled-retry:0', 'session:sess-scheduled-retry:0']);
+      expect(warn).toHaveBeenCalledWith(
+        "[telemetry-otel] Failed to export terminal 'orphan-sweep' telemetry",
+        expect.any(Error),
+      );
+    } finally {
+      warn.mockRestore();
+      await service.destroy();
+      vi.useRealTimers();
     }
   });
 

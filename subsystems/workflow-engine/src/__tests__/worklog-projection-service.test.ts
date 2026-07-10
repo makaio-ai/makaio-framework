@@ -44,6 +44,42 @@ describe('WorkLog projection service', () => {
     }
   });
 
+  it('serves a projected frame through worklog.frame.get', async () => {
+    await MakaioBus.emit(WorkflowSubjects.frame.started, {
+      executionId: 'exec-worklog',
+      frameId: 'frame-review',
+      nodeId: 'review',
+      nodeType: 'station',
+      path: ['frame-review'],
+      startedAt: 1_000,
+    });
+    await MakaioBus.emit(WorkflowSubjects.frame.completed, {
+      executionId: 'exec-worklog',
+      frameId: 'frame-review',
+      nodeId: 'review',
+      output: { verdict: 'approved' },
+      duration: 250,
+      completedAt: 1_250,
+    });
+
+    const result = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, { frameId: 'frame-review' });
+    const missing = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, { frameId: 'frame-missing' });
+
+    expect(result.frame).toEqual({
+      executionId: 'exec-worklog',
+      frameId: 'frame-review',
+      nodeId: 'review',
+      nodeType: 'station',
+      path: ['frame-review'],
+      status: 'completed',
+      attempt: 0,
+      startedAt: 1_000,
+      completedAt: 1_250,
+      durationMs: 250,
+    });
+    expect(missing.frame).toBeNull();
+  });
+
   it('preserves gate suspension metadata when projecting gate.resumed', async () => {
     await MakaioBus.emit(WorkflowSubjects.gate.suspended, {
       executionId: 'exec-worklog',

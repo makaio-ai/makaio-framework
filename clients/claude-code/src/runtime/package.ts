@@ -17,6 +17,8 @@ export {
 } from './schemas.js';
 export { normalizeClaudeCodeHook } from './hook-normalizer.js';
 export type { ClaudeCodeNormalizedEvent, ClaudeCodeNormalizedSubject } from './hook-normalizer.js';
+export { normalizeClaudeCodeSessionUsage, normalizeClaudeCodeStatusline } from './statusline-normalizer.js';
+export type { StatuslineIdentityContext } from './statusline-normalizer.js';
 export { resolveClaudeCodeSettingsPaths } from './settings-paths.js';
 export type { ClaudeCodeSettingsPath, ResolveClaudeCodeSettingsPathsOptions } from './settings-paths.js';
 export { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';

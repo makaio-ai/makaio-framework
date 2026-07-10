@@ -38,6 +38,13 @@ Provider configuration is resolved from the `ProviderContext` supplied on
 The public package root does not expose a config factory for callers to use
 directly.
 
+Provider settings may set `requestCorrelationHeaders: "factory-v1"` when the
+configured `baseUrl` targets a trusted Factory Gateway. The adapter then
+projects only the content-free `SessionContext.requestCorrelation` allowlist
+plus runtime-owned session, message, and per-request LLM-call IDs to
+`x-factory-*` headers. The option is disabled by default so these identifiers
+are never sent to arbitrary Anthropic-compatible endpoints.
+
 Runtime discovery loads `@makaio/adapter-anthropic-sdk/server`, whose
 default export is a `MakaioExtension` package descriptor with an `adapters[]`
 contribution.

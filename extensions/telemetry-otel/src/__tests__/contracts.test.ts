@@ -51,6 +51,23 @@ describe('telemetry-otel contracts', () => {
     expect(draft.attributes['makaio.execution.id']).toBe('wfx-1');
   });
 
+  it('parses standalone session spans without a workflow execution ID', () => {
+    const draft = SpanDraftSchema.parse({
+      spanId: 'session:local-1:0',
+      sessionId: 'local-1',
+      name: 'Agent session local-1',
+      kind: 'internal',
+      status: 'ok',
+      startedAt: 1000,
+      endedAt: 1500,
+      attributes: { 'makaio.trace.scope': 'standalone' },
+      links: [],
+      events: [],
+    });
+
+    expect(draft.executionId).toBeUndefined();
+  });
+
   it('parses rule actions using the real rules engine shape', () => {
     const rule = SpanEnricherRuleSchema.parse({
       id: 'factory-workflow',

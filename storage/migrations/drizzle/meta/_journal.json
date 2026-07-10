@@ -169,6 +169,20 @@
       "when": 1783356369164,
       "tag": "0023_m_mr9gc37m",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1783646185701,
+      "tag": "0024_external_settlement_fingerprint",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1783674656715,
+      "tag": "0025_external_registration_frame",
+      "breakpoints": true
     }
   ]
 }

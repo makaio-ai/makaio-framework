@@ -8,6 +8,7 @@ describe('ClientSubjects', () => {
     expect(ClientSubjects.session.account.observe.subject).toBe('session.account.observe');
     expect(ClientSubjects.usage.ingest.subject).toBe('usage.ingest');
     expect(ClientSubjects.usage.snapshot.subject).toBe('usage.snapshot');
+    expect(ClientSubjects.session.usage.snapshot.subject).toBe('session.usage.snapshot');
     expect(ClientSubjects.scan.$meta.namespace).toBe('client');
     expect(ClientSubjects.account.observe.$meta.namespace).toBe('client');
     expect(ClientSubjects.session.account.observe.$meta.namespace).toBe('client');

@@ -5,6 +5,7 @@ import {
   type AIReasoningLevel,
   type ReasoningLevelMap,
   type MessageResult,
+  type ProviderRequestCorrelation,
 } from '@makaio/ai-adapters-core';
 import type { AnthropicSdkProviderSettings } from '../schemas.js';
 import type Anthropic from '@anthropic-ai/sdk';
@@ -70,6 +71,8 @@ export interface StreamBridgeConfig {
   adapterSessionId?: string;
   /** Model name for event metadata */
   model: string;
+  /** Correlation bound to this concrete provider request. */
+  requestCorrelation?: ProviderRequestCorrelation;
   /** Optional low-level event logger for observability */
   logLowLevelEvent?: (event: unknown) => void;
 }
@@ -120,6 +123,8 @@ export interface AnthropicSdkSessionConfig {
   client: Anthropic;
   /** Anthropic-format tools to pass to messages.create */
   anthropicTools: Tool[];
+  /** Explicit opt-in for trusted Factory Gateway correlation headers. */
+  requestCorrelationHeaders?: 'factory-v1';
   /** Resolved system prompt string to prepend to messages */
   systemPrompt?: string;
   /**

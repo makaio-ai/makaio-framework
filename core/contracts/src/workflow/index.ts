@@ -195,6 +195,19 @@ export type {
   WorkerContributionManifest,
 } from './worker.js';
 export {
+  CompleteExternalExecutionRequestSchema,
+  EXTERNAL_EXECUTION_ID_PREFIX,
+  ExternalExecutionFrameCompletionSchema,
+  ExternalExecutionFrameStartSchema,
+  RegisterExternalExecutionRequestSchema,
+} from './external-execution.js';
+export type {
+  CompleteExternalExecutionRequest,
+  ExternalExecutionFrameCompletion,
+  ExternalExecutionFrameStart,
+  RegisterExternalExecutionRequest,
+} from './external-execution.js';
+export {
   WorkLogExecutionSummarySchema,
   WorkLogFrameEntrySchema,
   WorkLogArtifactWriteSchema,

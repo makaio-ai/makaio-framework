@@ -161,6 +161,7 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       env: this.config.env ?? {},
       client: this.client,
       openAITools: this.openAITools,
+      requestCorrelationHeaders: this.config.providerConfig?.requestCorrelationHeaders,
       systemPrompt,
       supportsResponseFormatWithTools:
         this.config.providerConfig?.supportsResponseFormatWithTools ??

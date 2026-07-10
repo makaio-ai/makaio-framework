@@ -139,6 +139,9 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
   protected extractUsagePayload(payload: Record<string, unknown>): NormalizedCallUsage {
     const usage = payload as UsageEvent;
     return {
+      ...(usage.llmCallId !== undefined ? { llmCallId: usage.llmCallId } : {}),
+      ...(usage.executionId !== undefined ? { executionId: usage.executionId } : {}),
+      ...(usage.frameId !== undefined ? { frameId: usage.frameId } : {}),
       provider: 'anthropic',
       inputTokens: usage.prompt_tokens,
       inputCachedTokens: usage.cache_read_input_tokens ?? 0,

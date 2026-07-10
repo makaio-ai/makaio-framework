@@ -3,6 +3,7 @@ import {
   ClientAccountObserveSchema,
   ClientDefinitionSchema,
   ClientScanResultSchema,
+  ClientSessionUsageSnapshotSchema,
   ClientUsageIngestSchema,
   ClientUsageSnapshotSchema,
 } from '@makaio/contracts/client';
@@ -138,6 +139,80 @@ describe('client schemas', () => {
       ClientUsageSnapshotSchema.safeParse({
         ...createValidUsageSnapshot(),
         clientAccountId: ' ',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts content-free interactive session usage snapshots', () => {
+    const snapshot = ClientSessionUsageSnapshotSchema.parse({
+      clientId: 'claude-code',
+      clientAccountId: 'client-account-1',
+      adapterSessionId: 'native-session-1',
+      source: 'statusline',
+      observedAt: 1_713_795_200_000,
+      clientVersion: '2.1.132',
+      modelId: 'claude-opus-4-6',
+      latestRequestInputTokens: 120,
+      latestRequestOutputTokens: 45,
+      latestRequestCacheReadTokens: 2_400,
+      latestRequestCacheWriteTokens: 80,
+      currentContextInputTokens: 80_000,
+      currentContextOutputTokens: 4_000,
+      contextWindowSizeTokens: 200_000,
+      contextUsedPercentage: 42,
+      totalCost: 12.68,
+      costCurrency: 'USD',
+      costProvenance: 'client-reported',
+      totalDurationMs: 3_933_000,
+      totalApiDurationMs: 348_000,
+      totalLinesAdded: 82,
+      totalLinesRemoved: 1,
+    });
+
+    expect(snapshot.latestRequestCacheReadTokens).toBe(2_400);
+    expect(snapshot.currentContextInputTokens).toBe(80_000);
+    expect(snapshot.totalCost).toBe(12.68);
+  });
+
+  it('rejects content fields and invalid measurements in session usage snapshots', () => {
+    const base = {
+      clientId: 'claude-code',
+      adapterSessionId: 'native-session-1',
+      source: 'statusline',
+      observedAt: 1_713_795_200_000,
+      latestRequestInputTokens: 120,
+    };
+
+    expect(ClientSessionUsageSnapshotSchema.safeParse({ ...base, prompt: 'private prompt' }).success).toBe(false);
+    expect(ClientSessionUsageSnapshotSchema.safeParse({ ...base, transcriptPath: '/private/transcript' }).success).toBe(
+      false,
+    );
+    expect(ClientSessionUsageSnapshotSchema.safeParse({ ...base, latestRequestInputTokens: -1 }).success).toBe(false);
+    expect(ClientSessionUsageSnapshotSchema.safeParse({ ...base, contextUsedPercentage: 101 }).success).toBe(false);
+    expect(ClientSessionUsageSnapshotSchema.safeParse({ ...base, totalCost: Number.NaN }).success).toBe(false);
+  });
+
+  it('requires session cost amount, currency, and provenance as one coherent group', () => {
+    const base = {
+      clientId: 'claude-code',
+      adapterSessionId: 'native-session-1',
+      source: 'statusline',
+      observedAt: 1_713_795_200_000,
+      latestRequestInputTokens: 120,
+    };
+
+    expect(ClientSessionUsageSnapshotSchema.safeParse(base).success).toBe(true);
+    expect(ClientSessionUsageSnapshotSchema.safeParse({ ...base, totalCost: 1, costCurrency: 'USD' }).success).toBe(
+      false,
+    );
+    expect(
+      ClientSessionUsageSnapshotSchema.safeParse({ ...base, totalCost: 1, costProvenance: 'estimated' }).success,
+    ).toBe(false);
+    expect(
+      ClientSessionUsageSnapshotSchema.safeParse({
+        ...base,
+        costCurrency: 'USD',
+        costProvenance: 'estimated',
       }).success,
     ).toBe(false);
   });

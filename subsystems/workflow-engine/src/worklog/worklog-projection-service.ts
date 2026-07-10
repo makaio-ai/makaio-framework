@@ -4,6 +4,7 @@ import { WorkflowSubjects } from '../namespace.js';
 import {
   upsertWorklogGateEvent,
   getWorklogGateEvent,
+  getWorklogFrameEntry,
   getWorklogSummary,
   listWorklogSummaries,
   aggregateWorklogStats,
@@ -146,8 +147,8 @@ async function projectGateResolvedEvent(
  * write failures are logged but never propagate to callers — the runtime must
  * not be blocked by a failing WorkLog write.
  *
- * **RPC handlers** serve `workflow.worklog.get`, `workflow.worklog.list`, and
- * `workflow.worklog.stats` requests directly from the WorkLog tables.
+ * **RPC handlers** serve WorkLog execution and frame reads directly from the
+ * WorkLog tables.
  *
  * Subscribed events cover execution, frame, gate, and artifact-write projections.
  * @param bus - Message bus to subscribe on.
@@ -163,6 +164,11 @@ export function registerWorklogProjection(bus: IMakaioBus, db: MakaioDatabase): 
       const { executionId } = ctx.payload;
       const summary = await getWorklogSummary(db, executionId);
       ctx.setResult({ summary });
+    }),
+    bus.on(WorkflowSubjects.worklog.frame.get, async (ctx) => {
+      const { frameId } = ctx.payload;
+      const frame = await getWorklogFrameEntry(db, frameId);
+      ctx.setResult({ frame });
     }),
     bus.on(WorkflowSubjects.worklog.list, async (ctx) => {
       const { workflowId, status, limit, offset } = ctx.payload;

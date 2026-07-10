@@ -116,6 +116,9 @@ export class OpenAIAgent extends BaseStreamAgent<OpenAINodeConnectorBus, OpenAIN
   protected extractUsagePayload(payload: Record<string, unknown>): NormalizedCallUsage {
     const usage = payload as UsageEvent;
     return {
+      ...(usage.llmCallId !== undefined ? { llmCallId: usage.llmCallId } : {}),
+      ...(usage.executionId !== undefined ? { executionId: usage.executionId } : {}),
+      ...(usage.frameId !== undefined ? { frameId: usage.frameId } : {}),
       provider: 'openai',
       inputTokens: usage.prompt_tokens,
       inputCachedTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,

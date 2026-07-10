@@ -59,10 +59,9 @@ export const TelemetryOtelConfigSchema = z
     /**
      * Time in ms after which execution-owned sessionless agent usage/tool
      * events are promoted to orphan spans, and unlinked sessioned events are
-     * discarded because no execution owner can be proven. Active executions are
-     * never ended by this timeout.
-     * Set to `0` to disable timeout-based orphan promotion only; unlinked
-     * sessioned events are still dropped on each sweep.
+     * exported as standalone trace segments. Active executions are never ended
+     * by this timeout.
+     * Set to `0` to retain unlinked events until a frame link or shutdown.
      */
     orphanTimeoutMs: z.number().int().nonnegative().default(30000),
   })

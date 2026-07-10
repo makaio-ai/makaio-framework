@@ -21,7 +21,7 @@ import {
 } from '../schemas.js';
 import type { WorkflowParallelNode } from '../schemas.js';
 import { WorkflowProgressUpdateSchema, WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
-import { WorkLogExecutionSummarySchema } from '../worklog.js';
+import { WorkLogExecutionSummarySchema, WorkLogFrameEntrySchema } from '../worklog.js';
 
 // ─────────────────────────────────────────────────────────────
 // Namespace subjects
@@ -65,6 +65,7 @@ describe('WorkflowNamespace', () => {
 
   it('exposes worklog RPC and event subjects', () => {
     expect(WorkflowSubjects.worklog.get.subject).toBe('worklog.get');
+    expect(WorkflowSubjects.worklog.frame.get.subject).toBe('worklog.frame.get');
     expect(WorkflowSubjects.worklog.list.subject).toBe('worklog.list');
     expect(WorkflowSubjects.worklog.stats.subject).toBe('worklog.stats');
     expect(WorkflowSubjects.worklog.changed.subject).toBe('worklog.changed');
@@ -1499,6 +1500,33 @@ describe('artifact.updated event', () => {
 // ─────────────────────────────────────────────────────────────
 // WorkLog RPC subjects
 // ─────────────────────────────────────────────────────────────
+
+describe('worklog.frame.get RPC', () => {
+  it('accepts a frame identifier and a contract-compatible response', () => {
+    const request = WorkflowSchemas['worklog.frame.get'].request.parse({ frameId: 'frame-1' });
+    const frame = WorkLogFrameEntrySchema.parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-1',
+      nodeId: 'review',
+      nodeType: 'station',
+      path: ['frame-1'],
+      status: 'completed',
+      attempt: 0,
+      startedAt: 1_000,
+      completedAt: 1_250,
+      durationMs: 250,
+    });
+    const response = WorkflowSchemas['worklog.frame.get'].response.parse({ frame });
+
+    expect(request.frameId).toBe('frame-1');
+    expect(response.frame).toEqual(frame);
+  });
+
+  it('rejects an empty frame identifier and accepts a missing frame response', () => {
+    expect(() => WorkflowSchemas['worklog.frame.get'].request.parse({ frameId: '' })).toThrow();
+    expect(WorkflowSchemas['worklog.frame.get'].response.parse({ frame: null }).frame).toBeNull();
+  });
+});
 
 describe('worklog.get RPC', () => {
   it('accepts a valid worklog.get request', () => {

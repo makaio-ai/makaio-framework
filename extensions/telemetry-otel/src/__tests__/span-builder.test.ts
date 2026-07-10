@@ -99,6 +99,15 @@ describe('SpanBuilder', () => {
       const draft = SpanBuilder.buildLlmSpan({
         executionId: 'wfx-1',
         sessionId: 'sess-1',
+        agentId: 'agent-review',
+        adapterId: 'adapter-instance-1',
+        adapterName: 'claude-code',
+        adapterSessionId: 'native-session-1',
+        messageId: 'message-1',
+        turnId: 'turn-1',
+        clientId: 'claude-code',
+        providerConfigId: 'anthropic-oauth',
+        llmCallId: 'call-1',
         frameId: 'frame-a',
         sequence: 0,
         provider: 'openai',
@@ -109,8 +118,11 @@ describe('SpanBuilder', () => {
         outputTokens: 20,
         reasoningTokens: 3,
         totalTokens: 33,
+        costUnits: 33,
+        costUnitType: 'tokens',
         cost: 0.0123,
         currency: 'USD',
+        costProvenance: 'estimated',
         duration: 250,
         startedAt: 1200,
         endedAt: 1450,
@@ -119,9 +131,14 @@ describe('SpanBuilder', () => {
 
       expect(draft.spanId).toBe('llm:wfx-1:sess-1:0');
       expect(draft.parentSpanId).toBe('frame:wfx-1:frame-a');
+      expect(draft.frameId).toBe('frame-a');
       expect(draft.sessionId).toBe('sess-1');
       expect(draft.namespace).toBe('agent');
       expect(draft.subject).toBe('usage');
+      expect(draft.attributes['makaio.llm_call.id']).toBe('call-1');
+      expect(draft.attributes['makaio.execution.id']).toBe('wfx-1');
+      expect(draft.attributes['makaio.frame.id']).toBe('frame-a');
+      expect(draft.attributes['makaio.session.id']).toBe('sess-1');
       expect(draft.name).toBe('LLM call gpt-5.4');
       expect(draft.kind).toBe('client');
       expect(draft.attributes['llm.provider']).toBe('openai');
@@ -135,8 +152,18 @@ describe('SpanBuilder', () => {
       expect(draft.attributes['llm.cost.estimated']).toBe(0.0123);
       expect(draft.attributes['llm.cost.currency']).toBe('USD');
       expect(draft.attributes['llm.duration_ms']).toBe(250);
-      expect(draft.attributes['llm.cost_units']).toBeUndefined();
-      expect(draft.attributes['llm.cost_unit_type']).toBeUndefined();
+      expect(draft.attributes['makaio.agent.id']).toBe('agent-review');
+      expect(draft.attributes['makaio.adapter.id']).toBe('adapter-instance-1');
+      expect(draft.attributes['makaio.adapter.name']).toBe('claude-code');
+      expect(draft.attributes['makaio.adapter.session_id']).toBe('native-session-1');
+      expect(draft.attributes['makaio.message.id']).toBe('message-1');
+      expect(draft.attributes['makaio.turn.id']).toBe('turn-1');
+      expect(draft.attributes['makaio.client.id']).toBe('claude-code');
+      expect(draft.attributes['makaio.provider.config_id']).toBe('anthropic-oauth');
+      expect(draft.attributes['llm.cost.units']).toBe(33);
+      expect(draft.attributes['llm.cost.unit_type']).toBe('tokens');
+      expect(draft.attributes['llm.cost.amount']).toBe(0.0123);
+      expect(draft.attributes['llm.cost.provenance']).toBe('estimated');
       expect(draft.attributes['correlation.orphaned']).toBeUndefined();
     });
 
@@ -153,6 +180,8 @@ describe('SpanBuilder', () => {
         outputTokens: 8,
         reasoningTokens: 0,
         totalTokens: 13,
+        costUnits: 13,
+        costUnitType: 'tokens',
         startedAt: 1000,
         endedAt: 1000,
         orphaned: true,
@@ -160,6 +189,83 @@ describe('SpanBuilder', () => {
 
       expect(draft.parentSpanId).toBeUndefined();
       expect(draft.attributes['correlation.orphaned']).toBe(true);
+    });
+
+    it('does not label provider-reported monetary cost as estimated', () => {
+      const draft = SpanBuilder.buildLlmSpan({
+        executionId: 'wfx-1',
+        sessionId: 'sess-1',
+        frameId: 'frame-1',
+        sequence: 0,
+        provider: 'anthropic',
+        model: 'claude-test',
+        inputTokens: 10,
+        inputCachedTokens: 0,
+        outputTokens: 5,
+        reasoningTokens: 0,
+        totalTokens: 15,
+        costUnits: 15,
+        costUnitType: 'tokens',
+        cost: 0.25,
+        currency: 'USD',
+        costProvenance: 'provider-reported',
+        startedAt: 1000,
+        endedAt: 1100,
+        orphaned: false,
+      });
+
+      expect(draft.attributes['llm.cost.amount']).toBe(0.25);
+      expect(draft.attributes['llm.cost.estimated']).toBeUndefined();
+      expect(draft.attributes['llm.cost.provenance']).toBe('provider-reported');
+    });
+
+    it('builds standalone session traces without fabricating a workflow execution', () => {
+      const root = SpanBuilder.buildStandaloneSessionSpan({
+        sessionId: 'sess-local',
+        segment: 4,
+        startedAt: 1000,
+        endedAt: 1500,
+      });
+      const llm = SpanBuilder.buildStandaloneLlmSpan({
+        sessionId: 'sess-local',
+        segment: 4,
+        sequence: 0,
+        provider: 'anthropic',
+        model: 'claude-opus-4-6',
+        inputTokens: 10,
+        inputCachedTokens: 5,
+        outputTokens: 4,
+        reasoningTokens: 0,
+        totalTokens: 14,
+        costUnits: 14,
+        costUnitType: 'tokens',
+        startedAt: 1200,
+        endedAt: 1400,
+      });
+      const tool = SpanBuilder.buildStandaloneToolSpan({
+        sessionId: 'sess-local',
+        segment: 4,
+        toolCallId: 'call-local',
+        toolName: 'read',
+        startedAt: 1250,
+        endedAt: 1300,
+        success: true,
+      });
+
+      expect(root.executionId).toBeUndefined();
+      expect(root.attributes).toMatchObject({
+        'makaio.session.id': 'sess-local',
+        'makaio.trace.scope': 'standalone',
+        'makaio.trace.segment': 4,
+      });
+      expect(llm.executionId).toBeUndefined();
+      expect(llm.parentSpanId).toBe(root.spanId);
+      expect(llm.attributes['makaio.trace.scope']).toBe('standalone');
+      expect(llm.attributes['makaio.execution.id']).toBeUndefined();
+      expect(tool.executionId).toBeUndefined();
+      expect(tool.parentSpanId).toBe(root.spanId);
+      expect(tool.attributes['makaio.trace.scope']).toBe('standalone');
+      expect(tool.attributes['makaio.execution.id']).toBeUndefined();
     });
   });
 

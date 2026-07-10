@@ -158,6 +158,7 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
       env: this.config.env ?? {},
       client: this.client,
       anthropicTools: this.anthropicTools,
+      requestCorrelationHeaders: this.config.providerConfig?.requestCorrelationHeaders,
       systemPrompt,
       maxTokens: this.config.providerConfig?.maxTokens,
       allowedDirectories: this.config.allowedDirectories,

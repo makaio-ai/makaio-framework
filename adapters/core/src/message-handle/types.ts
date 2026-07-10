@@ -5,6 +5,7 @@ import type {
   MessageDeliveryMode,
   MessageOutcome,
   ResponseSchemaDescriptor,
+  RequestCorrelationContext,
   SendMessageResultInnerResult,
   StructuredOutputValidation,
 } from '@makaio/contracts';
@@ -66,6 +67,8 @@ export interface MessageHandleOptions {
   messageHistory?: Message[];
   /** Optional per-turn metadata/context payload for prompt materialization. */
   turnContext?: Record<string, JsonValue>;
+  /** Content-free transport context that must never be added to model input. */
+  requestCorrelation?: RequestCorrelationContext;
   /** Caller-expressed caching intent for the injected history prefix. */
   cacheStrategy?: CacheStrategy;
   /**

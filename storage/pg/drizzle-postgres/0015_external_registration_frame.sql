@@ -1,0 +1,1 @@
+ALTER TABLE "workflow_executions" ADD COLUMN "external_registration_frame_id" text;

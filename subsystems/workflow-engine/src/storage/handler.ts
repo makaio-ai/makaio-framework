@@ -28,6 +28,7 @@ import { registerStateHandlers } from './state-handler.js';
 import { toWorkflowStateJsonColumnValue } from './state-json-column.js';
 import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
 import { registerWorklogProjection } from '../worklog/worklog-projection-service.js';
+import { registerExternalExecutionStorageHandlers } from './external-execution-handler.js';
 
 // The `.sqlite` face is the canonical static type for BOTH dialects:
 // `DialectSchema` presents the Postgres twins through the same SQLite-typed
@@ -63,7 +64,11 @@ function mapExecution(row: DbExecutionRow): WorkflowExecution {
 }
 
 /**
- * Maps a `WorkflowExecution` to canonical database values.
+ * Maps a `WorkflowExecution` to canonical public-owned database values.
+ *
+ * `externalSettlementFingerprint` is deliberately omitted: only the atomic
+ * external settlement handler owns that column, so generic execution upserts
+ * preserve an already-acknowledged identity.
  * @param execution - Workflow execution to persist
  * @returns Column values for the `workflow_executions` table
  */
@@ -494,7 +499,7 @@ function registerExecutionListHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
  * - Span CRUD: setSpan, listSpans
  * - Execution link CRUD: setExecutionLink, listExecutionLinks
  * - Run context CRUD: setRunContext, getRunContext
- * - WorkLog projection: worklog.get, worklog.list, worklog.changed (event-driven)
+ * - WorkLog projection: execution/frame reads, stats, and changed events
  * @param bus - MakaioBus instance for message handling
  * @param db - Drizzle database instance
  * @returns Cleanup function to unregister all handlers
@@ -509,6 +514,7 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
   const runContextCleanup = registerRunContextHandlers(bus, db);
   const stateCleanup = registerStateHandlers(bus, db);
   const worklogCleanup = registerWorklogProjection(bus, db);
+  const externalExecutionCleanup = registerExternalExecutionStorageHandlers(bus, db, toExecutionDbValues);
 
   return () => {
     definitionCleanup();
@@ -520,5 +526,6 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
     runContextCleanup();
     stateCleanup();
     worklogCleanup();
+    externalExecutionCleanup();
   };
 }

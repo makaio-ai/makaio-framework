@@ -13,23 +13,41 @@
  * 6. `onExecutionCompleted` / `onExecutionFailed` / `onExecutionCancelled` —
  *    flushes all span drafts for the execution and removes it from memory.
  * 7. `sweepOrphans` — call periodically; promotes stale sessionless agent
- *    events to orphan spans and drops stale sessioned events that never linked,
- *    without terminating still-active executions.
+ *    events to execution orphans and exports unlinked sessioned events as
+ *    standalone trace segments without terminating still-active executions.
  * @packageDocumentation
  */
 
 import type { SpanDraft } from '../contracts/types.js';
-import { SpanBuilder } from './span-builder.js';
+import {
+  appendExecutionUsage,
+  bufferExecutionTool,
+  closeExecutionFrame,
+  mergeExecutionToolStart,
+  toolCorrelationKey,
+} from './execution-state.js';
+import { buildExecutionToolSpan, buildExecutionTrace, buildExecutionUsageSpan } from './execution-traces.js';
 import { SessionIndex } from './session-index.js';
+import { buildStandaloneSessionTrace, mergeRetainedToolLifecycle, retryExport } from './standalone-session-traces.js';
+import {
+  createUnresolvedUsage,
+  groupUsageBySession,
+  partitionStaleSessionEvents,
+  partitionUsageForExecution,
+} from './unresolved-events.js';
 import type {
+  AgentUsagePayload,
   BufferedToolCall,
   BufferedUsage,
   CollectorOptions,
-  FrameRecord,
   OpenExecution,
   UnresolvedToolCall,
   UnresolvedUsage,
 } from './types.js';
+
+const SHUTDOWN_EXPORT_ATTEMPTS = 2;
+
+export type { AgentUsagePayload } from './types.js';
 
 /**
  * Payload shape for `workflow.execution.started`.
@@ -115,30 +133,6 @@ export interface FrameSessionLinkedPayload {
 }
 
 /**
- * Subset of the `agent.usage` event consumed by the collector.
- *
- * Mirrors the fields on `UsageSchema` that are relevant to span construction.
- * `sessionId` is optional because the base event schema marks it as such.
- */
-export interface AgentUsagePayload {
-  readonly sessionId?: string;
-  readonly provider: string;
-  readonly model: string;
-  readonly inputTokens: number;
-  readonly inputCachedTokens: number;
-  readonly cacheWriteTokens?: number;
-  readonly outputTokens: number;
-  readonly reasoningTokens: number;
-  readonly totalTokens: number;
-  readonly costUnits: number;
-  readonly costUnitType: 'requests' | 'tokens';
-  readonly cost?: number;
-  readonly currency?: string;
-  readonly duration?: number;
-  readonly occurredAt?: number;
-}
-
-/**
  * Payload shape for `agent.tool.started`.
  */
 export interface AgentToolStartedPayload {
@@ -171,7 +165,15 @@ export class SpanCollector {
   private readonly executions = new Map<string, OpenExecution>();
   private readonly sessionIndex = new SessionIndex();
   private readonly unresolvedUsageBySession = new Map<string, UnresolvedUsage[]>();
+  private readonly unresolvedUsageByExecution = new Map<string, UnresolvedUsage[]>();
   private readonly unresolvedToolsBySession = new Map<string, Map<string, UnresolvedToolCall>>();
+  /** Reuses span IDs when a failed standalone export is retried. */
+  private readonly standaloneRetrySegmentBySession = new Map<string, number>();
+  /** Reuses span IDs for usage whose claimed execution never opened. */
+  private readonly standaloneRetrySegmentsByExecution = new Map<string, Map<string, number>>();
+  /** Coalesces overlapping interval ticks into one state transition. */
+  private orphanSweepTask: Promise<void> | undefined;
+  private standaloneSegmentSequence = 0;
   /**
    * Orphan spans that have been emitted out-of-band during `sweepOrphans`.
    * Stored per executionId so they can be appended when the execution flushes.
@@ -209,7 +211,7 @@ export class SpanCollector {
       }
     }
 
-    this.executions.set(payload.executionId, {
+    const execution: OpenExecution = {
       executionId: payload.executionId,
       workflowId: payload.workflowId,
       startedAt,
@@ -218,7 +220,9 @@ export class SpanCollector {
       pendingTools: new Map(),
       sessionFrameMap: new Map(),
       usageSequence: 0,
-    });
+    };
+    this.executions.set(payload.executionId, execution);
+    this.replayUnresolvedUsageForExecution(execution);
 
     return eviction;
   }
@@ -326,6 +330,7 @@ export class SpanCollector {
     this.sessionIndex.link(payload.sessionId, payload.executionId, payload.frameId);
     this.replayUnresolvedUsage(payload.sessionId, execution);
     this.replayUnresolvedTools(payload.sessionId, execution);
+    this.standaloneRetrySegmentBySession.delete(payload.sessionId);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -344,15 +349,22 @@ export class SpanCollector {
    */
   public onAgentUsage(payload: AgentUsagePayload): void {
     const now = this.options.now();
-    const unresolved = this.createUnresolvedUsage(payload, now);
-    const execution = this.resolveExecutionForSession(payload.sessionId);
+    const unresolved = createUnresolvedUsage(payload, now);
+    const execution =
+      payload.executionId !== undefined
+        ? this.executions.get(payload.executionId)
+        : this.resolveExecutionForSession(payload.sessionId);
 
     if (execution !== undefined) {
-      this.bufferUsageOnExecution(execution, unresolved);
+      appendExecutionUsage(execution, unresolved);
       return;
     }
 
-    if (payload.sessionId !== undefined) {
+    if (payload.executionId !== undefined) {
+      const existing = this.unresolvedUsageByExecution.get(payload.executionId) ?? [];
+      existing.push(unresolved);
+      this.unresolvedUsageByExecution.set(payload.executionId, existing);
+    } else if (payload.sessionId !== undefined) {
       const existing = this.unresolvedUsageBySession.get(payload.sessionId) ?? [];
       existing.push(unresolved);
       this.unresolvedUsageBySession.set(payload.sessionId, existing);
@@ -369,7 +381,7 @@ export class SpanCollector {
     const execution = this.resolveExecutionForSession(payload.sessionId);
 
     if (execution !== undefined) {
-      this.mergeToolStartOnExecution(execution, {
+      mergeExecutionToolStart(execution, {
         sessionId: payload.sessionId,
         toolName: payload.toolName,
         toolCallId: payload.toolCallId,
@@ -404,7 +416,7 @@ export class SpanCollector {
     const execution = this.resolveExecutionForSession(payload.sessionId);
 
     if (execution !== undefined) {
-      const key = this.toolKey(payload.sessionId, payload.toolCallId);
+      const key = toolCorrelationKey(payload.sessionId, payload.toolCallId);
       const existing = execution.pendingTools.get(key);
       if (existing !== undefined) {
         existing.toolName = payload.toolName;
@@ -413,7 +425,7 @@ export class SpanCollector {
         return;
       }
 
-      this.bufferToolOnExecution(execution, {
+      bufferExecutionTool(execution, {
         sessionId: payload.sessionId,
         toolName: payload.toolName,
         toolCallId: payload.toolCallId,
@@ -426,7 +438,7 @@ export class SpanCollector {
     }
 
     if (payload.sessionId !== undefined) {
-      const key = this.toolKey(payload.sessionId, payload.toolCallId);
+      const key = toolCorrelationKey(payload.sessionId, payload.toolCallId);
       const sessionTools = this.unresolvedToolsBySession.get(payload.sessionId);
       const existing = sessionTools?.get(key);
       if (existing !== undefined) {
@@ -460,10 +472,42 @@ export class SpanCollector {
    * is terminated as failed with a `'Service shutdown'` error message.
    */
   public async flushAll(): Promise<void> {
+    const activeSweep = this.orphanSweepTask;
+    if (activeSweep !== undefined) {
+      try {
+        await activeSweep;
+      } catch {
+        // Failed standalone batches are restored before the sweep rejects and
+        // are retried by the shutdown flush below.
+      }
+    }
+
+    let firstFailure: unknown;
+    let hasFailure = false;
+    const recordFailure = (error: unknown) => {
+      if (hasFailure) return;
+      hasFailure = true;
+      firstFailure = error;
+    };
     const executionIds = [...this.executions.keys()];
     for (const executionId of executionIds) {
-      await this.onExecutionFailed({ executionId, error: 'Service shutdown' }, this.options.now());
+      const result = await retryExport(SHUTDOWN_EXPORT_ATTEMPTS, () =>
+        this.onExecutionFailed({ executionId, error: 'Service shutdown' }, this.options.now()),
+      );
+      if (!result.success) recordFailure(result.error);
     }
+    const standaloneFlushes = [
+      () => this.flushStaleStandaloneSessions(this.options.now(), 0, SHUTDOWN_EXPORT_ATTEMPTS, true),
+      () => this.flushStaleUnopenedExecutions(this.options.now(), 0, SHUTDOWN_EXPORT_ATTEMPTS, true),
+    ];
+    for (const flush of standaloneFlushes) {
+      try {
+        await flush();
+      } catch (error) {
+        recordFailure(error);
+      }
+    }
+    if (hasFailure) throw firstFailure;
   }
 
   /**
@@ -475,14 +519,28 @@ export class SpanCollector {
    *
    * Sessioned events that have not yet received `frame.sessionLinked` remain
    * buffered until this same timeout expires. After that point the collector
-   * discards them because no execution owner can be proven.
+   * exports them as standalone session trace segments.
+   * @returns The active sweep, shared by overlapping callers.
    */
-  public async sweepOrphans(): Promise<void> {
+  public sweepOrphans(): Promise<void> {
+    if (this.orphanSweepTask !== undefined) {
+      return this.orphanSweepTask;
+    }
+
+    const task = this.sweepOrphansOnce();
+    this.orphanSweepTask = task;
+    void task.then(
+      () => this.clearOrphanSweepTask(task),
+      () => this.clearOrphanSweepTask(task),
+    );
+    return task;
+  }
+
+  private async sweepOrphansOnce(): Promise<void> {
     const now = this.options.now();
     const { orphanTimeoutMs } = this.options;
 
     if (orphanTimeoutMs === 0) {
-      this.sweepUnresolvedSessionEvents(now, 0);
       return;
     }
 
@@ -492,15 +550,17 @@ export class SpanCollector {
       for (const usage of execution.pendingUsage) {
         const age = now - usage.ingestedAt;
         const isStale = age >= orphanTimeoutMs;
-        const sessionResolved = usage.sessionId !== undefined && execution.sessionFrameMap.has(usage.sessionId);
+        const frameResolved =
+          usage.frameId !== undefined ||
+          (usage.sessionId !== undefined && execution.sessionFrameMap.has(usage.sessionId));
 
-        if (!isStale || sessionResolved) {
+        if (!isStale || frameResolved) {
           remaining.push(usage);
           continue;
         }
 
         // Emit as orphan
-        const orphanDraft = this.buildUsageSpan(execution, usage, undefined);
+        const orphanDraft = buildExecutionUsageSpan(execution, usage, undefined);
         const existing = this.emittedOrphans.get(execution.executionId) ?? [];
         existing.push(orphanDraft);
         this.emittedOrphans.set(execution.executionId, existing);
@@ -514,14 +574,15 @@ export class SpanCollector {
         const sessionResolved = tool.sessionId !== undefined && execution.sessionFrameMap.has(tool.sessionId);
         if (!sessionResolved && age >= orphanTimeoutMs) {
           const existing = this.emittedOrphans.get(execution.executionId) ?? [];
-          existing.push(this.buildToolSpan(execution, tool, undefined, now));
+          existing.push(buildExecutionToolSpan(execution, tool, undefined, now));
           this.emittedOrphans.set(execution.executionId, existing);
           execution.pendingTools.delete(key);
         }
       }
     }
 
-    this.sweepUnresolvedSessionEvents(now, orphanTimeoutMs);
+    await this.flushStaleStandaloneSessions(now, orphanTimeoutMs);
+    await this.flushStaleUnopenedExecutions(now, orphanTimeoutMs);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -544,68 +605,21 @@ export class SpanCollector {
     }
 
     const now = this.options.now();
-    const drafts: SpanDraft[] = [];
-
-    // Root execution span with error status and an eviction event
-    const rootSpan = SpanBuilder.buildExecutionSpan({
-      executionId: execution.executionId,
-      workflowId: execution.workflowId,
-      startedAt: execution.startedAt,
+    const drafts = buildExecutionTrace({
+      execution,
       endedAt: now,
       status: 'error',
-    });
-    drafts.push({
-      ...rootSpan,
-      events: [
+      rootEvents: [
         {
           name: 'evicted',
           time: now,
           attributes: { 'eviction.reason': reason },
         },
       ],
+      orphans: this.emittedOrphans.get(executionId),
     });
 
-    // Frame spans — close any open frames at the eviction timestamp
-    for (const frame of execution.frames.values()) {
-      drafts.push(
-        SpanBuilder.buildFrameSpan({
-          executionId: execution.executionId,
-          frameId: frame.frameId,
-          nodeId: frame.nodeId,
-          nodeType: frame.nodeType,
-          path: frame.path,
-          parentFrameId: frame.parentFrameId,
-          startedAt: frame.startedAt,
-          endedAt: frame.endedAt ?? now,
-          status: frame.status === 'unset' ? 'error' : frame.status,
-        }),
-      );
-    }
-
-    // Resolve pending usage events against their session→frame mappings
-    for (const usage of execution.pendingUsage) {
-      const frameId = usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined;
-      drafts.push(this.buildUsageSpan(execution, usage, frameId));
-    }
-
-    for (const tool of execution.pendingTools.values()) {
-      const frameId = tool.sessionId !== undefined ? execution.sessionFrameMap.get(tool.sessionId) : undefined;
-      drafts.push(this.buildToolSpan(execution, tool, frameId, now));
-    }
-
-    // Append any orphan spans emitted during sweepOrphans
-    const orphans = this.emittedOrphans.get(executionId);
-    if (orphans !== undefined) {
-      drafts.push(...orphans);
-    }
-
-    // Clean up
-    this.executions.delete(executionId);
-    this.sessionIndex.evictExecution(executionId);
-    this.emittedOrphans.delete(executionId);
-    this.clearUnlinkedAgentEventsWhenIdle();
-
-    await this.options.emit(drafts);
+    await this.emitTerminalExecution(execution, drafts);
   }
 
   /**
@@ -629,97 +643,7 @@ export class SpanCollector {
     if (execution === undefined) {
       return;
     }
-
-    const startedAt = endedAt - (duration ?? 0);
-    const frame =
-      execution.frames.get(frameId) ?? this.createPlaceholderFrame(execution, frameId, nodeId, startedAt, endedAt);
-
-    frame.endedAt = endedAt;
-    frame.status = status;
-  }
-
-  /**
-   * Builds a {@link SpanDraft} for a single buffered usage event.
-   *
-   * When `frameId` is `undefined` the span is marked as orphaned.
-   * @param execution - The execution this usage belongs to.
-   * @param usage - Buffered usage event.
-   * @param frameId - Resolved frame ID, or `undefined` for orphan spans.
-   * @returns A fully-resolved {@link SpanDraft} for the LLM call.
-   */
-  private buildUsageSpan(execution: OpenExecution, usage: BufferedUsage, frameId: string | undefined): SpanDraft {
-    const orphaned = frameId === undefined;
-    const endedAt = usage.occurredAt ?? usage.ingestedAt;
-    const startedAt = usage.duration !== undefined ? endedAt - usage.duration : endedAt;
-
-    return SpanBuilder.buildLlmSpan({
-      executionId: execution.executionId,
-      sessionId: usage.sessionId ?? 'unknown',
-      frameId,
-      sequence: usage.sequence,
-      provider: usage.provider,
-      model: usage.model,
-      inputTokens: usage.inputTokens,
-      inputCachedTokens: usage.inputCachedTokens,
-      cacheWriteTokens: usage.cacheWriteTokens,
-      outputTokens: usage.outputTokens,
-      reasoningTokens: usage.reasoningTokens,
-      totalTokens: usage.totalTokens,
-      cost: usage.cost,
-      currency: usage.currency,
-      duration: usage.duration,
-      startedAt,
-      endedAt,
-      orphaned,
-    });
-  }
-
-  /**
-   * Builds a {@link SpanDraft} for a single buffered tool event pair.
-   * @param execution - The execution this tool call belongs to.
-   * @param tool - Buffered tool call event state.
-   * @param frameId - Resolved frame ID, or `undefined` for orphan spans.
-   * @param fallbackEndedAt - End timestamp for still-open tool calls.
-   * @returns A fully-resolved {@link SpanDraft} for the tool call.
-   */
-  private buildToolSpan(
-    execution: OpenExecution,
-    tool: BufferedToolCall,
-    frameId: string | undefined,
-    fallbackEndedAt: number,
-  ): SpanDraft {
-    return SpanBuilder.buildToolSpan({
-      executionId: execution.executionId,
-      sessionId: tool.sessionId ?? 'unknown',
-      frameId,
-      toolCallId: tool.toolCallId,
-      toolName: tool.toolName,
-      startedAt: tool.startedAt,
-      endedAt: tool.endedAt ?? fallbackEndedAt,
-      success: tool.success,
-      orphaned: frameId === undefined,
-    });
-  }
-
-  private createUnresolvedUsage(payload: AgentUsagePayload, ingestedAt: number): UnresolvedUsage {
-    return {
-      sessionId: payload.sessionId,
-      provider: payload.provider,
-      model: payload.model,
-      inputTokens: payload.inputTokens,
-      inputCachedTokens: payload.inputCachedTokens,
-      cacheWriteTokens: payload.cacheWriteTokens,
-      outputTokens: payload.outputTokens,
-      reasoningTokens: payload.reasoningTokens,
-      totalTokens: payload.totalTokens,
-      costUnits: payload.costUnits,
-      costUnitType: payload.costUnitType,
-      cost: payload.cost,
-      currency: payload.currency,
-      duration: payload.duration,
-      occurredAt: payload.occurredAt,
-      ingestedAt,
-    };
+    closeExecutionFrame(execution, frameId, nodeId, endedAt, status, duration);
   }
 
   private resolveExecutionForSession(sessionId: string | undefined): OpenExecution | undefined {
@@ -738,53 +662,36 @@ export class SpanCollector {
     return undefined;
   }
 
-  private bufferUsageOnExecution(execution: OpenExecution, usage: UnresolvedUsage): void {
-    execution.pendingUsage.push({
-      ...usage,
-      sequence: execution.usageSequence++,
-    });
-  }
-
   private replayUnresolvedUsage(sessionId: string, execution: OpenExecution): void {
     const usages = this.unresolvedUsageBySession.get(sessionId);
     if (usages === undefined) {
       return;
     }
 
-    for (const usage of usages) {
-      this.bufferUsageOnExecution(execution, usage);
+    const { matched, retained } = partitionUsageForExecution(usages, execution.executionId, true);
+    for (const usage of matched) {
+      appendExecutionUsage(execution, usage);
     }
-    this.unresolvedUsageBySession.delete(sessionId);
+    if (retained.length === 0) this.unresolvedUsageBySession.delete(sessionId);
+    else this.unresolvedUsageBySession.set(sessionId, retained);
   }
 
-  private bufferToolOnExecution(execution: OpenExecution, tool: BufferedToolCall): void {
-    execution.pendingTools.set(this.toolKey(tool.sessionId, tool.toolCallId), tool);
-  }
-
-  private mergeToolStartOnExecution(execution: OpenExecution, tool: BufferedToolCall): void {
-    const key = this.toolKey(tool.sessionId, tool.toolCallId);
-    const existing = execution.pendingTools.get(key);
-    if (existing === undefined) {
-      this.bufferToolOnExecution(execution, tool);
-      return;
-    }
-
-    execution.pendingTools.set(key, {
-      ...existing,
-      toolName: tool.toolName,
-      startedAt: tool.startedAt,
-    });
+  private replayUnresolvedUsageForExecution(execution: OpenExecution): void {
+    const usages = this.unresolvedUsageByExecution.get(execution.executionId) ?? [];
+    for (const usage of usages) appendExecutionUsage(execution, usage);
+    this.unresolvedUsageByExecution.delete(execution.executionId);
+    this.standaloneRetrySegmentsByExecution.delete(execution.executionId);
   }
 
   private bufferUnresolvedTool(sessionId: string, tool: UnresolvedToolCall): void {
     const sessionTools = this.unresolvedToolsBySession.get(sessionId) ?? new Map<string, UnresolvedToolCall>();
-    sessionTools.set(this.toolKey(sessionId, tool.toolCallId), tool);
+    sessionTools.set(toolCorrelationKey(sessionId, tool.toolCallId), tool);
     this.unresolvedToolsBySession.set(sessionId, sessionTools);
   }
 
   private mergeUnresolvedToolStart(sessionId: string, tool: UnresolvedToolCall): void {
     const sessionTools = this.unresolvedToolsBySession.get(sessionId);
-    const key = this.toolKey(sessionId, tool.toolCallId);
+    const key = toolCorrelationKey(sessionId, tool.toolCallId);
     const existing = sessionTools?.get(key);
     if (sessionTools === undefined || existing === undefined) {
       this.bufferUnresolvedTool(sessionId, tool);
@@ -805,7 +712,7 @@ export class SpanCollector {
     }
 
     for (const tool of tools.values()) {
-      this.bufferToolOnExecution(execution, {
+      const bufferedTool: BufferedToolCall = {
         sessionId,
         toolName: tool.toolName,
         toolCallId: tool.toolCallId,
@@ -813,67 +720,199 @@ export class SpanCollector {
         ingestedAt: tool.ingestedAt,
         endedAt: tool.endedAt,
         success: tool.success,
-      });
+      };
+      const key = toolCorrelationKey(sessionId, tool.toolCallId);
+      execution.pendingTools.set(key, mergeRetainedToolLifecycle(bufferedTool, execution.pendingTools.get(key)));
     }
     this.unresolvedToolsBySession.delete(sessionId);
   }
 
-  private sweepUnresolvedSessionEvents(now: number, orphanTimeoutMs: number): void {
-    for (const [sessionId, usages] of this.unresolvedUsageBySession) {
-      const retained = usages.filter((usage) => now - usage.ingestedAt < orphanTimeoutMs);
-      if (retained.length === 0) {
-        this.unresolvedUsageBySession.delete(sessionId);
+  private async flushStaleStandaloneSessions(
+    now: number,
+    timeoutMs: number,
+    attempts = 1,
+    continueAfterFailure = false,
+  ): Promise<void> {
+    let firstFailure: unknown;
+    let hasFailure = false;
+    const sessionIds = new Set([...this.unresolvedUsageBySession.keys(), ...this.unresolvedToolsBySession.keys()]);
+    for (const sessionId of sessionIds) {
+      const usages = this.unresolvedUsageBySession.get(sessionId) ?? [];
+      const tools = this.unresolvedToolsBySession.get(sessionId) ?? new Map();
+      const { expiredUsages, retainedUsages, expiredTools, retainedTools } = partitionStaleSessionEvents(
+        usages,
+        tools,
+        now,
+        timeoutMs,
+      );
+      if (retainedUsages.length === 0) this.unresolvedUsageBySession.delete(sessionId);
+      else this.unresolvedUsageBySession.set(sessionId, retainedUsages);
+      if (retainedTools.size === 0) this.unresolvedToolsBySession.delete(sessionId);
+      else this.unresolvedToolsBySession.set(sessionId, retainedTools);
+      if (expiredUsages.length === 0 && expiredTools.length === 0) continue;
+      const segment = this.standaloneRetrySegmentBySession.get(sessionId) ?? this.standaloneSegmentSequence++;
+      const result = await retryExport(
+        attempts,
+        () => this.flushStandaloneSession(sessionId, segment, expiredUsages, expiredTools, now),
+        () => this.promoteStandaloneSession(sessionId, expiredUsages, expiredTools),
+      );
+      if (result.success) {
+        this.standaloneRetrySegmentBySession.delete(sessionId);
         continue;
       }
-      if (retained.length !== usages.length) {
-        this.unresolvedUsageBySession.set(sessionId, retained);
+      if (this.promoteStandaloneSession(sessionId, expiredUsages, expiredTools)) continue;
+      this.restoreStandaloneSession(sessionId, segment, expiredUsages, expiredTools);
+      if (!continueAfterFailure) throw result.error;
+      if (!hasFailure) {
+        hasFailure = true;
+        firstFailure = result.error;
       }
     }
-
-    for (const [sessionId, tools] of this.unresolvedToolsBySession) {
-      for (const [key, tool] of tools) {
-        if (now - tool.ingestedAt >= orphanTimeoutMs) {
-          tools.delete(key);
-        }
-      }
-      if (tools.size === 0) {
-        this.unresolvedToolsBySession.delete(sessionId);
-      }
-    }
+    if (hasFailure) throw firstFailure;
   }
 
-  private clearUnlinkedAgentEventsWhenIdle(): void {
-    if (this.executions.size !== 0) {
+  private async flushStandaloneSession(
+    sessionId: string,
+    segment: number,
+    usages: readonly UnresolvedUsage[],
+    tools: readonly UnresolvedToolCall[],
+    fallbackEndedAt: number,
+  ): Promise<void> {
+    if (usages.length === 0 && tools.length === 0) {
       return;
     }
 
-    this.unresolvedUsageBySession.clear();
-    this.unresolvedToolsBySession.clear();
+    await this.options.emit(buildStandaloneSessionTrace({ sessionId, segment, usages, tools, fallbackEndedAt }));
   }
 
-  private toolKey(sessionId: string | undefined, toolCallId: string): string {
-    return `${sessionId ?? 'unknown'}:${toolCallId}`;
+  private async flushStaleUnopenedExecutions(
+    now: number,
+    timeoutMs: number,
+    attempts = 1,
+    continueAfterFailure = false,
+  ): Promise<void> {
+    let firstFailure: unknown;
+    let hasFailure = false;
+    executionLoop: for (const [executionId, usages] of [...this.unresolvedUsageByExecution]) {
+      const { expiredUsages, retainedUsages } = partitionStaleSessionEvents(usages, new Map(), now, timeoutMs);
+      if (retainedUsages.length === 0) this.unresolvedUsageByExecution.delete(executionId);
+      else this.unresolvedUsageByExecution.set(executionId, retainedUsages);
+      const groups = [...groupUsageBySession(expiredUsages, executionId)];
+      const retrySegments = this.standaloneRetrySegmentsByExecution.get(executionId) ?? new Map<string, number>();
+      for (const [index, [sessionId, grouped]] of groups.entries()) {
+        const segment = retrySegments.get(sessionId) ?? this.standaloneSegmentSequence++;
+        retrySegments.set(sessionId, segment);
+        this.standaloneRetrySegmentsByExecution.set(executionId, retrySegments);
+        const pending = groups.slice(index).flatMap(([, usagesForSession]) => usagesForSession);
+        const result = await retryExport(
+          attempts,
+          () => this.flushStandaloneSession(sessionId, segment, grouped, [], now),
+          () => this.promoteUnopenedExecution(executionId, pending),
+        );
+        if (result.success) {
+          if (result.recovered) continue executionLoop;
+          retrySegments.delete(sessionId);
+          if (retrySegments.size === 0) this.standaloneRetrySegmentsByExecution.delete(executionId);
+          continue;
+        }
+        if (this.promoteUnopenedExecution(executionId, pending)) continue executionLoop;
+        const unexported = continueAfterFailure ? grouped : pending;
+        this.restoreUnopenedExecution(executionId, unexported, retrySegments);
+        if (!continueAfterFailure) throw result.error;
+        if (!hasFailure) {
+          hasFailure = true;
+          firstFailure = result.error;
+        }
+      }
+    }
+    if (hasFailure) throw firstFailure;
   }
 
-  private createPlaceholderFrame(
-    execution: OpenExecution,
-    frameId: string,
-    nodeId: string,
-    startedAt: number,
-    endedAt: number | undefined,
-  ): FrameRecord {
-    const frame: FrameRecord = {
-      frameId,
-      nodeId,
-      nodeType: 'unknown',
-      path: [frameId],
-      parentFrameId: undefined,
-      startedAt,
-      endedAt,
-      status: 'unset',
-    };
-    execution.frames.set(frameId, frame);
-    return frame;
+  private promoteStandaloneSession(
+    sessionId: string,
+    usages: readonly UnresolvedUsage[],
+    tools: readonly UnresolvedToolCall[],
+  ): boolean {
+    const execution = this.resolveExecutionForSession(sessionId);
+    if (execution === undefined) return false;
+    for (const usage of usages) appendExecutionUsage(execution, usage);
+    for (const tool of tools) {
+      const key = toolCorrelationKey(sessionId, tool.toolCallId);
+      execution.pendingTools.set(key, mergeRetainedToolLifecycle(tool, execution.pendingTools.get(key)));
+    }
+    this.standaloneRetrySegmentBySession.delete(sessionId);
+    return true;
+  }
+
+  private restoreStandaloneSession(
+    sessionId: string,
+    segment: number,
+    usages: readonly UnresolvedUsage[],
+    tools: readonly UnresolvedToolCall[],
+  ): void {
+    this.standaloneRetrySegmentBySession.set(sessionId, segment);
+    const currentUsages = this.unresolvedUsageBySession.get(sessionId) ?? [];
+    this.unresolvedUsageBySession.set(sessionId, [...usages, ...currentUsages]);
+    const currentTools = this.unresolvedToolsBySession.get(sessionId) ?? new Map();
+    this.unresolvedToolsBySession.set(sessionId, currentTools);
+    for (const tool of tools) {
+      const key = toolCorrelationKey(sessionId, tool.toolCallId);
+      currentTools.set(key, mergeRetainedToolLifecycle(tool, currentTools.get(key)));
+    }
+  }
+
+  private promoteUnopenedExecution(executionId: string, usages: readonly UnresolvedUsage[]): boolean {
+    const execution = this.executions.get(executionId);
+    if (execution === undefined) return false;
+    for (const usage of usages) appendExecutionUsage(execution, usage);
+    this.standaloneRetrySegmentsByExecution.delete(executionId);
+    return true;
+  }
+
+  private restoreUnopenedExecution(
+    executionId: string,
+    usages: readonly UnresolvedUsage[],
+    retrySegments: Map<string, number>,
+  ): void {
+    this.standaloneRetrySegmentsByExecution.set(executionId, retrySegments);
+    const current = this.unresolvedUsageByExecution.get(executionId) ?? [];
+    this.unresolvedUsageByExecution.set(executionId, [...usages, ...current]);
+  }
+
+  private clearOrphanSweepTask(task: Promise<void>): void {
+    if (this.orphanSweepTask === task) this.orphanSweepTask = undefined;
+  }
+
+  /**
+   * Detach an execution while it is emitted and restore its correlation state on failure.
+   * @param execution - Execution snapshot represented by the drafts.
+   * @param drafts - Terminal trace batch to export.
+   * @returns Promise resolved after the batch is exported.
+   */
+  private async emitTerminalExecution(execution: OpenExecution, drafts: SpanDraft[]): Promise<void> {
+    const { executionId } = execution;
+    const orphans = this.emittedOrphans.get(executionId);
+    this.executions.delete(executionId);
+    this.sessionIndex.evictExecution(executionId);
+    this.emittedOrphans.delete(executionId);
+
+    try {
+      await this.options.emit(drafts);
+    } catch (error) {
+      if (!this.executions.has(executionId)) {
+        this.executions.set(executionId, execution);
+        if (orphans !== undefined) this.emittedOrphans.set(executionId, orphans);
+        this.replayUnresolvedUsageForExecution(execution);
+        for (const [sessionId, frameId] of execution.sessionFrameMap) {
+          const currentLink = this.sessionIndex.lookup(sessionId);
+          if (currentLink !== undefined && currentLink.executionId !== executionId) continue;
+          this.sessionIndex.link(sessionId, executionId, frameId);
+          this.replayUnresolvedUsage(sessionId, execution);
+          this.replayUnresolvedTools(sessionId, execution);
+        }
+      }
+      throw error;
+    }
   }
 
   /**
@@ -891,60 +930,13 @@ export class SpanCollector {
       return;
     }
 
-    const drafts: SpanDraft[] = [];
+    const drafts = buildExecutionTrace({
+      execution,
+      endedAt,
+      status,
+      orphans: this.emittedOrphans.get(executionId),
+    });
 
-    // Root execution span
-    drafts.push(
-      SpanBuilder.buildExecutionSpan({
-        executionId: execution.executionId,
-        workflowId: execution.workflowId,
-        startedAt: execution.startedAt,
-        endedAt,
-        status,
-      }),
-    );
-
-    // Frame spans — use the endedAt from the frame record when available,
-    // otherwise fall back to the execution terminal timestamp.
-    for (const frame of execution.frames.values()) {
-      drafts.push(
-        SpanBuilder.buildFrameSpan({
-          executionId: execution.executionId,
-          frameId: frame.frameId,
-          nodeId: frame.nodeId,
-          nodeType: frame.nodeType,
-          path: frame.path,
-          parentFrameId: frame.parentFrameId,
-          startedAt: frame.startedAt,
-          endedAt: frame.endedAt ?? endedAt,
-          status: frame.status === 'unset' ? status : frame.status,
-        }),
-      );
-    }
-
-    // Resolve pending usage events against their session→frame mappings
-    for (const usage of execution.pendingUsage) {
-      const frameId = usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined;
-      drafts.push(this.buildUsageSpan(execution, usage, frameId));
-    }
-
-    for (const tool of execution.pendingTools.values()) {
-      const frameId = tool.sessionId !== undefined ? execution.sessionFrameMap.get(tool.sessionId) : undefined;
-      drafts.push(this.buildToolSpan(execution, tool, frameId, endedAt));
-    }
-
-    // Append any orphan spans emitted during sweepOrphans
-    const orphans = this.emittedOrphans.get(executionId);
-    if (orphans !== undefined) {
-      drafts.push(...orphans);
-    }
-
-    // Clean up
-    this.executions.delete(executionId);
-    this.sessionIndex.evictExecution(executionId);
-    this.emittedOrphans.delete(executionId);
-    this.clearUnlinkedAgentEventsWhenIdle();
-
-    await this.options.emit(drafts);
+    await this.emitTerminalExecution(execution, drafts);
   }
 }

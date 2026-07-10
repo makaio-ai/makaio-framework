@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from '../statusline-normalizer.js';
+import {
+  normalizeClaudeCodeSessionUsage,
+  normalizeClaudeCodeStatusline,
+  type StatuslineIdentityContext,
+} from '../statusline-normalizer.js';
 import type { ClaudeCodeStatuslineRawPayload } from '../../schemas/statusline.js';
 
 /**
@@ -270,5 +274,136 @@ describe('normalizeClaudeCodeStatusline', () => {
       expect(result!.observedAt).toBeGreaterThanOrEqual(before);
       expect(result!.observedAt).toBeLessThanOrEqual(after);
     });
+  });
+});
+
+describe('normalizeClaudeCodeSessionUsage', () => {
+  it('preserves current-request, current-context, and cumulative measurements with explicit semantics', () => {
+    const result = normalizeClaudeCodeSessionUsage(
+      makeRawStatusline({
+        version: '2.1.132',
+        context_window: {
+          total_input_tokens: 80_000,
+          total_output_tokens: 4_000,
+          context_window_size: 200_000,
+          used_percentage: 42,
+          remaining_percentage: 58,
+          current_usage: {
+            input_tokens: 120,
+            output_tokens: 45,
+            cache_read_input_tokens: 2_400,
+            cache_creation_input_tokens: 80,
+          },
+        },
+        exceeds_200k_tokens: false,
+        cost: {
+          total_cost_usd: 12.68,
+          total_duration_ms: 3_933_000,
+          total_api_duration_ms: 348_000,
+          total_lines_added: 82,
+          total_lines_removed: 1,
+          total_edits: 12,
+        },
+      }),
+      'client-account-1',
+      'framework-session-1',
+    );
+
+    expect(result).toMatchObject({
+      clientId: 'claude-code',
+      clientAccountId: 'client-account-1',
+      sessionId: 'framework-session-1',
+      adapterSessionId: 'sess-sl-001',
+      source: 'statusline',
+      clientVersion: '2.1.132',
+      modelId: 'claude-opus-4-5',
+      modelDisplayName: 'Claude Opus 4.5',
+      modelFamily: 'claude',
+      latestRequestInputTokens: 120,
+      latestRequestOutputTokens: 45,
+      latestRequestCacheReadTokens: 2_400,
+      latestRequestCacheWriteTokens: 80,
+      currentContextInputTokens: 80_000,
+      currentContextOutputTokens: 4_000,
+      contextWindowSizeTokens: 200_000,
+      contextUsedPercentage: 42,
+      contextRemainingPercentage: 58,
+      contextThresholdExceeded: false,
+      totalCost: 12.68,
+      costCurrency: 'USD',
+      costProvenance: 'client-reported',
+      totalDurationMs: 3_933_000,
+      totalApiDurationMs: 348_000,
+      totalLinesAdded: 82,
+      totalLinesRemoved: 1,
+      totalEdits: 12,
+    });
+    expect(result).not.toHaveProperty('cwd');
+    expect(result).not.toHaveProperty('transcriptPath');
+    expect(result).not.toHaveProperty('rateLimits');
+  });
+
+  it('emits anonymous session usage when no account identity is available', () => {
+    const result = normalizeClaudeCodeSessionUsage(
+      makeRawStatusline({ context_window: { current_usage: { input_tokens: 10 } } }),
+    );
+
+    expect(result).toMatchObject({
+      clientId: 'claude-code',
+      adapterSessionId: 'sess-sl-001',
+      latestRequestInputTokens: 10,
+    });
+    expect(result?.clientAccountId).toBeUndefined();
+  });
+
+  it('normalizes empty optional identity fields out of the snapshot', () => {
+    const result = normalizeClaudeCodeSessionUsage(
+      makeRawStatusline({ context_window: { current_usage: { input_tokens: 10 } } }),
+      '   ',
+      '',
+    );
+
+    expect(result?.clientAccountId).toBeUndefined();
+    expect(result?.sessionId).toBeUndefined();
+  });
+
+  it('keeps quota windows out of session usage snapshots', () => {
+    const result = normalizeClaudeCodeSessionUsage(
+      makeRawStatusline({
+        rate_limits: { five_hour: { used_percentage: 50, resets_at: 1_738_425_600 } },
+        cost: { total_cost_usd: 1.25 },
+      }),
+    );
+
+    expect(result?.totalCost).toBe(1.25);
+    expect(result).not.toHaveProperty('usage');
+    expect(result).not.toHaveProperty('windows');
+    expect(result).not.toHaveProperty('rateLimits');
+  });
+
+  it('returns null without a session ID or supported usage measurements', () => {
+    expect(normalizeClaudeCodeSessionUsage({ cost: { total_cost_usd: 1 } })).toBeNull();
+    expect(normalizeClaudeCodeSessionUsage(makeRawStatusline())).toBeNull();
+  });
+
+  it('does not treat a false context-threshold flag as a usage measurement by itself', () => {
+    expect(normalizeClaudeCodeSessionUsage({ session_id: 'session-1', exceeds_200k_tokens: false })).toBeNull();
+    expect(normalizeClaudeCodeSessionUsage({ session_id: 'session-1', exceeds_200k_tokens: true })).toMatchObject({
+      contextThresholdExceeded: true,
+    });
+  });
+
+  it('drops invalid optional measurements without turning them into zero', () => {
+    const result = normalizeClaudeCodeSessionUsage(
+      makeRawStatusline({
+        cost: { total_cost_usd: -1, total_duration_ms: Number.POSITIVE_INFINITY },
+        context_window: { used_percentage: 120, current_usage: { input_tokens: 5 } },
+      }),
+    );
+
+    expect(result?.latestRequestInputTokens).toBe(5);
+    expect(result?.totalCost).toBeUndefined();
+    expect(result?.totalDurationMs).toBeUndefined();
+    expect(result?.contextUsedPercentage).toBeUndefined();
   });
 });

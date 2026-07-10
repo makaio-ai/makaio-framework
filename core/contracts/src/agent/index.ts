@@ -1,5 +1,6 @@
 export { AgentSubjects, AgentNamespace } from './namespace.js';
 export { AgentSchemas } from './schemas.js';
+export { UsageCostProvenanceSchema, UsageSchema, type Usage, type UsageCostProvenance } from './schemas/index.js';
 export { type Message as AgentMessage } from './schemas/index.js';
 export { CompleteSchema, type AgentComplete } from './schemas/index.js';
 export {

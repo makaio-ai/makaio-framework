@@ -55,6 +55,8 @@ export {
   ClientUsageWindowSchema,
   ClientUsageWindowsSchema,
 } from './account-identity.js';
+export { ClientSessionUsageCostProvenanceSchema, ClientSessionUsageSnapshotSchema } from './session-usage.js';
+export type { ClientSessionUsageCostProvenance, ClientSessionUsageSnapshot } from './session-usage.js';
 export type {
   ClientAccountIdentifier,
   ClientAccountObserveRequest,

@@ -1,0 +1,31 @@
+import { z } from 'zod';
+
+const HEADER_SAFE_VALUE_PATTERN = /^[\u0020-\u007e]*$/u;
+
+/** Content-free identifier safe to copy into an HTTP header value. */
+const HeaderSafeCorrelationIdSchema = z
+  .string()
+  .regex(HEADER_SAFE_VALUE_PATTERN, 'Correlation identifiers must contain only printable ASCII characters')
+  .trim()
+  .min(1)
+  .max(512);
+
+/**
+ * Content-free identifiers that may accompany an outbound provider request.
+ *
+ * This context is deliberately separate from `turnContext`: adapters must use
+ * it for transport correlation only and must never materialize it into model
+ * input. Runtime-owned identifiers (for example the actual message ID) take
+ * precedence over caller-supplied values before a request is sent.
+ */
+export const RequestCorrelationContextSchema = z
+  .object({
+    sessionId: HeaderSafeCorrelationIdSchema.optional(),
+    turnId: HeaderSafeCorrelationIdSchema.optional(),
+    messageId: HeaderSafeCorrelationIdSchema.optional(),
+    executionId: HeaderSafeCorrelationIdSchema.optional(),
+    frameId: HeaderSafeCorrelationIdSchema.optional(),
+  })
+  .strict();
+
+export type RequestCorrelationContext = z.infer<typeof RequestCorrelationContextSchema>;
