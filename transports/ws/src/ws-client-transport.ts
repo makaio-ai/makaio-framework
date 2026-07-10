@@ -18,7 +18,12 @@ import {
 } from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
 import { type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
-import { DEFAULT_CODEC, resolveReconnectConfig, type WebSocketClientTransportOptions } from './ws-client-options.js';
+import {
+  DEFAULT_CODEC,
+  DEFAULT_CONNECT_TIMEOUT_MS,
+  resolveReconnectConfig,
+  type WebSocketClientTransportOptions,
+} from './ws-client-options.js';
 import {
   connectOnce,
   runReconnectLoop,
@@ -55,6 +60,7 @@ export class WebSocketClientTransport implements BusTransport {
   private readonly codec: ClientTransportCodec;
   private readonly messageTransform: ((message: BusMessage) => Promise<BusMessage>) | undefined;
   private readonly autoReconnectConfig: Required<WebSocketClientTransportReconnectOptions> | false;
+  private readonly connectTimeoutMs: number;
   private readonly wsFactory: (url: string) => WebSocketLike | Promise<WebSocketLike>;
   private readonly debug: boolean;
   private readonly onConnectedCallback: (() => void) | undefined;
@@ -89,7 +95,9 @@ export class WebSocketClientTransport implements BusTransport {
 
   /**
    * Whether `runReconnectLoop` is currently executing.
-   * Used by `reconnect()` to distinguish mid-attempt (no-op) from loop-never-started (retry).
+   * Used by `reconnect()` to distinguish a loop mid-attempt (rescue a hung
+   * socket-open wait) from an in-flight or failed initial connect (no-op —
+   * `connect()` owns recovery there).
    */
   private reconnectLoopRunning = false;
 
@@ -120,6 +128,7 @@ export class WebSocketClientTransport implements BusTransport {
     this.messageTransform = options.messageTransform;
     this.debug = options.debug ?? false;
     this.autoReconnectConfig = resolveReconnectConfig(options.autoReconnect);
+    this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.wsFactory = options.createWebSocket ?? this.defaultWsFactory;
     this.onConnectedCallback = options.onConnected;
     this.onDisconnectedCallback = options.onDisconnected;
@@ -282,8 +291,9 @@ export class WebSocketClientTransport implements BusTransport {
   /**
    * Trigger an immediate reconnection attempt.
    *
-   * Cancels an active backoff wait, starts the reconnect loop if it stalled,
-   * or performs a one-shot connect when auto-reconnect is disabled.
+   * Cancels an active backoff wait, rescues a hung in-flight connect attempt
+   * by closing its still-CONNECTING socket (the loop then backs off and
+   * retries), or performs a one-shot connect when auto-reconnect is disabled.
    * @returns Promise that resolves when the attempt is initiated (loop) or completes (one-shot)
    */
   public async reconnect(): Promise<void> {
@@ -294,11 +304,22 @@ export class WebSocketClientTransport implements BusTransport {
       return;
     }
     if (this.autoReconnectConfig !== false) {
-      if (this.reconnectLoopRunning) return; // Loop mid-attempt — already trying.
-      // Loop never started (connectOnce threw on initial connect) — start it now.
-      if (this.reconnectAbort !== null) {
-        void this.startReconnectLoop(this.reconnectAbort.signal);
+      if (this.reconnectLoopRunning) {
+        // Loop mid-attempt. If the attempt hangs waiting for the socket to
+        // open, closing the socket settles `waitForSocketOpen` so the loop
+        // fails the attempt, backs off, and retries — the escape hatch for a
+        // never-settling upgrade. Attempts past the open-wait (auth, replay)
+        // are already bounded by the auth strategy timeouts.
+        const socket = this.socket;
+        if (socket !== null && socket.readyState === 0) {
+          socket.close();
+        }
+        return;
       }
+      // Loop not running: an initial connect() is either still in flight (it
+      // starts the loop itself on success and is bounded by connectTimeoutMs)
+      // or it failed and the caller owns recovery via connect(). Starting a
+      // loop here would race the in-flight connect with a second loop.
       return;
     }
     try {
@@ -421,6 +442,7 @@ export class WebSocketClientTransport implements BusTransport {
       localSubscriptions: this.localSubscriptions,
       wsFactory: this.wsFactory,
       url: this.url,
+      connectTimeoutMs: this.connectTimeoutMs,
       getSocket: () => this.socket,
       setSocket: (ws) => {
         this.socket = ws;
@@ -466,12 +488,16 @@ export class WebSocketClientTransport implements BusTransport {
 
   /**
    * Default `ws`-package WebSocket factory (dynamic import avoids bundling in browsers).
+   *
+   * Passes `connectTimeoutMs` as the `ws` handshake timeout so the protocol
+   * layer enforces the same bound as `waitForSocketOpen` (defense in depth —
+   * the `ws` default is no handshake timeout at all).
    * @param url - WebSocket server URL
    * @returns Promise resolving to a `WebSocketLike` instance
    */
   private readonly defaultWsFactory = async (url: string): Promise<WebSocketLike> => {
     const wsModule = await import('ws');
-    return new wsModule.WebSocket(url) as WebSocketLike;
+    return new wsModule.WebSocket(url, { handshakeTimeout: this.connectTimeoutMs }) as WebSocketLike;
   };
 
   /**

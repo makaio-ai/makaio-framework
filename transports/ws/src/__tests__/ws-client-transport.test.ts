@@ -814,6 +814,141 @@ describe('WebSocketClientTransport — drain does not block on stuck application
 });
 
 // ---------------------------------------------------------------------------
+// connect attempt timeout (issue #372)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a transport whose factory hands out fresh `MockWebSocket` instances.
+ *
+ * Sockets start in CONNECTING and never open on their own, modelling a server
+ * that accepts the TCP connection but never answers the WebSocket upgrade.
+ * Set `openSockets.value = true` to make subsequently created sockets open
+ * immediately (healthy server).
+ * @param options - Transport option overrides for the scenario under test
+ * @returns Transport, all created sockets, and the open-behavior switch
+ */
+function makeHangingFactoryTransport(options: {
+  connectTimeoutMs?: number;
+  autoReconnect?: { baseMs: number; maxMs: number } | false;
+  onDisconnected?: () => void;
+  openFirstSocket?: boolean;
+}): {
+  transport: WebSocketClientTransport;
+  created: MockWebSocket[];
+  openSockets: { value: boolean };
+} {
+  const created: MockWebSocket[] = [];
+  const openSockets = { value: false };
+  const transport = new WebSocketClientTransport({
+    url: 'ws://localhost:9999',
+    createWebSocket: () => {
+      const mock = new MockWebSocket();
+      const openImmediately = openSockets.value || (options.openFirstSocket === true && created.length === 0);
+      if (!openImmediately) {
+        mock.readyState = 0; // CONNECTING — never opens on its own
+      }
+      created.push(mock);
+      return mock;
+    },
+    autoReconnect: options.autoReconnect ?? false,
+    connectTimeoutMs: options.connectTimeoutMs,
+    onDisconnected: options.onDisconnected,
+  });
+  return { transport, created, openSockets };
+}
+
+describe('WebSocketClientTransport — connect attempt timeout', () => {
+  it('rejects the initial connect() when the upgrade never settles', { timeout: 2000 }, async () => {
+    const { transport, created } = makeHangingFactoryTransport({ connectTimeoutMs: 50 });
+
+    await expect(transport.connect()).rejects.toThrow('timed out');
+
+    // The hung socket must be closed so it cannot open later and leak.
+    expect(created[0].readyState).toBe(3);
+  });
+
+  it('keeps the reconnect loop attempting and recovers when the server heals', { timeout: 5000 }, async () => {
+    const { transport, created, openSockets } = makeHangingFactoryTransport({
+      openFirstSocket: true,
+      connectTimeoutMs: 60,
+      autoReconnect: { baseMs: 100, maxMs: 100 },
+    });
+
+    await transport.connect();
+    created[0].close(); // Unexpected close — the reconnect loop takes over.
+
+    // The loop must keep producing attempts instead of wedging on the first hung one.
+    await waitForCondition(() => created.length >= 3, 3000, 'reconnect loop wedged on a hung connect attempt');
+    // Each timed-out attempt must close its socket.
+    expect(created[1].readyState).toBe(3);
+
+    // Server "heals" — the next attempt opens and the transport recovers.
+    openSockets.value = true;
+    await waitForCondition(() => transport.isReady(), 2000, 'transport did not recover after server healed');
+
+    await transport.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reconnect() rescue of a hung attempt (issue #372, fix 3)
+// ---------------------------------------------------------------------------
+
+describe('WebSocketClientTransport — reconnect() rescue', () => {
+  it('aborts a hung in-flight connect attempt and lets the loop retry', { timeout: 5000 }, async () => {
+    // Large connectTimeoutMs: the rescue itself, not the attempt timeout, must unstick the loop.
+    const { transport, created, openSockets } = makeHangingFactoryTransport({
+      openFirstSocket: true,
+      connectTimeoutMs: 60_000,
+      autoReconnect: { baseMs: 100, maxMs: 100 },
+    });
+
+    await transport.connect();
+    created[0].close();
+
+    // Wait until the loop is mid-attempt on a socket that will never open.
+    await waitForCondition(() => created.length === 2, 2000, 'reconnect loop did not start an attempt');
+    expect(transport.isReady()).toBe(false);
+
+    openSockets.value = true; // Next attempt would succeed — if one ever happens.
+    await transport.reconnect();
+
+    // The rescue must close the hung socket and the loop must retry and recover.
+    await waitForCondition(() => created[1].readyState === 3, 1000, 'reconnect() did not abort the hung attempt');
+    await waitForCondition(() => transport.isReady(), 2000, 'transport did not recover after reconnect() rescue');
+
+    await transport.disconnect();
+  });
+
+  it('does not spawn a second reconnect loop when called during an in-flight initial connect', async () => {
+    const onDisconnected = vi.fn();
+    const { transport, created } = makeHangingFactoryTransport({
+      connectTimeoutMs: 60_000,
+      autoReconnect: { baseMs: 50, maxMs: 100 },
+      onDisconnected,
+    });
+
+    const connectPromise = transport.connect();
+    await waitForCondition(() => created.length === 1, 1000, 'initial connect attempt did not start');
+
+    // reconnect() while the initial connect is still in flight must not start a competing loop.
+    await transport.reconnect();
+
+    created[0].readyState = 1;
+    created[0].emit('open', new Event('open'));
+    await connectPromise;
+
+    // A single unexpected close must be observed by exactly one loop.
+    created[0].close();
+    await waitForCondition(() => onDisconnected.mock.calls.length >= 1, 1000, 'onDisconnected was not fired');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+
+    await transport.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getSubscriptions
 // ---------------------------------------------------------------------------
 

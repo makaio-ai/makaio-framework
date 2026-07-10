@@ -48,6 +48,8 @@ export interface ConnectionDeps {
   readonly wsFactory: (url: string) => WebSocketLike | Promise<WebSocketLike>;
   /** Target WebSocket server URL. */
   readonly url: string;
+  /** Bound in milliseconds for a single attempt's socket-open wait. */
+  readonly connectTimeoutMs: number;
 
   /** Read the current active socket. */
   getSocket(): WebSocketLike | null;
@@ -220,7 +222,7 @@ export async function connectOnce(deps: ConnectionDeps): Promise<void> {
     // during the WebSocket handshake are captured immediately.
     attachMessageListener(ws, deps);
 
-    await waitForSocketOpen(ws);
+    await waitForSocketOpen(ws, deps.connectTimeoutMs);
 
     if (deps.auth) {
       await deps.auth.authenticateClient((message: unknown) => {
@@ -264,6 +266,10 @@ export async function connectOnce(deps: ConnectionDeps): Promise<void> {
     }
     deps.setAuthComplete(false);
     if (ownsFailedSocket && (ws.readyState === 0 || ws.readyState === 1)) {
+      // Closing a still-CONNECTING socket aborts the handshake, which emits a
+      // late `error` event on the discarded socket; observe it so it cannot
+      // surface as an unhandled error.
+      ws.addEventListener('error', () => {});
       ws.close();
     }
     throw error;
