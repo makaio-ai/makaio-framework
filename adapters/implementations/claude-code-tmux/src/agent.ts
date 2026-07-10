@@ -227,23 +227,29 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
    * Prevent duplicate billing events from repeated statusline renders for the
    * same per-request token counts.
    *
-   * The key is built from exactly the fields that appear in the emitted
-   * {@link NormalizedCallUsage} payload: the four `current_usage.*` token
-   * counts plus `session_id` for scoping. `cost.total_cost_usd` is
-   * intentionally excluded — it is a cumulative session total that changes
-   * between statusline re-renders even when the per-request token counts are
-   * unchanged, which would cause the same usage event to fire more than once.
+   * The key combines the four `current_usage.*` token counts (the fields that
+   * appear in the emitted {@link NormalizedCallUsage} payload) with the
+   * cumulative context-window totals, plus `session_id` for scoping. The
+   * cumulative totals grow with every real API request, so two distinct
+   * requests that happen to produce identical per-request token counts still
+   * get distinct keys and are both counted. `cost.total_cost_usd` is
+   * intentionally excluded — it is a cumulative session total that can change
+   * between statusline re-renders of the SAME request, which would cause the
+   * same usage event to fire more than once.
    * @param payload - Raw statusline payload from Claude Code.
    * @returns True when usage should be emitted.
    */
   private shouldEmitUsage(payload: ClaudeCodeStatuslineRawPayload): boolean {
-    const usage = payload.context_window?.current_usage;
+    const contextWindow = payload.context_window;
+    const usage = contextWindow?.current_usage;
     const key = [
       payload.session_id ?? '',
       usage?.input_tokens ?? '',
       usage?.output_tokens ?? '',
       usage?.cache_read_input_tokens ?? '',
       usage?.cache_creation_input_tokens ?? '',
+      contextWindow?.total_input_tokens ?? '',
+      contextWindow?.total_output_tokens ?? '',
     ].join(':');
     if (this.statuslineUsageKeys.has(key)) {
       return false;

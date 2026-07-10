@@ -276,4 +276,47 @@ describe('ClaudeCodeTmuxAgent', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(usageEvents).toHaveLength(1);
   });
+
+  it('emits again when a new request repeats the same per-request tokens but grows the cumulative totals', async () => {
+    const { agent, connector } = await makeAgent();
+    agents.push(agent);
+    const usageEvents: Record<string, unknown>[] = [];
+
+    MakaioBus.on(AgentSubjects.usage, (ctx) => {
+      usageEvents.push(ctx.payload);
+    });
+
+    const currentUsage = {
+      input_tokens: 1_200,
+      output_tokens: 300,
+      cache_read_input_tokens: 800,
+      cache_creation_input_tokens: 50,
+    };
+
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      session_id: connector.adapterSessionId,
+      context_window: {
+        total_input_tokens: 24_000,
+        total_output_tokens: 3_000,
+        context_window_size: 200_000,
+        current_usage: currentUsage,
+      },
+    });
+
+    await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
+
+    // A second real request with identical per-request token counts advances
+    // the cumulative context totals — it must be counted as a new usage event.
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      session_id: connector.adapterSessionId,
+      context_window: {
+        total_input_tokens: 25_200,
+        total_output_tokens: 3_300,
+        context_window_size: 200_000,
+        current_usage: currentUsage,
+      },
+    });
+
+    await vi.waitFor(() => expect(usageEvents).toHaveLength(2));
+  });
 });
