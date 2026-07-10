@@ -123,7 +123,7 @@ export const CompleteExternalExecutionRequestSchema = z
     completedAt: z
       .number()
       .nonnegative()
-      .transform((value) => Math.trunc(value))
+      .overwrite((value) => Math.trunc(value))
       .optional(),
     /** Optional exact frame settled in the same transaction. */
     frame: ExternalExecutionFrameCompletionSchema.optional(),
