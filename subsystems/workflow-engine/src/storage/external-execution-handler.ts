@@ -59,11 +59,7 @@ function assertMatchingRegistration(existing: SelectWorkflowExecution, expected:
     existing.id === expected.id &&
     existing.workflowId === expected.workflowId &&
     existing.coordinatorSessionId === expected.coordinatorSessionId &&
-    existing.completedAt === expected.completedAt &&
-    existing.error === expected.error &&
-    existing.reason === expected.reason &&
     existing.startedAt === expected.startedAt &&
-    existing.externalSettlementFingerprint === (expected.externalSettlementFingerprint ?? null) &&
     existing.scopeType === expected.scopeType &&
     existing.scopeKind === expected.scopeKind &&
     existing.scopeId === expected.scopeId &&
@@ -74,15 +70,11 @@ function assertMatchingRegistration(existing: SelectWorkflowExecution, expected:
   if (!matches) {
     throw new Error(`setExternalExecutionStart: registration conflicts for execution "${expected.id}"`);
   }
-  if (existing.status !== 'running') {
-    throw new Error(
-      `setExternalExecutionStart: execution "${expected.id}" cannot be registered from status "${existing.status}"`,
-    );
-  }
 }
 
 /**
- * Assert that an initial WorkLog summary retains the registration identity.
+ * Assert that a WorkLog summary retains the immutable registration identity.
+ * Settlement-owned lifecycle and aggregate fields may legitimately differ.
  * @param existing - Durable WorkLog summary.
  * @param expected - Summary derived from the replayed request.
  */
@@ -90,36 +82,29 @@ function assertMatchingStartSummary(existing: SelectWorklogSummary, expected: In
   if (
     existing.workflowId !== expected.workflowId ||
     existing.startedAt !== expected.startedAt ||
-    existing.executionId !== expected.executionId ||
-    existing.status !== 'running' ||
-    existing.completedAt !== null ||
-    existing.durationMs !== null ||
-    existing.error !== null ||
-    existing.failedNodeId !== null
+    existing.executionId !== expected.executionId
   ) {
     throw new Error(`setExternalExecutionStart: WorkLog summary conflicts for execution "${expected.executionId}"`);
   }
 }
 
 /**
- * Assert that an initial WorkLog frame retains the registration identity.
+ * Assert that a WorkLog frame retains the immutable registration identity.
+ * Advisory and authoritative lifecycle fields may legitimately differ.
  * @param existing - Durable WorkLog frame row.
  * @param expected - Frame derived from the replayed request.
  */
 function assertMatchingStartFrame(existing: SelectWorklogFrameEntry, expected: RunningWorklogFrame): void {
   if (
     existing.executionId !== expected.executionId ||
+    existing.frameId !== expected.frameId ||
     existing.nodeId !== expected.nodeId ||
     existing.nodeType !== expected.nodeType ||
     !jsonValuesEqual(existing.path, expected.path) ||
     existing.attempt !== expected.attempt ||
     existing.iteration !== (expected.iteration ?? null) ||
     existing.branchKey !== (expected.branchKey ?? null) ||
-    existing.startedAt !== expected.startedAt ||
-    existing.status !== 'running' ||
-    existing.completedAt !== null ||
-    existing.durationMs !== null ||
-    existing.error !== null
+    existing.startedAt !== expected.startedAt
   ) {
     throw new Error(`setExternalExecutionStart: WorkLog frame conflicts for frame "${expected.frameId}"`);
   }
