@@ -43,7 +43,10 @@ type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { even
  * Every exit path of a query's consumption loop must satisfy:
  * 1. **Drain signalling:** `markHandled` on the drain BEFORE awaiting turn
  *    finalizers, so slow `onTurnComplete` hooks cannot race the 250 ms
- *    drain timeout in `close()`.
+ *    drain timeout in `close()`. The mark is gated on the turn actually
+ *    accepting the result (i.e., `!turn.isExpectingInterruptResult()`):
+ *    an absorbed interrupt result must not satisfy the drain while the
+ *    resumed message handle is still incomplete.
  * 2. **Unconditional disown:** {@link disownActiveQuery} clears
  *    `queryInstance`/`source` on ALL paths (iterator error regardless of
  *    turn state, close/abort, schema rotation) before any signal that can
@@ -580,7 +583,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     // or structured-output validation exceeding 250 ms causes the drain to
     // time out and fire the interruption error path even though a real result
     // was already accepted and emitted.
-    if (sdkMessage.type === 'result') {
+    //
+    // Gate on the turn actually accepting the result: when the turn is
+    // expecting an interrupt result (immediate-message pause flow), the
+    // result will be absorbed by handleClaudeResultMessage() and the
+    // resumed message handle remains incomplete. Satisfying the drain
+    // here would cause close() to skip completeInterruptedTurnAfterDrainTimeout()
+    // and tear down without completing the active handle.
+    if (sdkMessage.type === 'result' && !this.currentTurn?.isExpectingInterruptResult()) {
       this.terminalResultDrain.markHandled(queryGeneration);
     }
 

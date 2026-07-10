@@ -987,6 +987,180 @@ describe('ClaudeConnectorSession onTurnComplete seam', () => {
     }
   });
 
+  it('does not satisfy the drain when an absorbed interrupt result arrives during close', async () => {
+    vi.useFakeTimers();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    let resolveInterruptResult: (value: unknown) => void = () => undefined;
+    const interruptResult = new Promise<unknown>((resolve) => {
+      resolveInterruptResult = resolve;
+    });
+    const emitSdkEvent = vi.fn(async () => undefined);
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent,
+    });
+    queryHarness.query.mockImplementationOnce(
+      () =>
+        ({
+          interrupt: vi.fn(async () => {
+            // Deliver the interrupt result during close's interrupt() call
+            resolveInterruptResult({
+              type: 'result',
+              session_id: session.getConfirmedSessionId(),
+              subtype: 'error',
+              is_error: true,
+              result: 'interrupted',
+            });
+          }),
+          close: vi.fn(() => undefined),
+          setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+          setMaxThinkingTokens: vi.fn(async () => undefined),
+          async *[Symbol.asyncIterator]() {
+            yield (await interruptResult) as SDKMessage;
+            // Park the iterator so consumption stays alive
+            await new Promise<void>(() => undefined);
+          },
+        }) as unknown as ReturnType<typeof queryHarness.query>,
+    );
+
+    const handle = createMessageHandle('message-absorbed-interrupt');
+    // Simulate a turn that is expecting the interrupt result (immediate-message pause flow).
+    // The turn absorbs the result without completing the active handle.
+    let expectingInterrupt = true;
+    setCurrentTurnForTest(session, {
+      isCompleted: () => false,
+      getMessageHandle: () => handle,
+      isExpectingInterruptResult: () => expectingInterrupt,
+      markCompleted: vi.fn((result: MessageResult) => handle.markCompleted(result)),
+      handleSdkEvent: vi.fn(async (msg: SDKMessage) => {
+        // Mirror real turn behavior: absorb the result, clear the flag
+        if (msg.type === 'result' && expectingInterrupt) {
+          expectingInterrupt = false;
+        }
+      }),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+
+      const closePromise = session.close();
+
+      // Let the interrupt result be consumed
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The drain must NOT have been satisfied by the absorbed interrupt result.
+      // Advance past the 250 ms drain timeout — the timeout path must fire.
+      await vi.advanceTimersByTimeAsync(250);
+      await closePromise;
+
+      // The handle must have been completed via completeInterruptedTurnAfterDrainTimeout,
+      // NOT skipped because the drain was falsely satisfied.
+      await expect(handle.waitForCompletion(1_000)).resolves.toMatchObject({
+        outcome: 'error',
+        error: expect.objectContaining({ message: 'Claude query interrupted before terminal result' }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still satisfies the drain immediately when a genuinely accepted result arrives during close', async () => {
+    vi.useFakeTimers();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    let resolveResult: (value: unknown) => void = () => undefined;
+    const terminalResult = new Promise<unknown>((resolve) => {
+      resolveResult = resolve;
+    });
+    const emitSdkEvent = vi.fn(async () => undefined);
+
+    // Slow onTurnComplete to verify the drain resolves BEFORE finalizers complete
+    let releaseHook: (() => void) | undefined;
+    const onTurnComplete = vi.fn(
+      async () =>
+        new Promise<void>((resolve) => {
+          releaseHook = resolve;
+        }),
+    );
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent,
+      onTurnComplete,
+    });
+
+    queryHarness.query.mockImplementationOnce(
+      () =>
+        ({
+          interrupt: vi.fn(async () => {
+            resolveResult({
+              type: 'result',
+              session_id: session.getConfirmedSessionId(),
+              subtype: 'success',
+              is_error: false,
+              result: 'accepted result',
+              total_cost_usd: 0.01,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            });
+          }),
+          close: vi.fn(() => undefined),
+          setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+          setMaxThinkingTokens: vi.fn(async () => undefined),
+          async *[Symbol.asyncIterator]() {
+            yield (await terminalResult) as SDKMessage;
+          },
+        }) as unknown as ReturnType<typeof queryHarness.query>,
+    );
+
+    const handle = createMessageHandle('message-accepted-result-drain');
+    setCurrentTurnForTest(session, {
+      isCompleted: () => false,
+      getMessageHandle: () => handle,
+      // NOT expecting interrupt result — this is a genuinely accepted result
+      isExpectingInterruptResult: () => false,
+      markCompleted: vi.fn((result: MessageResult) => handle.markCompleted(result)),
+      handleSdkEvent: vi.fn(async () => undefined),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+
+      const closePromise = session.close();
+
+      // Let the result be consumed — drain should resolve immediately
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Advance well past 250 ms while onTurnComplete is blocked
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Release the slow hook
+      releaseHook?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await closePromise;
+
+      // The real result must have won — NOT the interruption error path
+      await expect(handle.waitForCompletion(1_000)).resolves.toEqual({
+        outcome: 'completed',
+        result: { message: 'accepted result' },
+      });
+    } finally {
+      releaseHook?.();
+      vi.useRealTimers();
+    }
+  });
+
   it('omits a terminal result that arrives after the interruption drain times out', async () => {
     vi.useFakeTimers();
     const bus = await ClaudeCodeConnectorNamespace.scopedBus();

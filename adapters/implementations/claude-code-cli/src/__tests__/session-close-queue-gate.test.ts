@@ -107,6 +107,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
     // by using a custom resolveTurnExecutionContext that sets closing = true
     // before returning, mimicking a concurrent close() call during the await.
     let callCount = 0;
+    const onTurnStart = vi.fn();
     const session = new ClaudeCliSession({
       bus,
       adapterId: 'adapter-test',
@@ -116,6 +117,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
       model: 'claude-sonnet',
       env: {},
       emitSdkEvent: vi.fn(async () => undefined),
+      onTurnStart,
       resolveTurnExecutionContext: async () => {
         callCount++;
         // On the second call (the racing turn), simulate close() interleaving
@@ -137,6 +139,10 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
 
     const { createStdioTransport } = await import('../utils/createStdioTransport.js');
     const initialTransportCount = vi.mocked(createStdioTransport).mock.calls.length;
+
+    // onTurnStart should have been called once for the successful first turn
+    expect(onTurnStart).toHaveBeenCalledTimes(1);
+    expect(onTurnStart).toHaveBeenCalledWith(firstHandle);
 
     // Reset transport harness for the second turn
     transportHarness.reset();
@@ -161,6 +167,14 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
 
     // No new transport should have been spawned for the racing turn
     expect(vi.mocked(createStdioTransport).mock.calls.length).toBe(initialTransportCount);
+
+    // onTurnStart must NOT have been called for the skipped handle — if it
+    // fires before the closing recheck, the connector's pendingMessageHandle
+    // is set for a handle that already completed, and onTurnComplete never
+    // clears it. This leaves stale connector state that blocks complete()
+    // and future sends.
+    expect(onTurnStart).toHaveBeenCalledTimes(1);
+    expect(onTurnStart).not.toHaveBeenCalledWith(racingHandle);
   });
 
   it('rejects queued handles after close() begins instead of starting a new subprocess', async () => {

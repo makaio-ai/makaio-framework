@@ -37,6 +37,17 @@ export interface MessageLifecycleTrackOptions {
  * This provides a clean separation between message lifecycle tracking
  * and the core AIAgent functionality.
  *
+ * ## Turn pairing contract
+ *
+ * `agent.turn.started` and `agent.turn.completed` are emitted **only as a
+ * matched pair** for handles that actually start a provider turn (i.e. whose
+ * acknowledgment is delivered). Handles completed before dispatch — merged,
+ * superseded, or rejected while queued — never receive `turn.started` and
+ * therefore never receive `turn.completed`. The message-level event
+ * `user_message.completed` always fires regardless of delivery, carrying the
+ * terminal outcome so downstream consumers (storage, UI cleanup) can react
+ * to every message disposition.
+ *
  * ## Correlation source contract
  *
  * The "active" handle (`currentMessageHandle`) is the correlation source for
@@ -80,6 +91,15 @@ export class MessageLifecycleTracker {
    * disrupting the order of remaining entries.
    */
   private readonly pendingTrackedHandles: MessageHandle[] = [];
+
+  /**
+   * Set of handles for which `acknowledge()` emitted `agent.turn.started`.
+   * Used by `complete()` to decide whether to emit `agent.turn.completed` —
+   * only handles in this set receive the completion counterpart, preserving
+   * the turn pairing contract. The handle is removed from the set when
+   * `complete()` fires.
+   */
+  private readonly turnStartedHandles = new Set<MessageHandle>();
 
   /** Current turnId from the session orchestrator (set at sendMessage entry, cleared on completion) */
   private currentTurnId?: string;
@@ -168,7 +188,9 @@ export class MessageLifecycleTracker {
       ...(turnId !== undefined && { turnId }),
     });
 
-    // Emit agent.turn.started (higher-level abstraction)
+    // Emit agent.turn.started (higher-level abstraction).
+    // Record the handle so complete() knows to emit the paired turn.completed.
+    this.turnStartedHandles.add(handle);
     void this.emitGlobal(AgentSubjects.turn.started, {
       messageId,
       content: message,
@@ -181,8 +203,9 @@ export class MessageLifecycleTracker {
    * Complete a message - marks turn end.
    *
    * Emits:
-   * - agent.turn.completed (always, with outcome — paired with agent.turn.started)
-   * - user_message.completed (always, with outcome)
+   * - agent.turn.completed — **only** when `acknowledge()` emitted
+   *   `agent.turn.started` for this handle (turn pairing contract)
+   * - user_message.completed — always, with outcome details
    * @param handle - The message handle being completed
    * @param result - The completion result with outcome
    * @param turnId - Turn ID captured when the handle was registered
@@ -205,24 +228,31 @@ export class MessageLifecycleTracker {
       this.currentTurnId = undefined;
     }
 
-    // Emit agent.turn.completed for all outcomes (invariant: always paired with turn.started)
-    void this.emitGlobal(AgentSubjects.turn.completed, {
-      messageId,
-      message: result.result?.message,
-      outcome: result.outcome,
-      error:
-        result.error instanceof Error
-          ? result.error.message
-          : typeof result.error === 'string'
-            ? result.error
-            : undefined,
-      ...(result.structuredOutputValidation !== undefined
-        ? { structuredOutputValidation: result.structuredOutputValidation }
-        : {}),
-      ...(turnId !== undefined && { turnId }),
-    });
+    // Emit agent.turn.completed only when the handle actually started a turn
+    // (i.e. acknowledge() emitted agent.turn.started for it). Handles completed
+    // before dispatch — merged, superseded, or rejected while queued — never
+    // received turn.started, so emitting turn.completed would produce an
+    // unpaired event that breaks lifecycle consumers counting active turns.
+    if (this.turnStartedHandles.delete(handle)) {
+      void this.emitGlobal(AgentSubjects.turn.completed, {
+        messageId,
+        message: result.result?.message,
+        outcome: result.outcome,
+        error:
+          result.error instanceof Error
+            ? result.error.message
+            : typeof result.error === 'string'
+              ? result.error
+              : undefined,
+        ...(result.structuredOutputValidation !== undefined
+          ? { structuredOutputValidation: result.structuredOutputValidation }
+          : {}),
+        ...(turnId !== undefined && { turnId }),
+      });
+    }
 
-    // Emit user_message.completed (always, with outcome details)
+    // Emit user_message.completed (always, with outcome details — message-level
+    // lifecycle fires regardless of whether a provider turn started)
     void this.emitGlobal(AgentSubjects.user_message.completed, {
       messageId,
       outcome: result.outcome,

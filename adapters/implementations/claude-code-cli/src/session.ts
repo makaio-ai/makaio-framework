@@ -354,9 +354,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     const nativeFork = resumeId === undefined ? this.config.nativeFork : undefined;
     assertCliNativeForkSupported(nativeFork);
 
-    // Notify connector that turn is starting
-    this.onTurnStart?.(handle);
-
     const prompt = buildTextPrompt(handle, mergedContent);
     const executionContext = await this.resolveAndPersistTurnExecutionContext();
     // Recheck: close() may have started during env resolution. The handle
@@ -371,6 +368,14 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     // Recheck: close() may have started during MCP registration.
     if (this.completeHandleIfClosing(handle)) return false;
     const mcpConfig = mcpResult?.config;
+
+    // Notify connector that turn is starting (sets pendingMessageHandle).
+    // Deferred until after all completeHandleIfClosing rechecks so the
+    // connector never sees a pendingMessageHandle for a handle that was
+    // already completed by a shutdown race — onTurnComplete would never
+    // fire for a skipped turn, leaving stale connector state that blocks
+    // complete() and future sends.
+    this.onTurnStart?.(handle);
     const permissionPromptTool = mcpResult?.hasBridge ? 'mcp__makaio__approve' : undefined;
 
     const args = buildCliArgs({

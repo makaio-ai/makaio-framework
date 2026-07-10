@@ -600,21 +600,22 @@ describe('MessageLifecycleTracker', () => {
     // onTerminal must have fired exactly once.
     expect(terminalObserved).toEqual([{ messageId: 'message-shutdown', outcome: 'error' }]);
 
-    // Lifecycle events: turn.completed and user_message.completed must have
-    // been emitted exactly once (no double-emission). No acknowledged/started
-    // events because the handle was never acknowledged.
+    // Lifecycle events: user_message.completed must have been emitted exactly
+    // once. No acknowledged/started events because the handle was never
+    // acknowledged — and therefore no turn.completed either (turn pairing
+    // contract: turn.completed only fires when turn.started was emitted).
     const turnCompleted = emissions.filter((e) => e.subject === AgentSubjects.turn.completed);
     const userCompleted = emissions.filter((e) => e.subject === AgentSubjects.user_message.completed);
     const ackEvents = emissions.filter((e) => e.subject === AgentSubjects.user_message.acknowledged);
     const turnStarted = emissions.filter((e) => e.subject === AgentSubjects.turn.started);
 
-    expect(turnCompleted).toHaveLength(1);
+    expect(turnCompleted).toHaveLength(0);
     expect(userCompleted).toHaveLength(1);
     expect(ackEvents).toHaveLength(0);
     expect(turnStarted).toHaveLength(0);
 
-    expect((turnCompleted[0]!.payload as { messageId: string; outcome: string }).messageId).toBe('message-shutdown');
-    expect((turnCompleted[0]!.payload as { outcome: string }).outcome).toBe('error');
+    expect((userCompleted[0]!.payload as { messageId: string; outcome: string }).messageId).toBe('message-shutdown');
+    expect((userCompleted[0]!.payload as { outcome: string }).outcome).toBe('error');
   });
 
   it('does not promote a pending handle whose acknowledgment fulfills with false (undelivered)', async () => {
@@ -673,5 +674,105 @@ describe('MessageLifecycleTracker', () => {
     await flushMicrotasks();
 
     expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+
+    // Turn pairing: only A (delivered) should have turn.completed;
+    // B (undelivered) should have user_message.completed but NOT turn.completed.
+    const turnCompletedEvents = emissions.filter((e) => e.subject === AgentSubjects.turn.completed);
+    expect(turnCompletedEvents).toHaveLength(1);
+    expect((turnCompletedEvents[0]!.payload as { messageId: string }).messageId).toBe('message-a');
+
+    const userCompletedEvents = emissions.filter((e) => e.subject === AgentSubjects.user_message.completed);
+    expect(userCompletedEvents).toHaveLength(2);
+    const userCompletedIds = userCompletedEvents.map((e) => (e.payload as { messageId: string }).messageId);
+    expect(userCompletedIds).toContain('message-a');
+    expect(userCompletedIds).toContain('message-b');
+  });
+
+  it('emits paired turn.started and turn.completed for a delivered handle', async () => {
+    const emissions: CapturedEmission[] = [];
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async (subject, payload) => {
+        emissions.push({ subject, payload });
+      },
+    });
+    const handle = new MessageHandle(
+      'message-delivered',
+      { role: 'user', blocks: [{ type: 'text', content: 'Hello' }] },
+      'enqueue',
+    );
+
+    tracker.track(handle);
+    handle.markAcknowledged();
+    handle.markCompleted({ outcome: 'completed', result: { message: 'Done' } });
+    await flushMicrotasks();
+
+    const subjects = emissions.map((e) => e.subject);
+    expect(subjects).toEqual([
+      AgentSubjects.user_message.acknowledged,
+      AgentSubjects.turn.started,
+      AgentSubjects.turn.completed,
+      AgentSubjects.user_message.completed,
+    ]);
+  });
+
+  it('emits user_message.completed but not turn events for an undelivered handle', async () => {
+    // Handle completed before dispatch (e.g. superseded while queued) —
+    // acknowledgment resolves with false, no turn.started, so no turn.completed.
+    const emissions: CapturedEmission[] = [];
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async (subject, payload) => {
+        emissions.push({ subject, payload });
+      },
+    });
+    const handle = new MessageHandle(
+      'message-undelivered',
+      { role: 'user', blocks: [{ type: 'text', content: 'Superseded' }] },
+      'enqueue',
+    );
+
+    tracker.track(handle);
+    // Complete without acknowledging — simulates merge/supersede before dispatch.
+    handle.markCompleted({ outcome: 'superseded', supersededBy: 'message-other' });
+    await flushMicrotasks();
+
+    const subjects = emissions.map((e) => e.subject);
+    expect(subjects).toEqual([AgentSubjects.user_message.completed]);
+
+    const userCompleted = emissions[0]!.payload as { messageId: string; outcome: string };
+    expect(userCompleted.messageId).toBe('message-undelivered');
+    expect(userCompleted.outcome).toBe('superseded');
+  });
+
+  it('applies the turn pairing rule to already-processed handles tracked late', async () => {
+    // Handle completed by shutdown gates before track() — isProcessed is true.
+    // Never acknowledged, so turn.started was never emitted. complete() must
+    // NOT emit turn.completed; only user_message.completed fires.
+    const emissions: CapturedEmission[] = [];
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async (subject, payload) => {
+        emissions.push({ subject, payload });
+      },
+    });
+    const handle = new MessageHandle(
+      'message-late-track',
+      { role: 'user', blocks: [{ type: 'text', content: 'Shutdown' }] },
+      'enqueue',
+    );
+
+    // Simulate shutdown gate completing the handle before track().
+    handle.markCompleted({ outcome: 'error', error: new Error('Session closed') });
+    expect(handle.isProcessed).toBe(true);
+
+    tracker.track(handle);
+    await flushMicrotasks();
+
+    const turnStarted = emissions.filter((e) => e.subject === AgentSubjects.turn.started);
+    const turnCompleted = emissions.filter((e) => e.subject === AgentSubjects.turn.completed);
+    const userCompleted = emissions.filter((e) => e.subject === AgentSubjects.user_message.completed);
+
+    expect(turnStarted).toHaveLength(0);
+    expect(turnCompleted).toHaveLength(0);
+    expect(userCompleted).toHaveLength(1);
+    expect((userCompleted[0]!.payload as { messageId: string }).messageId).toBe('message-late-track');
   });
 });
