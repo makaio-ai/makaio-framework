@@ -13,26 +13,18 @@ import {
 } from '@makaio/ai-adapters-core';
 import { DeferredPromise } from '@makaio/utils';
 import { MakaioBus } from '@makaio/bus-core';
-import {
-  AsyncQuerySource,
-  parseResultError,
-  prependContextBlock,
-  sdkUserMessageFromNormalized,
-} from '@makaio/ai-adapters-claude-shared';
+import { AsyncQuerySource, prependContextBlock, sdkUserMessageFromNormalized } from '@makaio/ai-adapters-claude-shared';
 import { ClaudeConnectorTurn } from './turn.js';
 import { UserMessageQueue, processQueueMessages, formatMessageHistoryAsTranscript } from '@makaio/ai-adapters-core';
 import { ClaudeCodeConnectorSubjects } from './namespace/index.js';
 import { ClaudeSessionConfig, CreateToolApprovalHandler } from './types/index.js';
 import { buildMcpServersRecord, buildQueryOptions } from './utils/buildQueryOptions.js';
 import { McpSubjects, type McpResolvedServer, type ResponseSchemaDescriptor } from '@makaio/contracts';
+import { handleClaudeResultMessage } from './result-handling.js';
+import { TerminalResultDrain } from './terminal-result-drain.js';
 
 type StreamEvent = { type: string; delta?: { type: string; thinking?: string } };
 type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { event: StreamEvent };
-type ResultMessageWithStructuredOutput = Extract<SDKMessage, { type: 'result' }> & {
-  result?: string;
-  structured_output?: unknown;
-};
-
 /**
  * Session for Claude SDK query lifecycle management.
  *
@@ -72,6 +64,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private queryGeneration = 0;
   /** Stable key for the SDK-relevant response schema on the active query. */
   private activeResponseSchemaKey: string | undefined;
+  private readonly terminalResultDrain = new TerminalResultDrain();
 
   public constructor(config: ClaudeSessionConfig) {
     super(config);
@@ -441,11 +434,36 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
           }
         }
       } catch (error) {
-        // Iterator-level errors (transport failure, SDK crash) are fatal.
+        // Iterator-level errors (transport failure, SDK crash) must complete
+        // the active handle: otherwise callers wait forever for a result that
+        // the SDK can no longer produce.
         console.error('Session consumption error:', error);
-        throw error;
+        await this.handleConsumptionError(error, queryGeneration);
       }
     })();
+  }
+
+  private async handleConsumptionError(error: unknown, queryGeneration: number): Promise<void> {
+    if (queryGeneration !== this.queryGeneration) return;
+
+    this.terminalResultDrain.resolve(queryGeneration);
+    const turn = this.currentTurn;
+    if (!turn || turn.isCompleted()) return;
+
+    const normalizedError = error instanceof Error ? error : new Error(String(error));
+    const result = { outcome: 'error' as const, error: normalizedError };
+    const handle = turn.getMessageHandle();
+    if (handle) {
+      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
+    } else {
+      turn.markCompleted(result);
+    }
+    await turn.finishOnError();
+  }
+
+  private async completeInterruptedTurnAfterDrainTimeout(queryGeneration: number): Promise<void> {
+    if (queryGeneration !== this.queryGeneration || this.currentTurn?.isCompleted()) return;
+    await this.handleConsumptionError(new Error('Claude query interrupted before terminal result'), queryGeneration);
   }
 
   /**
@@ -481,6 +499,10 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       return;
     }
 
+    if (sdkMessage.type === 'result' && this.terminalResultDrain.hasHandled(queryGeneration)) {
+      return;
+    }
+
     // Emit SDK event before turn completion so MakaioBus subscribers receive
     // events before waitForCompletion() resolves.
     await this.emitSdkEvent(sdkMessage);
@@ -495,75 +517,28 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       }
     }
 
-    // Capture current turn BEFORE any state transitions
-    const turnForThisMessage = this.currentTurn;
+    await this.handleTurnSdkEvent(sdkMessage);
 
-    // Handle message acknowledgment
+    if (sdkMessage.type === 'result') {
+      this.terminalResultDrain.markHandled(queryGeneration);
+    }
+  }
+
+  /**
+   * Apply an SDK message to the active turn after connector-level emission.
+   * @param sdkMessage - Routed SDK message.
+   */
+  private async handleTurnSdkEvent(sdkMessage: SDKMessage): Promise<void> {
+    const turn = this.currentTurn;
+    if (!turn) return;
+
     if (sdkMessage.type === 'user' && (sdkMessage as SDKUserMessage & { isReplay?: boolean }).isReplay) {
-      turnForThisMessage?.markAcknowledged();
+      turn.markAcknowledged();
     }
-
-    // Handle turn completion AFTER emitting event
-    if (sdkMessage.type === 'result' && turnForThisMessage) {
-      await this.handleResultMessage(sdkMessage, turnForThisMessage);
+    if (sdkMessage.type === 'result') {
+      await handleClaudeResultMessage(sdkMessage, turn, this.config.onTurnComplete);
     }
-
-    // Let turn handle state transitions
-    if (turnForThisMessage) {
-      await turnForThisMessage.handleSdkEvent(sdkMessage);
-    }
-  }
-
-  /**
-   * Complete the turn with success or error based on the result message.
-   * SDK quirk: some errors arrive as `subtype: 'success'` with `is_error: true`.
-   * @param msg - Result SDK message
-   * @param turn - Turn to complete
-   */
-  private async handleResultMessage(msg: ResultMessageWithStructuredOutput, turn: ClaudeConnectorTurn): Promise<void> {
-    // Check if we should absorb this error result (it's from an interrupted query)
-    if (turn.isExpectingInterruptResult()) {
-      return;
-    }
-
-    const handle = turn.getMessageHandle();
-    const isSuccess = msg.subtype === 'success' && !msg.is_error;
-    const isWeirdSuccessWithError = msg.subtype === 'success' && msg.is_error;
-
-    const result = isSuccess
-      ? { outcome: 'completed' as const, result: { message: this.resolveResultMessage(msg) } }
-      : {
-          outcome: 'error' as const,
-          error: (() => {
-            const parsedError = parseResultError(msg);
-            // Ensure error is always an Error object (parseResultError can return string)
-            return parsedError instanceof Error ? parsedError : new Error(String(parsedError));
-          })(),
-          // Preserve result message for success+is_error cases (contains error details)
-          result: isWeirdSuccessWithError ? { message: this.resolveResultMessage(msg) } : undefined,
-        };
-
-    if (handle) {
-      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
-    } else {
-      turn.markCompleted(result);
-    }
-  }
-
-  /**
-   * Resolve the terminal message from a successful SDK result.
-   * When `outputFormat` is active, Claude Agent SDK returns the typed value in
-   * `structured_output`. Makaio's terminal message contract is still text, so
-   * the structured value is serialized back to JSON for the shared validation
-   * and persistence pipeline.
-   * @param msg - Successful SDK result message.
-   * @returns Terminal message text for the Makaio message result.
-   */
-  private resolveResultMessage(msg: ResultMessageWithStructuredOutput): string {
-    if ('structured_output' in msg && msg.structured_output !== undefined) {
-      return JSON.stringify(msg.structured_output);
-    }
-    return msg.result ?? '';
+    await turn.handleSdkEvent(sdkMessage);
   }
 
   /**
@@ -593,11 +568,21 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    */
   public async abort(): Promise<void> {
     this.unregisterMcpContext();
-    const activeQuery = this.disownActiveQuery();
+    const activeQuery = this.queryInstance;
+    const queryGeneration = this.queryGeneration;
+    const terminalResultDrain =
+      activeQuery && this.currentTurn && !this.currentTurn.isCompleted()
+        ? this.terminalResultDrain.waitForResult(queryGeneration)
+        : undefined;
     try {
       try {
         await activeQuery?.interrupt();
       } finally {
+        const receivedTerminalResult = await terminalResultDrain;
+        if (receivedTerminalResult === false) {
+          await this.completeInterruptedTurnAfterDrainTimeout(queryGeneration);
+        }
+        this.disownActiveQuery();
         activeQuery?.close();
       }
     } finally {
@@ -660,7 +645,12 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    */
   public async close(): Promise<void> {
     this.unregisterMcpContext();
-    const activeQuery = this.disownActiveQuery();
+    const activeQuery = this.queryInstance;
+    const queryGeneration = this.queryGeneration;
+    const terminalResultDrain =
+      activeQuery && this.currentTurn && !this.currentTurn.isCompleted()
+        ? this.terminalResultDrain.waitForResult(queryGeneration)
+        : undefined;
     if (activeQuery) {
       try {
         await activeQuery.interrupt();
@@ -668,6 +658,11 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
         // Interrupt errors are expected when the query is already done
         console.warn('Session: interrupt failed during close', error);
       } finally {
+        const receivedTerminalResult = await terminalResultDrain;
+        if (receivedTerminalResult === false) {
+          await this.completeInterruptedTurnAfterDrainTimeout(queryGeneration);
+        }
+        this.disownActiveQuery();
         activeQuery.close();
       }
     }

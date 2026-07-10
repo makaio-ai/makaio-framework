@@ -41,6 +41,9 @@ export class MessageLifecycleTracker {
   /** Current messageId being processed (set on acknowledgment, cleared on completion) */
   private currentMessageId?: string;
 
+  /** Current message handle being processed (set on acknowledgment, cleared on completion). */
+  private currentMessageHandle?: MessageHandle;
+
   /** Current turnId from the session orchestrator (set at sendMessage entry, cleared on completion) */
   private currentTurnId?: string;
 
@@ -58,6 +61,14 @@ export class MessageLifecycleTracker {
    */
   public getCurrentMessageId(): string | undefined {
     return this.currentMessageId;
+  }
+
+  /**
+   * Get the active message handle being processed.
+   * @returns The active message handle or undefined if no message is being processed
+   */
+  public getCurrentMessageHandle(): MessageHandle | undefined {
+    return this.currentMessageHandle;
   }
 
   /**
@@ -98,6 +109,7 @@ export class MessageLifecycleTracker {
     const { messageId, message, mergedFrom } = handle;
 
     this.currentMessageId = messageId;
+    this.currentMessageHandle = handle;
 
     // Emit user_message.acknowledged
     void this.emitGlobal(AgentSubjects.user_message.acknowledged, {
@@ -128,9 +140,10 @@ export class MessageLifecycleTracker {
   public complete(handle: MessageHandle, result: MessageResult, turnId?: string): void {
     const { messageId } = handle;
 
-    // Clear currentMessageId only if still current (might have been superseded)
-    if (this.currentMessageId === messageId) {
+    // Clear lifecycle state only if this handle is still active (it might have been superseded).
+    if (this.currentMessageHandle === handle) {
       this.currentMessageId = undefined;
+      this.currentMessageHandle = undefined;
     }
     if (this.currentTurnId === turnId) {
       this.currentTurnId = undefined;

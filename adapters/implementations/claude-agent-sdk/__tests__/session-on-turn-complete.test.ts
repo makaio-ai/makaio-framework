@@ -2,6 +2,7 @@ import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue, type MessageResult } from '@makaio/ai-adapters-core';
+import type { SDKMessage } from '@makaio/client-claude-code';
 import { McpSubjects } from '@makaio/contracts';
 
 const queryHarness = vi.hoisted(() => {
@@ -402,6 +403,7 @@ describe('ClaudeConnectorSession onTurnComplete seam', () => {
           activeHandle.markCompleted(result);
         }),
         handleSdkEvent: vi.fn(async () => undefined),
+        finishOnError: vi.fn(async () => undefined),
       };
       setCurrentTurnForTest(session, currentTurn);
 
@@ -464,6 +466,7 @@ describe('ClaudeConnectorSession onTurnComplete seam', () => {
           activeHandle.markCompleted(result);
         }),
         handleSdkEvent: vi.fn(async () => undefined),
+        finishOnError: vi.fn(async () => undefined),
       };
       setCurrentTurnForTest(session, currentTurn);
 
@@ -581,6 +584,262 @@ describe('ClaudeConnectorSession onTurnComplete seam', () => {
     } finally {
       consoleWarn.mockRestore();
       await session.close();
+    }
+  });
+
+  it('emits and completes from a terminal result delivered during close interruption', async () => {
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    let resolveResult: (value: unknown) => void = () => undefined;
+    const terminalResult = new Promise<unknown>((resolve) => {
+      resolveResult = resolve;
+    });
+    const emitSdkEvent = vi.fn(async () => undefined);
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent,
+    });
+
+    queryHarness.query.mockImplementationOnce(
+      () =>
+        ({
+          interrupt: vi.fn(async () => {
+            resolveResult({
+              type: 'result',
+              session_id: session.getConfirmedSessionId(),
+              subtype: 'success',
+              is_error: false,
+              result: 'interrupted result',
+              total_cost_usd: 0.01,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            });
+          }),
+          close: vi.fn(() => undefined),
+          setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+          setMaxThinkingTokens: vi.fn(async () => undefined),
+          async *[Symbol.asyncIterator]() {
+            yield (await terminalResult) as SDKMessage;
+          },
+        }) as unknown as ReturnType<typeof queryHarness.query>,
+    );
+
+    const handle = createMessageHandle('message-close-result');
+    setCurrentTurnForTest(session, {
+      isCompleted: () => false,
+      getMessageHandle: () => handle,
+      isExpectingInterruptResult: () => false,
+      markCompleted: vi.fn((result: MessageResult) => handle.markCompleted(result)),
+      handleSdkEvent: vi.fn(async () => undefined),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+    await session.close();
+
+    await expect(handle.waitForCompletion(1_000)).resolves.toEqual({
+      outcome: 'completed',
+      result: { message: 'interrupted result' },
+    });
+    expect(emitSdkEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'result', total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 } }),
+    );
+  });
+
+  it('does not wait indefinitely when interruption yields no terminal result', async () => {
+    vi.useFakeTimers();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    const query = {
+      interrupt: vi.fn(async () => undefined),
+      close: vi.fn(() => undefined),
+      setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+      setMaxThinkingTokens: vi.fn(async () => undefined),
+      async *[Symbol.asyncIterator]() {
+        await new Promise<void>(() => undefined);
+      },
+    };
+    queryHarness.query.mockImplementationOnce(() => query as unknown as ReturnType<typeof queryHarness.query>);
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent: vi.fn(async () => undefined),
+    });
+    const handle = createMessageHandle('message-close-timeout');
+    setCurrentTurnForTest(session, {
+      isCompleted: () => false,
+      getMessageHandle: () => handle,
+      isExpectingInterruptResult: () => false,
+      markCompleted: vi.fn((result: MessageResult) => handle.markCompleted(result)),
+      handleSdkEvent: vi.fn(async () => undefined),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      const closePromise = session.close();
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(closePromise).resolves.toBeUndefined();
+      expect(query.close).toHaveBeenCalledTimes(1);
+      await expect(handle.waitForCompletion(1_000)).resolves.toMatchObject({
+        outcome: 'error',
+        error: expect.objectContaining({ message: 'Claude query interrupted before terminal result' }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not emit a duplicate terminal result after the interruption drain has cleared', async () => {
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    let resolveFirstResult: (value: unknown) => void = () => undefined;
+    let resolveDuplicateResult: (value: unknown) => void = () => undefined;
+    const firstResult = new Promise<unknown>((resolve) => {
+      resolveFirstResult = resolve;
+    });
+    const duplicateResult = new Promise<unknown>((resolve) => {
+      resolveDuplicateResult = resolve;
+    });
+    const emitSdkEvent = vi.fn(async () => undefined);
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent,
+    });
+    const query = {
+      interrupt: vi.fn(async () => {
+        resolveFirstResult({
+          type: 'result',
+          session_id: session.getConfirmedSessionId(),
+          subtype: 'success',
+          is_error: false,
+          result: 'first',
+        });
+      }),
+      close: vi.fn(() => undefined),
+      setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+      setMaxThinkingTokens: vi.fn(async () => undefined),
+      async *[Symbol.asyncIterator]() {
+        yield (await firstResult) as SDKMessage;
+        yield (await duplicateResult) as SDKMessage;
+      },
+    };
+    queryHarness.query.mockImplementationOnce(() => query as unknown as ReturnType<typeof queryHarness.query>);
+    const handle = createMessageHandle('message-close-duplicate');
+    let completed = false;
+    setCurrentTurnForTest(session, {
+      isCompleted: () => completed,
+      getMessageHandle: () => handle,
+      isExpectingInterruptResult: () => false,
+      markCompleted: vi.fn((result: MessageResult) => {
+        completed = true;
+        handle.markCompleted(result);
+      }),
+      handleSdkEvent: vi.fn(async () => undefined),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+    const queryGeneration = Reflect.get(session, 'queryGeneration') as number;
+    const terminalResultDrain = Reflect.get(session, 'terminalResultDrain') as {
+      waitForResult: (generation: number) => Promise<boolean>;
+    };
+    const drain = terminalResultDrain.waitForResult(queryGeneration);
+    await query.interrupt();
+    await drain;
+    expect(Reflect.get(terminalResultDrain, 'active')).toBeUndefined();
+
+    resolveDuplicateResult({
+      type: 'result',
+      session_id: session.getConfirmedSessionId(),
+      subtype: 'success',
+      is_error: false,
+      result: 'duplicate',
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(emitSdkEvent).toHaveBeenCalledTimes(1);
+    await expect(handle.waitForCompletion(1_000)).resolves.toEqual({
+      outcome: 'completed',
+      result: { message: 'first' },
+    });
+    await session.close();
+  });
+
+  it('omits a terminal result that arrives after the interruption drain times out', async () => {
+    vi.useFakeTimers();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    let resolveResult: (value: unknown) => void = () => undefined;
+    const terminalResult = new Promise<unknown>((resolve) => {
+      resolveResult = resolve;
+    });
+    const emitSdkEvent = vi.fn(async () => undefined);
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent,
+    });
+    queryHarness.query.mockImplementationOnce(
+      () =>
+        ({
+          interrupt: vi.fn(async () => undefined),
+          close: vi.fn(() => undefined),
+          setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+          setMaxThinkingTokens: vi.fn(async () => undefined),
+          async *[Symbol.asyncIterator]() {
+            yield (await terminalResult) as SDKMessage;
+          },
+        }) as unknown as ReturnType<typeof queryHarness.query>,
+    );
+    const handle = createMessageHandle('message-close-late');
+    setCurrentTurnForTest(session, {
+      isCompleted: () => false,
+      getMessageHandle: () => handle,
+      isExpectingInterruptResult: () => false,
+      markCompleted: vi.fn((result: MessageResult) => handle.markCompleted(result)),
+      handleSdkEvent: vi.fn(async () => undefined),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      const closePromise = session.close();
+      await vi.advanceTimersByTimeAsync(250);
+      await closePromise;
+      resolveResult({
+        type: 'result',
+        session_id: session.getConfirmedSessionId(),
+        subtype: 'success',
+        is_error: false,
+        result: 'late',
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(emitSdkEvent).not.toHaveBeenCalled();
+      await expect(handle.waitForCompletion(1_000)).resolves.toMatchObject({
+        outcome: 'error',
+        error: expect.objectContaining({ message: 'Claude query interrupted before terminal result' }),
+      });
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -63,6 +63,9 @@ type ResultMessageWithStructuredOutput = Extract<SDKMessage, { type: 'result' }>
   structured_output?: unknown;
 };
 
+const TERMINAL_RESULT_DRAIN_TIMEOUT_MS = 250;
+const CLOSED_BEFORE_TERMINAL_RESULT_MESSAGE = 'Claude Code CLI closed before emitting a terminal result';
+
 /**
  * Session for the Claude Code CLI adapter.
  *
@@ -91,6 +94,15 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   /** Callbacks for turn lifecycle notifications */
   private readonly onTurnStart?: OnTurnStartCallback;
   private readonly onTurnComplete?: OnTurnCompleteCallback;
+  /** Result messages are terminal and must be processed at most once per handle. */
+  private readonly handledResultHandles = new WeakSet<MessageHandle>();
+  /** Bounded window in which an active transport may deliver its terminal result during teardown. */
+  private terminalResultDrain?: {
+    transport: CliStdioTransport;
+    deferred: DeferredPromise<void>;
+  };
+  /** Shares one teardown across concurrent abort/close calls. */
+  private closePromise?: Promise<void>;
 
   /**
    * Resolve resume/session IDs for the next CLI turn.
@@ -393,7 +405,10 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       return;
     }
 
-    // Emit every SDK payload so lenient bus validation can report protocol drift.
+    const sdkMessage = isKnownSdkMessageForRouting(msg) ? msg : undefined;
+    if (!this.claimTerminalResult(sdkMessage, handle)) return;
+
+    // Emit every accepted SDK payload so lenient bus validation can report protocol drift.
     // Emission is diagnostic only; it must not block routing of system.init or
     // result payloads that drive the session state machine.
     if (this.emitSdkEvent) {
@@ -405,8 +420,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         console.error('[ClaudeCliSession] Failed to emit SDK event', error);
       });
     }
-    if (!isKnownSdkMessageForRouting(msg)) return;
-    const sdkMessage = msg;
+    if (!sdkMessage) return;
 
     // Extract confirmed session ID from system.init
     if (sdkMessage.type === 'system' && sdkMessage.subtype === 'init') {
@@ -448,6 +462,48 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     // Advance turn state machine
     if (this.currentTurn) {
       await this.currentTurn.handleSdkEvent(sdkMessage);
+    }
+
+    if (sdkMessage.type === 'result') {
+      const drain = this.terminalResultDrain;
+      if (drain && drain.transport === this.transport) {
+        drain.deferred.resolve(undefined);
+      }
+    }
+  }
+
+  /**
+   * Claim a terminal result so duplicate transport delivery cannot reprocess it.
+   * @param sdkMessage - Known SDK message, or undefined for protocol-drift payloads.
+   * @param handle - Message handle that owns the transport event.
+   * @returns True when the message should continue through emission and routing.
+   */
+  private claimTerminalResult(sdkMessage: SDKMessage | undefined, handle: MessageHandle): boolean {
+    if (sdkMessage?.type !== 'result') return true;
+    if (this.handledResultHandles.has(handle)) return false;
+    this.handledResultHandles.add(handle);
+    return true;
+  }
+
+  /**
+   * Wait briefly for a genuine terminal result before force-closing the active transport.
+   * @param transport - Transport that owns the current turn.
+   */
+  private async drainTerminalResult(transport: CliStdioTransport): Promise<void> {
+    const drain = { transport, deferred: new DeferredPromise<void>() };
+    this.terminalResultDrain = drain;
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        drain.deferred.getPromise(),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, TERMINAL_RESULT_DRAIN_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (this.terminalResultDrain === drain) this.terminalResultDrain = undefined;
     }
   }
 
@@ -523,7 +579,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    */
   public override async abort(): Promise<void> {
     await this.close();
-    await super.abort();
   }
 
   /**
@@ -531,13 +586,48 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * Unregisters agent context from the MCP context registry if registered.
    */
   public async close(): Promise<void> {
-    const transport = this.transport;
-    this.transport = undefined;
-    try {
-      transport?.close();
-    } catch (error) {
-      console.error('[Session] Failed to close transport during close', error);
+    if (this.closePromise) {
+      await this.closePromise;
+      return;
     }
-    this.unregisterMcpSession();
+
+    const closePromise = this.closeActiveTransport();
+    this.closePromise = closePromise;
+    try {
+      await closePromise;
+    } finally {
+      if (this.closePromise === closePromise) this.closePromise = undefined;
+    }
+  }
+
+  /** Drain and then force-close the transport owned by the current turn. */
+  private async closeActiveTransport(): Promise<void> {
+    const transport = this.transport;
+    const turn = this.currentTurn;
+    const handle = turn?.getMessageHandle();
+    const shouldDrain = transport !== undefined && turn !== undefined && !turn.isCompleted();
+    try {
+      if (shouldDrain) {
+        await this.drainTerminalResult(transport);
+      }
+      if (this.transport === transport) {
+        this.transport = undefined;
+      }
+      if (turn && handle && !handle.isProcessed) {
+        await this.completeTransportError(turn, handle, new Error(CLOSED_BEFORE_TERMINAL_RESULT_MESSAGE));
+      }
+    } catch (error) {
+      console.error('[Session] Failed to finalize active turn during close', error);
+    } finally {
+      if (this.transport === transport) {
+        this.transport = undefined;
+      }
+      try {
+        transport?.close();
+      } catch (error) {
+        console.error('[Session] Failed to close transport during close', error);
+      }
+      this.unregisterMcpSession();
+    }
   }
 }

@@ -7,6 +7,7 @@ import {
   type StepType,
 } from '@makaio/contracts';
 import type { AgentContext, ContextWindowInput, NormalizedCallUsage } from './types.js';
+import type { MessageHandle } from '../message-handle/index.js';
 import type { ToolCallTracker, ResolveHints } from './tool-call-tracker.js';
 
 /**
@@ -47,6 +48,8 @@ export interface AgentEventBridgeConfig {
   incrementBlockIndex: () => void;
   /** Resolve model name for usage events. */
   getUsageModel: () => string | undefined;
+  /** Get the message handle whose provider request is currently active. */
+  getActiveMessageHandle: () => MessageHandle | undefined;
 }
 
 /**
@@ -76,6 +79,7 @@ export class AgentEventBridge {
   private readonly getBlockIndex: () => number;
   private readonly incrementBlockIndex: () => void;
   private readonly getUsageModel: () => string | undefined;
+  private readonly getActiveMessageHandle: () => MessageHandle | undefined;
 
   /**
    * Create an event bridge with emission and correlation dependencies.
@@ -93,6 +97,7 @@ export class AgentEventBridge {
     this.getBlockIndex = config.getBlockIndex;
     this.incrementBlockIndex = config.incrementBlockIndex;
     this.getUsageModel = config.getUsageModel;
+    this.getActiveMessageHandle = config.getActiveMessageHandle;
   }
 
   /**
@@ -100,8 +105,15 @@ export class AgentEventBridge {
    * @param normalized - Provider-normalized usage metrics
    */
   public async trackUsage(normalized: NormalizedCallUsage): Promise<void> {
+    const requestCorrelation = this.getActiveMessageHandle()?.requestCorrelation;
     await this.emitUsagePayload({
       ...normalized,
+      ...(normalized.executionId === undefined && requestCorrelation?.executionId !== undefined
+        ? { executionId: requestCorrelation.executionId }
+        : {}),
+      ...(normalized.frameId === undefined && requestCorrelation?.frameId !== undefined
+        ? { frameId: requestCorrelation.frameId }
+        : {}),
       model: this.getUsageModel() ?? 'unknown',
     });
   }

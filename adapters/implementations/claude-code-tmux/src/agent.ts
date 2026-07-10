@@ -209,8 +209,8 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
         totalTokens: inputTokens + cacheReadTokens + outputTokens,
         costUnits: 1,
         costUnitType: 'requests',
-        cost: payload.cost?.total_cost_usd,
       };
+      // `cost.total_cost_usd` is cumulative for the Claude Code session, not this request.
       await this.trackUsage(normalized);
     }
 

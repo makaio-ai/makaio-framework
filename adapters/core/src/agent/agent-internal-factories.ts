@@ -60,6 +60,7 @@ export function createAgentPayloadEmitter(config: CreatePayloadEmitterInput): Ag
 export function createAgentEventBridge(config: {
   emitGlobal: AgentPayloadEmitter['emitGlobal'];
   toolCallTracker: ToolCallTracker;
+  lifecycleTracker: MessageLifecycleTracker;
   getBlockIndex: () => number;
   incrementBlockIndex: () => void;
   getUsageModel: () => string | undefined;
@@ -90,6 +91,7 @@ export function createAgentEventBridge(config: {
     getBlockIndex: config.getBlockIndex,
     incrementBlockIndex: config.incrementBlockIndex,
     getUsageModel: config.getUsageModel,
+    getActiveMessageHandle: () => config.lifecycleTracker.getCurrentMessageHandle(),
   });
 }
 

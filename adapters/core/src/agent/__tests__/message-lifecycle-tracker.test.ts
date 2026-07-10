@@ -237,6 +237,30 @@ describe('MessageLifecycleTracker', () => {
     expect(observed).toEqual([undefined]);
   });
 
+  it('keeps the most recently acknowledged handle active until that handle completes', () => {
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const firstHandle = new MessageHandle(
+      'message-a',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+    );
+    const secondHandle = new MessageHandle(
+      'message-b',
+      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
+      'enqueue',
+    );
+
+    tracker.acknowledge(firstHandle);
+    tracker.acknowledge(secondHandle);
+    tracker.complete(firstHandle, { outcome: 'completed' });
+
+    expect(tracker.getCurrentMessageHandle()).toBe(secondHandle);
+
+    tracker.complete(secondHandle, { outcome: 'completed' });
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
+
   it('keeps each tracked handle bound to its captured turnId when completions overlap', async () => {
     const emissions: CapturedEmission[] = [];
     const terminalObserved: Array<{ messageId: string; turnId: string | undefined }> = [];
