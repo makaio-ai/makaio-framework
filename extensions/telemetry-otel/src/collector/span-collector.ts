@@ -19,7 +19,7 @@
  */
 
 import type { SpanDraft } from '../contracts/types.js';
-import { SpanBuilder } from './span-builder.js';
+import { buildExecutionToolSpan, buildExecutionTrace, buildExecutionUsageSpan } from './execution-traces.js';
 import { SessionIndex } from './session-index.js';
 import { buildStandaloneSessionTrace } from './standalone-session-traces.js';
 import {
@@ -518,6 +518,7 @@ export class SpanCollector {
    * Sessioned events that have not yet received `frame.sessionLinked` remain
    * buffered until this same timeout expires. After that point the collector
    * exports them as standalone session trace segments.
+   * @returns The active sweep, shared by overlapping callers.
    */
   public sweepOrphans(): Promise<void> {
     if (this.orphanSweepTask !== undefined) {
@@ -557,7 +558,7 @@ export class SpanCollector {
         }
 
         // Emit as orphan
-        const orphanDraft = this.buildUsageSpan(execution, usage, undefined);
+        const orphanDraft = buildExecutionUsageSpan(execution, usage, undefined);
         const existing = this.emittedOrphans.get(execution.executionId) ?? [];
         existing.push(orphanDraft);
         this.emittedOrphans.set(execution.executionId, existing);
@@ -571,7 +572,7 @@ export class SpanCollector {
         const sessionResolved = tool.sessionId !== undefined && execution.sessionFrameMap.has(tool.sessionId);
         if (!sessionResolved && age >= orphanTimeoutMs) {
           const existing = this.emittedOrphans.get(execution.executionId) ?? [];
-          existing.push(this.buildToolSpan(execution, tool, undefined, now));
+          existing.push(buildExecutionToolSpan(execution, tool, undefined, now));
           this.emittedOrphans.set(execution.executionId, existing);
           execution.pendingTools.delete(key);
         }
@@ -602,61 +603,19 @@ export class SpanCollector {
     }
 
     const now = this.options.now();
-    const drafts: SpanDraft[] = [];
-
-    // Root execution span with error status and an eviction event
-    const rootSpan = SpanBuilder.buildExecutionSpan({
-      executionId: execution.executionId,
-      workflowId: execution.workflowId,
-      startedAt: execution.startedAt,
+    const drafts = buildExecutionTrace({
+      execution,
       endedAt: now,
       status: 'error',
-    });
-    drafts.push({
-      ...rootSpan,
-      events: [
+      rootEvents: [
         {
           name: 'evicted',
           time: now,
           attributes: { 'eviction.reason': reason },
         },
       ],
+      orphans: this.emittedOrphans.get(executionId),
     });
-
-    // Frame spans — close any open frames at the eviction timestamp
-    for (const frame of execution.frames.values()) {
-      drafts.push(
-        SpanBuilder.buildFrameSpan({
-          executionId: execution.executionId,
-          frameId: frame.frameId,
-          nodeId: frame.nodeId,
-          nodeType: frame.nodeType,
-          path: frame.path,
-          parentFrameId: frame.parentFrameId,
-          startedAt: frame.startedAt,
-          endedAt: frame.endedAt ?? now,
-          status: frame.status === 'unset' ? 'error' : frame.status,
-        }),
-      );
-    }
-
-    // Resolve pending usage events against their session→frame mappings
-    for (const usage of execution.pendingUsage) {
-      const frameId =
-        usage.frameId ?? (usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined);
-      drafts.push(this.buildUsageSpan(execution, usage, frameId));
-    }
-
-    for (const tool of execution.pendingTools.values()) {
-      const frameId = tool.sessionId !== undefined ? execution.sessionFrameMap.get(tool.sessionId) : undefined;
-      drafts.push(this.buildToolSpan(execution, tool, frameId, now));
-    }
-
-    // Append any orphan spans emitted during sweepOrphans
-    const orphans = this.emittedOrphans.get(executionId);
-    if (orphans !== undefined) {
-      drafts.push(...orphans);
-    }
 
     // Clean up
     this.executions.delete(executionId);
@@ -693,81 +652,6 @@ export class SpanCollector {
 
     frame.endedAt = endedAt;
     frame.status = status;
-  }
-
-  /**
-   * Builds a {@link SpanDraft} for a single buffered usage event.
-   *
-   * When `frameId` is `undefined` the span is marked as orphaned.
-   * @param execution - The execution this usage belongs to.
-   * @param usage - Buffered usage event.
-   * @param frameId - Resolved frame ID, or `undefined` for orphan spans.
-   * @returns A fully-resolved {@link SpanDraft} for the LLM call.
-   */
-  private buildUsageSpan(execution: OpenExecution, usage: BufferedUsage, frameId: string | undefined): SpanDraft {
-    const orphaned = frameId === undefined;
-    const endedAt = usage.occurredAt ?? usage.ingestedAt;
-    const startedAt = usage.duration !== undefined ? endedAt - usage.duration : endedAt;
-
-    return SpanBuilder.buildLlmSpan({
-      executionId: execution.executionId,
-      sessionId: usage.sessionId ?? 'unknown',
-      frameId,
-      sequence: usage.sequence,
-      provider: usage.provider,
-      model: usage.model,
-      inputTokens: usage.inputTokens,
-      inputCachedTokens: usage.inputCachedTokens,
-      cacheWriteTokens: usage.cacheWriteTokens,
-      outputTokens: usage.outputTokens,
-      reasoningTokens: usage.reasoningTokens,
-      totalTokens: usage.totalTokens,
-      agentId: usage.agentId,
-      adapterId: usage.adapterId,
-      adapterName: usage.adapterName,
-      adapterSessionId: usage.adapterSessionId,
-      messageId: usage.messageId,
-      turnId: usage.turnId,
-      clientId: usage.clientId,
-      providerConfigId: usage.providerConfigId,
-      llmCallId: usage.llmCallId,
-      costUnits: usage.costUnits,
-      costUnitType: usage.costUnitType,
-      cost: usage.cost,
-      currency: usage.currency,
-      costProvenance: usage.costProvenance,
-      duration: usage.duration,
-      startedAt,
-      endedAt,
-      orphaned,
-    });
-  }
-
-  /**
-   * Builds a {@link SpanDraft} for a single buffered tool event pair.
-   * @param execution - The execution this tool call belongs to.
-   * @param tool - Buffered tool call event state.
-   * @param frameId - Resolved frame ID, or `undefined` for orphan spans.
-   * @param fallbackEndedAt - End timestamp for still-open tool calls.
-   * @returns A fully-resolved {@link SpanDraft} for the tool call.
-   */
-  private buildToolSpan(
-    execution: OpenExecution,
-    tool: BufferedToolCall,
-    frameId: string | undefined,
-    fallbackEndedAt: number,
-  ): SpanDraft {
-    return SpanBuilder.buildToolSpan({
-      executionId: execution.executionId,
-      sessionId: tool.sessionId ?? 'unknown',
-      frameId,
-      toolCallId: tool.toolCallId,
-      toolName: tool.toolName,
-      startedAt: tool.startedAt,
-      endedAt: tool.endedAt ?? fallbackEndedAt,
-      success: tool.success,
-      orphaned: frameId === undefined,
-    });
   }
 
   private resolveExecutionForSession(sessionId: string | undefined): OpenExecution | undefined {
@@ -1023,54 +907,12 @@ export class SpanCollector {
       return;
     }
 
-    const drafts: SpanDraft[] = [];
-
-    // Root execution span
-    drafts.push(
-      SpanBuilder.buildExecutionSpan({
-        executionId: execution.executionId,
-        workflowId: execution.workflowId,
-        startedAt: execution.startedAt,
-        endedAt,
-        status,
-      }),
-    );
-
-    // Frame spans — use the endedAt from the frame record when available,
-    // otherwise fall back to the execution terminal timestamp.
-    for (const frame of execution.frames.values()) {
-      drafts.push(
-        SpanBuilder.buildFrameSpan({
-          executionId: execution.executionId,
-          frameId: frame.frameId,
-          nodeId: frame.nodeId,
-          nodeType: frame.nodeType,
-          path: frame.path,
-          parentFrameId: frame.parentFrameId,
-          startedAt: frame.startedAt,
-          endedAt: frame.endedAt ?? endedAt,
-          status: frame.status === 'unset' ? status : frame.status,
-        }),
-      );
-    }
-
-    // Resolve pending usage events against their session→frame mappings
-    for (const usage of execution.pendingUsage) {
-      const frameId =
-        usage.frameId ?? (usage.sessionId !== undefined ? execution.sessionFrameMap.get(usage.sessionId) : undefined);
-      drafts.push(this.buildUsageSpan(execution, usage, frameId));
-    }
-
-    for (const tool of execution.pendingTools.values()) {
-      const frameId = tool.sessionId !== undefined ? execution.sessionFrameMap.get(tool.sessionId) : undefined;
-      drafts.push(this.buildToolSpan(execution, tool, frameId, endedAt));
-    }
-
-    // Append any orphan spans emitted during sweepOrphans
-    const orphans = this.emittedOrphans.get(executionId);
-    if (orphans !== undefined) {
-      drafts.push(...orphans);
-    }
+    const drafts = buildExecutionTrace({
+      execution,
+      endedAt,
+      status,
+      orphans: this.emittedOrphans.get(executionId),
+    });
 
     // Clean up
     this.executions.delete(executionId);
