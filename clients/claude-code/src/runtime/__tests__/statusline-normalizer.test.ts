@@ -376,8 +376,7 @@ describe('normalizeClaudeCodeSessionUsage', () => {
     );
 
     expect(result?.totalCost).toBe(1.25);
-    expect(result).not.toHaveProperty('usage');
-    expect(result).not.toHaveProperty('windows');
+    expect(result).not.toHaveProperty('rateLimits');
   });
 
   it('returns null without a session ID or supported usage measurements', () => {

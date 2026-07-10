@@ -1,5 +1,16 @@
 import { z } from 'zod';
 
+const HEADER_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
+
+/** Content-free identifier safe to copy into an HTTP header value. */
+const HeaderSafeCorrelationIdSchema = z
+  .string()
+  .refine((value) => !HEADER_CONTROL_CHARACTER_PATTERN.test(value), {
+    message: 'Correlation identifiers must not contain control characters',
+  })
+  .transform((value) => value.trim())
+  .pipe(z.string().min(1).max(512));
+
 /**
  * Content-free identifiers that may accompany an outbound provider request.
  *
@@ -10,11 +21,11 @@ import { z } from 'zod';
  */
 export const RequestCorrelationContextSchema = z
   .object({
-    sessionId: z.string().trim().min(1).max(512).optional(),
-    turnId: z.string().trim().min(1).max(512).optional(),
-    messageId: z.string().trim().min(1).max(512).optional(),
-    executionId: z.string().trim().min(1).max(512).optional(),
-    frameId: z.string().trim().min(1).max(512).optional(),
+    sessionId: HeaderSafeCorrelationIdSchema.optional(),
+    turnId: HeaderSafeCorrelationIdSchema.optional(),
+    messageId: HeaderSafeCorrelationIdSchema.optional(),
+    executionId: HeaderSafeCorrelationIdSchema.optional(),
+    frameId: HeaderSafeCorrelationIdSchema.optional(),
   })
   .strict();
 

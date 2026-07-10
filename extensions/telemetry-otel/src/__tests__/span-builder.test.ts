@@ -242,6 +242,15 @@ describe('SpanBuilder', () => {
         startedAt: 1200,
         endedAt: 1400,
       });
+      const tool = SpanBuilder.buildStandaloneToolSpan({
+        sessionId: 'sess-local',
+        segment: 4,
+        toolCallId: 'call-local',
+        toolName: 'read',
+        startedAt: 1250,
+        endedAt: 1300,
+        success: true,
+      });
 
       expect(root.executionId).toBeUndefined();
       expect(root.attributes).toMatchObject({
@@ -252,6 +261,11 @@ describe('SpanBuilder', () => {
       expect(llm.executionId).toBeUndefined();
       expect(llm.parentSpanId).toBe(root.spanId);
       expect(llm.attributes['makaio.trace.scope']).toBe('standalone');
+      expect(llm.attributes['makaio.execution.id']).toBeUndefined();
+      expect(tool.executionId).toBeUndefined();
+      expect(tool.parentSpanId).toBe(root.spanId);
+      expect(tool.attributes['makaio.trace.scope']).toBe('standalone');
+      expect(tool.attributes['makaio.execution.id']).toBeUndefined();
     });
   });
 

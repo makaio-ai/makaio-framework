@@ -479,13 +479,14 @@ export class SpanBuilder {
       orphaned: false,
     });
     const { executionId: _executionId, ...standaloneDraft } = workflowDraft;
+    const { ['makaio.execution.id']: _syntheticExecutionId, ...standaloneAttributes } = workflowDraft.attributes;
 
     return {
       ...standaloneDraft,
       spanId: `tool:${SpanBuilder.standaloneSessionSpanId(input.sessionId, input.segment)}:${input.toolCallId}`,
       parentSpanId: SpanBuilder.standaloneSessionSpanId(input.sessionId, input.segment),
       attributes: {
-        ...workflowDraft.attributes,
+        ...standaloneAttributes,
         'makaio.trace.scope': 'standalone',
         'makaio.trace.segment': input.segment,
       },
