@@ -12,7 +12,7 @@ import type { BufferedToolCall, OpenExecution, UnresolvedUsage } from './types.j
  * @returns Stable in-memory correlation key.
  */
 export function toolCorrelationKey(sessionId: string | undefined, toolCallId: string): string {
-  return `${sessionId ?? 'unknown'}:${toolCallId}`;
+  return JSON.stringify([sessionId ?? null, toolCallId]);
 }
 
 /**
@@ -43,7 +43,9 @@ export function mergeExecutionToolStart(execution: OpenExecution, tool: Buffered
   const existing = execution.pendingTools.get(key);
   execution.pendingTools.set(
     key,
-    existing === undefined ? tool : { ...existing, toolName: tool.toolName, startedAt: tool.startedAt },
+    existing === undefined
+      ? tool
+      : { ...existing, toolName: tool.toolName, startedAt: Math.min(existing.startedAt, tool.startedAt) },
   );
 }
 

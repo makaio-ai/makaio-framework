@@ -36,15 +36,17 @@ export interface StandaloneSessionTraceInput {
  */
 export function mergeRetainedToolLifecycle<T extends ToolLifecycle>(retained: T, current: T | undefined): T {
   if (current === undefined) return retained;
-  const retainedTerminalWins =
-    retained.endedAt !== undefined && (current.endedAt === undefined || retained.endedAt >= current.endedAt);
+  const currentTerminalWins =
+    current.endedAt !== undefined && (retained.endedAt === undefined || current.endedAt >= retained.endedAt);
+  const terminalWinner = currentTerminalWins ? current : retained;
+  const terminalFallback = currentTerminalWins ? retained : current;
   return {
     ...current,
     toolName: retained.toolName,
     startedAt: Math.min(retained.startedAt, current.startedAt),
     ingestedAt: Math.min(retained.ingestedAt, current.ingestedAt),
-    endedAt: retainedTerminalWins ? retained.endedAt : current.endedAt,
-    success: retainedTerminalWins ? retained.success : current.success,
+    endedAt: terminalWinner.endedAt,
+    success: terminalWinner.success ?? terminalFallback.success,
   };
 }
 
