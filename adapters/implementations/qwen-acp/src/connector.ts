@@ -396,6 +396,10 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
         text: accumulatedText,
         timestamp: Date.now(),
       });
+      // Flush BEFORE handle completion: shared-core usage attribution
+      // (executionId/frameId) enriches from the active message handle,
+      // which the lifecycle tracker clears once the handle completes.
+      await this.flushAccumulatedUsage(Date.now());
       await markCompletedWithFinalResult(handle, successResult, (_handle, finalResult) => {
         this.lastResult = finalResult;
       });
@@ -403,16 +407,12 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
       if (turn.isPaused()) return;
       const err = error instanceof Error ? error : new Error(String(error));
       const errorResult: MessageResult = { outcome: 'error', error: err };
+      await this.flushAccumulatedUsage(Date.now());
       await markCompletedWithFinalResult(handle, errorResult, (_handle, finalResult) => {
         this.lastResult = finalResult;
       });
     } finally {
       if (!turn.isPaused()) {
-        try {
-          await this.flushAccumulatedUsage(Date.now());
-        } catch {
-          // Usage telemetry must not break turn cleanup; bus logs handler errors.
-        }
         await turn.markTurnFinished();
         await this.updateProcessingState('turn_finished');
         await this.updateProcessingState('processing_finished');
@@ -454,27 +454,32 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
 
   /**
    * Emit the consolidated per-turn usage event and reset the accumulator.
-   * Called once per turn in the `finally` block of {@link runPromptTurn}, before
-   * `markTurnFinished()`, so usage is always emitted — even on error paths.
+   * Called once per turn in {@link runPromptTurn} on both success and error
+   * paths, BEFORE the handle completes — the lifecycle tracker clears the
+   * active correlation handle on completion, and shared-core attribution
+   * (executionId/frameId) enriches usage from that active handle.
+   * Emission failures are swallowed: usage telemetry must not break turn
+   * completion; the bus logs handler errors.
    * @param timestamp - Timestamp to attach to the emitted event
    */
   private async flushAccumulatedUsage(timestamp: number): Promise<void> {
     const acc = this.turnUsageAccumulator;
     if (acc === null) return;
-    // Empty accumulator — clear stale state but skip emission.
-    if (Object.keys(acc).length === 0) {
-      this.turnUsageAccumulator = null;
-      return;
-    }
-    await this.emit(QwenAcpSubjects.session_update_usage, {
-      inputTokens: acc.inputTokens,
-      outputTokens: acc.outputTokens,
-      totalTokens: acc.totalTokens,
-      thoughtTokens: acc.thoughtTokens,
-      cachedReadTokens: acc.cachedReadTokens,
-      timestamp,
-    });
     this.turnUsageAccumulator = null;
+    // Empty accumulator — stale state cleared, skip emission.
+    if (Object.keys(acc).length === 0) return;
+    try {
+      await this.emit(QwenAcpSubjects.session_update_usage, {
+        inputTokens: acc.inputTokens,
+        outputTokens: acc.outputTokens,
+        totalTokens: acc.totalTokens,
+        thoughtTokens: acc.thoughtTokens,
+        cachedReadTokens: acc.cachedReadTokens,
+        timestamp,
+      });
+    } catch {
+      // Swallow: see method contract above.
+    }
   }
 
   private async onSessionUpdate(notification: SessionNotification): Promise<void> {
