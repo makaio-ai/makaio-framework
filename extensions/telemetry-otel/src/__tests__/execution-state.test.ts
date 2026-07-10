@@ -21,6 +21,7 @@ describe('execution tool state', () => {
     mergeExecutionToolStart(execution, tool({ startedAt: 1_000 }));
     mergeExecutionToolStart(execution, tool({ startedAt: 1_500 }));
 
+    expect(execution.pendingTools.size).toBe(1);
     expect([...execution.pendingTools.values()][0]?.startedAt).toBe(1_000);
   });
 
