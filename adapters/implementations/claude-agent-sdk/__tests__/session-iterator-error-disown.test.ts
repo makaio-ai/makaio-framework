@@ -309,4 +309,109 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
       await session.close();
     }
   });
+
+  it('disowns the dead query even when the turn is already completed, so the next message gets a fresh query', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent: vi.fn(async () => undefined),
+    });
+
+    // Iterator yields a result (completing the turn), then throws.
+    let messageReceived: () => void;
+    const messageReceivedPromise = new Promise<void>((resolve) => {
+      messageReceived = resolve;
+    });
+    queryHarness.query.mockImplementationOnce(
+      ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { sessionId?: string } }) => {
+        const effectiveSessionId = options.sessionId ?? crypto.randomUUID();
+        return {
+          interrupt: vi.fn(async () => undefined),
+          close: vi.fn(() => undefined),
+          setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+          setMaxThinkingTokens: vi.fn(async () => undefined),
+          async *[Symbol.asyncIterator]() {
+            for await (const _message of prompt) {
+              yield {
+                ...queryHarness.sdkBase(effectiveSessionId),
+                type: 'system',
+                subtype: 'init',
+                apiKeySource: 'user',
+                cwd: os.tmpdir(),
+                tools: [],
+                mcp_servers: [],
+                model: 'claude-sonnet-4-20250514',
+                permissionMode: 'default',
+                slash_commands: [],
+                output_style: 'default',
+              } as SDKMessage;
+              // Yield a successful result — this completes the turn
+              yield {
+                ...queryHarness.sdkBase(effectiveSessionId),
+                type: 'result',
+                subtype: 'success',
+                is_error: false,
+                result: 'turn completed',
+                duration_ms: 1,
+                duration_api_ms: 1,
+                num_turns: 1,
+                total_cost_usd: 0,
+                usage: queryHarness.usage,
+                modelUsage: {},
+                permission_denials: [],
+              } as SDKMessage;
+              messageReceived!();
+              // Iterator crashes after the result was already delivered
+              throw new Error('post-result transport failure');
+            }
+          },
+        } as unknown as ReturnType<typeof queryHarness.query>;
+      },
+    );
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      expect(queryHarness.query).toHaveBeenCalledTimes(1);
+
+      // Send first message — turn will complete successfully, then iterator throws
+      const queue = new UserMessageQueue();
+      const handle1 = createMessageHandle('message-completed-then-error');
+      queue.enqueue(handle1);
+      await session.processQueue(queue);
+
+      await messageReceivedPromise;
+      // Let the consumption error propagate
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      // First handle completed successfully with the real result
+      const result1 = await handle1.waitForCompletion(2_000);
+      expect(result1.outcome).toBe('completed');
+      expect((result1 as { result: { message: string } }).result.message).toBe('turn completed');
+
+      // The dead query must be disowned even though the turn was completed
+      expect(session.getQueryInstance()).toBeUndefined();
+
+      // Send a second message — must create a fresh query, not hang on dead source
+      const queue2 = new UserMessageQueue();
+      const handle2 = createMessageHandle('message-after-completed-error');
+      queue2.enqueue(handle2);
+      await session.processQueue(queue2);
+
+      expect(queryHarness.query).toHaveBeenCalledTimes(2);
+      const result2 = await handle2.waitForCompletion(2_000);
+      expect(result2.outcome).toBe('completed');
+      expect((result2 as { result: { message: string } }).result.message).toBe('session completed');
+    } finally {
+      consoleError.mockRestore();
+      await session.close();
+    }
+  });
 });

@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 685 }] */
+/* eslint max-lines: ["error", { "max": 710 }] */
 import type { Query, SDKUserMessage as SdkSDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage, SDKMessage } from '@makaio/client-claude-code';
@@ -37,6 +37,17 @@ type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { even
  * - Session persists query across turns (preserves prompt cache)
  * - Turn handles state machine for individual messages
  * - Queue processing delegates to processQueue()
+ *
+ * ## Query drain/ownership contract
+ *
+ * Every exit path of a query's consumption loop must satisfy:
+ * 1. **Drain signalling:** `markHandled` on the drain BEFORE awaiting turn
+ *    finalizers, so slow `onTurnComplete` hooks cannot race the 250 ms
+ *    drain timeout in `close()`.
+ * 2. **Unconditional disown:** {@link disownActiveQuery} clears
+ *    `queryInstance`/`source` on ALL paths (iterator error regardless of
+ *    turn state, close/abort, schema rotation) before any signal that can
+ *    trigger reuse via {@link ensureQueryForResponseSchema}.
  */
 export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionConfig> {
   private queryInstance?: Query;
@@ -209,6 +220,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
   /**
    * Detach the active query from session routing before async teardown awaits.
+   * Part of the drain/ownership contract: MUST be called on every exit path.
    * @returns Query instance that was active before detaching, when present.
    */
   private disownActiveQuery(): Query | undefined {
@@ -447,6 +459,13 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     })();
   }
 
+  /**
+   * Handle an iterator-level error (transport failure, SDK crash).
+   * Unconditionally disowns the dead query (drain/ownership contract) so
+   * {@link ensureQueryForResponseSchema} never reuses a dead source.
+   * @param error - The error thrown by the SDK async iterator.
+   * @param queryGeneration - Owner token captured when this consumption loop started.
+   */
   private async handleConsumptionError(error: unknown, queryGeneration: number): Promise<void> {
     if (queryGeneration !== this.queryGeneration) return;
 
@@ -456,6 +475,12 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     // Without this, a result emitted during the await window passes both the
     // queryGeneration guard and the hasHandled() check in handleSdkMessage().
     this.terminalResultDrain.retire(queryGeneration);
+
+    // Disown unconditionally: whether the turn is incomplete, already
+    // completed, or absent, the dead query must be detached so that the next
+    // message triggers a fresh query via ensureQueryForResponseSchema.
+    this.disownActiveQuery();
+
     const turn = this.currentTurn;
     if (!turn || turn.isCompleted()) return;
 
@@ -468,13 +493,6 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       turn.markCompleted(result);
     }
 
-    // Disown the dead query BEFORE finishOnError emits turn_finished.
-    // turn_finished triggers connector queue processing, and without this
-    // disown ensureQueryForResponseSchema would see the non-undefined but
-    // dead queryInstance/source and reuse them — pushing messages to a
-    // source whose consumption loop has already exited.
-    this.disownActiveQuery();
-
     await turn.finishOnError();
   }
 
@@ -484,7 +502,10 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
-   * Handle SDK message - update turn state and emit events.
+   * Handle SDK message — update turn state and emit events.
+   *
+   * For terminal `result` messages, marks the drain handled BEFORE awaiting
+   * turn finalizers (see drain/ownership contract on the class).
    * @param msg - SDK message from consumption loop
    * @param queryGeneration - Owner token captured when this consumption loop started
    */
@@ -534,11 +555,17 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       }
     }
 
-    await this.handleTurnSdkEvent(sdkMessage);
-
+    // Mark the drain handled BEFORE awaiting turn finalizers (completion
+    // transforms, onTurnComplete) so the close() drain resolves immediately
+    // when a terminal result is accepted. Without this, a slow onTurnComplete
+    // or structured-output validation exceeding 250 ms causes the drain to
+    // time out and fire the interruption error path even though a real result
+    // was already accepted and emitted.
     if (sdkMessage.type === 'result') {
       this.terminalResultDrain.markHandled(queryGeneration);
     }
+
+    await this.handleTurnSdkEvent(sdkMessage);
   }
 
   /**

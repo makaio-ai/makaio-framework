@@ -458,4 +458,97 @@ describe('MessageLifecycleTracker', () => {
       expect.objectContaining({ turnId: 'turn-b' }),
     ]);
   });
+
+  it('promotes pending handles in FIFO order when multiple are queued during an in-flight turn', async () => {
+    // Scenario: Turn A is executing. Two follow-ups (B then C) are dispatched
+    // while A is still active. On completion of A, B (the first queued) must be
+    // promoted — not C (the last queued).
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = new MessageHandle(
+      'message-a',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+    );
+    const handleB = new MessageHandle(
+      'message-b',
+      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
+      'enqueue',
+    );
+    const handleC = new MessageHandle(
+      'message-c',
+      { role: 'user', blocks: [{ type: 'text', content: 'C' }] },
+      'enqueue',
+    );
+
+    // A dispatched — becomes active immediately.
+    tracker.track(handleA);
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // B and C dispatched while A is in-flight — queued in FIFO order.
+    tracker.track(handleB);
+    tracker.track(handleC);
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // A completes — B (first queued) must be promoted, not C.
+    handleA.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBe(handleB);
+
+    // B completes — C is promoted.
+    handleB.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBe(handleC);
+
+    // C completes — no pending, active clears.
+    handleC.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
+
+  it('skips a cancelled queued handle and promotes the next in FIFO order', async () => {
+    // Scenario: Turn A is active. B and C are queued. B is cancelled while
+    // pending. On A's completion, C (the next remaining in queue) is promoted.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = new MessageHandle(
+      'message-a',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+    );
+    const handleB = new MessageHandle(
+      'message-b',
+      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
+      'enqueue',
+    );
+    const handleC = new MessageHandle(
+      'message-c',
+      { role: 'user', blocks: [{ type: 'text', content: 'C' }] },
+      'enqueue',
+    );
+
+    tracker.track(handleA);
+    tracker.track(handleB);
+    tracker.track(handleC);
+
+    // B is cancelled while pending (e.g. superseded by an immediate message).
+    await handleB.cancel();
+    await flushMicrotasks();
+
+    // Active handle unchanged — still A.
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // A completes — B was already removed, so C is promoted.
+    handleA.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBe(handleC);
+
+    // C completes — clears.
+    handleC.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
 });

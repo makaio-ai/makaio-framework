@@ -819,9 +819,13 @@ describe('ClaudeConnectorSession onTurnComplete seam', () => {
             setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
             setMaxThinkingTokens: vi.fn(async () => undefined),
             async *[Symbol.asyncIterator]() {
-              // First yield: the late result delivered after timeout fires
-              yield (await terminalResult) as SDKMessage;
+              // The late result delivered after the drain timeout fires.
+              // Signal BEFORE the yield: the consumption loop exits on the
+              // stale-generation check without pulling another value, so a
+              // post-yield signal would never run.
+              const lateResult = (await terminalResult) as SDKMessage;
               resolve();
+              yield lateResult;
               // Park the iterator so the consumption loop does not exit
               await new Promise<void>(() => undefined);
             },
@@ -881,6 +885,104 @@ describe('ClaudeConnectorSession onTurnComplete seam', () => {
         error: expect.objectContaining({ message: 'Claude query interrupted before terminal result' }),
       });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not trigger the interruption error path when a terminal result is accepted but onTurnComplete exceeds 250ms', async () => {
+    vi.useFakeTimers();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    let resolveResult: (value: unknown) => void = () => undefined;
+    const terminalResult = new Promise<unknown>((resolve) => {
+      resolveResult = resolve;
+    });
+    const emitSdkEvent = vi.fn(async (_msg: unknown) => undefined);
+
+    // Slow onTurnComplete that takes >250ms — previously this would cause the
+    // drain to time out and fire the interruption error path.
+    let releaseHook: (() => void) | undefined;
+    const onTurnComplete = vi.fn(
+      async () =>
+        new Promise<void>((resolve) => {
+          releaseHook = resolve;
+        }),
+    );
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent,
+      onTurnComplete,
+    });
+
+    queryHarness.query.mockImplementationOnce(
+      () =>
+        ({
+          interrupt: vi.fn(async () => {
+            // Deliver the result immediately on interrupt (within the 250ms window)
+            resolveResult({
+              type: 'result',
+              session_id: session.getConfirmedSessionId(),
+              subtype: 'success',
+              is_error: false,
+              result: 'graceful result',
+              total_cost_usd: 0.01,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            });
+          }),
+          close: vi.fn(() => undefined),
+          setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+          setMaxThinkingTokens: vi.fn(async () => undefined),
+          async *[Symbol.asyncIterator]() {
+            yield (await terminalResult) as SDKMessage;
+          },
+        }) as unknown as ReturnType<typeof queryHarness.query>,
+    );
+
+    const handle = createMessageHandle('message-slow-hook-drain');
+    setCurrentTurnForTest(session, {
+      isCompleted: () => false,
+      getMessageHandle: () => handle,
+      isExpectingInterruptResult: () => false,
+      markCompleted: vi.fn((result: MessageResult) => handle.markCompleted(result)),
+      handleSdkEvent: vi.fn(async () => undefined),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+
+      const closePromise = session.close();
+
+      // Let the result be consumed by the consumption loop. The drain should
+      // resolve immediately (markHandled fires before awaiting onTurnComplete).
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Advance well past the 250ms drain timeout while onTurnComplete is still blocked.
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Release the slow hook so close() can finish
+      releaseHook?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await closePromise;
+
+      // The real result must have won — NOT the interruption error
+      await expect(handle.waitForCompletion(1_000)).resolves.toEqual({
+        outcome: 'completed',
+        result: { message: 'graceful result' },
+      });
+
+      // The result must have been emitted
+      const resultEmissions = emitSdkEvent.mock.calls.filter(
+        (call) => (call[0] as { type?: string }).type === 'result',
+      );
+      expect(resultEmissions).toHaveLength(1);
+    } finally {
+      releaseHook?.();
       vi.useRealTimers();
     }
   });

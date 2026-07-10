@@ -46,11 +46,17 @@ export interface MessageLifecycleTrackOptions {
  *    tracked handle is still in-flight**. This ensures usage from the executing
  *    turn is attributed to the correct request.
  * 2. When a handle is tracked via `track()` while another handle is already
- *    active, it is stored as `pendingTrackedHandle`. It does NOT become the
- *    correlation source until the in-flight handle completes.
- * 3. When the active handle completes, the pending handle (if any) is promoted
- *    to active — making its correlation visible for usage emitted by its turn.
- * 4. For the first handle dispatched (no prior active), the handle is set
+ *    active, it is appended to `pendingTrackedHandles` (a FIFO queue). It does
+ *    NOT become the correlation source until all handles ahead of it in the
+ *    queue have been promoted or removed.
+ * 3. When the active handle completes, the head of the pending queue (if any)
+ *    is promoted to active — making its correlation visible for usage emitted
+ *    by its turn. This preserves FIFO ordering with the connector's
+ *    `UserMessageQueue`.
+ * 4. A pending handle that completes before promotion (e.g. cancelled or
+ *    superseded while queued) is removed from wherever it sits in the queue,
+ *    without disrupting the order of remaining pending handles.
+ * 5. For the first handle dispatched (no prior active), the handle is set
  *    eagerly so that usage arriving before the provider acknowledges the
  *    message is still correlated (closes the early-close / result-only stream
  *    window from the previous fix).
@@ -60,10 +66,13 @@ export class MessageLifecycleTracker {
   private currentMessageHandle?: MessageHandle;
 
   /**
-   * Handle tracked while another turn was still in-flight.
-   * Promoted to `currentMessageHandle` when the active handle completes.
+   * FIFO queue of handles tracked while another turn was still in-flight.
+   * The head of the queue is promoted to `currentMessageHandle` when the
+   * active handle completes. Handles that complete while queued (e.g.
+   * cancelled or superseded) are removed from wherever they sit without
+   * disrupting the order of remaining entries.
    */
-  private pendingTrackedHandle?: MessageHandle;
+  private readonly pendingTrackedHandles: MessageHandle[] = [];
 
   /** Current turnId from the session orchestrator (set at sendMessage entry, cleared on completion) */
   private currentTurnId?: string;
@@ -134,11 +143,9 @@ export class MessageLifecycleTracker {
     // processing this handle. Promote it to the active correlation source
     // unconditionally — by the time the provider acknowledges, the handle's
     // turn is genuinely executing. If the handle was stored as pending in
-    // track(), clear that slot since it is now active.
+    // track(), remove it from the queue since it is now active.
     this.currentMessageHandle = handle;
-    if (this.pendingTrackedHandle === handle) {
-      this.pendingTrackedHandle = undefined;
-    }
+    this.removePendingHandle(handle);
 
     // Emit user_message.acknowledged
     void this.emitGlobal(AgentSubjects.user_message.acknowledged, {
@@ -170,14 +177,15 @@ export class MessageLifecycleTracker {
     const { messageId } = handle;
 
     // Clear lifecycle state only if this handle is still active (it might have been superseded).
-    // When a pending handle exists, promote it to active so its correlation becomes visible
-    // for the turn that is about to execute.
+    // When pending handles exist, promote the queue head to active so its correlation becomes
+    // visible for the turn that is about to execute. This preserves FIFO ordering with the
+    // connector's UserMessageQueue.
     if (this.currentMessageHandle === handle) {
-      this.currentMessageHandle = this.pendingTrackedHandle;
-      this.pendingTrackedHandle = undefined;
-    } else if (this.pendingTrackedHandle === handle) {
-      // The pending handle completed before it was promoted (e.g. cancelled while queued).
-      this.pendingTrackedHandle = undefined;
+      this.currentMessageHandle = this.pendingTrackedHandles.shift();
+    } else {
+      // The handle completed before it was promoted (e.g. cancelled or superseded while
+      // queued). Remove it from wherever it sits in the queue without disrupting order.
+      this.removePendingHandle(handle);
     }
     if (this.currentTurnId === turnId) {
       this.currentTurnId = undefined;
@@ -211,6 +219,17 @@ export class MessageLifecycleTracker {
   }
 
   /**
+   * Remove a handle from the pending queue if present.
+   * @param handle - The handle to remove
+   */
+  private removePendingHandle(handle: MessageHandle): void {
+    const idx = this.pendingTrackedHandles.indexOf(handle);
+    if (idx >= 0) {
+      this.pendingTrackedHandles.splice(idx, 1);
+    }
+  }
+
+  /**
    * Wire up a message handle for lifecycle tracking.
    *
    * Subscribes to the handle's acknowledgment and completion promises
@@ -234,13 +253,14 @@ export class MessageLifecycleTracker {
     // executing should be the active correlation source. When no handle is
     // active, set eagerly so usage arriving before acknowledgment still
     // correlates (closes the early-close / result-only stream window).
-    // When another handle IS active, store as pending — it will be promoted
-    // when the in-flight handle completes. This prevents a queued follow-up
-    // from stealing correlation from the still-running turn.
+    // When another handle IS active, append to the pending queue — it will be
+    // promoted in FIFO order when handles ahead of it complete. This prevents
+    // a queued follow-up from stealing correlation from the still-running turn,
+    // and preserves ordering when multiple messages are queued concurrently.
     if (this.currentMessageHandle === undefined) {
       this.currentMessageHandle = handle;
     } else {
-      this.pendingTrackedHandle = handle;
+      this.pendingTrackedHandles.push(handle);
     }
 
     if (transformTerminal !== undefined) {
