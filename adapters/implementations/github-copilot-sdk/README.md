@@ -161,7 +161,7 @@ descriptor, whose `adapters[]` entry wraps the internal definition from
 | `normalizeToolExecutionStart` | Normalize tool.execution_start |
 | `normalizeToolExecutionPartialResult` | Normalize tool.execution_partial_result |
 | `normalizeToolExecutionComplete` | Normalize tool.execution_complete |
-| `normalizeSessionTruncation` | Normalize session.truncation to agent.usage |
+| `normalizeSessionTruncation` | Normalize session.truncation to agent.contextWindow.updated |
 | `normalizeSessionError` | Normalize session.error to agent.error |
 | `normalizeUserMessage` | Normalize user.message (import-only) |
 | `normalizeAssistantTurnEnd` | Normalize assistant.turn_end (import-only) |

@@ -155,30 +155,17 @@ describe('event-normalizers', () => {
   });
 
   describe('normalizeSessionTruncation', () => {
-    it('returns agent.usage and agent.contextWindow.updated', () => {
+    it('returns only the post-truncation context-window occupancy', () => {
       const result = normalizeSessionTruncation(
         { postTruncationTokensInMessages: 5000, tokenLimit: 128000 },
         baseContext,
-        'gpt-4o',
       );
-      expect(result).toHaveLength(2);
-      expect(result[0].subject).toBe(AgentSubjects.usage);
+      expect(result).toHaveLength(1);
+      expect(result[0].subject).toBe(AgentSubjects.contextWindow.updated);
       expect(result[0].payload).toMatchObject({
-        provider: 'copilot',
-        granularity: 'turn-aggregate',
-        model: 'gpt-4o',
-        inputTokens: 5000,
+        currentTokens: 5000,
+        maxTokens: 128000,
       });
-      expect(result[1].subject).toBe(AgentSubjects.contextWindow.updated);
-      expect(result[1].payload).toMatchObject({ currentTokens: 5000, maxTokens: 128000 });
-    });
-
-    it('uses "unknown" model when not provided', () => {
-      const result = normalizeSessionTruncation(
-        { postTruncationTokensInMessages: 1000, tokenLimit: 8000 },
-        baseContext,
-      );
-      expect(result[0].payload).toMatchObject({ model: 'unknown' });
     });
   });
 
@@ -312,14 +299,13 @@ describe('event-normalizers', () => {
         expect(result[0].payload).toMatchObject({ toolName: 'resolvedTool' });
       });
 
-      it('routes session.truncation to agent.usage + agent.contextWindow.updated', () => {
+      it('routes session.truncation only to agent.contextWindow.updated', () => {
         const result = normalizeGitHubCopilotLogRecord(
           createRecord('session.truncation', { postTruncationTokensInMessages: 4000, tokenLimit: 128000 }),
           baseContext,
         );
-        expect(result).toHaveLength(2);
-        expect(result[0].subject).toBe(AgentSubjects.usage);
-        expect(result[1].subject).toBe(AgentSubjects.contextWindow.updated);
+        expect(result).toHaveLength(1);
+        expect(result[0].subject).toBe(AgentSubjects.contextWindow.updated);
       });
 
       it('routes session.error to agent.complete with error outcome', () => {
