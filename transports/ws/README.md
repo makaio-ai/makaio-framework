@@ -110,7 +110,9 @@ For client-mode reconnect or socket creation options, use `WebSocketClientTransp
 directly. `createWebSocketTransport({ mode: 'client' })` wraps an already-created
 socket and rejects legacy `connectionOptions` instead of silently ignoring them.
 Reconnect behavior is scoped to `WebSocketClientTransport`; the generic factory disables
-auto-reconnect because it does not own socket creation.
+auto-reconnect because it does not own socket creation, and disables the heartbeat
+watchdog for the same reason — terminating a caller-owned socket without a reconnect
+path would not heal anything.
 
 ```typescript
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';

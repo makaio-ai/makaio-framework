@@ -136,6 +136,12 @@ export function createWebSocketTransport(options: import('./types.js').WebSocket
       // silently ignored. Use WebSocketClientTransport directly when the
       // transport should own socket creation across reconnect attempts.
       autoReconnect: false,
+      // The heartbeat watchdog terminates dead sockets so the reconnect path
+      // can recover them. With reconnect unsupported here, terminating a
+      // caller-owned socket would change its semantics without any recovery,
+      // so heartbeat follows the same rule as autoReconnect: off. Use
+      // WebSocketClientTransport directly for supervised connections.
+      heartbeat: false,
     });
   } else {
     return new ServerTransport({
