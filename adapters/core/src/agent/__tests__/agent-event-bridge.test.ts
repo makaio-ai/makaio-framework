@@ -55,6 +55,55 @@ describe('AgentEventBridge', () => {
     ]);
   });
 
+  it('correlates usage emitted before acknowledgment when handle is tracked at dispatch time', async () => {
+    const emittedUsagePayloads: Array<Record<string, unknown>> = [];
+    const lifecycleTracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const bridge = new AgentEventBridge({
+      emitUsage: async (payload) => {
+        emittedUsagePayloads.push(payload);
+      },
+      emitContextWindowUpdated: async () => {},
+      emitToolUse: async () => {},
+      emitToolOutput: async () => {},
+      emitAdapterLog: async () => {},
+      emitStepStarted: async () => {},
+      emitStepFinished: async () => {},
+      toolCallTracker: {
+        register: () => 'tool-call-id',
+        resolve: () => ({ correlationId: 'tool-call-id', strategy: 'exact' }),
+      } as never,
+      getBlockIndex: () => 0,
+      incrementBlockIndex: () => {},
+      getUsageModel: () => 'test-model',
+      getActiveMessageHandle: () => lifecycleTracker.getCurrentMessageHandle(),
+    });
+    const handle = new MessageHandle(
+      'message-pre-ack',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      { executionId: 'exec-1', frameId: 'frame-1' },
+    );
+
+    // track() sets the handle eagerly — usage emitted before acknowledgment
+    // (e.g. result-only streams) must still carry correlation.
+    lifecycleTracker.track(handle);
+
+    // Usage arrives before the provider sends user.isReplay acknowledgment.
+    await bridge.trackUsage(normalizedUsage);
+    expect(emittedUsagePayloads).toEqual([
+      { ...normalizedUsage, executionId: 'exec-1', frameId: 'frame-1', model: 'test-model' },
+    ]);
+
+    // Acknowledge + complete to clean up lifecycle state.
+    handle.markAcknowledged();
+    handle.markCompleted({ outcome: 'completed' });
+  });
+
   it('adds active request execution correlation to usage without replacing provider fields', async () => {
     const emittedUsagePayloads: Array<Record<string, unknown>> = [];
     const lifecycleTracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });

@@ -38,10 +38,7 @@ export interface MessageLifecycleTrackOptions {
  * and the core AIAgent functionality.
  */
 export class MessageLifecycleTracker {
-  /** Current messageId being processed (set on acknowledgment, cleared on completion) */
-  private currentMessageId?: string;
-
-  /** Current message handle being processed (set on acknowledgment, cleared on completion). */
+  /** Current message handle being processed (set at track/dispatch time, cleared on completion). */
   private currentMessageHandle?: MessageHandle;
 
   /** Current turnId from the session orchestrator (set at sendMessage entry, cleared on completion) */
@@ -56,11 +53,12 @@ export class MessageLifecycleTracker {
 
   /**
    * Get the current messageId being processed.
+   * Derived from the active message handle to avoid dual state.
    * Used by enrichPayload() to add messageId to intermediate events.
    * @returns The current messageId or undefined if no message is being processed
    */
   public getCurrentMessageId(): string | undefined {
-    return this.currentMessageId;
+    return this.currentMessageHandle?.messageId;
   }
 
   /**
@@ -108,7 +106,10 @@ export class MessageLifecycleTracker {
   public acknowledge(handle: MessageHandle, turnId?: string): void {
     const { messageId, message, mergedFrom } = handle;
 
-    this.currentMessageId = messageId;
+    // Handle is set eagerly in track() so correlation is available before the
+    // provider acknowledges. Re-assign here so that direct acknowledge() callers
+    // (e.g. tests) still work correctly and so an immediate-mode supersede
+    // updates the active handle at ack time.
     this.currentMessageHandle = handle;
 
     // Emit user_message.acknowledged
@@ -142,7 +143,6 @@ export class MessageLifecycleTracker {
 
     // Clear lifecycle state only if this handle is still active (it might have been superseded).
     if (this.currentMessageHandle === handle) {
-      this.currentMessageId = undefined;
       this.currentMessageHandle = undefined;
     }
     if (this.currentTurnId === turnId) {
@@ -195,6 +195,13 @@ export class MessageLifecycleTracker {
     options?: MessageLifecycleTrackOptions,
   ): void {
     const trackedTurnId = options ? options.turnId : this.currentTurnId;
+
+    // Set the active handle eagerly at dispatch time so that correlation
+    // (e.g. requestCorrelation on usage events) is available immediately,
+    // not only after the provider acknowledges the message. This closes
+    // the window where result-only or early-close streams that never emit
+    // a user.isReplay acknowledgment would produce uncorrelated usage.
+    this.currentMessageHandle = handle;
 
     if (transformTerminal !== undefined) {
       handle.addCompletionTransform(async (result) => {

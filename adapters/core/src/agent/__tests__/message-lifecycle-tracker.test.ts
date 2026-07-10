@@ -237,6 +237,29 @@ describe('MessageLifecycleTracker', () => {
     expect(observed).toEqual([undefined]);
   });
 
+  it('exposes the tracked handle immediately at dispatch time, before acknowledgment', () => {
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handle = new MessageHandle(
+      'message-early',
+      { role: 'user', blocks: [{ type: 'text', content: 'early' }] },
+      'enqueue',
+    );
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+    expect(tracker.getCurrentMessageId()).toBeUndefined();
+
+    tracker.track(handle);
+
+    // Handle and messageId are available before acknowledgment so that
+    // correlation (e.g. requestCorrelation on usage) works for result-only
+    // streams that never emit user.isReplay.
+    expect(tracker.getCurrentMessageHandle()).toBe(handle);
+    expect(tracker.getCurrentMessageId()).toBe('message-early');
+
+    handle.markAcknowledged();
+    handle.markCompleted({ outcome: 'completed' });
+  });
+
   it('keeps the most recently acknowledged handle active until that handle completes', () => {
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
     const firstHandle = new MessageHandle(

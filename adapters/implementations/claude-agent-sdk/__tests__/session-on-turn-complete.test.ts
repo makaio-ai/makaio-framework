@@ -779,6 +779,112 @@ describe('ClaudeConnectorSession onTurnComplete seam', () => {
     await session.close();
   });
 
+  it('rejects a late SDK result that arrives during error-completion after drain timeout', async () => {
+    vi.useFakeTimers();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    let resolveResult: (value: unknown) => void = () => undefined;
+    const terminalResult = new Promise<unknown>((resolve) => {
+      resolveResult = resolve;
+    });
+    const emitSdkEvent = vi.fn(async (_msg: unknown) => undefined);
+
+    // Make onTurnComplete async so the late result can arrive while
+    // handleConsumptionError awaits markCompletedWithFinalResult.
+    let releaseOnTurnComplete: (() => void) | undefined;
+    const onTurnComplete = vi.fn(
+      async () =>
+        new Promise<void>((resolve) => {
+          releaseOnTurnComplete = resolve;
+        }),
+    );
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent,
+      onTurnComplete,
+    });
+    // Two-yield iterator: yields the late result after the drain times out,
+    // then parks so the consumption loop stays alive during the test.
+    const yieldedSecond = new Promise<void>((resolve) => {
+      queryHarness.query.mockImplementationOnce(
+        () =>
+          ({
+            interrupt: vi.fn(async () => undefined),
+            close: vi.fn(() => undefined),
+            setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+            setMaxThinkingTokens: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+              // First yield: the late result delivered after timeout fires
+              yield (await terminalResult) as SDKMessage;
+              resolve();
+              // Park the iterator so the consumption loop does not exit
+              await new Promise<void>(() => undefined);
+            },
+          }) as unknown as ReturnType<typeof queryHarness.query>,
+      );
+    });
+    const handle = createMessageHandle('message-late-during-error-completion');
+    let completed = false;
+    setCurrentTurnForTest(session, {
+      isCompleted: () => completed,
+      getMessageHandle: () => handle,
+      isExpectingInterruptResult: () => false,
+      markCompleted: vi.fn((result: MessageResult) => {
+        completed = true;
+        handle.markCompleted(result);
+      }),
+      handleSdkEvent: vi.fn(async () => undefined),
+      finishOnError: vi.fn(async () => undefined),
+    });
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+
+      // Start close — interrupt is a no-op, drain starts
+      const closePromise = session.close();
+
+      // Advance past the 250 ms drain timeout so the error-completion path begins.
+      // onTurnComplete is now blocking inside handleConsumptionError.
+      await vi.advanceTimersByTimeAsync(250);
+
+      // Deliver the late result while onTurnComplete is still in-flight
+      resolveResult({
+        type: 'result',
+        session_id: session.getConfirmedSessionId(),
+        subtype: 'success',
+        is_error: false,
+        result: 'late-during-error',
+      });
+      // Let the consumption loop process the yielded result
+      await yieldedSecond;
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Release onTurnComplete so close() can finish
+      releaseOnTurnComplete?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await closePromise;
+
+      // The late result must NOT have been emitted — the drain was retired
+      const resultEmissions = emitSdkEvent.mock.calls.filter(
+        (call) => (call[0] as { type?: string }).type === 'result',
+      );
+      expect(resultEmissions).toHaveLength(0);
+
+      // Handle must have completed with the timeout error, not the late result
+      await expect(handle.waitForCompletion(1_000)).resolves.toMatchObject({
+        outcome: 'error',
+        error: expect.objectContaining({ message: 'Claude query interrupted before terminal result' }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('omits a terminal result that arrives after the interruption drain times out', async () => {
     vi.useFakeTimers();
     const bus = await ClaudeCodeConnectorNamespace.scopedBus();

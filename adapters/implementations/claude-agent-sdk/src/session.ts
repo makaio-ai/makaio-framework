@@ -447,6 +447,11 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     if (queryGeneration !== this.queryGeneration) return;
 
     this.terminalResultDrain.resolve(queryGeneration);
+    // Retire this generation so the consumption loop rejects any late SDK result
+    // that arrives while we await completion transforms / finishOnError below.
+    // Without this, a result emitted during the await window passes both the
+    // queryGeneration guard and the hasHandled() check in handleSdkMessage().
+    this.terminalResultDrain.retire(queryGeneration);
     const turn = this.currentTurn;
     if (!turn || turn.isCompleted()) return;
 
@@ -564,27 +569,15 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
   /**
    * Abort the session and cleanup resources.
-   * Unregisters MCP context before interrupting to prevent stale registry entries.
+   *
+   * Delegates to {@link close} for the interrupt/drain/disown sequence — the
+   * only additional semantic is the terminal `lifecycle.abort()` transition.
+   * This mirrors the CLI adapter's approach and eliminates duplicated teardown
+   * logic (including the try/catch around `interrupt()` that `close()` owns).
    */
   public async abort(): Promise<void> {
-    this.unregisterMcpContext();
-    const activeQuery = this.queryInstance;
-    const queryGeneration = this.queryGeneration;
-    const terminalResultDrain =
-      activeQuery && this.currentTurn && !this.currentTurn.isCompleted()
-        ? this.terminalResultDrain.waitForResult(queryGeneration)
-        : undefined;
     try {
-      try {
-        await activeQuery?.interrupt();
-      } finally {
-        const receivedTerminalResult = await terminalResultDrain;
-        if (receivedTerminalResult === false) {
-          await this.completeInterruptedTurnAfterDrainTimeout(queryGeneration);
-        }
-        this.disownActiveQuery();
-        activeQuery?.close();
-      }
+      await this.close();
     } finally {
       this.lifecycle.abort();
     }

@@ -596,6 +596,8 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     try {
       await closePromise;
     } finally {
+      // Identity comparison, not a missing await — the promise is awaited
+      // above; this only clears the memoized handle if it is still ours.
       if (this.closePromise === closePromise) this.closePromise = undefined;
     }
   }

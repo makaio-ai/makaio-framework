@@ -51,9 +51,21 @@ export class TerminalResultDrain {
   }
 
   /**
-   * Check whether this generation already emitted its terminal result.
+   * Mark a generation as retired so {@link hasHandled} returns true even when no
+   * SDK result was received. Used by the error-completion path to prevent late
+   * results from being accepted while async teardown (completion transforms,
+   * onTurnComplete, finishOnError) is in progress.
+   * @param queryGeneration - Generation to retire.
+   */
+  public retire(queryGeneration: number): void {
+    this.handledGeneration = queryGeneration;
+  }
+
+  /**
+   * Check whether this generation already emitted its terminal result or was
+   * retired by the error-completion path.
    * @param queryGeneration - Generation to check.
-   * @returns Whether a terminal result was already routed.
+   * @returns Whether a terminal result was already routed or the generation was retired.
    */
   public hasHandled(queryGeneration: number): boolean {
     return this.handledGeneration === queryGeneration;
