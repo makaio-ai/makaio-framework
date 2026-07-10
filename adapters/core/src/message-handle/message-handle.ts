@@ -141,22 +141,6 @@ export class MessageHandle {
     return this.deferredAdapterSessionId.getPromise();
   }
 
-  /**
-   * Whether the message was successfully delivered to the provider.
-   *
-   * Returns `true` only when {@link markAcknowledged} was called with
-   * `delivered = true` (the default). Handles that were completed before
-   * dispatch (merged, superseded, rejected) auto-resolve acknowledgment
-   * with `false`, so this getter returns `false` for them.
-   *
-   * Used by {@link MessageLifecycleTracker} to decide whether
-   * `agent.turn.completed` should pair with an earlier `agent.turn.started`.
-   * @returns `true` when the handle was acknowledged as delivered
-   */
-  public get wasDelivered(): boolean {
-    return this.isAcknowledged === true;
-  }
-
   public get isProcessed(): boolean {
     return this.state === 'completed' || this.state === 'cancelled';
   }
