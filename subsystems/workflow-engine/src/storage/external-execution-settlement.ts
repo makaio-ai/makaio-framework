@@ -276,13 +276,11 @@ export function buildTerminalSummaryValues(
   settlement: ExternalSettlement,
   completedAt: number,
 ): InsertWorklogSummary {
-  const recordedStartedAt = settlement.frame?.startedAt ?? existing?.startedAt ?? execution.startedAt;
-  // Exact frame settlements are validated by contract. Frame-less legacy
-  // calls use a zero-duration lower bound for inconsistent historical clocks.
-  const startedAt = settlement.frame === undefined ? Math.min(recordedStartedAt, completedAt) : recordedStartedAt;
-  if (completedAt < startedAt) {
-    throw new Error('settleExternalExecution: completedAt must not precede the WorkLog start timestamp');
-  }
+  // The summary represents the execution, not its optional frame. Preserve
+  // the registration timestamp even when a station frame starts later. The
+  // lower bound retains compatibility with migrated rows whose historical
+  // clocks place their completion before their recorded execution start.
+  const startedAt = Math.min(execution.startedAt, completedAt);
   return {
     executionId: execution.id,
     workflowId: execution.workflowId,
@@ -295,7 +293,7 @@ export function buildTerminalSummaryValues(
     totalOutputTokens: existing?.totalOutputTokens ?? null,
     totalEstimatedCost: existing?.totalEstimatedCost ?? null,
     error: settlement.status === 'failed' ? (settlement.error ?? null) : null,
-    failedNodeId: settlement.status === 'failed' ? (settlement.frame?.nodeId ?? null) : null,
+    failedNodeId: settlement.status === 'failed' ? (settlement.frame?.nodeId ?? existing?.failedNodeId ?? null) : null,
   };
 }
 

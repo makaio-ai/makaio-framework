@@ -294,6 +294,8 @@ function resolveExternalStartFrame(
     frameId,
     nodeId: frame.nodeId,
     nodeType: frame.nodeType,
+    // WorkLog paths contain frame IDs (matching WorkflowFrameState.path), so
+    // the root default is the resolved frame ID rather than the node ID.
     path: frame.path ?? [frameId],
     status: 'running',
     attempt: frame.attempt,

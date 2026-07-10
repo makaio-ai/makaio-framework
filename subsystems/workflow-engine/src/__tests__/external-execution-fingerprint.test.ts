@@ -57,6 +57,32 @@ async function withWorkflowHarness(
 }
 
 describe('external execution settlement fingerprint', () => {
+  it('enforces outer and frame terminal status parity at the storage invariant', () => {
+    const executionId = 'wfx-ext-fingerprint-status-parity';
+    expect(() =>
+      buildExternalSettlementFingerprint(
+        {
+          executionId,
+          status: 'completed',
+          completedAt,
+          frame: {
+            executionId,
+            frameId: `${executionId}:review`,
+            nodeId: 'review',
+            nodeType: 'delegate-role',
+            path: ['review'],
+            status: 'failed',
+            attempt: 0,
+            startedAt,
+            completedAt,
+            durationMs: completedAt - startedAt,
+          },
+        },
+        completedAt,
+      ),
+    ).toThrow('frame.status to match status');
+  });
+
   it('includes immutable frame identity while excluding mutable usage totals', () => {
     const executionId = 'wfx-ext-fingerprint-shape';
     const settlement = {
@@ -133,6 +159,41 @@ describe('external execution settlement fingerprint', () => {
       await expect(
         bus.request(WorkflowSubjects.worklog.frame.get, { frameId: `${executionId}:advisory` }),
       ).resolves.toMatchObject({ frame: { status: 'completed' } });
+    });
+  });
+
+  it('uses the durable execution start instead of a pre-existing advisory summary start', async () => {
+    await withWorkflowHarness(async (bus) => {
+      const executionId = 'wfx-ext-summary-start-authority';
+      await bus.request(WorkflowStorageSubjects.setExecution, {
+        execution: {
+          id: executionId,
+          workflowId: 'summary-start-authority',
+          status: 'running',
+          inputs: {},
+          startedAt,
+          scope: { type: 'global' },
+        },
+      });
+      await bus.emit(WorkflowSubjects.execution.started, {
+        executionId,
+        workflowId: 'advisory-summary-start',
+        startedAt: startedAt - 100,
+      });
+      await expect(bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: { startedAt: startedAt - 100 },
+      });
+
+      await expect(
+        bus.request(WorkflowSubjects.completeExternalExecution, {
+          executionId,
+          status: 'completed',
+          completedAt,
+        }),
+      ).resolves.toEqual({ success: true });
+      await expect(bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: { startedAt, completedAt, durationMs: completedAt - startedAt },
+      });
     });
   });
 

@@ -88,6 +88,40 @@ function buildFramedSettlement(executionId: string) {
 describeStorageConformance('workflow external settlement identity', (config) => {
   const getCtx = useSuiteDatabaseContext(config);
 
+  it('serializes identical concurrent registrations before inserting secondary WorkLog rows', async () => {
+    const executionId = `wfx-ext-register-concurrent-${crypto.randomUUID()}`;
+    const registration = buildRegistration(executionId);
+    // SQLite serializes transactions on one supported handle. PostgreSQL uses
+    // independent handles so the execution primary key exercises the same
+    // synchronization used across process-equivalent pools.
+    const sibling = config.dialect === 'postgres' ? await getCtx().createSiblingClient() : undefined;
+    const first = createWorkflowStorageBus(getCtx().db);
+    const second = createWorkflowStorageBus(sibling?.db ?? getCtx().db);
+    try {
+      await expect(
+        Promise.all([
+          first.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration),
+          second.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration),
+        ]),
+      ).resolves.toEqual([
+        { executionId, frameId: registration.frame.frameId },
+        { executionId, frameId: registration.frame.frameId },
+      ]);
+      await expect(first.bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: { executionId, status: 'running', startedAt },
+      });
+      await expect(
+        first.bus.request(WorkflowSubjects.worklog.frame.get, { frameId: registration.frame.frameId }),
+      ).resolves.toMatchObject({
+        frame: { executionId, status: 'running', startedAt },
+      });
+    } finally {
+      first.cleanup();
+      second.cleanup();
+      await sibling?.close();
+    }
+  });
+
   it('replays a framed settlement through a fresh database handle after handler restart', async () => {
     const executionId = `wfx-ext-restart-${crypto.randomUUID()}`;
     const registration = buildRegistration(executionId);

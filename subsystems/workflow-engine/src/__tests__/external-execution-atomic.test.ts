@@ -169,6 +169,95 @@ describe('atomic external execution WorkLog settlement', () => {
     });
   });
 
+  it('settles the registered frame when completion omits frame metadata', async () => {
+    const executionId = 'wfx-ext-atomic-frame-less-terminal';
+    const frameId = `${executionId}:review`;
+    await MakaioBus.request(WorkflowSubjects.registerExternalExecution, {
+      executionId,
+      name: 'frame-less-terminal-review',
+      startedAt: 1_000,
+      frame: {
+        nodeId: 'review',
+        nodeType: 'delegate-role',
+        startedAt: 1_100,
+      },
+    });
+    const settlement = {
+      executionId,
+      status: 'failed' as const,
+      error: 'review failed',
+      completedAt: 1_250,
+    };
+
+    await expect(MakaioBus.request(WorkflowSubjects.completeExternalExecution, settlement)).resolves.toEqual({
+      success: true,
+    });
+    await expect(MakaioBus.request(WorkflowSubjects.completeExternalExecution, settlement)).resolves.toEqual({
+      success: true,
+    });
+
+    const { summary } = await MakaioBus.request(WorkflowSubjects.worklog.get, { executionId });
+    const { frame } = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, { frameId });
+    expect(summary).toMatchObject({
+      status: 'failed',
+      startedAt: 1_000,
+      completedAt: 1_250,
+      durationMs: 250,
+      error: 'review failed',
+      failedNodeId: 'review',
+    });
+    expect(frame).toMatchObject({
+      frameId,
+      path: [frameId],
+      status: 'failed',
+      startedAt: 1_100,
+      completedAt: 1_250,
+      durationMs: 150,
+      error: 'review failed',
+    });
+  });
+
+  it('emits one post-commit WorkLog invalidation for every acknowledged request', async () => {
+    const observedStates: Array<{ summary: string | undefined; frame: string | undefined }> = [];
+    const cleanup = MakaioBus.on(
+      WorkflowSubjects.worklog.changed,
+      async () => {
+        const [summary] = await dbContext.db
+          .select()
+          .from(worklogSummaries)
+          .where(eq(worklogSummaries.executionId, registration.executionId));
+        const [frame] = await dbContext.db
+          .select()
+          .from(worklogFrameEntries)
+          .where(eq(worklogFrameEntries.frameId, completion.frame.frameId));
+        observedStates.push({ summary: summary?.status, frame: frame?.status });
+      },
+      { filter: { executionId: registration.executionId } },
+    );
+
+    try {
+      await MakaioBus.request(WorkflowSubjects.registerExternalExecution, registration);
+      await MakaioBus.request(WorkflowSubjects.registerExternalExecution, registration);
+      await expect(
+        MakaioBus.request(WorkflowSubjects.completeExternalExecution, {
+          ...completion,
+          frame: { ...completion.frame, nodeType: 'station' },
+        }),
+      ).rejects.toThrow('registered metadata');
+      await MakaioBus.request(WorkflowSubjects.completeExternalExecution, completion);
+      await MakaioBus.request(WorkflowSubjects.completeExternalExecution, completion);
+
+      expect(observedStates).toEqual([
+        { summary: 'running', frame: 'running' },
+        { summary: 'running', frame: 'running' },
+        { summary: 'completed', frame: 'completed' },
+        { summary: 'completed', frame: 'completed' },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('keeps frame-less completion without a supplied timestamp idempotent', async () => {
     const executionId = 'wfx-ext-atomic-legacy-1';
     await MakaioBus.request(WorkflowSubjects.registerExternalExecution, {
