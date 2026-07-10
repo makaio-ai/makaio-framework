@@ -523,6 +523,38 @@ describe('ClaudeCodeClientService', () => {
       expect(ingestCalls[0]!.usage.windows.map((w) => w.key)).toEqual(['5h', '7d']);
     });
 
+    it('keeps quota ingestion independent when a session usage subscriber fails', async () => {
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const cleanups = [
+        bus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+          ctx.setResult({ session: makeLinkedSession(ctx.payload.adapterSessionId, 'client-account-42') });
+        }),
+        bus.on(ClientSubjects.session.usage.snapshot, () => {
+          throw new Error('snapshot subscriber failed');
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'client-account-42', snapshot: {} as never });
+        }),
+      ];
+
+      try {
+        await expect(
+          bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+            session_id: SESSION_ID,
+            cost: { total_cost_usd: 1.25 },
+            rate_limits: { five_hour: { used_percentage: 35, resets_at: 1_738_425_600 } },
+          }),
+        ).resolves.toBeUndefined();
+      } finally {
+        for (const cleanup of cleanups) cleanup();
+        consoleError.mockRestore();
+      }
+
+      expect(ingestCalls).toHaveLength(1);
+    });
+
     it('does not emit client.usage.ingest when session has no clientAccountId', async () => {
       const ingestCalls: unknown[] = [];
       const snapshots: ClientSessionUsageSnapshot[] = [];

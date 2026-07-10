@@ -30,8 +30,8 @@ describe('WorkLog storage', () => {
     await upsertWorklogFrameEntry(dbContext.db, {
       executionId: 'exec-worklog-storage',
       frameId: 'frame-storage',
-      nodeId: 'implement',
-      nodeType: 'station',
+      nodeId: 'parallel-review',
+      nodeType: 'parallel',
       path: ['frame-storage'],
       status: 'completed',
       attempt: 0,
@@ -49,8 +49,8 @@ describe('WorkLog storage', () => {
     await expect(getWorklogFrameEntry(dbContext.db, 'frame-storage')).resolves.toEqual({
       executionId: 'exec-worklog-storage',
       frameId: 'frame-storage',
-      nodeId: 'implement',
-      nodeType: 'station',
+      nodeId: 'parallel-review',
+      nodeType: 'parallel',
       path: ['frame-storage'],
       status: 'completed',
       attempt: 0,

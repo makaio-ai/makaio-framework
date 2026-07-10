@@ -627,7 +627,12 @@ export class ClaudeCodeClientService extends BaseService {
 
     const sessionUsage = normalizeClaudeCodeSessionUsage(raw, identity?.clientAccountId, makaioSessionId);
     if (sessionUsage) {
-      await this.bus.emit(ClientSubjects.session.usage.snapshot, sessionUsage);
+      try {
+        await this.bus.emit(ClientSubjects.session.usage.snapshot, sessionUsage);
+      } catch {
+        // The bus already logs subscriber failures. Session telemetry is
+        // fail-open so it cannot suppress the independent quota observation.
+      }
     }
 
     if (!identity) return;
