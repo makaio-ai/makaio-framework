@@ -114,9 +114,9 @@ requires `totalCost`, `costCurrency`, and `costProvenance` to be supplied togeth
 
 Current behavior worth knowing:
 
-- No adapter tags `costProvenance` on `agent.usage` today. The Claude Agent SDK/CLI adapters
-  and `pi-sdk` emit provider-reported amounts as a bare `cost` field; `cursor-sdk` forwards
-  the SDK's optional amount only when reported.
+- The Claude Agent SDK/CLI adapters and `pi-sdk` tag provider-reported amounts with
+  `costProvenance: 'provider-reported'`. The OpenCode importer tags logged amounts as
+  `client-reported`; `cursor-sdk` forwards the SDK's optional amount only when reported.
 - The OTel telemetry collector treats an untagged (or `estimated`) `cost` as an estimate
   (`llm.cost.estimated`), so untagged provider-reported amounts are currently conservative in
   telemetry.
