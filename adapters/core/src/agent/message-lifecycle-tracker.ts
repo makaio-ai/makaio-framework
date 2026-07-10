@@ -36,10 +36,34 @@ export interface MessageLifecycleTrackOptions {
  *
  * This provides a clean separation between message lifecycle tracking
  * and the core AIAgent functionality.
+ *
+ * ## Correlation source contract
+ *
+ * The "active" handle (`currentMessageHandle`) is the correlation source for
+ * usage events emitted by the provider. The invariant:
+ *
+ * 1. A handle becomes the active correlation source **only when no other
+ *    tracked handle is still in-flight**. This ensures usage from the executing
+ *    turn is attributed to the correct request.
+ * 2. When a handle is tracked via `track()` while another handle is already
+ *    active, it is stored as `pendingTrackedHandle`. It does NOT become the
+ *    correlation source until the in-flight handle completes.
+ * 3. When the active handle completes, the pending handle (if any) is promoted
+ *    to active — making its correlation visible for usage emitted by its turn.
+ * 4. For the first handle dispatched (no prior active), the handle is set
+ *    eagerly so that usage arriving before the provider acknowledges the
+ *    message is still correlated (closes the early-close / result-only stream
+ *    window from the previous fix).
  */
 export class MessageLifecycleTracker {
-  /** Current message handle being processed (set at track/dispatch time, cleared on completion). */
+  /** Handle of the currently executing turn — the active correlation source. */
   private currentMessageHandle?: MessageHandle;
+
+  /**
+   * Handle tracked while another turn was still in-flight.
+   * Promoted to `currentMessageHandle` when the active handle completes.
+   */
+  private pendingTrackedHandle?: MessageHandle;
 
   /** Current turnId from the session orchestrator (set at sendMessage entry, cleared on completion) */
   private currentTurnId?: string;
@@ -106,11 +130,15 @@ export class MessageLifecycleTracker {
   public acknowledge(handle: MessageHandle, turnId?: string): void {
     const { messageId, message, mergedFrom } = handle;
 
-    // Handle is set eagerly in track() so correlation is available before the
-    // provider acknowledges. Re-assign here so that direct acknowledge() callers
-    // (e.g. tests) still work correctly and so an immediate-mode supersede
-    // updates the active handle at ack time.
+    // Acknowledgment is the authoritative signal that the provider is actively
+    // processing this handle. Promote it to the active correlation source
+    // unconditionally — by the time the provider acknowledges, the handle's
+    // turn is genuinely executing. If the handle was stored as pending in
+    // track(), clear that slot since it is now active.
     this.currentMessageHandle = handle;
+    if (this.pendingTrackedHandle === handle) {
+      this.pendingTrackedHandle = undefined;
+    }
 
     // Emit user_message.acknowledged
     void this.emitGlobal(AgentSubjects.user_message.acknowledged, {
@@ -142,8 +170,14 @@ export class MessageLifecycleTracker {
     const { messageId } = handle;
 
     // Clear lifecycle state only if this handle is still active (it might have been superseded).
+    // When a pending handle exists, promote it to active so its correlation becomes visible
+    // for the turn that is about to execute.
     if (this.currentMessageHandle === handle) {
-      this.currentMessageHandle = undefined;
+      this.currentMessageHandle = this.pendingTrackedHandle;
+      this.pendingTrackedHandle = undefined;
+    } else if (this.pendingTrackedHandle === handle) {
+      // The pending handle completed before it was promoted (e.g. cancelled while queued).
+      this.pendingTrackedHandle = undefined;
     }
     if (this.currentTurnId === turnId) {
       this.currentTurnId = undefined;
@@ -196,12 +230,18 @@ export class MessageLifecycleTracker {
   ): void {
     const trackedTurnId = options ? options.turnId : this.currentTurnId;
 
-    // Set the active handle eagerly at dispatch time so that correlation
-    // (e.g. requestCorrelation on usage events) is available immediately,
-    // not only after the provider acknowledges the message. This closes
-    // the window where result-only or early-close streams that never emit
-    // a user.isReplay acknowledgment would produce uncorrelated usage.
-    this.currentMessageHandle = handle;
+    // Correlation source assignment: only the handle whose turn is actually
+    // executing should be the active correlation source. When no handle is
+    // active, set eagerly so usage arriving before acknowledgment still
+    // correlates (closes the early-close / result-only stream window).
+    // When another handle IS active, store as pending — it will be promoted
+    // when the in-flight handle completes. This prevents a queued follow-up
+    // from stealing correlation from the still-running turn.
+    if (this.currentMessageHandle === undefined) {
+      this.currentMessageHandle = handle;
+    } else {
+      this.pendingTrackedHandle = handle;
+    }
 
     if (transformTerminal !== undefined) {
       handle.addCompletionTransform(async (result) => {
@@ -226,9 +266,16 @@ export class MessageLifecycleTracker {
       });
     }
 
-    handle.waitForAcknowledgment().then(() => {
-      this.acknowledge(handle, trackedTurnId);
-    });
+    handle.waitForAcknowledgment().then(
+      () => {
+        this.acknowledge(handle, trackedTurnId);
+      },
+      () => {
+        // Acknowledgment rejects when the handle is cancelled before dispatch.
+        // No turn starts in that case; the completion subscription below still
+        // fires (cancel() resolves completion) and clears the tracked slots.
+      },
+    );
 
     handle.waitForCompletion().then((finalResult) => {
       this.complete(handle, finalResult, trackedTurnId);

@@ -332,10 +332,6 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    * @param mergedContent - Optional content from superseded/merged messages (for immediate mode)
    */
   private async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
-    if (!this.queryInstance || !this.source) {
-      throw new Error('Session not initialized');
-    }
-
     const schemaKey = this.getResponseSchemaKey(handle.responseSchema);
     const pausedTurnNeedsSchemaRotation = this.currentTurn?.isPaused() && this.activeResponseSchemaKey !== schemaKey;
     if (!this.currentTurn || this.currentTurn.isCompleted() || pausedTurnNeedsSchemaRotation) {
@@ -343,6 +339,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       if (pausedTurnNeedsSchemaRotation) {
         this.currentTurn = undefined;
       }
+    }
+
+    // Guard after ensureQueryForResponseSchema: after an iterator-level error
+    // the dead query is disowned (queryInstance/source cleared), and
+    // ensureQueryForResponseSchema above recreates them. If this guard fires,
+    // the session was never initialized at all (no prior initialize() call).
+    if (!this.queryInstance || !this.source) {
+      throw new Error('Session not initialized');
     }
 
     // Reset thinking accumulation at turn start so stale reasoning is not forwarded
@@ -463,6 +467,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     } else {
       turn.markCompleted(result);
     }
+
+    // Disown the dead query BEFORE finishOnError emits turn_finished.
+    // turn_finished triggers connector queue processing, and without this
+    // disown ensureQueryForResponseSchema would see the non-undefined but
+    // dead queryInstance/source and reuse them — pushing messages to a
+    // source whose consumption loop has already exited.
+    this.disownActiveQuery();
+
     await turn.finishOnError();
   }
 

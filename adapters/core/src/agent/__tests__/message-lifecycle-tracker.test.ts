@@ -260,6 +260,111 @@ describe('MessageLifecycleTracker', () => {
     handle.markCompleted({ outcome: 'completed' });
   });
 
+  it('does not let a handle tracked while another is in-flight steal the active correlation', async () => {
+    // Scenario: Turn A is executing. A follow-up (Turn B) is dispatched and
+    // track(handleB) is called while handleA is still the active correlation
+    // source. handleB must NOT become active until handleA completes.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = new MessageHandle(
+      'message-a',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+    );
+    const handleB = new MessageHandle(
+      'message-b',
+      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
+      'enqueue',
+    );
+
+    // Turn A dispatched — becomes active immediately (no prior active handle).
+    tracker.track(handleA);
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // Turn B dispatched while Turn A is still in-flight — stored as pending.
+    tracker.track(handleB);
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // Turn A completes — pending handleB is promoted to active.
+    handleA.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBe(handleB);
+
+    // Turn B completes — no pending, active clears.
+    handleB.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
+
+  it('promotes the pending handle to active at acknowledgment time', async () => {
+    // Scenario: Turn A is executing. Turn B is tracked (pending). Turn A
+    // has not completed yet, but the provider acknowledges Turn B (e.g. an
+    // immediate-mode supersede where the provider starts the new turn before
+    // the old handle's completion promise resolves). Acknowledgment is the
+    // authoritative signal that the turn is executing.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = new MessageHandle(
+      'message-a',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+    );
+    const handleB = new MessageHandle(
+      'message-b',
+      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
+      'enqueue',
+    );
+
+    tracker.track(handleA);
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    tracker.track(handleB);
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // Provider acknowledges handleB (e.g. immediate-mode supersede started it).
+    handleB.markAcknowledged();
+    await flushMicrotasks();
+
+    // Acknowledgment promotes handleB to active correlation source.
+    expect(tracker.getCurrentMessageHandle()).toBe(handleB);
+
+    // Clean up.
+    handleA.markCompleted({ outcome: 'superseded', supersededBy: 'message-b' });
+    handleB.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
+
+  it('clears a pending handle that completes before promotion (e.g. cancelled while queued)', async () => {
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = new MessageHandle(
+      'message-a',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+    );
+    const handleB = new MessageHandle(
+      'message-b',
+      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
+      'enqueue',
+    );
+
+    tracker.track(handleA);
+    tracker.track(handleB);
+
+    // handleB is cancelled while still pending (e.g. queue drain).
+    await handleB.cancel();
+    await flushMicrotasks();
+
+    // Active handle should still be handleA — pending was cleared.
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    handleA.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
+
   it('keeps the most recently acknowledged handle active until that handle completes', () => {
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
     const firstHandle = new MessageHandle(
