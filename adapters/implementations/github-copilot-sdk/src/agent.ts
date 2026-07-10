@@ -28,6 +28,33 @@ type ToolCall = {
   toolCallId: string;
   args?: Record<string, unknown>;
 };
+
+/**
+ * Normalize one Copilot provider-call usage event.
+ * @param data - Token data reported by the Copilot SDK for one API call
+ * @returns Additive framework usage with provider-call granularity
+ */
+export function normalizeAssistantUsage(data: AssistantUsageEvent['data']): NormalizedCallUsage {
+  const inputTokens = data.inputTokens ?? 0;
+  const outputTokens = data.outputTokens ?? 0;
+
+  return {
+    provider: 'copilot',
+    // The SDK emits assistant.usage once for each provider API call,
+    // including calls made within a single agentic turn.
+    granularity: 'provider-call',
+    inputTokens,
+    inputCachedTokens: data.cacheReadTokens ?? 0,
+    outputTokens,
+    // The Copilot SDK's assistant.usage event does not expose reasoning
+    // token counts — the field is absent from the SDK type definitions.
+    reasoningTokens: 0,
+    totalTokens: inputTokens + outputTokens,
+    costUnits: 1,
+    costUnitType: 'requests',
+  };
+}
+
 /**
  * GitHub Copilot Agent - Middle layer between AIAdapter and GitHubCopilotConnector.
  *
@@ -297,26 +324,7 @@ export class GitHubCopilotAgent extends AIAgent<GitHubCopilotConnectorBus, GitHu
       connector,
       GitHubCopilotConnectorSubjects.assistant.usage,
       async (ctx: EventContext<AssistantUsageEvent>) => {
-        const data = ctx.payload.data;
-
-        const inputTokens = data.inputTokens ?? 0;
-        const outputTokens = data.outputTokens ?? 0;
-        const totalTokens = inputTokens + outputTokens;
-
-        const normalized: NormalizedCallUsage = {
-          provider: 'copilot',
-          granularity: 'turn-aggregate',
-          inputTokens,
-          inputCachedTokens: data.cacheReadTokens ?? 0,
-          outputTokens,
-          // The Copilot SDK's assistant.usage event does not expose reasoning
-          // token counts — the field is absent from the SDK type definitions.
-          reasoningTokens: 0,
-          totalTokens,
-          costUnits: 1,
-          costUnitType: 'requests',
-        };
-        await this.trackUsage(normalized);
+        await this.trackUsage(normalizeAssistantUsage(ctx.payload.data));
       },
     );
 

@@ -34,8 +34,9 @@ export type TerminalResultUsage = {
  * Normalize a Claude terminal-result usage block into the framework contract.
  *
  * The terminal result aggregates one query — potentially multiple model turns
- * in agentic tool loops — hence `granularity: 'query-aggregate'`. Cost is the
- * provider's own `total_cost_usd`, hence `costProvenance: 'provider-reported'`.
+ * in agentic tool loops — hence `granularity: 'query-aggregate'`. When present,
+ * cost is the provider's own `total_cost_usd`, hence
+ * `costProvenance: 'provider-reported'`.
  * @param usage - Raw usage block from the terminal result message
  * @param totalCostUsd - Provider-reported cost for the whole query, in USD
  * @returns Normalized usage ready for `AIAgent.trackUsage()`
@@ -55,8 +56,12 @@ export function normalizeTerminalResultUsage(
     totalTokens: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + usage.output_tokens,
     costUnits: 1,
     costUnitType: 'requests',
-    cost: totalCostUsd,
-    costProvenance: 'provider-reported',
+    ...(totalCostUsd === undefined
+      ? {}
+      : {
+          cost: totalCostUsd,
+          costProvenance: 'provider-reported' as const,
+        }),
     serviceTier: usage.service_tier,
   };
 }

@@ -26,6 +26,7 @@ import {
   type ClaudeConnectorNamespace,
 } from '../namespace/index.js';
 import { ClaudeCodeAgent } from './claude-code-agent.js';
+import { normalizeTerminalResultUsage, type TerminalResultUsage } from './terminal-usage.js';
 
 const TEST_NAMESPACE = 'adapter:claude-shared-usage-test' as const;
 const TestNamespace = createClaudeConnectorNamespace(TEST_NAMESPACE);
@@ -146,10 +147,11 @@ async function makeAgent(): Promise<{ agent: TestClaudeAgent; connector: TestCla
 }
 
 /**
- * Build a schema-valid terminal result message with provider usage and cost.
+ * Build a schema-valid terminal result message with provider usage and an optional cost.
+ * @param totalCostUsd - Provider-reported query cost
  * @returns Raw SDK result message
  */
-function makeResultMessage(): RawSdkResultMessage {
+function makeResultMessage(totalCostUsd: number): RawSdkResultMessage {
   return {
     type: 'result',
     subtype: 'success',
@@ -158,7 +160,7 @@ function makeResultMessage(): RawSdkResultMessage {
     duration_ms: 1,
     duration_api_ms: 1,
     num_turns: 2,
-    total_cost_usd: 0.42,
+    total_cost_usd: totalCostUsd,
     usage: {
       input_tokens: 10,
       output_tokens: 5,
@@ -200,7 +202,7 @@ describe('ClaudeCodeAgent terminal result usage', () => {
     const { agent, connector } = await makeAgent();
     agents.push(agent);
 
-    await connector.emitSdkEvent(makeResultMessage());
+    await connector.emitSdkEvent(makeResultMessage(0.42));
 
     await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
     expect(usageEvents[0]).toMatchObject({
@@ -217,5 +219,20 @@ describe('ClaudeCodeAgent terminal result usage', () => {
       costProvenance: 'provider-reported',
       serviceTier: 'standard',
     });
+  });
+
+  it('omits cost fields when the terminal result does not report a cost', () => {
+    const usage: TerminalResultUsage = {
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_creation_input_tokens: 2,
+      cache_read_input_tokens: 3,
+      service_tier: 'standard',
+    };
+
+    const normalized = normalizeTerminalResultUsage(usage, undefined);
+
+    expect(normalized).not.toHaveProperty('cost');
+    expect(normalized).not.toHaveProperty('costProvenance');
   });
 });

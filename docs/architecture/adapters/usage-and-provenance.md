@@ -35,7 +35,7 @@ Verified against the adapter sources; see the per-adapter READMEs for details.
 | `codex-app-server` | Provider token-usage notification (`tokenUsage.last` — the latest model request per update) | No | Not exposed by the protocol |
 | `cursor-sdk` | Completed message/turn | Optional SDK amount (omitted when the SDK does not report one) | Not exposed by the SDK |
 | `gemini-sdk` | Completed session/turn (`session.finished` with `usageMetadata`) | No | Not exposed by the SDK |
-| `github-copilot-sdk` | Assistant usage event (sub-turn; one per `assistant.usage` event) | No | Not exposed by the SDK |
+| `github-copilot-sdk` | Provider API call (`assistant.usage`; one event per call) | No | Not exposed by the SDK |
 | `pi-sdk` | Usage event after a completed assistant message | Provider-reported amount (`usage.cost.total`) | Not exposed by the SDK |
 | `qwen-acp` | Consolidated prompt-turn usage (running `_meta.usage` totals accumulated last-wins, flushed once per turn, including error paths) | No | Not exposed by the ACP prompt payload |
 
@@ -60,8 +60,8 @@ Emitter mapping (must match the Measurement Matrix above):
 
 | Emitter | `granularity` |
 |---------|---------------|
-| `openai-node`, `anthropic-sdk`, `codex-app-server` | `provider-call` |
-| `cursor-sdk`, `gemini-sdk`, `github-copilot-sdk`, `pi-sdk`, `qwen-acp` | `turn-aggregate` |
+| `openai-node`, `anthropic-sdk`, `codex-app-server`, `github-copilot-sdk` | `provider-call` |
+| `cursor-sdk`, `gemini-sdk`, `pi-sdk`, `qwen-acp` | `turn-aggregate` |
 | `claude-agent-sdk`, `claude-code-cli` | `query-aggregate` |
 | `claude-code-tmux` | `latest-request-gauge` |
 | OpenCode log importer | `provider-call` |
