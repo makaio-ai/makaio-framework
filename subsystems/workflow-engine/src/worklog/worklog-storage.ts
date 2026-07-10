@@ -67,6 +67,23 @@ export async function upsertWorklogSummary(db: MakaioDatabase, summary: InsertWo
 }
 
 /**
+ * Insert an advisory running summary only when no row exists.
+ *
+ * Atomic external registration owns the initial summary identity. A delayed or
+ * mismatched `execution.started` event may fill a missing projection row, but
+ * must never rewrite registration fields that are already durable.
+ * @param db - Drizzle database instance.
+ * @param summary - Running summary values.
+ */
+export async function insertRunningWorklogSummaryIfAbsent(
+  db: MakaioDatabase,
+  summary: InsertWorklogSummary & { status: 'running' },
+): Promise<void> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
+  await db.insert(worklogSummaries).values(summary).onConflictDoNothing();
+}
+
+/**
  * Upsert an advisory WorkLog summary without overwriting an authoritative terminal row.
  *
  * The status predicate is part of the conflict update itself. A projection
@@ -196,6 +213,23 @@ export async function upsertWorklogFrameEntry(db: MakaioDatabase, entry: InsertW
     target: worklogFrameEntries.frameId,
     set: entry,
   });
+}
+
+/**
+ * Insert an advisory running frame only when no row exists.
+ *
+ * Atomic registration owns immutable frame metadata. A `frame.started` event
+ * can repair a missing projection, but redelivery must not alter an existing
+ * frame's node, path, attempt, branch, or start timestamp.
+ * @param db - Drizzle database instance.
+ * @param entry - Running frame values.
+ */
+export async function insertRunningWorklogFrameIfAbsent(
+  db: MakaioDatabase,
+  entry: InsertWorklogFrameEntry & { status: 'running' },
+): Promise<void> {
+  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
+  await db.insert(worklogFrameEntries).values(entry).onConflictDoNothing();
 }
 
 /**

@@ -2,6 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import {
+  insertRunningWorklogFrameIfAbsent,
   upsertAdvisoryWorklogFrameEntry,
   getWorklogFrameEntryRow,
   type SelectWorklogFrameEntry,
@@ -191,7 +192,7 @@ export function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): A
     bus.on(WorkflowSubjects.frame.started, async (ctx) => {
       const { executionId, frameId, nodeId, nodeType, path, startedAt } = ctx.payload;
       await safeProject(`frame.started[${frameId}]`, async () => {
-        await upsertAdvisoryWorklogFrameEntry(db, {
+        await insertRunningWorklogFrameIfAbsent(db, {
           frameId,
           executionId,
           nodeId,

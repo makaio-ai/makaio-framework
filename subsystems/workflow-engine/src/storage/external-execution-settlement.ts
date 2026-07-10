@@ -244,13 +244,13 @@ export async function loadSettlementFrame(
     .select()
     .from(worklogFrameEntries)
     .where(eq(worklogFrameEntries.executionId, settlement.executionId));
-  if (executionFrames.some((frame) => frame.frameId !== settlement.frame.frameId)) {
+  const matchingFrame = executionFrames.find((frame) => frame.frameId === settlement.frame.frameId);
+  if (matchingFrame !== undefined) return matchingFrame;
+  if (executionFrames.length > 0) {
     throw new Error(
       `settleExternalExecution: frame "${settlement.frame.frameId}" conflicts with the registered frame identity`,
     );
   }
-  const matchingFrame = executionFrames.find((frame) => frame.frameId === settlement.frame.frameId);
-  if (matchingFrame !== undefined) return matchingFrame;
   const [collidingFrame] = await tx
     .select()
     .from(worklogFrameEntries)

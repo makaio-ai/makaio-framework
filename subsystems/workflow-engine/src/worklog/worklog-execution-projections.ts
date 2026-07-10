@@ -2,6 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import {
+  insertRunningWorklogSummaryIfAbsent,
   upsertAdvisoryWorklogSummary,
   updateWorklogSummaryTokenTotals,
   aggregateTokenTotals,
@@ -30,7 +31,7 @@ async function projectExecutionStarted(
   db: MakaioDatabase,
   payload: { readonly executionId: string; readonly workflowId: string; readonly startedAt?: number },
 ): Promise<void> {
-  await upsertAdvisoryWorklogSummary(db, {
+  await insertRunningWorklogSummaryIfAbsent(db, {
     executionId: payload.executionId,
     workflowId: payload.workflowId,
     workflowName: null,

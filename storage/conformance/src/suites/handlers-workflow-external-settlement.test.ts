@@ -95,8 +95,23 @@ describeStorageConformance('workflow external settlement identity', (config) => 
     const first = createWorkflowStorageBus(getCtx().db);
     try {
       await first.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration);
+      await first.bus.emit(WorkflowSubjects.frame.started, {
+        executionId,
+        frameId: `${executionId}:advisory`,
+        nodeId: 'advisory',
+        nodeType: 'station',
+        path: [`${executionId}:advisory`],
+        startedAt,
+      });
       await expect(first.bus.request(WorkflowStorageSubjects.settleExternalExecution, settlement)).resolves.toEqual({
         success: true,
+      });
+      await first.bus.emit(WorkflowSubjects.frame.completed, {
+        executionId,
+        frameId: `${executionId}:advisory`,
+        nodeId: 'advisory',
+        duration: completedAt - startedAt,
+        completedAt,
       });
     } finally {
       first.cleanup();
@@ -116,6 +131,52 @@ describeStorageConformance('workflow external settlement identity', (config) => 
     } finally {
       restarted.cleanup();
       await sibling.close();
+    }
+  });
+
+  it('preserves atomic registration fields against mismatched advisory starts', async () => {
+    const executionId = `wfx-ext-start-isolation-${crypto.randomUUID()}`;
+    const registration = buildRegistration(executionId);
+    const storage = createWorkflowStorageBus(getCtx().db);
+    try {
+      await storage.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration);
+      await storage.bus.emit(WorkflowSubjects.execution.started, {
+        executionId,
+        workflowId: 'mismatched-advisory-workflow',
+        startedAt: startedAt - 100,
+      });
+      await storage.bus.emit(WorkflowSubjects.frame.started, {
+        executionId,
+        frameId: registration.frame.frameId,
+        nodeId: 'mismatched-advisory-node',
+        nodeType: 'delegate-role',
+        path: ['mismatched'],
+        startedAt: startedAt - 100,
+      });
+
+      await expect(storage.bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: {
+          workflowId: registration.execution.workflowId,
+          status: 'running',
+          startedAt: registration.execution.startedAt,
+        },
+      });
+      await expect(
+        storage.bus.request(WorkflowSubjects.worklog.frame.get, { frameId: registration.frame.frameId }),
+      ).resolves.toMatchObject({
+        frame: {
+          nodeId: registration.frame.nodeId,
+          nodeType: registration.frame.nodeType,
+          path: registration.frame.path,
+          status: 'running',
+          startedAt: registration.frame.startedAt,
+        },
+      });
+      await expect(
+        storage.bus.request(WorkflowStorageSubjects.settleExternalExecution, buildFramedSettlement(executionId)),
+      ).resolves.toEqual({ success: true });
+    } finally {
+      storage.cleanup();
     }
   });
 

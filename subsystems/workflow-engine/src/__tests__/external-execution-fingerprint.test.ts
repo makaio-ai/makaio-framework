@@ -169,6 +169,104 @@ describe('external execution settlement fingerprint', () => {
     });
   });
 
+  it('does not let mismatched advisory starts rewrite atomic registration fields', async () => {
+    await withWorkflowHarness(async (bus) => {
+      const executionId = 'wfx-ext-advisory-start-isolation';
+      const frameId = `${executionId}:review`;
+      await bus.request(WorkflowSubjects.registerExternalExecution, {
+        executionId,
+        name: 'registered-workflow',
+        startedAt,
+        frame: {
+          nodeId: 'review',
+          nodeType: 'delegate-role',
+          path: ['review'],
+          startedAt,
+        },
+      });
+
+      await bus.emit(WorkflowSubjects.execution.started, {
+        executionId,
+        workflowId: 'mismatched-advisory-workflow',
+        startedAt: startedAt - 100,
+      });
+      await bus.emit(WorkflowSubjects.frame.started, {
+        executionId,
+        frameId,
+        nodeId: 'mismatched-advisory-node',
+        nodeType: 'station',
+        path: ['mismatched'],
+        startedAt: startedAt - 100,
+      });
+
+      await expect(bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: { workflowId: 'registered-workflow', status: 'running', startedAt },
+      });
+      await expect(bus.request(WorkflowSubjects.worklog.frame.get, { frameId })).resolves.toMatchObject({
+        frame: {
+          nodeId: 'review',
+          nodeType: 'delegate-role',
+          path: ['review'],
+          status: 'running',
+          startedAt,
+        },
+      });
+      await expect(
+        bus.request(WorkflowSubjects.completeExternalExecution, {
+          executionId,
+          status: 'completed',
+          completedAt,
+          frame: buildCompletionFrame(executionId),
+        }),
+      ).resolves.toEqual({ success: true });
+    });
+  });
+
+  it('replays an authoritative frame despite extra advisory frames', async () => {
+    await withWorkflowHarness(async (bus) => {
+      const executionId = 'wfx-ext-extra-advisory-frame';
+      await bus.request(WorkflowSubjects.registerExternalExecution, {
+        executionId,
+        name: 'extra-advisory-frame',
+        startedAt,
+        frame: {
+          nodeId: 'review',
+          nodeType: 'delegate-role',
+          path: ['review'],
+          startedAt,
+        },
+      });
+      await bus.emit(WorkflowSubjects.frame.started, {
+        executionId,
+        frameId: `${executionId}:advisory`,
+        nodeId: 'advisory',
+        nodeType: 'station',
+        path: ['advisory'],
+        startedAt,
+      });
+      const settlement = {
+        executionId,
+        status: 'completed' as const,
+        completedAt,
+        frame: buildCompletionFrame(executionId),
+      };
+
+      await expect(bus.request(WorkflowSubjects.completeExternalExecution, settlement)).resolves.toEqual({
+        success: true,
+      });
+      await bus.emit(WorkflowSubjects.frame.completed, {
+        executionId,
+        frameId: `${executionId}:advisory`,
+        nodeId: 'advisory',
+        duration: completedAt - startedAt,
+        completedAt,
+      });
+      await expect(bus.request(WorkflowSubjects.completeExternalExecution, settlement)).resolves.toEqual({
+        success: true,
+      });
+    });
+  });
+
   it('accepts the legacy advisory event sequence before authoritative settlement', async () => {
     await withWorkflowHarness(async (bus) => {
       const executionId = 'wfx-ext-fingerprint-legacy-events';
