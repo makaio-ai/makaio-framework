@@ -4,6 +4,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   BaseConnectorSession,
   markCompletedWithFinalResult,
+  rejectQueuedHandles,
   type AIReasoningLevel,
   type MessageHandle,
   type MessageResult,
@@ -103,6 +104,8 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   };
   /** Shares one teardown across concurrent abort/close calls. */
   private closePromise?: Promise<void>;
+  /** True once `close()` or `abort()` has begun; gates {@link processQueue}. */
+  private closing = false;
 
   /**
    * Resolve resume/session IDs for the next CLI turn.
@@ -286,6 +289,10 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * Delegates to the shared `processQueueMessages` orchestration which handles
    * immediate-mode superseding, late rejection, and normal enqueue processing.
    *
+   * Refuses to start new turns once the session is closing: any remaining
+   * queued handles are drained with an error outcome so callers awaiting
+   * `waitForCompletion()` resolve deterministically.
+   *
    * Returns `true` when a new turn was started, `false` when no action was taken
    * (e.g., all immediate messages were rejected). Callers use this to decide
    * whether to transition to idle.
@@ -293,6 +300,10 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * @returns True if a new turn was started
    */
   public async processQueue(queue: UserMessageQueue): Promise<boolean> {
+    if (this.closing) {
+      rejectQueuedHandles(queue);
+      return false;
+    }
     return processQueueMessages(queue, {
       getCurrentTurn: () => this.currentTurn,
       extractContent: (handle) => extractMessageText(handle.message),
@@ -583,9 +594,11 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
 
   /**
    * Gracefully close the session (kills the subprocess if active).
-   * Unregisters agent context from the MCP context registry if registered.
+   * Sets the closing flag to prevent new turns from starting, then
+   * unregisters agent context from the MCP context registry if registered.
    */
   public async close(): Promise<void> {
+    this.closing = true;
     if (this.closePromise) {
       await this.closePromise;
       return;

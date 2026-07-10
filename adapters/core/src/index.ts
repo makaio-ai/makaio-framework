@@ -93,7 +93,7 @@ export type {
 } from './utils/index.js';
 
 // Session lifecycle
-export { SessionLifecycle, UserMessageQueue, processQueueMessages } from './session/index.js';
+export { SessionLifecycle, UserMessageQueue, processQueueMessages, rejectQueuedHandles } from './session/index.js';
 export type { QueueableTurn, MergeResult, ProcessQueueCallbacks } from './session/index.js';
 
 // Agent — connectors, agent classes, lifecycle, tracking

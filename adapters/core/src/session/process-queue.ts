@@ -181,6 +181,28 @@ export async function processQueueMessages<TExtra = unknown>(
 }
 
 /**
+ * Drain all remaining handles from the queue and complete each with an error
+ * outcome so callers awaiting `waitForCompletion()` resolve deterministically.
+ *
+ * Used by session implementations during shutdown to prevent queued messages
+ * from hanging indefinitely when the session refuses to start new turns.
+ * @param queue - User message queue to drain
+ * @param message - Error message to attach to each rejected handle
+ */
+export function rejectQueuedHandles(
+  queue: UserMessageQueue,
+  message = 'Session closed before queued message could be processed',
+): void {
+  let handle = queue.dequeue();
+  while (handle) {
+    if (!handle.isProcessed) {
+      handle.markCompleted({ outcome: 'error', error: new Error(message) });
+    }
+    handle = queue.dequeue();
+  }
+}
+
+/**
  * Default content extraction: reads `message.message` as string.
  * @param handle - The message handle
  * @returns The message text content

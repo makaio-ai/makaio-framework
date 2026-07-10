@@ -1,21 +1,21 @@
 /* eslint max-lines: ["error", { "max": 710 }] */
 import type { Query, SDKUserMessage as SdkSDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKUserMessage, SDKMessage } from '@makaio/client-claude-code';
+import type { SDKMessage, SDKUserMessage } from '@makaio/client-claude-code';
 import { isKnownSdkMessageForRouting } from '@makaio/client-claude-code';
 import {
   BaseConnectorSession,
   SessionLifecycle,
   markCompletedWithFinalResult,
-  serializeTurnContext,
   type AIReasoningLevel,
   type MessageHandle,
 } from '@makaio/ai-adapters-core';
 import { DeferredPromise } from '@makaio/utils';
 import { MakaioBus } from '@makaio/bus-core';
-import { AsyncQuerySource, prependContextBlock, sdkUserMessageFromNormalized } from '@makaio/ai-adapters-claude-shared';
+import { AsyncQuerySource } from '@makaio/ai-adapters-claude-shared';
 import { ClaudeConnectorTurn } from './turn.js';
-import { UserMessageQueue, processQueueMessages, formatMessageHistoryAsTranscript } from '@makaio/ai-adapters-core';
+import { UserMessageQueue, processQueueMessages, rejectQueuedHandles } from '@makaio/ai-adapters-core';
+import { buildSdkUserMessage } from './sdk-message-builder.js';
 import { ClaudeCodeConnectorSubjects } from './namespace/index.js';
 import { ClaudeSessionConfig, CreateToolApprovalHandler } from './types/index.js';
 import { buildMcpServersRecord, buildQueryOptions } from './utils/buildQueryOptions.js';
@@ -48,6 +48,20 @@ type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { even
  *    `queryInstance`/`source` on ALL paths (iterator error regardless of
  *    turn state, close/abort, schema rotation) before any signal that can
  *    trigger reuse via {@link ensureQueryForResponseSchema}.
+ *
+ * ## Shutdown vs queue processing invariant
+ *
+ * Once `close()` or `abort()` begins, no new turn may start.
+ * {@link processQueue} refuses to dequeue or start turns when
+ * `this.closing` is `true`, and drains all remaining queued handles
+ * with an error outcome so that callers awaiting
+ * `waitForCompletion()` resolve deterministically instead of hanging.
+ *
+ * This prevents a race where the drain window in `close()` accepts a
+ * terminal result, the turn transitions to `turn_finished`, and the
+ * connector's `turn_finished` listener calls `processQueue()` to start
+ * a queued follow-up — which would create a new SDK query after the
+ * caller has already closed the session.
  */
 export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionConfig> {
   private queryInstance?: Query;
@@ -76,6 +90,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /** Stable key for the SDK-relevant response schema on the active query. */
   private activeResponseSchemaKey: string | undefined;
   private readonly terminalResultDrain = new TerminalResultDrain();
+  /** True once `close()` or `abort()` has begun; gates {@link processQueue}. */
+  private closing = false;
 
   public constructor(config: ClaudeSessionConfig) {
     super(config);
@@ -316,9 +332,17 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /**
    * Process messages from the queue (new turn or immediate injection).
    * Serializes via a re-run flag so concurrent calls are not silently dropped.
+   *
+   * Refuses to start new turns once the session is closing: any remaining
+   * queued handles are drained with an error outcome so callers awaiting
+   * `waitForCompletion()` resolve deterministically.
    * @param queue - User message queue to process
    */
   public async processQueue(queue: UserMessageQueue): Promise<void> {
+    if (this.closing) {
+      rejectQueuedHandles(queue);
+      return;
+    }
     if (this.processingQueue) {
       this.reprocessNeeded = true;
       return;
@@ -368,7 +392,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     this.config.onTurnStart?.(handle);
 
     // Build and inject the SDK message (shared type is a superset of the SDK type).
-    const sdkMessage = this.buildSdkMessage(handle, mergedContent);
+    const sdkMessage = buildSdkUserMessage(handle, this.sessionId!, this.config.agentId, mergedContent);
 
     if (this.currentTurn?.isPaused()) {
       this.currentTurn.setActiveMessageHandle(handle);
@@ -391,39 +415,6 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     );
 
     await this.currentTurn.start();
-  }
-
-  /**
-   * Build an SDK user message with turn context, message history, and any merged content prepended.
-   * @param handle - Message handle to process
-   * @param mergedContent - Optional content from superseded messages (immediate mode)
-   * @returns SDK user message ready to push to source
-   */
-  private buildSdkMessage(handle: MessageHandle, mergedContent?: string[]): SDKUserMessage {
-    let sdkMessage = sdkUserMessageFromNormalized(
-      handle.messageId,
-      this.sessionId!,
-      this.config.agentId,
-      handle.message,
-    );
-    const contextBlocks = serializeTurnContext(handle.turnContext);
-    for (let i = contextBlocks.length - 1; i >= 0; i--) {
-      const block = contextBlocks[i];
-      sdkMessage = prependContextBlock(sdkMessage, block.tag, block.content);
-    }
-
-    // Prepend message history if present
-    if (handle.messageHistory && handle.messageHistory.length > 0) {
-      const historyTranscript = formatMessageHistoryAsTranscript(handle.messageHistory);
-      sdkMessage = prependContextBlock(sdkMessage, 'message_history', historyTranscript);
-    }
-
-    // Prepend merged content if present (for immediate mode)
-    if (mergedContent && mergedContent.length > 0) {
-      sdkMessage = prependContextBlock(sdkMessage, 'merged_context', mergedContent.join('\n'));
-    }
-
-    return sdkMessage;
   }
 
   private startConsumption(queryGeneration: number): void {
@@ -673,9 +664,11 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
   /**
    * Gracefully close the session (interrupt, not abort).
-   * Unregisters MCP context and absorbs interrupt errors.
+   * Sets the closing flag to prevent new turns from starting, then
+   * unregisters MCP context and absorbs interrupt errors.
    */
   public async close(): Promise<void> {
+    this.closing = true;
     this.unregisterMcpContext();
     const activeQuery = this.queryInstance;
     const queryGeneration = this.queryGeneration;

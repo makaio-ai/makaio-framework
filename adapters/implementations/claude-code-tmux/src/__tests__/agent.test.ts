@@ -233,4 +233,47 @@ describe('ClaudeCodeTmuxAgent', () => {
     expect(usageEvents[0]).not.toHaveProperty('currency');
     expect(usageEvents[0]).not.toHaveProperty('costProvenance');
   });
+
+  it('does not emit a second usage event when the statusline re-renders with a changed cumulative cost but identical per-request tokens', async () => {
+    const { agent, connector } = await makeAgent();
+    agents.push(agent);
+    const usageEvents: Record<string, unknown>[] = [];
+
+    MakaioBus.on(AgentSubjects.usage, (ctx) => {
+      usageEvents.push(ctx.payload);
+    });
+
+    const basePayload = {
+      session_id: connector.adapterSessionId,
+      context_window: {
+        total_input_tokens: 24_000,
+        total_output_tokens: 3_000,
+        context_window_size: 200_000,
+        current_usage: {
+          input_tokens: 1_200,
+          output_tokens: 300,
+          cache_read_input_tokens: 800,
+          cache_creation_input_tokens: 50,
+        },
+      },
+    };
+
+    // First render: cumulative cost 12.34
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      ...basePayload,
+      cost: { total_cost_usd: 12.34 },
+    });
+
+    await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
+
+    // Second render: same per-request tokens, updated cumulative cost — must NOT produce a second usage event.
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      ...basePayload,
+      cost: { total_cost_usd: 15.0 },
+    });
+
+    // Allow any async handlers to settle, then assert still exactly one event.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(usageEvents).toHaveLength(1);
+  });
 });
