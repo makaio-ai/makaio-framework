@@ -106,16 +106,23 @@ export class AgentEventBridge {
    */
   public async trackUsage(normalized: NormalizedCallUsage): Promise<void> {
     const requestCorrelation = this.getActiveMessageHandle()?.requestCorrelation;
-    await this.emitUsagePayload({
+
+    const payload: typeof normalized & { model: string } = {
       ...normalized,
-      ...(normalized.executionId === undefined && requestCorrelation?.executionId !== undefined
-        ? { executionId: requestCorrelation.executionId }
-        : {}),
-      ...(normalized.frameId === undefined && requestCorrelation?.frameId !== undefined
-        ? { frameId: requestCorrelation.frameId }
-        : {}),
       model: this.getUsageModel() ?? 'unknown',
-    });
+    };
+
+    // Fall back to handle-level correlation IDs when the provider didn't
+    // include them in the normalized usage (e.g. providers that don't emit
+    // execution/frame context natively).
+    if (payload.executionId === undefined && requestCorrelation?.executionId !== undefined) {
+      payload.executionId = requestCorrelation.executionId;
+    }
+    if (payload.frameId === undefined && requestCorrelation?.frameId !== undefined) {
+      payload.frameId = requestCorrelation.frameId;
+    }
+
+    await this.emitUsagePayload(payload);
   }
 
   /**

@@ -2,90 +2,13 @@ import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue, type MessageResult } from '@makaio/ai-adapters-core';
-import type { SDKMessage } from '@makaio/client-claude-code';
 
 const queryHarness = vi.hoisted(() => {
-  const sdkBase = (sessionId: string) => ({
-    uuid: crypto.randomUUID(),
-    session_id: sessionId,
-    agentId: 'agent-test',
-  });
-  const usage = {
-    input_tokens: 1,
-    output_tokens: 1,
-    cache_creation: {
-      ephemeral_1h_input_tokens: 0,
-      ephemeral_5m_input_tokens: 0,
-    },
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 0,
-    server_tool_use: { web_search_requests: 0 },
-    service_tier: 'standard',
-  };
-  const query = vi.fn(
-    ({
-      prompt,
-      options,
-    }: {
-      prompt: AsyncIterable<unknown>;
-      options: {
-        sessionId?: string;
-        resume?: string;
-        outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
-      };
-    }) => {
-      const effectiveSessionId = options.resume ?? options.sessionId ?? crypto.randomUUID();
-      return {
-        interrupt: vi.fn(async () => undefined),
-        close: vi.fn(() => undefined),
-        setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
-        setMaxThinkingTokens: vi.fn(async () => undefined),
-        async *[Symbol.asyncIterator]() {
-          for await (const _message of prompt) {
-            yield {
-              type: 'rate_limit_event',
-              retry_after_ms: 1000,
-              session_id: effectiveSessionId,
-            };
-            yield {
-              ...sdkBase(effectiveSessionId),
-              type: 'system',
-              subtype: 'init',
-              apiKeySource: 'user',
-              cwd: os.tmpdir(),
-              tools: [],
-              mcp_servers: [],
-              model: 'claude-sonnet-4-20250514',
-              permissionMode: 'default',
-              slash_commands: [],
-              output_style: 'default',
-            };
-            yield {
-              ...sdkBase(effectiveSessionId),
-              type: 'result',
-              subtype: 'success',
-              is_error: false,
-              result: 'session completed',
-              duration_ms: 1,
-              duration_api_ms: 1,
-              num_turns: 1,
-              total_cost_usd: 0,
-              usage,
-              modelUsage: {},
-              permission_denials: [],
-            };
-          }
-        },
-      };
-    },
-  );
-
+  const query = vi.fn();
   return {
     query,
-    sdkBase,
-    usage,
     reset: () => {
-      query.mockClear();
+      query.mockReset();
     },
   };
 });
@@ -97,26 +20,18 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 import { ClaudeCodeConnectorNamespace } from '../src/namespace/index.js';
 import { ClaudeConnectorSession } from '../src/session.js';
-
-function createMessageHandle(
-  messageId = 'message-1',
-  deliveryMode: 'enqueue' | 'replace' | 'immediate' = 'enqueue',
-): MessageHandle {
-  return new MessageHandle(
-    messageId,
-    {
-      role: 'user',
-      blocks: [{ type: 'text', content: 'hello' }],
-      message: 'hello',
-    },
-    deliveryMode,
-  );
-}
+import {
+  installDefaultQueryImpl,
+  makeInitMessage,
+  makeResultMessage,
+  createMessageHandle,
+} from './fixtures/query-harness.js';
 
 describe('ClaudeConnectorSession iterator error query disowning', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
     queryHarness.reset();
+    installDefaultQueryImpl(queryHarness.query, { includeRateLimitEvent: true });
   });
 
   it('disowns the dead query after an iterator-level error so the next message gets a fresh query', async () => {
@@ -151,19 +66,7 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
           setMaxThinkingTokens: vi.fn(async () => undefined),
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt) {
-              yield {
-                ...queryHarness.sdkBase(effectiveSessionId),
-                type: 'system',
-                subtype: 'init',
-                apiKeySource: 'user',
-                cwd: os.tmpdir(),
-                tools: [],
-                mcp_servers: [],
-                model: 'claude-sonnet-4-20250514',
-                permissionMode: 'default',
-                slash_commands: [],
-                output_style: 'default',
-              } as SDKMessage;
+              yield makeInitMessage(effectiveSessionId);
               messageReceived!();
               // Simulate an iterator-level SDK/transport error
               throw new Error('SDK transport failure');
@@ -243,19 +146,7 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
           setMaxThinkingTokens: vi.fn(async () => undefined),
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt) {
-              yield {
-                ...queryHarness.sdkBase(effectiveSessionId),
-                type: 'system',
-                subtype: 'init',
-                apiKeySource: 'user',
-                cwd: os.tmpdir(),
-                tools: [],
-                mcp_servers: [],
-                model: 'claude-sonnet-4-20250514',
-                permissionMode: 'default',
-                slash_commands: [],
-                output_style: 'default',
-              } as SDKMessage;
+              yield makeInitMessage(effectiveSessionId);
               messageReceived!();
               throw new Error('iterator crash');
             }
@@ -339,34 +230,9 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
           setMaxThinkingTokens: vi.fn(async () => undefined),
           async *[Symbol.asyncIterator]() {
             for await (const _message of prompt) {
-              yield {
-                ...queryHarness.sdkBase(effectiveSessionId),
-                type: 'system',
-                subtype: 'init',
-                apiKeySource: 'user',
-                cwd: os.tmpdir(),
-                tools: [],
-                mcp_servers: [],
-                model: 'claude-sonnet-4-20250514',
-                permissionMode: 'default',
-                slash_commands: [],
-                output_style: 'default',
-              } as SDKMessage;
+              yield makeInitMessage(effectiveSessionId);
               // Yield a successful result — this completes the turn
-              yield {
-                ...queryHarness.sdkBase(effectiveSessionId),
-                type: 'result',
-                subtype: 'success',
-                is_error: false,
-                result: 'turn completed',
-                duration_ms: 1,
-                duration_api_ms: 1,
-                num_turns: 1,
-                total_cost_usd: 0,
-                usage: queryHarness.usage,
-                modelUsage: {},
-                permission_denials: [],
-              } as SDKMessage;
+              yield makeResultMessage(effectiveSessionId, { result: 'turn completed' });
               messageReceived!();
               // Iterator crashes after the result was already delivered
               throw new Error('post-result transport failure');

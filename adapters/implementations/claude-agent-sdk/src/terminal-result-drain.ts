@@ -1,6 +1,5 @@
 import { DeferredPromise } from '@makaio/utils';
-
-const TERMINAL_RESULT_DRAIN_TIMEOUT_MS = 250;
+import { TERMINAL_RESULT_DRAIN_TIMEOUT_MS } from '@makaio/ai-adapters-claude-shared';
 
 /** Coordinates the bounded terminal-result window used during query teardown. */
 export class TerminalResultDrain {
@@ -41,23 +40,19 @@ export class TerminalResultDrain {
   }
 
   /**
-   * Release a pending drain when the query iterator fails before a result.
-   * @param queryGeneration - Generation whose iterator failed.
+   * Release the drain and retire the generation in a single call.
+   *
+   * Resolves any pending drain deferred and marks the generation as handled
+   * so {@link hasHandled} returns true even when no SDK result was received.
+   * Used by the error-completion path to prevent late results from being
+   * accepted while async teardown (completion transforms, onTurnComplete,
+   * finishOnError) is in progress.
+   * @param queryGeneration - Generation whose iterator failed or is being torn down.
    */
-  public resolve(queryGeneration: number): void {
+  public forceClose(queryGeneration: number): void {
     if (this.active?.queryGeneration === queryGeneration) {
       this.active.deferred.resolve(undefined);
     }
-  }
-
-  /**
-   * Mark a generation as retired so {@link hasHandled} returns true even when no
-   * SDK result was received. Used by the error-completion path to prevent late
-   * results from being accepted while async teardown (completion transforms,
-   * onTurnComplete, finishOnError) is in progress.
-   * @param queryGeneration - Generation to retire.
-   */
-  public retire(queryGeneration: number): void {
     this.handledGeneration = queryGeneration;
   }
 

@@ -35,6 +35,9 @@ export {
   extractTextFromMessage,
   parseResultError,
   prependContextBlock,
+  resolveResultMessage,
   sdkUserMessageFromNormalized,
+  TERMINAL_RESULT_DRAIN_TIMEOUT_MS,
   unwrapBlockFromMessage,
 } from './utils/index.js';
+export type { ResultMessageWithStructuredOutput } from './utils/index.js';

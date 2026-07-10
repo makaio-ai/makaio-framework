@@ -41,9 +41,12 @@ export interface MessageLifecycleTrackOptions {
  *
  * `agent.turn.started` and `agent.turn.completed` are emitted **only as a
  * matched pair** for handles that actually start a provider turn (i.e. whose
- * acknowledgment is delivered). Handles completed before dispatch — merged,
- * superseded, or rejected while queued — never receive `turn.started` and
- * therefore never receive `turn.completed`. The message-level event
+ * acknowledgment is delivered). The pairing decision is derived from
+ * `handle.wasDelivered` — `acknowledge()` ensures the handle is marked as
+ * delivered, so `complete()` can gate `turn.completed` emission without
+ * maintaining parallel tracking state. Handles completed before dispatch —
+ * merged, superseded, or rejected while queued — never receive `turn.started`
+ * and therefore never receive `turn.completed`. The message-level event
  * `user_message.completed` always fires regardless of delivery, carrying the
  * terminal outcome so downstream consumers (storage, UI cleanup) can react
  * to every message disposition.
@@ -91,15 +94,6 @@ export class MessageLifecycleTracker {
    * disrupting the order of remaining entries.
    */
   private readonly pendingTrackedHandles: MessageHandle[] = [];
-
-  /**
-   * Set of handles for which `acknowledge()` emitted `agent.turn.started`.
-   * Used by `complete()` to decide whether to emit `agent.turn.completed` —
-   * only handles in this set receive the completion counterpart, preserving
-   * the turn pairing contract. The handle is removed from the set when
-   * `complete()` fires.
-   */
-  private readonly turnStartedHandles = new Set<MessageHandle>();
 
   /** Current turnId from the session orchestrator (set at sendMessage entry, cleared on completion) */
   private currentTurnId?: string;
@@ -181,6 +175,15 @@ export class MessageLifecycleTracker {
     this.currentMessageHandle = handle;
     this.removePendingHandle(handle);
 
+    // Ensure the handle itself records delivery — direct callers (tests,
+    // legacy paths) may invoke acknowledge() without going through
+    // markAcknowledged() first. This closes the gap so complete() can
+    // derive the turn-pairing decision from handle.wasDelivered instead
+    // of maintaining a parallel Set.
+    if (!handle.wasDelivered) {
+      handle.markAcknowledged(true);
+    }
+
     // Emit user_message.acknowledged
     void this.emitGlobal(AgentSubjects.user_message.acknowledged, {
       messageId,
@@ -189,8 +192,6 @@ export class MessageLifecycleTracker {
     });
 
     // Emit agent.turn.started (higher-level abstraction).
-    // Record the handle so complete() knows to emit the paired turn.completed.
-    this.turnStartedHandles.add(handle);
     void this.emitGlobal(AgentSubjects.turn.started, {
       messageId,
       content: message,
@@ -229,11 +230,14 @@ export class MessageLifecycleTracker {
     }
 
     // Emit agent.turn.completed only when the handle actually started a turn
-    // (i.e. acknowledge() emitted agent.turn.started for it). Handles completed
-    // before dispatch — merged, superseded, or rejected while queued — never
-    // received turn.started, so emitting turn.completed would produce an
-    // unpaired event that breaks lifecycle consumers counting active turns.
-    if (this.turnStartedHandles.delete(handle)) {
+    // (i.e. acknowledge() emitted agent.turn.started for it). The delivery
+    // state is derived from handle.wasDelivered — acknowledge() ensures
+    // markAcknowledged(true) is called, so wasDelivered is true if and only
+    // if acknowledge() ran. Handles completed before dispatch — merged,
+    // superseded, or rejected while queued — resolve acknowledgment with
+    // false, so emitting turn.completed would produce an unpaired event that
+    // breaks lifecycle consumers counting active turns.
+    if (handle.wasDelivered) {
       void this.emitGlobal(AgentSubjects.turn.completed, {
         messageId,
         message: result.result?.message,

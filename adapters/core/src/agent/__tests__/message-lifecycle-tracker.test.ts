@@ -10,6 +10,25 @@ type CapturedEmission = {
   payload: unknown;
 };
 
+/**
+ * Create a MessageHandle with sensible test defaults.
+ * @param id - Unique message identifier
+ * @param content - Text content for the user message block (defaults to the id)
+ * @param deliveryMode - Delivery mode (defaults to 'enqueue')
+ * @returns A new MessageHandle instance
+ */
+function makeHandle(
+  id: string,
+  content?: string,
+  deliveryMode?: import('@makaio/contracts').MessageDeliveryMode,
+): MessageHandle {
+  return new MessageHandle(
+    id,
+    { role: 'user', blocks: [{ type: 'text', content: content ?? id }] },
+    deliveryMode ?? 'enqueue',
+  );
+}
+
 type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -34,14 +53,7 @@ async function flushMicrotasks(): Promise<void> {
 
 describe('MessageLifecycleTracker', () => {
   it('notifies completion observers with the transformed terminal result before completion resolves', async () => {
-    const handle = new MessageHandle(
-      'message-observer',
-      {
-        role: 'user',
-        blocks: [{ type: 'text', content: 'Return JSON' }],
-      },
-      'enqueue',
-    );
+    const handle = makeHandle('message-observer', 'Return JSON');
     const observedMessages: Array<string | undefined> = [];
 
     handle.addCompletionTransform(
@@ -76,14 +88,7 @@ describe('MessageLifecycleTracker', () => {
         emissions.push({ subject, payload });
       },
     });
-    const handle = new MessageHandle(
-      'message-1',
-      {
-        role: 'user',
-        blocks: [{ type: 'text', content: 'Return JSON' }],
-      },
-      'enqueue',
-    );
+    const handle = makeHandle('message-1', 'Return JSON');
 
     tracker.track(
       handle,
@@ -177,14 +182,7 @@ describe('MessageLifecycleTracker', () => {
     const tracker = new MessageLifecycleTracker({
       emitGlobal: async () => {},
     });
-    const handle = new MessageHandle(
-      'message-with-turn',
-      {
-        role: 'user',
-        blocks: [{ type: 'text', content: 'Hello' }],
-      },
-      'enqueue',
-    );
+    const handle = makeHandle('message-with-turn', 'Hello');
     const observed: Array<string | undefined> = [];
 
     tracker.setCurrentTurnId('turn-1');
@@ -207,14 +205,7 @@ describe('MessageLifecycleTracker', () => {
     const tracker = new MessageLifecycleTracker({
       emitGlobal: async () => {},
     });
-    const handle = new MessageHandle(
-      'message-without-turn',
-      {
-        role: 'user',
-        blocks: [{ type: 'text', content: 'Hello' }],
-      },
-      'enqueue',
-    );
+    const handle = makeHandle('message-without-turn', 'Hello');
     const observed: Array<string | undefined> = [];
 
     tracker.setCurrentTurnId('later-turn');
@@ -239,11 +230,7 @@ describe('MessageLifecycleTracker', () => {
 
   it('exposes the tracked handle immediately at dispatch time, before acknowledgment', () => {
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
-    const handle = new MessageHandle(
-      'message-early',
-      { role: 'user', blocks: [{ type: 'text', content: 'early' }] },
-      'enqueue',
-    );
+    const handle = makeHandle('message-early', 'early');
 
     expect(tracker.getCurrentMessageHandle()).toBeUndefined();
     expect(tracker.getCurrentMessageId()).toBeUndefined();
@@ -265,16 +252,8 @@ describe('MessageLifecycleTracker', () => {
     // track(handleB) is called while handleA is still the active correlation
     // source. handleB must NOT become active until handleA completes.
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
-    const handleA = new MessageHandle(
-      'message-a',
-      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
-      'enqueue',
-    );
-    const handleB = new MessageHandle(
-      'message-b',
-      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
-      'enqueue',
-    );
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
 
     // Turn A dispatched — becomes active immediately (no prior active handle).
     tracker.track(handleA);
@@ -304,16 +283,8 @@ describe('MessageLifecycleTracker', () => {
     // the old handle's completion promise resolves). Acknowledgment is the
     // authoritative signal that the turn is executing.
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
-    const handleA = new MessageHandle(
-      'message-a',
-      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
-      'enqueue',
-    );
-    const handleB = new MessageHandle(
-      'message-b',
-      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
-      'enqueue',
-    );
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
 
     tracker.track(handleA);
     expect(tracker.getCurrentMessageHandle()).toBe(handleA);
@@ -338,16 +309,8 @@ describe('MessageLifecycleTracker', () => {
 
   it('clears a pending handle that completes before promotion (e.g. cancelled while queued)', async () => {
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
-    const handleA = new MessageHandle(
-      'message-a',
-      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
-      'enqueue',
-    );
-    const handleB = new MessageHandle(
-      'message-b',
-      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
-      'enqueue',
-    );
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
 
     tracker.track(handleA);
     tracker.track(handleB);
@@ -367,16 +330,8 @@ describe('MessageLifecycleTracker', () => {
 
   it('keeps the most recently acknowledged handle active until that handle completes', () => {
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
-    const firstHandle = new MessageHandle(
-      'message-a',
-      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
-      'enqueue',
-    );
-    const secondHandle = new MessageHandle(
-      'message-b',
-      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
-      'enqueue',
-    );
+    const firstHandle = makeHandle('message-a', 'A');
+    const secondHandle = makeHandle('message-b', 'B');
 
     tracker.acknowledge(firstHandle);
     tracker.acknowledge(secondHandle);
@@ -397,22 +352,8 @@ describe('MessageLifecycleTracker', () => {
         emissions.push({ subject, payload });
       },
     });
-    const firstHandle = new MessageHandle(
-      'message-a',
-      {
-        role: 'user',
-        blocks: [{ type: 'text', content: 'A' }],
-      },
-      'enqueue',
-    );
-    const secondHandle = new MessageHandle(
-      'message-b',
-      {
-        role: 'user',
-        blocks: [{ type: 'text', content: 'B' }],
-      },
-      'enqueue',
-    );
+    const firstHandle = makeHandle('message-a', 'A');
+    const secondHandle = makeHandle('message-b', 'B');
 
     tracker.setCurrentTurnId('turn-a');
     tracker.track(firstHandle, (messageId, _result, turnId) => {
@@ -464,21 +405,9 @@ describe('MessageLifecycleTracker', () => {
     // while A is still active. On completion of A, B (the first queued) must be
     // promoted — not C (the last queued).
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
-    const handleA = new MessageHandle(
-      'message-a',
-      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
-      'enqueue',
-    );
-    const handleB = new MessageHandle(
-      'message-b',
-      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
-      'enqueue',
-    );
-    const handleC = new MessageHandle(
-      'message-c',
-      { role: 'user', blocks: [{ type: 'text', content: 'C' }] },
-      'enqueue',
-    );
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
+    const handleC = makeHandle('message-c', 'C');
 
     // A dispatched — becomes active immediately.
     tracker.track(handleA);
@@ -512,21 +441,9 @@ describe('MessageLifecycleTracker', () => {
     // Scenario: Turn A is active. B and C are queued. B is cancelled while
     // pending. On A's completion, C (the next remaining in queue) is promoted.
     const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
-    const handleA = new MessageHandle(
-      'message-a',
-      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
-      'enqueue',
-    );
-    const handleB = new MessageHandle(
-      'message-b',
-      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
-      'enqueue',
-    );
-    const handleC = new MessageHandle(
-      'message-c',
-      { role: 'user', blocks: [{ type: 'text', content: 'C' }] },
-      'enqueue',
-    );
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
+    const handleC = makeHandle('message-c', 'C');
 
     tracker.track(handleA);
     tracker.track(handleB);
@@ -568,11 +485,7 @@ describe('MessageLifecycleTracker', () => {
       },
     });
 
-    const handle = new MessageHandle(
-      'message-shutdown',
-      { role: 'user', blocks: [{ type: 'text', content: 'Too late' }] },
-      'enqueue',
-    );
+    const handle = makeHandle('message-shutdown', 'Too late');
 
     // Simulate shutdown gate completing the handle before track() is called.
     handle.markCompleted({ outcome: 'error', error: new Error('Session closed') });
@@ -630,16 +543,8 @@ describe('MessageLifecycleTracker', () => {
         emissions.push({ subject, payload });
       },
     });
-    const handleA = new MessageHandle(
-      'message-a',
-      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
-      'enqueue',
-    );
-    const handleB = new MessageHandle(
-      'message-b',
-      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
-      'enqueue',
-    );
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
 
     // A dispatched — becomes active immediately.
     tracker.track(handleA);
@@ -695,11 +600,7 @@ describe('MessageLifecycleTracker', () => {
         emissions.push({ subject, payload });
       },
     });
-    const handle = new MessageHandle(
-      'message-delivered',
-      { role: 'user', blocks: [{ type: 'text', content: 'Hello' }] },
-      'enqueue',
-    );
+    const handle = makeHandle('message-delivered', 'Hello');
 
     tracker.track(handle);
     handle.markAcknowledged();
@@ -724,11 +625,7 @@ describe('MessageLifecycleTracker', () => {
         emissions.push({ subject, payload });
       },
     });
-    const handle = new MessageHandle(
-      'message-undelivered',
-      { role: 'user', blocks: [{ type: 'text', content: 'Superseded' }] },
-      'enqueue',
-    );
+    const handle = makeHandle('message-undelivered', 'Superseded');
 
     tracker.track(handle);
     // Complete without acknowledging — simulates merge/supersede before dispatch.
@@ -753,11 +650,7 @@ describe('MessageLifecycleTracker', () => {
         emissions.push({ subject, payload });
       },
     });
-    const handle = new MessageHandle(
-      'message-late-track',
-      { role: 'user', blocks: [{ type: 'text', content: 'Shutdown' }] },
-      'enqueue',
-    );
+    const handle = makeHandle('message-late-track', 'Shutdown');
 
     // Simulate shutdown gate completing the handle before track().
     handle.markCompleted({ outcome: 'error', error: new Error('Session closed') });

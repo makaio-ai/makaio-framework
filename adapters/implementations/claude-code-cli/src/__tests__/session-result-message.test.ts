@@ -3,55 +3,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue, type MessageResult } from '@makaio/ai-adapters-core';
 import type { SDKMessage } from '@makaio/client-claude-code';
-import type { CliStdioTransport } from '../utils/createStdioTransport.js';
 
-const transportHarness = vi.hoisted(() => {
-  type MessageCallback = (message: SDKMessage) => void;
-  type ErrorCallback = (error: Error) => void;
-
-  let messageCallback: MessageCallback | undefined;
-  let errorCallback: ErrorCallback | undefined;
-
-  const transport: CliStdioTransport = {
-    onMessage: vi.fn((callback: MessageCallback) => {
-      messageCallback = callback;
-    }),
-    onError: vi.fn((callback: ErrorCallback) => {
-      errorCallback = callback;
-    }),
+const transportStub = vi.hoisted(() => ({
+  transport: {
+    onMessage: vi.fn(),
+    onError: vi.fn(),
     close: vi.fn(),
-  };
-
-  return {
-    transport,
-    emitMessage(message: SDKMessage): void {
-      if (!messageCallback) {
-        throw new Error('Transport message callback was not registered');
-      }
-      messageCallback(message);
-    },
-    emitError(error: Error): void {
-      if (!errorCallback) {
-        throw new Error('Transport error callback was not registered');
-      }
-      errorCallback(error);
-    },
-    reset(): void {
-      messageCallback = undefined;
-      errorCallback = undefined;
-      vi.mocked(transport.onMessage).mockClear();
-      vi.mocked(transport.onError).mockClear();
-      vi.mocked(transport.close).mockClear();
-    },
-  };
-});
+  },
+}));
 
 vi.mock('../utils/createStdioTransport.js', () => ({
-  createStdioTransport: vi.fn(() => transportHarness.transport),
+  createStdioTransport: vi.fn(() => transportStub.transport),
 }));
 
 import { ClaudeCliSession } from '../session.js';
 import { ClaudeCodeCliConnectorNamespace } from '../namespace/index.js';
+import { makeTransportHarness } from './fixtures/transport-harness.js';
+
+const transportHarness = makeTransportHarness(transportStub.transport);
 
 function makeHandle(): MessageHandle {
   return new MessageHandle(

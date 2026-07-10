@@ -12,6 +12,11 @@ import {
   processQueueMessages,
 } from '@makaio/ai-adapters-core';
 import { buildTextPrompt, extractMessageText } from '@makaio/ai-adapters-claude-process-shared';
+import {
+  resolveResultMessage,
+  TERMINAL_RESULT_DRAIN_TIMEOUT_MS,
+  type ResultMessageWithStructuredOutput,
+} from '@makaio/ai-adapters-claude-shared';
 import { DeferredPromise } from '@makaio/utils';
 import type { CliStdioTransport } from './utils/createStdioTransport.js';
 import { createStdioTransport } from './utils/createStdioTransport.js';
@@ -59,12 +64,6 @@ interface TurnSessionIdentity {
   sessionIdForMcp: string;
 }
 
-type ResultMessageWithStructuredOutput = Extract<SDKMessage, { type: 'result' }> & {
-  result?: string;
-  structured_output?: unknown;
-};
-
-const TERMINAL_RESULT_DRAIN_TIMEOUT_MS = 250;
 const CLOSED_BEFORE_TERMINAL_RESULT_MESSAGE = 'Claude Code CLI closed before emitting a terminal result';
 
 /**
@@ -104,8 +103,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   };
   /** Shares one teardown across concurrent abort/close calls. */
   private closePromise?: Promise<void>;
-  /** True once `close()` or `abort()` has begun; gates {@link processQueue}. */
-  private closing = false;
 
   /**
    * Resolve resume/session IDs for the next CLI turn.
@@ -312,28 +309,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   }
 
   /**
-   * Recheck the shutdown flag after an awaited setup step in the start path.
-   *
-   * When `close()` sets `this.closing` while `startTurn` is awaiting
-   * environment resolution or MCP registration, the dequeued handle is no
-   * longer in the queue and {@link rejectQueuedHandles} cannot reach it.
-   * This helper completes the handle with the same error contract so callers
-   * see a consistent shutdown outcome.
-   * @param handle - Dequeued message handle currently being set up
-   * @returns `true` when the session is closing and the handle was completed
-   */
-  private completeHandleIfClosing(handle: MessageHandle): boolean {
-    if (!this.closing) return false;
-    if (!handle.isProcessed) {
-      handle.markCompleted({
-        outcome: 'error',
-        error: new Error('Session closed before queued message could be processed'),
-      });
-    }
-    return true;
-  }
-
-  /**
    * Start a new turn by spawning a `claude -p` process for the given message.
    *
    * Each turn is a separate CLI invocation. For turns after the first, the
@@ -502,7 +477,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         ? {
             outcome: 'completed',
             result: {
-              message: this.resolveResultMessage(sdkMessage),
+              message: resolveResultMessage(sdkMessage as ResultMessageWithStructuredOutput),
             },
           }
         : {
@@ -580,23 +555,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     } catch (finishError) {
       console.error('[Session] Failed to finish errored turn:', finishError);
     }
-  }
-
-  /**
-   * Resolve the terminal message from a successful CLI result.
-   *
-   * When `--json-schema` is active, Claude Code CLI returns the typed value in
-   * `structured_output`. Makaio's terminal message contract is still text, so
-   * the structured value is serialized back to JSON for shared validation and
-   * persistence.
-   * @param msg - Successful CLI result message.
-   * @returns Terminal message text for the Makaio message result.
-   */
-  private resolveResultMessage(msg: ResultMessageWithStructuredOutput): string {
-    if ('structured_output' in msg && msg.structured_output !== undefined) {
-      return JSON.stringify(msg.structured_output);
-    }
-    return msg.result ?? '';
   }
 
   /**

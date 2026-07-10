@@ -6,86 +6,11 @@ import type { SDKMessage } from '@makaio/client-claude-code';
 import { McpSubjects } from '@makaio/contracts';
 
 const queryHarness = vi.hoisted(() => {
-  const sdkBase = (sessionId: string) => ({
-    uuid: crypto.randomUUID(),
-    session_id: sessionId,
-    agentId: 'agent-test',
-  });
-  const usage = {
-    input_tokens: 1,
-    output_tokens: 1,
-    cache_creation: {
-      ephemeral_1h_input_tokens: 0,
-      ephemeral_5m_input_tokens: 0,
-    },
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 0,
-    server_tool_use: { web_search_requests: 0 },
-    service_tier: 'standard',
-  };
-  const query = vi.fn(
-    ({
-      prompt,
-      options,
-    }: {
-      prompt: AsyncIterable<unknown>;
-      options: {
-        sessionId?: string;
-        resume?: string;
-        outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
-      };
-    }) => {
-      const effectiveSessionId = options.resume ?? options.sessionId ?? crypto.randomUUID();
-      return {
-        interrupt: vi.fn(async () => undefined),
-        close: vi.fn(() => undefined),
-        setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
-        setMaxThinkingTokens: vi.fn(async () => undefined),
-        async *[Symbol.asyncIterator]() {
-          for await (const _message of prompt) {
-            yield {
-              type: 'rate_limit_event',
-              retry_after_ms: 1000,
-              session_id: effectiveSessionId,
-            };
-            yield {
-              ...sdkBase(effectiveSessionId),
-              type: 'system',
-              subtype: 'init',
-              apiKeySource: 'user',
-              cwd: os.tmpdir(),
-              tools: [],
-              mcp_servers: [],
-              model: 'claude-sonnet-4-20250514',
-              permissionMode: 'default',
-              slash_commands: [],
-              output_style: 'default',
-            };
-            yield {
-              ...sdkBase(effectiveSessionId),
-              type: 'result',
-              subtype: 'success',
-              is_error: false,
-              result: options.outputFormat ? '' : 'session completed',
-              ...(options.outputFormat !== undefined && { structured_output: { ok: true } }),
-              duration_ms: 1,
-              duration_api_ms: 1,
-              num_turns: 1,
-              total_cost_usd: 0,
-              usage,
-              modelUsage: {},
-              permission_denials: [],
-            };
-          }
-        },
-      };
-    },
-  );
-
+  const query = vi.fn();
   return {
     query,
     reset: () => {
-      query.mockClear();
+      query.mockReset();
     },
   };
 });
@@ -97,6 +22,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 import { ClaudeCodeConnectorNamespace } from '../src/namespace/index.js';
 import { ClaudeConnectorSession } from '../src/session.js';
+import { installDefaultQueryImpl, createMessageHandle } from './fixtures/query-harness.js';
 
 /**
  * Install a current-turn seam for tests that exercise queue interleavings.
@@ -107,29 +33,14 @@ function setCurrentTurnForTest(session: ClaudeConnectorSession, currentTurn: unk
   expect(Reflect.set(session, 'currentTurn', currentTurn)).toBe(true);
 }
 
-function createMessageHandle(
-  messageId = 'message-1',
-  deliveryMode: 'enqueue' | 'replace' | 'immediate' = 'enqueue',
-  responseSchema?: MessageHandle['responseSchema'],
-): MessageHandle {
-  return new MessageHandle(
-    messageId,
-    {
-      role: 'user',
-      blocks: [{ type: 'text', content: 'hello' }],
-      message: 'hello',
-    },
-    deliveryMode,
-    undefined,
-    undefined,
-    responseSchema,
-  );
-}
-
 describe('ClaudeConnectorSession onTurnComplete seam', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
     queryHarness.reset();
+    installDefaultQueryImpl(queryHarness.query, {
+      includeRateLimitEvent: true,
+      includeOutputFormat: true,
+    });
   });
 
   it('invokes onTurnComplete from the real result-handling path', async () => {

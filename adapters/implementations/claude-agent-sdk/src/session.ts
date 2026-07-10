@@ -64,9 +64,9 @@ type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { even
  * starts its turn before `close()` begins, or is completed with
  * the closing error at every await point where `close()` can
  * interleave (schema rotation, query creation, MCP registration).
- * This is enforced by {@link completeHandleIfClosing}, which rechecks
- * `this.closing` after each awaited setup step and completes the
- * handle with the same error contract used by
+ * This is enforced by {@link BaseConnectorSession.completeHandleIfClosing},
+ * which rechecks `this.closing` after each awaited setup step and completes
+ * the handle with the same error contract used by
  * {@link rejectQueuedHandles}.
  *
  * This prevents a race where the drain window in `close()` accepts a
@@ -102,8 +102,6 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /** Stable key for the SDK-relevant response schema on the active query. */
   private activeResponseSchemaKey: string | undefined;
   private readonly terminalResultDrain = new TerminalResultDrain();
-  /** True once `close()` or `abort()` has begun; gates {@link processQueue}. */
-  private closing = false;
 
   public constructor(config: ClaudeSessionConfig) {
     super(config);
@@ -353,28 +351,6 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
-   * Recheck the shutdown flag after an awaited setup step in the start path.
-   *
-   * When `close()` sets `this.closing` while `startNewTurn` is awaiting
-   * schema rotation, query creation, or MCP registration, the dequeued handle
-   * is no longer in the queue and {@link rejectQueuedHandles} cannot reach it.
-   * This helper completes the handle with the same error contract so callers
-   * see a consistent shutdown outcome.
-   * @param handle - Dequeued message handle currently being set up
-   * @returns `true` when the session is closing and the handle was completed
-   */
-  private completeHandleIfClosing(handle: MessageHandle): boolean {
-    if (!this.closing) return false;
-    if (!handle.isProcessed) {
-      handle.markCompleted({
-        outcome: 'error',
-        error: new Error('Session closed before queued message could be processed'),
-      });
-    }
-    return true;
-  }
-
-  /**
    * Start a new turn with the given message.
    *
    * Returns `false` when shutdown interleaved during setup and no turn was
@@ -491,12 +467,12 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private async handleConsumptionError(error: unknown, queryGeneration: number): Promise<void> {
     if (queryGeneration !== this.queryGeneration) return;
 
-    this.terminalResultDrain.resolve(queryGeneration);
-    // Retire this generation so the consumption loop rejects any late SDK result
-    // that arrives while we await completion transforms / finishOnError below.
-    // Without this, a result emitted during the await window passes both the
-    // queryGeneration guard and the hasHandled() check in handleSdkMessage().
-    this.terminalResultDrain.retire(queryGeneration);
+    // Force-close this generation so (a) the drain deferred resolves and
+    // (b) hasHandled() returns true, preventing any late SDK result that
+    // arrives while we await completion transforms / finishOnError below
+    // from passing both the queryGeneration guard and the hasHandled()
+    // check in handleSdkMessage().
+    this.terminalResultDrain.forceClose(queryGeneration);
 
     // Disown unconditionally: whether the turn is incomplete, already
     // completed, or absent, the dead query must be detached so that the next

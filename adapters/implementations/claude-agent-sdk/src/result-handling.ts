@@ -1,13 +1,11 @@
-import type { SDKMessage } from '@makaio/client-claude-code';
 import { markCompletedWithFinalResult, type MessageResult } from '@makaio/ai-adapters-core';
-import { parseResultError } from '@makaio/ai-adapters-claude-shared';
+import {
+  parseResultError,
+  resolveResultMessage,
+  type ResultMessageWithStructuredOutput,
+} from '@makaio/ai-adapters-claude-shared';
 import type { OnTurnCompleteCallback } from './types/index.js';
 import { ClaudeConnectorTurn } from './turn.js';
-
-type ResultMessageWithStructuredOutput = Extract<SDKMessage, { type: 'result' }> & {
-  result?: string;
-  structured_output?: unknown;
-};
 
 /**
  * Complete a Claude turn from its terminal SDK result.
@@ -48,15 +46,4 @@ export async function handleClaudeResultMessage(
 function normalizeResultError(msg: ResultMessageWithStructuredOutput): Error {
   const parsedError = parseResultError(msg);
   return parsedError instanceof Error ? parsedError : new Error(String(parsedError));
-}
-
-/**
- * Convert a terminal result payload to Makaio's text result contract.
- * @param msg - Terminal SDK result.
- * @returns Terminal message text.
- */
-function resolveResultMessage(msg: ResultMessageWithStructuredOutput): string {
-  return 'structured_output' in msg && msg.structured_output !== undefined
-    ? JSON.stringify(msg.structured_output)
-    : (msg.result ?? '');
 }

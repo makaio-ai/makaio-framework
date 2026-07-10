@@ -3,6 +3,17 @@ import type { PauseResult } from '../connector/base-connector-turn.js';
 import type { UserMessageQueue } from './user-message-queue.js';
 
 /**
+ * Canonical error message used when a queued message cannot be processed
+ * because the session has entered the shutdown path.
+ *
+ * Shared between {@link rejectQueuedHandles} (queue drain) and the per-handle
+ * shutdown gate ({@link BaseConnectorSession.completeHandleIfClosing}) so that
+ * callers see a consistent error contract regardless of whether the handle was
+ * still in the queue or had already been dequeued when `close()` interleaved.
+ */
+export const SESSION_CLOSED_QUEUE_ERROR = 'Session closed before queued message could be processed';
+
+/**
  * Minimal turn interface required by processQueue orchestration.
  *
  * Any turn implementation (Claude, Gemini, OpenAI, Copilot) that exposes
@@ -198,10 +209,7 @@ export async function processQueueMessages<TExtra = unknown>(
  * @param queue - User message queue to drain
  * @param message - Error message to attach to each rejected handle
  */
-export function rejectQueuedHandles(
-  queue: UserMessageQueue,
-  message = 'Session closed before queued message could be processed',
-): void {
+export function rejectQueuedHandles(queue: UserMessageQueue, message = SESSION_CLOSED_QUEUE_ERROR): void {
   let handle = queue.dequeue();
   while (handle) {
     if (!handle.isProcessed) {
