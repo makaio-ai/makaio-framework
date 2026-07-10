@@ -936,6 +936,11 @@ export type {
   TransitionRuleDefinition,
 } from './workflow/index.js';
 export {
+  CompleteExternalExecutionRequestSchema,
+  EXTERNAL_EXECUTION_ID_PREFIX,
+  ExternalExecutionFrameCompletionSchema,
+  ExternalExecutionFrameStartSchema,
+  RegisterExternalExecutionRequestSchema,
   WorkLogExecutionSummarySchema,
   WorkLogFrameEntrySchema,
   WorkLogArtifactWriteSchema,
@@ -946,6 +951,10 @@ export {
   WorkflowArtifactBindingSchema,
 } from './workflow/index.js';
 export type {
+  CompleteExternalExecutionRequest,
+  ExternalExecutionFrameCompletion,
+  ExternalExecutionFrameStart,
+  RegisterExternalExecutionRequest,
   WorkLogExecutionSummary,
   WorkLogFrameEntry,
   WorkLogArtifactWrite,

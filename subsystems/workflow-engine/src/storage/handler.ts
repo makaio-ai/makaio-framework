@@ -17,7 +17,7 @@ import type {
   WorkflowRunContext,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
-import type { InsertWorkflowExecution } from './schema.js';
+import type { InsertWorkflowExecution, SelectWorkflowExecution } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { registerDefinitionHandlers } from './definition-handler.js';
 import { registerFrameHandlers } from './frame-handler.js';
@@ -28,6 +28,7 @@ import { registerStateHandlers } from './state-handler.js';
 import { toWorkflowStateJsonColumnValue } from './state-json-column.js';
 import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
 import { registerWorklogProjection } from '../worklog/worklog-projection-service.js';
+import { registerExternalExecutionStorageHandlers } from './external-execution-handler.js';
 
 // The `.sqlite` face is the canonical static type for BOTH dialects:
 // `DialectSchema` presents the Postgres twins through the same SQLite-typed
@@ -67,7 +68,7 @@ function mapExecution(row: DbExecutionRow): WorkflowExecution {
  * @param execution - Workflow execution to persist
  * @returns Column values for the `workflow_executions` table
  */
-function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecution {
+function toExecutionDbValues(execution: WorkflowExecution): SelectWorkflowExecution {
   const scopeColumns = toScopeColumns(execution.scope);
   return {
     id: execution.id,
@@ -494,7 +495,7 @@ function registerExecutionListHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
  * - Span CRUD: setSpan, listSpans
  * - Execution link CRUD: setExecutionLink, listExecutionLinks
  * - Run context CRUD: setRunContext, getRunContext
- * - WorkLog projection: worklog.get, worklog.list, worklog.changed (event-driven)
+ * - WorkLog projection: execution/frame reads, stats, and changed events
  * @param bus - MakaioBus instance for message handling
  * @param db - Drizzle database instance
  * @returns Cleanup function to unregister all handlers
@@ -509,6 +510,7 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
   const runContextCleanup = registerRunContextHandlers(bus, db);
   const stateCleanup = registerStateHandlers(bus, db);
   const worklogCleanup = registerWorklogProjection(bus, db);
+  const externalExecutionCleanup = registerExternalExecutionStorageHandlers(bus, db, toExecutionDbValues);
 
   return () => {
     definitionCleanup();
@@ -520,5 +522,6 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
     runContextCleanup();
     stateCleanup();
     worklogCleanup();
+    externalExecutionCleanup();
   };
 }

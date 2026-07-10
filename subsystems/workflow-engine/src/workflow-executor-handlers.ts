@@ -3,8 +3,10 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { BaseMessageContext } from '@makaio/core';
 import {
   JsonPatchOperationSchema,
+  EXTERNAL_EXECUTION_ID_PREFIX,
   type IWorkflowTriggerTypeRegistry,
   type JsonValue,
+  type WorkLogFrameEntry,
   type WorkflowDefinition,
   type WorkflowExecution,
 } from '@makaio/contracts';
@@ -15,18 +17,6 @@ import { generateId } from './executor-helpers.js';
 
 type RegisterExternalExecutionRequest = z.infer<typeof WorkflowSchemas.registerExternalExecution.request>;
 type CompleteExternalExecutionRequest = z.infer<typeof WorkflowSchemas.completeExternalExecution.request>;
-
-/**
- * ID prefix that marks externally-registered executions.
- *
- * All IDs produced by `registerExternalExecution` start with this prefix.
- * Engine-driven executions use the `wfx-` prefix (without `-ext`), so the
- * two sets are disjoint and prefix-checking is a reliable discriminant.
- *
- * This constant is the single source of truth — the register handler and the
- * `completeExternalExecution` guard both reference it so they cannot drift.
- */
-const EXTERNAL_EXECUTION_ID_PREFIX = 'wfx-ext-';
 
 /**
  * Return `true` when `executionId` was produced by `registerExternalExecution`.
@@ -215,10 +205,9 @@ export function registerWorkflowStorageDelegationHandlers(bus: IMakaioBus): Arra
 /**
  * Register handlers for external (engine-bypass) execution lifecycle.
  *
- * External executions create a minimal `workflow_executions` row so that
- * standard lifecycle events can flow through the WorkLog projection without
- * FK violations. No coordinator session, run-context snapshot, or runtime
- * state is created.
+ * External executions and their WorkLog summary/frame are written through
+ * atomic storage subjects. Standard lifecycle events remain advisory; no
+ * coordinator session, run-context snapshot, or runtime state is created.
  * @param bus - Message bus
  * @returns Cleanup functions for the registered handlers
  */
@@ -227,28 +216,39 @@ function registerExternalExecutionHandlers(bus: IMakaioBus): Array<() => void> {
     bus.on(WorkflowSubjects.registerExternalExecution, async (ctx) => {
       const payload = WorkflowSchemas.registerExternalExecution.request.parse(ctx.payload);
       const { name, scope, input } = payload;
+      if (payload.executionId !== undefined && !ctx.origin.local) {
+        throw new Error('registerExternalExecution: caller-supplied executionId is restricted to local callers');
+      }
       // `generateId('wfx-ext')` produces `wfx-ext-<timestamp>-<random>`, which
       // satisfies EXTERNAL_EXECUTION_ID_PREFIX and is disjoint from engine IDs.
-      const executionId = generateId('wfx-ext');
-      const execution: WorkflowExecution = {
+      const executionId = payload.executionId ?? generateId('wfx-ext');
+      if (!isExternalExecutionId(executionId)) {
+        throw new Error('registerExternalExecution: executionId must use the wfx-ext- prefix');
+      }
+      const startedAt = payload.startedAt ?? Date.now();
+      const execution: WorkflowExecution & { status: 'running' } = {
         id: executionId,
         workflowId: name,
         status: 'running',
         // Preserve explicit null: `undefined` means no input provided (default to {}),
         // but `null` is a valid JSON value that must round-trip unchanged.
         inputs: input === undefined ? {} : input,
-        startedAt: Date.now(),
+        startedAt,
         scope: scope ?? { type: 'global' },
         ...buildExternalExecutionOptionals(payload),
       };
-      await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-      ctx.setResult({ executionId });
+      const frame = resolveExternalStartFrame(executionId, startedAt, payload.frame);
+      const result = await bus.request(WorkflowStorageSubjects.setExternalExecutionStart, {
+        execution,
+        ...(frame !== undefined ? { frame } : {}),
+      });
+      ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.completeExternalExecution, async (ctx) => {
       // Bus schema validation is disabled in production; parse here because the
       // terminal metadata rules are storage invariants, not just dev-time checks.
       const payload = WorkflowSchemas.completeExternalExecution.request.parse(ctx.payload);
-      const { executionId, status, completedAt } = payload;
+      const { executionId, status } = payload;
       // Primary guard: only executions registered through registerExternalExecution
       // carry the EXTERNAL_EXECUTION_ID_PREFIX. Engine IDs use the plain `wfx-` prefix.
       // This covers all engine paths including persistPreRuntimeTerminalExecution,
@@ -259,24 +259,84 @@ function registerExternalExecutionHandlers(bus: IMakaioBus): Array<() => void> {
           `completeExternalExecution: execution "${executionId}" is engine-owned and must be completed through the engine finalizer, not this API`,
         );
       }
-      const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, { executionId });
-      if (execution === null) {
-        throw new Error(`completeExternalExecution: execution "${executionId}" was not registered`);
-      }
-      if (execution.status !== 'running') {
-        throw new Error(
-          `completeExternalExecution: execution "${executionId}" cannot transition from status "${execution.status}"`,
-        );
-      }
-      const result = await bus.request(WorkflowStorageSubjects.updateExecution, {
+      const frame = resolveExternalTerminalFrame(payload);
+      const result = await bus.request(WorkflowStorageSubjects.settleExternalExecution, {
         executionId,
         status,
         ...buildExternalCompletionMetadata(payload),
-        completedAt: completedAt ?? Date.now(),
+        ...(payload.completedAt !== undefined ? { completedAt: payload.completedAt } : {}),
+        ...(frame !== undefined ? { frame } : {}),
       });
       ctx.setResult({ success: result.success });
     }),
   ];
+}
+
+/**
+ * Resolve optional external frame metadata after the execution ID is known.
+ * @param executionId - Resolved external execution identifier.
+ * @param executionStartedAt - Durable execution start timestamp.
+ * @param frame - Optional caller-supplied frame start metadata.
+ * @returns Resolved running WorkLog frame, or `undefined` when omitted.
+ */
+function resolveExternalStartFrame(
+  executionId: string,
+  executionStartedAt: number,
+  frame: RegisterExternalExecutionRequest['frame'],
+): (WorkLogFrameEntry & { status: 'running'; startedAt: number }) | undefined {
+  if (frame === undefined) return undefined;
+  const frameId = frame.frameId ?? `${executionId}:${frame.nodeId}`;
+  return {
+    executionId,
+    frameId,
+    nodeId: frame.nodeId,
+    nodeType: frame.nodeType,
+    path: frame.path ?? [frameId],
+    status: 'running',
+    attempt: frame.attempt,
+    ...(frame.iteration !== undefined ? { iteration: frame.iteration } : {}),
+    ...(frame.branchKey !== undefined ? { branchKey: frame.branchKey } : {}),
+    startedAt: frame.startedAt ?? executionStartedAt,
+  };
+}
+
+/**
+ * Resolve exact terminal frame values from an external completion request.
+ * @param payload - Parsed external completion request.
+ * @returns Resolved terminal WorkLog frame, or `undefined` when omitted.
+ */
+function resolveExternalTerminalFrame(payload: CompleteExternalExecutionRequest):
+  | (WorkLogFrameEntry & {
+      status: 'completed' | 'failed' | 'cancelled';
+      startedAt: number;
+      completedAt: number;
+      durationMs: number;
+    })
+  | undefined {
+  if (payload.frame === undefined) return undefined;
+  if (payload.completedAt === undefined) {
+    throw new Error('completedAt is required when frame metadata is supplied');
+  }
+  const durationMs = payload.completedAt - payload.frame.startedAt;
+  if (durationMs < 0) throw new Error('completedAt must not precede frame.startedAt');
+  if (payload.frame.durationMs !== undefined && payload.frame.durationMs !== durationMs) {
+    throw new Error('frame.durationMs must equal completedAt - frame.startedAt');
+  }
+  return {
+    executionId: payload.executionId,
+    frameId: payload.frame.frameId,
+    nodeId: payload.frame.nodeId,
+    nodeType: payload.frame.nodeType,
+    path: payload.frame.path,
+    status: payload.status,
+    attempt: payload.frame.attempt,
+    ...(payload.frame.iteration !== undefined ? { iteration: payload.frame.iteration } : {}),
+    ...(payload.frame.branchKey !== undefined ? { branchKey: payload.frame.branchKey } : {}),
+    startedAt: payload.frame.startedAt,
+    completedAt: payload.completedAt,
+    durationMs,
+    ...(payload.status === 'failed' && payload.error !== undefined ? { error: payload.error } : {}),
+  };
 }
 
 /**

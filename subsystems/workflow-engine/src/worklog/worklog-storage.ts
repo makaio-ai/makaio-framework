@@ -1,6 +1,13 @@
-import { eq, and, desc, gte, lte, count, sum } from 'drizzle-orm';
+import { eq, and, desc, gte, lte, count, sum, notInArray } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
-import type { WorkLogExecutionSummary, WorkLogStats, JsonValue, WorkflowArtifactBinding } from '@makaio/contracts';
+import {
+  WorkLogFrameEntrySchema,
+  type WorkLogExecutionSummary,
+  type WorkLogFrameEntry,
+  type WorkLogStats,
+  type JsonValue,
+  type WorkflowArtifactBinding,
+} from '@makaio/contracts';
 import type {
   InsertWorklogSummary,
   SelectWorklogSummary,
@@ -57,6 +64,26 @@ export async function upsertWorklogSummary(db: MakaioDatabase, summary: InsertWo
     target: worklogSummaries.executionId,
     set: summary,
   });
+}
+
+/**
+ * Upsert a running WorkLog summary without regressing a terminal row.
+ * @param db - Drizzle database instance.
+ * @param summary - Running summary values.
+ */
+export async function upsertRunningWorklogSummary(
+  db: MakaioDatabase,
+  summary: InsertWorklogSummary & { status: 'running' },
+): Promise<void> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
+  await db
+    .insert(worklogSummaries)
+    .values(summary)
+    .onConflictDoUpdate({
+      target: worklogSummaries.executionId,
+      set: summary,
+      setWhere: notInArray(worklogSummaries.status, ['completed', 'failed', 'cancelled']),
+    });
 }
 
 /**
@@ -148,6 +175,26 @@ export async function upsertWorklogFrameEntry(db: MakaioDatabase, entry: InsertW
 }
 
 /**
+ * Upsert a running WorkLog frame without regressing a terminal row.
+ * @param db - Drizzle database instance.
+ * @param entry - Running frame values.
+ */
+export async function upsertRunningWorklogFrameEntry(
+  db: MakaioDatabase,
+  entry: InsertWorklogFrameEntry & { status: 'running' },
+): Promise<void> {
+  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
+  await db
+    .insert(worklogFrameEntries)
+    .values(entry)
+    .onConflictDoUpdate({
+      target: worklogFrameEntries.frameId,
+      set: entry,
+      setWhere: notInArray(worklogFrameEntries.status, ['completed', 'failed', 'skipped', 'cancelled']),
+    });
+}
+
+/**
  * Retrieve a single WorkLog frame entry by frame ID.
  *
  * Used by terminal-event projections (`frame.completed`, `frame.failed`) to
@@ -157,13 +204,47 @@ export async function upsertWorklogFrameEntry(db: MakaioDatabase, entry: InsertW
  * @param frameId - Frame identifier to look up.
  * @returns The frame entry row, or `null` when not found.
  */
-export async function getWorklogFrameEntry(
+export async function getWorklogFrameEntryRow(
   db: MakaioDatabase,
   frameId: string,
 ): Promise<SelectWorklogFrameEntry | null> {
   const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
   const rows = await db.select().from(worklogFrameEntries).where(eq(worklogFrameEntries.frameId, frameId)).limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Retrieve one WorkLog frame entry as its public contract shape.
+ *
+ * Database nulls are normalised to absent optional fields before the value is
+ * returned through the public WorkLog RPC. Parsing also protects the RPC from
+ * exposing a row that does not satisfy the published projection contract.
+ * @param db - Drizzle database instance.
+ * @param frameId - Frame identifier to look up.
+ * @returns The mapped frame entry, or `null` when not found.
+ */
+export async function getWorklogFrameEntry(db: MakaioDatabase, frameId: string): Promise<WorkLogFrameEntry | null> {
+  const row = await getWorklogFrameEntryRow(db, frameId);
+  if (row === null) return null;
+
+  return WorkLogFrameEntrySchema.parse({
+    executionId: row.executionId,
+    frameId: row.frameId,
+    nodeId: row.nodeId,
+    nodeType: row.nodeType,
+    path: row.path,
+    status: row.status,
+    attempt: row.attempt,
+    iteration: row.iteration ?? undefined,
+    branchKey: row.branchKey ?? undefined,
+    startedAt: row.startedAt ?? undefined,
+    completedAt: row.completedAt ?? undefined,
+    durationMs: row.durationMs ?? undefined,
+    inputTokens: row.inputTokens ?? undefined,
+    outputTokens: row.outputTokens ?? undefined,
+    estimatedCost: row.estimatedCost ?? undefined,
+    error: row.error ?? undefined,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────

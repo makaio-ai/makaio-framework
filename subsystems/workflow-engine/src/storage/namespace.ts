@@ -15,6 +15,7 @@ import {
   WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
   WorkflowRunContextSchema,
+  WorkLogFrameEntrySchema,
   JsonPatchOperationSchema,
   JsonValueSchema,
 } from '@makaio/contracts';
@@ -40,6 +41,18 @@ const ExecutionUpdateSchema = z.object({
   error: z.string().nullable().optional(),
   reason: z.string().nullable().optional(),
   completedAt: z.number().nullable().optional(),
+});
+
+const ExternalExecutionTerminalStatusSchema = z.enum(['completed', 'failed', 'cancelled']);
+const RunningWorklogFrameSchema = WorkLogFrameEntrySchema.extend({
+  status: z.literal('running'),
+  startedAt: z.number().int().nonnegative(),
+});
+const TerminalWorklogFrameSchema = WorkLogFrameEntrySchema.extend({
+  status: ExternalExecutionTerminalStatusSchema,
+  startedAt: z.number().int().nonnegative(),
+  completedAt: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
 });
 
 /**
@@ -114,6 +127,28 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       }),
       response: z.object({ id: z.string(), executionId: z.string() }),
     },
+
+    /** Atomically persist an external execution and its initial WorkLog rows. */
+    setExternalExecutionStart: localSubject({
+      request: z.object({
+        execution: WorkflowExecutionSchema.extend({ status: z.literal('running') }),
+        frame: RunningWorklogFrameSchema.optional(),
+      }),
+      response: z.object({ executionId: z.string(), frameId: z.string().optional() }),
+    }),
+
+    /** Atomically settle an external execution and its WorkLog projection. */
+    settleExternalExecution: localSubject({
+      request: z.object({
+        executionId: z.string().min(1),
+        status: ExternalExecutionTerminalStatusSchema,
+        error: z.string().min(1).optional(),
+        reason: z.string().min(1).optional(),
+        completedAt: z.number().int().nonnegative().optional(),
+        frame: TerminalWorklogFrameSchema.optional(),
+      }),
+      response: z.object({ success: z.boolean() }),
+    }),
 
     updateExecution: {
       request: ExecutionUpdateSchema,

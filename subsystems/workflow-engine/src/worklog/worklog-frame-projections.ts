@@ -1,7 +1,12 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
-import { upsertWorklogFrameEntry, getWorklogFrameEntry, type SelectWorklogFrameEntry } from './worklog-storage.js';
+import {
+  upsertWorklogFrameEntry,
+  upsertRunningWorklogFrameEntry,
+  getWorklogFrameEntryRow,
+  type SelectWorklogFrameEntry,
+} from './worklog-storage.js';
 import { safeProject, emitWorklogChanged } from './worklog-projection-helpers.js';
 import { reaggregateTokenTotals } from './worklog-execution-projections.js';
 
@@ -24,6 +29,17 @@ interface FrameStartedMetadata {
   inputTokens: number | null;
   outputTokens: number | null;
   estimatedCost: number | null;
+}
+
+const TERMINAL_FRAME_STATUSES = new Set(['completed', 'failed', 'skipped', 'cancelled']);
+
+/**
+ * Return whether a WorkLog frame status is terminal.
+ * @param status - WorkLog frame status.
+ * @returns Whether the status is terminal.
+ */
+function isTerminalFrameStatus(status: string): boolean {
+  return TERMINAL_FRAME_STATUSES.has(status);
 }
 
 /**
@@ -99,7 +115,8 @@ async function projectFrameCompleted(
   completedAt: number | undefined,
 ): Promise<void> {
   const resolvedCompletedAt = completedAt ?? Date.now();
-  const existing = await getWorklogFrameEntry(db, frameId);
+  const existing = await getWorklogFrameEntryRow(db, frameId);
+  if (existing !== null && isTerminalFrameStatus(existing.status)) return;
   const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
   const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
   await upsertWorklogFrameEntry(db, {
@@ -142,7 +159,8 @@ async function projectFrameFailed(
   completedAt: number | undefined,
 ): Promise<void> {
   const resolvedCompletedAt = completedAt ?? Date.now();
-  const existing = await getWorklogFrameEntry(db, frameId);
+  const existing = await getWorklogFrameEntryRow(db, frameId);
+  if (existing !== null && isTerminalFrameStatus(existing.status)) return;
   const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
   const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
   await upsertWorklogFrameEntry(db, {
@@ -174,7 +192,7 @@ export function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): A
     bus.on(WorkflowSubjects.frame.started, async (ctx) => {
       const { executionId, frameId, nodeId, nodeType, path, startedAt } = ctx.payload;
       await safeProject(`frame.started[${frameId}]`, async () => {
-        await upsertWorklogFrameEntry(db, {
+        await upsertRunningWorklogFrameEntry(db, {
           frameId,
           executionId,
           nodeId,
