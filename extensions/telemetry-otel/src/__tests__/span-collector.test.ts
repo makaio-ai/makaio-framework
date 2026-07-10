@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SpanDraft } from '../contracts/types.js';
-import { SpanCollector } from '../collector/span-collector.js';
+import { SpanCollector, type AgentUsagePayload } from '../collector/span-collector.js';
 
 describe('SpanCollector', () => {
   it('buffers agent usage until frame.sessionLinked arrives', async () => {
@@ -1247,6 +1247,247 @@ describe('SpanCollector', () => {
     );
   });
 
+  it('restores only unexported execution groups and preserves the failed group segment', async () => {
+    const attemptedRootSpanIds: string[] = [];
+    const exportedSessions: string[] = [];
+    let nowMs = 1_000;
+    let attempts = 0;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        const root = drafts.find((draft) => draft.subject === 'session');
+        if (root !== undefined) attemptedRootSpanIds.push(root.spanId);
+        if (attempts === 2) throw new Error('second group failed');
+        if (root?.sessionId !== undefined) exportedSessions.push(root.sessionId);
+      },
+    });
+    const usage = (sessionId: string): AgentUsagePayload => ({
+      executionId: 'wfx-multi-group',
+      sessionId,
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 1,
+      inputCachedTokens: 0,
+      outputTokens: 1,
+      reasoningTokens: 0,
+      totalTokens: 2,
+      costUnits: 2,
+      costUnitType: 'tokens',
+    });
+
+    collector.onAgentUsage(usage('sess-a'));
+    collector.onAgentUsage(usage('sess-b'));
+    nowMs = 6_000;
+
+    await expect(collector.sweepOrphans()).rejects.toThrow('second group failed');
+    await expect(collector.sweepOrphans()).resolves.toBeUndefined();
+
+    expect(attemptedRootSpanIds).toEqual(['session:sess-a:0', 'session:sess-b:1', 'session:sess-b:1']);
+    expect(exportedSessions).toEqual(['sess-a', 'sess-b']);
+  });
+
+  it('coalesces concurrent sweeps so new arrivals receive a fresh segment', async () => {
+    const attemptedRootSpanIds: string[] = [];
+    let nowMs = 1_000;
+    let releaseFirstExport = (): void => {};
+    let markFirstExportStarted = (): void => {};
+    const firstExportGate = new Promise<void>((resolve) => {
+      releaseFirstExport = resolve;
+    });
+    const firstExportStarted = new Promise<void>((resolve) => {
+      markFirstExportStarted = resolve;
+    });
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        const root = drafts.find((draft) => draft.subject === 'session');
+        if (root !== undefined) attemptedRootSpanIds.push(root.spanId);
+        if (attemptedRootSpanIds.length === 1) {
+          markFirstExportStarted();
+          await firstExportGate;
+        }
+      },
+    });
+    const usage = (): AgentUsagePayload => ({
+      executionId: 'wfx-concurrent-sweep',
+      sessionId: 'sess-concurrent-sweep',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 1,
+      inputCachedTokens: 0,
+      outputTokens: 1,
+      reasoningTokens: 0,
+      totalTokens: 2,
+      costUnits: 2,
+      costUnitType: 'tokens',
+    });
+
+    collector.onAgentUsage(usage());
+    nowMs = 6_000;
+    const firstSweep = collector.sweepOrphans();
+    await firstExportStarted;
+    collector.onAgentUsage(usage());
+    nowMs = 11_000;
+    const overlappingSweep = collector.sweepOrphans();
+
+    expect(overlappingSweep).toBe(firstSweep);
+    expect(attemptedRootSpanIds).toEqual(['session:sess-concurrent-sweep:0']);
+    releaseFirstExport();
+    await firstSweep;
+    await collector.sweepOrphans();
+
+    expect(attemptedRootSpanIds).toEqual(['session:sess-concurrent-sweep:0', 'session:sess-concurrent-sweep:1']);
+  });
+
+  it('replays a failed standalone batch when its claimed execution opens during export', async () => {
+    const exported: SpanDraft[][] = [];
+    let nowMs = 1_000;
+    let rejectFirstExport = (_error: Error): void => {};
+    let markFirstExportStarted = (): void => {};
+    const firstExportGate = new Promise<void>((_resolve, reject) => {
+      rejectFirstExport = reject;
+    });
+    const firstExportStarted = new Promise<void>((resolve) => {
+      markFirstExportStarted = resolve;
+    });
+    let attempts = 0;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        if (attempts === 1) {
+          markFirstExportStarted();
+          await firstExportGate;
+        }
+        exported.push(drafts);
+      },
+    });
+
+    collector.onAgentUsage({
+      executionId: 'wfx-opens-during-export',
+      sessionId: 'sess-opens-during-export',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 1,
+      inputCachedTokens: 0,
+      outputTokens: 1,
+      reasoningTokens: 0,
+      totalTokens: 2,
+      costUnits: 2,
+      costUnitType: 'tokens',
+    });
+    nowMs = 6_000;
+    const sweep = collector.sweepOrphans();
+    await firstExportStarted;
+    collector.onExecutionStarted({ executionId: 'wfx-opens-during-export', workflowId: 'wf-test' }, nowMs);
+    rejectFirstExport(new Error('standalone export failed'));
+
+    await expect(sweep).rejects.toThrow('standalone export failed');
+    await collector.onExecutionCompleted({ executionId: 'wfx-opens-during-export', totalDuration: 1 }, nowMs + 1);
+    await collector.sweepOrphans();
+
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ spanId: 'execution:wfx-opens-during-export' }),
+        expect.objectContaining({
+          spanId: 'llm:wfx-opens-during-export:sess-opens-during-export:0',
+          executionId: 'wfx-opens-during-export',
+        }),
+      ]),
+    );
+  });
+
+  it('replays failed standalone usage and tools when the session links during export', async () => {
+    const exported: SpanDraft[][] = [];
+    let nowMs = 1_000;
+    let rejectFirstExport = (_error: Error): void => {};
+    let markFirstExportStarted = (): void => {};
+    const firstExportGate = new Promise<void>((_resolve, reject) => {
+      rejectFirstExport = reject;
+    });
+    const firstExportStarted = new Promise<void>((resolve) => {
+      markFirstExportStarted = resolve;
+    });
+    let attempts = 0;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        if (attempts === 1) {
+          markFirstExportStarted();
+          await firstExportGate;
+        }
+        exported.push(drafts);
+      },
+    });
+
+    collector.onExecutionStarted({ executionId: 'wfx-links-during-export', workflowId: 'wf-test' }, nowMs);
+    collector.onFrameStarted(
+      {
+        executionId: 'wfx-links-during-export',
+        frameId: 'frame-links-during-export',
+        nodeId: 'delegate',
+        nodeType: 'delegate-agent',
+        path: ['frame-links-during-export'],
+      },
+      nowMs,
+    );
+    collector.onAgentUsage({
+      sessionId: 'sess-links-during-export',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 1,
+      inputCachedTokens: 0,
+      outputTokens: 1,
+      reasoningTokens: 0,
+      totalTokens: 2,
+      costUnits: 2,
+      costUnitType: 'tokens',
+    });
+    collector.onAgentToolStarted({
+      sessionId: 'sess-links-during-export',
+      toolName: 'read',
+      toolCallId: 'call-links-during-export',
+    });
+    nowMs = 6_000;
+    const sweep = collector.sweepOrphans();
+    await firstExportStarted;
+    collector.onFrameSessionLinked({
+      executionId: 'wfx-links-during-export',
+      frameId: 'frame-links-during-export',
+      sessionId: 'sess-links-during-export',
+    });
+    rejectFirstExport(new Error('standalone export failed'));
+
+    await expect(sweep).rejects.toThrow('standalone export failed');
+    await collector.onExecutionCompleted({ executionId: 'wfx-links-during-export', totalDuration: 1 }, nowMs + 1);
+    await collector.sweepOrphans();
+
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          spanId: 'llm:wfx-links-during-export:sess-links-during-export:0',
+          parentSpanId: 'frame:wfx-links-during-export:frame-links-during-export',
+        }),
+        expect.objectContaining({
+          spanId: 'tool:wfx-links-during-export:sess-links-during-export:call-links-during-export',
+          parentSpanId: 'frame:wfx-links-during-export:frame-links-during-export',
+        }),
+      ]),
+    );
+  });
+
   it('flushes pending standalone session usage on shutdown when timeout promotion is disabled', async () => {
     const exported: SpanDraft[][] = [];
     const collector = new SpanCollector({
@@ -1309,7 +1550,6 @@ describe('SpanCollector', () => {
       costUnitType: 'tokens',
     });
 
-    await expect(collector.flushAll()).rejects.toThrow('shutdown export failure');
     await expect(collector.flushAll()).resolves.toBeUndefined();
     await collector.flushAll();
 

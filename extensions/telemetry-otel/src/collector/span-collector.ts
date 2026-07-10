@@ -39,6 +39,8 @@ import type {
   UnresolvedUsage,
 } from './types.js';
 
+const SHUTDOWN_STANDALONE_FLUSH_ATTEMPTS = 2;
+
 export type { AgentUsagePayload } from './types.js';
 
 /**
@@ -163,6 +165,8 @@ export class SpanCollector {
   private readonly standaloneRetrySegmentBySession = new Map<string, number>();
   /** Reuses span IDs for usage whose claimed execution never opened. */
   private readonly standaloneRetrySegmentsByExecution = new Map<string, Map<string, number>>();
+  /** Coalesces overlapping interval ticks into one state transition. */
+  private orphanSweepTask: Promise<void> | undefined;
   private standaloneSegmentSequence = 0;
   /**
    * Orphan spans that have been emitted out-of-band during `sweepOrphans`.
@@ -462,12 +466,46 @@ export class SpanCollector {
    * is terminated as failed with a `'Service shutdown'` error message.
    */
   public async flushAll(): Promise<void> {
+    const activeSweep = this.orphanSweepTask;
+    if (activeSweep !== undefined) {
+      try {
+        await activeSweep;
+      } catch {
+        // Failed standalone batches are restored before the sweep rejects and
+        // are retried by the shutdown flush below.
+      }
+    }
+
+    let firstFailure: unknown;
+    let hasFailure = false;
+    const recordFailure = (error: unknown) => {
+      if (hasFailure) return;
+      hasFailure = true;
+      firstFailure = error;
+    };
     const executionIds = [...this.executions.keys()];
     for (const executionId of executionIds) {
-      await this.onExecutionFailed({ executionId, error: 'Service shutdown' }, this.options.now());
+      try {
+        await this.onExecutionFailed({ executionId, error: 'Service shutdown' }, this.options.now());
+      } catch (error) {
+        recordFailure(error);
+      }
     }
-    await this.flushStaleStandaloneSessions(this.options.now(), 0);
-    await this.flushStaleUnopenedExecutions(this.options.now(), 0);
+    const standaloneFlushes = [
+      () => this.flushStaleStandaloneSessions(this.options.now(), 0),
+      () => this.flushStaleUnopenedExecutions(this.options.now(), 0),
+    ];
+    for (const flush of standaloneFlushes) {
+      for (let attempt = 1; attempt <= SHUTDOWN_STANDALONE_FLUSH_ATTEMPTS; attempt += 1) {
+        try {
+          await flush();
+          break;
+        } catch (error) {
+          if (attempt === SHUTDOWN_STANDALONE_FLUSH_ATTEMPTS) recordFailure(error);
+        }
+      }
+    }
+    if (hasFailure) throw firstFailure;
   }
 
   /**
@@ -481,7 +519,21 @@ export class SpanCollector {
    * buffered until this same timeout expires. After that point the collector
    * exports them as standalone session trace segments.
    */
-  public async sweepOrphans(): Promise<void> {
+  public sweepOrphans(): Promise<void> {
+    if (this.orphanSweepTask !== undefined) {
+      return this.orphanSweepTask;
+    }
+
+    const task = this.sweepOrphansOnce();
+    this.orphanSweepTask = task;
+    void task.then(
+      () => this.clearOrphanSweepTask(task),
+      () => this.clearOrphanSweepTask(task),
+    );
+    return task;
+  }
+
+  private async sweepOrphansOnce(): Promise<void> {
     const now = this.options.now();
     const { orphanTimeoutMs } = this.options;
 
@@ -844,12 +896,7 @@ export class SpanCollector {
         await this.flushStandaloneSession(sessionId, segment, expiredUsages, expiredTools, now);
         this.standaloneRetrySegmentBySession.delete(sessionId);
       } catch (error) {
-        this.standaloneRetrySegmentBySession.set(sessionId, segment);
-        const currentUsages = this.unresolvedUsageBySession.get(sessionId) ?? [];
-        this.unresolvedUsageBySession.set(sessionId, [...expiredUsages, ...currentUsages]);
-        const currentTools = this.unresolvedToolsBySession.get(sessionId) ?? new Map();
-        this.unresolvedToolsBySession.set(sessionId, currentTools);
-        for (const tool of expiredTools) this.mergeUnresolvedToolStart(sessionId, tool);
+        this.restoreFailedStandaloneSession(sessionId, segment, expiredUsages, expiredTools);
         throw error;
       }
     }
@@ -886,12 +933,54 @@ export class SpanCollector {
           if (retrySegments.size === 0) this.standaloneRetrySegmentsByExecution.delete(executionId);
         } catch (error) {
           const unexported = groups.slice(index).flatMap(([, pending]) => pending);
-          const current = this.unresolvedUsageByExecution.get(executionId) ?? [];
-          this.unresolvedUsageByExecution.set(executionId, [...unexported, ...current]);
+          this.restoreFailedUnopenedExecution(executionId, unexported, retrySegments);
           throw error;
         }
       }
     }
+  }
+
+  private restoreFailedStandaloneSession(
+    sessionId: string,
+    segment: number,
+    usages: readonly UnresolvedUsage[],
+    tools: readonly UnresolvedToolCall[],
+  ): void {
+    const execution = this.resolveExecutionForSession(sessionId);
+    if (execution !== undefined) {
+      for (const usage of usages) this.bufferUsageOnExecution(execution, usage);
+      for (const tool of tools) this.mergeToolStartOnExecution(execution, tool);
+      this.standaloneRetrySegmentBySession.delete(sessionId);
+      return;
+    }
+
+    this.standaloneRetrySegmentBySession.set(sessionId, segment);
+    const currentUsages = this.unresolvedUsageBySession.get(sessionId) ?? [];
+    this.unresolvedUsageBySession.set(sessionId, [...usages, ...currentUsages]);
+    const currentTools = this.unresolvedToolsBySession.get(sessionId) ?? new Map();
+    this.unresolvedToolsBySession.set(sessionId, currentTools);
+    for (const tool of tools) this.mergeUnresolvedToolStart(sessionId, tool);
+  }
+
+  private restoreFailedUnopenedExecution(
+    executionId: string,
+    usages: readonly UnresolvedUsage[],
+    retrySegments: Map<string, number>,
+  ): void {
+    const execution = this.executions.get(executionId);
+    if (execution !== undefined) {
+      for (const usage of usages) this.bufferUsageOnExecution(execution, usage);
+      this.standaloneRetrySegmentsByExecution.delete(executionId);
+      return;
+    }
+
+    this.standaloneRetrySegmentsByExecution.set(executionId, retrySegments);
+    const current = this.unresolvedUsageByExecution.get(executionId) ?? [];
+    this.unresolvedUsageByExecution.set(executionId, [...usages, ...current]);
+  }
+
+  private clearOrphanSweepTask(task: Promise<void>): void {
+    if (this.orphanSweepTask === task) this.orphanSweepTask = undefined;
   }
 
   private toolKey(sessionId: string | undefined, toolCallId: string): string {

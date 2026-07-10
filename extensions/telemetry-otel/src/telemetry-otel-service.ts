@@ -83,6 +83,7 @@ export class TelemetryOtelService extends BaseService implements TelemetryOtelPr
   private readonly clock: () => number;
   private readonly scheduledDelayMs: number;
   private readonly terminalTelemetryTasks = new Set<Promise<void>>();
+  private orphanSweepTask: Promise<void> | undefined;
   private sweepIntervalId: ReturnType<typeof setInterval> | undefined;
 
   /**
@@ -129,19 +130,22 @@ export class TelemetryOtelService extends BaseService implements TelemetryOtelPr
     });
 
     this.registerHandler(WorkflowSubjects.execution.completed, async (ctx) => {
-      await this.handleTerminalTelemetry('completed', () =>
+      await this.drainOrphanSweep();
+      await this.trackTerminalTelemetry('completed', () =>
         this.collector.onExecutionCompleted(ctx.payload, ctx.payload.completedAt ?? this.clock()),
       );
     });
 
     this.registerHandler(WorkflowSubjects.execution.failed, async (ctx) => {
-      await this.handleTerminalTelemetry('failed', () =>
+      await this.drainOrphanSweep();
+      await this.trackTerminalTelemetry('failed', () =>
         this.collector.onExecutionFailed(ctx.payload, ctx.payload.completedAt ?? this.clock()),
       );
     });
 
     this.registerHandler(WorkflowSubjects.execution.cancelled, async (ctx) => {
-      await this.handleTerminalTelemetry('cancelled', () =>
+      await this.drainOrphanSweep();
+      await this.trackTerminalTelemetry('cancelled', () =>
         this.collector.onExecutionCancelled(ctx.payload, ctx.payload.completedAt ?? this.clock()),
       );
     });
@@ -191,7 +195,7 @@ export class TelemetryOtelService extends BaseService implements TelemetryOtelPr
     // ── Orphan sweep interval ─────────────────────────────────────
 
     this.sweepIntervalId = setInterval(() => {
-      void this.collector.sweepOrphans();
+      void this.startOrphanSweep();
     }, this.scheduledDelayMs);
 
     this.addCleanup(() => {
@@ -207,6 +211,7 @@ export class TelemetryOtelService extends BaseService implements TelemetryOtelPr
   protected async onDestroy(): Promise<void> {
     this.clearSweepInterval();
     try {
+      await this.drainOrphanSweep();
       await this.drainTerminalTelemetry();
       await this.handleTerminalTelemetry('shutdown', () => this.collector.flushAll());
       await this.drainTerminalTelemetry();
@@ -216,11 +221,16 @@ export class TelemetryOtelService extends BaseService implements TelemetryOtelPr
   }
 
   private observeTerminalTelemetry(status: string, operation: () => Promise<void>): void {
+    void this.trackTerminalTelemetry(status, operation);
+  }
+
+  private trackTerminalTelemetry(status: string, operation: () => Promise<void>): Promise<void> {
     const task = this.handleTerminalTelemetry(status, operation);
     this.terminalTelemetryTasks.add(task);
-    void task.finally(() => {
+    void task.then(() => {
       this.terminalTelemetryTasks.delete(task);
     });
+    return task;
   }
 
   private async drainTerminalTelemetry(): Promise<void> {
@@ -235,6 +245,23 @@ export class TelemetryOtelService extends BaseService implements TelemetryOtelPr
     } catch (error) {
       console.warn(`[telemetry-otel] Failed to export terminal '${status}' telemetry`, error);
     }
+  }
+
+  private startOrphanSweep(): Promise<void> {
+    if (this.orphanSweepTask !== undefined) {
+      return this.orphanSweepTask;
+    }
+
+    const task = this.handleTerminalTelemetry('orphan-sweep', () => this.collector.sweepOrphans());
+    this.orphanSweepTask = task;
+    void task.then(() => {
+      if (this.orphanSweepTask === task) this.orphanSweepTask = undefined;
+    });
+    return task;
+  }
+
+  private async drainOrphanSweep(): Promise<void> {
+    await this.orphanSweepTask;
   }
 
   private clearSweepInterval(): void {
