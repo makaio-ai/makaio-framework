@@ -1,11 +1,12 @@
 /**
- * Dual-dialect conformance for durable external settlement identity.
+ * Dual-dialect conformance for durable external settlement identity and usage.
  *
  * The same cases run against file-backed SQLite and live PostgreSQL: replay
- * after a fresh database handle, concurrent identity selection, and adoption
- * of migrated terminal rows whose fingerprint column is null.
+ * after a fresh database handle, concurrent identity selection, usage
+ * aggregation ordering, and adoption of migrated terminal rows.
  */
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { createBusContext, createBusInstance } from '@makaio/bus-core';
 import { WorkflowNamespace, WorkflowSubjects } from '@makaio/contracts';
 import {
@@ -14,6 +15,7 @@ import {
   WorkflowStorageSubjects,
 } from '@makaio/subsystem-workflow-engine';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import type { SiblingClient, StorageDatabaseContext } from '../harness/config.js';
 import { describeStorageConformance } from '../harness/env.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
 
@@ -63,8 +65,12 @@ function buildRegistration(executionId: string) {
 /**
  * Build an exact framed settlement matching {@link buildRegistration}.
  * @param executionId - External execution identifier.
+ * @param usage - Optional terminal frame usage telemetry.
  */
-function buildFramedSettlement(executionId: string) {
+function buildFramedSettlement(
+  executionId: string,
+  usage?: { readonly inputTokens: number; readonly outputTokens: number; readonly estimatedCost: number },
+) {
   const frameId = `${executionId}:station`;
   return {
     executionId,
@@ -81,12 +87,45 @@ function buildFramedSettlement(executionId: string) {
       startedAt,
       completedAt,
       durationMs: completedAt - startedAt,
+      ...usage,
     },
   };
 }
 
+/**
+ * Return the sole PostgreSQL backend PID used by a poolMax=1 sibling.
+ * @param client - Single-connection sibling client.
+ * @returns PostgreSQL backend process identifier.
+ */
+async function getBackendPid(client: SiblingClient): Promise<number> {
+  const rows = await client.executor.all<{ pid: number }>(sql`SELECT pg_backend_pid() AS pid`);
+  return rows[0]!.pid;
+}
+
+/**
+ * Wait until PostgreSQL reports that a specific backend is blocked on a lock.
+ * @param ctx - Conformance database context used for lock inspection.
+ * @param pid - Backend process identifier to inspect.
+ * @param operation - Human-readable operation for timeout diagnostics.
+ */
+async function waitForBackendLock(ctx: StorageDatabaseContext, pid: number, operation: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const rows = await ctx.executor.all<{ waiting: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_stat_activity
+        WHERE pid = ${pid} AND wait_event_type = 'Lock'
+      ) AS waiting
+    `);
+    if (rows[0]?.waiting === true) return;
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${operation} to block on the summary row`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describeStorageConformance('workflow external settlement identity', (config) => {
   const getCtx = useSuiteDatabaseContext(config);
+  const describePg = config.dialect === 'postgres' ? describe : describe.skip;
 
   it('serializes identical concurrent registrations before inserting secondary WorkLog rows', async () => {
     const executionId = `wfx-ext-register-concurrent-${crypto.randomUUID()}`;
@@ -120,6 +159,226 @@ describeStorageConformance('workflow external settlement identity', (config) => 
       second.cleanup();
       await sibling?.close();
     }
+  });
+
+  it('replaces a pre-settlement aggregate with the authoritative terminal frame usage', async () => {
+    const executionId = `wfx-ext-usage-settlement-${crypto.randomUUID()}`;
+    const registration = {
+      ...buildRegistration(executionId),
+      frame: {
+        ...buildRegistration(executionId).frame,
+        inputTokens: 11,
+        outputTokens: 7,
+        estimatedCost: 0.18,
+      },
+    };
+    const storage = createWorkflowStorageBus(getCtx().db);
+    try {
+      await storage.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration);
+      await storage.bus.emit(WorkflowSubjects.frame.completed, {
+        executionId,
+        frameId: registration.frame.frameId,
+        nodeId: registration.frame.nodeId,
+        duration: completedAt - startedAt,
+        completedAt,
+      });
+      await expect(storage.bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: { totalInputTokens: 11, totalOutputTokens: 7, totalEstimatedCost: 0.18 },
+      });
+
+      const settlement = buildFramedSettlement(executionId, {
+        inputTokens: 29,
+        outputTokens: 13,
+        estimatedCost: 0.42,
+      });
+      await expect(storage.bus.request(WorkflowStorageSubjects.settleExternalExecution, settlement)).resolves.toEqual({
+        success: true,
+      });
+      await expect(storage.bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: {
+          status: 'completed',
+          totalInputTokens: 29,
+          totalOutputTokens: 13,
+          totalEstimatedCost: 0.42,
+        },
+      });
+    } finally {
+      storage.cleanup();
+    }
+  });
+
+  it('allows delayed frame usage to reaggregate an already-terminal summary', async () => {
+    const executionId = `wfx-ext-usage-late-${crypto.randomUUID()}`;
+    const registration = buildRegistration(executionId);
+    const settlement = buildFramedSettlement(executionId, {
+      inputTokens: 31,
+      outputTokens: 17,
+      estimatedCost: 0.48,
+    });
+    const lateFrameId = `${executionId}:late-telemetry`;
+    const storage = createWorkflowStorageBus(getCtx().db);
+    try {
+      await storage.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration);
+      await storage.bus.request(WorkflowStorageSubjects.settleExternalExecution, settlement);
+      await storage.bus.emit(WorkflowSubjects.frame.started, {
+        executionId,
+        frameId: lateFrameId,
+        nodeId: 'late-telemetry',
+        nodeType: 'station',
+        path: [lateFrameId],
+        startedAt,
+      });
+      await getCtx().executor.run(sql`
+        UPDATE worklog_frame_entries
+        SET input_tokens = 5, output_tokens = 3, estimated_cost = 0.07
+        WHERE frame_id = ${lateFrameId}
+      `);
+      await storage.bus.emit(WorkflowSubjects.frame.completed, {
+        executionId,
+        frameId: lateFrameId,
+        nodeId: 'late-telemetry',
+        duration: completedAt - startedAt,
+        completedAt,
+      });
+
+      await expect(storage.bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+        summary: {
+          status: 'completed',
+          totalInputTokens: 36,
+          totalOutputTokens: 20,
+          totalEstimatedCost: 0.55,
+        },
+      });
+    } finally {
+      storage.cleanup();
+    }
+  });
+
+  describePg('cross-handle usage serialization', () => {
+    it.each([
+      'settlement-first',
+      'reaggregation-first',
+    ] as const)('aggregates after acquiring the summary row (%s)', async (firstOperation) => {
+      const ctx = getCtx();
+      const executionId = `wfx-ext-usage-race-${firstOperation}-${crypto.randomUUID()}`;
+      const baseRegistration = buildRegistration(executionId);
+      const registration = {
+        ...baseRegistration,
+        frame: {
+          ...baseRegistration.frame,
+          inputTokens: 17,
+          outputTokens: 9,
+          estimatedCost: 0.26,
+        },
+      };
+      const settlement = buildFramedSettlement(executionId, {
+        inputTokens: 43,
+        outputTokens: 21,
+        estimatedCost: 0.64,
+      });
+      const triggerFrameId = `${executionId}:reaggregate`;
+      const [settlementClient, reaggregationClient, holderClient] = await Promise.all([
+        ctx.createSiblingClient({ poolMax: 1 }),
+        ctx.createSiblingClient({ poolMax: 1 }),
+        ctx.createSiblingClient({ poolMax: 1 }),
+      ]);
+      const setup = createWorkflowStorageBus(ctx.db);
+      const settlementStorage = createWorkflowStorageBus(settlementClient.db);
+      const reaggregationStorage = createWorkflowStorageBus(reaggregationClient.db);
+      let releaseHolder = (): void => {};
+      let holderPromise: Promise<void> | undefined;
+      let settlementPromise: Promise<unknown> | undefined;
+      let reaggregationPromise: Promise<unknown> | undefined;
+
+      try {
+        await setup.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration);
+        await setup.bus.emit(WorkflowSubjects.frame.completed, {
+          executionId,
+          frameId: registration.frame.frameId,
+          nodeId: registration.frame.nodeId,
+          duration: completedAt - startedAt,
+          completedAt,
+        });
+        await setup.bus.emit(WorkflowSubjects.frame.started, {
+          executionId,
+          frameId: triggerFrameId,
+          nodeId: 'reaggregate',
+          nodeType: 'station',
+          path: [triggerFrameId],
+          startedAt,
+        });
+
+        const [settlementPid, reaggregationPid] = await Promise.all([
+          getBackendPid(settlementClient),
+          getBackendPid(reaggregationClient),
+        ]);
+        let signalHolder!: () => void;
+        const holderAcquired = new Promise<void>((resolve) => {
+          signalHolder = resolve;
+        });
+        const holderRelease = new Promise<void>((resolve) => {
+          releaseHolder = resolve;
+        });
+        holderPromise = holderClient.executor.withSession(async (session) => {
+          await session.run(sql.raw('BEGIN'));
+          await session.run(sql`
+              UPDATE worklog_summaries
+              SET total_input_tokens = total_input_tokens
+              WHERE execution_id = ${executionId}
+            `);
+          signalHolder();
+          await holderRelease;
+          await session.run(sql.raw('COMMIT'));
+        });
+        await Promise.race([holderAcquired, holderPromise]);
+
+        const startSettlement = (): Promise<unknown> =>
+          settlementStorage.bus.request(WorkflowStorageSubjects.settleExternalExecution, settlement);
+        const startReaggregation = (): Promise<unknown> =>
+          reaggregationStorage.bus.emit(WorkflowSubjects.frame.completed, {
+            executionId,
+            frameId: triggerFrameId,
+            nodeId: 'reaggregate',
+            duration: completedAt - startedAt,
+            completedAt,
+          });
+
+        if (firstOperation === 'settlement-first') {
+          settlementPromise = startSettlement();
+          await waitForBackendLock(ctx, settlementPid, 'external settlement');
+          reaggregationPromise = startReaggregation();
+          await waitForBackendLock(ctx, reaggregationPid, 'delayed reaggregation');
+        } else {
+          reaggregationPromise = startReaggregation();
+          await waitForBackendLock(ctx, reaggregationPid, 'delayed reaggregation');
+          settlementPromise = startSettlement();
+          await waitForBackendLock(ctx, settlementPid, 'external settlement');
+        }
+
+        releaseHolder();
+        await Promise.all([holderPromise, settlementPromise, reaggregationPromise]);
+
+        await expect(setup.bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
+          summary: {
+            status: 'completed',
+            totalInputTokens: 43,
+            totalOutputTokens: 21,
+            totalEstimatedCost: 0.64,
+          },
+        });
+      } finally {
+        releaseHolder();
+        await Promise.allSettled(
+          [holderPromise, settlementPromise, reaggregationPromise].filter(
+            (promise): promise is Promise<unknown> => promise !== undefined,
+          ),
+        );
+        setup.cleanup();
+        settlementStorage.cleanup();
+        reaggregationStorage.cleanup();
+        await Promise.all([settlementClient.close(), reaggregationClient.close(), holderClient.close()]);
+      }
+    });
   });
 
   it('replays a framed settlement through a fresh database handle after handler restart', async () => {

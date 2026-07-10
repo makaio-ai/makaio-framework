@@ -30,6 +30,13 @@ import {
   type WorkflowStorageTransaction,
 } from './external-execution-settlement.js';
 import { emitWorklogChanged } from '../worklog/worklog-projection-helpers.js';
+import {
+  aggregateTokenTotalsInTransaction,
+  hasMeasuredTokenTotals,
+  lockWorklogSummaryForUsage,
+  updateWorklogSummaryTokenTotalsInTransaction,
+  worklogSummaryLifecycleUpdateValues,
+} from '../worklog/worklog-storage.js';
 
 type RunningWorklogFrame = WorkLogFrameEntry & { status: 'running'; startedAt: number };
 type TerminalWorklogTables = Pick<typeof workflowEngineSchema.sqlite, 'worklogSummaries' | 'worklogFrameEntries'>;
@@ -295,18 +302,9 @@ async function writeTerminalWorklog(
   completedAt: number,
 ): Promise<void> {
   const { worklogSummaries, worklogFrameEntries } = tables;
+  const existingSummary = await lockWorklogSummaryForUsage(tx, worklogSummaries, execution.id);
   const resolvedFrame = await resolveTerminalWorklogFrame(tx, worklogFrameEntries, execution, settlement, completedAt);
   const worklogSettlement = resolvedFrame === undefined ? settlement : { ...settlement, frame: resolvedFrame.frame };
-  const [existingSummary] = await tx
-    .select()
-    .from(worklogSummaries)
-    .where(eq(worklogSummaries.executionId, execution.id))
-    .limit(1);
-  const summaryValues = buildTerminalSummaryValues(execution, existingSummary, worklogSettlement, completedAt);
-  await tx.insert(worklogSummaries).values(summaryValues).onConflictDoUpdate({
-    target: worklogSummaries.executionId,
-    set: summaryValues,
-  });
 
   if (resolvedFrame !== undefined) {
     const frameValues = buildTerminalFrameValues(resolvedFrame.frame, resolvedFrame.existing);
@@ -314,6 +312,23 @@ async function writeTerminalWorklog(
       target: worklogFrameEntries.frameId,
       set: frameValues,
     });
+  }
+
+  const totals = await aggregateTokenTotalsInTransaction(tx, worklogFrameEntries, execution.id);
+  const hasMeasuredTotals = hasMeasuredTokenTotals(totals);
+  const summaryValues = {
+    ...buildTerminalSummaryValues(execution, existingSummary, worklogSettlement, completedAt),
+    ...(hasMeasuredTotals ? totals : {}),
+  };
+  await tx
+    .insert(worklogSummaries)
+    .values(summaryValues)
+    .onConflictDoUpdate({
+      target: worklogSummaries.executionId,
+      set: worklogSummaryLifecycleUpdateValues(summaryValues),
+    });
+  if (hasMeasuredTotals) {
+    await updateWorklogSummaryTokenTotalsInTransaction(tx, worklogSummaries, execution.id, totals);
   }
 }
 

@@ -4,8 +4,6 @@ import { WorkflowSubjects } from '../namespace.js';
 import {
   insertRunningWorklogSummaryIfAbsent,
   upsertAdvisoryWorklogSummary,
-  updateWorklogSummaryTokenTotals,
-  aggregateTokenTotals,
   getWorklogSummary,
 } from './worklog-storage.js';
 import { safeProject, emitWorklogChanged } from './worklog-projection-helpers.js';
@@ -114,18 +112,6 @@ async function projectExecutionTerminated(
     failedNodeId,
   });
   await emitWorklogChanged(bus, executionId);
-}
-
-/**
- * Re-aggregate token totals into the worklog summary when a frame completes.
- * @param db - Drizzle database instance.
- * @param executionId - Execution identifier.
- */
-export async function reaggregateTokenTotals(db: MakaioDatabase, executionId: string): Promise<void> {
-  const totals = await aggregateTokenTotals(db, executionId);
-  if (totals.totalInputTokens > 0 || totals.totalOutputTokens > 0 || totals.totalEstimatedCost > 0) {
-    await updateWorklogSummaryTokenTotals(db, executionId, totals);
-  }
 }
 
 /**

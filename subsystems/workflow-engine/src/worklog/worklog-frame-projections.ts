@@ -5,10 +5,10 @@ import {
   insertRunningWorklogFrameIfAbsent,
   upsertAdvisoryWorklogFrameEntry,
   getWorklogFrameEntryRow,
+  reaggregateTokenTotals,
   type SelectWorklogFrameEntry,
 } from './worklog-storage.js';
 import { safeProject, emitWorklogChanged } from './worklog-projection-helpers.js';
-import { reaggregateTokenTotals } from './worklog-execution-projections.js';
 
 // ─────────────────────────────────────────────────────────────
 // Frame metadata resolution helper

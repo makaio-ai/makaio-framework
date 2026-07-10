@@ -1,5 +1,5 @@
-import { eq, and, desc, gte, lte, count, sum, notInArray } from 'drizzle-orm';
-import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { eq, and, desc, gte, lte, count, sum, notInArray, sql } from 'drizzle-orm';
+import { executeTransaction, getDatabaseDialect, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import {
   WorkLogFrameEntrySchema,
   type WorkLogExecutionSummary,
@@ -18,6 +18,23 @@ import type {
   SelectWorklogGateEvent,
 } from '../storage/schema.js';
 import { workflowEngineSchema } from '../storage/schema.variants.js';
+
+type WorklogStorageTransaction = Parameters<Parameters<typeof executeTransaction>[1]>[0];
+type WorklogSummariesTable = typeof workflowEngineSchema.sqlite.worklogSummaries;
+type WorklogFrameEntriesTable = typeof workflowEngineSchema.sqlite.worklogFrameEntries;
+
+/** Aggregate usage values owned by WorkLog frame telemetry. */
+export interface WorklogTokenTotals {
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly totalEstimatedCost: number;
+}
+
+/** Summary fields owned by execution lifecycle projections and settlement. */
+export type WorklogSummaryLifecycleUpdate = Pick<
+  InsertWorklogSummary,
+  'workflowId' | 'workflowName' | 'status' | 'startedAt' | 'completedAt' | 'durationMs' | 'error' | 'failedNodeId'
+>;
 
 // ─────────────────────────────────────────────────────────────
 // Row → domain mappers
@@ -99,31 +116,31 @@ export async function upsertAdvisoryWorklogSummary(db: MakaioDatabase, summary: 
     .values(summary)
     .onConflictDoUpdate({
       target: worklogSummaries.executionId,
-      set: summary,
+      set: worklogSummaryLifecycleUpdateValues(summary),
       setWhere: notInArray(worklogSummaries.status, ['completed', 'failed', 'cancelled']),
     });
 }
 
 /**
- * Update only aggregate usage fields on an existing WorkLog summary.
+ * Select the execution-lifecycle fields that may be changed by a summary upsert.
  *
- * Lifecycle fields are deliberately excluded so a stale aggregation read can
- * never regress an authoritative terminal settlement.
- * @param db - Drizzle database instance.
- * @param executionId - Execution whose totals should be updated.
- * @param totals - Recomputed token and cost totals.
+ * Aggregate usage has a separate authority: it is derived from WorkLog frames
+ * only after serializing on the summary row. Conflict updates must therefore
+ * preserve the usage values already stored by a concurrent reaggregation.
+ * @param summary - Complete summary insert values.
+ * @returns Lifecycle-only conflict update values.
  */
-export async function updateWorklogSummaryTokenTotals(
-  db: MakaioDatabase,
-  executionId: string,
-  totals: {
-    readonly totalInputTokens: number;
-    readonly totalOutputTokens: number;
-    readonly totalEstimatedCost: number;
-  },
-): Promise<void> {
-  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
-  await db.update(worklogSummaries).set(totals).where(eq(worklogSummaries.executionId, executionId));
+export function worklogSummaryLifecycleUpdateValues(summary: InsertWorklogSummary): WorklogSummaryLifecycleUpdate {
+  return {
+    workflowId: summary.workflowId,
+    workflowName: summary.workflowName,
+    status: summary.status,
+    startedAt: summary.startedAt,
+    completedAt: summary.completedAt,
+    durationMs: summary.durationMs,
+    error: summary.error,
+    failedNodeId: summary.failedNodeId,
+  };
 }
 
 /**
@@ -401,25 +418,47 @@ export function buildGateEventId(executionId: string, nodeId: string, frameId: s
 }
 
 // ─────────────────────────────────────────────────────────────
-// Token aggregation helper
+// Token aggregation helpers
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Re-aggregate token totals from all frame entries for an execution using a
- * single SQL aggregate query instead of loading every row into JS memory.
+ * Acquire the summary row as the serialization point for usage aggregation.
  *
- * Called after a `frame.completed` event that carries token telemetry so the
- * WorkLog summary stays accurate without loading all frames from memory.
- * @param db - Drizzle database instance.
- * @param executionId - Execution identifier to aggregate.
- * @returns Aggregated token sums and cost.
+ * A self-update is the portable lock seam: PostgreSQL holds a row lock until
+ * the transaction ends, while SQLite acquires its writer lock. Callers must
+ * aggregate frames only after this operation resolves so a waiter observes
+ * every frame and summary write committed by the previous lock owner.
+ * @param tx - Active storage transaction.
+ * @param worklogSummaries - Dialect-resolved summary table.
+ * @param executionId - Execution whose summary row should be locked.
+ * @returns The current summary row, or `undefined` when none exists.
  */
-export async function aggregateTokenTotals(
-  db: MakaioDatabase,
+export async function lockWorklogSummaryForUsage(
+  tx: WorklogStorageTransaction,
+  worklogSummaries: WorklogSummariesTable,
   executionId: string,
-): Promise<{ totalInputTokens: number; totalOutputTokens: number; totalEstimatedCost: number }> {
-  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
-  const [row] = await db
+): Promise<SelectWorklogSummary | undefined> {
+  const [summary] = await tx
+    .update(worklogSummaries)
+    .set({ totalInputTokens: worklogSummaries.totalInputTokens })
+    .where(eq(worklogSummaries.executionId, executionId))
+    .returning();
+  return summary;
+}
+
+/**
+ * Aggregate usage from every WorkLog frame in the current transaction.
+ * @param tx - Active storage transaction that already owns the summary lock.
+ * @param worklogFrameEntries - Dialect-resolved frame table.
+ * @param executionId - Execution identifier to aggregate.
+ * @returns Aggregated token sums and estimated cost.
+ */
+export async function aggregateTokenTotalsInTransaction(
+  tx: WorklogStorageTransaction,
+  worklogFrameEntries: WorklogFrameEntriesTable,
+  executionId: string,
+): Promise<WorklogTokenTotals> {
+  const [row] = await tx
     .select({
       totalInputTokens: sum(worklogFrameEntries.inputTokens),
       totalOutputTokens: sum(worklogFrameEntries.outputTokens),
@@ -429,10 +468,88 @@ export async function aggregateTokenTotals(
     .where(eq(worklogFrameEntries.executionId, executionId));
 
   return {
-    totalInputTokens: row?.totalInputTokens !== null ? Number(row?.totalInputTokens) : 0,
-    totalOutputTokens: row?.totalOutputTokens !== null ? Number(row?.totalOutputTokens) : 0,
-    totalEstimatedCost: row?.totalEstimatedCost !== null ? Number(row?.totalEstimatedCost) : 0,
+    totalInputTokens: Number(row?.totalInputTokens ?? 0),
+    totalOutputTokens: Number(row?.totalOutputTokens ?? 0),
+    totalEstimatedCost: Number(row?.totalEstimatedCost ?? 0),
   };
+}
+
+/**
+ * Return whether an aggregate contains telemetry worth materializing.
+ * @param totals - Recomputed token and cost totals.
+ * @returns Whether at least one total is positive.
+ */
+export function hasMeasuredTokenTotals(totals: WorklogTokenTotals): boolean {
+  return totals.totalInputTokens > 0 || totals.totalOutputTokens > 0 || totals.totalEstimatedCost > 0;
+}
+
+/**
+ * Update only usage-owned fields while the caller owns the summary lock.
+ * @param tx - Active storage transaction.
+ * @param worklogSummaries - Dialect-resolved summary table.
+ * @param executionId - Execution whose totals should be updated.
+ * @param totals - Recomputed token and cost totals.
+ */
+export async function updateWorklogSummaryTokenTotalsInTransaction(
+  tx: WorklogStorageTransaction,
+  worklogSummaries: WorklogSummariesTable,
+  executionId: string,
+  totals: WorklogTokenTotals,
+): Promise<void> {
+  await tx.update(worklogSummaries).set(totals).where(eq(worklogSummaries.executionId, executionId));
+}
+
+/**
+ * Recompute SQLite usage in one writer-serialized statement, avoiding an
+ * advisory projection transaction that spans awaits and runtime checkpoints.
+ * @param db - SQLite database handle.
+ * @param worklogSummaries - Dialect-resolved summary table.
+ * @param worklogFrameEntries - Dialect-resolved frame table.
+ * @param executionId - Execution identifier to aggregate.
+ */
+async function reaggregateSqliteTokenTotalsInSingleStatement(
+  db: MakaioDatabase,
+  worklogSummaries: WorklogSummariesTable,
+  worklogFrameEntries: WorklogFrameEntriesTable,
+  executionId: string,
+): Promise<void> {
+  const totalInputTokens = sql<number>`coalesce((select sum(${worklogFrameEntries.inputTokens}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
+  const totalOutputTokens = sql<number>`coalesce((select sum(${worklogFrameEntries.outputTokens}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
+  const totalEstimatedCost = sql<number>`coalesce((select sum(${worklogFrameEntries.estimatedCost}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
+  await db
+    .update(worklogSummaries)
+    .set({ totalInputTokens, totalOutputTokens, totalEstimatedCost })
+    .where(
+      and(
+        eq(worklogSummaries.executionId, executionId),
+        sql`(${totalInputTokens} > 0 or ${totalOutputTokens} > 0 or ${totalEstimatedCost} > 0)`,
+      ),
+    );
+}
+
+/**
+ * Re-aggregate frame usage into an existing WorkLog summary atomically.
+ *
+ * PostgreSQL locks before aggregating; SQLite computes and writes in one
+ * writer-serialized statement. Terminal summaries remain eligible because
+ * usage may arrive after the execution lifecycle has completed.
+ * @param db - Drizzle database instance.
+ * @param executionId - Execution identifier to aggregate.
+ */
+export async function reaggregateTokenTotals(db: MakaioDatabase, executionId: string): Promise<void> {
+  const { worklogSummaries, worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
+  if (getDatabaseDialect(db) === 'sqlite') {
+    await reaggregateSqliteTokenTotalsInSingleStatement(db, worklogSummaries, worklogFrameEntries, executionId);
+    return;
+  }
+  await executeTransaction(db, async (tx) => {
+    const summary = await lockWorklogSummaryForUsage(tx, worklogSummaries, executionId);
+    if (summary === undefined) return;
+    const totals = await aggregateTokenTotalsInTransaction(tx, worklogFrameEntries, executionId);
+    if (hasMeasuredTokenTotals(totals)) {
+      await updateWorklogSummaryTokenTotalsInTransaction(tx, worklogSummaries, executionId, totals);
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
