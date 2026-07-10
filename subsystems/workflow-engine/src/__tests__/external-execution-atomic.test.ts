@@ -213,7 +213,7 @@ describe('atomic external execution WorkLog settlement', () => {
           durationMs: 250,
         },
       }),
-    ).rejects.toThrow('frame presence conflicts');
+    ).rejects.toThrow('settlement fingerprint');
 
     await MakaioBus.request(WorkflowSubjects.registerExternalExecution, registration);
     await MakaioBus.request(WorkflowSubjects.completeExternalExecution, completion);
@@ -223,7 +223,7 @@ describe('atomic external execution WorkLog settlement', () => {
         status: 'completed',
         completedAt: completion.completedAt,
       }),
-    ).rejects.toThrow('frame presence conflicts');
+    ).rejects.toThrow('settlement fingerprint');
   });
 
   it('rolls back conflicting terminal status or frame identity', async () => {
@@ -268,7 +268,7 @@ describe('atomic external execution WorkLog settlement', () => {
         ...completion,
         frame: { ...completion.frame, path: ['different'] },
       }),
-    ).rejects.toThrow('registered metadata');
+    ).rejects.toThrow('settlement fingerprint');
     await expect(
       MakaioBus.request(WorkflowSubjects.completeExternalExecution, {
         ...completion,

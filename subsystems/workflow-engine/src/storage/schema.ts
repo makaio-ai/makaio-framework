@@ -135,6 +135,8 @@ export const workflowExecutionsDual = defineDualTable(
     startedAt: c.epochMs('started_at').notNull(),
     /** Execution completion timestamp. */
     completedAt: c.epochMs('completed_at'),
+    /** Canonical identity of an authoritative external settlement, when present. */
+    externalSettlementFingerprint: c.text('external_settlement_fingerprint'),
     /** Trigger payload from the firing trigger (JSON object). */
     triggerPayload: c.jsonCol<Record<string, JsonValue>>('trigger_payload'),
     /** Artifact kind the execution is bound to (flat for indexed filtering). */

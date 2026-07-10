@@ -17,7 +17,7 @@ import type {
   WorkflowRunContext,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
-import type { InsertWorkflowExecution, SelectWorkflowExecution } from './schema.js';
+import type { InsertWorkflowExecution } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { registerDefinitionHandlers } from './definition-handler.js';
 import { registerFrameHandlers } from './frame-handler.js';
@@ -64,11 +64,15 @@ function mapExecution(row: DbExecutionRow): WorkflowExecution {
 }
 
 /**
- * Maps a `WorkflowExecution` to canonical database values.
+ * Maps a `WorkflowExecution` to canonical public-owned database values.
+ *
+ * `externalSettlementFingerprint` is deliberately omitted: only the atomic
+ * external settlement handler owns that column, so generic execution upserts
+ * preserve an already-acknowledged identity.
  * @param execution - Workflow execution to persist
  * @returns Column values for the `workflow_executions` table
  */
-function toExecutionDbValues(execution: WorkflowExecution): SelectWorkflowExecution {
+function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecution {
   const scopeColumns = toScopeColumns(execution.scope);
   return {
     id: execution.id,

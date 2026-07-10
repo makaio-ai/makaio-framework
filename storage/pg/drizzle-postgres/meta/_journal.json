@@ -99,6 +99,13 @@
       "when": 1783356371013,
       "tag": "0013_m_mr9gc37m",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783646191230,
+      "tag": "0014_external_settlement_fingerprint",
+      "breakpoints": true
     }
   ]
 }

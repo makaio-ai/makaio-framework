@@ -1,9 +1,10 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { EXTERNAL_EXECUTION_ID_PREFIX, type WorkLogFrameEntry, type WorkflowExecution } from '@makaio/contracts';
 import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type {
   InsertWorklogSummary,
+  InsertWorkflowExecution,
   SelectWorkflowExecution,
   SelectWorklogFrameEntry,
   SelectWorklogSummary,
@@ -14,7 +15,8 @@ import { jsonValuesEqual, toFrameDbValues, type ExecutionDbValueMapper } from '.
 import {
   assertMatchingFrameIdentity,
   assertMatchingSettlement,
-  assertMatchingTerminalFrame,
+  assertOrAdoptSettlementFingerprint,
+  buildExternalSettlementFingerprint,
   buildTerminalFrameValues,
   buildTerminalSummaryValues,
   loadSettlementFrame,
@@ -31,7 +33,7 @@ type TerminalWorklogTables = Pick<typeof workflowEngineSchema.sqlite, 'worklogSu
  * @param existing - Durable execution row.
  * @param expected - Execution row derived from the replayed request.
  */
-function assertMatchingRegistration(existing: SelectWorkflowExecution, expected: SelectWorkflowExecution): void {
+function assertMatchingRegistration(existing: SelectWorkflowExecution, expected: InsertWorkflowExecution): void {
   const matches =
     existing.id === expected.id &&
     existing.workflowId === expected.workflowId &&
@@ -40,6 +42,7 @@ function assertMatchingRegistration(existing: SelectWorkflowExecution, expected:
     existing.error === expected.error &&
     existing.reason === expected.reason &&
     existing.startedAt === expected.startedAt &&
+    existing.externalSettlementFingerprint === (expected.externalSettlementFingerprint ?? null) &&
     existing.scopeType === expected.scopeType &&
     existing.scopeKind === expected.scopeKind &&
     existing.scopeId === expected.scopeId &&
@@ -266,8 +269,8 @@ async function settleExternalExecution(db: MakaioDatabase, settlement: ExternalS
     }
 
     let completedAt = settlement.completedAt ?? execution.completedAt ?? Date.now();
-    let terminalReplay = execution.status !== 'running';
     if (execution.status === 'running') {
+      const settlementFingerprint = buildExternalSettlementFingerprint(settlement, completedAt);
       const updated = await tx
         .update(workflowExecutions)
         .set({
@@ -275,11 +278,17 @@ async function settleExternalExecution(db: MakaioDatabase, settlement: ExternalS
           completedAt,
           error: settlement.status === 'failed' ? (settlement.error ?? null) : null,
           reason: settlement.status === 'cancelled' ? (settlement.reason ?? null) : null,
+          externalSettlementFingerprint: settlementFingerprint,
         })
-        .where(and(eq(workflowExecutions.id, settlement.executionId), eq(workflowExecutions.status, 'running')))
+        .where(
+          and(
+            eq(workflowExecutions.id, settlement.executionId),
+            eq(workflowExecutions.status, 'running'),
+            isNull(workflowExecutions.externalSettlementFingerprint),
+          ),
+        )
         .returning({ id: workflowExecutions.id });
       if (updated.length === 0) {
-        terminalReplay = true;
         const [current] = await tx
           .select()
           .from(workflowExecutions)
@@ -292,12 +301,13 @@ async function settleExternalExecution(db: MakaioDatabase, settlement: ExternalS
           completedAt = current.completedAt;
         }
         assertMatchingSettlement(current, settlement, completedAt);
+        await assertOrAdoptSettlementFingerprint(tx, workflowExecutions, current, settlement, completedAt);
       }
     } else {
       assertMatchingSettlement(execution, settlement, completedAt);
+      await assertOrAdoptSettlementFingerprint(tx, workflowExecutions, execution, settlement, completedAt);
     }
 
-    if (terminalReplay) await assertMatchingTerminalFrame(tx, worklogFrameEntries, settlement);
     await writeTerminalWorklog(tx, { worklogSummaries, worklogFrameEntries }, execution, settlement, completedAt);
     return true;
   });

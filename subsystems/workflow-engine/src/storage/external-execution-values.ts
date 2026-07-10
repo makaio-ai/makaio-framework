@@ -1,8 +1,8 @@
 import type { WorkLogFrameEntry, WorkflowExecution } from '@makaio/contracts';
-import type { InsertWorklogFrameEntry, SelectWorkflowExecution } from './schema.js';
+import type { InsertWorkflowExecution, InsertWorklogFrameEntry } from './schema.js';
 
-/** Map a public execution value to a fully populated database row. */
-export type ExecutionDbValueMapper = (execution: WorkflowExecution) => SelectWorkflowExecution;
+/** Map a public execution to insert/upsert values that omit settlement-owned columns. */
+export type ExecutionDbValueMapper = (execution: WorkflowExecution) => InsertWorkflowExecution;
 
 /**
  * Compare JSON-compatible values without depending on object key order.

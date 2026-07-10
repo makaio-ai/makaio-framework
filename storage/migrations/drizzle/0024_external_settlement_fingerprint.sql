@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_executions` ADD `external_settlement_fingerprint` text;
