@@ -281,6 +281,7 @@ export function normalizeSessionTruncation(
       payload: {
         ...ctx,
         provider: 'copilot',
+        granularity: 'turn-aggregate',
         model: model ?? UNKNOWN_MODEL,
         inputTokens: totalTokens,
         inputCachedTokens: 0,

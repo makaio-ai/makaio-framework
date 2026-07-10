@@ -1,17 +1,17 @@
 // NOTE: do NOT change without explicit human approval
 /* eslint max-lines: ["error", { "max": 450 }] */
-import {
-  AIAgent,
-  type NormalizedCallUsage,
-  processDiscriminatedItems,
-  AIAgentConnector,
-} from '@makaio/ai-adapters-core';
+import { AIAgent, processDiscriminatedItems, AIAgentConnector } from '@makaio/ai-adapters-core';
 import type { OnOptions } from '@makaio/bus-core';
 import type { HandlerForSubjectDefinition, ScopedSubjectDefinition } from '@makaio/core';
 import type { ClaudeConnectorBus, ClaudeConnectorNamespace } from '../namespace/index.js';
 import { registerToolApprovalHandler } from '../tool-handling/index.js';
 import { AgentSubjects, type StepType, type SessionMessageBlock } from '@makaio/contracts';
 import { CONTENT_BLOCK_HANDLERS } from '../content-block-handlers/index.js';
+import {
+  computeContextWindowTokens,
+  normalizeTerminalResultUsage,
+  type TerminalResultUsage,
+} from './terminal-usage.js';
 
 type ContentBlockStartPayload = {
   type: string;
@@ -317,38 +317,11 @@ export abstract class ClaudeCodeAgent<
     total_cost_usd?: number;
   }): Promise<void> {
     if (payload.usage) {
-      const usage = payload.usage as {
-        input_tokens: number;
-        cache_read_input_tokens?: number;
-        cache_creation_input_tokens?: number;
-        output_tokens: number;
-        service_tier?: string;
-      };
-
-      const normalized: NormalizedCallUsage = {
-        provider: 'anthropic',
-        inputTokens: usage.input_tokens,
-        inputCachedTokens: usage.cache_read_input_tokens ?? 0,
-        cacheWriteTokens: usage.cache_creation_input_tokens,
-        outputTokens: usage.output_tokens,
-        reasoningTokens: 0,
-        totalTokens: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + usage.output_tokens,
-        costUnits: 1,
-        costUnitType: 'requests',
-        cost: payload.total_cost_usd,
-        serviceTier: usage.service_tier,
-      };
-      await this.trackUsage(normalized);
-
-      const currentTokens =
-        usage.input_tokens +
-        (usage.cache_creation_input_tokens ?? 0) +
-        (usage.cache_read_input_tokens ?? 0) +
-        usage.output_tokens;
-      const contextWindowSize = this.getContextWindowSize() ?? 200_000;
+      const usage = payload.usage as TerminalResultUsage;
+      await this.trackUsage(normalizeTerminalResultUsage(usage, payload.total_cost_usd));
       await this.emitContextWindowUpdate({
-        currentTokens,
-        maxTokens: contextWindowSize,
+        currentTokens: computeContextWindowTokens(usage),
+        maxTokens: this.getContextWindowSize() ?? 200_000,
         cachedTokens: usage.cache_read_input_tokens,
       });
     }

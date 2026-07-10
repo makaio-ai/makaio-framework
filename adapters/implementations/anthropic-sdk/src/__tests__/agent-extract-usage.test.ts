@@ -110,6 +110,14 @@ describe('AnthropicSdkAgent.extractUsagePayload', () => {
     expect(result.totalTokens).toBe(150);
   });
 
+  it('declares provider-call granularity on the emitted usage payload', () => {
+    const agent = makeAgent();
+
+    const result = agent.callExtractUsagePayload(makeUsageEvent());
+
+    expect(result.granularity).toBe('provider-call');
+  });
+
   it('sets provider to "anthropic" and costUnitType to "tokens"', () => {
     const agent = makeAgent();
     const payload = makeUsageEvent();

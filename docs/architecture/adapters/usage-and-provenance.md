@@ -33,11 +33,41 @@ Verified against the adapter sources; see the per-adapter READMEs for details.
 | `claude-agent-sdk` / `claude-code-cli` | Terminal query aggregate, potentially covering multiple model turns | Provider-reported aggregate (`total_cost_usd` on the result message) | No |
 | `claude-code-tmux` | Latest-request token gauge from the statusline; cumulative session totals go to `client.session.usage.snapshot` only | Excluded from `agent.usage` (`cost.total_cost_usd` is a cumulative session total); surfaced only via the session usage snapshot | No |
 | `codex-app-server` | Provider token-usage notification (`tokenUsage.last` — the latest model request per update) | No | Not exposed by the protocol |
-| `cursor-sdk` | Completed message/turn | Optional SDK amount (defaults to `0` when the SDK omits it) | Not exposed by the SDK |
+| `cursor-sdk` | Completed message/turn | Optional SDK amount (omitted when the SDK does not report one) | Not exposed by the SDK |
 | `gemini-sdk` | Completed session/turn (`session.finished` with `usageMetadata`) | No | Not exposed by the SDK |
 | `github-copilot-sdk` | Assistant usage event (sub-turn; one per `assistant.usage` event) | No | Not exposed by the SDK |
 | `pi-sdk` | Usage event after a completed assistant message | Provider-reported amount (`usage.cost.total`) | Not exposed by the SDK |
 | `qwen-acp` | Consolidated prompt-turn usage (running `_meta.usage` totals accumulated last-wins, flushed once per turn, including error paths) | No | Not exposed by the ACP prompt payload |
+
+---
+
+## The Mandatory `granularity` Field
+
+`agent.usage.granularity` makes the granularity class machine-readable. It is a **required**
+field on the `agent.usage` schema (`UsageGranularitySchema` in `@makaio/contracts`) and is
+projected to telemetry as the `llm.usage.granularity` span attribute. Granularity is
+orthogonal to `llmCallId`: granularity declares what the numbers cover, `llmCallId` declares
+whether the concrete provider request is nameable.
+
+| Enum value | Meaning |
+|------------|---------|
+| `provider-call` | One concrete provider API request |
+| `turn-aggregate` | One completed assistant message / prompt turn |
+| `query-aggregate` | Terminal result of one query, potentially multiple model turns |
+| `latest-request-gauge` | Lossy observed statusline gauge for the latest request |
+
+Emitter mapping (must match the Measurement Matrix above):
+
+| Emitter | `granularity` |
+|---------|---------------|
+| `openai-node`, `anthropic-sdk`, `codex-app-server` | `provider-call` |
+| `cursor-sdk`, `gemini-sdk`, `github-copilot-sdk`, `pi-sdk`, `qwen-acp` | `turn-aggregate` |
+| `claude-agent-sdk`, `claude-code-cli` | `query-aggregate` |
+| `claude-code-tmux` | `latest-request-gauge` |
+| OpenCode log importer | `provider-call` |
+
+Log importers that synthesize `agent.usage` events from external logs MUST set the field
+truthfully as well — imported per-call records are `provider-call`.
 
 ---
 
@@ -86,7 +116,7 @@ Current behavior worth knowing:
 
 - No adapter tags `costProvenance` on `agent.usage` today. The Claude Agent SDK/CLI adapters
   and `pi-sdk` emit provider-reported amounts as a bare `cost` field; `cursor-sdk` forwards
-  the SDK's optional amount (defaulting to `0`).
+  the SDK's optional amount only when reported.
 - The OTel telemetry collector treats an untagged (or `estimated`) `cost` as an estimate
   (`llm.cost.estimated`), so untagged provider-reported amounts are currently conservative in
   telemetry.

@@ -186,6 +186,7 @@ describe('QwenAcpAgent shared-core usage attribution', () => {
     await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
     expect(usageEvents[0]).toMatchObject({
       agentId: TEST_AGENT_ID,
+      granularity: 'turn-aggregate',
       inputTokens: 10,
       outputTokens: 5,
       totalTokens: 15,
@@ -208,6 +209,7 @@ describe('QwenAcpAgent shared-core usage attribution', () => {
     // own executionId/frameId while the real turn handle is still active.
     const providerNormalized: NormalizedCallUsage = {
       provider: 'qwen',
+      granularity: 'turn-aggregate',
       inputTokens: 1,
       inputCachedTokens: 0,
       outputTokens: 2,

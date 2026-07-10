@@ -305,6 +305,7 @@ export class GitHubCopilotAgent extends AIAgent<GitHubCopilotConnectorBus, GitHu
 
         const normalized: NormalizedCallUsage = {
           provider: 'copilot',
+          granularity: 'turn-aggregate',
           inputTokens,
           inputCachedTokens: data.cacheReadTokens ?? 0,
           outputTokens,

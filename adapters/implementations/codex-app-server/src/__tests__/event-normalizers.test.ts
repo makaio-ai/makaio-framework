@@ -232,6 +232,8 @@ describe('event-normalizers', () => {
           subject: AgentSubjects.usage,
           payload: {
             ...mockContext,
+            // tokenUsage.last measures exactly one model request
+            granularity: 'provider-call',
             provider: 'openai',
             model: 'gpt-5.1-codex-mini',
             inputTokens: 100,

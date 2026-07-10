@@ -403,6 +403,7 @@ describe('bus simulation — full pipeline (always runs)', () => {
       reasoningTokens: 0,
       costUnits: 1,
       costUnitType: 'tokens',
+      granularity: 'provider-call',
       cost: 0.0015,
     });
 

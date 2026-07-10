@@ -13,6 +13,7 @@ import type { AgentUsagePayload, UnresolvedToolCall, UnresolvedUsage } from './t
  */
 export function createUnresolvedUsage(payload: AgentUsagePayload, ingestedAt: number): UnresolvedUsage {
   return {
+    granularity: payload.granularity,
     llmCallId: payload.llmCallId,
     executionId: payload.executionId,
     frameId: payload.frameId,

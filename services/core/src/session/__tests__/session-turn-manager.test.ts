@@ -244,6 +244,7 @@ const BASE_USAGE_FIELDS = {
   totalTokens: 0,
   costUnits: 0,
   costUnitType: 'tokens' as const,
+  granularity: 'provider-call' as const,
 };
 
 // ---------------------------------------------------------------------------

@@ -54,6 +54,7 @@ const BASE_USAGE_EVENT = {
   totalTokens: 0,
   costUnits: 0,
   costUnitType: 'tokens' as const,
+  granularity: 'provider-call' as const,
 };
 
 describe('SessionOrchestrator - Usage Tracking', () => {
@@ -111,6 +112,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       totalTokens: 225,
       costUnits: 225,
       costUnitType: 'tokens',
+      granularity: 'provider-call',
     });
 
     // Complete the agent turn
@@ -327,6 +329,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       totalTokens: 999,
       costUnits: 999,
       costUnitType: 'tokens',
+      granularity: 'provider-call',
       turnId: firstTurnId,
     });
 

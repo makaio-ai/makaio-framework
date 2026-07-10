@@ -1102,6 +1102,7 @@ class AgentUsagePayload:
     agent_id: str
     cost_unit_type: Literal["requests", "tokens"]
     cost_units: float
+    granularity: Literal["provider-call", "turn-aggregate", "query-aggregate", "latest-request-gauge"]
     input_cached_tokens: float
     input_tokens: float
     model: str

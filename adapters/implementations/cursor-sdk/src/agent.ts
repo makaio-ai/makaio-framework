@@ -34,7 +34,7 @@ import { registerToolApprovalHandler } from './tool-handling.js';
  * Typed locally to avoid a runtime dependency on the Cursor SDK peer in the agent layer.
  * Cursor SDK reports token usage per completed message or turn.
  */
-interface CursorRawUsage {
+export interface CursorRawUsage {
   /** Input (prompt) token count. */
   inputTokens: number;
   /** Output (completion) token count. */
@@ -62,6 +62,35 @@ function isCursorRawUsage(value: unknown): value is CursorRawUsage {
   if (typeof value !== 'object' || value === null) return false;
   const u = value as Record<string, unknown>;
   return typeof u['inputTokens'] === 'number' && typeof u['outputTokens'] === 'number';
+}
+
+/**
+ * Normalize a Cursor SDK usage payload to the shared `NormalizedCallUsage` format.
+ *
+ * Granularity is `turn-aggregate`: the Cursor SDK reports usage once per
+ * completed message/turn and may fold several internal model calls into it.
+ * `cost` is forwarded only when the SDK actually reports an amount — an
+ * absent amount stays absent instead of being invented as `0`.
+ *
+ * Exported to make it independently testable.
+ * @param usage - Raw usage payload narrowed by {@link isCursorRawUsage}
+ * @returns Normalized usage metrics ready for `trackUsage()`
+ */
+export function normalizeCursorUsage(usage: CursorRawUsage): NormalizedCallUsage {
+  const totalTokens = usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
+  return {
+    granularity: 'turn-aggregate',
+    provider: 'cursor-sdk',
+    inputTokens: usage.inputTokens,
+    inputCachedTokens: usage.cacheReadTokens ?? 0,
+    cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+    outputTokens: usage.outputTokens,
+    reasoningTokens: 0,
+    totalTokens,
+    costUnits: totalTokens,
+    costUnitType: 'tokens',
+    ...(usage.cost !== undefined ? { cost: usage.cost } : {}),
+  };
 }
 
 /**
@@ -286,12 +315,8 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
    * to the Cursor SDK peer type. A type-guard narrows it to `CursorRawUsage` before
    * normalization; unknown shapes log a warning and are skipped.
    *
-   * Normalization mapping:
-   * - `inputTokens` → `inputTokens`
-   * - `outputTokens` → `outputTokens`
-   * - `totalTokens` → `totalTokens`
-   * - `cost` → `cost` (USD, optional)
-   * - `provider` → `'cursor-sdk'`
+   * Normalization is delegated to {@link normalizeCursorUsage}, which declares
+   * the `turn-aggregate` granularity and forwards `cost` only when reported.
    * @param connector - The CursorSdkConnector to subscribe on
    */
   private wireUsageTracking(connector: CursorSdkConnector): void {
@@ -303,19 +328,7 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
         return;
       }
 
-      const totalTokens = usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
-      const normalized: NormalizedCallUsage = {
-        provider: 'cursor-sdk',
-        inputTokens: usage.inputTokens,
-        inputCachedTokens: usage.cacheReadTokens ?? 0,
-        cacheWriteTokens: usage.cacheWriteTokens ?? 0,
-        outputTokens: usage.outputTokens,
-        reasoningTokens: 0,
-        totalTokens,
-        costUnits: totalTokens,
-        costUnitType: 'tokens',
-        cost: usage.cost ?? 0,
-      };
+      const normalized = normalizeCursorUsage(usage);
 
       await this.trackUsage(normalized);
 

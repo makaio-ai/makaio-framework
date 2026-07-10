@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { AgentSubjects, AdapterSubjects } from '@makaio/contracts';
+import { AgentSubjects, AdapterSubjects, AgentSchemas } from '@makaio/contracts';
 import { OpenCodeLogImporter } from '../src/importer.js';
 
 const createImporter = () =>
@@ -288,10 +288,125 @@ describe('OpenCodeLogImporter', () => {
         provider: 'openai',
         model: 'openai/gpt-5.2-chat-latest',
         inputTokens: 1500,
+        // Legacy nested metrics format carries no cache/reasoning counts
+        inputCachedTokens: 0,
+        cacheWriteTokens: 0,
         outputTokens: 250,
+        reasoningTokens: 0,
         totalTokens: 1750,
+        // Token-counting adapter convention: cost units are tokens
+        costUnits: 1750,
+        costUnitType: 'tokens',
         cost: 0.0175,
+        // One step-finish part = one LLM request in OpenCode
+        granularity: 'provider-call',
+        // Cost is read from the external tool's log, not from the provider
+        costProvenance: 'client-reported',
       });
+
+      // The payload must survive the strict bus emit path, which validates
+      // against the registered agent.usage schema in dev mode.
+      expect(() => AgentSchemas.usage.parse(usageEvents[0].payload)).not.toThrow();
+    });
+
+    it('maps cache and reasoning tokens from current-format step-finish parts', () => {
+      // Current-format step-finish part with non-zero cache/reasoning counts
+      writeFileSync(
+        join(
+          testStorageDir,
+          'project',
+          'test-slug',
+          'storage',
+          'part',
+          'msg_bbc7965ee0013MiAht130lgpXk',
+          'prt_bbc796e5a004StepFinishCache.json',
+        ),
+        JSON.stringify({
+          id: 'prt_bbc796e5a004StepFinishCache',
+          sessionID: 'ses_43d462e9cffexz6719QK96K7Ei',
+          messageID: 'msg_bbc7965ee0013MiAht130lgpXk',
+          type: 'step-finish',
+          cost: 0.005,
+          tokens: {
+            input: 100,
+            output: 50,
+            reasoning: 25,
+            cache: { read: 40, write: 12 },
+          },
+        }),
+      );
+
+      const importer = createImporter();
+      const sessionJson = loadFixture('session.json');
+      const session = importer.parseRecord(sessionJson, sessionFilePath)!;
+      const context = importer.extractSessionContext([session]);
+      const events = importer.processRecords([session], context);
+
+      const usageEvents = events.filter((e) => e.subject === AgentSubjects.usage);
+      const cacheEvent = usageEvents.find((e) => e.payload.inputTokens === 100);
+      expect(cacheEvent).toBeDefined();
+      expect(cacheEvent!.payload).toMatchObject({
+        inputTokens: 100,
+        inputCachedTokens: 40,
+        cacheWriteTokens: 12,
+        outputTokens: 50,
+        reasoningTokens: 25,
+        // Current format has no explicit total: input + output
+        totalTokens: 150,
+        costUnits: 150,
+        costUnitType: 'tokens',
+        cost: 0.005,
+        costProvenance: 'client-reported',
+      });
+
+      // Every usage payload must pass the schema the bus validates against.
+      for (const event of usageEvents) {
+        expect(() => AgentSchemas.usage.parse(event.payload)).not.toThrow();
+      }
+    });
+
+    it('omits costProvenance on usage events when the step-finish part has no cost', () => {
+      // Additional step-finish part with tokens but without any cost data
+      writeFileSync(
+        join(
+          testStorageDir,
+          'project',
+          'test-slug',
+          'storage',
+          'part',
+          'msg_bbc7965ee0013MiAht130lgpXk',
+          'prt_bbc796e5a003StepFinishNoCost.json',
+        ),
+        JSON.stringify({
+          id: 'prt_bbc796e5a003StepFinishNoCost',
+          sessionID: 'ses_43d462e9cffexz6719QK96K7Ei',
+          messageID: 'msg_bbc7965ee0013MiAht130lgpXk',
+          type: 'step-finish',
+          tokens: { input: 10, output: 5 },
+        }),
+      );
+
+      const importer = createImporter();
+      const sessionJson = loadFixture('session.json');
+      const session = importer.parseRecord(sessionJson, sessionFilePath)!;
+      const context = importer.extractSessionContext([session]);
+      const events = importer.processRecords([session], context);
+
+      const usageEvents = events.filter((e) => e.subject === AgentSubjects.usage);
+      expect(usageEvents).toHaveLength(2);
+
+      // Every usage event truthfully declares per-request granularity
+      for (const event of usageEvents) {
+        expect(event.payload.granularity).toBe('provider-call');
+      }
+
+      const noCostEvent = usageEvents.find((e) => e.payload.inputTokens === 10);
+      expect(noCostEvent).toBeDefined();
+      expect(noCostEvent!.payload).not.toHaveProperty('cost');
+      expect(noCostEvent!.payload).not.toHaveProperty('costProvenance');
+
+      // Cost-less payloads must also pass strict bus schema validation.
+      expect(() => AgentSchemas.usage.parse(noCostEvent!.payload)).not.toThrow();
     });
 
     it('tool events carry a defined turnId from the turn tracker', () => {

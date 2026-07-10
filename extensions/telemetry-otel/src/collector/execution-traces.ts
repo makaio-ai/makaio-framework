@@ -47,6 +47,7 @@ export function buildExecutionUsageSpan(
   const startedAt = usage.duration === undefined ? endedAt : endedAt - usage.duration;
 
   return SpanBuilder.buildLlmSpan({
+    granularity: usage.granularity,
     executionId: execution.executionId,
     sessionId: usage.sessionId ?? 'unknown',
     frameId,

@@ -217,6 +217,9 @@ function normalizeTokenUsage(params: ThreadTokenUsageUpdatedNotification, ctx: N
     subject: AgentSubjects.usage,
     payload: {
       ...ctx,
+      // `tokenUsage.last` covers the latest single model request per
+      // protocol update — hence `provider-call`.
+      granularity: 'provider-call',
       provider,
       model,
       inputTokens: last.inputTokens,

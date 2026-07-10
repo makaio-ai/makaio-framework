@@ -223,6 +223,7 @@ describe('ClaudeCodeTmuxAgent', () => {
 
     await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
     expect(usageEvents[0]).toMatchObject({
+      granularity: 'latest-request-gauge',
       inputTokens: 1_200,
       inputCachedTokens: 800,
       cacheWriteTokens: 50,

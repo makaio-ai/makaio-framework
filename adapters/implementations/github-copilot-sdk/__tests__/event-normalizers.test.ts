@@ -163,7 +163,12 @@ describe('event-normalizers', () => {
       );
       expect(result).toHaveLength(2);
       expect(result[0].subject).toBe(AgentSubjects.usage);
-      expect(result[0].payload).toMatchObject({ provider: 'copilot', model: 'gpt-4o', inputTokens: 5000 });
+      expect(result[0].payload).toMatchObject({
+        provider: 'copilot',
+        granularity: 'turn-aggregate',
+        model: 'gpt-4o',
+        inputTokens: 5000,
+      });
       expect(result[1].subject).toBe(AgentSubjects.contextWindow.updated);
       expect(result[1].payload).toMatchObject({ currentTokens: 5000, maxTokens: 128000 });
     });

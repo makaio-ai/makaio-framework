@@ -9,8 +9,12 @@
 
 import type { SpanDraftStatus } from '../contracts/types.js';
 
+/** Truthful measurement granularity of one `agent.usage` event. */
+export type UsageGranularity = 'provider-call' | 'turn-aggregate' | 'query-aggregate' | 'latest-request-gauge';
+
 /** Subset of `agent.usage` consumed by the collector. */
 export interface AgentUsagePayload {
+  readonly granularity: UsageGranularity;
   readonly llmCallId?: string;
   readonly executionId?: string;
   readonly frameId?: string;
@@ -76,6 +80,8 @@ export interface FrameRecord {
  * waits for the matching `frame.sessionLinked` event.
  */
 export interface BufferedUsage {
+  /** Truthful measurement granularity declared by the source event. */
+  readonly granularity: UsageGranularity;
   /** Runtime-generated identifier for one concrete provider API request. */
   readonly llmCallId: string | undefined;
   /** Authoritative workflow execution supplied by the provider request context. */

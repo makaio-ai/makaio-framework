@@ -519,6 +519,9 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
       const payload = ctx.payload;
 
       const normalized: NormalizedCallUsage = {
+        // `token_usage` carries `tokenUsage.last` — the latest single model
+        // request per protocol update — hence `provider-call`.
+        granularity: 'provider-call',
         provider: 'openai',
         inputTokens: payload.promptTokens,
         inputCachedTokens: payload.inputCachedTokens,

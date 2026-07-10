@@ -119,6 +119,7 @@ describe('SpanBuilder', () => {
         reasoningTokens: 3,
         totalTokens: 33,
         costUnits: 33,
+        granularity: 'provider-call',
         costUnitType: 'tokens',
         cost: 0.0123,
         currency: 'USD',
@@ -143,6 +144,7 @@ describe('SpanBuilder', () => {
       expect(draft.kind).toBe('client');
       expect(draft.attributes['llm.provider']).toBe('openai');
       expect(draft.attributes['llm.model']).toBe('gpt-5.4');
+      expect(draft.attributes['llm.usage.granularity']).toBe('provider-call');
       expect(draft.attributes['llm.tokens.input']).toBe(10);
       expect(draft.attributes['llm.tokens.cached_input']).toBe(2);
       expect(draft.attributes['llm.tokens.cache_write']).toBe(4);
@@ -181,6 +183,7 @@ describe('SpanBuilder', () => {
         reasoningTokens: 0,
         totalTokens: 13,
         costUnits: 13,
+        granularity: 'query-aggregate',
         costUnitType: 'tokens',
         startedAt: 1000,
         endedAt: 1000,
@@ -189,6 +192,7 @@ describe('SpanBuilder', () => {
 
       expect(draft.parentSpanId).toBeUndefined();
       expect(draft.attributes['correlation.orphaned']).toBe(true);
+      expect(draft.attributes['llm.usage.granularity']).toBe('query-aggregate');
     });
 
     it('does not label provider-reported monetary cost as estimated', () => {
@@ -205,6 +209,7 @@ describe('SpanBuilder', () => {
         reasoningTokens: 0,
         totalTokens: 15,
         costUnits: 15,
+        granularity: 'provider-call',
         costUnitType: 'tokens',
         cost: 0.25,
         currency: 'USD',
@@ -238,6 +243,7 @@ describe('SpanBuilder', () => {
         reasoningTokens: 0,
         totalTokens: 14,
         costUnits: 14,
+        granularity: 'latest-request-gauge',
         costUnitType: 'tokens',
         startedAt: 1200,
         endedAt: 1400,
@@ -260,6 +266,7 @@ describe('SpanBuilder', () => {
       });
       expect(llm.executionId).toBeUndefined();
       expect(llm.parentSpanId).toBe(root.spanId);
+      expect(llm.attributes['llm.usage.granularity']).toBe('latest-request-gauge');
       expect(llm.attributes['makaio.trace.scope']).toBe('standalone');
       expect(llm.attributes['makaio.execution.id']).toBeUndefined();
       expect(tool.executionId).toBeUndefined();
