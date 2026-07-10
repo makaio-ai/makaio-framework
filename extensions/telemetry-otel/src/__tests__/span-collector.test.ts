@@ -1133,6 +1133,72 @@ describe('SpanCollector', () => {
     expect(tool?.executionId).toBeUndefined();
   });
 
+  it('retries stale standalone usage and tools after a transient export failure', async () => {
+    const exported: SpanDraft[][] = [];
+    const attemptedRootSpanIds: string[] = [];
+    let nowMs = 1_000;
+    let attempts = 0;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        const root = drafts.find((draft) => draft.subject === 'session');
+        if (root !== undefined) attemptedRootSpanIds.push(root.spanId);
+        if (attempts === 1) throw new Error('transient export failure');
+        exported.push(drafts);
+      },
+    });
+
+    collector.onAgentUsage({
+      sessionId: 'sess-retry-local',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 10,
+      inputCachedTokens: 5,
+      outputTokens: 4,
+      reasoningTokens: 0,
+      totalTokens: 14,
+      costUnits: 14,
+      costUnitType: 'tokens',
+    });
+    collector.onAgentToolStarted({
+      sessionId: 'sess-retry-local',
+      toolName: 'read',
+      toolCallId: 'call-retry-local',
+      occurredAt: 1_100,
+    });
+    collector.onAgentToolCompleted({
+      sessionId: 'sess-retry-local',
+      toolName: 'read',
+      toolCallId: 'call-retry-local',
+      success: true,
+      occurredAt: 1_200,
+    });
+
+    nowMs = 6_000;
+    await expect(collector.sweepOrphans()).rejects.toThrow('transient export failure');
+    await expect(collector.sweepOrphans()).resolves.toBeUndefined();
+    await collector.sweepOrphans();
+
+    expect(attempts).toBe(2);
+    expect(attemptedRootSpanIds).toEqual(['session:sess-retry-local:0', 'session:sess-retry-local:0']);
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ subject: 'session', sessionId: 'sess-retry-local' }),
+        expect.objectContaining({ subject: 'usage', sessionId: 'sess-retry-local' }),
+        expect.objectContaining({
+          subject: 'tool',
+          sessionId: 'sess-retry-local',
+          endedAt: 1_200,
+          attributes: expect.objectContaining({ 'tool.success': true }),
+        }),
+      ]),
+    );
+  });
+
   it('flushes pending standalone session usage on shutdown when timeout promotion is disabled', async () => {
     const exported: SpanDraft[][] = [];
     const collector = new SpanCollector({
@@ -1164,6 +1230,47 @@ describe('SpanCollector', () => {
       expect.arrayContaining([
         expect.objectContaining({ subject: 'session', sessionId: 'sess-shutdown-local' }),
         expect.objectContaining({ subject: 'usage', sessionId: 'sess-shutdown-local' }),
+      ]),
+    );
+  });
+
+  it('retries shutdown standalone export after a transient failure', async () => {
+    const exported: SpanDraft[][] = [];
+    let attempts = 0;
+    const collector = new SpanCollector({
+      now: () => 5_000,
+      orphanTimeoutMs: 0,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('shutdown export failure');
+        exported.push(drafts);
+      },
+    });
+
+    collector.onAgentUsage({
+      sessionId: 'sess-shutdown-retry',
+      provider: 'openai',
+      model: 'gpt-5.4',
+      inputTokens: 10,
+      inputCachedTokens: 1,
+      outputTokens: 20,
+      reasoningTokens: 0,
+      totalTokens: 31,
+      costUnits: 31,
+      costUnitType: 'tokens',
+    });
+
+    await expect(collector.flushAll()).rejects.toThrow('shutdown export failure');
+    await expect(collector.flushAll()).resolves.toBeUndefined();
+    await collector.flushAll();
+
+    expect(attempts).toBe(2);
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ subject: 'session', sessionId: 'sess-shutdown-retry' }),
+        expect.objectContaining({ subject: 'usage', sessionId: 'sess-shutdown-retry' }),
       ]),
     );
   });

@@ -159,6 +159,8 @@ export class SpanCollector {
   private readonly unresolvedUsageBySession = new Map<string, UnresolvedUsage[]>();
   private readonly unresolvedUsageByExecution = new Map<string, UnresolvedUsage[]>();
   private readonly unresolvedToolsBySession = new Map<string, Map<string, UnresolvedToolCall>>();
+  /** Reuses span IDs when a failed standalone export is retried. */
+  private readonly standaloneRetrySegmentBySession = new Map<string, number>();
   private standaloneSegmentSequence = 0;
   /**
    * Orphan spans that have been emitted out-of-band during `sweepOrphans`.
@@ -316,6 +318,7 @@ export class SpanCollector {
     this.sessionIndex.link(payload.sessionId, payload.executionId, payload.frameId);
     this.replayUnresolvedUsage(payload.sessionId, execution);
     this.replayUnresolvedTools(payload.sessionId, execution);
+    this.standaloneRetrySegmentBySession.delete(payload.sessionId);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -832,12 +835,26 @@ export class SpanCollector {
       else this.unresolvedUsageBySession.set(sessionId, retainedUsages);
       if (retainedTools.size === 0) this.unresolvedToolsBySession.delete(sessionId);
       else this.unresolvedToolsBySession.set(sessionId, retainedTools);
-      await this.flushStandaloneSession(sessionId, expiredUsages, expiredTools, now);
+      if (expiredUsages.length === 0 && expiredTools.length === 0) continue;
+      const segment = this.standaloneRetrySegmentBySession.get(sessionId) ?? this.standaloneSegmentSequence++;
+      try {
+        await this.flushStandaloneSession(sessionId, segment, expiredUsages, expiredTools, now);
+        this.standaloneRetrySegmentBySession.delete(sessionId);
+      } catch (error) {
+        this.standaloneRetrySegmentBySession.set(sessionId, segment);
+        const currentUsages = this.unresolvedUsageBySession.get(sessionId) ?? [];
+        this.unresolvedUsageBySession.set(sessionId, [...expiredUsages, ...currentUsages]);
+        const currentTools = this.unresolvedToolsBySession.get(sessionId) ?? new Map();
+        this.unresolvedToolsBySession.set(sessionId, currentTools);
+        for (const tool of expiredTools) this.mergeUnresolvedToolStart(sessionId, tool);
+        throw error;
+      }
     }
   }
 
   private async flushStandaloneSession(
     sessionId: string,
+    segment: number,
     usages: readonly UnresolvedUsage[],
     tools: readonly UnresolvedToolCall[],
     fallbackEndedAt: number,
@@ -846,7 +863,6 @@ export class SpanCollector {
       return;
     }
 
-    const segment = this.standaloneSegmentSequence++;
     await this.options.emit(buildStandaloneSessionTrace({ sessionId, segment, usages, tools, fallbackEndedAt }));
   }
 
@@ -856,7 +872,7 @@ export class SpanCollector {
       if (retainedUsages.length === 0) this.unresolvedUsageByExecution.delete(executionId);
       else this.unresolvedUsageByExecution.set(executionId, retainedUsages);
       for (const [sessionId, grouped] of groupUsageBySession(expiredUsages, executionId)) {
-        await this.flushStandaloneSession(sessionId, grouped, [], now);
+        await this.flushStandaloneSession(sessionId, this.standaloneSegmentSequence++, grouped, [], now);
       }
     }
   }
