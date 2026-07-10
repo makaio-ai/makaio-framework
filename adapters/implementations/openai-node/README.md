@@ -149,6 +149,16 @@ That entrypoint default-exports the `openaiNodePackage` `MakaioExtension`
 descriptor, whose `adapters[]` entry wraps the internal definition from
 `src/definition.ts`.
 
+## Usage Telemetry
+
+Each `agent.usage` event corresponds to exactly one OpenAI API call: token
+counts are extracted from the streaming usage chunk of the request. The API
+reports no monetary amount, so no `cost` is emitted. Every event carries a
+runtime-generated `llmCallId` identifying the concrete provider request
+(projected to `x-factory-llm-call-id` when request correlation headers are
+enabled). See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## File Structure
 
 ```

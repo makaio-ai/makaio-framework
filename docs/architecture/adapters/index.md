@@ -198,6 +198,7 @@ streaming deltas, tool events, and usage.
 |-------|----------|
 | Building a new adapter | [Creating Adapters](../../creating-adapters) |
 | Models, providers, credentials | [Models & Providers](./models-and-providers) |
+| Usage granularity, cost provenance, double-counting | [Usage & Provenance](./usage-and-provenance) |
 | How adapters are discovered and loaded | [Discovery](./discovery) |
 | Publishing and versioning strategy | [Publishing](./publishing) |
 

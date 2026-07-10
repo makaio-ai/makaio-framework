@@ -75,6 +75,16 @@ Conformance-test capabilities returned by `createTestConfig()`:
 | `supportsInterrupt` | Yes — `connector.interrupt()` |
 | `supportsUsageMetrics` | Yes — token usage tracked via stream events |
 
+## Usage Telemetry
+
+Each `agent.usage` event corresponds to exactly one Anthropic API call: token
+counts are merged from the `message_start` and `message_delta` stream events.
+The API reports no monetary amount, so no `cost` is emitted. Every event
+carries a runtime-generated `llmCallId` identifying the concrete provider
+request (projected to `x-factory-llm-call-id` when request correlation
+headers are enabled). See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## Conformance Testing
 
 ```typescript
