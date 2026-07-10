@@ -22,6 +22,16 @@ export interface ExecutionTraceInput {
 }
 
 /**
+ * Keep a parent frame only when its span will be present in the same trace.
+ * @param execution - Execution whose frames will be emitted.
+ * @param frameId - Candidate direct or session-derived frame identifier.
+ * @returns The known frame identifier, or `undefined` for orphan handling.
+ */
+function resolveKnownFrameId(execution: OpenExecution, frameId: string | undefined): string | undefined {
+  return frameId !== undefined && execution.frames.has(frameId) ? frameId : undefined;
+}
+
+/**
  * Build a single LLM span from buffered usage.
  * @param execution - Execution that owns the usage.
  * @param usage - Buffered provider usage event.
@@ -130,12 +140,14 @@ export function buildExecutionTrace(input: ExecutionTraceInput): SpanDraft[] {
   }
 
   for (const usage of execution.pendingUsage) {
-    const frameId =
+    const candidateFrameId =
       usage.frameId ?? (usage.sessionId === undefined ? undefined : execution.sessionFrameMap.get(usage.sessionId));
+    const frameId = resolveKnownFrameId(execution, candidateFrameId);
     drafts.push(buildExecutionUsageSpan(execution, usage, frameId));
   }
   for (const tool of execution.pendingTools.values()) {
-    const frameId = tool.sessionId === undefined ? undefined : execution.sessionFrameMap.get(tool.sessionId);
+    const candidateFrameId = tool.sessionId === undefined ? undefined : execution.sessionFrameMap.get(tool.sessionId);
+    const frameId = resolveKnownFrameId(execution, candidateFrameId);
     drafts.push(buildExecutionToolSpan(execution, tool, frameId, endedAt));
   }
   if (input.orphans !== undefined) drafts.push(...input.orphans);

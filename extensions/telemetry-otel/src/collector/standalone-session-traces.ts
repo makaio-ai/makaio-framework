@@ -5,7 +5,14 @@
 
 import type { SpanDraft } from '../contracts/types.js';
 import { SpanBuilder } from './span-builder.js';
-import type { UnresolvedToolCall, UnresolvedUsage } from './types.js';
+import type { BufferedToolCall, UnresolvedToolCall, UnresolvedUsage } from './types.js';
+
+type ToolLifecycle = BufferedToolCall | UnresolvedToolCall;
+
+/** Result of a bounded export attempt sequence. */
+export type ExportAttemptResult =
+  | { readonly success: true; readonly recovered: boolean }
+  | { readonly success: false; readonly error: unknown };
 
 /** Input for {@link buildStandaloneSessionTrace}. */
 export interface StandaloneSessionTraceInput {
@@ -19,6 +26,51 @@ export interface StandaloneSessionTraceInput {
   readonly tools: readonly UnresolvedToolCall[];
   /** End timestamp for tool calls without a completion event. */
   readonly fallbackEndedAt: number;
+}
+
+/**
+ * Merge lifecycle state retained across an export with events that arrived while it was in flight.
+ * @param retained - Lifecycle state removed for the attempted export.
+ * @param current - State observed after the export started.
+ * @returns One lifecycle that preserves the earliest start and strongest terminal event.
+ */
+export function mergeRetainedToolLifecycle<T extends ToolLifecycle>(retained: T, current: T | undefined): T {
+  if (current === undefined) return retained;
+  const retainedTerminalWins =
+    retained.endedAt !== undefined && (current.endedAt === undefined || retained.endedAt >= current.endedAt);
+  return {
+    ...current,
+    toolName: retained.toolName,
+    startedAt: Math.min(retained.startedAt, current.startedAt),
+    ingestedAt: Math.min(retained.ingestedAt, current.ingestedAt),
+    endedAt: retainedTerminalWins ? retained.endedAt : current.endedAt,
+    success: retainedTerminalWins ? retained.success : current.success,
+  };
+}
+
+/**
+ * Run one export operation with a bounded retry budget.
+ * @param attempts - Maximum number of attempts, including the first call.
+ * @param operation - Export operation to invoke.
+ * @param recover - Optional failure hook that returns true when correlation recovery handled the batch.
+ * @returns A discriminated success or final-failure result.
+ */
+export async function retryExport(
+  attempts: number,
+  operation: () => Promise<void>,
+  recover?: (error: unknown) => boolean | Promise<boolean>,
+): Promise<ExportAttemptResult> {
+  let failure: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await operation();
+      return { success: true, recovered: false };
+    } catch (error) {
+      if (await recover?.(error)) return { success: true, recovered: true };
+      failure = error;
+    }
+  }
+  return { success: false, error: failure };
 }
 
 /**

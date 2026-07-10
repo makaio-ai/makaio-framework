@@ -19,9 +19,16 @@
  */
 
 import type { SpanDraft } from '../contracts/types.js';
+import {
+  appendExecutionUsage,
+  bufferExecutionTool,
+  closeExecutionFrame,
+  mergeExecutionToolStart,
+  toolCorrelationKey,
+} from './execution-state.js';
 import { buildExecutionToolSpan, buildExecutionTrace, buildExecutionUsageSpan } from './execution-traces.js';
 import { SessionIndex } from './session-index.js';
-import { buildStandaloneSessionTrace } from './standalone-session-traces.js';
+import { buildStandaloneSessionTrace, mergeRetainedToolLifecycle, retryExport } from './standalone-session-traces.js';
 import {
   createUnresolvedUsage,
   groupUsageBySession,
@@ -33,13 +40,12 @@ import type {
   BufferedToolCall,
   BufferedUsage,
   CollectorOptions,
-  FrameRecord,
   OpenExecution,
   UnresolvedToolCall,
   UnresolvedUsage,
 } from './types.js';
 
-const SHUTDOWN_STANDALONE_FLUSH_ATTEMPTS = 2;
+const SHUTDOWN_EXPORT_ATTEMPTS = 2;
 
 export type { AgentUsagePayload } from './types.js';
 
@@ -350,7 +356,7 @@ export class SpanCollector {
         : this.resolveExecutionForSession(payload.sessionId);
 
     if (execution !== undefined) {
-      this.bufferUsageOnExecution(execution, unresolved);
+      appendExecutionUsage(execution, unresolved);
       return;
     }
 
@@ -375,7 +381,7 @@ export class SpanCollector {
     const execution = this.resolveExecutionForSession(payload.sessionId);
 
     if (execution !== undefined) {
-      this.mergeToolStartOnExecution(execution, {
+      mergeExecutionToolStart(execution, {
         sessionId: payload.sessionId,
         toolName: payload.toolName,
         toolCallId: payload.toolCallId,
@@ -410,7 +416,7 @@ export class SpanCollector {
     const execution = this.resolveExecutionForSession(payload.sessionId);
 
     if (execution !== undefined) {
-      const key = this.toolKey(payload.sessionId, payload.toolCallId);
+      const key = toolCorrelationKey(payload.sessionId, payload.toolCallId);
       const existing = execution.pendingTools.get(key);
       if (existing !== undefined) {
         existing.toolName = payload.toolName;
@@ -419,7 +425,7 @@ export class SpanCollector {
         return;
       }
 
-      this.bufferToolOnExecution(execution, {
+      bufferExecutionTool(execution, {
         sessionId: payload.sessionId,
         toolName: payload.toolName,
         toolCallId: payload.toolCallId,
@@ -432,7 +438,7 @@ export class SpanCollector {
     }
 
     if (payload.sessionId !== undefined) {
-      const key = this.toolKey(payload.sessionId, payload.toolCallId);
+      const key = toolCorrelationKey(payload.sessionId, payload.toolCallId);
       const sessionTools = this.unresolvedToolsBySession.get(payload.sessionId);
       const existing = sessionTools?.get(key);
       if (existing !== undefined) {
@@ -485,24 +491,20 @@ export class SpanCollector {
     };
     const executionIds = [...this.executions.keys()];
     for (const executionId of executionIds) {
-      try {
-        await this.onExecutionFailed({ executionId, error: 'Service shutdown' }, this.options.now());
-      } catch (error) {
-        recordFailure(error);
-      }
+      const result = await retryExport(SHUTDOWN_EXPORT_ATTEMPTS, () =>
+        this.onExecutionFailed({ executionId, error: 'Service shutdown' }, this.options.now()),
+      );
+      if (!result.success) recordFailure(result.error);
     }
     const standaloneFlushes = [
-      () => this.flushStaleStandaloneSessions(this.options.now(), 0),
-      () => this.flushStaleUnopenedExecutions(this.options.now(), 0),
+      () => this.flushStaleStandaloneSessions(this.options.now(), 0, SHUTDOWN_EXPORT_ATTEMPTS, true),
+      () => this.flushStaleUnopenedExecutions(this.options.now(), 0, SHUTDOWN_EXPORT_ATTEMPTS, true),
     ];
     for (const flush of standaloneFlushes) {
-      for (let attempt = 1; attempt <= SHUTDOWN_STANDALONE_FLUSH_ATTEMPTS; attempt += 1) {
-        try {
-          await flush();
-          break;
-        } catch (error) {
-          if (attempt === SHUTDOWN_STANDALONE_FLUSH_ATTEMPTS) recordFailure(error);
-        }
+      try {
+        await flush();
+      } catch (error) {
+        recordFailure(error);
       }
     }
     if (hasFailure) throw firstFailure;
@@ -617,11 +619,7 @@ export class SpanCollector {
       orphans: this.emittedOrphans.get(executionId),
     });
 
-    // Clean up
-    this.executions.delete(executionId);
-    this.sessionIndex.evictExecution(executionId);
-    this.emittedOrphans.delete(executionId);
-    await this.options.emit(drafts);
+    await this.emitTerminalExecution(execution, drafts);
   }
 
   /**
@@ -645,13 +643,7 @@ export class SpanCollector {
     if (execution === undefined) {
       return;
     }
-
-    const startedAt = endedAt - (duration ?? 0);
-    const frame =
-      execution.frames.get(frameId) ?? this.createPlaceholderFrame(execution, frameId, nodeId, startedAt, endedAt);
-
-    frame.endedAt = endedAt;
-    frame.status = status;
+    closeExecutionFrame(execution, frameId, nodeId, endedAt, status, duration);
   }
 
   private resolveExecutionForSession(sessionId: string | undefined): OpenExecution | undefined {
@@ -670,13 +662,6 @@ export class SpanCollector {
     return undefined;
   }
 
-  private bufferUsageOnExecution(execution: OpenExecution, usage: UnresolvedUsage): void {
-    execution.pendingUsage.push({
-      ...usage,
-      sequence: execution.usageSequence++,
-    });
-  }
-
   private replayUnresolvedUsage(sessionId: string, execution: OpenExecution): void {
     const usages = this.unresolvedUsageBySession.get(sessionId);
     if (usages === undefined) {
@@ -685,7 +670,7 @@ export class SpanCollector {
 
     const { matched, retained } = partitionUsageForExecution(usages, execution.executionId, true);
     for (const usage of matched) {
-      this.bufferUsageOnExecution(execution, usage);
+      appendExecutionUsage(execution, usage);
     }
     if (retained.length === 0) this.unresolvedUsageBySession.delete(sessionId);
     else this.unresolvedUsageBySession.set(sessionId, retained);
@@ -693,39 +678,20 @@ export class SpanCollector {
 
   private replayUnresolvedUsageForExecution(execution: OpenExecution): void {
     const usages = this.unresolvedUsageByExecution.get(execution.executionId) ?? [];
-    for (const usage of usages) this.bufferUsageOnExecution(execution, usage);
+    for (const usage of usages) appendExecutionUsage(execution, usage);
     this.unresolvedUsageByExecution.delete(execution.executionId);
     this.standaloneRetrySegmentsByExecution.delete(execution.executionId);
   }
 
-  private bufferToolOnExecution(execution: OpenExecution, tool: BufferedToolCall): void {
-    execution.pendingTools.set(this.toolKey(tool.sessionId, tool.toolCallId), tool);
-  }
-
-  private mergeToolStartOnExecution(execution: OpenExecution, tool: BufferedToolCall): void {
-    const key = this.toolKey(tool.sessionId, tool.toolCallId);
-    const existing = execution.pendingTools.get(key);
-    if (existing === undefined) {
-      this.bufferToolOnExecution(execution, tool);
-      return;
-    }
-
-    execution.pendingTools.set(key, {
-      ...existing,
-      toolName: tool.toolName,
-      startedAt: tool.startedAt,
-    });
-  }
-
   private bufferUnresolvedTool(sessionId: string, tool: UnresolvedToolCall): void {
     const sessionTools = this.unresolvedToolsBySession.get(sessionId) ?? new Map<string, UnresolvedToolCall>();
-    sessionTools.set(this.toolKey(sessionId, tool.toolCallId), tool);
+    sessionTools.set(toolCorrelationKey(sessionId, tool.toolCallId), tool);
     this.unresolvedToolsBySession.set(sessionId, sessionTools);
   }
 
   private mergeUnresolvedToolStart(sessionId: string, tool: UnresolvedToolCall): void {
     const sessionTools = this.unresolvedToolsBySession.get(sessionId);
-    const key = this.toolKey(sessionId, tool.toolCallId);
+    const key = toolCorrelationKey(sessionId, tool.toolCallId);
     const existing = sessionTools?.get(key);
     if (sessionTools === undefined || existing === undefined) {
       this.bufferUnresolvedTool(sessionId, tool);
@@ -746,7 +712,7 @@ export class SpanCollector {
     }
 
     for (const tool of tools.values()) {
-      this.bufferToolOnExecution(execution, {
+      const bufferedTool: BufferedToolCall = {
         sessionId,
         toolName: tool.toolName,
         toolCallId: tool.toolCallId,
@@ -754,12 +720,21 @@ export class SpanCollector {
         ingestedAt: tool.ingestedAt,
         endedAt: tool.endedAt,
         success: tool.success,
-      });
+      };
+      const key = toolCorrelationKey(sessionId, tool.toolCallId);
+      execution.pendingTools.set(key, mergeRetainedToolLifecycle(bufferedTool, execution.pendingTools.get(key)));
     }
     this.unresolvedToolsBySession.delete(sessionId);
   }
 
-  private async flushStaleStandaloneSessions(now: number, timeoutMs: number): Promise<void> {
+  private async flushStaleStandaloneSessions(
+    now: number,
+    timeoutMs: number,
+    attempts = 1,
+    continueAfterFailure = false,
+  ): Promise<void> {
+    let firstFailure: unknown;
+    let hasFailure = false;
     const sessionIds = new Set([...this.unresolvedUsageBySession.keys(), ...this.unresolvedToolsBySession.keys()]);
     for (const sessionId of sessionIds) {
       const usages = this.unresolvedUsageBySession.get(sessionId) ?? [];
@@ -776,14 +751,24 @@ export class SpanCollector {
       else this.unresolvedToolsBySession.set(sessionId, retainedTools);
       if (expiredUsages.length === 0 && expiredTools.length === 0) continue;
       const segment = this.standaloneRetrySegmentBySession.get(sessionId) ?? this.standaloneSegmentSequence++;
-      try {
-        await this.flushStandaloneSession(sessionId, segment, expiredUsages, expiredTools, now);
+      const result = await retryExport(
+        attempts,
+        () => this.flushStandaloneSession(sessionId, segment, expiredUsages, expiredTools, now),
+        () => this.promoteStandaloneSession(sessionId, expiredUsages, expiredTools),
+      );
+      if (result.success) {
         this.standaloneRetrySegmentBySession.delete(sessionId);
-      } catch (error) {
-        this.restoreFailedStandaloneSession(sessionId, segment, expiredUsages, expiredTools);
-        throw error;
+        continue;
+      }
+      if (this.promoteStandaloneSession(sessionId, expiredUsages, expiredTools)) continue;
+      this.restoreStandaloneSession(sessionId, segment, expiredUsages, expiredTools);
+      if (!continueAfterFailure) throw result.error;
+      if (!hasFailure) {
+        hasFailure = true;
+        firstFailure = result.error;
       }
     }
+    if (hasFailure) throw firstFailure;
   }
 
   private async flushStandaloneSession(
@@ -800,64 +785,95 @@ export class SpanCollector {
     await this.options.emit(buildStandaloneSessionTrace({ sessionId, segment, usages, tools, fallbackEndedAt }));
   }
 
-  private async flushStaleUnopenedExecutions(now: number, timeoutMs: number): Promise<void> {
-    for (const [executionId, usages] of this.unresolvedUsageByExecution) {
+  private async flushStaleUnopenedExecutions(
+    now: number,
+    timeoutMs: number,
+    attempts = 1,
+    continueAfterFailure = false,
+  ): Promise<void> {
+    let firstFailure: unknown;
+    let hasFailure = false;
+    executionLoop: for (const [executionId, usages] of [...this.unresolvedUsageByExecution]) {
       const { expiredUsages, retainedUsages } = partitionStaleSessionEvents(usages, new Map(), now, timeoutMs);
       if (retainedUsages.length === 0) this.unresolvedUsageByExecution.delete(executionId);
       else this.unresolvedUsageByExecution.set(executionId, retainedUsages);
       const groups = [...groupUsageBySession(expiredUsages, executionId)];
+      const retrySegments = this.standaloneRetrySegmentsByExecution.get(executionId) ?? new Map<string, number>();
       for (const [index, [sessionId, grouped]] of groups.entries()) {
-        const retrySegments = this.standaloneRetrySegmentsByExecution.get(executionId) ?? new Map<string, number>();
         const segment = retrySegments.get(sessionId) ?? this.standaloneSegmentSequence++;
         retrySegments.set(sessionId, segment);
         this.standaloneRetrySegmentsByExecution.set(executionId, retrySegments);
-        try {
-          await this.flushStandaloneSession(sessionId, segment, grouped, [], now);
+        const pending = groups.slice(index).flatMap(([, usagesForSession]) => usagesForSession);
+        const result = await retryExport(
+          attempts,
+          () => this.flushStandaloneSession(sessionId, segment, grouped, [], now),
+          () => this.promoteUnopenedExecution(executionId, pending),
+        );
+        if (result.success) {
+          if (result.recovered) continue executionLoop;
           retrySegments.delete(sessionId);
           if (retrySegments.size === 0) this.standaloneRetrySegmentsByExecution.delete(executionId);
-        } catch (error) {
-          const unexported = groups.slice(index).flatMap(([, pending]) => pending);
-          this.restoreFailedUnopenedExecution(executionId, unexported, retrySegments);
-          throw error;
+          continue;
+        }
+        if (this.promoteUnopenedExecution(executionId, pending)) continue executionLoop;
+        const unexported = continueAfterFailure ? grouped : pending;
+        this.restoreUnopenedExecution(executionId, unexported, retrySegments);
+        if (!continueAfterFailure) throw result.error;
+        if (!hasFailure) {
+          hasFailure = true;
+          firstFailure = result.error;
         }
       }
     }
+    if (hasFailure) throw firstFailure;
   }
 
-  private restoreFailedStandaloneSession(
+  private promoteStandaloneSession(
+    sessionId: string,
+    usages: readonly UnresolvedUsage[],
+    tools: readonly UnresolvedToolCall[],
+  ): boolean {
+    const execution = this.resolveExecutionForSession(sessionId);
+    if (execution === undefined) return false;
+    for (const usage of usages) appendExecutionUsage(execution, usage);
+    for (const tool of tools) {
+      const key = toolCorrelationKey(sessionId, tool.toolCallId);
+      execution.pendingTools.set(key, mergeRetainedToolLifecycle(tool, execution.pendingTools.get(key)));
+    }
+    this.standaloneRetrySegmentBySession.delete(sessionId);
+    return true;
+  }
+
+  private restoreStandaloneSession(
     sessionId: string,
     segment: number,
     usages: readonly UnresolvedUsage[],
     tools: readonly UnresolvedToolCall[],
   ): void {
-    const execution = this.resolveExecutionForSession(sessionId);
-    if (execution !== undefined) {
-      for (const usage of usages) this.bufferUsageOnExecution(execution, usage);
-      for (const tool of tools) this.mergeToolStartOnExecution(execution, tool);
-      this.standaloneRetrySegmentBySession.delete(sessionId);
-      return;
-    }
-
     this.standaloneRetrySegmentBySession.set(sessionId, segment);
     const currentUsages = this.unresolvedUsageBySession.get(sessionId) ?? [];
     this.unresolvedUsageBySession.set(sessionId, [...usages, ...currentUsages]);
     const currentTools = this.unresolvedToolsBySession.get(sessionId) ?? new Map();
     this.unresolvedToolsBySession.set(sessionId, currentTools);
-    for (const tool of tools) this.mergeUnresolvedToolStart(sessionId, tool);
+    for (const tool of tools) {
+      const key = toolCorrelationKey(sessionId, tool.toolCallId);
+      currentTools.set(key, mergeRetainedToolLifecycle(tool, currentTools.get(key)));
+    }
   }
 
-  private restoreFailedUnopenedExecution(
+  private promoteUnopenedExecution(executionId: string, usages: readonly UnresolvedUsage[]): boolean {
+    const execution = this.executions.get(executionId);
+    if (execution === undefined) return false;
+    for (const usage of usages) appendExecutionUsage(execution, usage);
+    this.standaloneRetrySegmentsByExecution.delete(executionId);
+    return true;
+  }
+
+  private restoreUnopenedExecution(
     executionId: string,
     usages: readonly UnresolvedUsage[],
     retrySegments: Map<string, number>,
   ): void {
-    const execution = this.executions.get(executionId);
-    if (execution !== undefined) {
-      for (const usage of usages) this.bufferUsageOnExecution(execution, usage);
-      this.standaloneRetrySegmentsByExecution.delete(executionId);
-      return;
-    }
-
     this.standaloneRetrySegmentsByExecution.set(executionId, retrySegments);
     const current = this.unresolvedUsageByExecution.get(executionId) ?? [];
     this.unresolvedUsageByExecution.set(executionId, [...usages, ...current]);
@@ -867,29 +883,36 @@ export class SpanCollector {
     if (this.orphanSweepTask === task) this.orphanSweepTask = undefined;
   }
 
-  private toolKey(sessionId: string | undefined, toolCallId: string): string {
-    return `${sessionId ?? 'unknown'}:${toolCallId}`;
-  }
+  /**
+   * Detach an execution while it is emitted and restore its correlation state on failure.
+   * @param execution - Execution snapshot represented by the drafts.
+   * @param drafts - Terminal trace batch to export.
+   * @returns Promise resolved after the batch is exported.
+   */
+  private async emitTerminalExecution(execution: OpenExecution, drafts: SpanDraft[]): Promise<void> {
+    const { executionId } = execution;
+    const orphans = this.emittedOrphans.get(executionId);
+    this.executions.delete(executionId);
+    this.sessionIndex.evictExecution(executionId);
+    this.emittedOrphans.delete(executionId);
 
-  private createPlaceholderFrame(
-    execution: OpenExecution,
-    frameId: string,
-    nodeId: string,
-    startedAt: number,
-    endedAt: number | undefined,
-  ): FrameRecord {
-    const frame: FrameRecord = {
-      frameId,
-      nodeId,
-      nodeType: 'unknown',
-      path: [frameId],
-      parentFrameId: undefined,
-      startedAt,
-      endedAt,
-      status: 'unset',
-    };
-    execution.frames.set(frameId, frame);
-    return frame;
+    try {
+      await this.options.emit(drafts);
+    } catch (error) {
+      if (!this.executions.has(executionId)) {
+        this.executions.set(executionId, execution);
+        if (orphans !== undefined) this.emittedOrphans.set(executionId, orphans);
+        this.replayUnresolvedUsageForExecution(execution);
+        for (const [sessionId, frameId] of execution.sessionFrameMap) {
+          const currentLink = this.sessionIndex.lookup(sessionId);
+          if (currentLink !== undefined && currentLink.executionId !== executionId) continue;
+          this.sessionIndex.link(sessionId, executionId, frameId);
+          this.replayUnresolvedUsage(sessionId, execution);
+          this.replayUnresolvedTools(sessionId, execution);
+        }
+      }
+      throw error;
+    }
   }
 
   /**
@@ -914,10 +937,6 @@ export class SpanCollector {
       orphans: this.emittedOrphans.get(executionId),
     });
 
-    // Clean up
-    this.executions.delete(executionId);
-    this.sessionIndex.evictExecution(executionId);
-    this.emittedOrphans.delete(executionId);
-    await this.options.emit(drafts);
+    await this.emitTerminalExecution(execution, drafts);
   }
 }

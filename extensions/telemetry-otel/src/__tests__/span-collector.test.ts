@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import type { SpanDraft } from '../contracts/types.js';
 import { SpanCollector, type AgentUsagePayload } from '../collector/span-collector.js';
 
+function testUsage(
+  model: string,
+  context: Pick<AgentUsagePayload, 'sessionId' | 'executionId'> = {},
+): AgentUsagePayload {
+  return {
+    ...context,
+    provider: 'anthropic',
+    model,
+    inputTokens: 1,
+    inputCachedTokens: 0,
+    outputTokens: 1,
+    reasoningTokens: 0,
+    totalTokens: 2,
+    costUnits: 2,
+    costUnitType: 'tokens',
+  };
+}
+
 describe('SpanCollector', () => {
   it('buffers agent usage until frame.sessionLinked arrives', async () => {
     const exported: SpanDraft[][] = [];
@@ -549,6 +567,57 @@ describe('SpanCollector', () => {
     expect(exported).toHaveLength(2);
     expect(exported[0]?.some((draft) => draft.name === 'LLM call gpt-5.4')).toBe(true);
     expect(exported[1]?.some((draft) => draft.name === 'LLM call gpt-5.4')).toBe(false);
+  });
+
+  it('does not emit dangling parents for claimed frames that were never observed', async () => {
+    const exported: SpanDraft[][] = [];
+    const collector = new SpanCollector({
+      now: () => 2_000,
+      orphanTimeoutMs: 30_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        exported.push(drafts);
+      },
+    });
+
+    collector.onExecutionStarted({ executionId: 'wfx-missing-frame', workflowId: 'wf-missing-frame' }, 1_000);
+    collector.onFrameSessionLinked({
+      executionId: 'wfx-missing-frame',
+      frameId: 'frame-never-observed',
+      sessionId: 'sess-missing-frame',
+    });
+    collector.onAgentUsage({
+      executionId: 'wfx-missing-frame',
+      frameId: 'frame-never-observed',
+      sessionId: 'sess-missing-frame',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 1,
+      inputCachedTokens: 0,
+      outputTokens: 1,
+      reasoningTokens: 0,
+      totalTokens: 2,
+      costUnits: 2,
+      costUnitType: 'tokens',
+    });
+    collector.onAgentToolStarted({
+      sessionId: 'sess-missing-frame',
+      toolName: 'read',
+      toolCallId: 'call-missing-frame',
+    });
+
+    await collector.onExecutionCompleted({ executionId: 'wfx-missing-frame', totalDuration: 1_000 }, 2_000);
+
+    const childDrafts =
+      exported[0]?.filter((candidate) => candidate.subject === 'usage' || candidate.subject === 'tool') ?? [];
+    expect(childDrafts).toHaveLength(2);
+    for (const draft of childDrafts) {
+      expect(draft).toMatchObject({
+        parentSpanId: undefined,
+        attributes: expect.objectContaining({ 'correlation.orphaned': true }),
+      });
+      if (draft.subject === 'usage') expect(draft.frameId).toBeUndefined();
+    }
   });
 
   it('correlates agent tool spans by session and tool call id', async () => {
@@ -1389,7 +1458,7 @@ describe('SpanCollector', () => {
     collector.onExecutionStarted({ executionId: 'wfx-opens-during-export', workflowId: 'wf-test' }, nowMs);
     rejectFirstExport(new Error('standalone export failed'));
 
-    await expect(sweep).rejects.toThrow('standalone export failed');
+    await expect(sweep).resolves.toBeUndefined();
     await collector.onExecutionCompleted({ executionId: 'wfx-opens-during-export', totalDuration: 1 }, nowMs + 1);
     await collector.sweepOrphans();
 
@@ -1458,6 +1527,14 @@ describe('SpanCollector', () => {
       sessionId: 'sess-links-during-export',
       toolName: 'read',
       toolCallId: 'call-links-during-export',
+      occurredAt: 1_100,
+    });
+    collector.onAgentToolCompleted({
+      sessionId: 'sess-links-during-export',
+      toolName: 'read',
+      toolCallId: 'call-links-during-export',
+      occurredAt: 1_300,
+      success: true,
     });
     nowMs = 6_000;
     const sweep = collector.sweepOrphans();
@@ -1467,9 +1544,15 @@ describe('SpanCollector', () => {
       frameId: 'frame-links-during-export',
       sessionId: 'sess-links-during-export',
     });
+    collector.onAgentToolStarted({
+      sessionId: 'sess-links-during-export',
+      toolName: 'read',
+      toolCallId: 'call-links-during-export',
+      occurredAt: 1_100,
+    });
     rejectFirstExport(new Error('standalone export failed'));
 
-    await expect(sweep).rejects.toThrow('standalone export failed');
+    await expect(sweep).resolves.toBeUndefined();
     await collector.onExecutionCompleted({ executionId: 'wfx-links-during-export', totalDuration: 1 }, nowMs + 1);
     await collector.sweepOrphans();
 
@@ -1483,6 +1566,9 @@ describe('SpanCollector', () => {
         expect.objectContaining({
           spanId: 'tool:wfx-links-during-export:sess-links-during-export:call-links-during-export',
           parentSpanId: 'frame:wfx-links-during-export:frame-links-during-export',
+          startedAt: 1_100,
+          endedAt: 1_300,
+          attributes: expect.objectContaining({ 'tool.success': true }),
         }),
       ]),
     );
@@ -1519,6 +1605,100 @@ describe('SpanCollector', () => {
       expect.arrayContaining([
         expect.objectContaining({ subject: 'session', sessionId: 'sess-shutdown-local' }),
         expect.objectContaining({ subject: 'usage', sessionId: 'sess-shutdown-local' }),
+      ]),
+    );
+  });
+
+  it('restores execution, session links, and orphan drafts after a terminal export failure', async () => {
+    const attempted: SpanDraft[][] = [];
+    const exported: SpanDraft[][] = [];
+    let attempts = 0;
+    let nowMs = 1_000;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        attempted.push(drafts);
+        if (attempts === 1) throw new Error('terminal export failed');
+        exported.push(drafts);
+      },
+    });
+
+    collector.onExecutionStarted({ executionId: 'wfx-terminal-retry', workflowId: 'wf-terminal-retry' }, nowMs);
+    collector.onFrameStarted(
+      {
+        executionId: 'wfx-terminal-retry',
+        frameId: 'frame-terminal-retry',
+        nodeId: 'review',
+        nodeType: 'station',
+        path: ['frame-terminal-retry'],
+      },
+      nowMs,
+    );
+    collector.onFrameSessionLinked({
+      executionId: 'wfx-terminal-retry',
+      frameId: 'frame-terminal-retry',
+      sessionId: 'sess-terminal-retry',
+    });
+    collector.onAgentUsage(testUsage('linked-before-failure', { sessionId: 'sess-terminal-retry' }));
+    collector.onAgentUsage(testUsage('orphan-before-failure'));
+    nowMs = 6_000;
+    await collector.sweepOrphans();
+
+    await expect(
+      collector.onExecutionCompleted({ executionId: 'wfx-terminal-retry', totalDuration: 5_000 }, nowMs),
+    ).rejects.toThrow('terminal export failed');
+    collector.onAgentUsage(testUsage('linked-after-failure', { sessionId: 'sess-terminal-retry' }));
+    await collector.onExecutionCompleted({ executionId: 'wfx-terminal-retry', totalDuration: 5_001 }, nowMs + 1);
+
+    expect(attempted).toHaveLength(2);
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'LLM call linked-before-failure',
+          parentSpanId: 'frame:wfx-terminal-retry:frame-terminal-retry',
+        }),
+        expect.objectContaining({
+          name: 'LLM call linked-after-failure',
+          parentSpanId: 'frame:wfx-terminal-retry:frame-terminal-retry',
+        }),
+        expect.objectContaining({
+          name: 'LLM call orphan-before-failure',
+          parentSpanId: undefined,
+          attributes: expect.objectContaining({ 'correlation.orphaned': true }),
+        }),
+      ]),
+    );
+  });
+
+  it('retries a failed terminal execution export during shutdown', async () => {
+    const exported: SpanDraft[][] = [];
+    let attempts = 0;
+    const collector = new SpanCollector({
+      now: () => 5_000,
+      orphanTimeoutMs: 0,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('transient terminal shutdown failure');
+        exported.push(drafts);
+      },
+    });
+
+    collector.onExecutionStarted({ executionId: 'wfx-shutdown-retry', workflowId: 'wf-shutdown-retry' }, 1_000);
+    collector.onAgentUsage(testUsage('shutdown-retry'));
+
+    await collector.flushAll();
+
+    expect(attempts).toBe(2);
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ spanId: 'execution:wfx-shutdown-retry', status: 'error' }),
+        expect.objectContaining({ name: 'LLM call shutdown-retry' }),
       ]),
     );
   });
@@ -1561,6 +1741,75 @@ describe('SpanCollector', () => {
         expect.objectContaining({ subject: 'usage', sessionId: 'sess-shutdown-retry' }),
       ]),
     );
+  });
+
+  it('gives every standalone shutdown segment an independent retry budget', async () => {
+    const attemptsBySession = new Map<string, number>();
+    const exportedSessions: string[] = [];
+    const collector = new SpanCollector({
+      now: () => 5_000,
+      orphanTimeoutMs: 0,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        const sessionId = drafts.find((draft) => draft.subject === 'session')?.sessionId;
+        if (sessionId === undefined) throw new Error('expected a standalone session root');
+        const attempts = (attemptsBySession.get(sessionId) ?? 0) + 1;
+        attemptsBySession.set(sessionId, attempts);
+        if (attempts === 1) throw new Error(`transient export failure for ${sessionId}`);
+        exportedSessions.push(sessionId);
+      },
+    });
+
+    collector.onAgentUsage(testUsage('local-a', { sessionId: 'sess-local-a' }));
+    collector.onAgentUsage(testUsage('local-b', { sessionId: 'sess-local-b' }));
+    collector.onAgentUsage(testUsage('claimed-a', { executionId: 'wfx-never-opened', sessionId: 'sess-claimed-a' }));
+    collector.onAgentUsage(testUsage('claimed-b', { executionId: 'wfx-never-opened', sessionId: 'sess-claimed-b' }));
+
+    await collector.flushAll();
+
+    expect(Object.fromEntries(attemptsBySession)).toEqual({
+      'sess-local-a': 2,
+      'sess-local-b': 2,
+      'sess-claimed-a': 2,
+      'sess-claimed-b': 2,
+    });
+    expect(new Set(exportedSessions)).toEqual(
+      new Set(['sess-local-a', 'sess-local-b', 'sess-claimed-a', 'sess-claimed-b']),
+    );
+  });
+
+  it('continues shutdown after exhausted standalone segments and reports failure last', async () => {
+    const attemptsBySession = new Map<string, number>();
+    const exportedSessions: string[] = [];
+    const collector = new SpanCollector({
+      now: () => 5_000,
+      orphanTimeoutMs: 0,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        const sessionId = drafts.find((draft) => draft.subject === 'session')?.sessionId;
+        if (sessionId === undefined) throw new Error('expected a standalone session root');
+        attemptsBySession.set(sessionId, (attemptsBySession.get(sessionId) ?? 0) + 1);
+        if (sessionId.endsWith('-fail')) throw new Error(`permanent export failure for ${sessionId}`);
+        exportedSessions.push(sessionId);
+      },
+    });
+
+    collector.onAgentUsage(testUsage('local-fail', { sessionId: 'sess-local-fail' }));
+    collector.onAgentUsage(testUsage('local-ok', { sessionId: 'sess-local-ok' }));
+    collector.onAgentUsage(
+      testUsage('claimed-fail', { executionId: 'wfx-never-opened', sessionId: 'sess-claimed-fail' }),
+    );
+    collector.onAgentUsage(testUsage('claimed-ok', { executionId: 'wfx-never-opened', sessionId: 'sess-claimed-ok' }));
+
+    await expect(collector.flushAll()).rejects.toThrow('permanent export failure for sess-local-fail');
+
+    expect(Object.fromEntries(attemptsBySession)).toEqual({
+      'sess-local-fail': 2,
+      'sess-local-ok': 1,
+      'sess-claimed-fail': 2,
+      'sess-claimed-ok': 1,
+    });
+    expect(new Set(exportedSessions)).toEqual(new Set(['sess-local-ok', 'sess-claimed-ok']));
   });
 
   it('force-flushes the oldest execution with error status when maxOpenExecutions is reached', async () => {
