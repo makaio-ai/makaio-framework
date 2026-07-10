@@ -57,5 +57,8 @@ describe('provider request correlation', () => {
         executionId: 'x'.repeat(513),
       }),
     ).toThrow();
+    expect(() => buildFactoryUsageCorrelationHeaders({ llmCallId: 'call\r\ninjected' })).toThrow();
+    expect(() => buildFactoryUsageCorrelationHeaders({ llmCallId: 'call-😀' })).toThrow();
+    expect(() => buildFactoryUsageCorrelationHeaders({ llmCallId: 'call-1', executionId: 'execution-😀' })).toThrow();
   });
 });

@@ -1,5 +1,4 @@
 import { RequestCorrelationContextSchema, type RequestCorrelationContext } from '@makaio/contracts';
-import { z } from 'zod';
 
 /** Exact Factory Gateway headers accepted by its content-free usage boundary. */
 export const FactoryUsageCorrelationHeaders = {
@@ -11,9 +10,11 @@ export const FactoryUsageCorrelationHeaders = {
   frameId: 'x-factory-frame-id',
 } as const;
 
+const HeaderSafeCorrelationIdSchema = RequestCorrelationContextSchema.shape.sessionId.unwrap();
+
 const ProviderRequestCorrelationSchema = RequestCorrelationContextSchema.extend({
   /** Runtime-generated ID for the concrete API request. */
-  llmCallId: z.string().trim().min(1).max(512),
+  llmCallId: HeaderSafeCorrelationIdSchema,
 });
 
 export type ProviderRequestCorrelation = RequestCorrelationContext & { llmCallId: string };

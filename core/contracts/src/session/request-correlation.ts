@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-const HEADER_SAFE_VALUE_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]*$/u;
+const HEADER_SAFE_VALUE_PATTERN = /^[\u0020-\u007e]*$/u;
 
 /** Content-free identifier safe to copy into an HTTP header value. */
 const HeaderSafeCorrelationIdSchema = z
   .string()
-  .regex(HEADER_SAFE_VALUE_PATTERN, 'Correlation identifiers must not contain control characters')
+  .regex(HEADER_SAFE_VALUE_PATTERN, 'Correlation identifiers must contain only printable ASCII characters')
   .trim()
   .min(1)
   .max(512);
