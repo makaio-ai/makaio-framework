@@ -1,15 +1,14 @@
 import { z } from 'zod';
 
-const HEADER_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
+const HEADER_SAFE_VALUE_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]*$/u;
 
 /** Content-free identifier safe to copy into an HTTP header value. */
 const HeaderSafeCorrelationIdSchema = z
   .string()
-  .refine((value) => !HEADER_CONTROL_CHARACTER_PATTERN.test(value), {
-    message: 'Correlation identifiers must not contain control characters',
-  })
-  .transform((value) => value.trim())
-  .pipe(z.string().min(1).max(512));
+  .regex(HEADER_SAFE_VALUE_PATTERN, 'Correlation identifiers must not contain control characters')
+  .trim()
+  .min(1)
+  .max(512);
 
 /**
  * Content-free identifiers that may accompany an outbound provider request.

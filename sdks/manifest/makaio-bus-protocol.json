@@ -3274,26 +3274,31 @@
                   "executionId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "frameId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "messageId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "sessionId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "turnId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   }
                 },
@@ -9115,26 +9120,31 @@
                   "executionId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "frameId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "messageId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "sessionId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   },
                   "turnId": {
                     "maxLength": 512,
                     "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                     "type": "string"
                   }
                 },
