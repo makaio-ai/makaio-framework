@@ -100,6 +100,65 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
     transportHarness.reset();
   });
 
+  it('completes dequeued handle when close() begins during startTurn setup', async () => {
+    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+
+    // Simulate close() interleaving during the awaited env resolution
+    // by using a custom resolveTurnExecutionContext that sets closing = true
+    // before returning, mimicking a concurrent close() call during the await.
+    let callCount = 0;
+    const session = new ClaudeCliSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-code-cli',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet',
+      env: {},
+      emitSdkEvent: vi.fn(async () => undefined),
+      resolveTurnExecutionContext: async () => {
+        callCount++;
+        // On the second call (the racing turn), simulate close() interleaving
+        // by setting this.closing = true during the awaited env resolution.
+        if (callCount >= 2) {
+          Reflect.set(session, 'closing', true);
+        }
+        return { env: {}, binaryPath: undefined };
+      },
+    });
+
+    // Start and complete a first turn so the session has a confirmed state
+    const firstQueue = new UserMessageQueue();
+    const firstHandle = makeHandle('message-first');
+    firstQueue.enqueue(firstHandle);
+    await session.processQueue(firstQueue);
+    transportHarness.emitMessage(successResult());
+    await expect(firstHandle.waitForCompletion(1_000)).resolves.toMatchObject({ outcome: 'completed' });
+
+    const { createStdioTransport } = await import('../utils/createStdioTransport.js');
+    const initialTransportCount = vi.mocked(createStdioTransport).mock.calls.length;
+
+    // Reset transport harness for the second turn
+    transportHarness.reset();
+
+    // Enqueue a racing handle — when processQueue calls startTurn, the
+    // resolveTurnExecutionContext mock will set closing = true mid-await.
+    const queue = new UserMessageQueue();
+    const racingHandle = makeHandle('message-racing');
+    queue.enqueue(racingHandle);
+
+    const turnStarted = await session.processQueue(queue);
+    expect(turnStarted).toBe(true); // processQueue returned true (startNewTurn was called)
+
+    // The racing handle must complete with an error, not hang
+    const result = await racingHandle.waitForCompletion(1_000);
+    expect(result.outcome).toBe('error');
+    expect((result as { error: Error }).error.message).toContain('Session closed');
+
+    // No new transport should have been spawned for the racing turn
+    expect(vi.mocked(createStdioTransport).mock.calls.length).toBe(initialTransportCount);
+  });
+
   it('rejects queued handles after close() begins instead of starting a new subprocess', async () => {
     const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
     const session = new ClaudeCliSession({

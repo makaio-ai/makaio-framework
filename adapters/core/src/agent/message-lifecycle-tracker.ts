@@ -130,6 +130,13 @@ export class MessageLifecycleTracker {
   /**
    * Acknowledge a message - marks turn start.
    *
+   * This should only be called for handles whose acknowledgment was
+   * genuinely delivered (i.e. `waitForAcknowledgment()` resolved with
+   * `true`). Handles completed before dispatch (merged, superseded, or
+   * rejected) resolve acknowledgment with `false` — calling acknowledge()
+   * for those would steal the active correlation slot from the real
+   * in-flight turn.
+   *
    * Emits:
    * - user_message.acknowledged
    * - agent.turn.started
@@ -287,8 +294,15 @@ export class MessageLifecycleTracker {
     }
 
     handle.waitForAcknowledgment().then(
-      () => {
-        this.acknowledge(handle, trackedTurnId);
+      (delivered) => {
+        // `delivered` is false when a handle is completed before dispatch
+        // (e.g. merged, superseded, or rejected while queued). In that case
+        // no provider turn actually started, so promoting the handle would
+        // steal the active correlation slot from the real in-flight turn and
+        // cause its completion to clear/advance the slot prematurely.
+        if (delivered) {
+          this.acknowledge(handle, trackedTurnId);
+        }
       },
       () => {
         // Acknowledgment rejects when the handle is cancelled before dispatch.

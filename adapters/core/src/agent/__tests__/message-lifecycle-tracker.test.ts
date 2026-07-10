@@ -551,4 +551,62 @@ describe('MessageLifecycleTracker', () => {
 
     expect(tracker.getCurrentMessageHandle()).toBeUndefined();
   });
+
+  it('does not promote a pending handle whose acknowledgment fulfills with false (undelivered)', async () => {
+    // Scenario: Turn A is executing. Turn B is tracked (pending). B is
+    // superseded via markCompleted() before the provider dispatches it,
+    // which auto-resolves acknowledgment with false. The tracker must NOT
+    // call acknowledge() for B, because that would steal the active
+    // correlation slot from A's still-running turn.
+    const emissions: CapturedEmission[] = [];
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async (subject, payload) => {
+        emissions.push({ subject, payload });
+      },
+    });
+    const handleA = new MessageHandle(
+      'message-a',
+      { role: 'user', blocks: [{ type: 'text', content: 'A' }] },
+      'enqueue',
+    );
+    const handleB = new MessageHandle(
+      'message-b',
+      { role: 'user', blocks: [{ type: 'text', content: 'B' }] },
+      'enqueue',
+    );
+
+    // A dispatched — becomes active immediately.
+    tracker.track(handleA);
+    handleA.markAcknowledged();
+    await flushMicrotasks();
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // B dispatched while A is in-flight — queued as pending.
+    tracker.track(handleB);
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // B is superseded before the provider dispatches it. markCompleted()
+    // auto-resolves acknowledgment with false (delivered = false).
+    handleB.markCompleted({ outcome: 'superseded', supersededBy: 'message-a' });
+    await flushMicrotasks();
+
+    // Active handle must still be A — B must NOT have been promoted.
+    expect(tracker.getCurrentMessageHandle()).toBe(handleA);
+
+    // B must have been removed from the pending queue by complete().
+    // No user_message.acknowledged or turn.started events for B.
+    const ackEvents = emissions.filter((e) => e.subject === AgentSubjects.user_message.acknowledged);
+    expect(ackEvents).toHaveLength(1);
+    expect((ackEvents[0]!.payload as { messageId: string }).messageId).toBe('message-a');
+
+    const turnStartEvents = emissions.filter((e) => e.subject === AgentSubjects.turn.started);
+    expect(turnStartEvents).toHaveLength(1);
+    expect((turnStartEvents[0]!.payload as { messageId: string }).messageId).toBe('message-a');
+
+    // A completes — no pending handles remain, active clears.
+    handleA.markCompleted({ outcome: 'completed' });
+    await flushMicrotasks();
+
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
 });

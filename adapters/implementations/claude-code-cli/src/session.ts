@@ -312,6 +312,28 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   }
 
   /**
+   * Recheck the shutdown flag after an awaited setup step in the start path.
+   *
+   * When `close()` sets `this.closing` while `startTurn` is awaiting
+   * environment resolution or MCP registration, the dequeued handle is no
+   * longer in the queue and {@link rejectQueuedHandles} cannot reach it.
+   * This helper completes the handle with the same error contract so callers
+   * see a consistent shutdown outcome.
+   * @param handle - Dequeued message handle currently being set up
+   * @returns `true` when the session is closing and the handle was completed
+   */
+  private completeHandleIfClosing(handle: MessageHandle): boolean {
+    if (!this.closing) return false;
+    if (!handle.isProcessed) {
+      handle.markCompleted({
+        outcome: 'error',
+        error: new Error('Session closed before queued message could be processed'),
+      });
+    }
+    return true;
+  }
+
+  /**
    * Start a new turn by spawning a `claude -p` process for the given message.
    *
    * Each turn is a separate CLI invocation. For turns after the first, the
@@ -331,7 +353,14 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
 
     const prompt = buildTextPrompt(handle, mergedContent);
     const executionContext = await this.resolveAndPersistTurnExecutionContext();
+    // Recheck: close() may have started during env resolution. The handle
+    // is dequeued and unreachable by rejectQueuedHandles — complete it here
+    // instead of spawning a subprocess on a closing session.
+    if (this.completeHandleIfClosing(handle)) return;
+
     const mcpResult = await this.registerMcpContextAndBuildConfig(sessionIdForMcp, executionContext.env);
+    // Recheck: close() may have started during MCP registration.
+    if (this.completeHandleIfClosing(handle)) return;
     const mcpConfig = mcpResult?.config;
     const permissionPromptTool = mcpResult?.hasBridge ? 'mcp__makaio__approve' : undefined;
 

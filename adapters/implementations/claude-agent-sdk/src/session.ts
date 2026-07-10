@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 710 }] */
+/* eslint max-lines: ["error", { "max": 740 }] */
 import type { Query, SDKUserMessage as SdkSDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage, SDKUserMessage } from '@makaio/client-claude-code';
@@ -56,6 +56,15 @@ type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { even
  * `this.closing` is `true`, and drains all remaining queued handles
  * with an error outcome so that callers awaiting
  * `waitForCompletion()` resolve deterministically instead of hanging.
+ *
+ * A dequeued handle that has entered {@link startNewTurn} either
+ * starts its turn before `close()` begins, or is completed with
+ * the closing error at every await point where `close()` can
+ * interleave (schema rotation, query creation, MCP registration).
+ * This is enforced by {@link completeHandleIfClosing}, which rechecks
+ * `this.closing` after each awaited setup step and completes the
+ * handle with the same error contract used by
+ * {@link rejectQueuedHandles}.
  *
  * This prevents a race where the drain window in `close()` accepts a
  * terminal result, the turn transitions to `turn_finished`, and the
@@ -363,6 +372,28 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
+   * Recheck the shutdown flag after an awaited setup step in the start path.
+   *
+   * When `close()` sets `this.closing` while `startNewTurn` is awaiting
+   * schema rotation, query creation, or MCP registration, the dequeued handle
+   * is no longer in the queue and {@link rejectQueuedHandles} cannot reach it.
+   * This helper completes the handle with the same error contract so callers
+   * see a consistent shutdown outcome.
+   * @param handle - Dequeued message handle currently being set up
+   * @returns `true` when the session is closing and the handle was completed
+   */
+  private completeHandleIfClosing(handle: MessageHandle): boolean {
+    if (!this.closing) return false;
+    if (!handle.isProcessed) {
+      handle.markCompleted({
+        outcome: 'error',
+        error: new Error('Session closed before queued message could be processed'),
+      });
+    }
+    return true;
+  }
+
+  /**
    * Start a new turn with the given message.
    * @param handle - Message handle to process
    * @param mergedContent - Optional content from superseded/merged messages (for immediate mode)
@@ -372,6 +403,10 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     const pausedTurnNeedsSchemaRotation = this.currentTurn?.isPaused() && this.activeResponseSchemaKey !== schemaKey;
     if (!this.currentTurn || this.currentTurn.isCompleted() || pausedTurnNeedsSchemaRotation) {
       await this.ensureQueryForResponseSchema(handle.responseSchema);
+      // Recheck: close() may have started during schema rotation / query
+      // creation / MCP registration. The handle is dequeued and unreachable
+      // by rejectQueuedHandles — complete it here instead of proceeding.
+      if (this.completeHandleIfClosing(handle)) return;
       if (pausedTurnNeedsSchemaRotation) {
         this.currentTurn = undefined;
       }
@@ -382,6 +417,13 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     // ensureQueryForResponseSchema above recreates them. If this guard fires,
     // the session was never initialized at all (no prior initialize() call).
     if (!this.queryInstance || !this.source) {
+      // Complete the handle so the caller does not hang on waitForCompletion().
+      if (!handle.isProcessed) {
+        handle.markCompleted({
+          outcome: 'error',
+          error: new Error('Session not initialized'),
+        });
+      }
       throw new Error('Session not initialized');
     }
 

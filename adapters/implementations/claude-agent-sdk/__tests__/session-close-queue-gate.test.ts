@@ -157,6 +157,131 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
     }
   });
 
+  it('completes dequeued handle when close() begins during startNewTurn setup', async () => {
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+
+    // We simulate close() interleaving by hooking into the query mock:
+    // the mock's ensureQueryForResponseSchema path calls createQuery which
+    // calls query(). We intercept the query() call for the schema-rotation
+    // turn and set this.closing = true before it returns, simulating close()
+    // starting during the awaited setup window.
+    let sessionRef: ClaudeConnectorSession | undefined;
+    let queryCalls = 0;
+    queryHarness.query.mockImplementation(
+      ({ prompt, options }: { prompt: AsyncIterable<unknown>; options: { sessionId?: string; resume?: string } }) => {
+        const effectiveSessionId = options.resume ?? options.sessionId ?? crypto.randomUUID();
+        queryCalls++;
+        // On the second query() call (schema rotation), simulate close() arriving
+        // during the awaited setup by setting closing = true on the session.
+        if (queryCalls >= 2 && sessionRef) {
+          expect(Reflect.set(sessionRef, 'closing', true)).toBe(true);
+        }
+        return {
+          interrupt: vi.fn(async () => undefined),
+          close: vi.fn(() => undefined),
+          setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
+          setMaxThinkingTokens: vi.fn(async () => undefined),
+          async *[Symbol.asyncIterator]() {
+            for await (const _message of prompt) {
+              yield {
+                uuid: crypto.randomUUID(),
+                session_id: effectiveSessionId,
+                agentId: 'agent-test',
+                type: 'system',
+                subtype: 'init',
+                apiKeySource: 'user',
+                cwd: os.tmpdir(),
+                tools: [],
+                mcp_servers: [],
+                model: 'claude-sonnet-4-20250514',
+                permissionMode: 'default',
+                slash_commands: [],
+                output_style: 'default',
+              };
+              yield {
+                uuid: crypto.randomUUID(),
+                session_id: effectiveSessionId,
+                agentId: 'agent-test',
+                type: 'result',
+                subtype: 'success',
+                is_error: false,
+                result: 'session completed',
+                duration_ms: 1,
+                duration_api_ms: 1,
+                num_turns: 1,
+                total_cost_usd: 0,
+                usage: {
+                  input_tokens: 1,
+                  output_tokens: 1,
+                  cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 0,
+                  server_tool_use: { web_search_requests: 0 },
+                  service_tier: 'standard',
+                },
+                modelUsage: {},
+                permission_denials: [],
+              };
+            }
+          },
+        };
+      },
+    );
+
+    const session = new ClaudeConnectorSession({
+      bus,
+      adapterId: 'adapter-test',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'agent-test',
+      cwd: os.tmpdir(),
+      model: 'claude-sonnet-4-20250514',
+      env: {},
+      emitSdkEvent: vi.fn(async () => undefined),
+    });
+    sessionRef = session;
+
+    try {
+      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+
+      // Complete a first turn so the session is idle
+      const firstQueue = new UserMessageQueue();
+      const firstHandle = createMessageHandle('message-first');
+      firstQueue.enqueue(firstHandle);
+      await session.processQueue(firstQueue);
+      await expect(firstHandle.waitForCompletion(1_000)).resolves.toMatchObject({ outcome: 'completed' });
+
+      // Enqueue a handle with a responseSchema to trigger schema rotation
+      // (ensureQueryForResponseSchema will create a new query, at which point
+      // our mock sets this.closing = true to simulate close() interleaving).
+      const queue = new UserMessageQueue();
+      const racingHandle = new MessageHandle(
+        'message-racing',
+        {
+          role: 'user',
+          blocks: [{ type: 'text', content: 'hello racing' }],
+          message: 'hello racing',
+        },
+        'enqueue',
+        undefined,
+        undefined,
+        { name: 'test', schema: { type: 'object', properties: { x: { type: 'number' } } } },
+      );
+      queue.enqueue(racingHandle);
+
+      await session.processQueue(queue);
+
+      // The racing handle must complete with an error, not hang
+      const result = await racingHandle.waitForCompletion(1_000);
+      expect(result.outcome).toBe('error');
+      expect((result as { error: Error }).error.message).toContain('Session closed');
+      expect(racingHandle.isProcessed).toBe(true);
+    } finally {
+      // Ensure close completes (already closing via mock)
+      Reflect.set(session, 'closing', true);
+      await session.close();
+    }
+  });
+
   it('rejects queued follow-ups during close() drain window', async () => {
     const bus = await ClaudeCodeConnectorNamespace.scopedBus();
     const session = new ClaudeConnectorSession({
