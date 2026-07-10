@@ -316,9 +316,14 @@ async function writeTerminalWorklog(
 
   const totals = await aggregateTokenTotalsInTransaction(tx, worklogFrameEntries, execution.id);
   const hasMeasuredTotals = hasMeasuredTokenTotals(totals);
+  const measuredTotals = {
+    totalInputTokens: totals.totalInputTokens,
+    totalOutputTokens: totals.totalOutputTokens,
+    totalEstimatedCost: totals.totalEstimatedCost,
+  };
   const summaryValues = {
     ...buildTerminalSummaryValues(execution, existingSummary, worklogSettlement, completedAt),
-    ...(hasMeasuredTotals ? totals : {}),
+    ...(hasMeasuredTotals ? measuredTotals : {}),
   };
   await tx
     .insert(worklogSummaries)

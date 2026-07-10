@@ -28,6 +28,7 @@ export interface WorklogTokenTotals {
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
   readonly totalEstimatedCost: number;
+  readonly hasMeasurements: boolean;
 }
 
 /** Summary fields owned by execution lifecycle projections and settlement. */
@@ -463,6 +464,9 @@ export async function aggregateTokenTotalsInTransaction(
       totalInputTokens: sum(worklogFrameEntries.inputTokens),
       totalOutputTokens: sum(worklogFrameEntries.outputTokens),
       totalEstimatedCost: sum(worklogFrameEntries.estimatedCost),
+      measuredInputTokens: count(worklogFrameEntries.inputTokens),
+      measuredOutputTokens: count(worklogFrameEntries.outputTokens),
+      measuredCosts: count(worklogFrameEntries.estimatedCost),
     })
     .from(worklogFrameEntries)
     .where(eq(worklogFrameEntries.executionId, executionId));
@@ -471,16 +475,20 @@ export async function aggregateTokenTotalsInTransaction(
     totalInputTokens: Number(row?.totalInputTokens ?? 0),
     totalOutputTokens: Number(row?.totalOutputTokens ?? 0),
     totalEstimatedCost: Number(row?.totalEstimatedCost ?? 0),
+    hasMeasurements:
+      Number(row?.measuredInputTokens ?? 0) > 0 ||
+      Number(row?.measuredOutputTokens ?? 0) > 0 ||
+      Number(row?.measuredCosts ?? 0) > 0,
   };
 }
 
 /**
  * Return whether an aggregate contains telemetry worth materializing.
  * @param totals - Recomputed token and cost totals.
- * @returns Whether at least one total is positive.
+ * @returns Whether at least one frame supplied a token or cost measurement.
  */
 export function hasMeasuredTokenTotals(totals: WorklogTokenTotals): boolean {
-  return totals.totalInputTokens > 0 || totals.totalOutputTokens > 0 || totals.totalEstimatedCost > 0;
+  return totals.hasMeasurements;
 }
 
 /**
@@ -496,7 +504,14 @@ export async function updateWorklogSummaryTokenTotalsInTransaction(
   executionId: string,
   totals: WorklogTokenTotals,
 ): Promise<void> {
-  await tx.update(worklogSummaries).set(totals).where(eq(worklogSummaries.executionId, executionId));
+  await tx
+    .update(worklogSummaries)
+    .set({
+      totalInputTokens: totals.totalInputTokens,
+      totalOutputTokens: totals.totalOutputTokens,
+      totalEstimatedCost: totals.totalEstimatedCost,
+    })
+    .where(eq(worklogSummaries.executionId, executionId));
 }
 
 /**
@@ -516,15 +531,17 @@ async function reaggregateSqliteTokenTotalsInSingleStatement(
   const totalInputTokens = sql<number>`coalesce((select sum(${worklogFrameEntries.inputTokens}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
   const totalOutputTokens = sql<number>`coalesce((select sum(${worklogFrameEntries.outputTokens}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
   const totalEstimatedCost = sql<number>`coalesce((select sum(${worklogFrameEntries.estimatedCost}) from ${worklogFrameEntries} where ${worklogFrameEntries.executionId} = ${executionId}), 0)`;
+  const hasMeasurements = sql`exists(
+    select 1 from ${worklogFrameEntries}
+    where ${worklogFrameEntries.executionId} = ${executionId}
+      and (${worklogFrameEntries.inputTokens} is not null
+        or ${worklogFrameEntries.outputTokens} is not null
+        or ${worklogFrameEntries.estimatedCost} is not null)
+  )`;
   await db
     .update(worklogSummaries)
     .set({ totalInputTokens, totalOutputTokens, totalEstimatedCost })
-    .where(
-      and(
-        eq(worklogSummaries.executionId, executionId),
-        sql`(${totalInputTokens} > 0 or ${totalOutputTokens} > 0 or ${totalEstimatedCost} > 0)`,
-      ),
-    );
+    .where(and(eq(worklogSummaries.executionId, executionId), hasMeasurements));
 }
 
 /**

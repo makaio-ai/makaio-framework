@@ -161,7 +161,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
     }
   });
 
-  it('replaces a pre-settlement aggregate with the authoritative terminal frame usage', async () => {
+  it('clears a pre-settlement aggregate when the authoritative terminal frame measures zero usage', async () => {
     const executionId = `wfx-ext-usage-settlement-${crypto.randomUUID()}`;
     const registration = {
       ...buildRegistration(executionId),
@@ -187,9 +187,9 @@ describeStorageConformance('workflow external settlement identity', (config) => 
       });
 
       const settlement = buildFramedSettlement(executionId, {
-        inputTokens: 29,
-        outputTokens: 13,
-        estimatedCost: 0.42,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCost: 0,
       });
       await expect(storage.bus.request(WorkflowStorageSubjects.settleExternalExecution, settlement)).resolves.toEqual({
         success: true,
@@ -197,9 +197,9 @@ describeStorageConformance('workflow external settlement identity', (config) => 
       await expect(storage.bus.request(WorkflowSubjects.worklog.get, { executionId })).resolves.toMatchObject({
         summary: {
           status: 'completed',
-          totalInputTokens: 29,
-          totalOutputTokens: 13,
-          totalEstimatedCost: 0.42,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalEstimatedCost: 0,
         },
       });
     } finally {
