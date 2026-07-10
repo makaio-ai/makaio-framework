@@ -52,9 +52,9 @@ function mapSummary(row: SelectWorklogSummary): WorkLogExecutionSummary {
 /**
  * Upsert a WorkLog execution summary row.
  *
- * Called when an `execution.started` event is received to create the initial
- * row, and again on `execution.completed`, `execution.failed`, and
- * `execution.cancelled` to update terminal status fields.
+ * This is the unconditional storage primitive. Event projections use
+ * {@link upsertAdvisoryWorklogSummary} so they cannot overwrite an
+ * authoritative terminal settlement.
  * @param db - Drizzle database instance.
  * @param summary - The summary values to insert or update.
  */
@@ -67,14 +67,15 @@ export async function upsertWorklogSummary(db: MakaioDatabase, summary: InsertWo
 }
 
 /**
- * Upsert a running WorkLog summary without regressing a terminal row.
+ * Upsert an advisory WorkLog summary without overwriting an authoritative terminal row.
+ *
+ * The status predicate is part of the conflict update itself. A projection
+ * that read a running row before an external settlement therefore cannot
+ * overwrite the terminal row after that settlement commits.
  * @param db - Drizzle database instance.
- * @param summary - Running summary values.
+ * @param summary - Advisory summary values.
  */
-export async function upsertRunningWorklogSummary(
-  db: MakaioDatabase,
-  summary: InsertWorklogSummary & { status: 'running' },
-): Promise<void> {
+export async function upsertAdvisoryWorklogSummary(db: MakaioDatabase, summary: InsertWorklogSummary): Promise<void> {
   const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
   await db
     .insert(worklogSummaries)
@@ -84,6 +85,28 @@ export async function upsertRunningWorklogSummary(
       set: summary,
       setWhere: notInArray(worklogSummaries.status, ['completed', 'failed', 'cancelled']),
     });
+}
+
+/**
+ * Update only aggregate usage fields on an existing WorkLog summary.
+ *
+ * Lifecycle fields are deliberately excluded so a stale aggregation read can
+ * never regress an authoritative terminal settlement.
+ * @param db - Drizzle database instance.
+ * @param executionId - Execution whose totals should be updated.
+ * @param totals - Recomputed token and cost totals.
+ */
+export async function updateWorklogSummaryTokenTotals(
+  db: MakaioDatabase,
+  executionId: string,
+  totals: {
+    readonly totalInputTokens: number;
+    readonly totalOutputTokens: number;
+    readonly totalEstimatedCost: number;
+  },
+): Promise<void> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
+  await db.update(worklogSummaries).set(totals).where(eq(worklogSummaries.executionId, executionId));
 }
 
 /**
@@ -161,8 +184,9 @@ export async function listWorklogSummaries(
 /**
  * Upsert a WorkLog frame entry row.
  *
- * Called on `frame.started`, `frame.completed`, and `frame.failed` events to
- * create or update the frame's projection entry.
+ * This is the unconditional storage primitive. Event projections use
+ * {@link upsertAdvisoryWorklogFrameEntry} to preserve authoritative terminal
+ * rows.
  * @param db - Drizzle database instance.
  * @param entry - Frame entry values to insert or update.
  */
@@ -175,13 +199,16 @@ export async function upsertWorklogFrameEntry(db: MakaioDatabase, entry: InsertW
 }
 
 /**
- * Upsert a running WorkLog frame without regressing a terminal row.
+ * Upsert an advisory WorkLog frame without overwriting an authoritative terminal row.
+ *
+ * The status predicate is evaluated by the database during the conflict
+ * update, closing the read-then-write race in terminal event projections.
  * @param db - Drizzle database instance.
- * @param entry - Running frame values.
+ * @param entry - Advisory frame values.
  */
-export async function upsertRunningWorklogFrameEntry(
+export async function upsertAdvisoryWorklogFrameEntry(
   db: MakaioDatabase,
-  entry: InsertWorklogFrameEntry & { status: 'running' },
+  entry: InsertWorklogFrameEntry,
 ): Promise<void> {
   const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
   await db

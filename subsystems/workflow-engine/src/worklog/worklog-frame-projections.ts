@@ -2,8 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import {
-  upsertWorklogFrameEntry,
-  upsertRunningWorklogFrameEntry,
+  upsertAdvisoryWorklogFrameEntry,
   getWorklogFrameEntryRow,
   type SelectWorklogFrameEntry,
 } from './worklog-storage.js';
@@ -119,7 +118,7 @@ async function projectFrameCompleted(
   if (existing !== null && isTerminalFrameStatus(existing.status)) return;
   const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
   const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
-  await upsertWorklogFrameEntry(db, {
+  await upsertAdvisoryWorklogFrameEntry(db, {
     frameId,
     executionId,
     ...meta,
@@ -128,7 +127,7 @@ async function projectFrameCompleted(
     durationMs: duration ?? null,
     error: null,
   });
-  await reaggregateTokenTotals(bus, db, executionId);
+  await reaggregateTokenTotals(db, executionId);
   await emitWorklogChanged(bus, executionId);
 }
 
@@ -163,7 +162,7 @@ async function projectFrameFailed(
   if (existing !== null && isTerminalFrameStatus(existing.status)) return;
   const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
   const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
-  await upsertWorklogFrameEntry(db, {
+  await upsertAdvisoryWorklogFrameEntry(db, {
     frameId,
     executionId,
     ...meta,
@@ -192,7 +191,7 @@ export function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): A
     bus.on(WorkflowSubjects.frame.started, async (ctx) => {
       const { executionId, frameId, nodeId, nodeType, path, startedAt } = ctx.payload;
       await safeProject(`frame.started[${frameId}]`, async () => {
-        await upsertRunningWorklogFrameEntry(db, {
+        await upsertAdvisoryWorklogFrameEntry(db, {
           frameId,
           executionId,
           nodeId,

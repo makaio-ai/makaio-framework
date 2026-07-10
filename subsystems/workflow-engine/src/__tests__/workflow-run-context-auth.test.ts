@@ -125,6 +125,25 @@ class StubTransport implements BusTransport {
       context,
     );
   }
+
+  /**
+   * Inject a remote external-execution settlement request.
+   * @param executionId - External execution identifier to settle.
+   * @param context - Transport receive context for the remote caller.
+   */
+  public async requestExternalCompletion(executionId: string, context: TransportReceiveContext): Promise<void> {
+    await this.handler?.(
+      {
+        type: 'request',
+        namespace: WorkflowSubjects.completeExternalExecution.$meta.namespace,
+        subject: WorkflowSubjects.completeExternalExecution.subject as string,
+        payload: { executionId, status: 'completed', completedAt: 1_250 },
+        correlationId: `external-complete-corr-${executionId}`,
+        messageId: `external-complete-msg-${executionId}`,
+      },
+      context,
+    );
+  }
 }
 
 const runContext = WorkflowRunContextSchema.parse({
@@ -285,6 +304,74 @@ describe('workflow.getRunContext authorization', () => {
       correlationId: `storage-corr-${runContext.executionId}`,
       error: { message: expect.stringContaining('local-only') },
     });
+  });
+});
+
+describe('workflow.completeExternalExecution authorization', () => {
+  it('allows an authenticated workflow peer bound to the external execution', async () => {
+    const bus = createWorkflowTestBus();
+    const dbContext = await createTestDbForBus(bus);
+    const cleanups = registerWorkflowStorageDelegationHandlers(bus);
+    const executionId = 'wfx-ext-authorized-completion';
+
+    try {
+      await bus.request(WorkflowSubjects.registerExternalExecution, {
+        executionId,
+        name: 'authorized-external-completion',
+        startedAt: 1_000,
+      });
+      const transport = new StubTransport();
+      bus.registerTransport(transport);
+      await transport.requestExternalCompletion(executionId, {
+        transportName: 'remote-workflow',
+        peer: { kind: 'workflow-execution', id: executionId, authenticated: true },
+      });
+
+      expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
+        type: 'response',
+        correlationId: `external-complete-corr-${executionId}`,
+        result: { success: true },
+      });
+      await expect(bus.request(WorkflowSubjects.getExecution, { executionId })).resolves.toMatchObject({
+        execution: { status: 'completed', completedAt: 1_250 },
+      });
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+      dbContext.cleanup();
+    }
+  });
+
+  it('denies a remote peer that is not bound to the external execution', async () => {
+    const bus = createWorkflowTestBus();
+    const dbContext = await createTestDbForBus(bus);
+    const cleanups = registerWorkflowStorageDelegationHandlers(bus);
+    const executionId = 'wfx-ext-unauthorized-completion';
+
+    try {
+      await bus.request(WorkflowSubjects.registerExternalExecution, {
+        executionId,
+        name: 'unauthorized-external-completion',
+        startedAt: 1_000,
+      });
+      const transport = new StubTransport();
+      bus.registerTransport(transport);
+      await transport.requestExternalCompletion(executionId, {
+        transportName: 'remote-workflow',
+        peer: { kind: 'workflow-execution', id: 'wfx-ext-other-execution', authenticated: true },
+      });
+
+      expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
+        type: 'response',
+        correlationId: `external-complete-corr-${executionId}`,
+        error: { message: expect.stringContaining('Unauthorized') },
+      });
+      await expect(bus.request(WorkflowSubjects.getExecution, { executionId })).resolves.toMatchObject({
+        execution: { status: 'running', completedAt: undefined },
+      });
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+      dbContext.cleanup();
+    }
   });
 });
 

@@ -3,7 +3,6 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { EXTERNAL_EXECUTION_ID_PREFIX, type WorkLogFrameEntry, type WorkflowExecution } from '@makaio/contracts';
 import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type {
-  InsertWorklogFrameEntry,
   InsertWorklogSummary,
   SelectWorkflowExecution,
   SelectWorklogFrameEntry,
@@ -12,24 +11,20 @@ import type {
 import { WorkflowStorageSubjects } from './namespace.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { jsonValuesEqual, toFrameDbValues, type ExecutionDbValueMapper } from './external-execution-values.js';
+import {
+  assertMatchingFrameIdentity,
+  assertMatchingSettlement,
+  assertMatchingTerminalFrame,
+  buildTerminalFrameValues,
+  buildTerminalSummaryValues,
+  loadSettlementFrame,
+  type ExternalSettlement,
+  type TerminalWorklogFrame,
+  type WorkflowStorageTransaction,
+} from './external-execution-settlement.js';
 
-type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 type RunningWorklogFrame = WorkLogFrameEntry & { status: 'running'; startedAt: number };
-type TerminalWorklogFrame = WorkLogFrameEntry & {
-  status: TerminalStatus;
-  startedAt: number;
-  completedAt: number;
-  durationMs: number;
-};
-
-interface ExternalSettlement {
-  readonly executionId: string;
-  readonly status: TerminalStatus;
-  readonly error?: string;
-  readonly reason?: string;
-  readonly completedAt?: number;
-  readonly frame?: TerminalWorklogFrame;
-}
+type TerminalWorklogTables = Pick<typeof workflowEngineSchema.sqlite, 'worklogSummaries' | 'worklogFrameEntries'>;
 
 /**
  * Assert that an existing row represents an identical external registration.
@@ -199,191 +194,21 @@ async function setExternalExecutionStart(
 }
 
 /**
- * Assert that settlement does not mutate immutable frame identity metadata.
- * @param existing - Durable WorkLog frame row.
- * @param expected - Terminal frame supplied by the settlement.
- */
-function assertMatchingFrameIdentity(existing: SelectWorklogFrameEntry, expected: TerminalWorklogFrame): void {
-  if (
-    existing.executionId !== expected.executionId ||
-    existing.nodeId !== expected.nodeId ||
-    existing.nodeType !== expected.nodeType ||
-    !jsonValuesEqual(existing.path, expected.path) ||
-    existing.attempt !== expected.attempt ||
-    existing.iteration !== (expected.iteration ?? null) ||
-    existing.branchKey !== (expected.branchKey ?? null) ||
-    existing.startedAt !== expected.startedAt
-  ) {
-    throw new Error(`settleExternalExecution: frame "${expected.frameId}" conflicts with its registered metadata`);
-  }
-}
-
-/**
- * Assert that a terminal execution row is an identical completion replay.
- * @param execution - Durable execution row.
- * @param settlement - Requested terminal settlement.
- * @param completedAt - Resolved terminal timestamp.
- */
-function assertMatchingSettlement(
-  execution: SelectWorkflowExecution,
-  settlement: ExternalSettlement,
-  completedAt: number,
-): void {
-  const expectedError = settlement.status === 'failed' ? (settlement.error ?? null) : null;
-  const expectedReason = settlement.status === 'cancelled' ? (settlement.reason ?? null) : null;
-  if (
-    execution.status !== settlement.status ||
-    execution.completedAt !== completedAt ||
-    execution.error !== expectedError ||
-    execution.reason !== expectedReason
-  ) {
-    if (execution.status !== settlement.status) {
-      throw new Error(
-        `settleExternalExecution: execution "${settlement.executionId}" cannot transition from status "${execution.status}"`,
-      );
-    }
-    throw new Error(
-      `settleExternalExecution: execution "${settlement.executionId}" conflicts with an existing terminal settlement`,
-    );
-  }
-}
-
-/**
- * Load the only frame compatible with an external settlement.
- * @param tx - Active storage transaction.
- * @param settlement - Settlement carrying exact frame metadata.
- * @returns Existing matching frame, or `undefined` when none is stored.
- */
-async function loadSettlementFrame(
-  tx: Parameters<Parameters<typeof executeTransaction>[1]>[0],
-  settlement: ExternalSettlement & { frame: TerminalWorklogFrame },
-): Promise<SelectWorklogFrameEntry | undefined> {
-  const { worklogFrameEntries } = resolveSchema(tx, workflowEngineSchema);
-  const executionFrames = await tx
-    .select()
-    .from(worklogFrameEntries)
-    .where(eq(worklogFrameEntries.executionId, settlement.executionId));
-  if (executionFrames.some((frame) => frame.frameId !== settlement.frame.frameId)) {
-    throw new Error(
-      `settleExternalExecution: frame "${settlement.frame.frameId}" conflicts with the registered frame identity`,
-    );
-  }
-  const matchingFrame = executionFrames.find((frame) => frame.frameId === settlement.frame.frameId);
-  if (matchingFrame !== undefined) return matchingFrame;
-  const [collidingFrame] = await tx
-    .select()
-    .from(worklogFrameEntries)
-    .where(eq(worklogFrameEntries.frameId, settlement.frame.frameId))
-    .limit(1);
-  if (collidingFrame !== undefined) {
-    throw new Error(`settleExternalExecution: frame "${settlement.frame.frameId}" belongs to another execution`);
-  }
-  return undefined;
-}
-
-/**
- * Reject a terminal replay whose frame metadata differs from the durable settlement.
- * @param tx - Active storage transaction.
- * @param settlement - Replayed settlement request.
- */
-async function assertMatchingTerminalFrame(
-  tx: Parameters<Parameters<typeof executeTransaction>[1]>[0],
-  settlement: ExternalSettlement,
-): Promise<void> {
-  if (settlement.frame === undefined) return;
-  const existing = await loadSettlementFrame(tx, settlement as ExternalSettlement & { frame: TerminalWorklogFrame });
-  if (existing === undefined) return;
-  assertMatchingFrameIdentity(existing, settlement.frame);
-  const expected = toFrameDbValues(settlement.frame);
-  const matches =
-    existing.executionId === expected.executionId &&
-    existing.nodeId === expected.nodeId &&
-    existing.nodeType === expected.nodeType &&
-    jsonValuesEqual(existing.path, expected.path) &&
-    existing.status === expected.status &&
-    existing.attempt === expected.attempt &&
-    existing.iteration === expected.iteration &&
-    existing.branchKey === expected.branchKey &&
-    existing.startedAt === expected.startedAt &&
-    existing.completedAt === expected.completedAt &&
-    existing.durationMs === expected.durationMs &&
-    existing.error === expected.error;
-  if (!matches) {
-    throw new Error(
-      `settleExternalExecution: frame "${settlement.frame.frameId}" conflicts with an existing terminal settlement`,
-    );
-  }
-}
-
-/**
- * Build the authoritative terminal WorkLog summary values.
- * @param execution - Durable execution row.
- * @param existing - Existing WorkLog summary, when present.
- * @param settlement - Requested terminal settlement.
- * @param completedAt - Resolved terminal timestamp.
- * @returns WorkLog summary database values.
- */
-function buildTerminalSummaryValues(
-  execution: SelectWorkflowExecution,
-  existing: SelectWorklogSummary | undefined,
-  settlement: ExternalSettlement,
-  completedAt: number,
-): InsertWorklogSummary {
-  const recordedStartedAt = settlement.frame?.startedAt ?? existing?.startedAt ?? execution.startedAt;
-  // Exact frame settlements are validated by contract. Frame-less legacy
-  // calls use a zero-duration lower bound for inconsistent historical clocks.
-  const startedAt = settlement.frame === undefined ? Math.min(recordedStartedAt, completedAt) : recordedStartedAt;
-  if (completedAt < startedAt) {
-    throw new Error('settleExternalExecution: completedAt must not precede the WorkLog start timestamp');
-  }
-  return {
-    executionId: execution.id,
-    workflowId: execution.workflowId,
-    workflowName: existing?.workflowName ?? null,
-    status: settlement.status,
-    startedAt,
-    completedAt,
-    durationMs: completedAt - startedAt,
-    totalInputTokens: existing?.totalInputTokens ?? null,
-    totalOutputTokens: existing?.totalOutputTokens ?? null,
-    totalEstimatedCost: existing?.totalEstimatedCost ?? null,
-    error: settlement.status === 'failed' ? (settlement.error ?? null) : null,
-    failedNodeId: settlement.status === 'failed' ? (settlement.frame?.nodeId ?? null) : null,
-  };
-}
-
-/**
- * Preserve usage measurements while applying authoritative terminal frame fields.
- * @param frame - Requested terminal frame.
- * @param existing - Existing projected frame, when present.
- * @returns WorkLog frame database values.
- */
-function buildTerminalFrameValues(
-  frame: TerminalWorklogFrame,
-  existing: SelectWorklogFrameEntry | undefined,
-): InsertWorklogFrameEntry {
-  return toFrameDbValues({
-    ...frame,
-    inputTokens: frame.inputTokens ?? existing?.inputTokens ?? undefined,
-    outputTokens: frame.outputTokens ?? existing?.outputTokens ?? undefined,
-    estimatedCost: frame.estimatedCost ?? existing?.estimatedCost ?? undefined,
-  });
-}
-
-/**
  * Write the authoritative terminal WorkLog summary and optional frame.
  * @param tx - Active storage transaction.
+ * @param tables - Dialect-resolved WorkLog tables from the branded root handle.
  * @param execution - Durable execution row.
  * @param settlement - Requested terminal settlement.
  * @param completedAt - Resolved terminal timestamp.
  */
 async function writeTerminalWorklog(
-  tx: Parameters<Parameters<typeof executeTransaction>[1]>[0],
+  tx: WorkflowStorageTransaction,
+  tables: TerminalWorklogTables,
   execution: SelectWorkflowExecution,
   settlement: ExternalSettlement,
   completedAt: number,
 ): Promise<void> {
-  const { worklogSummaries, worklogFrameEntries } = resolveSchema(tx, workflowEngineSchema);
+  const { worklogSummaries, worklogFrameEntries } = tables;
   const [existingSummary] = await tx
     .select()
     .from(worklogSummaries)
@@ -398,6 +223,7 @@ async function writeTerminalWorklog(
   if (settlement.frame !== undefined) {
     const existingFrame = await loadSettlementFrame(
       tx,
+      worklogFrameEntries,
       settlement as ExternalSettlement & { frame: TerminalWorklogFrame },
     );
     if (existingFrame !== undefined) assertMatchingFrameIdentity(existingFrame, settlement.frame);
@@ -425,7 +251,10 @@ async function settleExternalExecution(db: MakaioDatabase, settlement: ExternalS
     throw new Error('settleExternalExecution requires frame.executionId to match executionId');
   }
 
-  const { workflowExecutions } = resolveSchema(db, workflowEngineSchema);
+  // Resolve the dialect-correct tables from the branded root handle. Drizzle
+  // transaction objects do not carry Makaio's dialect brand, so resolving from
+  // `tx` would silently select the SQLite variants for PostgreSQL transactions.
+  const { workflowExecutions, worklogSummaries, worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
   return executeTransaction(db, async (tx) => {
     const [execution] = await tx
       .select()
@@ -468,8 +297,8 @@ async function settleExternalExecution(db: MakaioDatabase, settlement: ExternalS
       assertMatchingSettlement(execution, settlement, completedAt);
     }
 
-    if (terminalReplay) await assertMatchingTerminalFrame(tx, settlement);
-    await writeTerminalWorklog(tx, execution, settlement, completedAt);
+    if (terminalReplay) await assertMatchingTerminalFrame(tx, worklogFrameEntries, settlement);
+    await writeTerminalWorklog(tx, { worklogSummaries, worklogFrameEntries }, execution, settlement, completedAt);
     return true;
   });
 }

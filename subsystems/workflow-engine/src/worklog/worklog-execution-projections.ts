@@ -2,8 +2,8 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import {
-  upsertWorklogSummary,
-  upsertRunningWorklogSummary,
+  upsertAdvisoryWorklogSummary,
+  updateWorklogSummaryTokenTotals,
   aggregateTokenTotals,
   getWorklogSummary,
 } from './worklog-storage.js';
@@ -30,7 +30,7 @@ async function projectExecutionStarted(
   db: MakaioDatabase,
   payload: { readonly executionId: string; readonly workflowId: string; readonly startedAt?: number },
 ): Promise<void> {
-  await upsertRunningWorklogSummary(db, {
+  await upsertAdvisoryWorklogSummary(db, {
     executionId: payload.executionId,
     workflowId: payload.workflowId,
     workflowName: null,
@@ -60,7 +60,7 @@ async function projectExecutionCompleted(
   const completedAt = payload.completedAt ?? Date.now();
   const existing = await getWorklogSummary(db, payload.executionId);
   if (existing !== null && isTerminalWorklogStatus(existing.status)) return;
-  await upsertWorklogSummary(db, {
+  await upsertAdvisoryWorklogSummary(db, {
     executionId: payload.executionId,
     workflowId: existing?.workflowId ?? payload.executionId,
     workflowName: existing?.workflowName ?? null,
@@ -98,7 +98,7 @@ async function projectExecutionTerminated(
   const existing = await getWorklogSummary(db, executionId);
   if (existing !== null && isTerminalWorklogStatus(existing.status)) return;
   const startedAt = existing?.startedAt ?? completedAt;
-  await upsertWorklogSummary(db, {
+  await upsertAdvisoryWorklogSummary(db, {
     executionId,
     workflowId: existing?.workflowId ?? executionId,
     workflowName: existing?.workflowName ?? null,
@@ -117,30 +117,13 @@ async function projectExecutionTerminated(
 
 /**
  * Re-aggregate token totals into the worklog summary when a frame completes.
- * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
  * @param executionId - Execution identifier.
  */
-export async function reaggregateTokenTotals(bus: IMakaioBus, db: MakaioDatabase, executionId: string): Promise<void> {
+export async function reaggregateTokenTotals(db: MakaioDatabase, executionId: string): Promise<void> {
   const totals = await aggregateTokenTotals(db, executionId);
   if (totals.totalInputTokens > 0 || totals.totalOutputTokens > 0 || totals.totalEstimatedCost > 0) {
-    const existing = await getWorklogSummary(db, executionId);
-    if (existing) {
-      await upsertWorklogSummary(db, {
-        executionId,
-        workflowId: existing.workflowId,
-        workflowName: existing.workflowName ?? null,
-        status: existing.status,
-        startedAt: existing.startedAt,
-        completedAt: existing.completedAt ?? null,
-        durationMs: existing.durationMs ?? null,
-        totalInputTokens: totals.totalInputTokens,
-        totalOutputTokens: totals.totalOutputTokens,
-        totalEstimatedCost: totals.totalEstimatedCost,
-        error: existing.error ?? null,
-        failedNodeId: existing.failedNodeId ?? null,
-      });
-    }
+    await updateWorklogSummaryTokenTotals(db, executionId, totals);
   }
 }
 

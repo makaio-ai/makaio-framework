@@ -249,6 +249,9 @@ function registerExternalExecutionHandlers(bus: IMakaioBus): Array<() => void> {
       // terminal metadata rules are storage invariants, not just dev-time checks.
       const payload = WorkflowSchemas.completeExternalExecution.request.parse(ctx.payload);
       const { executionId, status } = payload;
+      if (!isExecutionBoundAccessAllowed(ctx, executionId)) {
+        throw new Error(`Unauthorized: caller is not permitted to settle execution: ${executionId}`);
+      }
       // Primary guard: only executions registered through registerExternalExecution
       // carry the EXTERNAL_EXECUTION_ID_PREFIX. Engine IDs use the plain `wfx-` prefix.
       // This covers all engine paths including persistPreRuntimeTerminalExecution,

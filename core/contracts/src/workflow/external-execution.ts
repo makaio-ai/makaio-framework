@@ -73,27 +73,37 @@ export const ExternalExecutionFrameCompletionSchema = z
 export type ExternalExecutionFrameCompletion = z.infer<typeof ExternalExecutionFrameCompletionSchema>;
 
 /** Request contract for atomic external execution registration. */
-export const RegisterExternalExecutionRequestSchema = z.object({
-  /** Stable caller-supplied ID for idempotent replay. Generated when omitted. */
-  executionId: z
-    .string()
-    .startsWith(EXTERNAL_EXECUTION_ID_PREFIX, { message: 'executionId must use the wfx-ext- prefix' })
-    .optional(),
-  /** Human-readable label stored as the external execution's workflow ID. */
-  name: z.string().min(1),
-  /** Execution start timestamp. Defaults to `Date.now()`. */
-  startedAt: z.number().int().nonnegative().optional(),
-  /** Scope for the execution. Defaults to global when omitted. */
-  scope: WorkflowExecutionScopeSchema.optional(),
-  /** Optional artifact binding reference. */
-  artifactRef: WorkflowArtifactRefSchema.optional(),
-  /** Optional bound input value for the execution. */
-  input: JsonValueSchema.optional(),
-  /** Optional trigger payload metadata. */
-  triggerPayload: JsonObjectContractSchema.optional(),
-  /** Optional frame persisted in the same transaction as the execution. */
-  frame: ExternalExecutionFrameStartSchema.optional(),
-});
+export const RegisterExternalExecutionRequestSchema = z
+  .object({
+    /** Stable caller-supplied ID for idempotent replay. Generated when omitted. */
+    executionId: z
+      .string()
+      .startsWith(EXTERNAL_EXECUTION_ID_PREFIX, { message: 'executionId must use the wfx-ext- prefix' })
+      .optional(),
+    /** Human-readable label stored as the external execution's workflow ID. */
+    name: z.string().min(1),
+    /** Execution start timestamp. Defaults to `Date.now()` for generated IDs. */
+    startedAt: z.number().int().nonnegative().optional(),
+    /** Scope for the execution. Defaults to global when omitted. */
+    scope: WorkflowExecutionScopeSchema.optional(),
+    /** Optional artifact binding reference. */
+    artifactRef: WorkflowArtifactRefSchema.optional(),
+    /** Optional bound input value for the execution. */
+    input: JsonValueSchema.optional(),
+    /** Optional trigger payload metadata. */
+    triggerPayload: JsonObjectContractSchema.optional(),
+    /** Optional frame persisted in the same transaction as the execution. */
+    frame: ExternalExecutionFrameStartSchema.optional(),
+  })
+  .superRefine((payload, ctx) => {
+    if (payload.executionId !== undefined && payload.startedAt === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'startedAt is required when executionId is supplied',
+        path: ['startedAt'],
+      });
+    }
+  });
 
 /** Parsed external execution registration request. */
 export type RegisterExternalExecutionRequest = z.infer<typeof RegisterExternalExecutionRequestSchema>;
@@ -109,8 +119,12 @@ export const CompleteExternalExecutionRequestSchema = z
     error: z.string().min(1).optional(),
     /** Required cancellation reason for cancelled settlements. */
     reason: z.string().min(1).optional(),
-    /** Completion timestamp. Defaults transactionally when frame metadata is absent. */
-    completedAt: z.number().int().nonnegative().optional(),
+    /** Completion timestamp. Fractional legacy values are truncated to epoch milliseconds. */
+    completedAt: z
+      .number()
+      .nonnegative()
+      .transform((value) => Math.trunc(value))
+      .optional(),
     /** Optional exact frame settled in the same transaction. */
     frame: ExternalExecutionFrameCompletionSchema.optional(),
   })
@@ -127,20 +141,6 @@ export const CompleteExternalExecutionRequestSchema = z
         code: z.ZodIssueCode.custom,
         message: "status 'cancelled' requires a non-empty 'reason' string",
         path: ['reason'],
-      });
-    }
-    if (payload.status === 'failed' && payload.reason !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "status 'failed' must not carry a 'reason'",
-        path: ['reason'],
-      });
-    }
-    if (payload.status === 'cancelled' && payload.error !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "status 'cancelled' must not carry an 'error'",
-        path: ['error'],
       });
     }
     if (payload.status === 'completed' && payload.error !== undefined) {

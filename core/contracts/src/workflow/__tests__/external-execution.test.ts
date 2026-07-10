@@ -30,6 +30,19 @@ describe('external execution contracts', () => {
     ).toThrow('wfx-ext-');
   });
 
+  it('requires deterministic start time for caller-supplied registration IDs', () => {
+    expect(() =>
+      RegisterExternalExecutionRequestSchema.parse({
+        executionId: 'wfx-ext-direct-review-1',
+        name: 'direct-review',
+      }),
+    ).toThrow('startedAt is required');
+
+    expect(RegisterExternalExecutionRequestSchema.parse({ name: 'direct-review' })).toEqual({
+      name: 'direct-review',
+    });
+  });
+
   it('accepts an exact frame settlement and validates its timestamps', () => {
     const settlement = {
       executionId: 'wfx-ext-direct-review-1',
@@ -73,5 +86,26 @@ describe('external execution contracts', () => {
         frame,
       }),
     ).toThrow('durationMs must equal');
+  });
+
+  it('normalises legacy fractional timestamps and accepts ignored terminal metadata', () => {
+    expect(
+      CompleteExternalExecutionRequestSchema.parse({
+        executionId: 'wfx-ext-direct-review-1',
+        status: 'failed',
+        error: 'review failed',
+        reason: 'legacy ignored reason',
+        completedAt: 1_250.75,
+      }),
+    ).toMatchObject({ completedAt: 1_250, reason: 'legacy ignored reason' });
+
+    expect(() =>
+      CompleteExternalExecutionRequestSchema.parse({
+        executionId: 'wfx-ext-direct-review-1',
+        status: 'cancelled',
+        reason: 'operator cancelled',
+        error: 'legacy ignored error',
+      }),
+    ).not.toThrow();
   });
 });

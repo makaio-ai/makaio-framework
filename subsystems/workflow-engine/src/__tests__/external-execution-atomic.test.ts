@@ -6,6 +6,7 @@ import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace } from '../storage/namespace.js';
 import { worklogFrameEntries, worklogSummaries } from '../storage/schema.js';
 import { registerWorkflowStorageDelegationHandlers } from '../workflow-executor-handlers.js';
+import { upsertAdvisoryWorklogFrameEntry, upsertAdvisoryWorklogSummary } from '../worklog/worklog-storage.js';
 import { createTestDb, type TestDbContext } from './shared.js';
 
 const registration = {
@@ -99,6 +100,9 @@ describe('atomic external execution WorkLog settlement', () => {
       MakaioBus.request(WorkflowSubjects.registerExternalExecution, { ...registration, name: 'different-workflow' }),
     ).rejects.toThrow('registration conflicts');
     await expect(
+      MakaioBus.request(WorkflowSubjects.registerExternalExecution, { ...registration, startedAt: 1_001 }),
+    ).rejects.toThrow('registration conflicts');
+    await expect(
       MakaioBus.request(WorkflowSubjects.registerExternalExecution, {
         ...registration,
         frame: { ...registration.frame, nodeId: 'implement' },
@@ -181,6 +185,45 @@ describe('atomic external execution WorkLog settlement', () => {
     ).resolves.toEqual({ success: true });
     const replay = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
     expect(replay.execution?.completedAt).toBe(first.execution?.completedAt);
+  });
+
+  it('rejects terminal replays that add or remove exact frame settlement', async () => {
+    const frameLessExecutionId = 'wfx-ext-atomic-frame-less-1';
+    await MakaioBus.request(WorkflowSubjects.registerExternalExecution, {
+      executionId: frameLessExecutionId,
+      name: 'frame-less-external-run',
+      startedAt: 1_000,
+    });
+    await MakaioBus.request(WorkflowSubjects.completeExternalExecution, {
+      executionId: frameLessExecutionId,
+      status: 'completed',
+      completedAt: 1_250,
+    });
+    await expect(
+      MakaioBus.request(WorkflowSubjects.completeExternalExecution, {
+        executionId: frameLessExecutionId,
+        status: 'completed',
+        completedAt: 1_250,
+        frame: {
+          frameId: `${frameLessExecutionId}:review`,
+          nodeId: 'review',
+          nodeType: 'delegate-role',
+          path: ['review'],
+          startedAt: 1_000,
+          durationMs: 250,
+        },
+      }),
+    ).rejects.toThrow('frame presence conflicts');
+
+    await MakaioBus.request(WorkflowSubjects.registerExternalExecution, registration);
+    await MakaioBus.request(WorkflowSubjects.completeExternalExecution, completion);
+    await expect(
+      MakaioBus.request(WorkflowSubjects.completeExternalExecution, {
+        executionId: completion.executionId,
+        status: 'completed',
+        completedAt: completion.completedAt,
+      }),
+    ).rejects.toThrow('frame presence conflicts');
   });
 
   it('rolls back conflicting terminal status or frame identity', async () => {
@@ -293,5 +336,62 @@ describe('atomic external execution WorkLog settlement', () => {
       completedAt: 1_250,
       durationMs: 250,
     });
+  });
+
+  it('keeps authoritative settlement when advisory writes resume after a stale read', async () => {
+    await MakaioBus.request(WorkflowSubjects.registerExternalExecution, registration);
+
+    let releaseAdvisoryWrite!: () => void;
+    let signalStaleRead!: () => void;
+    const settlementCommitted = new Promise<void>((resolve) => {
+      releaseAdvisoryWrite = resolve;
+    });
+    const staleReadCompleted = new Promise<void>((resolve) => {
+      signalStaleRead = resolve;
+    });
+    const delayedAdvisoryProjection = (async () => {
+      const [staleSummary] = await dbContext.db
+        .select()
+        .from(worklogSummaries)
+        .where(eq(worklogSummaries.executionId, registration.executionId));
+      const [staleFrame] = await dbContext.db
+        .select()
+        .from(worklogFrameEntries)
+        .where(eq(worklogFrameEntries.frameId, completion.frame.frameId));
+      if (staleSummary === undefined || staleFrame === undefined) {
+        throw new Error('expected registration WorkLog rows before interleaving settlement');
+      }
+      signalStaleRead();
+      await settlementCommitted;
+      await upsertAdvisoryWorklogSummary(dbContext.db, {
+        ...staleSummary,
+        status: 'failed',
+        completedAt: 1_300,
+        durationMs: 300,
+        error: 'stale advisory failure',
+        failedNodeId: 'stale-review',
+      });
+      await upsertAdvisoryWorklogFrameEntry(dbContext.db, {
+        ...staleFrame,
+        status: 'failed',
+        completedAt: 1_300,
+        durationMs: 300,
+        error: 'stale advisory failure',
+      });
+    })();
+
+    await staleReadCompleted;
+    await MakaioBus.request(WorkflowSubjects.completeExternalExecution, completion);
+    releaseAdvisoryWrite();
+    await delayedAdvisoryProjection;
+
+    const { summary } = await MakaioBus.request(WorkflowSubjects.worklog.get, {
+      executionId: registration.executionId,
+    });
+    const { frame } = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, {
+      frameId: completion.frame.frameId,
+    });
+    expect(summary).toMatchObject({ status: 'completed', completedAt: 1_250, error: undefined });
+    expect(frame).toMatchObject({ status: 'completed', completedAt: 1_250, error: undefined });
   });
 });
