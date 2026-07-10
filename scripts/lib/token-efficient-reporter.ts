@@ -140,19 +140,7 @@ export default class TokenEfficientReporter implements Reporter {
       process.stderr.write('\n');
     }
 
-    // Print module-level errors (e.g., import failures)
-    let moduleErrorCount = 0;
-    for (const testModule of testModules) {
-      const moduleErrors = testModule.errors();
-      if (moduleErrors?.length) {
-        moduleErrorCount += moduleErrors.length;
-        process.stderr.write(`${colors.red}MODULE ERROR:${colors.reset} ${testModule.relativeModuleId}\n`);
-        for (const error of moduleErrors) {
-          this.printError(error as TestError, { fullMessage: true });
-        }
-        process.stderr.write('\n');
-      }
-    }
+    const moduleErrorCount = this.printModuleAndSuiteErrors(testModules);
 
     // Print unhandled errors collected during the run
     if (unhandledErrors.length) {
@@ -185,6 +173,36 @@ export default class TokenEfficientReporter implements Reporter {
     if (this.cleanRunOwnsExitCode) {
       process.exitCode = 0;
     }
+  }
+
+  /**
+   * Prints module-level errors (e.g., import failures) and suite-level errors
+   * (e.g., a failing beforeAll inside a describe). Suite errors attach to the
+   * TestSuite, not the TestModule — without walking the suites a failed hook
+   * would fail the run with no error text at all.
+   * @param testModules - The test modules reported for this run.
+   * @returns The total number of module- and suite-level errors printed.
+   */
+  private printModuleAndSuiteErrors(testModules: ReadonlyArray<TestModule>): number {
+    let moduleErrorCount = 0;
+    for (const testModule of testModules) {
+      const scopes: { label: string; errors: readonly SerializedError[] }[] = [
+        { label: testModule.relativeModuleId, errors: testModule.errors() },
+      ];
+      for (const suite of testModule.children.allSuites()) {
+        scopes.push({ label: `${testModule.relativeModuleId} > ${suite.fullName}`, errors: suite.errors() });
+      }
+      for (const { label, errors } of scopes) {
+        if (!errors?.length) continue;
+        moduleErrorCount += errors.length;
+        process.stderr.write(`${colors.red}MODULE ERROR:${colors.reset} ${label}\n`);
+        for (const error of errors) {
+          this.printError(error as TestError, { fullMessage: true });
+        }
+        process.stderr.write('\n');
+      }
+    }
+    return moduleErrorCount;
   }
 
   /**

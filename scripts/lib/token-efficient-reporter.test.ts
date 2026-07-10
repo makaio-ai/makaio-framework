@@ -27,6 +27,7 @@ describe('TokenEfficientReporter', () => {
               ].join('\n'),
             },
           ],
+          children: { *allSuites() {} },
         } as never,
       ],
       [],
@@ -41,6 +42,39 @@ describe('TokenEfficientReporter', () => {
     expect(output).toContain('Help: Either unwrap this try block or add catch / finally clause');
     expect(summary).toContain('1 module error');
     expect(summary).toContain('(1 total)');
+  });
+
+  it('prints suite-level errors such as a failing beforeAll hook', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    const reporter = new TokenEfficientReporter();
+    reporter.onTestRunEnd(
+      [
+        {
+          relativeModuleId: 'src/hook.test.ts',
+          errors: () => [],
+          children: {
+            *allSuites() {
+              yield {
+                fullName: 'outer > suite with broken hook',
+                errors: () => [{ message: 'beforeAll exploded' }],
+              };
+            },
+          },
+        } as never,
+      ],
+      [],
+      'failed',
+    );
+
+    const output = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
+    const summary = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+
+    expect(output).toContain('MODULE ERROR');
+    expect(output).toContain('src/hook.test.ts > outer > suite with broken hook');
+    expect(output).toContain('beforeAll exploded');
+    expect(summary).toContain('1 module error');
   });
 
   it('clears stale command-under-test exit codes after a clean run', () => {
