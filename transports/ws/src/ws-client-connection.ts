@@ -17,6 +17,8 @@ import { sendEncoded, waitForSocketOpen } from './transport-helpers.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { backoffMs, sleep, type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 import { handleInboundMessage } from './ws-client-message-handler.js';
+import { startHeartbeatWatchdog } from './ws-client-heartbeat.js';
+import type { WebSocketClientTransportHeartbeatOptions } from './ws-client-options.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,6 +52,12 @@ export interface ConnectionDeps {
   readonly url: string;
   /** Bound in milliseconds for a single attempt's socket-open wait. */
   readonly connectTimeoutMs: number;
+  /**
+   * Resolved heartbeat watchdog timing, or `false` when the liveness
+   * watchdog is disabled. Started per socket in `connectOnce`; the watchdog
+   * self-stops on the socket's `close` event.
+   */
+  readonly heartbeat: Required<WebSocketClientTransportHeartbeatOptions> | false;
 
   /** Read the current active socket. */
   getSocket(): WebSocketLike | null;
@@ -234,6 +242,13 @@ export async function connectOnce(deps: ConnectionDeps): Promise<void> {
     }
 
     deps.setAuthComplete(true);
+
+    // Supervise the established connection for half-open failure. No handle
+    // is stored: the watchdog self-stops on the socket's close event, and
+    // every failure path below closes the socket this attempt owns.
+    if (deps.heartbeat !== false) {
+      startHeartbeatWatchdog(ws, deps.heartbeat, deps);
+    }
 
     if (deps.debug) {
       console.info(`[WebSocketClientTransport:${deps.name}] Connected to ${deps.url}`);

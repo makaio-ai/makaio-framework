@@ -35,6 +35,15 @@ export class MockWebSocket implements WebSocketLike {
   public readyState: number = 1; // OPEN
   public sentMessages: string[] = [];
 
+  /** Number of ping frames sent via {@link ping}. */
+  public pingCount = 0;
+
+  /** Whether {@link ping} automatically answers with a `pong` event (live peer). */
+  public autoPong = true;
+
+  /** Whether {@link terminate} was called. */
+  public terminated = false;
+
   public listeners: Map<string, Set<(event: unknown) => void>> = new Map();
 
   send(data: string | BufferSource | Blob): void {
@@ -53,6 +62,59 @@ export class MockWebSocket implements WebSocketLike {
   close(code?: number, reason?: string): void {
     this.readyState = 3; // CLOSED
     this.emit('close', createWebSocketCloseEvent(code, reason));
+  }
+
+  /**
+   * Send an RFC-6455 ping control frame (mirrors `ws.WebSocket.ping`).
+   *
+   * Throws when the socket is not open. When {@link autoPong} is enabled the
+   * mock answers with a `pong` event on the next microtask, simulating a
+   * live peer.
+   */
+  ping(): void {
+    if (this.readyState !== 1) {
+      throw new Error('WebSocket is not open');
+    }
+    this.pingCount++;
+    if (this.autoPong) {
+      queueMicrotask(() => {
+        this.emit('pong', undefined);
+      });
+    }
+  }
+
+  /**
+   * Forcibly destroy the connection without a close handshake (mirrors
+   * `ws.WebSocket.terminate`): the socket closes abruptly with 1006.
+   */
+  terminate(): void {
+    this.terminated = true;
+    this.readyState = 3; // CLOSED
+    this.emit('close', createWebSocketCloseEvent(1006, 'terminated'));
+  }
+
+  /**
+   * Register a Node-style event listener (used for `pong` frames).
+   *
+   * Shares the same listener map as `addEventListener`, so `emit('pong', …)`
+   * reaches listeners registered here.
+   * @param event - Event name (`'pong'`)
+   * @param listener - Invoked for each received pong frame
+   */
+  on(event: 'pong', listener: () => void): void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(listener);
+  }
+
+  /**
+   * Remove a Node-style event listener registered via {@link on}.
+   * @param event - Event name (`'pong'`)
+   * @param listener - Listener to remove
+   */
+  off(event: 'pong', listener: () => void): void {
+    this.listeners.get(event)?.delete(listener);
   }
 
   addEventListener<K extends keyof WebSocketMockEventMap>(

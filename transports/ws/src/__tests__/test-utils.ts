@@ -6,13 +6,14 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 /**
  * Create a WebSocket server on a random available port.
+ * @param options - Extra `WebSocketServer` options (e.g. `{ autoPong: false }`)
  * @returns Promise containing the WebSocket server and bound port number
  */
-export async function createTestServer(): Promise<{
+export async function createTestServer(options?: { autoPong?: boolean }): Promise<{
   wss: WebSocketServer;
   port: number;
 }> {
-  const wss = new WebSocketServer({ port: 0 });
+  const wss = new WebSocketServer({ port: 0, ...options });
 
   await new Promise<void>((resolve, reject) => {
     wss.once('listening', () => resolve());
@@ -28,6 +29,19 @@ export async function createTestServer(): Promise<{
   }
 
   return { wss, port: address.port };
+}
+
+/**
+ * Close a WebSocket server, terminating any remaining clients first.
+ * @param wss - Server to close
+ */
+export async function closeServer(wss: WebSocketServer): Promise<void> {
+  for (const client of wss.clients) {
+    client.terminate();
+  }
+  await new Promise<void>((resolve) => {
+    wss.close(() => resolve());
+  });
 }
 
 /**

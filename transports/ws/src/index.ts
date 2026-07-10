@@ -61,6 +61,7 @@ export type { ClientTransportCodec } from './types.js';
 // Export URL-based client transport with built-in reconnection
 export { WebSocketClientTransport } from './ws-client-transport.js';
 export type {
+  WebSocketClientTransportHeartbeatOptions,
   WebSocketClientTransportOptions,
   WebSocketClientTransportReconnectOptions,
 } from './ws-client-transport.js';

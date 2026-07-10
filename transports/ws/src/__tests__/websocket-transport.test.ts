@@ -85,7 +85,16 @@ describe('Client mode behavior', () => {
   });
 
   it('rejects server mode with a client-shaped socket at runtime', () => {
-    const ws = new MockWebSocket();
+    // A browser-style client socket: addEventListener/removeEventListener but
+    // no Node-style on/off. (MockWebSocket now mirrors `ws` and exposes
+    // on/off for pong frames, so it is no longer purely client-shaped.)
+    const ws = {
+      readyState: 1,
+      send: () => {},
+      close: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
 
     expect(
       () =>
