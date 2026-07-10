@@ -47,7 +47,7 @@ _Empty object._
 | Field | Type | Required |
 |-------|------|----------|
 | `bundleCEF` | `boolean` | yes |
-| `defaultRenderer` | `"cef" \| "native"` | yes |
+| `defaultRenderer` | `"native" \| "cef"` | yes |
 | `variant` | `"base" \| "cef"` | yes |
 
 ### <a id="host:variant.requestUpgrade"></a>`host:variant.requestUpgrade` (rpc)

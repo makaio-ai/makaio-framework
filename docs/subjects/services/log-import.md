@@ -185,11 +185,7 @@ serialized by the handler.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `messageCount` | `number \| undefined` | no |
-| `reason` | `string \| undefined` | no |
-| `sessionId` | `string \| undefined` | no |
 | `status` | `"imported" \| "skipped"` | yes |
-| `turnCount` | `number \| undefined` | no |
 
 ### <a id="log-import.importSession"></a>`log-import.importSession` (rpc)
 
@@ -205,6 +201,7 @@ Purpose: Imports one discovered adapter session into Makaio on demand.
 |-------|------|----------|
 | `adapterName` | `string` | yes |
 | `adapterSessionId` | `string` | yes |
+| `ingestionMarker` | `"live" \| "backfill" \| undefined` | no |
 
 **Response:**
 

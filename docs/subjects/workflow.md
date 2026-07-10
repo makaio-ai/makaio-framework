@@ -24,6 +24,7 @@ next: false
 |-----|------|------|--------|
 | `artifact.updated` | [`workflow.artifact.updated`](#workflow.artifact.updated) | event | — |
 | `cancel` | [`workflow.cancel`](#workflow.cancel) | rpc | — |
+| `completeExternalExecution` | [`workflow.completeExternalExecution`](#workflow.completeExternalExecution) | rpc | — |
 | `definition.created` | [`workflow.definition.created`](#workflow.definition.created) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/workflow/schemas.ts) |
 | `definition.deleted` | [`workflow.definition.deleted`](#workflow.definition.deleted) | event | — |
 | `definition.updated` | [`workflow.definition.updated`](#workflow.definition.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/workflow/schemas.ts) |
@@ -56,6 +57,7 @@ next: false
 | `listGateInstances` | [`workflow.listGateInstances`](#workflow.listGateInstances) | rpc | — |
 | `listSpans` | [`workflow.listSpans`](#workflow.listSpans) | rpc | — |
 | `listTriggerTypes` | [`workflow.listTriggerTypes`](#workflow.listTriggerTypes) | rpc | — |
+| `registerExternalExecution` | [`workflow.registerExternalExecution`](#workflow.registerExternalExecution) | rpc | — |
 | `rerun` | [`workflow.rerun`](#workflow.rerun) | rpc | — |
 | `resolveAgent` | [`workflow.resolveAgent`](#workflow.resolveAgent) | rpc | — |
 | `resolveRole` | [`workflow.resolveRole`](#workflow.resolveRole) | rpc | — |
@@ -72,6 +74,7 @@ next: false
 | `step.skipped` | [`workflow.step.skipped`](#workflow.step.skipped) | event | — |
 | `step.started` | [`workflow.step.started`](#workflow.step.started) | event | — |
 | `worklog.changed` | [`workflow.worklog.changed`](#workflow.worklog.changed) | event | — |
+| `worklog.frame.get` | [`workflow.worklog.frame.get`](#workflow.worklog.frame.get) | rpc | — |
 | `worklog.get` | [`workflow.worklog.get`](#workflow.worklog.get) | rpc | — |
 | `worklog.list` | [`workflow.worklog.list`](#workflow.worklog.list) | rpc | — |
 | `worklog.stats` | [`workflow.worklog.stats`](#workflow.worklog.stats) | rpc | — |
@@ -114,6 +117,39 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `cancelled` | `boolean` | yes |
+
+### <a id="workflow.completeExternalExecution"></a>`workflow.completeExternalExecution` (rpc)
+
+Complete an external execution and its WorkLog projection atomically.
+
+Identical terminal replays succeed. Conflicting execution status, metadata,
+or frame identity fails without overwriting the existing settlement.
+Lifecycle events may still be emitted for advisory consumers.
+
+Cross-field invariants (enforced by schema refinement):
+- `'failed'` requires a non-empty `error` string.
+- `'cancelled'` requires a non-empty `reason` string.
+- `'completed'` must not carry `error` or `reason`.
+
+Subject: `workflow.completeExternalExecution`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `completedAt` | `number \| undefined` | no |
+| `error` | `string \| undefined` | no |
+| `executionId` | `string` | yes |
+| `frame` | `{ frameId: string; nodeId: string; nodeType: "station" \| "delegate-agent" \| "delegate-role" \| "gate"; path: string[]; startedAt: number; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; durationMs?: number \| undefined; } \| undefined` | no |
+| `reason` | `string \| undefined` | no |
+| `status` | `"completed" \| "cancelled" \| "failed"` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
 
 ### <a id="workflow.definition.created"></a>`workflow.definition.created` (event)
 
@@ -767,6 +803,46 @@ _Empty object._
 |-------|------|----------|
 | `triggerTypes` | `{ type: string; displayName: string; icon: string; category: string; configJsonSchema: Record<string, JsonValue>; outputJsonSchema: Record<string, JsonValue>; source: string; description?: string \| undefined; }[]` | yes |
 
+### <a id="workflow.registerExternalExecution"></a>`workflow.registerExternalExecution` (rpc)
+
+Register an external execution that is not driven by the workflow engine.
+
+Atomically creates the `workflow_executions` row, its running WorkLog
+summary, and the optional initial frame. A caller-supplied external ID
+makes an identical registration replay idempotent; conflicting replays are
+rejected without overwriting durable state.
+
+External executions are not associated with a persisted workflow definition
+and do not create coordinator sessions, run-context snapshots, or
+runtime state.
+
+Standard execution and frame lifecycle events remain useful as advisory
+signals for other consumers, but WorkLog durability does not depend on
+those events.
+
+Subject: `workflow.registerExternalExecution`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `artifactRef` | `{ kind: string; id: string; } \| undefined` | no |
+| `executionId` | `string \| undefined` | no |
+| `frame` | `{ nodeId: string; nodeType: "station" \| "delegate-agent" \| "delegate-role" \| "gate"; frameId?: string \| undefined; path?: string[] \| undefined; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; } \| undefined` | no |
+| `input` | `unknown` | no |
+| `name` | `string` | yes |
+| `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
+| `startedAt` | `number \| undefined` | no |
+| `triggerPayload` | `Record<string, unknown> \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `executionId` | `string` | yes |
+| `frameId` | `string \| undefined` | no |
+
 ### <a id="workflow.rerun"></a>`workflow.rerun` (rpc)
 
 Subject: `workflow.rerun`
@@ -1087,6 +1163,28 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `executionId` | `string` | yes |
+
+### <a id="workflow.worklog.frame.get"></a>`workflow.worklog.frame.get` (rpc)
+
+Retrieve one projected WorkLog frame entry by frame identifier (RPC).
+
+This narrow lookup lets repair and audit consumers verify durable frame
+state without loading the execution's runtime frame tree.
+
+Subject: `workflow.worklog.frame.get`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `frameId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "station" \| "delegate-agent" \| "delegate-role" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "completed" \| "cancelled" \| "skipped" \| "failed" \| "pending" \| "running" \| "waiting"; attempt: number; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| null` | yes |
 
 ### <a id="workflow.worklog.get"></a>`workflow.worklog.get` (rpc)
 

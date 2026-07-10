@@ -42,7 +42,7 @@ Type: Request (RPC)
 | `attributes` | `Record<string, string \| number \| boolean \| string[] \| number[] \| boolean[] \| null[] \| null>` | yes |
 | `endedAt` | `number` | yes |
 | `events` | `{ name: string; time: number; attributes: Record<string, string \| number \| boolean \| string[] \| number[] \| boolean[] \| null[] \| null>; }[]` | yes |
-| `executionId` | `string` | yes |
+| `executionId` | `string \| undefined` | no |
 | `frameId` | `string \| undefined` | no |
 | `kind` | `"client" \| "internal"` | yes |
 | `links` | `{ traceId: string; attributes: Record<string, string \| number \| boolean \| string[] \| number[] \| boolean[] \| null[] \| null>; spanId?: string \| undefined; }[]` | yes |
