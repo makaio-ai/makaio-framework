@@ -52,6 +52,9 @@ interface ResolvedTerminalWorklogFrame {
  * @param expected - Execution row derived from the replayed request.
  */
 function assertMatchingRegistration(existing: SelectWorkflowExecution, expected: InsertWorkflowExecution): void {
+  if (existing.externalRegistrationFrameId !== (expected.externalRegistrationFrameId ?? null)) {
+    throw new Error(`setExternalExecutionStart: frame metadata conflicts for execution "${expected.id}"`);
+  }
   const matches =
     existing.id === expected.id &&
     existing.workflowId === expected.workflowId &&
@@ -143,7 +146,10 @@ async function setExternalExecutionStart(
   }
 
   const { workflowExecutions, worklogSummaries, worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
-  const executionValues = mapExecution(execution);
+  const executionValues: InsertWorkflowExecution = {
+    ...mapExecution(execution),
+    externalRegistrationFrameId: frame?.frameId ?? null,
+  };
   const summaryValues: InsertWorklogSummary = {
     executionId: execution.id,
     workflowId: execution.workflowId,
@@ -192,25 +198,16 @@ async function setExternalExecutionStart(
       assertMatchingStartSummary(existingSummary, summaryValues);
     }
 
-    const existingExecutionFrames = replayed
-      ? await tx.select().from(worklogFrameEntries).where(eq(worklogFrameEntries.executionId, execution.id))
-      : [];
-    if (frame === undefined && existingExecutionFrames.length > 0) {
-      throw new Error(`setExternalExecutionStart: frame metadata conflicts for execution "${execution.id}"`);
-    }
     if (frame !== undefined) {
-      if (replayed && existingExecutionFrames.length === 0) {
-        throw new Error(`setExternalExecutionStart: frame metadata conflicts for execution "${execution.id}"`);
-      }
-      if (existingExecutionFrames.some((entry) => entry.frameId !== frame.frameId)) {
-        throw new Error(`setExternalExecutionStart: frame metadata conflicts for execution "${execution.id}"`);
-      }
       const [existingFrame] = await tx
         .select()
         .from(worklogFrameEntries)
         .where(eq(worklogFrameEntries.frameId, frame.frameId))
         .limit(1);
       if (existingFrame === undefined) {
+        if (replayed) {
+          throw new Error(`setExternalExecutionStart: frame metadata conflicts for execution "${execution.id}"`);
+        }
         await tx.insert(worklogFrameEntries).values(toFrameDbValues(frame));
       } else {
         assertMatchingStartFrame(existingFrame, frame);
@@ -223,9 +220,9 @@ async function setExternalExecutionStart(
  * Resolve the terminal WorkLog frame for an external settlement.
  *
  * A caller may omit terminal frame metadata after atomically registering one
- * running frame. In that case the sole running row is authoritative enough to
- * finish without making its metadata part of the settlement fingerprint.
- * Multiple running rows are ambiguous and require an exact framed settlement.
+ * frame. The durable registration binding identifies that frame even when
+ * advisory lifecycle events have added other frames or already terminalized
+ * the registered one.
  * @param tx - Active storage transaction.
  * @param worklogFrameEntries - Dialect-resolved WorkLog frame table.
  * @param execution - Durable external execution row.
@@ -250,18 +247,19 @@ async function resolveTerminalWorklogFrame(
     return { frame: settlement.frame, existing };
   }
 
-  const runningFrames = (
-    await tx.select().from(worklogFrameEntries).where(eq(worklogFrameEntries.executionId, execution.id))
-  ).filter((frame) => frame.status === 'running');
-  if (runningFrames.length > 1) {
+  if (execution.externalRegistrationFrameId === null) return undefined;
+  const [existing] = await tx
+    .select()
+    .from(worklogFrameEntries)
+    .where(eq(worklogFrameEntries.frameId, execution.externalRegistrationFrameId))
+    .limit(1);
+  if (existing === undefined || existing.executionId !== execution.id) {
     throw new Error(
-      `settleExternalExecution: frame-less settlement for execution "${execution.id}" is ambiguous across multiple running frames`,
+      `settleExternalExecution: registered frame "${execution.externalRegistrationFrameId}" is unavailable for execution "${execution.id}"`,
     );
   }
-  const [existing] = runningFrames;
-  if (existing === undefined) return undefined;
   if (existing.startedAt === null) {
-    throw new Error(`settleExternalExecution: running frame "${existing.frameId}" has no start timestamp`);
+    throw new Error(`settleExternalExecution: registered frame "${existing.frameId}" has no start timestamp`);
   }
   if (completedAt < existing.startedAt) {
     throw new Error('settleExternalExecution: completedAt must not precede the registered frame start timestamp');

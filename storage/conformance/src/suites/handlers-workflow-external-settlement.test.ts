@@ -161,6 +161,56 @@ describeStorageConformance('workflow external settlement identity', (config) => 
     }
   });
 
+  it('replays registration beside advisory frames and settles its bound frame after advisory terminalization', async () => {
+    const executionId = `wfx-ext-registration-binding-${crypto.randomUUID()}`;
+    const registration = buildRegistration(executionId);
+    const advisoryFrameId = `${executionId}:advisory`;
+    const storage = createWorkflowStorageBus(getCtx().db);
+    try {
+      await storage.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration);
+      await storage.bus.emit(WorkflowSubjects.frame.started, {
+        executionId,
+        frameId: advisoryFrameId,
+        nodeId: 'advisory',
+        nodeType: 'station',
+        path: [advisoryFrameId],
+        startedAt: startedAt + 25,
+      });
+      await expect(
+        storage.bus.request(WorkflowStorageSubjects.setExternalExecutionStart, registration),
+      ).resolves.toEqual({ executionId, frameId: registration.frame.frameId });
+
+      await storage.bus.emit(WorkflowSubjects.frame.completed, {
+        executionId,
+        frameId: registration.frame.frameId,
+        nodeId: registration.frame.nodeId,
+        duration: 100,
+        completedAt: startedAt + 100,
+      });
+      await expect(
+        storage.bus.request(WorkflowStorageSubjects.settleExternalExecution, {
+          executionId,
+          status: 'failed',
+          error: 'authoritative failure',
+          completedAt,
+        }),
+      ).resolves.toEqual({ success: true });
+      await expect(
+        storage.bus.request(WorkflowSubjects.worklog.frame.get, { frameId: registration.frame.frameId }),
+      ).resolves.toMatchObject({
+        frame: {
+          executionId,
+          status: 'failed',
+          completedAt,
+          durationMs: completedAt - startedAt,
+          error: 'authoritative failure',
+        },
+      });
+    } finally {
+      storage.cleanup();
+    }
+  });
+
   it('clears a pre-settlement aggregate when the authoritative terminal frame measures zero usage', async () => {
     const executionId = `wfx-ext-usage-settlement-${crypto.randomUUID()}`;
     const registration = {

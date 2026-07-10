@@ -176,6 +176,13 @@
       "when": 1783646185701,
       "tag": "0024_external_settlement_fingerprint",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1783674656715,
+      "tag": "0025_external_registration_frame",
+      "breakpoints": true
     }
   ]
 }

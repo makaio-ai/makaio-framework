@@ -110,6 +110,31 @@ describe('atomic external execution WorkLog settlement', () => {
     ).rejects.toThrow('frame metadata conflicts');
   });
 
+  it('accepts an identical registration replay after advisory frames are added', async () => {
+    await MakaioBus.request(WorkflowSubjects.registerExternalExecution, registration);
+    const advisoryFrameId = `${registration.executionId}:advisory`;
+    await MakaioBus.emit(WorkflowSubjects.frame.started, {
+      executionId: registration.executionId,
+      frameId: advisoryFrameId,
+      nodeId: 'advisory',
+      nodeType: 'station',
+      path: [advisoryFrameId],
+      startedAt: 1_050,
+    });
+
+    await expect(MakaioBus.request(WorkflowSubjects.registerExternalExecution, registration)).resolves.toEqual({
+      executionId: registration.executionId,
+      frameId: `${registration.executionId}:review`,
+    });
+    const frames = await dbContext.db
+      .select()
+      .from(worklogFrameEntries)
+      .where(eq(worklogFrameEntries.executionId, registration.executionId));
+    expect(frames.map((frame) => frame.frameId).sort()).toEqual(
+      [`${registration.executionId}:review`, advisoryFrameId].sort(),
+    );
+  });
+
   it('rolls back registration when a frame ID belongs to another execution', async () => {
     const sharedFrameId = 'external-shared-frame';
     await MakaioBus.request(WorkflowSubjects.registerExternalExecution, {
@@ -181,6 +206,13 @@ describe('atomic external execution WorkLog settlement', () => {
         nodeType: 'delegate-role',
         startedAt: 1_100,
       },
+    });
+    await MakaioBus.emit(WorkflowSubjects.frame.completed, {
+      executionId,
+      frameId,
+      nodeId: 'review',
+      duration: 100,
+      completedAt: 1_200,
     });
     const settlement = {
       executionId,
