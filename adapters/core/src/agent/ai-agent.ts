@@ -170,6 +170,7 @@ export abstract class AIAgent<
     this.eventBridge = createAgentEventBridge({
       emitGlobal,
       toolCallTracker: this.toolCallTracker,
+      lifecycleTracker: this.lifecycleTracker,
       getBlockIndex: this.getBlockIndex.bind(this),
       incrementBlockIndex: this.incrementBlockIndex.bind(this),
       getUsageModel: () => this.confirmedModel ?? this.initialModel,

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { ClaudeCodeTmuxAgent } from '../agent.js';
@@ -193,5 +194,129 @@ describe('ClaudeCodeTmuxAgent', () => {
       adapterSessionId: connector.adapterSessionId,
       observedAt: expect.any(Number),
     });
+  });
+
+  it('emits latest-request tokens without attributing cumulative session cost to one usage event', async () => {
+    const { agent, connector } = await makeAgent();
+    agents.push(agent);
+    const usageEvents: Record<string, unknown>[] = [];
+
+    MakaioBus.on(AgentSubjects.usage, (ctx) => {
+      usageEvents.push(ctx.payload);
+    });
+
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      session_id: connector.adapterSessionId,
+      cost: { total_cost_usd: 12.34 },
+      context_window: {
+        total_input_tokens: 24_000,
+        total_output_tokens: 3_000,
+        context_window_size: 200_000,
+        current_usage: {
+          input_tokens: 1_200,
+          output_tokens: 300,
+          cache_read_input_tokens: 800,
+          cache_creation_input_tokens: 50,
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
+    expect(usageEvents[0]).toMatchObject({
+      inputTokens: 1_200,
+      inputCachedTokens: 800,
+      cacheWriteTokens: 50,
+      outputTokens: 300,
+      totalTokens: 2_300,
+    });
+    expect(usageEvents[0]).not.toHaveProperty('cost');
+    expect(usageEvents[0]).not.toHaveProperty('currency');
+    expect(usageEvents[0]).not.toHaveProperty('costProvenance');
+  });
+
+  it('does not emit a second usage event when the statusline re-renders with a changed cumulative cost but identical per-request tokens', async () => {
+    const { agent, connector } = await makeAgent();
+    agents.push(agent);
+    const usageEvents: Record<string, unknown>[] = [];
+
+    MakaioBus.on(AgentSubjects.usage, (ctx) => {
+      usageEvents.push(ctx.payload);
+    });
+
+    const basePayload = {
+      session_id: connector.adapterSessionId,
+      context_window: {
+        total_input_tokens: 24_000,
+        total_output_tokens: 3_000,
+        context_window_size: 200_000,
+        current_usage: {
+          input_tokens: 1_200,
+          output_tokens: 300,
+          cache_read_input_tokens: 800,
+          cache_creation_input_tokens: 50,
+        },
+      },
+    };
+
+    // First render: cumulative cost 12.34
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      ...basePayload,
+      cost: { total_cost_usd: 12.34 },
+    });
+
+    await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
+
+    // Second render: same per-request tokens, updated cumulative cost — must NOT produce a second usage event.
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      ...basePayload,
+      cost: { total_cost_usd: 15.0 },
+    });
+
+    // Allow any async handlers to settle, then assert still exactly one event.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(usageEvents).toHaveLength(1);
+  });
+
+  it('emits again when a new request repeats the same per-request tokens but grows the cumulative totals', async () => {
+    const { agent, connector } = await makeAgent();
+    agents.push(agent);
+    const usageEvents: Record<string, unknown>[] = [];
+
+    MakaioBus.on(AgentSubjects.usage, (ctx) => {
+      usageEvents.push(ctx.payload);
+    });
+
+    const currentUsage = {
+      input_tokens: 1_200,
+      output_tokens: 300,
+      cache_read_input_tokens: 800,
+      cache_creation_input_tokens: 50,
+    };
+
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      session_id: connector.adapterSessionId,
+      context_window: {
+        total_input_tokens: 24_000,
+        total_output_tokens: 3_000,
+        context_window_size: 200_000,
+        current_usage: currentUsage,
+      },
+    });
+
+    await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
+
+    // A second real request with identical per-request token counts advances
+    // the cumulative context totals — it must be counted as a new usage event.
+    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+      session_id: connector.adapterSessionId,
+      context_window: {
+        total_input_tokens: 25_200,
+        total_output_tokens: 3_300,
+        context_window_size: 200_000,
+        current_usage: currentUsage,
+      },
+    });
+
+    await vi.waitFor(() => expect(usageEvents).toHaveLength(2));
   });
 });

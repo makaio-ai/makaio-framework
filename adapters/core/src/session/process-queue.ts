@@ -3,6 +3,17 @@ import type { PauseResult } from '../connector/base-connector-turn.js';
 import type { UserMessageQueue } from './user-message-queue.js';
 
 /**
+ * Canonical error message used when a queued message cannot be processed
+ * because the session has entered the shutdown path.
+ *
+ * Shared between {@link rejectQueuedHandles} (queue drain) and the per-handle
+ * shutdown gate ({@link BaseConnectorSession.completeHandleIfClosing}) so that
+ * callers see a consistent error contract regardless of whether the handle was
+ * still in the queue or had already been dequeued when `close()` interleaved.
+ */
+export const SESSION_CLOSED_QUEUE_ERROR = 'Session closed before queued message could be processed';
+
+/**
  * Minimal turn interface required by processQueue orchestration.
  *
  * Any turn implementation (Claude, Gemini, OpenAI, Copilot) that exposes
@@ -68,11 +79,18 @@ export interface ProcessQueueCallbacks<TExtra = unknown> {
 
   /**
    * Start a new turn with the given message and optional merge data.
+   *
+   * Returns `void` (or `undefined`) when the turn was started normally.
+   * Returns `false` explicitly when the turn was **not** started (e.g.,
+   * shutdown interleaved during setup and the handle was completed with
+   * an error). `processQueueMessages` propagates this so callers see an
+   * accurate "no turn started" result and can transition to idle.
    * @param handle - The message handle to process
    * @param mergedContent - Text content from superseded/merged messages
    * @param extra - Adapter-specific extra merge data
+   * @returns `false` when the turn was skipped; `void` otherwise
    */
-  startNewTurn: (handle: MessageHandle, mergedContent?: string[], extra?: TExtra) => Promise<void>;
+  startNewTurn: (handle: MessageHandle, mergedContent?: string[], extra?: TExtra) => Promise<void | false>;
 }
 
 /**
@@ -146,8 +164,9 @@ export async function processQueueMessages<TExtra = unknown>(
         await callbacks.onBeforeImmediateTurn?.();
 
         // Start new turn with the immediate message and merged context
-        await callbacks.startNewTurn(immediateMsg, mergedContent, extra);
-        return true;
+        const started = await callbacks.startNewTurn(immediateMsg, mergedContent, extra);
+        // Explicit false means the turn was skipped (e.g., shutdown race).
+        return started !== false;
       } else {
         // Turn ended - immediate missed the window, reject it
         immediateMsg.markCompleted({ outcome: 'rejected' });
@@ -172,12 +191,32 @@ export async function processQueueMessages<TExtra = unknown>(
       }
       // Process enqueue/replace messages normally
       queue.dequeue();
-      await callbacks.startNewTurn(nextMsg);
-      return true;
+      const started = await callbacks.startNewTurn(nextMsg);
+      // Explicit false means the turn was skipped (e.g., shutdown race).
+      return started !== false;
     }
   }
 
   return false;
+}
+
+/**
+ * Drain all remaining handles from the queue and complete each with an error
+ * outcome so callers awaiting `waitForCompletion()` resolve deterministically.
+ *
+ * Used by session implementations during shutdown to prevent queued messages
+ * from hanging indefinitely when the session refuses to start new turns.
+ * @param queue - User message queue to drain
+ * @param message - Error message to attach to each rejected handle
+ */
+export function rejectQueuedHandles(queue: UserMessageQueue, message = SESSION_CLOSED_QUEUE_ERROR): void {
+  let handle = queue.dequeue();
+  while (handle) {
+    if (!handle.isProcessed) {
+      handle.markCompleted({ outcome: 'error', error: new Error(message) });
+    }
+    handle = queue.dequeue();
+  }
 }
 
 /**

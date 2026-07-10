@@ -3,55 +3,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue, type MessageResult } from '@makaio/ai-adapters-core';
 import type { SDKMessage } from '@makaio/client-claude-code';
-import type { CliStdioTransport } from '../utils/createStdioTransport.js';
 
-const transportHarness = vi.hoisted(() => {
-  type MessageCallback = (message: SDKMessage) => void;
-  type ErrorCallback = (error: Error) => void;
-
-  let messageCallback: MessageCallback | undefined;
-  let errorCallback: ErrorCallback | undefined;
-
-  const transport: CliStdioTransport = {
-    onMessage: vi.fn((callback: MessageCallback) => {
-      messageCallback = callback;
-    }),
-    onError: vi.fn((callback: ErrorCallback) => {
-      errorCallback = callback;
-    }),
+const transportStub = vi.hoisted(() => ({
+  transport: {
+    onMessage: vi.fn(),
+    onError: vi.fn(),
     close: vi.fn(),
-  };
-
-  return {
-    transport,
-    emitMessage(message: SDKMessage): void {
-      if (!messageCallback) {
-        throw new Error('Transport message callback was not registered');
-      }
-      messageCallback(message);
-    },
-    emitError(error: Error): void {
-      if (!errorCallback) {
-        throw new Error('Transport error callback was not registered');
-      }
-      errorCallback(error);
-    },
-    reset(): void {
-      messageCallback = undefined;
-      errorCallback = undefined;
-      vi.mocked(transport.onMessage).mockClear();
-      vi.mocked(transport.onError).mockClear();
-      vi.mocked(transport.close).mockClear();
-    },
-  };
-});
+  },
+}));
 
 vi.mock('../utils/createStdioTransport.js', () => ({
-  createStdioTransport: vi.fn(() => transportHarness.transport),
+  createStdioTransport: vi.fn(() => transportStub.transport),
 }));
 
 import { ClaudeCliSession } from '../session.js';
 import { ClaudeCodeCliConnectorNamespace } from '../namespace/index.js';
+import { makeTransportHarness } from './fixtures/transport-harness.js';
+
+const transportHarness = makeTransportHarness(transportStub.transport);
 
 function makeHandle(): MessageHandle {
   return new MessageHandle(
@@ -75,7 +44,7 @@ function structuredOutputResult(): SDKMessage {
     duration_ms: 1,
     duration_api_ms: 1,
     num_turns: 1,
-    total_cost_usd: 0,
+    total_cost_usd: 0.42,
     usage: {
       input_tokens: 1,
       output_tokens: 1,
@@ -109,6 +78,28 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
       resolveDeferred();
     },
   };
+}
+
+async function makeActiveSession() {
+  const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+  const handle = makeHandle();
+  const emitSdkEvent = vi.fn(async () => undefined);
+  const onTurnComplete = vi.fn();
+  const session = new ClaudeCliSession({
+    bus,
+    adapterId: 'adapter-test',
+    adapterName: 'claude-code-cli',
+    agentId: 'agent-test',
+    cwd: os.tmpdir(),
+    model: 'claude-sonnet',
+    env: {},
+    emitSdkEvent,
+    onTurnComplete,
+  });
+  const queue = new UserMessageQueue();
+  queue.enqueue(handle);
+  await session.processQueue(queue);
+  return { emitSdkEvent, handle, onTurnComplete, session };
 }
 
 describe('ClaudeCliSession result message handling', () => {
@@ -204,6 +195,85 @@ describe('ClaudeCliSession result message handling', () => {
       consoleWarn.mockRestore();
       unsubscribeTurnFinished();
       await session.close();
+    }
+  });
+
+  it('processes a terminal usage result that arrives during the close grace period', async () => {
+    const { emitSdkEvent, handle, onTurnComplete, session } = await makeActiveSession();
+
+    const closePromise = session.close();
+    expect(transportHarness.transport.close).not.toHaveBeenCalled();
+
+    const terminalResult = structuredOutputResult();
+    transportHarness.emitMessage(terminalResult);
+
+    await closePromise;
+    await expect(handle.waitForCompletion(1_000)).resolves.toEqual({
+      outcome: 'completed',
+      result: { message: '{"ok":true}' },
+    });
+    expect(emitSdkEvent).toHaveBeenCalledWith(terminalResult);
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(transportHarness.transport.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-closes after the abort grace period when no terminal result arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, onTurnComplete, session } = await makeActiveSession();
+
+      const abortPromise = session.abort();
+      expect(transportHarness.transport.close).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+      await abortPromise;
+
+      expect(transportHarness.transport.close).toHaveBeenCalledTimes(1);
+      const result = await handle.waitForCompletion(1_000);
+      expect(result.outcome).toBe('error');
+      expect(result.error).toEqual(
+        expect.objectContaining({ message: 'Claude Code CLI closed before emitting a terminal result' }),
+      );
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('processes duplicate terminal results only once during graceful close', async () => {
+    const { emitSdkEvent, onTurnComplete, session } = await makeActiveSession();
+    const closePromise = session.close();
+    const terminalResult = structuredOutputResult();
+
+    transportHarness.emitMessage(terminalResult);
+    transportHarness.emitMessage(terminalResult);
+
+    await closePromise;
+    expect(emitSdkEvent).toHaveBeenCalledTimes(1);
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores terminal results delivered after the close timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitSdkEvent, handle, onTurnComplete, session } = await makeActiveSession();
+      const closePromise = session.close();
+
+      await vi.advanceTimersByTimeAsync(250);
+      await closePromise;
+      transportHarness.emitMessage(structuredOutputResult());
+      await Promise.resolve();
+
+      expect(emitSdkEvent).not.toHaveBeenCalled();
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.isProcessed).toBe(true);
+      const result = await handle.waitForCompletion(1_000);
+      expect(result.outcome).toBe('error');
+      expect(result.error).toEqual(
+        expect.objectContaining({ message: 'Claude Code CLI closed before emitting a terminal result' }),
+      );
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

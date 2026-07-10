@@ -209,8 +209,8 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
         totalTokens: inputTokens + cacheReadTokens + outputTokens,
         costUnits: 1,
         costUnitType: 'requests',
-        cost: payload.cost?.total_cost_usd,
       };
+      // `cost.total_cost_usd` is cumulative for the Claude Code session, not this request.
       await this.trackUsage(normalized);
     }
 
@@ -225,17 +225,31 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
 
   /**
    * Prevent duplicate billing events from repeated statusline renders for the
-   * same cumulative Claude context state.
+   * same per-request token counts.
+   *
+   * The key combines the four `current_usage.*` token counts (the fields that
+   * appear in the emitted {@link NormalizedCallUsage} payload) with the
+   * cumulative context-window totals, plus `session_id` for scoping. The
+   * cumulative totals grow with every real API request, so two distinct
+   * requests that happen to produce identical per-request token counts still
+   * get distinct keys and are both counted. `cost.total_cost_usd` is
+   * intentionally excluded — it is a cumulative session total that can change
+   * between statusline re-renders of the SAME request, which would cause the
+   * same usage event to fire more than once.
    * @param payload - Raw statusline payload from Claude Code.
    * @returns True when usage should be emitted.
    */
   private shouldEmitUsage(payload: ClaudeCodeStatuslineRawPayload): boolean {
     const contextWindow = payload.context_window;
+    const usage = contextWindow?.current_usage;
     const key = [
       payload.session_id ?? '',
+      usage?.input_tokens ?? '',
+      usage?.output_tokens ?? '',
+      usage?.cache_read_input_tokens ?? '',
+      usage?.cache_creation_input_tokens ?? '',
       contextWindow?.total_input_tokens ?? '',
       contextWindow?.total_output_tokens ?? '',
-      payload.cost?.total_cost_usd ?? '',
     ].join(':');
     if (this.statuslineUsageKeys.has(key)) {
       return false;

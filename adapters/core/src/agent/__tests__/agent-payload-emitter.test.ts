@@ -391,6 +391,9 @@ describe('AgentPayloadEmitter', () => {
         register: () => 'tool-call-id',
         resolve: () => ({ strategy: 'exact' }),
       } as never,
+      lifecycleTracker: {
+        getCurrentMessageHandle: () => undefined,
+      } as never,
       getBlockIndex: () => 0,
       incrementBlockIndex: () => {},
       getUsageModel: () => 'test-model',
