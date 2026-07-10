@@ -283,7 +283,6 @@ function createUsageEvent(
       agentId: message.agent ?? 'main',
       adapterSessionId,
       messageId: message.id,
-      // One step-finish part = one LLM request in OpenCode.
       granularity: 'provider-call',
       provider,
       model: model ?? 'unknown',

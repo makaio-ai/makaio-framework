@@ -30,8 +30,8 @@ discovery.
 
 `agent.usage` is emitted once per completed message/turn from the SDK's usage
 event. The SDK may report an optional monetary amount, forwarded as `cost`
-(defaulting to `0` when the SDK omits it). The SDK exposes no provider call
-ID, so `llmCallId` is never set. See
+(omitted entirely when the SDK reports no amount). The SDK exposes no provider
+call ID, so `llmCallId` is never set. See
 [Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
 
 ## License
