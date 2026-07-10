@@ -1199,6 +1199,54 @@ describe('SpanCollector', () => {
     );
   });
 
+  it('retries stale usage whose claimed execution never opens without changing span identity', async () => {
+    const exported: SpanDraft[][] = [];
+    const attemptedRootSpanIds: string[] = [];
+    let nowMs = 1_000;
+    let attempts = 0;
+    const collector = new SpanCollector({
+      now: () => nowMs,
+      orphanTimeoutMs: 5_000,
+      maxOpenExecutions: 1000,
+      emit: async (drafts) => {
+        attempts += 1;
+        const root = drafts.find((draft) => draft.subject === 'session');
+        if (root !== undefined) attemptedRootSpanIds.push(root.spanId);
+        if (attempts === 1) throw new Error('unopened execution export failure');
+        exported.push(drafts);
+      },
+    });
+
+    collector.onAgentUsage({
+      executionId: 'wfx-never-opened',
+      sessionId: 'sess-unopened-retry',
+      provider: 'anthropic',
+      model: 'claude-test',
+      inputTokens: 10,
+      inputCachedTokens: 5,
+      outputTokens: 4,
+      reasoningTokens: 0,
+      totalTokens: 14,
+      costUnits: 14,
+      costUnitType: 'tokens',
+    });
+
+    nowMs = 6_000;
+    await expect(collector.sweepOrphans()).rejects.toThrow('unopened execution export failure');
+    await expect(collector.sweepOrphans()).resolves.toBeUndefined();
+    await collector.sweepOrphans();
+
+    expect(attempts).toBe(2);
+    expect(attemptedRootSpanIds).toEqual(['session:sess-unopened-retry:0', 'session:sess-unopened-retry:0']);
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ subject: 'session', sessionId: 'sess-unopened-retry' }),
+        expect.objectContaining({ subject: 'usage', sessionId: 'sess-unopened-retry' }),
+      ]),
+    );
+  });
+
   it('flushes pending standalone session usage on shutdown when timeout promotion is disabled', async () => {
     const exported: SpanDraft[][] = [];
     const collector = new SpanCollector({

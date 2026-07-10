@@ -161,6 +161,8 @@ export class SpanCollector {
   private readonly unresolvedToolsBySession = new Map<string, Map<string, UnresolvedToolCall>>();
   /** Reuses span IDs when a failed standalone export is retried. */
   private readonly standaloneRetrySegmentBySession = new Map<string, number>();
+  /** Reuses span IDs for usage whose claimed execution never opened. */
+  private readonly standaloneRetrySegmentsByExecution = new Map<string, Map<string, number>>();
   private standaloneSegmentSequence = 0;
   /**
    * Orphan spans that have been emitted out-of-band during `sweepOrphans`.
@@ -757,6 +759,7 @@ export class SpanCollector {
     const usages = this.unresolvedUsageByExecution.get(execution.executionId) ?? [];
     for (const usage of usages) this.bufferUsageOnExecution(execution, usage);
     this.unresolvedUsageByExecution.delete(execution.executionId);
+    this.standaloneRetrySegmentsByExecution.delete(execution.executionId);
   }
 
   private bufferToolOnExecution(execution: OpenExecution, tool: BufferedToolCall): void {
@@ -871,8 +874,22 @@ export class SpanCollector {
       const { expiredUsages, retainedUsages } = partitionStaleSessionEvents(usages, new Map(), now, timeoutMs);
       if (retainedUsages.length === 0) this.unresolvedUsageByExecution.delete(executionId);
       else this.unresolvedUsageByExecution.set(executionId, retainedUsages);
-      for (const [sessionId, grouped] of groupUsageBySession(expiredUsages, executionId)) {
-        await this.flushStandaloneSession(sessionId, this.standaloneSegmentSequence++, grouped, [], now);
+      const groups = [...groupUsageBySession(expiredUsages, executionId)];
+      for (const [index, [sessionId, grouped]] of groups.entries()) {
+        const retrySegments = this.standaloneRetrySegmentsByExecution.get(executionId) ?? new Map<string, number>();
+        const segment = retrySegments.get(sessionId) ?? this.standaloneSegmentSequence++;
+        retrySegments.set(sessionId, segment);
+        this.standaloneRetrySegmentsByExecution.set(executionId, retrySegments);
+        try {
+          await this.flushStandaloneSession(sessionId, segment, grouped, [], now);
+          retrySegments.delete(sessionId);
+          if (retrySegments.size === 0) this.standaloneRetrySegmentsByExecution.delete(executionId);
+        } catch (error) {
+          const unexported = groups.slice(index).flatMap(([, pending]) => pending);
+          const current = this.unresolvedUsageByExecution.get(executionId) ?? [];
+          this.unresolvedUsageByExecution.set(executionId, [...unexported, ...current]);
+          throw error;
+        }
       }
     }
   }
