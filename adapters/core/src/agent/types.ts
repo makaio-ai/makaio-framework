@@ -433,6 +433,11 @@ export type EmitteryEvents = {
 /**
  * Normalized usage metrics for a single agent call.
  * Adapter implementations normalize provider-specific usage data to this format.
+ *
+ * Derived from the `agent.usage` schema, so the mandatory `granularity` field
+ * is part of this type: adapters MUST declare the truthful measurement
+ * granularity of every usage signal they normalize (see
+ * `docs/architecture/adapters/usage-and-provenance.md`).
  */
 export type NormalizedCallUsage = Omit<z.infer<typeof AgentSchemas.usage>, keyof AgentContext | 'model'>;
 

@@ -48,6 +48,7 @@ class HookTestAgent extends AIAgent<TestBus, HookTestConnector> {
   public async emitUsageForTest(): Promise<void> {
     await this.trackUsage({
       provider: 'test-provider',
+      granularity: 'provider-call',
       inputTokens: 1,
       inputCachedTokens: 0,
       outputTokens: 1,

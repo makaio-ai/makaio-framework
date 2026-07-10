@@ -144,6 +144,7 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
 
       const normalized: NormalizedCallUsage = {
         provider: 'qwen',
+        granularity: 'turn-aggregate',
         inputTokens: inputTokens ?? 0,
         inputCachedTokens: cachedReadTokens ?? 0,
         outputTokens: outputTokens ?? 0,

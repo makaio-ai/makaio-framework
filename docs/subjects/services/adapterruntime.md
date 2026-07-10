@@ -22,10 +22,26 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `getMachineId` | [`adapterRuntime.getMachineId`](#adapterRuntime.getMachineId) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
 | `resolveId` | [`adapterRuntime.resolveId`](#adapterRuntime.resolveId) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
 | `resolveName` | [`adapterRuntime.resolveName`](#adapterRuntime.resolveName) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
 
 ## Subject Details
+
+### <a id="adapterRuntime.getMachineId"></a>`adapterRuntime.getMachineId` (rpc)
+
+Subject: `adapterRuntime.getMachineId`
+Type: Request (RPC)
+
+**Request:**
+
+_Empty object._
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `machineId` | `string \| undefined` | no |
 
 ### <a id="adapterRuntime.resolveId"></a>`adapterRuntime.resolveId` (rpc)
 

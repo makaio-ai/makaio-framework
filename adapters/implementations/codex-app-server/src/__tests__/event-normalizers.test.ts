@@ -232,6 +232,7 @@ describe('event-normalizers', () => {
           subject: AgentSubjects.usage,
           payload: {
             ...mockContext,
+            granularity: 'provider-call',
             provider: 'openai',
             model: 'gpt-5.1-codex-mini',
             inputTokens: 100,

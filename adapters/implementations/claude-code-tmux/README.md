@@ -48,6 +48,17 @@ writes a session-scoped `makaio-<short-id>` HTTP server entry into the project
 `.mcp.json` before spawning Claude Code. On close it removes that generated
 entry and unregisters the pinned MCP session.
 
+## Usage Telemetry
+
+Usage comes from scraped Claude Code statusline payloads and splits into two
+signals. The latest-request token gauge (`context_window.current_usage`) is
+deduplicated across statusline re-renders and emitted as `agent.usage`. The
+cumulative session totals and `cost.total_cost_usd` are deliberately excluded
+from `agent.usage` — they flow only into `client.session.usage.snapshot`
+(source: `statusline`, cost provenance `client-reported`). No `llmCallId` is
+set. Summing snapshot totals on top of `agent.usage` double counts. See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## File Index
 
 | File | Purpose |

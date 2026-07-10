@@ -72,6 +72,15 @@ CodexAppServerConnector extends AIAgentConnector
 - Replace and interrupt delivery modes
 - Reasoning support with configurable effort levels
 
+## Usage Telemetry
+
+`agent.usage` is emitted per `thread/tokenUsage/updated` notification, using
+the protocol's `tokenUsage.last` bucket — the token counts of the latest model
+request covered by that update. The protocol reports no monetary amount and
+does not expose a provider call ID, so `cost` and `llmCallId` are never set.
+See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## Exports
 
 ### Adapter

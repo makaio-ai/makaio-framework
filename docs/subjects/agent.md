@@ -76,7 +76,7 @@ Consumers can inspect `outcome` to distinguish success from failure:
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `error` | `string \| undefined` | no |
@@ -104,7 +104,7 @@ Used by orchestration layer to trigger compression when thresholds are reached.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `cachedTokens` | `number \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
@@ -166,7 +166,7 @@ Handler: AIAgent swaps connector with new cwd
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -198,7 +198,7 @@ Use for: UI updates, audit logging
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -248,7 +248,7 @@ can listen to this event to know when the agent is safe to mutate.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -272,7 +272,7 @@ Handler: AIAgent delegates to the active connector's `interrupt()` implementatio
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -303,7 +303,7 @@ latest request for the next turn boundary when requested by the caller.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `mcpSessionContext` | `{ sessionId: string; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; }` | yes |
@@ -335,7 +335,7 @@ Emitted when: A full message is received from the AI model
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `content` | `string` | yes |
@@ -357,7 +357,7 @@ Emitted when: Streaming message text is received from the AI model
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -382,7 +382,7 @@ Handler: AIAgent attempts native in-place change, falls back to connector swap
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -421,7 +421,7 @@ Use for: Tracking model transitions for billing, context restoration
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -446,7 +446,7 @@ Emitted when: A full reasoning/thinking block is received from the AI model
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `content` | `string` | yes |
@@ -468,7 +468,7 @@ Emitted when: Streaming reasoning content is received from the AI model
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `content` | `string` | yes |
@@ -496,7 +496,7 @@ Purpose: Sends a message to an existing agent instance (errors if agent doesn't 
 | `message` | `string \| { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }` | yes |
 | `messageId` | `string \| undefined` | no |
 | `responseSchema` | `{ schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined` | no |
-| `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; cacheStrategy?: "auto" \| "systemPrompt" \| "fullPrefix" \| undefined; turnContext?: Record<string, unknown> \| undefined; } \| undefined` | no |
+| `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; cacheStrategy?: "auto" \| "systemPrompt" \| "fullPrefix" \| undefined; turnContext?: Record<string, unknown> \| undefined; requestCorrelation?: { sessionId?: string \| undefined; turnId?: string \| undefined; messageId?: string \| undefined; executionId?: string \| undefined; frameId?: string \| undefined; } \| undefined; nativeLocality?: { kind: "native"; } \| { kind: "degrade"; reason: "adapter-unsupported" \| "adapter-mismatch" \| "no-adapter-session" \| "missing-machine-id" \| "machine-mismatch" \| "cwd-mismatch" \| "transforms-present" \| "compression-present" \| "connector-swap" \| "mid-history-unsupported" \| "hybrid-imported-orchestrated" \| "native-attempt-failed" \| "agent-already-started" \| "fork-point-unresolvable"; } \| { kind: "foreign"; machineId: string; } \| undefined; nativeFork?: { sourceSessionId: string; sourceAdapterSessionId: string; forkPointMessageId?: string \| undefined; targetWorkingDirectory?: string \| undefined; } \| undefined; } \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `turnId` | `string \| undefined` | no |
 
@@ -522,7 +522,7 @@ adapter translates to adapter-level events.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -538,13 +538,15 @@ Agent execution started.
 
 Subject: `agent.started`
 Type: Event (fire-and-forget)
-Emitted when: An agent begins processing a task
+Emitted when: An agent begins processing a turn. Fires once per turn
+dispatch — use `StartMode` to distinguish the session lifecycle
+phase.
 
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `cwd` | `string \| null` | yes |
@@ -553,6 +555,7 @@ Emitted when: An agent begins processing a task
 | `occurredAt` | `number \| undefined` | no |
 | `providerConfigId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
+| `startMode` | `"fork" \| "resume" \| "fresh" \| "rotation"` | yes |
 | `turnId` | `string \| undefined` | no |
 
 ### <a id="agent.step.finished"></a>`agent.step.finished` (event)
@@ -567,7 +570,7 @@ Emitted when: A content block completes processing
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `blockIndex` | `number` | yes |
 | `clientId` | `string \| undefined` | no |
@@ -591,7 +594,7 @@ Emitted when: A content block begins processing
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `blockData` | `{ type: "tool_use"; toolName: string; toolCallId: string; } \| { type: "reasoning"; } \| { type: "text"; } \| undefined` | no |
 | `blockIndex` | `number` | yes |
@@ -683,7 +686,7 @@ Emitted when: A tool finishes execution
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `args` | `Record<string, unknown> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
@@ -709,7 +712,7 @@ Emitted when: A tool produces output during execution
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `args` | `Record<string, unknown> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
@@ -734,7 +737,7 @@ Emitted when: A tool begins execution
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
@@ -757,7 +760,7 @@ Emitted when: Agent requests to use a tool
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `args` | `Record<string, unknown> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
@@ -791,7 +794,7 @@ Response semantics:
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `args` | `Record<string, unknown> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
@@ -826,7 +829,7 @@ For full outcome details (supersededBy, mergedInto), listen to user_message.comp
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `error` | `string \| undefined` | no |
@@ -854,7 +857,7 @@ Consumers who don't need merge/supersede details can subscribe to this.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `content` | `{ role: "user" \| "assistant" \| "system"; blocks: ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; message?: string \| undefined; }` | yes |
@@ -867,20 +870,25 @@ Consumers who don't need merge/supersede details can subscribe to this.
 
 ### <a id="agent.usage"></a>`agent.usage` (event)
 
-Per-call token usage metrics.
+Additive token usage metrics.
 
 Subject: `agent.usage`
 Type: Event (fire-and-forget)
-Emitted when: Usage metrics are available from an AI provider API call
+Emitted when: Usage metrics are available from an AI provider or client
 
-This event contains delta metrics for a single API call.
-For adapter-level cumulative totals, see `adapter.session.usage`.
+Each event is an additive usage measurement whose coverage is declared by
+the mandatory `granularity` field: depending on the upstream signal, the
+numbers may cover one provider API call, a completed turn, a terminal
+query result, or a lossy latest-request gauge. See
+`docs/architecture/adapters/usage-and-provenance.md` for the per-adapter
+measurement matrix. For adapter-level cumulative totals, see
+`adapter.session.usage`.
 
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `audioInputTokens` | `number \| undefined` | no |
 | `audioOutputTokens` | `number \| undefined` | no |
@@ -888,12 +896,17 @@ For adapter-level cumulative totals, see `adapter.session.usage`.
 | `clientId` | `string \| undefined` | no |
 | `contextWindow` | `number \| undefined` | no |
 | `cost` | `number \| undefined` | no |
+| `costProvenance` | `"provider-reported" \| "client-reported" \| "estimated" \| undefined` | no |
 | `costUnits` | `number` | yes |
 | `costUnitType` | `"requests" \| "tokens"` | yes |
 | `currency` | `string \| undefined` | no |
 | `duration` | `number \| undefined` | no |
+| `executionId` | `string \| undefined` | no |
+| `frameId` | `string \| undefined` | no |
+| `granularity` | `"provider-call" \| "turn-aggregate" \| "query-aggregate" \| "latest-request-gauge"` | yes |
 | `inputCachedTokens` | `number` | yes |
 | `inputTokens` | `number` | yes |
+| `llmCallId` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
 | `model` | `string` | yes |
 | `occurredAt` | `number \| undefined` | no |
@@ -923,7 +936,7 @@ folded into this message (their content was combined).
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `mergedFrom` | `string[] \| undefined` | no |
@@ -955,7 +968,7 @@ For persistence/reconstruction:
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `error` | `string \| undefined` | no |
@@ -983,7 +996,7 @@ For persistence, this is the source of truth for user input.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `content` | `{ role: "user" \| "assistant" \| "system"; blocks: ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; message?: string \| undefined; }` | yes |

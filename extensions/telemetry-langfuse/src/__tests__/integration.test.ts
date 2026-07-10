@@ -160,6 +160,7 @@ describe('telemetry-langfuse integration', () => {
         totalTokens: 150,
         costUnits: 150,
         costUnitType: 'tokens',
+        granularity: 'provider-call',
       });
 
       await MakaioBus.emit(WorkflowSubjects.execution.completed, {

@@ -110,6 +110,9 @@ export class OpenAIAgent extends BaseStreamAgent<OpenAINodeConnectorBus, OpenAIN
    *
    * Reads OpenAI-specific nested fields: `prompt_tokens_details.cached_tokens`
    * and `completion_tokens_details.reasoning_tokens`.
+   *
+   * Granularity is `provider-call`: each usage event stems from the usage
+   * chunk of exactly one OpenAI streaming request.
    * @param payload - OpenAI usage event payload
    * @returns Normalized usage metrics
    */
@@ -119,6 +122,7 @@ export class OpenAIAgent extends BaseStreamAgent<OpenAINodeConnectorBus, OpenAIN
       ...(usage.llmCallId !== undefined ? { llmCallId: usage.llmCallId } : {}),
       ...(usage.executionId !== undefined ? { executionId: usage.executionId } : {}),
       ...(usage.frameId !== undefined ? { frameId: usage.frameId } : {}),
+      granularity: 'provider-call',
       provider: 'openai',
       inputTokens: usage.prompt_tokens,
       inputCachedTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,

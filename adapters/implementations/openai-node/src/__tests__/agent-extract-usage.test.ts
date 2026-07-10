@@ -31,4 +31,15 @@ describe('OpenAIAgent.extractUsagePayload', () => {
       frameId: 'frame-1',
     });
   });
+
+  it('declares provider-call granularity on the emitted usage payload', () => {
+    const usage: UsageEvent = {
+      eventType: 'usage',
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+    };
+
+    expect(makeAgent().callExtractUsagePayload(usage).granularity).toBe('provider-call');
+  });
 });

@@ -37,6 +37,7 @@ next: false
 | `profile.setDefault` | [`client.profile.setDefault`](#client.profile.setDefault) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
 | `profile.update` | [`client.profile.update`](#client.profile.update) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
 | `resolveBinary` | [`client.resolveBinary`](#client.resolveBinary) | rpc | [`binary-resolution.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-resolution.ts) |
+| `runtime.isAdapterManaged` | [`client.runtime.isAdapterManaged`](#client.runtime.isAdapterManaged) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `runtime.observe` | [`client.runtime.observe`](#client.runtime.observe) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `runtime.started` | [`client.runtime.started`](#client.runtime.started) | event | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `scan` | [`client.scan`](#client.scan) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
@@ -46,6 +47,7 @@ next: false
 | `session.tool.pre` | [`client.session.tool.pre`](#client.session.tool.pre) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.turn.completed` | [`client.session.turn.completed`](#client.session.turn.completed) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.turn.started` | [`client.session.turn.started`](#client.session.turn.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.usage.snapshot` | [`client.session.usage.snapshot`](#client.session.usage.snapshot) | event | [`session-usage.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-usage.ts) |
 | `session.userPrompt.submitted` | [`client.session.userPrompt.submitted`](#client.session.userPrompt.submitted) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `sessionConfig.cleanup` | [`client.sessionConfig.cleanup`](#client.sessionConfig.cleanup) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
 | `sessionConfig.create` | [`client.sessionConfig.create`](#client.sessionConfig.create) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
@@ -418,6 +420,47 @@ Type: Request (RPC)
 | `source` | `"global" \| "managed"` | yes |
 | `version` | `string \| null` | yes |
 
+### <a id="client.runtime.isAdapterManaged"></a>`client.runtime.isAdapterManaged` (rpc)
+
+Request and response schemas for `client.runtime.isAdapterManaged`.
+
+Query the runtime registry to determine whether an adapter session ID
+was bound by an adapter-layer observation (`source.layer === 'adapter'`)
+of the **current process**. This is present-tense runtime truth — it
+does NOT merely check whether a runtime record exists for the pair.
+
+The distinction matters because `client.runtime.observe` is also emitted
+by non-adapter layers (e.g. `client-hook` observations forwarded from
+the hook bridge), and those sessions must remain importable. Only
+adapter-layer observations mark the pair as adapter-owned in the
+in-memory provenance set.
+
+**Provenance is intentionally in-memory-only.** After a restart,
+adapter-managed processes are re-observed by the adapter layer and the
+provenance set is rebuilt. Hydrated records from a prior process do not
+count as "currently managed."
+
+Primary consumer: the log-importer skip predicate, which needs to
+distinguish adapter-managed sessions from externally observed sessions
+that share the same storage fingerprint (`isImported: true`,
+`importStatus: 'tracking'`, `clientId` set).
+
+Subject: `client.runtime.isAdapterManaged`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string` | yes |
+| `clientId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `managed` | `boolean` | yes |
+
 ### <a id="client.runtime.observe"></a>`client.runtime.observe` (rpc)
 
 Request and response schemas for `client.runtime.observe`.
@@ -534,12 +577,6 @@ Type: Request (RPC)
 
 ### <a id="client.session.started"></a>`client.session.started` (event)
 
-Payload for `client.session.started`.
-
-Emitted when an adapter observes that a new client session has begun.
-This is a normalized observed signal — not a command. The session may not
-yet be linked to a framework session at emission time.
-
 Subject: `client.session.started`
 Type: Event
 
@@ -548,10 +585,13 @@ Type: Event
 | `adapterSessionId` | `string \| undefined` | no |
 | `clientId` | `string` | yes |
 | `cwd` | `string \| undefined` | no |
+| `machineId` | `string \| undefined` | no |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 | `observedAt` | `number` | yes |
+| `parentAdapterSessionId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `source` | `string` | yes |
+| `startMode` | `"fork" \| "resume" \| "fresh" \| "compact" \| "clear" \| undefined` | no |
 | `transcriptPath` | `string \| undefined` | no |
 
 ### <a id="client.session.tool.post"></a>`client.session.tool.post` (event)
@@ -643,6 +683,52 @@ Type: Event
 | `observedAt` | `number` | yes |
 | `sessionId` | `string \| undefined` | no |
 | `source` | `string` | yes |
+
+### <a id="client.session.usage.snapshot"></a>`client.session.usage.snapshot` (event)
+
+Snapshot of usage measurements for one interactive client session.
+
+Field names encode gauge/counter semantics explicitly:
+- `latestRequest*` is the most recent API-call usage.
+- `currentContext*` is the current context-window gauge.
+- `total*` is cumulative for the native client session.
+
+The contract contains no prompts, responses, transcripts, tool arguments,
+filesystem paths, or open metadata bags.
+
+Subject: `client.session.usage.snapshot`
+Type: Event
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `clientAccountId` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+| `clientVersion` | `string \| undefined` | no |
+| `contextRemainingPercentage` | `number \| undefined` | no |
+| `contextThresholdExceeded` | `boolean \| undefined` | no |
+| `contextUsedPercentage` | `number \| undefined` | no |
+| `contextWindowSizeTokens` | `number \| undefined` | no |
+| `costCurrency` | `string \| undefined` | no |
+| `costProvenance` | `"provider-reported" \| "client-reported" \| "estimated" \| undefined` | no |
+| `currentContextInputTokens` | `number \| undefined` | no |
+| `currentContextOutputTokens` | `number \| undefined` | no |
+| `latestRequestCacheReadTokens` | `number \| undefined` | no |
+| `latestRequestCacheWriteTokens` | `number \| undefined` | no |
+| `latestRequestInputTokens` | `number \| undefined` | no |
+| `latestRequestOutputTokens` | `number \| undefined` | no |
+| `modelDisplayName` | `string \| undefined` | no |
+| `modelFamily` | `string \| undefined` | no |
+| `modelId` | `string \| undefined` | no |
+| `observedAt` | `number` | yes |
+| `sessionId` | `string \| undefined` | no |
+| `source` | `string` | yes |
+| `totalApiDurationMs` | `number \| undefined` | no |
+| `totalCost` | `number \| undefined` | no |
+| `totalDurationMs` | `number \| undefined` | no |
+| `totalEdits` | `number \| undefined` | no |
+| `totalLinesAdded` | `number \| undefined` | no |
+| `totalLinesRemoved` | `number \| undefined` | no |
 
 ### <a id="client.session.userPrompt.submitted"></a>`client.session.userPrompt.submitted` (event)
 

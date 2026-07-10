@@ -11,6 +11,12 @@ import type { JsonObject } from 'type-fest';
  * @remarks
  * Events may include optional {@link ImportMetadata} to distinguish
  * imported events from live events and preserve original timestamps.
+ *
+ * Importers that build `agent.usage` events MUST set the schema-mandated
+ * `granularity` field truthfully — it declares what the token numbers cover
+ * (the schema rejects payloads without it). Imported per-call log records
+ * map to `'provider-call'`; see
+ * `docs/architecture/adapters/usage-and-provenance.md` for the full mapping.
  * @see {@link LogImporter} - Interface that produces these events
  * @see {@link ImportMetadata} - Provenance metadata for imported events
  */

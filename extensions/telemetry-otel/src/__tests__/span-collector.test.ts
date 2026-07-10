@@ -16,6 +16,7 @@ function testUsage(
     reasoningTokens: 0,
     totalTokens: 2,
     costUnits: 2,
+    granularity: 'provider-call',
     costUnitType: 'tokens',
   };
 }
@@ -62,6 +63,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 3,
       totalTokens: 33,
       costUnits: 33,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
       cost: 0.0123,
       currency: 'USD',
@@ -94,6 +96,7 @@ describe('SpanCollector', () => {
             'llm.cost.provenance': 'estimated',
             'llm.cost.units': 33,
             'llm.cost.unit_type': 'tokens',
+            'llm.usage.granularity': 'provider-call',
             'llm.duration_ms': 250,
             'makaio.agent.id': 'review-agent',
             'makaio.adapter.id': 'adapter-instance-1',
@@ -154,6 +157,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -210,6 +214,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 15,
       costUnits: 15,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     now = 40_000;
@@ -262,6 +267,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
       duration: 1000,
       occurredAt: 2000,
@@ -312,6 +318,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
       duration: 1000,
       occurredAt: 2000,
@@ -369,6 +376,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     collector.onAgentToolStarted({ sessionId: 'sess-stale', toolName: 'read', toolCallId: 'call-stale' });
@@ -422,6 +430,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 15,
       costUnits: 15,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     nowMs = 4000;
@@ -435,6 +444,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 30,
       costUnits: 30,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -501,6 +511,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 15,
       costUnits: 15,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     await collector.onExecutionCompleted({ executionId: 'wfx-session-owner', totalDuration: 1000 }, 2000);
@@ -557,6 +568,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -598,6 +610,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 2,
       costUnits: 2,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     collector.onAgentToolStarted({
@@ -926,6 +939,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 13,
       costUnits: 13,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -1059,6 +1073,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 13,
       costUnits: 13,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -1111,6 +1126,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     collector.onAgentToolStarted({ sessionId: 'sess-zero', toolName: 'read', toolCallId: 'call-zero' });
@@ -1156,6 +1172,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 14,
       costUnits: 14,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
       occurredAt: 1200,
       duration: 200,
@@ -1230,6 +1247,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 14,
       costUnits: 14,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     collector.onAgentToolStarted({
@@ -1297,6 +1315,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 14,
       costUnits: 14,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -1344,6 +1363,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 2,
       costUnits: 2,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -1393,6 +1413,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 2,
       costUnits: 2,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -1450,6 +1471,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 2,
       costUnits: 2,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     nowMs = 6_000;
@@ -1521,6 +1543,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 2,
       costUnits: 2,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
     collector.onAgentToolStarted({
@@ -1595,6 +1618,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -1727,6 +1751,7 @@ describe('SpanCollector', () => {
       reasoningTokens: 0,
       totalTokens: 31,
       costUnits: 31,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 

@@ -78,6 +78,16 @@ definition and model registry, not provider config. Registry generation can use
 `provider.fetcher.ts`, which asks the Copilot SDK for models using the SDK's own
 authentication flow.
 
+## Usage Telemetry
+
+`agent.usage` is emitted per `assistant.usage` event, which the SDK reports
+for each provider API call; one agentic turn may therefore produce several
+events. The SDK reports no monetary amount and no provider call ID, so `cost`
+and `llmCallId` are never set. `inputTokens` reflects the full LLM prompt
+including Copilot's built-in tool schemas and is deliberately not used for
+context-window estimates. See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## Exports
 
 ### Adapter
@@ -151,7 +161,7 @@ descriptor, whose `adapters[]` entry wraps the internal definition from
 | `normalizeToolExecutionStart` | Normalize tool.execution_start |
 | `normalizeToolExecutionPartialResult` | Normalize tool.execution_partial_result |
 | `normalizeToolExecutionComplete` | Normalize tool.execution_complete |
-| `normalizeSessionTruncation` | Normalize session.truncation to agent.usage |
+| `normalizeSessionTruncation` | Normalize session.truncation to agent.contextWindow.updated |
 | `normalizeSessionError` | Normalize session.error to agent.error |
 | `normalizeUserMessage` | Normalize user.message (import-only) |
 | `normalizeAssistantTurnEnd` | Normalize assistant.turn_end (import-only) |

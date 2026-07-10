@@ -8,6 +8,7 @@
  */
 
 import type { SpanDraft, SpanDraftStatus } from '../contracts/types.js';
+import type { UsageGranularity } from './types.js';
 
 /** Input bag for {@link SpanBuilder.buildExecutionSpan}. */
 export interface BuildExecutionSpanInput {
@@ -47,6 +48,8 @@ export interface BuildFrameSpanInput {
 
 /** Input bag for {@link SpanBuilder.buildLlmSpan}. */
 export interface BuildLlmSpanInput {
+  /** Truthful measurement granularity declared by the source usage event. */
+  readonly granularity: UsageGranularity;
   /** Runtime-generated identifier for one concrete provider API request. */
   readonly llmCallId?: string;
   /** Workflow execution identifier. */
@@ -344,6 +347,7 @@ export class SpanBuilder {
       'llm.tokens.total': input.totalTokens,
       'llm.cost.units': input.costUnits,
       'llm.cost.unit_type': input.costUnitType,
+      'llm.usage.granularity': input.granularity,
     };
 
     setOptionalAttribute(attributes, 'makaio.agent.id', input.agentId);

@@ -201,6 +201,9 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
       const cacheWriteTokens = contextWindow.current_usage?.cache_creation_input_tokens;
       const normalized: NormalizedCallUsage = {
         provider: 'anthropic',
+        // Lossy statusline observation of the latest request — deduplicated
+        // via shouldEmitUsage, never a running total.
+        granularity: 'latest-request-gauge',
         inputTokens,
         inputCachedTokens: cacheReadTokens,
         cacheWriteTokens,

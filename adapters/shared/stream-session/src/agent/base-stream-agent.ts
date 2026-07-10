@@ -225,6 +225,12 @@ export abstract class BaseStreamAgent<
    *
    * - Anthropic: reads `cache_read_input_tokens`, `cache_creation_input_tokens`
    * - OpenAI: reads `prompt_tokens_details.cached_tokens`, `completion_tokens_details.reasoning_tokens`
+   *
+   * Implementations must declare the truthful `granularity` of their usage
+   * signal (see `docs/architecture/adapters/usage-and-provenance.md`). It is
+   * intentionally not hard-coded here: both current subclasses report
+   * `provider-call` (one usage event per provider request), but the base class
+   * makes no such guarantee for future stream adapters.
    * @param payload - Raw usage event payload (cast from the connector's usage event type)
    * @returns Normalized usage metrics ready for `trackUsage()`
    */

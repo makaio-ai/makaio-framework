@@ -133,6 +133,9 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
    *
    * Reads Anthropic-specific cache fields: `cache_read_input_tokens` and
    * `cache_creation_input_tokens`.
+   *
+   * Granularity is `provider-call`: each usage event is merged from the
+   * `message_start`/`message_delta` frames of exactly one Anthropic request.
    * @param payload - Anthropic usage event payload
    * @returns Normalized usage metrics
    */
@@ -142,6 +145,7 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
       ...(usage.llmCallId !== undefined ? { llmCallId: usage.llmCallId } : {}),
       ...(usage.executionId !== undefined ? { executionId: usage.executionId } : {}),
       ...(usage.frameId !== undefined ? { frameId: usage.frameId } : {}),
+      granularity: 'provider-call',
       provider: 'anthropic',
       inputTokens: usage.prompt_tokens,
       inputCachedTokens: usage.cache_read_input_tokens ?? 0,

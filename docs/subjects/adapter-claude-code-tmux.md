@@ -55,7 +55,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `args` | `Record<string, unknown> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |

@@ -307,6 +307,7 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
 
       const normalized: NormalizedCallUsage = {
         provider: 'pi-sdk',
+        granularity: 'turn-aggregate',
         inputTokens: usage.input,
         inputCachedTokens: usage.cacheRead,
         cacheWriteTokens: usage.cacheWrite,
@@ -316,6 +317,7 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
         costUnits: usage.totalTokens,
         costUnitType: 'tokens',
         cost: usage.cost.total,
+        costProvenance: 'provider-reported',
       };
 
       await this.trackUsage(normalized);

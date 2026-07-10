@@ -7,11 +7,11 @@ next: false
 
 # services
 
-32 namespaces, 222 subjects (35 events, 187 RPCs).
+32 namespaces, 223 subjects (35 events, 188 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
-| [`adapterRuntime`](./adapterruntime.md) | bus | 2 | 0E / 2R |
+| [`adapterRuntime`](./adapterruntime.md) | bus | 3 | 0E / 3R |
 | [`adapterSubsystem`](./adaptersubsystem.md) | bus | 33 | 9E / 24R |
 | [`agentRuntime`](./agentruntime.md) | bus | 6 | 2E / 4R |
 | [`cliDetection`](./clidetection.md) | bus | 1 | 0E / 1R |

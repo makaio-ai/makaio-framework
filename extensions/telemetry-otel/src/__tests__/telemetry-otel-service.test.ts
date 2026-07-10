@@ -108,6 +108,7 @@ describe('TelemetryOtelService', () => {
         reasoningTokens: 0,
         totalTokens: 3,
         costUnits: 3,
+        granularity: 'provider-call',
         costUnitType: 'tokens',
       });
       await MakaioBus.emit(WorkflowSubjects.execution.completed, {
@@ -159,6 +160,7 @@ describe('TelemetryOtelService', () => {
       reasoningTokens: 0,
       totalTokens: 14,
       costUnits: 14,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
       cost: 0.05,
       currency: 'USD',
@@ -219,6 +221,7 @@ describe('TelemetryOtelService', () => {
       reasoningTokens: 0,
       totalTokens: 2,
       costUnits: 2,
+      granularity: 'provider-call',
       costUnitType: 'tokens',
     });
 
@@ -583,6 +586,7 @@ describe('TelemetryOtelService', () => {
           reasoningTokens: 0,
           totalTokens: 2,
           costUnits: 2,
+          granularity: 'provider-call',
           costUnitType: 'tokens' as const,
         });
 
@@ -652,6 +656,7 @@ describe('TelemetryOtelService', () => {
         reasoningTokens: 0,
         totalTokens: 2,
         costUnits: 2,
+        granularity: 'provider-call',
         costUnitType: 'tokens',
       });
       nowMs = 6_000;

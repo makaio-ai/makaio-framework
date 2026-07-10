@@ -1,6 +1,7 @@
 /* eslint max-lines: ["error", { "max": 450 }] */
-import { AIAgent, type NormalizedCallUsage } from '@makaio/ai-adapters-core';
+import { AIAgent } from '@makaio/ai-adapters-core';
 import { GeminiConnector } from './connector.js';
+import { normalizeGeminiUsage, type GeminiUsageMetadata } from './usage.js';
 import {
   GeminiConnectorSubjects,
   type GeminiConnectorBus,
@@ -346,30 +347,12 @@ export class GeminiAgent extends AIAgent<GeminiConnectorBus, GeminiConnector> {
   private async handleSessionFinished(payload: {
     model?: string;
     reason?: string;
-    usageMetadata?: {
-      promptTokenCount?: number;
-      cachedContentTokenCount?: number;
-      candidatesTokenCount?: number;
-      thoughtsTokenCount?: number;
-      totalTokenCount?: number;
-      trafficType?: string;
-    };
+    usageMetadata?: GeminiUsageMetadata;
   }): Promise<void> {
     await this.flushAccumulatedSteps();
 
-    // Track usage
-    const normalized: NormalizedCallUsage = {
-      provider: 'gemini',
-      inputTokens: payload.usageMetadata?.promptTokenCount ?? 0,
-      inputCachedTokens: payload.usageMetadata?.cachedContentTokenCount ?? 0,
-      outputTokens: payload.usageMetadata?.candidatesTokenCount ?? 0,
-      reasoningTokens: payload.usageMetadata?.thoughtsTokenCount ?? 0,
-      totalTokens: payload.usageMetadata?.totalTokenCount ?? 0,
-      costUnits: 1,
-      costUnitType: 'requests',
-      serviceTier: payload.usageMetadata?.trafficType,
-    };
-    await this.trackUsage(normalized);
+    // Track usage (turn-aggregate; see normalizeGeminiUsage)
+    await this.trackUsage(normalizeGeminiUsage(payload.usageMetadata));
 
     const usageMetadata = payload.usageMetadata;
     if (usageMetadata) {

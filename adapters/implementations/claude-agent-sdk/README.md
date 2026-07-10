@@ -143,6 +143,17 @@ descriptor, whose `adapters[]` entry wraps the internal definition from
 - `chat:inTurnMessages` - Multi-turn conversation
 - `systemPrompt:override` - Replace/set the system prompt
 
+## Usage Telemetry
+
+`agent.usage` is a terminal query aggregate: the SDK reports usage once on
+the result message, covering every model turn inside the query (agentic tool
+loops included). The result is drained within a bounded timeout even on error
+or interruption, so usage is still emitted for failed turns. `total_cost_usd`
+is forwarded as a provider-reported aggregate `cost`. No `llmCallId` is set —
+the SDK does not expose individual provider calls, and the framework never
+synthesizes one for aggregates. See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## File Structure
 
 ```

@@ -242,6 +242,17 @@ function createToolEvents(
 /**
  * Create a usage event from step metrics.
  * Handles both top-level tokens (current format) and nested metrics.tokens (older log format).
+ *
+ * Each step-finish part corresponds to exactly one LLM request in OpenCode,
+ * so the event carries `granularity: 'provider-call'`. When a cost value is
+ * present it originates from OpenCode's own log (not the provider), so it is
+ * marked `costProvenance: 'client-reported'`; without a cost value neither
+ * field is emitted.
+ *
+ * Cache and reasoning token counts are optional in OpenCode logs; missing
+ * values default to 0, matching the live token-counting adapters
+ * (anthropic-sdk, openai-node, cursor-sdk). Cost accounting follows the same
+ * convention: `costUnits` equals `totalTokens` with `costUnitType: 'tokens'`.
  * @param message - OpenCode message metadata
  * @param part - Step finish part with metrics
  * @param model - Model string
@@ -256,25 +267,13 @@ function createUsageEvent(
 ): NormalizedEvent {
   const { adapterId, adapterName, adapterSessionId, timestamp, importMetadata } = ctx;
 
-  // Prefer top-level tokens (current format), fallback to nested metrics.tokens (older logs)
-  const tokens = part.tokens ?? part.metrics?.tokens;
-  if (!tokens) {
-    throw new Error('step-finish part has no tokens data');
-  }
-
-  // Calculate total if not provided (current format doesn't have total)
-  const totalTokens = 'total' in tokens ? tokens.total : tokens.input + tokens.output;
+  const { totalTokens, inputTokens, outputTokens, inputCachedTokens, cacheWriteTokens, reasoningTokens } =
+    extractStepTokens(part);
 
   // Get cost from top-level (current) or nested metrics (older logs)
   const cost = part.cost ?? part.metrics?.cost?.total;
 
-  // Extract provider from message - handle both user and assistant formats
-  let provider = 'unknown';
-  if ('model' in message && message.model) {
-    provider = message.model.providerID;
-  } else if ('providerID' in message && message.providerID) {
-    provider = message.providerID;
-  }
+  const provider = extractProvider(message);
 
   return {
     subject: AgentSubjects.usage,
@@ -284,16 +283,77 @@ function createUsageEvent(
       agentId: message.agent ?? 'main',
       adapterSessionId,
       messageId: message.id,
+      granularity: 'provider-call',
       provider,
       model: model ?? 'unknown',
-      inputTokens: tokens.input,
-      outputTokens: tokens.output,
+      inputTokens,
+      inputCachedTokens,
+      cacheWriteTokens,
+      outputTokens,
+      reasoningTokens,
       totalTokens,
-      cost,
+      // Token-counting adapters bill cost units in tokens (see e.g.
+      // anthropic-sdk and openai-node extractUsagePayload).
+      costUnits: totalTokens,
+      costUnitType: 'tokens',
+      // Cost comes from the external tool's log, not directly from the provider.
+      ...(cost !== undefined ? { cost, costProvenance: 'client-reported' } : {}),
       timestamp,
       _import: importMetadata,
     },
   };
+}
+
+/** Normalized token counts of one step-finish part, ready for the `agent.usage` payload. */
+interface StepTokenCounts {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  inputCachedTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+}
+
+/**
+ * Extract normalized token counts from a step-finish part.
+ * Prefers top-level tokens (current format) and falls back to nested
+ * metrics.tokens (older log format). Cache and reasoning counts only exist in
+ * the current top-level format; the legacy nested metrics format never
+ * carried them, so they default to 0.
+ * @param part - Step finish part with metrics
+ * @returns Token counts ready for the `agent.usage` payload
+ * @throws Error when the part carries no tokens data in either format
+ */
+function extractStepTokens(part: OpenCodeStepFinishPart): StepTokenCounts {
+  const tokens = part.tokens ?? part.metrics?.tokens;
+  if (!tokens) {
+    throw new Error('step-finish part has no tokens data');
+  }
+
+  return {
+    // Calculate total if not provided (current format doesn't have total)
+    totalTokens: 'total' in tokens ? tokens.total : tokens.input + tokens.output,
+    inputTokens: tokens.input,
+    outputTokens: tokens.output,
+    inputCachedTokens: part.tokens?.cache?.read ?? 0,
+    cacheWriteTokens: part.tokens?.cache?.write ?? 0,
+    reasoningTokens: part.tokens?.reasoning ?? 0,
+  };
+}
+
+/**
+ * Extract the provider ID from a message, handling both user and assistant formats.
+ * @param message - OpenCode message metadata
+ * @returns Provider ID, or 'unknown' when the message carries none
+ */
+function extractProvider(message: OpenCodeMessage): string {
+  if ('model' in message && message.model) {
+    return message.model.providerID;
+  }
+  if ('providerID' in message && message.providerID) {
+    return message.providerID;
+  }
+  return 'unknown';
 }
 
 /**

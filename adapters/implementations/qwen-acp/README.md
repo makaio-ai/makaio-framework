@@ -101,6 +101,15 @@ Default timeouts:
 | `toolApproval` | 5 s |
 | `eventWait` | 3 s |
 
+## Usage Telemetry
+
+`agent.usage` is a consolidated prompt-turn aggregate: the connector
+accumulates the running `_meta.usage` totals from each message chunk
+(last-wins) and flushes them once per turn, including error paths. ACP
+reports no monetary amount and no provider call ID, so `cost` and
+`llmCallId` are never set. See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## Conformance Testing
 
 ```typescript

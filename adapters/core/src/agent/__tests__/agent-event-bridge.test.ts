@@ -6,6 +6,7 @@ import type { NormalizedCallUsage } from '../types.js';
 
 const normalizedUsage = {
   provider: 'test-provider',
+  granularity: 'provider-call',
   inputTokens: 1,
   inputCachedTokens: 0,
   outputTokens: 2,

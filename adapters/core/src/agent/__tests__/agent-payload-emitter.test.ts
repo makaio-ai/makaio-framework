@@ -116,6 +116,7 @@ describe('AgentPayloadEmitter', () => {
 
     await emitter.emitGlobal(AgentSubjects.usage, {
       provider: 'anthropic',
+      granularity: 'provider-call',
       model: 'claude-3-7-sonnet',
       inputTokens: 1,
       inputCachedTokens: 0,
@@ -132,6 +133,7 @@ describe('AgentPayloadEmitter', () => {
     expect(emittedPayloads).toEqual([
       {
         provider: 'anthropic',
+        granularity: 'provider-call',
         model: 'claude-3-7-sonnet',
         inputTokens: 1,
         inputCachedTokens: 0,

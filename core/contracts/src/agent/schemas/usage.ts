@@ -9,16 +9,50 @@ export const UsageCostProvenanceSchema = z.enum(['provider-reported', 'client-re
 export type UsageCostProvenance = z.infer<typeof UsageCostProvenanceSchema>;
 
 /**
- * Per-call token usage metrics.
+ * Truthful measurement granularity of one `agent.usage` event.
+ *
+ * - `provider-call` — one concrete provider API request. The finest
+ *   granularity; events can be summed freely.
+ * - `turn-aggregate` — one completed assistant message or prompt turn. May
+ *   cover several internal model calls the upstream SDK does not expose
+ *   individually.
+ * - `query-aggregate` — the terminal result of one query, potentially
+ *   covering multiple model turns (agentic tool loops).
+ * - `latest-request-gauge` — a lossy observed statusline gauge for the
+ *   latest request; deduplicated, never a running total.
+ */
+export const UsageGranularitySchema = z.enum([
+  'provider-call',
+  'turn-aggregate',
+  'query-aggregate',
+  'latest-request-gauge',
+]);
+
+/** Truthful measurement granularity of one `agent.usage` event. */
+export type UsageGranularity = z.infer<typeof UsageGranularitySchema>;
+
+/**
+ * Additive token usage metrics.
  *
  * Subject: `agent.usage`
  * Type: Event (fire-and-forget)
- * Emitted when: Usage metrics are available from an AI provider API call
+ * Emitted when: Usage metrics are available from an AI provider or client
  *
- * This event contains delta metrics for a single API call.
- * For adapter-level cumulative totals, see `adapter.session.usage`.
+ * Each event is an additive usage measurement whose coverage is declared by
+ * the mandatory `granularity` field: depending on the upstream signal, the
+ * numbers may cover one provider API call, a completed turn, a terminal
+ * query result, or a lossy latest-request gauge. See
+ * `docs/architecture/adapters/usage-and-provenance.md` for the per-adapter
+ * measurement matrix. For adapter-level cumulative totals, see
+ * `adapter.session.usage`.
  */
 export const UsageSchema = BaseAgentEventSchema.extend({
+  /**
+   * Truthful measurement granularity of this event. Orthogonal to
+   * `llmCallId`: granularity declares what the numbers cover, while
+   * `llmCallId` declares whether the concrete provider request is nameable.
+   */
+  granularity: observability.attribute(UsageGranularitySchema, 'llm.usage.granularity'),
   /** Runtime-generated identifier for one concrete provider API request. */
   llmCallId: observability.attribute(z.string(), 'makaio.llm_call.id').optional(),
   /** Workflow execution that caused the provider request, when known. */

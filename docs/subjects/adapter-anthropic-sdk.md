@@ -162,7 +162,7 @@ Type: Event
 | `adapterName` | `string \| undefined` | no |
 | `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string \| undefined` | no |
-| `event` | `{ eventType: "chunk"; index: number; delta: { type: "text_delta"; text: string; } \| { type: "thinking_delta"; thinking: string; } \| { type: "input_json_delta"; partial_json: string; }; } \| { eventType: "usage"; prompt_tokens: number; completion_tokens: number; total_tokens: number; cache_read_input_tokens?: number \| undefined; cache_creation_input_tokens?: number \| undefined; } \| { eventType: "tool_calls"; toolCalls: { id: string; type: "function"; function: { name: string; arguments: string; }; blockIndex: number; }[]; } \| { eventType: "message_complete"; content: string \| null; finish_reason: "tool_use" \| "end_turn" \| "max_tokens" \| "stop_sequence" \| "pause_turn" \| null; reasoning?: string \| undefined; tool_calls?: { id: string; blockIndex: number; type: "function"; function: { name: string; arguments: string; }; }[] \| undefined; } \| { eventType: "reasoning_delta"; content: string; } \| { eventType: "reasoning_complete"; content: string; signature?: string \| undefined; } \| { eventType: "agent_started"; model?: string \| undefined; } \| { eventType: "agent_complete"; message?: string \| undefined; error?: string \| undefined; } \| { eventType: "error"; message: string; code?: string \| number \| undefined; type?: string \| undefined; } \| { eventType: "tool_started"; toolName: string; toolCallId: string; } \| { eventType: "tool_completed"; toolName: string; toolCallId: string; result: string; success: boolean; }` | yes |
+| `event` | `{ eventType: "chunk"; index: number; delta: { type: "text_delta"; text: string; } \| { type: "thinking_delta"; thinking: string; } \| { type: "input_json_delta"; partial_json: string; }; } \| { eventType: "usage"; prompt_tokens: number; completion_tokens: number; total_tokens: number; llmCallId?: string \| undefined; executionId?: string \| undefined; frameId?: string \| undefined; cache_read_input_tokens?: number \| undefined; cache_creation_input_tokens?: number \| undefined; } \| { eventType: "tool_calls"; toolCalls: { id: string; type: "function"; function: { name: string; arguments: string; }; blockIndex: number; }[]; } \| { eventType: "message_complete"; content: string \| null; finish_reason: "tool_use" \| "end_turn" \| "max_tokens" \| "stop_sequence" \| "pause_turn" \| null; reasoning?: string \| undefined; tool_calls?: { id: string; blockIndex: number; type: "function"; function: { name: string; arguments: string; }; }[] \| undefined; } \| { eventType: "reasoning_delta"; content: string; } \| { eventType: "reasoning_complete"; content: string; signature?: string \| undefined; } \| { eventType: "agent_started"; model?: string \| undefined; } \| { eventType: "agent_complete"; message?: string \| undefined; error?: string \| undefined; } \| { eventType: "error"; message: string; code?: string \| number \| undefined; type?: string \| undefined; } \| { eventType: "tool_started"; toolName: string; toolCallId: string; } \| { eventType: "tool_completed"; toolName: string; toolCallId: string; result: string; success: boolean; }` | yes |
 | `sessionId` | `string \| undefined` | no |
 
 ### <a id="adapter:anthropic-sdk.sdk.raw"></a>`adapter:anthropic-sdk.sdk.raw` (event)
@@ -199,7 +199,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `args` | `Record<string, unknown> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
@@ -355,6 +355,9 @@ Type: Event
 | `cache_read_input_tokens` | `number \| undefined` | no |
 | `completion_tokens` | `number` | yes |
 | `eventType` | `"usage"` | yes |
+| `executionId` | `string \| undefined` | no |
+| `frameId` | `string \| undefined` | no |
+| `llmCallId` | `string \| undefined` | no |
 | `prompt_tokens` | `number` | yes |
 | `total_tokens` | `number` | yes |
 

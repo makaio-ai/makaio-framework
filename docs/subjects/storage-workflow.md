@@ -46,10 +46,12 @@ next: false
 | `setExecution` | [`storage:workflow.setExecution`](#storage:workflow.setExecution) | rpc | — |
 | `setExecutionLink` | [`storage:workflow.setExecutionLink`](#storage:workflow.setExecutionLink) | rpc | — |
 | `setExecutionStart` | [`storage:workflow.setExecutionStart`](#storage:workflow.setExecutionStart) | rpc | — |
+| `setExternalExecutionStart` | [`storage:workflow.setExternalExecutionStart`](#storage:workflow.setExternalExecutionStart) | rpc | — |
 | `setFrame` | [`storage:workflow.setFrame`](#storage:workflow.setFrame) | rpc | — |
 | `setGateInstance` | [`storage:workflow.setGateInstance`](#storage:workflow.setGateInstance) | rpc | — |
 | `setRunContext` | [`storage:workflow.setRunContext`](#storage:workflow.setRunContext) | rpc | — |
 | `setSpan` | [`storage:workflow.setSpan`](#storage:workflow.setSpan) | rpc | — |
+| `settleExternalExecution` | [`storage:workflow.settleExternalExecution`](#storage:workflow.settleExternalExecution) | rpc | — |
 | `updateExecution` | [`storage:workflow.updateExecution`](#storage:workflow.updateExecution) | rpc | — |
 
 ## Subject Details
@@ -531,6 +533,27 @@ Type: Request (RPC)
 | `executionId` | `string` | yes |
 | `id` | `string` | yes |
 
+### <a id="storage:workflow.setExternalExecutionStart"></a>`storage:workflow.setExternalExecutionStart` (rpc)
+
+Atomically persist an external execution and its initial WorkLog rows.
+
+Subject: `storage:workflow.setExternalExecutionStart`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `execution` | `{ id: string; workflowId: string; inputs: unknown; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; status: "running"; coordinatorSessionId?: string \| undefined; config?: Record<string, unknown> \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; }` | yes |
+| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "station" \| "delegate-agent" \| "delegate-role" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; attempt: number; status: "running"; startedAt: number; iteration?: number \| undefined; branchKey?: string \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `executionId` | `string` | yes |
+| `frameId` | `string \| undefined` | no |
+
 ### <a id="storage:workflow.setFrame"></a>`storage:workflow.setFrame` (rpc)
 
 Upsert a single execution frame by `frameId`.
@@ -610,6 +633,30 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `id` | `string` | yes |
+
+### <a id="storage:workflow.settleExternalExecution"></a>`storage:workflow.settleExternalExecution` (rpc)
+
+Atomically settle an external execution and its WorkLog projection.
+
+Subject: `storage:workflow.settleExternalExecution`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `completedAt` | `number \| undefined` | no |
+| `error` | `string \| undefined` | no |
+| `executionId` | `string` | yes |
+| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "station" \| "delegate-agent" \| "delegate-role" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; attempt: number; status: "completed" \| "cancelled" \| "failed"; startedAt: number; completedAt: number; durationMs: number; iteration?: number \| undefined; branchKey?: string \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| undefined` | no |
+| `reason` | `string \| undefined` | no |
+| `status` | `"completed" \| "cancelled" \| "failed"` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
 
 ### <a id="storage:workflow.updateExecution"></a>`storage:workflow.updateExecution` (rpc)
 

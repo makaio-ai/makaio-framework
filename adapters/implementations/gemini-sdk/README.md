@@ -60,6 +60,13 @@ GeminiConnector extends AIAgentConnector
 - Tool approval workflow via `registerToolApprovalHandler`
 - Replace and interrupt delivery modes
 
+## Usage Telemetry
+
+`agent.usage` is emitted once per completed session/turn from the
+`session.finished` event's `usageMetadata`. The SDK reports no monetary
+amount and no provider call ID, so `cost` and `llmCallId` are never set. See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## Exports
 
 ### Adapter

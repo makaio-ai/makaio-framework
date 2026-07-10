@@ -5795,6 +5795,15 @@
             },
             "type": "string"
           },
+          "granularity": {
+            "enum": ["provider-call", "turn-aggregate", "query-aggregate", "latest-request-gauge"],
+            "makaio.observability": {
+              "attributeName": "llm.usage.granularity",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
           "inputCachedTokens": {
             "makaio.observability": {
               "attributeName": "llm.tokens.cached_input",
@@ -5934,6 +5943,7 @@
           "agentId",
           "adapterId",
           "adapterName",
+          "granularity",
           "provider",
           "model",
           "inputTokens",

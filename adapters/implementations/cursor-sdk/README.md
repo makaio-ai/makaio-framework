@@ -26,6 +26,14 @@ subjects, provider metadata, and descriptor package. The `./server` entrypoint
 default-exports the `cursorSdkPackage` descriptor for framework extension
 discovery.
 
+## Usage Telemetry
+
+`agent.usage` is emitted once per completed message/turn from the SDK's usage
+event. The SDK may report an optional monetary amount, forwarded as `cost`
+(omitted entirely when the SDK reports no amount). The SDK exposes no provider
+call ID, so `llmCallId` is never set. See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## License
 
 MIT

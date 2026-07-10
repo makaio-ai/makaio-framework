@@ -114,6 +114,13 @@ Default timeouts:
 @mariozechner/pi-coding-agent >=0.72.0
 ```
 
+## Usage Telemetry
+
+`agent.usage` is emitted per usage event following a completed assistant
+message. The SDK's provider-reported `cost.total` is forwarded as `cost`
+(USD). The SDK exposes no provider call ID, so `llmCallId` is never set. See
+[Usage & Provenance](../../../docs/architecture/adapters/usage-and-provenance.md).
+
 ## Conformance Testing
 
 ```typescript

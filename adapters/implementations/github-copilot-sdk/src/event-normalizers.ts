@@ -23,9 +23,6 @@ import { AgentSubjects, type StartMode } from '@makaio/contracts';
 /** Default tool name when resolution fails */
 const UNKNOWN_TOOL_NAME = 'unknown';
 
-/** Default model name when not provided */
-const UNKNOWN_MODEL = 'unknown';
-
 // =============================================================================
 // TYPE DEFINITIONS
 // =============================================================================
@@ -263,34 +260,14 @@ export function normalizeToolExecutionComplete(
 }
 
 /**
- * Normalize session.truncation event to agent.usage + agent.contextWindow.updated.
+ * Normalize session.truncation to the remaining context-window occupancy.
  * @param data - The session truncation event data
  * @param ctx - Normalization context with session/adapter info
- * @param model - Model name to include in usage payload
- * @returns Array of two events: usage and context window update
+ * @returns Context-window update event
  */
-export function normalizeSessionTruncation(
-  data: SessionTruncationData,
-  ctx: NormalizationContext,
-  model?: string | null,
-): NormalizedEvent[] {
+export function normalizeSessionTruncation(data: SessionTruncationData, ctx: NormalizationContext): NormalizedEvent[] {
   const totalTokens = data.postTruncationTokensInMessages;
   return [
-    {
-      subject: AgentSubjects.usage,
-      payload: {
-        ...ctx,
-        provider: 'copilot',
-        model: model ?? UNKNOWN_MODEL,
-        inputTokens: totalTokens,
-        inputCachedTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens,
-        costUnits: 1,
-        costUnitType: 'requests',
-      },
-    },
     {
       subject: AgentSubjects.contextWindow.updated,
       payload: { ...ctx, currentTokens: totalTokens, maxTokens: data.tokenLimit },
@@ -426,7 +403,7 @@ export function normalizeGitHubCopilotLogRecord(
       return [normalizeToolExecutionComplete(data, ctx, toolNameResolver?.(data.toolCallId))];
     }
     case 'session.truncation':
-      return normalizeSessionTruncation(record.data as SessionTruncationData, ctx, model);
+      return normalizeSessionTruncation(record.data as SessionTruncationData, ctx);
     case 'session.error':
       return [normalizeSessionError(record.data as SessionErrorData, ctx)];
     case 'user.message':

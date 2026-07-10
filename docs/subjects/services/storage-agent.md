@@ -162,6 +162,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterId` | `string \| undefined` | no |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `allowedDirectories` | `string[] \| undefined` | no |
 | `cwd` | `string \| undefined` | no |

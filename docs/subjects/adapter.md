@@ -93,7 +93,7 @@ Purpose: Returns details for a specific agent, or null if not found.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `agent` | `{ agentId: string; sessionId: string; adapterSessionId: string; } \| null` | yes |
+| `agent` | `{ agentId: string; sessionId: string; adapterSessionId?: string \| undefined; } \| null` | yes |
 
 ### <a id="adapter.getCapabilities"></a>`adapter.getCapabilities` (rpc)
 
@@ -213,7 +213,7 @@ Purpose: Returns all active agents managed by the specified adapter.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `agents` | `{ agentId: string; sessionId: string; adapterSessionId: string; }[]` | yes |
+| `agents` | `{ agentId: string; sessionId: string; adapterSessionId?: string \| undefined; }[]` | yes |
 
 ### <a id="adapter.log"></a>`adapter.log` (event)
 
@@ -282,6 +282,7 @@ Success is implicit. Errors are thrown if:
 | `agentId` | `string` | yes |
 | `cwd` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
+| `resumeAdapterSessionId` | `string \| undefined` | no |
 
 **Response:**
 
@@ -318,7 +319,7 @@ Emitted when: SDK session is created (Anthropic, OpenAI, etc.)
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `model` | `string` | yes |
 | `sessionId` | `string` | yes |
 
@@ -336,6 +337,7 @@ Type: Event
 | `forkPointMessageId` | `string \| null` | yes |
 | `kind` | `"fork" \| "root" \| "subagent" \| "compress"` | yes |
 | `logFilePath` | `string \| null \| undefined` | no |
+| `machineId` | `string \| null \| undefined` | no |
 | `model` | `string \| null` | yes |
 | `parentAdapterSessionId` | `string \| null` | yes |
 | `startedAt` | `number \| undefined` | no |
@@ -356,7 +358,7 @@ For per-call delta metrics, see `agent.usage`.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `sessionId` | `string` | yes |
 | `totalCalls` | `number` | yes |
 | `totalInputTokens` | `number` | yes |
@@ -402,7 +404,7 @@ For `resume` mode, `sessionId` and `adapterSessionId` are REQUIRED.
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `responseSchema` | `{ schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined` | no |
 | `role` | `"lead" \| "member"` | yes |
-| `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; cacheStrategy?: "auto" \| "systemPrompt" \| "fullPrefix" \| undefined; turnContext?: Record<string, unknown> \| undefined; } \| undefined` | no |
+| `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; cacheStrategy?: "auto" \| "systemPrompt" \| "fullPrefix" \| undefined; turnContext?: Record<string, unknown> \| undefined; requestCorrelation?: { sessionId?: string \| undefined; turnId?: string \| undefined; messageId?: string \| undefined; executionId?: string \| undefined; frameId?: string \| undefined; } \| undefined; nativeLocality?: { kind: "native"; } \| { kind: "degrade"; reason: "adapter-unsupported" \| "adapter-mismatch" \| "no-adapter-session" \| "missing-machine-id" \| "machine-mismatch" \| "cwd-mismatch" \| "transforms-present" \| "compression-present" \| "connector-swap" \| "mid-history-unsupported" \| "hybrid-imported-orchestrated" \| "native-attempt-failed" \| "agent-already-started" \| "fork-point-unresolvable"; } \| { kind: "foreign"; machineId: string; } \| undefined; nativeFork?: { sourceSessionId: string; sourceAdapterSessionId: string; forkPointMessageId?: string \| undefined; targetWorkingDirectory?: string \| undefined; } \| undefined; } \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `systemPrompt` | `string \| { mode: "append"; content: string; } \| undefined` | no |
 
