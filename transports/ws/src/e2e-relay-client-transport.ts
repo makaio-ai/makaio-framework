@@ -270,6 +270,10 @@ export function createE2ERelayClientTransport(options: E2ERelayClientTransportOp
     auth: e2eAuth,
     codec: relayCodec,
     autoReconnect: false,
+    // No reconnect path exists for this caller-owned socket, so the heartbeat
+    // watchdog defaults to off — terminating the socket would not heal
+    // anything. Callers that handle recovery themselves can still opt in.
+    heartbeat: rest.heartbeat ?? false,
   });
   if (debug) {
     console.info('[E2ERelayTransport] Inner transport created');

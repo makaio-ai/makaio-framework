@@ -90,6 +90,10 @@ export function createE2ETransport(options: E2ETransportOptions): BusTransport {
     createWebSocket: () => ws,
     auth: e2eAuth,
     autoReconnect: false,
+    // No reconnect path exists for this caller-owned socket, so the heartbeat
+    // watchdog defaults to off — terminating the socket would not heal
+    // anything. Callers that handle recovery themselves can still opt in.
+    heartbeat: rest.heartbeat ?? false,
     messageTransform: async (message: BusMessage): Promise<BusMessage> => {
       const sessionKey = e2eAuth.getSessionKey();
       if (!sessionKey) return message; // Pre-auth: pass through
