@@ -148,7 +148,11 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
     queue.enqueue(racingHandle);
 
     const turnStarted = await session.processQueue(queue);
-    expect(turnStarted).toBe(true); // processQueue returned true (startNewTurn was called)
+    // processQueue must return false: startTurn was entered but the shutdown
+    // gate completed the handle without spawning a subprocess. Returning true
+    // would leave the connector in processing state with no turn_finished event
+    // to transition it back to idle, causing complete() to hang.
+    expect(turnStarted).toBe(false);
 
     // The racing handle must complete with an error, not hang
     const result = await racingHandle.waitForCompletion(1_000);

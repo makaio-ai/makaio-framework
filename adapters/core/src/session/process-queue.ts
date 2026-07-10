@@ -68,11 +68,18 @@ export interface ProcessQueueCallbacks<TExtra = unknown> {
 
   /**
    * Start a new turn with the given message and optional merge data.
+   *
+   * Returns `void` (or `undefined`) when the turn was started normally.
+   * Returns `false` explicitly when the turn was **not** started (e.g.,
+   * shutdown interleaved during setup and the handle was completed with
+   * an error). `processQueueMessages` propagates this so callers see an
+   * accurate "no turn started" result and can transition to idle.
    * @param handle - The message handle to process
    * @param mergedContent - Text content from superseded/merged messages
    * @param extra - Adapter-specific extra merge data
+   * @returns `false` when the turn was skipped; `void` otherwise
    */
-  startNewTurn: (handle: MessageHandle, mergedContent?: string[], extra?: TExtra) => Promise<void>;
+  startNewTurn: (handle: MessageHandle, mergedContent?: string[], extra?: TExtra) => Promise<void | false>;
 }
 
 /**
@@ -146,8 +153,9 @@ export async function processQueueMessages<TExtra = unknown>(
         await callbacks.onBeforeImmediateTurn?.();
 
         // Start new turn with the immediate message and merged context
-        await callbacks.startNewTurn(immediateMsg, mergedContent, extra);
-        return true;
+        const started = await callbacks.startNewTurn(immediateMsg, mergedContent, extra);
+        // Explicit false means the turn was skipped (e.g., shutdown race).
+        return started !== false;
       } else {
         // Turn ended - immediate missed the window, reject it
         immediateMsg.markCompleted({ outcome: 'rejected' });
@@ -172,8 +180,9 @@ export async function processQueueMessages<TExtra = unknown>(
       }
       // Process enqueue/replace messages normally
       queue.dequeue();
-      await callbacks.startNewTurn(nextMsg);
-      return true;
+      const started = await callbacks.startNewTurn(nextMsg);
+      // Explicit false means the turn was skipped (e.g., shutdown race).
+      return started !== false;
     }
   }
 

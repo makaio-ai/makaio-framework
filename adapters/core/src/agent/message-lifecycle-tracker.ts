@@ -60,6 +60,13 @@ export interface MessageLifecycleTrackOptions {
  *    eagerly so that usage arriving before the provider acknowledges the
  *    message is still correlated (closes the early-close / result-only stream
  *    window from the previous fix).
+ * 6. A handle that is already processed (`isProcessed === true`) at `track()`
+ *    time — e.g. completed by shutdown gates before the agent's
+ *    `onMessageHandle` callback ran — **never becomes the correlation source**.
+ *    It is neither promoted to active nor queued as pending. Completion
+ *    transforms are skipped (the pipeline already ran), but the completion
+ *    subscription still fires and `onTerminal` is still called, preserving
+ *    the terminal lifecycle contract for the caller.
  */
 export class MessageLifecycleTracker {
   /** Handle of the currently executing turn — the active correlation source. */
@@ -243,6 +250,15 @@ export class MessageLifecycleTracker {
    * and emits the appropriate events. When `transformTerminal` is provided,
    * it is registered on the handle so validation or other post-processing
    * amends the public completion result before lifecycle events fire.
+   *
+   * **Already-processed handles:** When a handle is already completed or
+   * cancelled at `track()` time (e.g. shutdown gates completed it before
+   * the agent's `onMessageHandle` callback ran), it is never promoted to
+   * the active correlation source and never queued as pending. The
+   * completion transform is skipped (the handle already ran its transform
+   * pipeline), but the completion and terminal subscriptions still fire so
+   * the caller receives the full lifecycle contract (events emitted,
+   * `onTerminal` called).
    * @param handle - The message handle to track
    * @param onTerminal - Optional callback for any terminal outcome (emits agent.complete)
    * @param transformTerminal - Optional async transform applied before public completion resolves
@@ -256,41 +272,51 @@ export class MessageLifecycleTracker {
   ): void {
     const trackedTurnId = options ? options.turnId : this.currentTurnId;
 
-    // Correlation source assignment: only the handle whose turn is actually
-    // executing should be the active correlation source. When no handle is
-    // active, set eagerly so usage arriving before acknowledgment still
-    // correlates (closes the early-close / result-only stream window).
-    // When another handle IS active, append to the pending queue — it will be
-    // promoted in FIFO order when handles ahead of it complete. This prevents
-    // a queued follow-up from stealing correlation from the still-running turn,
-    // and preserves ordering when multiple messages are queued concurrently.
-    if (this.currentMessageHandle === undefined) {
-      this.currentMessageHandle = handle;
-    } else {
-      this.pendingTrackedHandles.push(handle);
-    }
+    // Already-processed guard: when shutdown gates (e.g. rejectQueuedHandles)
+    // complete the handle before the agent calls track(), the handle's
+    // completion pipeline has already started. Promoting it as the active
+    // correlation source would leave a stale completed handle in the slot, and
+    // calling addCompletionTransform() would throw. Skip promotion/queueing
+    // and the transform registration — the waitForCompletion subscription
+    // below still fires (deferred is already resolved) and delivers the
+    // terminal lifecycle contract the caller expects.
+    if (!handle.isProcessed) {
+      // Correlation source assignment: only the handle whose turn is actually
+      // executing should be the active correlation source. When no handle is
+      // active, set eagerly so usage arriving before acknowledgment still
+      // correlates (closes the early-close / result-only stream window).
+      // When another handle IS active, append to the pending queue — it will be
+      // promoted in FIFO order when handles ahead of it complete. This prevents
+      // a queued follow-up from stealing correlation from the still-running turn,
+      // and preserves ordering when multiple messages are queued concurrently.
+      if (this.currentMessageHandle === undefined) {
+        this.currentMessageHandle = handle;
+      } else {
+        this.pendingTrackedHandles.push(handle);
+      }
 
-    if (transformTerminal !== undefined) {
-      handle.addCompletionTransform(async (result) => {
-        try {
-          return await transformTerminal(result);
-        } catch (error) {
-          // Transform failed — synthesize a validation failure so the cause is
-          // visible in every completion consumer while preserving the terminal
-          // event invariant: complete() and onTerminal must always be called.
-          const structuredOutputValidation: StructuredOutputValidation = {
-            status: 'failed',
-            errors: [
-              {
-                message: error instanceof Error ? error.message : 'Structured output validation failed',
-                instancePath: '',
-                schemaPath: '#',
-              },
-            ],
-          };
-          return { ...result, structuredOutputValidation };
-        }
-      });
+      if (transformTerminal !== undefined) {
+        handle.addCompletionTransform(async (result) => {
+          try {
+            return await transformTerminal(result);
+          } catch (error) {
+            // Transform failed — synthesize a validation failure so the cause is
+            // visible in every completion consumer while preserving the terminal
+            // event invariant: complete() and onTerminal must always be called.
+            const structuredOutputValidation: StructuredOutputValidation = {
+              status: 'failed',
+              errors: [
+                {
+                  message: error instanceof Error ? error.message : 'Structured output validation failed',
+                  instancePath: '',
+                  schemaPath: '#',
+                },
+              ],
+            };
+            return { ...result, structuredOutputValidation };
+          }
+        });
+      }
     }
 
     handle.waitForAcknowledgment().then(

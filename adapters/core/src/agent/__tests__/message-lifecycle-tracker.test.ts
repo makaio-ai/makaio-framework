@@ -552,6 +552,71 @@ describe('MessageLifecycleTracker', () => {
     expect(tracker.getCurrentMessageHandle()).toBeUndefined();
   });
 
+  it('tolerates an already-completed handle without throwing, promoting, or double-emitting', async () => {
+    // Scenario: Shutdown gates (e.g. rejectQueuedHandles) complete the handle
+    // BEFORE AIAgent.onMessageHandle() calls track(). The handle arrives at
+    // track() with isProcessed === true and completionStarted === true.
+    // track() must:
+    //   (a) NOT throw even with a transformTerminal provided
+    //   (b) NOT promote the handle to active or queue it as pending
+    //   (c) still fire onTerminal and completion lifecycle events exactly once
+    const emissions: CapturedEmission[] = [];
+    const terminalObserved: Array<{ messageId: string; outcome: string }> = [];
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async (subject, payload) => {
+        emissions.push({ subject, payload });
+      },
+    });
+
+    const handle = new MessageHandle(
+      'message-shutdown',
+      { role: 'user', blocks: [{ type: 'text', content: 'Too late' }] },
+      'enqueue',
+    );
+
+    // Simulate shutdown gate completing the handle before track() is called.
+    handle.markCompleted({ outcome: 'error', error: new Error('Session closed') });
+    expect(handle.isProcessed).toBe(true);
+
+    // track() must not throw even though transformTerminal is provided and
+    // the handle's completion pipeline has already started.
+    expect(() => {
+      tracker.track(
+        handle,
+        (messageId, result) => {
+          terminalObserved.push({ messageId, outcome: result.outcome });
+        },
+        async (result) => ({ ...result, structuredOutputValidation: { status: 'passed' as const } }),
+      );
+    }).not.toThrow();
+
+    // The handle must NOT become the active correlation source or be queued.
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+    expect(tracker.getCurrentMessageId()).toBeUndefined();
+
+    // Let the microtask queue drain so waitForCompletion resolves.
+    await flushMicrotasks();
+
+    // onTerminal must have fired exactly once.
+    expect(terminalObserved).toEqual([{ messageId: 'message-shutdown', outcome: 'error' }]);
+
+    // Lifecycle events: turn.completed and user_message.completed must have
+    // been emitted exactly once (no double-emission). No acknowledged/started
+    // events because the handle was never acknowledged.
+    const turnCompleted = emissions.filter((e) => e.subject === AgentSubjects.turn.completed);
+    const userCompleted = emissions.filter((e) => e.subject === AgentSubjects.user_message.completed);
+    const ackEvents = emissions.filter((e) => e.subject === AgentSubjects.user_message.acknowledged);
+    const turnStarted = emissions.filter((e) => e.subject === AgentSubjects.turn.started);
+
+    expect(turnCompleted).toHaveLength(1);
+    expect(userCompleted).toHaveLength(1);
+    expect(ackEvents).toHaveLength(0);
+    expect(turnStarted).toHaveLength(0);
+
+    expect((turnCompleted[0]!.payload as { messageId: string; outcome: string }).messageId).toBe('message-shutdown');
+    expect((turnCompleted[0]!.payload as { outcome: string }).outcome).toBe('error');
+  });
+
   it('does not promote a pending handle whose acknowledgment fulfills with false (undelivered)', async () => {
     // Scenario: Turn A is executing. Turn B is tracked (pending). B is
     // superseded via markCompleted() before the provider dispatches it,

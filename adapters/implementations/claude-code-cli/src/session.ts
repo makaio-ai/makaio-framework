@@ -338,10 +338,16 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    *
    * Each turn is a separate CLI invocation. For turns after the first, the
    * `--resume` flag is passed so the CLI restores the conversation context.
+   *
+   * Returns `false` when shutdown interleaved during setup and no subprocess
+   * was spawned. `processQueueMessages` propagates this so the connector
+   * transitions to idle instead of waiting for a `turn_finished` event that
+   * will never arrive.
    * @param handle - Message handle to process
    * @param mergedContent - Optional content from superseded/merged messages (for immediate mode)
+   * @returns `false` when the turn was skipped due to shutdown; `void` otherwise
    */
-  public async startTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
+  public async startTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
     const { resumeId, sessionIdForMcp } = this.resolveTurnSessionIdentity(mergedContent);
     // Fork directive only applies on the initial CLI invocation: rotations resume the fork child
     // via the confirmed session ID rather than re-forking the source session.
@@ -355,12 +361,15 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     const executionContext = await this.resolveAndPersistTurnExecutionContext();
     // Recheck: close() may have started during env resolution. The handle
     // is dequeued and unreachable by rejectQueuedHandles — complete it here
-    // instead of spawning a subprocess on a closing session.
-    if (this.completeHandleIfClosing(handle)) return;
+    // instead of spawning a subprocess on a closing session. Return false so
+    // processQueueMessages reports "no turn started" and the connector
+    // transitions to idle rather than waiting for a turn_finished that will
+    // never arrive.
+    if (this.completeHandleIfClosing(handle)) return false;
 
     const mcpResult = await this.registerMcpContextAndBuildConfig(sessionIdForMcp, executionContext.env);
     // Recheck: close() may have started during MCP registration.
-    if (this.completeHandleIfClosing(handle)) return;
+    if (this.completeHandleIfClosing(handle)) return false;
     const mcpConfig = mcpResult?.config;
     const permissionPromptTool = mcpResult?.hasBridge ? 'mcp__makaio__approve' : undefined;
 

@@ -11,7 +11,6 @@ import {
   type MessageHandle,
 } from '@makaio/ai-adapters-core';
 import { DeferredPromise } from '@makaio/utils';
-import { MakaioBus } from '@makaio/bus-core';
 import { AsyncQuerySource } from '@makaio/ai-adapters-claude-shared';
 import { ClaudeConnectorTurn } from './turn.js';
 import { UserMessageQueue, processQueueMessages, rejectQueuedHandles } from '@makaio/ai-adapters-core';
@@ -19,7 +18,8 @@ import { buildSdkUserMessage } from './sdk-message-builder.js';
 import { ClaudeCodeConnectorSubjects } from './namespace/index.js';
 import { ClaudeSessionConfig, CreateToolApprovalHandler } from './types/index.js';
 import { buildMcpServersRecord, buildQueryOptions } from './utils/buildQueryOptions.js';
-import { McpSubjects, type McpResolvedServer, type ResponseSchemaDescriptor } from '@makaio/contracts';
+import type { McpResolvedServer, ResponseSchemaDescriptor } from '@makaio/contracts';
+import { registerMcpSession, unregisterMcpSession } from './mcp-session-bridge.js';
 import { handleClaudeResultMessage } from './result-handling.js';
 import { TerminalResultDrain } from './terminal-result-drain.js';
 
@@ -132,36 +132,18 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
-   * Register this session with the singleton MCP bridge service via bus RPC.
+   * Register this session with the singleton MCP bridge service.
    * On success stores the returned port in {@link mcpServerPort} for query options.
-   * Degrades gracefully when the bridge service is not running (`handled: false`).
+   * Degrades gracefully when the bridge service is not running.
    */
   private async registerMcpContext(): Promise<void> {
     if (!this.sessionId) {
       return;
     }
     this.registeredMcpSessionId = this.sessionId;
-    const makaioSessionId = this.config.sessionId ?? this.sessionId;
-    // MakaioBus (global singleton) is intentional here — MCP subjects live in
-    // the `mcp` namespace, which is unreachable from the adapter's scoped bus.
-    // Same pattern used by ToolSubjects.execute and AgentSubjects throughout
-    // the adapter layer for all cross-namespace RPCs.
-    const result = await MakaioBus.requestOptional(McpSubjects.session.register, {
-      adapterSessionId: this.sessionId,
-      agentId: this.config.agentId,
-      adapterId: this.config.adapterId,
-      adapterName: this.config.adapterName,
-      sessionId: makaioSessionId,
-      contextOverrides: {
-        cwd: this.config.cwd,
-        env: this.config.env,
-        sessionId: makaioSessionId,
-        agentId: this.config.agentId,
-        adapterSessionId: this.sessionId,
-      },
-    });
-    if (result.handled) {
-      this.mcpServerPort = result.data.port;
+    const port = await registerMcpSession(this.sessionId, this.config);
+    if (port !== undefined) {
+      this.mcpServerPort = port;
     }
   }
 
@@ -189,11 +171,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     const sessionId = this.registeredMcpSessionId;
     this.registeredMcpSessionId = undefined;
     this.mcpServerPort = this.config.mcpServerPort;
-    void MakaioBus.requestOptional(McpSubjects.session.unregister, {
-      adapterSessionId: sessionId,
-    }).catch(() => {
-      // Best-effort cleanup — ignore bridge failures during teardown.
-    });
+    unregisterMcpSession(sessionId);
   }
 
   public getQueryInstance(): Query | undefined {
@@ -395,10 +373,17 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
   /**
    * Start a new turn with the given message.
+   *
+   * Returns `false` when shutdown interleaved during setup and no turn was
+   * started. The SDK connector does not currently consume this value (its
+   * `turn_finished` handler uses queue emptiness to decide idle), but the
+   * shared `processQueueMessages` contract requires an accurate signal so
+   * any future caller sees a consistent "no turn started" result.
    * @param handle - Message handle to process
    * @param mergedContent - Optional content from superseded/merged messages (for immediate mode)
+   * @returns `false` when the turn was skipped due to shutdown; `void` otherwise
    */
-  private async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
+  private async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
     const schemaKey = this.getResponseSchemaKey(handle.responseSchema);
     const pausedTurnNeedsSchemaRotation = this.currentTurn?.isPaused() && this.activeResponseSchemaKey !== schemaKey;
     if (!this.currentTurn || this.currentTurn.isCompleted() || pausedTurnNeedsSchemaRotation) {
@@ -406,7 +391,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       // Recheck: close() may have started during schema rotation / query
       // creation / MCP registration. The handle is dequeued and unreachable
       // by rejectQueuedHandles — complete it here instead of proceeding.
-      if (this.completeHandleIfClosing(handle)) return;
+      // Return false so processQueueMessages reports "no turn started".
+      if (this.completeHandleIfClosing(handle)) return false;
       if (pausedTurnNeedsSchemaRotation) {
         this.currentTurn = undefined;
       }
