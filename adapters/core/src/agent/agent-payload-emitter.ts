@@ -116,7 +116,11 @@ export class AgentPayloadEmitter {
   ): Promise<T & AgentIdentity & AgentPayloadEventFields> {
     const payloadEventFields = payload as Partial<AgentPayloadEventFields>;
     const messageId = overrideMessageId ?? this.config.getCurrentMessageId();
-    const turnId = payloadEventFields.turnId ?? this.config.getCurrentTurnId();
+    // Key presence, not value, gates the executing-turn fallback: a payload
+    // that includes `turnId: undefined` declares itself intentionally
+    // turn-less (e.g. user_message.sent for a no-turn submission) and must
+    // not inherit the still-executing turn's id.
+    const turnId = 'turnId' in payloadEventFields ? payloadEventFields.turnId : this.config.getCurrentTurnId();
     const adapterSessionId = this.resolveConfirmedAdapterSessionId();
     const { clientId, providerConfigId, occurredAt } = this.resolveEventMetadata(
       payloadEventFields,
@@ -124,7 +128,7 @@ export class AgentPayloadEmitter {
     );
 
     const base = this.config.getAgentContextBase();
-    return {
+    const enriched = {
       ...payload,
       agentId: base.agentId,
       adapterId: base.adapterId,
@@ -137,6 +141,13 @@ export class AgentPayloadEmitter {
       ...(providerConfigId !== undefined && { providerConfigId }),
       ...(occurredAt !== undefined && { occurredAt }),
     };
+    // An intentionally turn-less payload spreads its `turnId: undefined` key
+    // into the result above — drop it so absent fields stay absent, per the
+    // emitter contract documented on the base event schema.
+    if (turnId === undefined && 'turnId' in enriched) {
+      delete (enriched as Record<string, unknown>).turnId;
+    }
+    return enriched;
   }
 
   /**

@@ -683,13 +683,14 @@ export abstract class AIAgent<
       // turn) nor any shared tracker field (mutable — overlapping sends
       // overwrite it before a hook-delayed first send emits) is safe here.
       // The handle itself carries the submitted turnId: the turn executor
-      // threads payload.turnId into requestCorrelation at dispatch.
-      const turnId = handle.requestCorrelation?.turnId;
+      // threads payload.turnId into requestCorrelation at dispatch. The key
+      // is set even when undefined so a no-turn submission stays turn-less
+      // instead of inheriting the executing turn's id via enrichment.
       void this.emitGlobal(AgentSubjects.user_message.sent, {
         messageId: handle.messageId,
         content: handle.message,
         deliveryMode: handle.deliveryMode,
-        ...(turnId !== undefined && { turnId }),
+        turnId: handle.requestCorrelation?.turnId,
       });
     };
   }
