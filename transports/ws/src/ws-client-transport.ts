@@ -21,7 +21,9 @@ import { type WebSocketClientTransportReconnectOptions } from './ws-client-recon
 import {
   DEFAULT_CODEC,
   DEFAULT_CONNECT_TIMEOUT_MS,
+  resolveHeartbeatConfig,
   resolveReconnectConfig,
+  type WebSocketClientTransportHeartbeatOptions,
   type WebSocketClientTransportOptions,
 } from './ws-client-options.js';
 import {
@@ -35,7 +37,10 @@ import { addSubscription, removeSubscription, type SubscriptionAckHandle } from 
 
 // Re-export public types so that consumers and index.ts can import them
 // from this module's path without needing to know the sub-module layout.
-export type { WebSocketClientTransportOptions } from './ws-client-options.js';
+export type {
+  WebSocketClientTransportHeartbeatOptions,
+  WebSocketClientTransportOptions,
+} from './ws-client-options.js';
 export type { WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 
 /**
@@ -60,6 +65,7 @@ export class WebSocketClientTransport implements BusTransport {
   private readonly codec: ClientTransportCodec;
   private readonly messageTransform: ((message: BusMessage) => Promise<BusMessage>) | undefined;
   private readonly autoReconnectConfig: Required<WebSocketClientTransportReconnectOptions> | false;
+  private readonly heartbeatConfig: Required<WebSocketClientTransportHeartbeatOptions> | false;
   private readonly connectTimeoutMs: number;
   private readonly wsFactory: (url: string) => WebSocketLike | Promise<WebSocketLike>;
   private readonly debug: boolean;
@@ -128,6 +134,7 @@ export class WebSocketClientTransport implements BusTransport {
     this.messageTransform = options.messageTransform;
     this.debug = options.debug ?? false;
     this.autoReconnectConfig = resolveReconnectConfig(options.autoReconnect);
+    this.heartbeatConfig = resolveHeartbeatConfig(options.heartbeat);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.wsFactory = options.createWebSocket ?? this.defaultWsFactory;
     this.onConnectedCallback = options.onConnected;
@@ -443,6 +450,7 @@ export class WebSocketClientTransport implements BusTransport {
       wsFactory: this.wsFactory,
       url: this.url,
       connectTimeoutMs: this.connectTimeoutMs,
+      heartbeat: this.heartbeatConfig,
       getSocket: () => this.socket,
       setSocket: (ws) => {
         this.socket = ws;

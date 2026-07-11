@@ -17,6 +17,8 @@ import { sendEncoded, waitForSocketOpen } from './transport-helpers.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { backoffMs, sleep, type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 import { handleInboundMessage } from './ws-client-message-handler.js';
+import { startHeartbeatWatchdog } from './ws-client-heartbeat.js';
+import type { WebSocketClientTransportHeartbeatOptions } from './ws-client-options.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,6 +52,12 @@ export interface ConnectionDeps {
   readonly url: string;
   /** Bound in milliseconds for a single attempt's socket-open wait. */
   readonly connectTimeoutMs: number;
+  /**
+   * Resolved heartbeat watchdog timing, or `false` when the liveness
+   * watchdog is disabled. Started per socket in `connectOnce`; the watchdog
+   * self-stops on the socket's `close` event.
+   */
+  readonly heartbeat: Required<WebSocketClientTransportHeartbeatOptions> | false;
 
   /** Read the current active socket. */
   getSocket(): WebSocketLike | null;
@@ -249,6 +257,15 @@ export async function connectOnce(deps: ConnectionDeps): Promise<void> {
           `[WebSocketClientTransport:${deps.name}] Replayed ${deps.localSubscriptions.size} subscription(s)`,
         );
       }
+    }
+
+    // Arm the heartbeat watchdog AFTER subscription replay so that every
+    // async gap (codec encode, socket write) has settled before the watchdog
+    // can fire. This guarantees the caller's close-listener (no-reconnect or
+    // reconnect-loop) is installed before the earliest possible watchdog
+    // termination, preserving the lifecycle-ordering contract.
+    if (deps.heartbeat !== false) {
+      startHeartbeatWatchdog(ws, deps.heartbeat, deps);
     }
 
     // Notify after auth + subscription replay so that reconnect handlers

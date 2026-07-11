@@ -16,6 +16,32 @@ export type { WebSocketClientTransportReconnectOptions } from './ws-client-recon
 // ---------------------------------------------------------------------------
 
 /**
+ * Liveness heartbeat configuration for `WebSocketClientTransport`.
+ *
+ * The heartbeat watchdog probes an idle connection with RFC-6455 ping frames
+ * and terminates the socket when no inbound evidence (message or pong)
+ * arrives before the probe deadline. This detects half-open TCP connections
+ * that keep `readyState === 1` forever after the peer dies without a close
+ * frame.
+ */
+export interface WebSocketClientTransportHeartbeatOptions {
+  /**
+   * Idle interval in milliseconds between liveness checks. A ping probe is
+   * only sent when no inbound evidence arrived within the last interval.
+   * @defaultValue 30000
+   */
+  intervalMs?: number;
+
+  /**
+   * Deadline in milliseconds after a ping probe within which inbound
+   * evidence (message or pong) must arrive; otherwise the socket is
+   * terminated and the reconnect machinery takes over.
+   * @defaultValue 10000
+   */
+  timeoutMs?: number;
+}
+
+/**
  * Configuration options for `WebSocketClientTransport`.
  */
 export interface WebSocketClientTransportOptions {
@@ -67,6 +93,17 @@ export interface WebSocketClientTransportOptions {
    * @defaultValue `{ baseMs: 1000, maxMs: 10000 }`
    */
   autoReconnect?: WebSocketClientTransportReconnectOptions | false;
+
+  /**
+   * Liveness heartbeat configuration. Defaults to a 30 s idle interval with
+   * a 10 s pong deadline. Pass `false` to disable the watchdog.
+   *
+   * Only active when the underlying socket supports RFC-6455 ping/pong
+   * control frames (the `ws` package does; browser `WebSocket` does not) —
+   * otherwise the watchdog is inert.
+   * @defaultValue `{ intervalMs: 30000, timeoutMs: 10000 }`
+   */
+  heartbeat?: WebSocketClientTransportHeartbeatOptions | false;
 
   /**
    * Maximum time in milliseconds a single connect attempt may wait for the
@@ -131,6 +168,18 @@ export interface WebSocketClientTransportOptions {
 export const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 /**
+ * Default heartbeat watchdog timing.
+ *
+ * Applied when {@link WebSocketClientTransportOptions.heartbeat} is not
+ * supplied: probe after 30 s of inbound silence, terminate when no evidence
+ * arrives within 10 s of the probe.
+ */
+export const DEFAULT_HEARTBEAT: Required<WebSocketClientTransportHeartbeatOptions> = {
+  intervalMs: 30_000,
+  timeoutMs: 10_000,
+};
+
+/**
  * Plain JSON codec applied when no `codec` option is supplied.
  *
  * Encodes messages as JSON strings and decodes raw objects back to
@@ -159,4 +208,31 @@ export function resolveReconnectConfig(
     baseMs: autoReconnect?.baseMs ?? DEFAULT_AUTO_RECONNECT.baseMs,
     maxMs: autoReconnect?.maxMs ?? DEFAULT_AUTO_RECONNECT.maxMs,
   };
+}
+
+/**
+ * Resolve the heartbeat watchdog configuration from user-supplied options.
+ *
+ * Returns `false` when the heartbeat is disabled, or a fully-populated
+ * `Required<WebSocketClientTransportHeartbeatOptions>` otherwise.
+ * @param heartbeat - Raw `heartbeat` value from `WebSocketClientTransportOptions`
+ * @returns Resolved heartbeat config or `false`
+ */
+export function resolveHeartbeatConfig(
+  heartbeat: WebSocketClientTransportHeartbeatOptions | false | undefined,
+): Required<WebSocketClientTransportHeartbeatOptions> | false {
+  if (heartbeat === false) {
+    return false;
+  }
+  const intervalMs = heartbeat?.intervalMs ?? DEFAULT_HEARTBEAT.intervalMs;
+  const timeoutMs = heartbeat?.timeoutMs ?? DEFAULT_HEARTBEAT.timeoutMs;
+
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    throw new RangeError(`heartbeat.intervalMs must be a finite number > 0 (got ${String(intervalMs)})`);
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError(`heartbeat.timeoutMs must be a finite number > 0 (got ${String(timeoutMs)})`);
+  }
+
+  return { intervalMs, timeoutMs };
 }

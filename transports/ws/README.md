@@ -86,6 +86,7 @@ const transport = createWebSocketTransport({
 | `WebSocketServerLike` | Duck-typed server WebSocket interface |
 | `WebSocketClientTransportOptions` | URL-based client transport configuration |
 | `WebSocketClientTransportReconnectOptions` | `{ baseMs?, maxMs? }` reconnect timing |
+| `WebSocketClientTransportHeartbeatOptions` | `{ intervalMs?, timeoutMs? }` liveness watchdog timing |
 | `ClientTransportCodec` | Client wire codec interface |
 | `TransportAuth` | Authentication strategy interface |
 | `E2ERelayAuthOptions` | Relay E2E auth strategy options |
@@ -109,7 +110,9 @@ For client-mode reconnect or socket creation options, use `WebSocketClientTransp
 directly. `createWebSocketTransport({ mode: 'client' })` wraps an already-created
 socket and rejects legacy `connectionOptions` instead of silently ignoring them.
 Reconnect behavior is scoped to `WebSocketClientTransport`; the generic factory disables
-auto-reconnect because it does not own socket creation.
+auto-reconnect because it does not own socket creation, and disables the heartbeat
+watchdog for the same reason — terminating a caller-owned socket without a reconnect
+path would not heal anything.
 
 ```typescript
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
@@ -120,6 +123,11 @@ const transport = new WebSocketClientTransport({
   autoReconnect: { baseMs: 1_000, maxMs: 10_000 },
   connectTimeoutMs: 30_000, // bound per connect attempt (default); prevents a
   // never-answered upgrade from wedging the reconnect loop
+  heartbeat: { intervalMs: 30_000, timeoutMs: 10_000 }, // liveness watchdog (default);
+  // pings an idle connection and terminates it when no message/pong arrives in time,
+  // so half-open TCP connections are detected and healed by the reconnect loop.
+  // Requires RFC-6455 ping support on the socket (the `ws` package has it; browser
+  // WebSocket does not — the watchdog is inert there). Pass `false` to disable.
 });
 ```
 

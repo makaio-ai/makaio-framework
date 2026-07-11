@@ -949,6 +949,132 @@ describe('WebSocketClientTransport — reconnect() rescue', () => {
 });
 
 // ---------------------------------------------------------------------------
+// heartbeat watchdog (issue #374)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a transport whose factory hands out ping-capable `MockWebSocket`s.
+ *
+ * Sockets open immediately (MockWebSocket starts at readyState 1). Each
+ * socket captures the shared `autoPong.value` flag at creation time, so tests
+ * can model a half-open connection (never answers pings) that heals on a
+ * later reconnect by flipping the flag.
+ * @param options - Heartbeat/reconnect configuration and lifecycle spies
+ * @returns Transport, all created sockets, and the autoPong switch
+ */
+function makeHeartbeatTransport(options: {
+  heartbeat?: { intervalMs: number; timeoutMs: number } | false;
+  autoReconnect?: { baseMs: number; maxMs: number } | false;
+  autoPong?: boolean;
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}): { transport: WebSocketClientTransport; created: MockWebSocket[]; autoPong: { value: boolean } } {
+  const created: MockWebSocket[] = [];
+  const autoPong = { value: options.autoPong ?? true };
+  const transport = new WebSocketClientTransport({
+    url: 'ws://localhost:9999',
+    createWebSocket: () => {
+      const mock = new MockWebSocket();
+      mock.autoPong = autoPong.value;
+      created.push(mock);
+      return mock;
+    },
+    autoReconnect: options.autoReconnect ?? false,
+    heartbeat: options.heartbeat,
+    onConnected: options.onConnected,
+    onDisconnected: options.onDisconnected,
+  });
+  return { transport, created, autoPong };
+}
+
+describe('WebSocketClientTransport — heartbeat watchdog', () => {
+  it('recovers a half-open connection end-to-end', { timeout: 10_000 }, async () => {
+    const onConnected = vi.fn();
+    const onDisconnected = vi.fn();
+
+    // Flip autoPong to true BEFORE the reconnect loop creates the next
+    // socket so the replacement is responsive from the start — eliminates
+    // the race where a second dead socket is created before the flag flips.
+    const { transport, created, autoPong } = makeHeartbeatTransport({
+      heartbeat: { intervalMs: 30, timeoutMs: 30 },
+      autoReconnect: { baseMs: 50, maxMs: 50 },
+      autoPong: false, // Half-open: established but the peer never answers.
+      onConnected,
+      onDisconnected,
+    });
+
+    await transport.connect();
+    expect(onConnected).toHaveBeenCalledTimes(1);
+
+    // No traffic and no pongs: only the watchdog can detect this socket is dead.
+    await waitForCondition(
+      () => onDisconnected.mock.calls.length >= 1,
+      3000,
+      'watchdog did not detect the half-open connection',
+    );
+    expect(created[0].terminated).toBe(true);
+
+    // Flip before the backoff sleep (50 ms) expires so the next socket is
+    // guaranteed to be responsive — no intermediate dead socket is created.
+    autoPong.value = true;
+
+    await waitForCondition(
+      () => onConnected.mock.calls.length >= 2,
+      3000,
+      'transport did not reconnect after the watchdog terminated the socket',
+    );
+    await waitForCondition(() => transport.isReady(), 3000, 'transport did not become ready after recovery');
+
+    // Hold through a full heartbeat cycle (intervalMs + timeoutMs) to prove
+    // the replacement socket stays healthy — not just transiently connected.
+    const connectedCountAfterRecovery = onConnected.mock.calls.length;
+    const disconnectedCountAfterRecovery = onDisconnected.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 30 + 30 + 20));
+    expect(transport.isReady()).toBe(true);
+    expect(onDisconnected.mock.calls.length).toBe(disconnectedCountAfterRecovery);
+    expect(onConnected.mock.calls.length).toBe(connectedCountAfterRecovery);
+
+    await transport.disconnect();
+  });
+
+  it('heartbeat: false disables the watchdog entirely', { timeout: 5000 }, async () => {
+    const onDisconnected = vi.fn();
+    const { transport, created } = makeHeartbeatTransport({
+      heartbeat: false,
+      autoPong: false, // Would be terminated if a watchdog were running.
+      onDisconnected,
+    });
+
+    await transport.connect();
+
+    // > 5 × (interval + timeout) at the 30/30 scale used above.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    expect(created[0].pingCount).toBe(0);
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(transport.isReady()).toBe(true);
+
+    await transport.disconnect();
+  });
+
+  it('disconnect() stops the watchdog — no leaked probe timers', { timeout: 5000 }, async () => {
+    const { transport, created } = makeHeartbeatTransport({
+      heartbeat: { intervalMs: 20, timeoutMs: 20 },
+    });
+
+    await transport.connect();
+    await waitForCondition(() => created[0].pingCount >= 1, 1000, 'watchdog did not probe the idle connection');
+
+    await transport.disconnect();
+    const countAtDisconnect = created[0].pingCount;
+
+    // A leaked timer would ping the closed socket (throws) or grow the count.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(created[0].pingCount).toBe(countAtDisconnect);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getSubscriptions
 // ---------------------------------------------------------------------------
 
