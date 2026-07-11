@@ -104,8 +104,13 @@ export class MessageLifecycleTracker {
    * turn is still streaming, so enrichment resolves the turnId from the
    * active handle; the shared field only covers the window between
    * `setCurrentTurnId` and `track`.
+   *
+   * Explicitly-undefined turnIds are recorded too (map presence, not value,
+   * gates the fallback): a handle intentionally tracked without a turn
+   * (e.g. `start()`) must keep its events turn-less instead of inheriting a
+   * later queued turn's id from the shared field.
    */
-  private readonly handleTurnIds = new WeakMap<MessageHandle, string>();
+  private readonly handleTurnIds = new WeakMap<MessageHandle, string | undefined>();
 
   /** Emit function injected from AIAgent */
   private readonly emitGlobal: EmitGlobalFn;
@@ -160,9 +165,8 @@ export class MessageLifecycleTracker {
    * @returns The executing turn's turnId or undefined if not set
    */
   public getCurrentTurnId(): string | undefined {
-    if (this.currentMessageHandle !== undefined) {
-      const captured = this.handleTurnIds.get(this.currentMessageHandle);
-      if (captured !== undefined) return captured;
+    if (this.currentMessageHandle !== undefined && this.handleTurnIds.has(this.currentMessageHandle)) {
+      return this.handleTurnIds.get(this.currentMessageHandle);
     }
     return this.currentTurnId;
   }
@@ -324,9 +328,7 @@ export class MessageLifecycleTracker {
     options?: MessageLifecycleTrackOptions,
   ): void {
     const trackedTurnId = options ? options.turnId : this.currentTurnId;
-    if (trackedTurnId !== undefined) {
-      this.handleTurnIds.set(handle, trackedTurnId);
-    }
+    this.handleTurnIds.set(handle, trackedTurnId);
 
     // Already-processed guard: when shutdown gates (e.g. rejectQueuedHandles)
     // complete the handle before the agent calls track(), the handle's

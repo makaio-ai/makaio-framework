@@ -437,6 +437,23 @@ describe('MessageLifecycleTracker', () => {
     expect(tracker.getCurrentMessageHandle()).toBeUndefined();
   });
 
+  it('keeps events of a handle tracked without a turn turn-less when a queued sendMessage sets the shared field', () => {
+    // Scenario: a handle is intentionally tracked with turnId: undefined
+    // (agent.sendMessage.turnId is optional; start() tracks without a turn).
+    // While it is active, a queued sendMessage sets the shared currentTurnId.
+    // The active no-turn handle must NOT inherit that later turn's id via the
+    // shared-field fallback — map presence, not value, gates the fallback.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const noTurnHandle = makeHandle('message-a', 'A');
+
+    tracker.track(noTurnHandle, undefined, undefined, { turnId: undefined });
+    expect(tracker.getCurrentTurnId()).toBeUndefined();
+
+    // Queued follow-up announces its turn before its handle is promoted.
+    tracker.setCurrentTurnId('turn-b');
+    expect(tracker.getCurrentTurnId()).toBeUndefined();
+  });
+
   it('promotes pending handles in FIFO order when multiple are queued during an in-flight turn', async () => {
     // Scenario: Turn A is executing. Two follow-ups (B then C) are dispatched
     // while A is still active. On completion of A, B (the first queued) must be
