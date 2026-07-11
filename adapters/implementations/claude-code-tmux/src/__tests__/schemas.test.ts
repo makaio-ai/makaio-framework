@@ -2,16 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ClaudeCodeTmuxProviderConfigSchema } from '../schemas.js';
 
 describe('ClaudeCodeTmuxProviderConfigSchema', () => {
-  it('accepts an absolute binaryPath', () => {
-    expect(ClaudeCodeTmuxProviderConfigSchema.parse({ binaryPath: '/usr/local/bin/claude' }).binaryPath).toBe(
-      '/usr/local/bin/claude',
-    );
-  });
-
-  it('rejects a relative binaryPath', () => {
-    expect(() => ClaudeCodeTmuxProviderConfigSchema.parse({ binaryPath: 'bin/claude' })).toThrow(
-      /binaryPath must be an absolute path/,
-    );
+  it('rejects the removed provider-level binary override', () => {
+    expect(ClaudeCodeTmuxProviderConfigSchema.safeParse({ binaryPath: '/legacy/bin/claude' }).success).toBe(false);
   });
 
   it('accepts a safe tmux server name', () => {

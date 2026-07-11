@@ -40,6 +40,8 @@ function registerAdapterStartHandler(): () => void {
     const agentId = `agent-${Math.random().toString(36).slice(2)}`;
     const adapterSessionId = `adapter-session-${Math.random().toString(36).slice(2)}`;
     const sessionId = ctx.payload.sessionId ?? 'session-missing';
+    const providerConfigId =
+      ctx.payload.providerContext?.state === 'resolved' ? ctx.payload.providerContext.providerConfigId : undefined;
     await MakaioBus.request(AgentStorageSubjects.set, {
       agentId,
       agent: {
@@ -53,9 +55,7 @@ function registerAdapterStartHandler(): () => void {
         lastActivityAt: now,
         ...(ctx.payload.model !== undefined && { model: ctx.payload.model }),
         ...(ctx.payload.cwd !== undefined && { cwd: ctx.payload.cwd }),
-        ...(ctx.payload.providerContext !== undefined && {
-          providerConfigId: ctx.payload.providerContext.providerConfigId,
-        }),
+        ...(providerConfigId !== undefined && { providerConfigId }),
       },
     });
     await MakaioBus.emit(SessionSubjects.agent.added, {

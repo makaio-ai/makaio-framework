@@ -1,6 +1,11 @@
 # @makaio/provider-anthropic
 
-Type-only package that declares the Anthropic provider identity for the Makaio framework. It exports two `ProviderDefinitionInput` objects: `providerDefinition` for the API-key variant and `providerDefinitionOAuth` for the OAuth subscription variant. No runtime logic, network calls, or model catalog is included — the model catalog is populated from the YAML lab registry at boot time. The `anthropicPackage` descriptor wraps both definitions for unified package discovery.
+Type-only package that declares the Anthropic provider identity for the Makaio
+framework. It exports two `ProviderDefinitionInput` objects:
+`providerDefinition` for the API-key provider and `providerDefinitionOAuth` for
+the Claude subscription path. No runtime logic, network calls, or model catalog
+is included; the model registry populates the catalog at boot. The
+`anthropicPackage` descriptor wraps both definitions for package discovery.
 
 ## Provider Identity
 
@@ -23,13 +28,19 @@ Type-only package that declares the Anthropic provider identity for the Makaio f
 | `defaultModel` | `sonnet` |
 | `fastModel` | `haiku` |
 
-The OAuth variant carries no `endpoints` or `credentialEnvVars` — credentials are managed by the account-manager or client binary.
+The subscription definition declares no provider-owned auth method. Compatible
+adapters pair it with client-owned Claude Code methods instead.
 
-## Credential Environment Variables
+## Authentication
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | API key for the `anthropic` variant |
+| Provider | Method | Mode | Fields and sources |
+|----------|--------|------|--------------------|
+| `anthropic` | `api-key` | `explicit` | Required `apiKey`; `ANTHROPIC_API_KEY` is an environment source hint |
+| `anthropic-oauth` | _(client-owned methods only)_ | — | Claude Code `native` or `oauth-token`, as supported by the selected adapter |
+
+An environment source hint is not an automatic fallback and does not prescribe
+delivery. The selected adapter maps `apiKey` to its subprocess environment or
+SDK constructor and scrubs competing auth inputs first.
 
 ## Endpoints
 

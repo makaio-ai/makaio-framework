@@ -44,7 +44,7 @@ import {
 import type { Turn } from './entities/turn.js';
 import { registerAttachHandler } from './handlers/attach-handler.js';
 import { routeToAgentsCore } from './handlers/route-to-agents-core.js';
-import { activateProviderContext, buildProviderContext } from '../provider-context/index.js';
+import { resolveRuntimeProviderContext } from '../provider-context/index.js';
 
 /**
  * Slim framework session orchestrator.
@@ -180,13 +180,12 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             (await this.adapterRegistry.resolveAvailable(adapterName));
           const providerContext =
             adapterKindSelection.providerConfigId !== undefined
-              ? await buildProviderContext(this.bus, adapterKindSelection.providerConfigId)
+              ? await resolveRuntimeProviderContext(this.bus, {
+                  adapterName,
+                  providerConfigId: adapterKindSelection.providerConfigId,
+                })
               : undefined;
           const providerConfigId = adapterKindSelection.providerConfigId ?? providerContext?.providerConfigId;
-          if (providerContext !== undefined) {
-            await activateProviderContext(this.bus, providerContext);
-          }
-
           const startResult = await this.bus.request(AdapterSubjects.startAgent, {
             adapterId,
             sessionId: resolvedSessionId,

@@ -74,9 +74,7 @@ GitHubCopilotConnector extends AIAgentConnector
 - Model metadata from the model registry and canonical provider definitions
 
 **Note:** Runtime model lists come from the canonical GitHub Copilot provider
-definition and model registry, not provider config. Registry generation can use
-`provider.fetcher.ts`, which asks the Copilot SDK for models using the SDK's own
-authentication flow.
+definition and model registry, not provider config.
 
 ## Usage Telemetry
 
@@ -172,14 +170,13 @@ descriptor, whose `adapters[]` entry wraps the internal definition from
 ## Environment
 
 Runtime sessions require GitHub Copilot credentials. `COPILOT_TOKEN` is a
-runtime credential environment variable when credentials are provided through the
-environment. The canonical GitHub Copilot provider maps the stored `token`
-credential field to `COPILOT_TOKEN`; the connector also accepts a resolved
-`token` credential directly and passes it to the SDK as `githubToken`.
+supported source for the canonical provider's explicit `token` field. The
+trusted runtime resolves the selected source once and delivers the value only
+to the Copilot SDK constructor as `githubToken`; the child process receives the
+final scrubbed session environment and does not inherit the token variable.
 
-Model registry generation uses the Copilot SDK authentication flow (for example
-an authenticated GitHub CLI session or supported SDK token source), not provider
-config.
+The model registry is static for this SDK-native provider; the Copilot SDK does
+not expose Makaio's live HTTP model-discovery seam.
 
 ## File Structure
 
@@ -196,7 +193,6 @@ src/
 ├── definition.ts         # Internal adapter definition
 ├── package.ts            # MakaioExtension package descriptor
 ├── provider.ts           # Provider registration
-├── provider.fetcher.ts   # Registry model fetcher using Copilot SDK auth
 ├── server.ts             # Server entrypoint exporting the package descriptor
 ├── schemas.ts            # Zod schemas
 ├── tool-handling.ts      # Tool approval utilities

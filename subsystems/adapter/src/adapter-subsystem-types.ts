@@ -1,14 +1,14 @@
 import { type AdapterFile, type ProviderConfigFile } from '@makaio/contracts/config';
 import {
   type BindingRecord,
-  type CanonicalProviderConfigCredentialRefsPayload,
+  type CanonicalProviderConfigAuthPayload,
   type CanonicalProviderConfigPatch,
   type CreateCanonicalProviderConfigInputPayload,
 } from '@makaio/services-core/adapter-subsystem';
 
 export type { CreateCanonicalProviderConfigInputPayload as ProviderConfigCreateInput };
 export type { CanonicalProviderConfigPatch as ProviderConfigPatch };
-export type { CanonicalProviderConfigCredentialRefsPayload as ProviderConfigCredentialRefs };
+export type { CanonicalProviderConfigAuthPayload as ProviderConfigAuthInput };
 
 export type AdapterConfigPatch = {
   readonly displayName?: string;

@@ -1,17 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { AIModel, AIReasoningLevel } from '@makaio/contracts';
+import { AgentSubjects, CredentialSubjects, SessionSubjects } from '@makaio/contracts';
+import type { AIModel, AIReasoningLevel, ProviderContext } from '@makaio/contracts';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import { createMockScopedBus } from '@makaio/test-utils';
 import {
   asAgentConnector,
   createTestableAgent,
   createAgentTestLifecycle,
+  registerSuccessfulRuntimeMutationPersistence,
   TestableAgent,
 } from './helpers/mock-agent.js';
 import type { AgentTestLifecycle } from './helpers/mock-agent.js';
 import type { AIAgentConfig } from '../types.js';
+import { AgentStorageSubjects } from '@makaio/services-core/session';
 
 /** Request payload type for `model.change`, derived from the subject definition. */
 type ModelChangeRequest = (typeof AgentSubjects.model.change)['$meta']['payload']['request'];
@@ -19,22 +21,127 @@ type ModelChangeRequest = (typeof AgentSubjects.model.change)['$meta']['payload'
 /** Response type for `model.change`, derived from the subject definition. */
 type ModelChangeResponse = (typeof AgentSubjects.model.change)['$meta']['payload']['response'];
 
-const TEST_PROVIDER_CONTEXT = { providerConfigId: 'test-config', definitionId: 'test', credentialRefs: {} };
-const TEST_PROVIDER_CONTEXT_2 = {
+/** Resolved provider context carried by the activation transaction boundary. */
+type ActivationProviderContext =
+  (typeof CredentialSubjects.activation.prepare)['$meta']['payload']['request']['providerContext'];
+
+const TEST_PROVIDER_CONTEXT: ProviderContext = {
+  state: 'resolved',
+  providerConfigId: 'test-config',
+  definitionId: 'test',
+  auth: {
+    mode: 'none',
+    method: { owner: 'provider', providerDefinitionId: 'test', methodId: 'none' },
+    definition: { id: 'none', mode: 'none', label: 'No authentication' },
+  },
+};
+const TEST_PROVIDER_CONTEXT_2: ProviderContext = {
+  state: 'resolved',
   providerConfigId: 'provider-config-2',
   definitionId: 'test',
   endpointOverrides: { anthropic: 'https://api.example.test' },
-  credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-2', 'apiKey') },
+  auth: {
+    mode: 'explicit',
+    method: { owner: 'provider', providerDefinitionId: 'test', methodId: 'api-key' },
+    definition: {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'TEST_API_KEY' }],
+        },
+      ],
+    },
+    credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-2', 'apiKey') },
+  },
 };
-const TEST_PROVIDER_CONTEXT_3 = {
+const TEST_PROVIDER_CONTEXT_3: ProviderContext = {
+  state: 'resolved',
   providerConfigId: 'provider-config-3',
   definitionId: 'test',
-  credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-3', 'apiKey') },
-  credentialEnvVars: { apiKey: 'TEST_API_KEY' },
+  auth: {
+    mode: 'explicit',
+    method: { owner: 'provider', providerDefinitionId: 'test', methodId: 'api-key' },
+    definition: {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'TEST_API_KEY' }],
+        },
+      ],
+    },
+    credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-3', 'apiKey') },
+  },
+};
+const NORMALIZED_PROVIDER_CONTEXT: ProviderContext = {
+  state: 'resolved',
+  providerConfigId: 'provider-config-normalized',
+  definitionId: 'test',
+  auth: {
+    mode: 'none',
+    method: { owner: 'provider', providerDefinitionId: 'test', methodId: 'none' },
+    definition: { id: 'none', mode: 'none', label: 'No authentication' },
+  },
+};
+const INFERRED_PROVIDER_CONTEXT: ProviderContext = {
+  state: 'resolved',
+  providerConfigId: 'provider-config-native',
+  definitionId: 'test',
+  auth: {
+    mode: 'inferred',
+    method: { owner: 'client', clientId: 'test-client', methodId: 'native' },
+    definition: { id: 'native', mode: 'inferred', label: 'Native client' },
+    account: { managerId: 'account-manager', accountId: 'account-1' },
+  },
 };
 
 /** Standard agent ID used by all model-change tests. */
 const TEST_AGENT_ID = 'test-agent-model';
+
+/** Small deferred helper for deterministic async interleavings. */
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((resolver) => {
+    resolve = resolver;
+  });
+  return { promise, resolve: () => resolve?.() };
+}
+
+/**
+ * Register a successful account activation transaction with observable phases.
+ * @param cleanups - Test lifecycle cleanup collection
+ * @param hooks - Optional prepare/commit/rollback observers
+ */
+function registerActivationTransaction(
+  cleanups: Array<() => void>,
+  hooks: { prepare?: (providerContext: ActivationProviderContext) => void; commit?: () => void; rollback?: () => void },
+): void {
+  cleanups.push(
+    MakaioBus.on(CredentialSubjects.activation.prepare, (ctx) => {
+      hooks.prepare?.(ctx.payload.providerContext);
+      ctx.setResult({ success: true, transactionId: crypto.randomUUID() });
+    }),
+    MakaioBus.on(CredentialSubjects.activation.commit, (ctx) => {
+      hooks.commit?.();
+      ctx.setResult({ success: true });
+    }),
+    MakaioBus.on(CredentialSubjects.activation.rollback, (ctx) => {
+      hooks.rollback?.();
+      ctx.setResult({ success: true });
+    }),
+  );
+}
 
 /**
  * Options for creating a reasoning-capable test agent.
@@ -86,9 +193,16 @@ async function sendModelChange(
 
 describe('AIAgent Model change handler', () => {
   const ctx = createAgentTestLifecycle();
+  let persistenceCleanup: () => void;
 
-  beforeEach(() => ctx.reset());
-  afterEach(async () => await ctx.teardown());
+  beforeEach(() => {
+    ctx.reset();
+    persistenceCleanup = registerSuccessfulRuntimeMutationPersistence();
+  });
+  afterEach(async () => {
+    persistenceCleanup();
+    await ctx.teardown();
+  });
 
   it('model.change request triggers connector swap and emits model.changed with previousModel/newModel', async () => {
     ctx.agent = createTestableAgent({
@@ -122,6 +236,130 @@ describe('AIAgent Model change handler', () => {
     expect(initialConnector.closeCalled).toBe(true);
     expect(ctx.agent.currentConnector.model).toBe('test-model-2');
     expect(changedEvents).toEqual([{ previousModel: 'test-model-1', newModel: 'test-model-2' }]);
+  });
+
+  it('serializes overlapping CWD and model swaps against successive connector generations', async () => {
+    ctx.agent = createTestableAgent({
+      agentId: TEST_AGENT_ID,
+      mockConnectorFactory: ctx.mockFactory,
+      initialModel: 'test-model-1',
+      initialCwd: '/test/cwd1',
+      providerContext: TEST_PROVIDER_CONTEXT,
+    });
+    await ctx.agent.init();
+    const firstInitializeStarted = createDeferred();
+    const releaseFirstInitialize = createDeferred();
+    const originalFactory = ctx.mockFactory.getMockImplementation();
+    if (!originalFactory) throw new Error('Expected connector factory implementation.');
+    let replacementCount = 0;
+    ctx.mockFactory.mockImplementation((config) => {
+      const replacement = originalFactory(config);
+      replacementCount += 1;
+      if (replacementCount === 1) {
+        replacement.initialize = vi.fn(async () => {
+          firstInitializeStarted.resolve();
+          await releaseFirstInitialize.promise;
+        });
+      }
+      return replacement;
+    });
+
+    const cwdChange = MakaioBus.request(AgentSubjects.cwd.change, {
+      agentId: TEST_AGENT_ID,
+      adapterId: 'test-adapter',
+      adapterName: 'test',
+      adapterSessionId: 'test-session-id',
+      newCwd: '/test/cwd2',
+    });
+    await firstInitializeStarted.promise;
+    const modelChange = sendModelChange({ newModel: 'test-model-2' });
+    await Promise.resolve();
+
+    expect(ctx.createdConnectors).toHaveLength(2);
+
+    releaseFirstInitialize.resolve();
+    await expect(cwdChange).resolves.toMatchObject({ success: true });
+    await expect(modelChange).resolves.toMatchObject({ success: true });
+
+    expect(ctx.createdConnectors).toHaveLength(3);
+    expect(ctx.createdConnectors[0]?.closeCalled).toBe(true);
+    expect(ctx.createdConnectors[1]?.closeCalled).toBe(true);
+    expect(ctx.agent.currentConnector.cwd).toBe('/test/cwd2');
+    expect(ctx.agent.currentConnector.model).toBe('test-model-2');
+  });
+
+  it('prepares and commits a selected provider account around replacement initialization', async () => {
+    await createReasoningAgent(ctx);
+    const order: string[] = [];
+    registerActivationTransaction(ctx.cleanupFns, {
+      prepare: (providerContext) => {
+        order.push('prepare');
+        expect(providerContext).toEqual(INFERRED_PROVIDER_CONTEXT);
+      },
+      commit: () => {
+        order.push('commit');
+        expect(ctx.agent?.testPrimaryConnector()).toBe(ctx.createdConnectors[0]);
+      },
+    });
+    const originalFactory = ctx.mockFactory.getMockImplementation();
+    if (!originalFactory) throw new Error('Expected connector factory implementation.');
+    ctx.mockFactory.mockImplementation((config) => {
+      order.push('replacement');
+      const replacement = originalFactory(config);
+      replacement.initialize = vi.fn(async () => {
+        order.push('initialize');
+      });
+      return replacement;
+    });
+
+    await expect(
+      sendModelChange({ providerContext: INFERRED_PROVIDER_CONTEXT, skipWarning: true }),
+    ).resolves.toMatchObject({ success: true, swapped: true });
+
+    expect(order).toEqual(['prepare', 'replacement', 'initialize', 'commit']);
+    expect(ctx.agent?.testPrimaryConnector()).toBe(ctx.createdConnectors[1]);
+  });
+
+  it('rolls back a prepared provider account when replacement initialization fails', async () => {
+    await createReasoningAgent(ctx);
+    const rollback = vi.fn();
+    registerActivationTransaction(ctx.cleanupFns, { rollback });
+    const originalConnector = ctx.createdConnectors[0];
+    const originalFactory = ctx.mockFactory.getMockImplementation();
+    if (!originalFactory) throw new Error('Expected connector factory implementation.');
+    ctx.mockFactory.mockImplementation((config) => {
+      const replacement = originalFactory(config);
+      replacement.initialize = vi.fn(async () => {
+        throw new Error('replacement initialize failed');
+      });
+      return replacement;
+    });
+
+    await expect(sendModelChange({ providerContext: INFERRED_PROVIDER_CONTEXT, skipWarning: true })).resolves.toEqual({
+      success: false,
+      reason: 'model_change_failed: connector_replacement_failed',
+    });
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(ctx.agent?.testPrimaryConnector()).toBe(originalConnector);
+    expect(ctx.createdConnectors[1]?.closeCalled).toBe(true);
+  });
+
+  it('reports response-declared persistence failure as committed runtime state', async () => {
+    await createReasoningAgent(ctx);
+    persistenceCleanup();
+    persistenceCleanup = () => undefined;
+    ctx.cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
+        ctx.setResult({ success: false });
+      }),
+    );
+
+    const response = await sendModelChange({ newModel: 'test-model-2', skipWarning: true });
+
+    expect(response).toEqual({ success: false, reason: 'model_change_committed_persistence_failed' });
+    expect(ctx.agent?.currentConnector.model).toBe('test-model-2');
+    expect(ctx.createdConnectors).toHaveLength(2);
   });
 
   it('model.change during active turn returns success: false, reason: turn_active', async () => {
@@ -285,6 +523,31 @@ describe('AIAgent Model change handler', () => {
     expect(ctx.createdConnectors).toHaveLength(2);
   });
 
+  it('persists an explicit providerConfigId clear when switching to unresolved provider state', async () => {
+    ctx.agent = createTestableAgent({
+      agentId: TEST_AGENT_ID,
+      mockConnectorFactory: ctx.mockFactory,
+      initialModel: 'test-model-1',
+      providerContext: NORMALIZED_PROVIDER_CONTEXT,
+    });
+    await ctx.agent.init();
+    const runtimeUpdates: unknown[] = [];
+    ctx.cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateRuntime, (storageCtx) => {
+        runtimeUpdates.push(storageCtx.payload);
+        storageCtx.setResult({ success: true });
+      }),
+    );
+
+    const response = await sendModelChange({
+      providerContext: { state: 'unresolved' },
+      skipWarning: true,
+    });
+
+    expect(response).toMatchObject({ success: true, swapped: true });
+    expect(runtimeUpdates).toContainEqual(expect.objectContaining({ agentId: TEST_AGENT_ID, providerConfigId: null }));
+  });
+
   it('forces a connector swap when providerContext changes during a reasoning-only request', async () => {
     await createReasoningAgent(ctx, {
       initialReasoningEffort: 'low',
@@ -314,7 +577,7 @@ describe('AIAgent Model change handler', () => {
     expect(ctx.agent!.currentConnector.currentReasoningEffort).toBe('high');
   });
 
-  it('preserves populated credentialRefs and endpointOverrides across a model swap', async () => {
+  it('preserves populated auth refs and endpoint overrides across a model swap', async () => {
     const { bus: mockBus } = createMockScopedBus();
     const capturedContexts: Array<unknown> = [];
 
@@ -357,11 +620,11 @@ describe('AIAgent Model change handler', () => {
     await sendModelChange({ newModel: 'test-model-2', providerContext: TEST_PROVIDER_CONTEXT_2, skipWarning: true });
 
     // Both the init call and the swap call must carry the full provider context
-    // with credentialRefs and endpointOverrides intact.
+    // with normalized auth refs and endpoint overrides intact.
     expect(capturedContexts).toHaveLength(2);
     for (const captured of capturedContexts) {
       expect(captured).toMatchObject({
-        credentialRefs: TEST_PROVIDER_CONTEXT_2.credentialRefs,
+        auth: TEST_PROVIDER_CONTEXT_2.auth,
         endpointOverrides: TEST_PROVIDER_CONTEXT_2.endpointOverrides,
       });
     }

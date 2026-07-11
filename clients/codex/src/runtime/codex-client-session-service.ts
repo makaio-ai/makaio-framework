@@ -11,8 +11,8 @@
  * Codex config root, falling back to native `~/.codex` paths when no resolver
  * or global binary is available. Wiring requests use the same settings path
  * resolution. The service also handles the blocking `client:codex.config.prime`
- * lifecycle hook and the `client:codex.sessionConfig.setup` delegation subject
- * for per-session config directory initialization.
+ * lifecycle hook and the `client:codex.sessionConfig.setup` / `.destroy`
+ * delegation subjects for refresh-safe per-session config isolation.
  *
  * Unknown or not-yet-modeled event names are silently dropped — they stay
  * raw-only inside the `client:codex.*` namespace and are never forwarded to
@@ -48,7 +48,7 @@ import { CodexClientSettings } from './client-settings.js';
 import { handleCodexConfigPrime } from './config-prime-handler.js';
 import { normalizeCodexHook } from './hook-normalizer.js';
 import { CodexClientSubjects } from './namespace.js';
-import { handleCodexSessionConfigSetup } from './session-config-handler.js';
+import { CodexSessionConfigHandler } from './session-config-handler.js';
 import { applyCodexWiring, buildCodexWiringList, removeCodexWiring } from './wiring.js';
 
 /** Stable client ID for Codex — used to filter `client.runtime.started` events. */
@@ -75,7 +75,7 @@ export const MANAGED_SESSION_CAP = 10_000;
  *    `client.runtime.started` for the adapter-managed session gate, and
  *    registers request handlers for `config.hooks.list`, `config.hooks.add`,
  *    `config.hooks.remove`, `config.prime`, `wiring.list`, `wiring.apply`,
- *    `wiring.remove`, and `sessionConfig.setup`.
+ *    `wiring.remove`, `sessionConfig.setup`, and `sessionConfig.destroy`.
  * 2. On each incoming raw event, calls {@link normalizeCodexHook}.
  * 3. Emits the normalized subject when the event is recognized; silently
  *    ignores unknown events.  Normalized `client.session.*` events are
@@ -96,6 +96,9 @@ export class CodexClientSessionService extends BaseService {
    * deriving it from the writer process.
    */
   private readonly machineId: string | undefined;
+
+  /** Client-owned native auth materialization and refresh reconciliation. */
+  private readonly sessionConfigHandler: CodexSessionConfigHandler;
 
   /**
    * Set of `adapterSessionId` values known to be owned by an adapter-managed
@@ -120,17 +123,24 @@ export class CodexClientSessionService extends BaseService {
    * @param machineId - Stable runtime identity of the observing machine,
    *   caller-supplied from the extension context. Omit in tests or when the
    *   identity is unavailable.
+   * @param sessionConfigHandler - Optional native auth lease handler override.
    */
-  public constructor(bus: IMakaioBus = MakaioBus, settings?: CodexClientSettings, machineId?: string) {
+  public constructor(
+    bus: IMakaioBus = MakaioBus,
+    settings?: CodexClientSettings,
+    machineId?: string,
+    sessionConfigHandler: CodexSessionConfigHandler = new CodexSessionConfigHandler(),
+  ) {
     super(bus);
     this.settingsOverride = settings;
     this.machineId = machineId;
+    this.sessionConfigHandler = sessionConfigHandler;
   }
 
   /**
    * Register the raw hook ingress handler, config management request handlers,
    * wiring management request handlers, the config-prime lifecycle handler,
-   * and the session config setup handler on the bus.
+   * and the session config setup/teardown handlers on the bus.
    *
    * Also subscribes to `client.runtime.started` to track adapter-managed
    * sessions for the {@link handleHookReceived} suppression gate.
@@ -196,7 +206,11 @@ export class CodexClientSessionService extends BaseService {
     });
 
     this.registerHandler(CodexClientSubjects.sessionConfig.setup, async (ctx) => {
-      ctx.setResult(await handleCodexSessionConfigSetup(ctx.payload));
+      ctx.setResult(await this.sessionConfigHandler.setup(ctx.payload));
+    });
+
+    this.registerHandler(CodexClientSubjects.sessionConfig.destroy, async (ctx) => {
+      ctx.setResult(await this.sessionConfigHandler.teardown(ctx.payload));
     });
   }
 

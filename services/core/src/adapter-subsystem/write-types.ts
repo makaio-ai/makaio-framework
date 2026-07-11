@@ -1,31 +1,39 @@
 import { z } from 'zod';
-import { CredentialRefSchema, isCanonicalProviderConfigName } from '@makaio/contracts/config';
+import { ProviderConfigAuthSchema, ProviderConfigManagerSchema } from '@makaio/contracts/auth';
+import { isCanonicalProviderConfigName } from '@makaio/contracts/config';
 import { ModelFilterModeSchema, ModelVisibilitySchema, ProtocolEndpointsSchema } from '@makaio/contracts/provider';
 
 const INVALID_PROVIDER_CONFIG_NAME_MESSAGE = 'Provider config name must slugify to a canonical routing segment.';
 
 /**
- * Canonical credential-ref map stored in provider-config files.
- */
-export const CanonicalProviderConfigCredentialRefsSchema = z.record(z.string(), CredentialRefSchema);
-
-/**
  * Canonical create payload for provider configs.
  *
- * Canonical subsystem writes are ref-only at rest. Public callers must resolve
- * any plaintext credentials before using this contract.
+ * Authentication is structurally complete at creation time. Callers that need
+ * to store plaintext first create a disabled config whose auth selection
+ * already contains stored credential refs, then enable it after storage
+ * succeeds.
  */
 export const CreateCanonicalProviderConfigInputSchema = z
   .object({
-    definitionId: z.string(),
+    definitionId: z.string().trim().min(1),
     name: z.string().optional(),
-    credentialRefs: z.record(z.string(), CredentialRefSchema).optional(),
+    auth: ProviderConfigAuthSchema,
+    managedBy: ProviderConfigManagerSchema.optional(),
     endpointOverrides: ProtocolEndpointsSchema.optional(),
     modelVisibility: z.record(z.string(), ModelVisibilitySchema).optional(),
     modelFilterMode: ModelFilterModeSchema.optional(),
-    isSentinel: z.boolean().optional(),
+    enabled: z.boolean().optional(),
   })
   .strict()
+  .superRefine((input, ctx) => {
+    if (input.auth.method.owner === 'provider' && input.auth.method.providerDefinitionId !== input.definitionId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Provider-owned auth methods must belong to the selected provider definition.',
+        path: ['auth', 'method', 'providerDefinitionId'],
+      });
+    }
+  })
   .refine((input) => input.name === undefined || isCanonicalProviderConfigName(input.name), {
     message: INVALID_PROVIDER_CONFIG_NAME_MESSAGE,
     path: ['name'],
@@ -34,8 +42,9 @@ export const CreateCanonicalProviderConfigInputSchema = z
 /**
  * Canonical patch payload for provider configs.
  *
- * Mode changes flow through `setModelFilterMode`. Sentinel state is not part of
- * the generic patch seam.
+ * Model-filter mode changes flow through `setModelFilterMode`; authentication
+ * changes flow through `setProviderConfigAuth`. Lifecycle management is fixed
+ * at creation and is not part of the generic patch seam.
  */
 export const CanonicalProviderConfigPatchSchema = z
   .object({
@@ -71,14 +80,15 @@ export type CreateCanonicalProviderConfigInputPayload = z.input<typeof CreateCan
 export type CanonicalProviderConfigPatch = z.infer<typeof CanonicalProviderConfigPatchSchema>;
 
 /**
- * Inferred canonical credential-ref map (post-validation, with branded refs).
+ * Inferred canonical auth replacement (post-validation, with branded refs).
  */
-export type CanonicalProviderConfigCredentialRefs = z.infer<typeof CanonicalProviderConfigCredentialRefsSchema>;
+export type CanonicalProviderConfigAuth = z.infer<typeof ProviderConfigAuthSchema>;
 
 /**
- * Bus-layer credential-ref map payload (pre-validation input type).
+ * Bus-layer auth replacement payload (pre-validation input type).
  *
  * Request handlers receive the schema input shape from the bus context, so
- * credential refs arrive as plain strings until the schema parse brands them.
+ * credential refs inside explicit selections arrive as plain strings until
+ * the schema parse brands them.
  */
-export type CanonicalProviderConfigCredentialRefsPayload = z.input<typeof CanonicalProviderConfigCredentialRefsSchema>;
+export type CanonicalProviderConfigAuthPayload = z.input<typeof ProviderConfigAuthSchema>;

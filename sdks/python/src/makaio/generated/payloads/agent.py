@@ -67,14 +67,133 @@ class AgentContextWindowUpdatedPayload:
 
 
 @dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantADefinitionFieldsItemSourceHintsItem:
+    kind: Literal["environment"]
+    variable: str
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantADefinitionFieldsItem:
+    id: str
+    label: str
+    required: bool
+    secret: bool
+    source_hints: list[AgentCredentialChangeRequestProviderContextAuthVariantADefinitionFieldsItemSourceHintsItem]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantADefinition:
+    fields: list[AgentCredentialChangeRequestProviderContextAuthVariantADefinitionFieldsItem]
+    id: str
+    label: str
+    mode: Literal["explicit"]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantAMethodVariantA:
+    method_id: str
+    owner: Literal["provider"]
+    provider_definition_id: str
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantAMethodVariantB:
+    client_id: str
+    method_id: str
+    owner: Literal["client"]
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantA:
+    credential_refs: dict[str, Any]
+    definition: AgentCredentialChangeRequestProviderContextAuthVariantADefinition
+    method: Union[AgentCredentialChangeRequestProviderContextAuthVariantAMethodVariantA, AgentCredentialChangeRequestProviderContextAuthVariantAMethodVariantB]
+    mode: Literal["explicit"]
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantBAccount:
+    account_id: str
+    manager_id: str
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantBDefinition:
+    id: str
+    label: str
+    mode: Literal["inferred"]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantBMethod:
+    client_id: str
+    method_id: str
+    owner: Literal["client"]
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantB:
+    definition: AgentCredentialChangeRequestProviderContextAuthVariantBDefinition
+    method: AgentCredentialChangeRequestProviderContextAuthVariantBMethod
+    mode: Literal["inferred"]
+    account: AgentCredentialChangeRequestProviderContextAuthVariantBAccount | None = None
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantCDefinition:
+    id: str
+    label: str
+    mode: Literal["none"]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantCMethodVariantA:
+    method_id: str
+    owner: Literal["provider"]
+    provider_definition_id: str
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantCMethodVariantB:
+    client_id: str
+    method_id: str
+    owner: Literal["client"]
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextAuthVariantC:
+    definition: AgentCredentialChangeRequestProviderContextAuthVariantCDefinition
+    method: Union[AgentCredentialChangeRequestProviderContextAuthVariantCMethodVariantA, AgentCredentialChangeRequestProviderContextAuthVariantCMethodVariantB]
+    mode: Literal["none"]
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContextEndpointOverrides:
+    anthropic: str | None = None
+    openai: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeRequestProviderContext:
+    auth: Union[AgentCredentialChangeRequestProviderContextAuthVariantA, AgentCredentialChangeRequestProviderContextAuthVariantB, AgentCredentialChangeRequestProviderContextAuthVariantC]
+    definition_id: str
+    provider_config_id: str
+    state: Literal["resolved"]
+    capabilities: dict[str, Any] | None = None
+    endpoint_overrides: AgentCredentialChangeRequestProviderContextEndpointOverrides | None = None
+
+
+@dataclass(frozen=True)
 class AgentCredentialChangeRequest:
     adapter_id: str
     adapter_name: str
     agent_id: str
     change_sequence: int
-    credential_refs: dict[str, Any]
-    definition_id: str
-    provider_config_id: str
+    provider_context: AgentCredentialChangeRequestProviderContext
     adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
@@ -91,7 +210,7 @@ class AgentCredentialChangeResponseVariantA:
 
 @dataclass(frozen=True)
 class AgentCredentialChangeResponseVariantB:
-    reason: str
+    reason: Literal["provider_mismatch", "stale_change", "turn_active", "credential_activation_failed:manager-unavailable", "credential_activation_failed:account-not-found", "credential_activation_failed:activation-failed", "credential_swap_failed"]
     success: Literal[False]
 
 
@@ -322,20 +441,129 @@ class AgentMessageDeltaPayload:
 
 
 @dataclass(frozen=True)
-class AgentModelChangeRequestProviderContextEndpointOverrides:
+class AgentModelChangeRequestProviderContextVariantAAuthVariantADefinitionFieldsItemSourceHintsItem:
+    kind: Literal["environment"]
+    variable: str
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantADefinitionFieldsItem:
+    id: str
+    label: str
+    required: bool
+    secret: bool
+    source_hints: list[AgentModelChangeRequestProviderContextVariantAAuthVariantADefinitionFieldsItemSourceHintsItem]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantADefinition:
+    fields: list[AgentModelChangeRequestProviderContextVariantAAuthVariantADefinitionFieldsItem]
+    id: str
+    label: str
+    mode: Literal["explicit"]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantAMethodVariantA:
+    method_id: str
+    owner: Literal["provider"]
+    provider_definition_id: str
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantAMethodVariantB:
+    client_id: str
+    method_id: str
+    owner: Literal["client"]
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantA:
+    credential_refs: dict[str, Any]
+    definition: AgentModelChangeRequestProviderContextVariantAAuthVariantADefinition
+    method: Union[AgentModelChangeRequestProviderContextVariantAAuthVariantAMethodVariantA, AgentModelChangeRequestProviderContextVariantAAuthVariantAMethodVariantB]
+    mode: Literal["explicit"]
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantBAccount:
+    account_id: str
+    manager_id: str
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantBDefinition:
+    id: str
+    label: str
+    mode: Literal["inferred"]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantBMethod:
+    client_id: str
+    method_id: str
+    owner: Literal["client"]
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantB:
+    definition: AgentModelChangeRequestProviderContextVariantAAuthVariantBDefinition
+    method: AgentModelChangeRequestProviderContextVariantAAuthVariantBMethod
+    mode: Literal["inferred"]
+    account: AgentModelChangeRequestProviderContextVariantAAuthVariantBAccount | None = None
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantCDefinition:
+    id: str
+    label: str
+    mode: Literal["none"]
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantCMethodVariantA:
+    method_id: str
+    owner: Literal["provider"]
+    provider_definition_id: str
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantCMethodVariantB:
+    client_id: str
+    method_id: str
+    owner: Literal["client"]
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAAuthVariantC:
+    definition: AgentModelChangeRequestProviderContextVariantAAuthVariantCDefinition
+    method: Union[AgentModelChangeRequestProviderContextVariantAAuthVariantCMethodVariantA, AgentModelChangeRequestProviderContextVariantAAuthVariantCMethodVariantB]
+    mode: Literal["none"]
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantAEndpointOverrides:
     anthropic: str | None = None
     openai: str | None = None
 
 
 @dataclass(frozen=True)
-class AgentModelChangeRequestProviderContext:
-    credential_refs: dict[str, Any]
+class AgentModelChangeRequestProviderContextVariantA:
+    auth: Union[AgentModelChangeRequestProviderContextVariantAAuthVariantA, AgentModelChangeRequestProviderContextVariantAAuthVariantB, AgentModelChangeRequestProviderContextVariantAAuthVariantC]
     definition_id: str
     provider_config_id: str
-    ambient_credential_env_vars: list[str] | None = None
+    state: Literal["resolved"]
     capabilities: dict[str, Any] | None = None
-    credential_env_vars: dict[str, Any] | None = None
-    endpoint_overrides: AgentModelChangeRequestProviderContextEndpointOverrides | None = None
+    endpoint_overrides: AgentModelChangeRequestProviderContextVariantAEndpointOverrides | None = None
+
+
+@dataclass(frozen=True)
+class AgentModelChangeRequestProviderContextVariantB:
+    state: Literal["unresolved"]
 
 
 @dataclass(frozen=True)
@@ -349,7 +577,7 @@ class AgentModelChangeRequest:
     new_model: str | None = None
     occurred_at: float | None = None
     provider_config_id: str | None = None
-    provider_context: AgentModelChangeRequestProviderContext | None = None
+    provider_context: Union[AgentModelChangeRequestProviderContextVariantA, AgentModelChangeRequestProviderContextVariantB] | None = None
     reasoning_effort: Literal["none", "low", "medium", "high", "extra-high"] | None = None
     session_id: str | None = None
     skip_warning: bool | None = None

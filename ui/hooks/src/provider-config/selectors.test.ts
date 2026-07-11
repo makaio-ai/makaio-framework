@@ -2,44 +2,35 @@ import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
-import { getProviderConfigDetailView } from './selectors.js';
+import { getProviderConfigDetailView, listCompatibleAuthOptions } from './selectors.js';
 
-describe('getProviderConfigDetailView', () => {
-  it('omits empty credentialRefs so detail views do not treat "{}" as stored credentials', async () => {
+const SAFE_CONFIG = {
+  id: 'cfg-anthropic',
+  definitionId: 'anthropic',
+  name: 'Anthropic',
+  modelFilterMode: 'show-all' as const,
+  isDefault: true,
+  enabled: true,
+  auth: {
+    mode: 'explicit' as const,
+    method: { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'api-key' },
+    hasCredentials: true as const,
+  },
+};
+
+describe('provider config selectors', () => {
+  it('builds detail from the safe summary without requesting runtime credential refs', async () => {
     const bus = createBusInstance();
-
-    bus.on(AdapterSubsystemSubjects.getProviderConfig, (ctx) => {
-      ctx.setResult({
-        config: {
-          id: 'cfg-empty-creds',
-          definitionId: 'anthropic',
-          name: 'Anthropic Empty',
-          modelFilterMode: 'show-all',
-          isDefault: false,
-          enabled: true,
-          isSentinel: false,
-          hasCredentials: false,
-        },
-      });
-    });
-
-    bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-      ctx.setResult({
-        context: {
-          providerConfigId: 'cfg-empty-creds',
-          definitionId: 'anthropic',
-          credentialRefs: {},
-        },
-      });
-    });
-
+    bus.on(AdapterSubsystemSubjects.getProviderConfig, (ctx) => ctx.setResult({ config: SAFE_CONFIG }));
     bus.on(ProviderStorageSubjects.get, (ctx) => {
       ctx.setResult({
         provider: {
           id: 'anthropic',
           packageName: '@makaio/provider-anthropic',
           name: 'Anthropic',
+          endpoints: { anthropic: 'https://api.anthropic.test' },
           availableModels: [],
+          authMethods: [],
           defaultModelFilterMode: 'show-all',
           enabled: true,
           createdAt: 1,
@@ -48,90 +39,40 @@ describe('getProviderConfigDetailView', () => {
       });
     });
 
-    const detail = await getProviderConfigDetailView(bus, 'cfg-empty-creds');
-
-    expect(detail).not.toBeNull();
-    expect(detail).not.toHaveProperty('credentialRefs');
+    await expect(getProviderConfigDetailView(bus, SAFE_CONFIG.id)).resolves.toEqual({
+      ...SAFE_CONFIG,
+      supportedProtocols: ['anthropic'],
+    });
   });
 
-  it('returns null when context building observes a missing config', async () => {
+  it('returns null for a missing safe config without reading provider metadata', async () => {
     const bus = createBusInstance();
-
-    bus.on(AdapterSubsystemSubjects.getProviderConfig, (ctx) => {
-      ctx.setResult({
-        config: {
-          id: 'cfg-deleted',
-          definitionId: 'anthropic',
-          name: 'Deleted Anthropic',
-          modelFilterMode: 'show-all',
-          isDefault: false,
-          enabled: true,
-          isSentinel: false,
-          hasCredentials: false,
-        },
-      });
-    });
-
-    bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-      expect(ctx.payload.providerConfigId).toBe('cfg-deleted');
-      ctx.setResult({ context: null });
-    });
-
-    bus.on(ProviderStorageSubjects.get, (ctx) => {
-      expect(ctx.payload.id).toBe('anthropic');
-      ctx.setResult({
-        provider: {
-          id: 'anthropic',
-          packageName: '@makaio/provider-anthropic',
-          name: 'Anthropic',
-          availableModels: [],
-          defaultModelFilterMode: 'show-all',
-          enabled: true,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      });
-    });
-
-    await expect(getProviderConfigDetailView(bus, 'cfg-deleted')).resolves.toBeNull();
-  });
-
-  it('returns null when config and context snapshots disagree on provider definition', async () => {
-    const bus = createBusInstance();
-    let providerLookupCount = 0;
-
-    bus.on(AdapterSubsystemSubjects.getProviderConfig, (ctx) => {
-      ctx.setResult({
-        config: {
-          id: 'cfg-changed',
-          definitionId: 'anthropic',
-          name: 'Changed Anthropic',
-          modelFilterMode: 'show-all',
-          isDefault: false,
-          enabled: true,
-          isSentinel: false,
-          hasCredentials: false,
-        },
-      });
-    });
-
-    bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-      expect(ctx.payload.providerConfigId).toBe('cfg-changed');
-      ctx.setResult({
-        context: {
-          providerConfigId: 'cfg-changed',
-          definitionId: 'openai',
-          credentialRefs: {},
-        },
-      });
-    });
-
+    let providerReads = 0;
+    bus.on(AdapterSubsystemSubjects.getProviderConfig, (ctx) => ctx.setResult({ config: null }));
     bus.on(ProviderStorageSubjects.get, () => {
-      providerLookupCount += 1;
-      throw new Error('Provider lookup should be skipped for mismatched config/context snapshots');
+      providerReads += 1;
+      throw new Error('provider metadata must not be read for a missing config');
     });
 
-    await expect(getProviderConfigDetailView(bus, 'cfg-changed')).resolves.toBeNull();
-    expect(providerLookupCount).toBe(0);
+    await expect(getProviderConfigDetailView(bus, 'missing')).resolves.toBeNull();
+    expect(providerReads).toBe(0);
+  });
+
+  it('returns compatible method definitions without refs or plaintext', async () => {
+    const bus = createBusInstance();
+    const option = {
+      definitionId: 'anthropic',
+      method: { owner: 'client' as const, clientId: 'claude-code', methodId: 'native' },
+      mode: 'inferred' as const,
+      label: 'Claude Code sign-in',
+      fields: [],
+      compatibleAdapterNames: ['claude-code-cli'],
+      portability: 'local-only' as const,
+    };
+    bus.on(AdapterSubsystemSubjects.listCompatibleAuthOptions, (ctx) => ctx.setResult({ options: [option] }));
+
+    const options = await listCompatibleAuthOptions(bus, 'anthropic');
+    expect(options).toEqual([option]);
+    expect(JSON.stringify(options)).not.toContain('credentialRefs');
   });
 });

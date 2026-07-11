@@ -13,6 +13,8 @@ export interface ConnectorSessionConfig<TBus extends ScopedBus<string> = ScopedB
   cwd: string;
   model: string;
   env: Record<string, string>;
+  /** Auth-free environment safe for bus-routable tool and MCP contexts. */
+  contextEnv?: Readonly<Record<string, string>>;
 }
 
 /**

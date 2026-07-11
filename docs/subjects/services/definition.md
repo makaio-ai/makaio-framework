@@ -23,7 +23,6 @@ next: false
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
 | `getConfigSchema` | [`definition.getConfigSchema`](#definition.getConfigSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/definition/schemas.ts) |
-| `getCredentialSchema` | [`definition.getCredentialSchema`](#definition.getCredentialSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/definition/schemas.ts) |
 
 ## Subject Details
 
@@ -32,26 +31,6 @@ next: false
 Get the JSON Schema for a provider definition's config fields.
 
 Subject: `definition.getConfigSchema`
-Type: Request (RPC)
-
-**Request:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `definitionId` | `string` | yes |
-
-**Response:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `hasSchema` | `boolean` | yes |
-| `schema` | `Record<string, unknown> \| null` | yes |
-
-### <a id="definition.getCredentialSchema"></a>`definition.getCredentialSchema` (rpc)
-
-Get the JSON Schema for a provider definition's credential fields.
-
-Subject: `definition.getCredentialSchema`
 Type: Request (RPC)
 
 **Request:**

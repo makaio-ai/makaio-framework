@@ -2,7 +2,7 @@
  * Definition namespace definition.
  *
  * Provides bus subjects for querying JSON Schema descriptions of a
- * provider definition's config and credential fields.  The definition ID
+ * provider definition's non-secret config fields. The definition ID
  * (`definitionId`) is the stable string identifier contributed by each
  * provider adapter package (e.g. `'openai'`).
  *

@@ -1,10 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { CredentialSubjects } from '@makaio/contracts';
+import { ProviderConfigAuthSchema } from '@makaio/contracts/auth';
 import { resolveModelVisibility, type ModelFilterMode } from '@makaio/contracts/provider';
 import {
   PROVIDER_CONFIG_SCHEMA_VERSION,
   type ProviderConfigFile,
-  brandCredentialRecord,
   resolveCanonicalProviderConfigName,
   slugifyProviderConfigName,
 } from '@makaio/contracts/config';
@@ -15,11 +15,44 @@ import type { AdapterConfigStore } from './adapter-config-store.js';
 import {
   cloneProviderEndpointOverrides,
   cloneProviderModelVisibility,
+  type ProviderConfigAuthInput,
   type ProviderConfigCreateInput,
   type ProviderConfigPatch,
-  type ProviderConfigCredentialRefs,
   type RemoveBindingsResult,
+  type SnapshotState,
 } from './adapter-subsystem-types.js';
+
+type ProviderConfigDefaultChange = { definitionId: string; configId: string | null };
+
+/**
+ * Resolve default status after an enabled-state patch.
+ * @param configs - Snapshot provider configs.
+ * @param id - Config being updated.
+ * @param existing - Existing config value.
+ * @param nextEnabled - Patched enabled state.
+ * @returns Whether the updated config should be the definition default.
+ */
+function resolveUpdatedDefault(
+  configs: ReadonlyMap<string, ProviderConfigFile>,
+  id: string,
+  existing: ProviderConfigFile,
+  nextEnabled: boolean,
+): boolean {
+  const wasDefault = existing.isDefault ?? false;
+  if (!nextEnabled) return false;
+  if (wasDefault) return true;
+  return ![...configs.entries()].some(
+    ([candidateId, candidate]) =>
+      candidateId !== id &&
+      candidate.definitionId === existing.definitionId &&
+      (candidate.enabled ?? true) &&
+      (candidate.isDefault ?? false),
+  );
+}
+import {
+  assertProviderConfigAuthDefinitionsEnabled,
+  validateProviderConfigAuth,
+} from './provider-config-auth-validation.js';
 
 /**
  * Constructor options for {@link AdapterProviderConfigService}.
@@ -61,9 +94,15 @@ export class AdapterProviderConfigService {
    * @returns Newly created provider config read model.
    */
   public async createProviderConfig(input: ProviderConfigCreateInput): Promise<{ config: ProviderConfigFileRecord }> {
-    const name = await this.resolveProviderConfigName(input.definitionId, input.name);
+    const provider = await this.getProviderDefinitionOrThrow(input.definitionId);
+    const auth = ProviderConfigAuthSchema.parse(input.auth);
+    const enabled = input.enabled ?? true;
+    const validatedAuth = await validateProviderConfigAuth(this.bus, input.definitionId, auth, provider);
+    if (enabled) {
+      assertProviderConfigAuthDefinitionsEnabled(validatedAuth);
+    }
+    const name = this.resolveProviderConfigNameFromDefinition(input.definitionId, provider.name, input.name);
     const id = slugifyProviderConfigName(name);
-    const credentials = this.cloneCreateCredentialRefs(input);
     const endpointOverrides = cloneProviderEndpointOverrides(input.endpointOverrides);
     const modelVisibility = cloneProviderModelVisibility(input.modelVisibility);
     const config = await this.configStore.commitSnapshotMutation(
@@ -76,15 +115,18 @@ export class AdapterProviderConfigService {
           $schema: PROVIDER_CONFIG_SCHEMA_VERSION,
           definitionId: input.definitionId,
           name,
-          credentials,
+          auth: structuredClone(auth),
+          ...(input.managedBy ? { managedBy: { ...input.managedBy } } : {}),
           endpointOverrides,
           modelVisibility,
           modelFilterMode: input.modelFilterMode ?? 'show-all',
-          isDefault: ![...nextSnapshot.providerConfigs.values()].some(
-            (config) => config.definitionId === input.definitionId,
-          ),
-          enabled: true,
-          isSentinel: input.isSentinel ?? false,
+          isDefault:
+            enabled &&
+            ![...nextSnapshot.providerConfigs.values()].some(
+              (config) =>
+                config.definitionId === input.definitionId && (config.enabled ?? true) && (config.isDefault ?? false),
+            ),
+          enabled,
         });
       },
       () => this.configStore.requireProviderConfig(id, 'creation'),
@@ -103,58 +145,93 @@ export class AdapterProviderConfigService {
     id: string,
     patch: ProviderConfigPatch,
   ): Promise<{ config: ProviderConfigFileRecord }> {
+    let defaultChanged: ProviderConfigDefaultChange | undefined;
     const config = await this.configStore.commitSnapshotMutation(
-      (nextSnapshot) => {
-        const existing = nextSnapshot.providerConfigs.get(id);
-        if (!existing) {
-          throw new Error(`Provider config not found: ${id}`);
-        }
-        const nextName = patch.name ?? existing.name ?? existing.definitionId;
-        if (patch.name !== undefined) {
-          this.configStore.assertProviderConfigNameUnique(nextName, id);
-        }
-        nextSnapshot.providerConfigs.set(id, {
-          ...existing,
-          name: nextName,
-          endpointOverrides:
-            patch.endpointOverrides === null
-              ? undefined
-              : patch.endpointOverrides !== undefined
-                ? cloneProviderEndpointOverrides(patch.endpointOverrides)
-                : existing.endpointOverrides,
-          modelVisibility:
-            patch.modelVisibility !== undefined
-              ? cloneProviderModelVisibility(patch.modelVisibility)
-              : existing.modelVisibility,
-          enabled: patch.enabled ?? existing.enabled,
-        });
+      async (nextSnapshot) => {
+        defaultChanged = await this.applyProviderConfigPatch(nextSnapshot, id, patch);
       },
       () => this.configStore.requireProviderConfig(id, 'update'),
     );
     await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, config);
+    if (defaultChanged) {
+      await this.bus.emit(AdapterSubsystemSubjects.providerConfig.defaultChanged, defaultChanged);
+    }
     return { config };
   }
 
   /**
-   * Replace the canonical credential refs for one provider config.
+   * Apply one normalized provider-config patch to a captured snapshot.
+   * @param snapshot - Mutable snapshot owned by the serialized mutation.
+   * @param id - Provider config being updated.
+   * @param patch - Validated patch payload.
+   * @returns Default-change event payload when default ownership changed.
+   */
+  private async applyProviderConfigPatch(
+    snapshot: SnapshotState,
+    id: string,
+    patch: ProviderConfigPatch,
+  ): Promise<ProviderConfigDefaultChange | undefined> {
+    const existing = snapshot.providerConfigs.get(id);
+    if (!existing) throw new Error(`Provider config not found: ${id}`);
+    const nextName = patch.name ?? existing.name ?? existing.definitionId;
+    if (patch.name !== undefined) this.configStore.assertProviderConfigNameUnique(nextName, id);
+    const nextEnabled = patch.enabled ?? existing.enabled ?? true;
+    if (nextEnabled && !(existing.enabled ?? true)) {
+      const validatedAuth = await validateProviderConfigAuth(this.bus, existing.definitionId, existing.auth);
+      assertProviderConfigAuthDefinitionsEnabled(validatedAuth);
+    }
+    const nextIsDefault = resolveUpdatedDefault(snapshot.providerConfigs, id, existing, nextEnabled);
+    snapshot.providerConfigs.set(id, {
+      ...existing,
+      name: nextName,
+      endpointOverrides:
+        patch.endpointOverrides === null
+          ? undefined
+          : patch.endpointOverrides === undefined
+            ? existing.endpointOverrides
+            : cloneProviderEndpointOverrides(patch.endpointOverrides),
+      modelVisibility:
+        patch.modelVisibility === undefined
+          ? existing.modelVisibility
+          : cloneProviderModelVisibility(patch.modelVisibility),
+      enabled: nextEnabled,
+      isDefault: nextIsDefault,
+    });
+    if ((existing.isDefault ?? false) && !nextIsDefault) {
+      return {
+        definitionId: existing.definitionId,
+        configId: this.configStore.promoteProviderConfigDefault(existing.definitionId, id, snapshot.providerConfigs),
+      };
+    }
+    return !(existing.isDefault ?? false) && nextIsDefault
+      ? { definitionId: existing.definitionId, configId: id }
+      : undefined;
+  }
+
+  /**
+   * Replace the complete normalized auth selection for one provider config.
    * @param id - Provider config ID.
-   * @param credentialRefs - Full replacement credential-ref map.
+   * @param authInput - Full replacement authentication selection.
    * @returns Updated provider config read model.
    */
-  public async setProviderConfigCredentialRefs(
+  public async setProviderConfigAuth(
     id: string,
-    credentialRefs: ProviderConfigCredentialRefs,
+    authInput: ProviderConfigAuthInput,
   ): Promise<{ config: ProviderConfigFileRecord }> {
-    const credentials = this.normalizeCredentialRefs(credentialRefs);
+    const auth = ProviderConfigAuthSchema.parse(authInput);
     const config = await this.configStore.commitSnapshotMutation(
-      (nextSnapshot) => {
+      async (nextSnapshot) => {
         const existing = nextSnapshot.providerConfigs.get(id);
         if (!existing) {
           throw new Error(`Provider config not found: ${id}`);
         }
-        nextSnapshot.providerConfigs.set(id, { ...existing, credentials });
+        const validatedAuth = await validateProviderConfigAuth(this.bus, existing.definitionId, auth);
+        if (existing.enabled ?? true) {
+          assertProviderConfigAuthDefinitionsEnabled(validatedAuth);
+        }
+        nextSnapshot.providerConfigs.set(id, { ...existing, auth: structuredClone(auth) });
       },
-      () => this.configStore.requireProviderConfig(id, 'credential update'),
+      () => this.configStore.requireProviderConfig(id, 'auth update'),
     );
 
     await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, config);
@@ -177,15 +254,20 @@ export class AdapterProviderConfigService {
       deletedBindings: [],
       defaultChangedBindings: [],
     };
-    const sentinelConfig = await this.configStore.commitSnapshotMutation(
+    const managedConfig = await this.configStore.commitSnapshotMutation(
       (nextSnapshot) => {
         const existing = nextSnapshot.providerConfigs.get(id);
         if (!existing) {
           return;
         }
-        if (existing.isSentinel) {
-          if (existing.enabled) {
-            nextSnapshot.providerConfigs.set(id, { ...existing, enabled: false });
+        if (existing.managedBy) {
+          if (existing.enabled ?? true) {
+            wasDefault = existing.isDefault ?? false;
+            definitionId = existing.definitionId;
+            nextSnapshot.providerConfigs.set(id, { ...existing, enabled: false, isDefault: false });
+            promoted = wasDefault
+              ? this.configStore.promoteProviderConfigDefault(existing.definitionId, id, nextSnapshot.providerConfigs)
+              : null;
             updatedConfigId = id;
           }
           return;
@@ -206,14 +288,20 @@ export class AdapterProviderConfigService {
           nextSnapshot.adapters.set(adapterName, raw);
         }
       },
-      () => (updatedConfigId ? this.configStore.requireProviderConfig(id, 'sentinel disable') : null),
+      () => (updatedConfigId ? this.configStore.requireProviderConfig(id, 'managed config disable') : null),
     );
 
     if (!deleted) {
       if (!updatedConfigId) {
         return { deleted: false };
       }
-      await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, sentinelConfig!);
+      await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, managedConfig!);
+      if (wasDefault) {
+        await this.bus.emit(AdapterSubsystemSubjects.providerConfig.defaultChanged, {
+          definitionId,
+          configId: promoted,
+        });
+      }
       return { deleted: false };
     }
     await this.cleanupDeletedProviderCredentials(id);
@@ -302,28 +390,6 @@ export class AdapterProviderConfigService {
   }
 
   /**
-   * Normalize a credential-refs map into the snapshot-safe branded form.
-   * @param credentialRefs - Raw credential refs from a bus payload.
-   * @returns Branded credential record, or `undefined` when the map is empty.
-   */
-  public normalizeCredentialRefs(credentialRefs?: Record<string, string>): ProviderConfigFile['credentials'] {
-    if (!credentialRefs || Object.keys(credentialRefs).length === 0) {
-      return undefined;
-    }
-
-    return brandCredentialRecord(credentialRefs);
-  }
-
-  /**
-   * Extract and normalize credential refs from a creation input payload.
-   * @param input - Provider config creation payload.
-   * @returns Branded credential record, or `undefined` when no refs are present.
-   */
-  public cloneCreateCredentialRefs(input: ProviderConfigCreateInput): ProviderConfigFile['credentials'] {
-    return this.normalizeCredentialRefs(input.credentialRefs);
-  }
-
-  /**
    * Request deletion of stored credentials for a removed provider config.
    *
    * Failures are swallowed with a warning so that a missing credential
@@ -349,9 +415,20 @@ export class AdapterProviderConfigService {
    */
   public async resolveProviderConfigName(definitionId: string, name?: string): Promise<string> {
     const provider = await this.getProviderDefinitionOrThrow(definitionId);
+    return this.resolveProviderConfigNameFromDefinition(definitionId, provider.name, name);
+  }
+
+  /**
+   * Resolve a canonical provider-config name from an already loaded definition.
+   * @param definitionId - Provider definition ID.
+   * @param providerName - Display name from the provider definition.
+   * @param name - Caller-supplied config name.
+   * @returns Canonical display name.
+   */
+  private resolveProviderConfigNameFromDefinition(definitionId: string, providerName: string, name?: string): string {
     const resolvedName = resolveCanonicalProviderConfigName({
       requestedName: name,
-      providerName: provider.name,
+      providerName,
       definitionId,
     });
     if (resolvedName) {

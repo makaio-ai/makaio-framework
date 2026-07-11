@@ -1,71 +1,90 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { buildAccountManagerCredentialRef } from '@makaio/contracts/config';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
-import { ClientStorageSubjects } from '@makaio/services-core/settings/storage';
+
+import { ACCOUNT_MANAGER_ID } from './account-manager-id.js';
+
+interface AccountAuthView {
+  readonly mode: string;
+  readonly method: {
+    readonly owner: string;
+    readonly clientId?: string;
+  };
+  readonly account?: {
+    readonly managerId: string;
+    readonly accountId: string;
+  };
+}
 
 /**
- * Resolved provider config context for an account-manager account.
- *
- * Carries the minimal fields needed to route credential changes and to
- * identify the owning provider definition.
+ * Check whether inferred auth selects one exact account-manager account.
+ * @param auth - Safe or runtime normalized auth view.
+ * @param clientId - Expected client owner.
+ * @param accountId - Expected selected account.
+ * @returns Whether all selector coordinates match exactly.
  */
+export function authSelectsAccount(auth: AccountAuthView, clientId: string, accountId: string): boolean {
+  return (
+    auth.mode === 'inferred' &&
+    auth.method.owner === 'client' &&
+    auth.method.clientId === clientId &&
+    auth.account?.managerId === ACCOUNT_MANAGER_ID &&
+    auth.account.accountId === accountId
+  );
+}
+
+/**
+ * Check whether inferred auth follows a newly activated account.
+ * @param auth - Safe or runtime normalized auth view.
+ * @param clientId - Client whose native account changed.
+ * @param accountId - Account that is now active.
+ * @returns Whether the config is current-native or selects this exact account.
+ */
+export function authFollowsActivatedAccount(auth: AccountAuthView, clientId: string, accountId: string): boolean {
+  return (
+    auth.mode === 'inferred' &&
+    auth.method.owner === 'client' &&
+    auth.method.clientId === clientId &&
+    (auth.account === undefined || authSelectsAccount(auth, clientId, accountId))
+  );
+}
+
+/** Minimal provider config identity needed for credential-change fan-out. */
 export interface ResolvedProviderConfig {
   /** Stable provider config identifier. */
   providerConfigId: string;
   /** Provider definition this config is bound to. */
   definitionId: string;
-  /** Whether this config is the sentinel (default) config for the definition. */
-  isSentinel: boolean;
 }
 
 /**
- * Resolve the provider configs that are owned by a given account-manager account.
+ * Resolve inferred provider configs affected when one account-manager client
+ * activates an account.
  *
- * A config is considered owned when either:
- * - Its `sourceRef` matches the account-manager credential ref for
- *   `(clientId, accountId)` (direct binding), or
- * - It is a sentinel config whose `definitionId` matches the client's
- *   `defaultProviderId` (sentinel fallback, only applicable when the client
- *   record is available).
- *
- * Returns an empty array when the adapter subsystem is unavailable.
- * Falls back to direct `sourceRef` matching only when no client record exists.
- * Direct account-bound configs are returned before sentinel fallbacks so callers
- * that need one primary route prefer account-specific credentials.
- * @param bus - Bus used for provider-config and client-storage lookups
- * @param clientId - Account-manager client identifier
- * @param accountId - Stable account identifier
- * @returns Matching provider configs, or an empty array when none apply
+ * Inferred configs without an account selector follow the client's current
+ * native account and therefore rebuild on every switch for that client.
+ * Account-pinned configs rebuild only for their exact manager/account pair.
+ * Lifecycle ownership (`managedBy`) is deliberately irrelevant to auth.
+ * @param bus - Bus used for credential-free provider-config reads.
+ * @param clientId - Client whose native account changed.
+ * @param accountId - Account that is now active.
+ * @returns Matching provider config identities.
  */
 export async function resolveProviderConfigsForAccount(
   bus: IMakaioBus,
   clientId: string,
   accountId: string,
 ): Promise<ResolvedProviderConfig[]> {
-  const [configListResult, clientResult] = await Promise.all([
-    bus.requestOptional(AdapterSubsystemSubjects.listProviderConfigs, {}),
-    bus.requestOptional(ClientStorageSubjects.get, { id: clientId }),
-  ]);
-
+  const configListResult = await bus.requestOptional(AdapterSubsystemSubjects.listProviderConfigs, {});
   if (!configListResult.handled) {
     return [];
   }
 
-  const client = clientResult.handled ? clientResult.data.client : null;
-  const accountRef = buildAccountManagerCredentialRef(clientId, accountId);
   return configListResult.data.configs
     .filter((config) => {
-      if (config.sourceRef === accountRef) {
-        return true;
-      }
-      return (
-        client?.defaultProviderId !== undefined && config.isSentinel && config.definitionId === client.defaultProviderId
-      );
+      return authFollowsActivatedAccount(config.auth, clientId, accountId);
     })
-    .sort((a, b) => Number(a.isSentinel) - Number(b.isSentinel))
     .map((config) => ({
       providerConfigId: config.id,
       definitionId: config.definitionId,
-      isSentinel: config.isSentinel,
     }));
 }

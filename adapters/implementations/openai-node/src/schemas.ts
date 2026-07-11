@@ -63,24 +63,6 @@ export const OpenAINodeProviderConfigSchema = z.object({
 });
 
 /**
- * Zod schema for OpenAI Node credential input.
- *
- * Used for:
- * 1. Write-only credential capture in settings UI
- * 2. Secure storage in credential service
- */
-export const OpenAINodeCredentialSchema = z.object({
-  /**
-   * API key for OpenAI.
-   */
-  apiKey: z.string().optional().meta({
-    title: 'API Key',
-    description: 'Stored securely (not saved in config)',
-    format: 'password',
-  }),
-});
-
-/**
  * Provider settings input type (pre-validation, fields optional).
  */
 export type OpenAINodeProviderSettings = z.input<typeof OpenAINodeProviderConfigSchema>;

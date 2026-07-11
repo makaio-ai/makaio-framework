@@ -89,7 +89,7 @@ export function createStdioTransport(cwd: string, env: Record<string, unknown>, 
   // is exported and may be called directly by tests or alternate hosts.
   const subprocess = spawn(command, ['app-server'], {
     cwd,
-    env: { ...cleanEnv, RUST_LOG: 'debug' },
+    env: cleanEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -112,16 +112,22 @@ export function createStdioTransport(cwd: string, env: Record<string, unknown>, 
         try {
           const message = JSON.parse(line) as StdioMessage;
           messageCallback?.(message);
-        } catch (err) {
-          const error = err instanceof Error ? err : new Error(`Failed to parse JSONL: ${line}`);
-          errorCallback?.(error);
+        } catch {
+          // Never retain the malformed line: app-server protocol payloads can
+          // contain connector-local authentication material.
+          errorCallback?.(new Error('Codex app-server emitted invalid JSONL.'));
         }
       }
     }
   });
 
-  subprocess.stderr.on('data', (chunk: Buffer) => {
-    console.warn('[codex app-server]', chunk.toString('utf-8'));
+  let stderrWarningEmitted = false;
+  subprocess.stderr.on('data', () => {
+    if (stderrWarningEmitted) return;
+    stderrWarningEmitted = true;
+    // Child stderr is deliberately suppressed because Codex may include an
+    // account-login RPC payload in debug diagnostics.
+    console.warn('[codex app-server] stderr output suppressed');
   });
 
   /**

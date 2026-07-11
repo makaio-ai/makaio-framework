@@ -11,5 +11,4 @@ export const GeminiSdkConfig = createAdapterConfigFactory<GeminiConnectorConfig>
   },
   schema: GeminiSdkProviderConfigSchema,
   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
-  protocol: 'openai',
 }));

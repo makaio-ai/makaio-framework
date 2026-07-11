@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
-import { createBusInstance, MakaioBus, type IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { ResponseSchemaDescriptor } from '@makaio/contracts';
+import { createBusInstance, MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
+import { AdapterSubjects, AgentSubjects, CredentialSubjects, SessionSubjects } from '@makaio/contracts';
+import type {
+  ProviderAuthMethodDefinition,
+  ResolvedProviderContext,
+  ResponseSchemaDescriptor,
+} from '@makaio/contracts';
+import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { registerPreUserMessageHook, resetPreUserMessageHooks } from '@makaio/hooks';
 import { createMockScopedBus } from '@makaio/test-utils';
@@ -22,15 +27,36 @@ import type { ConfigFactoryInput } from '../ai-adapter-config.js';
 import type { AIAdapterConfig } from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
 import type { AdapterProviderDefinition } from '../../types/provider-definition.js';
+import { createTestProviderAuth } from '../../__tests__/__fixtures__/adapter-provider-auth.js';
 
 type TestBus = ReturnType<typeof createMockScopedBus>['bus'];
+
+const TEST_API_KEY_METHOD = {
+  id: 'api-key',
+  mode: 'explicit',
+  label: 'API key',
+  fields: [
+    {
+      id: 'apiKey',
+      label: 'API key',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment', variable: 'TEST_PROVIDER_API_KEY' }],
+    },
+  ],
+} satisfies ProviderAuthMethodDefinition;
 
 interface ConnectorBehavior {
   inferredText: string;
   retryInferredText?: string;
+  throwOnCreate?: Error;
+  throwOnInitialize?: Error;
   throwOnStart?: Error;
   throwOnClose?: Error;
   completeOnStart?: boolean;
+  onInitialize?: () => void;
+  onStart?: () => void;
+  onClose?: () => void;
 }
 
 class ConfigurableConnector extends AIAgentConnector {
@@ -58,6 +84,10 @@ class ConfigurableConnector extends AIAgentConnector {
     this.initializeCalls += 1;
     this.capturedInitializeSystemPrompt = options?.systemPrompt;
     this.capturedInitializeResponseSchema = options?.responseSchema;
+    this.behavior.onInitialize?.();
+    if (this.behavior.throwOnInitialize) {
+      throw this.behavior.throwOnInitialize;
+    }
   }
 
   public async start(
@@ -67,6 +97,7 @@ class ConfigurableConnector extends AIAgentConnector {
     this.capturedStartMessage = message;
     this.capturedStartSystemPrompt = options?.systemPrompt;
     this.capturedStartResponseSchema = options?.responseSchema;
+    this.behavior.onStart?.();
 
     if (this.behavior.throwOnStart) {
       throw this.behavior.throwOnStart;
@@ -117,6 +148,7 @@ class ConfigurableConnector extends AIAgentConnector {
   public async interrupt(): Promise<void> {}
   public async close(): Promise<void> {
     this.closeCalls += 1;
+    this.behavior.onClose?.();
     if (this.behavior.throwOnClose) {
       throw this.behavior.throwOnClose;
     }
@@ -165,7 +197,11 @@ function buildAdapter<T extends TestAdapter>(
   name: string,
   behavior: ConnectorBehavior,
   capture: AdapterCapture,
-  options?: { definitionProviders?: AdapterProviderDefinition[]; globalBus?: IMakaioBus },
+  options?: {
+    definitionProviders?: AdapterProviderDefinition[];
+    globalBus?: IMakaioBus;
+    prepareAuthRuntime?: AIAdapterConfig<TestBus>['prepareAuthRuntime'];
+  },
 ): T {
   const { bus: scopedBus } = createMockScopedBus();
   const namespace = createAdapterNamespace(name, {});
@@ -193,24 +229,128 @@ function buildAdapter<T extends TestAdapter>(
       };
     },
     connectorFactory: async (config: BaseAgentConnectorConfig<TestBus> & { adapterId: string }) => {
+      if (behavior.throwOnCreate) {
+        throw behavior.throwOnCreate;
+      }
       const connector = new ConfigurableConnector(config, behavior);
       capture.connectors.push(connector);
       return connector;
     },
     definitionProviders: options?.definitionProviders,
+    prepareAuthRuntime: options?.prepareAuthRuntime,
   });
 }
 
 function createTestAdapter(
   behavior: ConnectorBehavior,
   capture: AdapterCapture,
-  options?: { definitionProviders?: AdapterProviderDefinition[] },
+  options?: {
+    definitionProviders?: AdapterProviderDefinition[];
+    prepareAuthRuntime?: AIAdapterConfig<TestBus>['prepareAuthRuntime'];
+  },
 ): TestAdapter {
   return buildAdapter(TestAdapter, 'test-adapter-infer', behavior, capture, options);
 }
 
 function createInitDefaultsAdapter(behavior: ConnectorBehavior, capture: AdapterCapture): InitDefaultsAdapter {
   return buildAdapter(InitDefaultsAdapter, 'test-adapter-init-defaults', behavior, capture);
+}
+
+/**
+ * Build a normalized explicit-auth context for provider-selection tests.
+ * @param definitionId - Provider definition selected by the context
+ * @param providerConfigId - Provider config identity selected by the context
+ * @returns Resolved explicit-auth provider context
+ */
+function createResolvedProviderContext(
+  definitionId: string,
+  providerConfigId = `${definitionId}-config`,
+): ResolvedProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId,
+    definitionId,
+    auth: {
+      mode: 'explicit',
+      method: { owner: 'provider', providerDefinitionId: definitionId, methodId: 'api-key' },
+      definition: TEST_API_KEY_METHOD,
+      credentialRefs: { apiKey: buildStoredCredentialRef(providerConfigId, 'apiKey') },
+    },
+  };
+}
+
+/**
+ * Build a managed inferred-auth context for atomic activation tests.
+ * @param selectedAccount - Whether the inferred method selects a managed native account
+ * @returns Resolved inferred provider context
+ */
+function createManagedInferredProviderContext(selectedAccount = true): ResolvedProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId: 'native-provider-config',
+    definitionId: 'native-provider',
+    auth: {
+      mode: 'inferred',
+      method: { owner: 'client', clientId: 'test-client', methodId: 'native' },
+      definition: { id: 'native', mode: 'inferred', label: 'Native account' },
+      ...(selectedAccount && { account: { managerId: 'account-manager', accountId: 'account-1' } }),
+    },
+  };
+}
+
+/** Activation transaction fixture controls for adapter lifecycle tests. */
+interface ActivationFixtureOptions {
+  /** Result code returned by each commit attempt; undefined means success. */
+  readonly commitCode?: (attempt: number) => 'commit-failed' | 'commit-rollback-failed' | undefined;
+  /** Whether rollback reports a native/durable restoration failure. */
+  readonly rollbackFails?: boolean;
+  /** Optional assertion executed while commit still owns the activation lock. */
+  readonly onCommit?: () => void;
+}
+
+/**
+ * Register an opaque account activation transaction fixture.
+ * @param events - Ordered lifecycle event sink
+ * @param options - Commit/rollback behavior controls
+ * @returns Cleanup function for all transaction handlers
+ */
+function registerActivationFixture(events: string[], options: ActivationFixtureOptions = {}): () => void {
+  let transactionSequence = 0;
+  let commitAttempts = 0;
+  const cleanups = [
+    MakaioBus.on(CredentialSubjects.activation.prepare, (ctx) => {
+      events.push('prepare');
+      transactionSequence += 1;
+      ctx.setResult({ success: true, transactionId: `activation-${transactionSequence}` });
+    }),
+    MakaioBus.on(CredentialSubjects.activation.commit, (ctx) => {
+      events.push('commit');
+      options.onCommit?.();
+      commitAttempts += 1;
+      const code = options.commitCode?.(commitAttempts);
+      ctx.setResult(code === undefined ? { success: true } : { success: false, code });
+    }),
+    MakaioBus.on(CredentialSubjects.activation.rollback, (ctx) => {
+      events.push('rollback');
+      ctx.setResult(options.rollbackFails ? { success: false, code: 'rollback-failed' } : { success: true });
+    }),
+  ];
+  return () => {
+    for (const cleanup of cleanups) cleanup();
+  };
+}
+
+/**
+ * Build a host-local auth preparer that records exact lease materialization.
+ * @param events - Ordered lifecycle event sink
+ * @returns Test auth runtime preparer
+ */
+function createRecordingAuthPreparer(events: string[]): NonNullable<AIAdapterConfig<TestBus>['prepareAuthRuntime']> {
+  return async (config) => {
+    events.push('materialize');
+    const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
+    return { config: { ...runtimeConfig, contextEnv: Object.freeze({}) } };
+  };
 }
 
 describe('AIAdapter.handleInfer', () => {
@@ -224,6 +364,333 @@ describe('AIAdapter.handleInfer', () => {
     await adapter?.closeAsync();
   });
 
+  it('commits managed account activation after infer initialization and before dispatch', async () => {
+    const events: string[] = [];
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter(
+      {
+        inferredText: 'managed inference',
+        onInitialize: () => events.push('initialize'),
+        onStart: () => events.push('start'),
+        onClose: () => events.push('close'),
+      },
+      capture,
+      { prepareAuthRuntime: createRecordingAuthPreparer(events) },
+    );
+    await adapter.init();
+    const cleanupActivation = registerActivationFixture(events);
+
+    try {
+      const result = await MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'infer with selected native account',
+        providerContext: createManagedInferredProviderContext(),
+      });
+
+      expect(result.text).toBe('managed inference');
+      expect(events).toEqual(['prepare', 'materialize', 'initialize', 'commit', 'start', 'close']);
+    } finally {
+      cleanupActivation();
+    }
+  });
+
+  it('fails direct infer before runtime materialization when the selected account manager is missing', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: 'must not run' }, capture);
+    await adapter.init();
+
+    await expect(
+      MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'infer with unavailable account manager',
+        providerContext: createManagedInferredProviderContext(),
+      }),
+    ).rejects.toThrow('selected account manager is unavailable');
+    expect(capture.configFactoryInputs).toEqual([]);
+    expect(capture.connectors).toEqual([]);
+  });
+
+  it('keeps unresolved, explicit, none, and unselected inferred auth activation-free', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: 'side-effect-free' }, capture);
+    await adapter.init();
+    let prepareCalls = 0;
+    const cleanupPrepare = MakaioBus.on(CredentialSubjects.activation.prepare, (ctx) => {
+      prepareCalls += 1;
+      ctx.setResult({ success: false, code: 'activation-failed' });
+    });
+    const inferredWithoutAccount = createManagedInferredProviderContext(false);
+    const noAuth: ResolvedProviderContext = {
+      state: 'resolved',
+      providerConfigId: 'no-auth-config',
+      definitionId: 'no-auth-provider',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'no-auth-provider', methodId: 'none' },
+        definition: { id: 'none', mode: 'none', label: 'No authentication' },
+      },
+    };
+
+    try {
+      await MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'unresolved',
+      });
+      await MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'explicit',
+        providerContext: createResolvedProviderContext('explicit-provider'),
+      });
+      await MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'none',
+        providerContext: noAuth,
+      });
+      await MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'unselected inferred',
+        providerContext: inferredWithoutAccount,
+      });
+
+      expect(prepareCalls).toBe(0);
+      expect(capture.connectors).toHaveLength(4);
+    } finally {
+      cleanupPrepare();
+    }
+  });
+
+  it('closes infer runtime without dispatch when account activation commit fails', async () => {
+    const events: string[] = [];
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter(
+      {
+        inferredText: 'must not dispatch',
+        onInitialize: () => events.push('initialize'),
+        onStart: () => events.push('start'),
+        onClose: () => events.push('close'),
+      },
+      capture,
+      { prepareAuthRuntime: createRecordingAuthPreparer(events) },
+    );
+    await adapter.init();
+    const cleanupActivation = registerActivationFixture(events, { commitCode: () => 'commit-failed' });
+
+    try {
+      await expect(
+        MakaioBus.request(AdapterSubjects.infer, {
+          adapterId: adapter.adapterId,
+          prompt: 'do not dispatch after failed commit',
+          providerContext: createManagedInferredProviderContext(),
+        }),
+      ).rejects.toThrow('selected account could not be activated');
+      expect(events).toEqual(['prepare', 'materialize', 'initialize', 'commit', 'close']);
+      expect(capture.connectors[0]?.closeCalls).toBe(1);
+    } finally {
+      cleanupActivation();
+    }
+  });
+
+  it('holds managed account activation through idle start readiness and commits before registry publication', async () => {
+    const events: string[] = [];
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '', onInitialize: () => events.push('initialize') }, capture, {
+      prepareAuthRuntime: createRecordingAuthPreparer(events),
+    });
+    await adapter.init();
+    const cleanupActivation = registerActivationFixture(events, {
+      onCommit: () => expect(adapter.getActiveAgents()).toEqual([]),
+    });
+
+    try {
+      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        role: 'lead',
+        mode: 'create',
+        providerContext: createManagedInferredProviderContext(),
+      });
+
+      expect(result.success).toBe(true);
+      expect(events).toEqual(['prepare', 'materialize', 'initialize', 'commit']);
+      expect(adapter.getActiveAgents()).toHaveLength(1);
+    } finally {
+      cleanupActivation();
+    }
+  });
+
+  it('fails direct start before connector creation when the selected account manager is missing', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: 'must not run' }, capture);
+    await adapter.init();
+
+    await expect(
+      MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        role: 'lead',
+        mode: 'create',
+        providerContext: createManagedInferredProviderContext(),
+      }),
+    ).rejects.toThrow('selected account manager is unavailable');
+    expect(capture.configFactoryInputs).toEqual([]);
+    expect(capture.connectors).toEqual([]);
+    expect(adapter.getActiveAgents()).toEqual([]);
+  });
+
+  it('releases the resume claim and closes the agent when activation commit fails', async () => {
+    const events: string[] = [];
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '', onInitialize: () => events.push('initialize') }, capture, {
+      prepareAuthRuntime: createRecordingAuthPreparer(events),
+    });
+    await adapter.init();
+    const cleanupActivation = registerActivationFixture(events, {
+      commitCode: (attempt) => (attempt === 1 ? 'commit-failed' : undefined),
+    });
+    const request = {
+      adapterId: adapter.adapterId,
+      role: 'lead' as const,
+      mode: 'resume' as const,
+      sessionId: 'resume-session',
+      adapterSessionId: 'native-resume-session',
+      providerContext: createManagedInferredProviderContext(),
+    };
+
+    try {
+      await expect(MakaioBus.request(AdapterSubjects.startAgent, request)).rejects.toThrow(
+        'selected account could not be activated',
+      );
+      expect(capture.connectors[0]?.closeCalls).toBe(1);
+      expect(adapter.getActiveAgents()).toEqual([]);
+
+      const retry = await MakaioBus.request(AdapterSubjects.startAgent, request);
+      expect(retry.success).toBe(true);
+      expect(capture.connectors).toHaveLength(2);
+    } finally {
+      cleanupActivation();
+    }
+  });
+
+  it('sanitizes startup secrets when connector failure and account rollback both fail', async () => {
+    const events: string[] = [];
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter(
+      {
+        inferredText: '',
+        throwOnInitialize: new Error('connector leaked secret-token-value'),
+        onInitialize: () => events.push('initialize'),
+        onClose: () => events.push('close'),
+      },
+      capture,
+      { prepareAuthRuntime: createRecordingAuthPreparer(events) },
+    );
+    await adapter.init();
+    const cleanupActivation = registerActivationFixture(events, { rollbackFails: true });
+
+    try {
+      const error = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        role: 'lead',
+        mode: 'create',
+        providerContext: createManagedInferredProviderContext(),
+      }).catch((value: unknown) => value);
+
+      expect(error).toBeInstanceOf(RequestError);
+      const aggregate = (error as RequestError).cause;
+      expect(aggregate).toBeInstanceOf(AggregateError);
+      expect((aggregate as AggregateError).cause).toBeUndefined();
+      expect((aggregate as AggregateError).errors.map(String).join(' ')).not.toContain('secret-token-value');
+      expect(events).toEqual(['prepare', 'materialize', 'initialize', 'close', 'rollback']);
+      expect(adapter.getActiveAgents()).toEqual([]);
+    } finally {
+      cleanupActivation();
+    }
+  });
+
+  it('sanitizes startup secrets when connector creation and auth lease rollback both fail', async () => {
+    const events: string[] = [];
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter(
+      {
+        inferredText: '',
+        throwOnCreate: new Error('connector creation leaked secret-create-value'),
+      },
+      capture,
+      {
+        prepareAuthRuntime: async (config) => {
+          events.push('materialize');
+          const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
+          return {
+            config: { ...runtimeConfig, contextEnv: Object.freeze({}) },
+            lease: {
+              clientId: 'test-client',
+              leaseId: 'failing-lease',
+              release: async () => {
+                throw new Error('lease rollback leaked secret-lease-value');
+              },
+            },
+          };
+        },
+      },
+    );
+    await adapter.init();
+    const cleanupActivation = registerActivationFixture(events);
+
+    try {
+      const error = await MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'fail during connector creation',
+        providerContext: createManagedInferredProviderContext(),
+      }).catch((value: unknown) => value);
+
+      expect(error).toBeInstanceOf(RequestError);
+      const aggregate = (error as RequestError).cause;
+      expect(aggregate).toBeInstanceOf(AggregateError);
+      expect((aggregate as AggregateError).cause).toBeUndefined();
+      const diagnostics = (aggregate as AggregateError).errors.map(String).join(' ');
+      expect(diagnostics).not.toContain('secret-create-value');
+      expect(diagnostics).not.toContain('secret-lease-value');
+      expect(events).toEqual(['prepare', 'materialize', 'rollback']);
+      expect(capture.connectors).toEqual([]);
+    } finally {
+      cleanupActivation();
+    }
+  });
+
   it('returns inferred text and forwards model/systemPrompt/providerContext', async () => {
     const capture = {
       configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
@@ -233,11 +700,7 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createTestAdapter({ inferredText: 'inferred output' }, capture);
     await adapter.init();
 
-    const providerContext = {
-      providerConfigId: 'test-config',
-      definitionId: 'test-provider',
-      credentialRefs: {},
-    };
+    const providerContext = createResolvedProviderContext('test-provider', 'test-config');
     const result = await MakaioBus.request(AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer this',
@@ -250,6 +713,7 @@ describe('AIAdapter.handleInfer', () => {
     expect(capture.configFactoryInputs).toHaveLength(1);
     expect(capture.configFactoryInputs[0]?.model).toBe('override-model');
     expect(capture.configFactoryInputs[0]?.providerContext).toEqual(providerContext);
+    expect(capture.configFactoryInputs[0]?.adapterProviderAuth).toBeUndefined();
     // Infer connectors are one-shot: they must declare ephemeral so
     // persistence-capable connectors never write orphaned transcripts.
     expect(capture.configFactoryInputs[0]?.ephemeral).toBe(true);
@@ -259,6 +723,75 @@ describe('AIAdapter.handleInfer', () => {
     expect(capture.connectors[0]?.capturedStartMessage?.message).toBe('infer this');
     expect(capture.connectors[0]?.capturedStartSystemPrompt).toBe('classification-system-prompt');
     expect(capture.connectors[0]?.closeCalls).toBe(1);
+  });
+
+  it('forwards auth metadata for the provider selected by inference context', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    const adapterProviderAuth = createTestProviderAuth('provider-a');
+    adapter = createTestAdapter({ inferredText: 'authenticated output' }, capture, {
+      definitionProviders: [
+        {
+          definition: {
+            id: 'provider-a',
+            name: 'Provider A',
+            availableModels: [],
+            authMethods: [TEST_API_KEY_METHOD],
+          },
+          auth: adapterProviderAuth,
+        },
+      ],
+    });
+    await adapter.init();
+
+    const result = await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'infer with selected auth',
+      providerContext: createResolvedProviderContext('provider-a'),
+    });
+
+    expect(result.text).toBe('authenticated output');
+    expect(capture.configFactoryInputs[0]?.adapterProviderAuth).toEqual(adapterProviderAuth);
+  });
+
+  it('does not fall back to single-provider auth for unresolved or mismatched inference contexts', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    const adapterProviderAuth = createTestProviderAuth('provider-a');
+    adapter = createTestAdapter({ inferredText: 'unbound output' }, capture, {
+      definitionProviders: [
+        {
+          definition: {
+            id: 'provider-a',
+            name: 'Provider A',
+            availableModels: [],
+            authMethods: [TEST_API_KEY_METHOD],
+          },
+          auth: adapterProviderAuth,
+        },
+      ],
+    });
+    await adapter.init();
+
+    await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'infer without provider resolution',
+    });
+    await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'infer with mismatched provider',
+      providerContext: createResolvedProviderContext('provider-b'),
+    });
+
+    expect(capture.configFactoryInputs).toHaveLength(2);
+    expect(capture.configFactoryInputs[0]?.adapterProviderAuth).toBeUndefined();
+    expect(capture.configFactoryInputs[1]?.adapterProviderAuth).toBeUndefined();
   });
 
   it('passes the injected globalBus through infer config factory input', async () => {
@@ -433,51 +966,43 @@ describe('AIAdapter.handleInfer', () => {
     );
     await adapter.init();
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      await expect(
-        MakaioBus.request(AdapterSubjects.infer, {
-          adapterId: adapter.adapterId,
-          prompt: 'infer this',
-          providerContext: { providerConfigId: 'test-config', definitionId: 'test-provider', credentialRefs: {} },
-        }),
-      ).rejects.toThrow('start failed');
-      expect(capture.connectors[0]?.closeCalls).toBe(1);
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[handleInfer:test-adapter-infer] Connector cleanup error:',
-        expect.any(Error),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
+    const error = await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'infer this',
+      providerContext: createResolvedProviderContext('test-provider', 'test-config'),
+    }).catch((cause: unknown) => cause);
+
+    const aggregate = (error as { cause?: unknown }).cause;
+    expect(aggregate).toBeInstanceOf(AggregateError);
+    expect((aggregate as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: 'start failed' }),
+      expect.objectContaining({ message: 'close failed' }),
+    ]);
+    expect(capture.connectors[0]?.closeCalls).toBe(1);
   });
 
-  it('uses sentinel providerContext when none is provided in infer payload', async () => {
+  it('uses unresolved providerContext when none is provided in infer payload', async () => {
     const capture = {
       configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
       connectors: [] as ConfigurableConnector[],
       agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
     };
-    adapter = createTestAdapter({ inferredText: 'sentinel-ok' }, capture);
+    adapter = createTestAdapter({ inferredText: 'unresolved-ok' }, capture);
     await adapter.init();
 
-    // Infer without providerContext — should succeed with sentinel fallback
-    // (supports health checks and local adapters that bypass orchestration).
+    // Infer without providerContext remains explicitly configless. This supports
+    // health checks and local adapters without authorizing ambient credentials.
     const result = await MakaioBus.request(AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer this',
     });
 
-    expect(result.text).toBe('sentinel-ok');
+    expect(result.text).toBe('unresolved-ok');
     expect(capture.configFactoryInputs).toHaveLength(1);
-    expect(capture.configFactoryInputs[0]!.providerContext).toEqual({
-      providerConfigId: 'sentinel',
-      definitionId: 'unresolved', // UNRESOLVED_PROVIDER_DEFINITION_ID sentinel
-      credentialRefs: {},
-    });
+    expect(capture.configFactoryInputs[0]!.providerContext).toEqual({ state: 'unresolved' });
   });
 
-  it('uses sentinel providerContext when none is provided in startAgent payload', async () => {
+  it('uses unresolved providerContext when none is provided in startAgent payload', async () => {
     const capture = {
       configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
       connectors: [] as ConfigurableConnector[],
@@ -493,7 +1018,7 @@ describe('AIAdapter.handleInfer', () => {
       initialMessage: 'hello',
     });
 
-    // Should succeed with sentinel providerContext for provider-less adapters.
+    // Provider-less adapters remain usable with explicitly unresolved context.
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.agentId).toBeDefined();
@@ -598,6 +1123,38 @@ describe('AIAdapter.handleInfer', () => {
 
     const listed = await MakaioBus.request(AdapterSubjects.listAgents, { adapterId: adapter.adapterId });
     expect(listed.agents).toEqual([]);
+  });
+
+  it('releases the connector auth lease when startAgent fails before registry commit', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    const release = vi.fn(async () => undefined);
+    adapter = createTestAdapter({ inferredText: '', throwOnStart: new Error('start failed') }, capture, {
+      prepareAuthRuntime: async (config) => {
+        const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
+        return {
+          config: { ...runtimeConfig, contextEnv: Object.freeze({}) },
+          lease: { clientId: 'claude-code', leaseId: 'lease-startup-failure', release },
+        };
+      },
+    });
+    await adapter.init();
+
+    await expect(
+      MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        role: 'lead',
+        mode: 'create',
+        initialMessage: 'hello',
+      }),
+    ).rejects.toThrow('start failed');
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(capture.connectors[0]?.closeCalls).toBe(1);
+    expect(adapter.getActiveAgents()).toEqual([]);
   });
 
   it('uses live platform defaults from subclass initialization for agent config and persistence', async () => {
@@ -1042,19 +1599,22 @@ describe('AIAdapter model metadata resolution', () => {
     await adapter?.closeAsync();
   });
 
-  it('passes single-provider models into agent config', async () => {
+  it('carries resolved provider metadata into agent config and initial factory input', async () => {
     const capture = {
       configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
       connectors: [] as ConfigurableConnector[],
       agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
     };
+    const adapterProviderAuth = createTestProviderAuth('provider-a');
     const definitionProviders: AdapterProviderDefinition[] = [
       {
         definition: {
           id: 'provider-a',
           name: 'Provider A',
           availableModels: [{ name: 'model-a', contextWindowSize: 123_456, labId: 'provider-a' }],
+          authMethods: [TEST_API_KEY_METHOD],
         },
+        auth: adapterProviderAuth,
       },
     ];
     adapter = createTestAdapter({ inferredText: 'unused' }, capture, { definitionProviders });
@@ -1066,11 +1626,56 @@ describe('AIAdapter model metadata resolution', () => {
       mode: 'create',
       initialMessage: 'hello',
       model: 'model-a',
-      providerContext: { providerConfigId: 'test-config', definitionId: 'provider-a', credentialRefs: {} },
+      providerContext: createResolvedProviderContext('provider-a', 'test-config'),
     });
 
     expect(result.success).toBe(true);
     expect(capture.agentConfigs[0]?.availableModels).toEqual(definitionProviders[0]?.definition.availableModels);
+    expect(capture.agentConfigs[0]?.definitionProviders).toBe(definitionProviders);
+    expect(capture.configFactoryInputs[0]?.adapterProviderAuth).toEqual(adapterProviderAuth);
+  });
+
+  it('does not fall back to single-provider auth for unresolved or mismatched initial contexts', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    const adapterProviderAuth = createTestProviderAuth('provider-a');
+    adapter = createTestAdapter({ inferredText: 'unused' }, capture, {
+      definitionProviders: [
+        {
+          definition: {
+            id: 'provider-a',
+            name: 'Provider A',
+            availableModels: [],
+            authMethods: [TEST_API_KEY_METHOD],
+          },
+          auth: adapterProviderAuth,
+        },
+      ],
+    });
+    await adapter.init();
+
+    const unresolvedResult = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      role: 'lead',
+      mode: 'create',
+      initialMessage: 'hello unresolved provider',
+    });
+    const mismatchedResult = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      role: 'lead',
+      mode: 'create',
+      initialMessage: 'hello mismatched provider',
+      providerContext: createResolvedProviderContext('provider-b'),
+    });
+
+    expect(unresolvedResult.success).toBe(true);
+    expect(mismatchedResult.success).toBe(true);
+    expect(capture.configFactoryInputs).toHaveLength(2);
+    expect(capture.configFactoryInputs[0]?.adapterProviderAuth).toBeUndefined();
+    expect(capture.configFactoryInputs[1]?.adapterProviderAuth).toBeUndefined();
   });
 
   it('uses single-provider models when the caller omitted provider selection', async () => {
@@ -1085,6 +1690,7 @@ describe('AIAdapter model metadata resolution', () => {
           id: 'provider-a',
           name: 'Provider A',
           availableModels: [{ name: 'model-a', contextWindowSize: 123_456, labId: 'provider-a' }],
+          authMethods: [],
         },
       },
     ];
@@ -1115,6 +1721,7 @@ describe('AIAdapter model metadata resolution', () => {
           id: 'provider-a',
           name: 'Provider A',
           availableModels: [{ name: 'shared-model', contextWindowSize: 100_000, labId: 'provider-a' }],
+          authMethods: [],
         },
       },
       {
@@ -1122,6 +1729,7 @@ describe('AIAdapter model metadata resolution', () => {
           id: 'provider-b',
           name: 'Provider B',
           availableModels: [{ name: 'shared-model', contextWindowSize: 200_000, labId: 'provider-b' }],
+          authMethods: [],
         },
       },
     ];

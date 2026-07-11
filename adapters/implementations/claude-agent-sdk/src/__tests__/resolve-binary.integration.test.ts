@@ -1,39 +1,20 @@
-/**
- * Tests for `client.resolveBinary` integration in the Claude Agent SDK connector.
- *
- * Verifies that `initializeSession()` threads the resolved binary path and env
- * into the SDK query options, and that the adapter degrades gracefully when no
- * handler is registered for `client.resolveBinary`.
- *
- * Design invariants under test:
- * - When `client.resolveBinary` returns a managed context, the session env
- *   includes the resolved env vars (e.g. `CLAUDE_CONFIG_DIR`) and the SDK query
- *   options use the resolved `pathToClaudeCodeExecutable`.
- * - When `client.resolveBinary` returns a global context (binaryPath: null,
- *   empty env), neither field is set on the session.
- * - When `client.resolveBinary` has no handler (framework-only boot),
- *   the connector falls back to the default env/options and still initializes.
- */
+/** Connector consumption tests for centrally prepared Claude runtime config. */
 
 import os from 'node:os';
-import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/contracts/client';
-import type { OptionalResult } from '@makaio/core';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { CredentialRefSchema } from '@makaio/contracts/config';
-import { setupFixedCredentialBus } from '@makaio/ai-adapters-claude-shared/testing';
+import { MakaioBus } from '@makaio/bus-core';
+import { ClientSubjects, type ClientExecutionContext } from '@makaio/contracts/client';
+import type { OptionalResult } from '@makaio/core';
+import { ClaudeCodeConnectorNamespace } from '../namespace/index.js';
+import { ClaudeSdkConnector } from '../connector.js';
+import type { ClaudeAgentConfig } from '../types/index.js';
 
-// ---------------------------------------------------------------------------
-// SDK mock — captures the Options passed to each query() call so tests can
-// inspect what path and env the connector resolved.
-// ---------------------------------------------------------------------------
-
-/** Captured query options from each query() invocation, in order. */
 const capturedOptions: Options[] = [];
 
-const queryHarness = vi.hoisted(() => {
-  const query = vi.fn((opts: { prompt: unknown; options: Options }) => {
+const queryHarness = vi.hoisted(() => ({
+  query: vi.fn((opts: { prompt: unknown; options: Options }) => {
     capturedOptions.push(opts.options);
     return {
       interrupt: vi.fn(async () => undefined),
@@ -41,287 +22,190 @@ const queryHarness = vi.hoisted(() => {
       setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
       setMaxThinkingTokens: vi.fn(async () => undefined),
       async *[Symbol.asyncIterator]() {
-        // No messages — initialization tests do not exercise turn consumption.
+        // Initialization does not consume messages.
       },
     };
-  });
-
-  return {
-    query,
-    reset: () => {
-      query.mockClear();
-      capturedOptions.length = 0;
-    },
-  };
-});
+  }),
+}));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   Options: class Options {},
   query: queryHarness.query,
 }));
 
-import { ClaudeCodeConnectorNamespace } from '../namespace/index.js';
-import type { ClaudeCodeConnectorBus } from '../namespace/index.js';
-import { ClaudeCodeAgent } from '../agent.js';
-import { ClaudeSdkConnector } from '../connector.js';
-import type { ClaudeAgentConfig } from '../types/index.js';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+type TestProviderConfig = ClaudeAgentConfig['providerConfig'] & { baseUrl?: string };
 
 /**
- * Create a ClaudeCodeAgent wired to a fresh connector namespace bus.
- * @param clientId - Client identifier forwarded to `client.resolveBinary`.
- * @param connectorEnv - Base environment passed to the connector.
- * @param queryOptions - Optional Claude SDK query options.
- * @returns Agent instance ready for `initialize()`.
+ * Build a connector whose environment and binary were already finalized centrally.
+ * @param options - Optional prepared environment, client execution, and provider config.
+ * @returns Connector configured for one central-runtime assertion.
  */
-async function makeAgent(
-  clientId = 'claude-code',
-  connectorEnv: Record<string, string> = {},
-  queryOptions?: Options,
-): Promise<ClaudeCodeAgent> {
-  const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus();
-  return new ClaudeCodeAgent({
-    adapterBus,
-    globalBus: MakaioBus,
+async function makeConnector(
+  options: {
+    env?: Record<string, string>;
+    clientExecution?: ClientExecutionContext;
+    providerConfig?: TestProviderConfig;
+  } = {},
+): Promise<ClaudeSdkConnector> {
+  const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+  return new ClaudeSdkConnector({
+    bus,
     adapterId: 'adapter-test',
     adapterName: 'claude-agent-sdk',
     agentId: 'agent-test',
     cwd: os.tmpdir(),
     model: 'claude-sonnet-4-20250514',
-    env: connectorEnv,
-    capabilities: [],
-    nativeTools: [],
-    clientId,
-    configFactory: async (input) => ({
-      ...input,
-      bus: input.bus as ClaudeCodeConnectorBus,
-      cwd: input.cwd ?? os.tmpdir(),
-      model: input.model ?? 'claude-sonnet-4-20250514',
-      env: input.env ?? {},
-      providerConfig: queryOptions !== undefined ? { queryOptions } : undefined,
-    }),
-    connectorFactory: (config) =>
-      new ClaudeSdkConnector({
-        ...(config as ClaudeAgentConfig),
-        clientId: config.clientId ?? 'claude-code',
-        requestSessionAccountObservation: async (): Promise<OptionalResult<never>> => ({
-          handled: false,
-        }),
-      }),
+    env: options.env ?? {},
+    clientExecution: options.clientExecution,
+    providerConfig: options.providerConfig,
+    clientId: 'claude-code',
+    requestSessionAccountObservation: async (): Promise<OptionalResult<never>> => ({ handled: false }),
   });
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+/**
+ * Build one client execution context for binary-consumption assertions.
+ * @param binaryPath - Exact selected path, or `null` for SDK-managed discovery.
+ * @param source - Resolution source owning the selected path.
+ * @returns Client execution context matching the selected source.
+ */
+function execution(
+  binaryPath: string | null,
+  source: ClientExecutionContext['source'] = binaryPath === null ? 'global' : 'managed',
+): ClientExecutionContext {
+  return {
+    binaryPath,
+    env: {},
+    configDir: null,
+    source,
+    version: null,
+  };
+}
 
-describe('ClaudeSdkConnector — client.resolveBinary integration', () => {
-  let agents: ClaudeCodeAgent[];
-  let cleanupHandlers: Array<() => void>;
+describe('ClaudeSdkConnector — central runtime config', () => {
+  const connectors: ClaudeSdkConnector[] = [];
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    queryHarness.reset();
-    agents = [];
-    cleanupHandlers = [];
+    capturedOptions.length = 0;
+    queryHarness.query.mockClear();
   });
 
   afterEach(async () => {
-    for (const cleanup of cleanupHandlers) cleanup();
-    cleanupHandlers = [];
-    await Promise.all(agents.map((agent) => agent.close()));
-    agents = [];
+    await Promise.all(connectors.splice(0).map((connector) => connector.close()));
     MakaioBus.__resetHandlers?.();
   });
 
-  // -------------------------------------------------------------------------
-  // Managed context — binary path and env are resolved
-  // -------------------------------------------------------------------------
-
-  it('sets pathToClaudeCodeExecutable and env when resolveBinary returns a managed context', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult({
-          binaryPath: '/usr/local/lib/makaio/claude-code/1.0.0/claude',
-          env: { CLAUDE_CONFIG_DIR: '/usr/local/lib/makaio/profiles/default' },
-          configDir: '/usr/local/lib/makaio/profiles/default',
-          source: 'managed',
-          version: '1.0.0',
-        });
-      }),
-    );
-
-    const agent = await makeAgent('claude-code');
-    agents.push(agent);
-    await agent.initialize();
-
-    expect(capturedOptions).toHaveLength(1);
-    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/usr/local/lib/makaio/claude-code/1.0.0/claude');
-    expect(capturedOptions[0]?.env).toMatchObject({
-      CLAUDE_CONFIG_DIR: '/usr/local/lib/makaio/profiles/default',
+  it('uses the centrally selected managed binary and lease environment', async () => {
+    const connector = await makeConnector({
+      env: { CLAUDE_CONFIG_DIR: '/isolated/claude' },
+      clientExecution: execution('/managed/bin/claude'),
     });
+    connectors.push(connector);
+
+    await connector.initialize();
+
+    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/managed/bin/claude');
+    expect(capturedOptions[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: '/isolated/claude' });
   });
 
-  // -------------------------------------------------------------------------
-  // Global context — neither path nor env is set
-  // -------------------------------------------------------------------------
+  it('uses the exact host-global executable selected by the central resolver', async () => {
+    const hostBinaryPath = path.resolve(os.tmpdir(), 'makaio-host-global', 'claude');
+    const connector = await makeConnector({
+      clientExecution: execution(hostBinaryPath, 'global'),
+    });
+    connectors.push(connector);
 
-  it('does not set pathToClaudeCodeExecutable when resolveBinary returns a global context', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult({
-          binaryPath: null,
-          env: {},
-          configDir: null,
-          source: 'global',
-          version: null,
-        });
-      }),
-    );
+    await connector.initialize();
 
-    const agent = await makeAgent('claude-code');
-    agents.push(agent);
-    await agent.initialize();
+    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe(hostBinaryPath);
+  });
 
-    expect(capturedOptions).toHaveLength(1);
+  it('uses the exact image-local executable selected by container global-only resolution', async () => {
+    const connector = await makeConnector({
+      clientExecution: execution('/opt/makaio/bin/claude', 'global'),
+    });
+    connectors.push(connector);
+
+    await connector.initialize();
+
+    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/opt/makaio/bin/claude');
+  });
+
+  it('uses SDK-managed discovery and suppresses a legacy query path when central selection is null', async () => {
+    const connector = await makeConnector({
+      clientExecution: execution(null),
+      providerConfig: { queryOptions: { pathToClaudeCodeExecutable: '/legacy/bin/claude' } },
+    });
+    connectors.push(connector);
+
+    await connector.initialize();
+
     expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBeUndefined();
   });
 
-  it('does not inject env vars when resolveBinary returns a global context with empty env', async () => {
-    const baseEnv = { EXISTING_VAR: 'base-value' };
-
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult({
-          binaryPath: null,
-          env: {},
-          configDir: null,
-          source: 'global',
-          version: null,
-        });
-      }),
-    );
-
-    const agent = await makeAgent('claude-code', baseEnv);
-    agents.push(agent);
-    await agent.initialize();
-
-    expect(capturedOptions).toHaveLength(1);
-    expect(capturedOptions[0]?.env).toMatchObject({ EXISTING_VAR: 'base-value' });
-    expect(capturedOptions[0]?.env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
-  });
-
-  // -------------------------------------------------------------------------
-  // No handler — framework-only boot, falls back to current behaviour
-  // -------------------------------------------------------------------------
-
-  it('initializes without error when no handler is registered for client.resolveBinary', async () => {
-    // No handler registered — requestOptional returns { handled: false }
-    const agent = await makeAgent('claude-code');
-    agents.push(agent);
-    // Non-fork sessions return the locally-authoritative session ID immediately.
-    await expect(agent.initialize()).resolves.toEqual(expect.any(String));
-
-    expect(capturedOptions).toHaveLength(1);
-    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBeUndefined();
-  });
-
-  it('preserves base env when falling back without a handler', async () => {
-    const baseEnv = { MY_API_KEY: 'secret' };
-    const agent = await makeAgent('claude-code', baseEnv);
-    agents.push(agent);
-    await agent.initialize();
-
-    expect(capturedOptions[0]?.env).toMatchObject({ MY_API_KEY: 'secret' });
-  });
-
-  it('passes Anthropic-compatible provider overrides through Claude-native env names', async () => {
-    cleanupHandlers.push(setupFixedCredentialBus('opencode-secret'));
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
-    const connector = new ClaudeSdkConnector({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'agent-test',
-      cwd: os.tmpdir(),
-      model: 'minimax-m2.7',
-      env: {
-        ANTHROPIC_API_KEY: 'ambient-anthropic-secret',
-        OPENCODE_GO_API_KEY: 'ambient-opencode-secret',
-      },
-      providerContext: {
-        providerConfigId: 'test-provider-config-id',
-        definitionId: 'opencode-go-anthropic',
-        credentialRefs: { apiKey: CredentialRefSchema.parse('env:OPENCODE_GO_API_KEY') },
-        credentialEnvVars: { apiKey: 'OPENCODE_GO_API_KEY' },
-        ambientCredentialEnvVars: ['ANTHROPIC_API_KEY', 'OPENCODE_GO_API_KEY'],
-        endpointOverrides: { anthropic: 'https://opencode.example.test/anthropic' },
-      },
-      clientId: 'claude-code',
-      requestSessionAccountObservation: async (): Promise<OptionalResult<never>> => ({
-        handled: false,
-      }),
+  it('keeps the central managed binary authoritative over query options', async () => {
+    const connector = await makeConnector({
+      clientExecution: execution('/managed/bin/claude'),
+      providerConfig: { queryOptions: { pathToClaudeCodeExecutable: '/user/bin/claude' } },
     });
+    connectors.push(connector);
+
+    await connector.initialize();
+
+    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/managed/bin/claude');
+  });
+
+  it('uses only the selected API-key delivery and resolved endpoint', async () => {
+    const connector = await makeConnector({
+      env: { ANTHROPIC_API_KEY: 'api-secret' },
+      providerConfig: { baseUrl: 'https://gateway.example.test/anthropic' },
+    });
+    connectors.push(connector);
 
     await connector.initialize();
 
     expect(capturedOptions[0]?.env).toMatchObject({
-      ANTHROPIC_API_KEY: 'opencode-secret',
-      ANTHROPIC_BASE_URL: 'https://opencode.example.test/anthropic',
+      ANTHROPIC_API_KEY: 'api-secret',
+      ANTHROPIC_BASE_URL: 'https://gateway.example.test/anthropic',
     });
-    expect(capturedOptions[0]?.env).not.toHaveProperty('OPENCODE_GO_API_KEY');
+    expect(capturedOptions[0]?.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
   });
 
-  // -------------------------------------------------------------------------
-  // Env merge order — resolved binary env takes precedence over credential env
-  // -------------------------------------------------------------------------
+  it('uses only the selected explicit OAuth-token delivery', async () => {
+    const connector = await makeConnector({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' } });
+    connectors.push(connector);
 
-  it('binary env overrides base connector env when both are present', async () => {
-    // Base env has a value; resolved binary env overrides it
-    const baseEnv = { CLAUDE_CONFIG_DIR: '/old/path', BASE_VAR: 'keep-me' };
+    await connector.initialize();
 
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult({
-          binaryPath: '/path/to/claude',
-          env: { CLAUDE_CONFIG_DIR: '/new/managed/path' },
-          configDir: '/new/managed/path',
-          source: 'managed',
-          version: '1.2.3',
-        });
-      }),
-    );
-
-    const agent = await makeAgent('claude-code', baseEnv);
-    agents.push(agent);
-    await agent.initialize();
-
-    expect(capturedOptions[0]?.env).toMatchObject({
-      CLAUDE_CONFIG_DIR: '/new/managed/path',
-      BASE_VAR: 'keep-me',
-    });
+    expect(capturedOptions[0]?.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' });
+    expect(capturedOptions[0]?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 
-  it('keeps the managed binary path authoritative over provider query options', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult({
-          binaryPath: '/managed/claude',
-          env: {},
-          configDir: null,
-          source: 'managed',
-          version: '1.2.3',
-        });
-      }),
-    );
+  it('preserves inferred native state without explicit auth variables', async () => {
+    const connector = await makeConnector({ env: { CLAUDE_CONFIG_DIR: '/native/claude' } });
+    connectors.push(connector);
 
-    const agent = await makeAgent('claude-code', {}, { pathToClaudeCodeExecutable: '/user/override/claude' });
-    agents.push(agent);
-    await agent.initialize();
+    await connector.initialize();
 
-    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/managed/claude');
+    expect(capturedOptions[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: '/native/claude' });
+    expect(capturedOptions[0]?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(capturedOptions[0]?.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('does not resolve the client binary again inside the connector', async () => {
+    const resolveBinary = vi.fn();
+    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
+      resolveBinary();
+      ctx.setResult(execution('/unexpected/bin/claude'));
+    });
+    const connector = await makeConnector({ clientExecution: execution('/selected/bin/claude') });
+    connectors.push(connector);
+
+    await connector.initialize();
+    cleanup();
+
+    expect(resolveBinary).not.toHaveBeenCalled();
+    expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/selected/bin/claude');
   });
 });

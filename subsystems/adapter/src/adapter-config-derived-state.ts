@@ -1,12 +1,8 @@
-import {
-  type AdapterFile,
-  type ProviderConfigFile,
-  isAccountManagerRef,
-  slugifyProviderConfigName,
-} from '@makaio/contracts/config';
+import { type AdapterFile, type ProviderConfigFile, slugifyProviderConfigName } from '@makaio/contracts/config';
 import {
   type AdapterFileConfig,
   type BindingRecord,
+  type ProviderConfigAuthSummary,
   type ProviderConfigFileRecord,
 } from '@makaio/services-core/adapter-subsystem';
 import { type SnapshotState } from './adapter-subsystem-types.js';
@@ -49,16 +45,14 @@ export interface AdapterConfigDerivedState {
 /**
  * Convert a raw provider config file into the bus-safe read model.
  *
- * Raw `credentials` are never included in the result. Instead the helper
- * derives `hasCredentials` and an optional opaque `sourceRef`.
+ * Raw credential refs are never included in the result. The fixed auth summary
+ * exposes only the selected method, mode, optional native account, and whether
+ * the selection contains credentials.
  * @param id - Canonical provider config ID.
  * @param raw - Raw file payload.
  * @returns Bus-safe provider config read model.
  */
 export function toProviderConfigRecord(id: string, raw: ProviderConfigFile): ProviderConfigFileRecord {
-  const hasCredentials = raw.credentials !== undefined && Object.keys(raw.credentials).length > 0;
-  const sourceRef = deriveSourceRef(raw.credentials);
-
   return {
     id,
     definitionId: raw.definitionId,
@@ -68,10 +62,38 @@ export function toProviderConfigRecord(id: string, raw: ProviderConfigFile): Pro
     modelFilterMode: raw.modelFilterMode ?? 'show-all',
     isDefault: raw.isDefault ?? false,
     enabled: raw.enabled ?? true,
-    isSentinel: raw.isSentinel ?? false,
-    hasCredentials,
-    ...(sourceRef ? { sourceRef } : {}),
+    auth: summarizeProviderConfigAuth(raw),
+    ...(raw.managedBy ? { managedBy: { ...raw.managedBy } } : {}),
   };
+}
+
+/**
+ * Build the credential-free auth summary exposed by canonical reads.
+ * @param raw - Raw provider config containing credential refs.
+ * @returns Fixed summary with no credential refs.
+ */
+export function summarizeProviderConfigAuth(raw: ProviderConfigFile): ProviderConfigAuthSummary {
+  switch (raw.auth.mode) {
+    case 'explicit':
+      return {
+        mode: 'explicit',
+        method: { ...raw.auth.method },
+        hasCredentials: true,
+      };
+    case 'inferred':
+      return {
+        mode: 'inferred',
+        method: { ...raw.auth.method },
+        ...(raw.auth.account ? { account: { ...raw.auth.account } } : {}),
+        hasCredentials: false,
+      };
+    case 'none':
+      return {
+        mode: 'none',
+        method: { ...raw.auth.method },
+        hasCredentials: false,
+      };
+  }
 }
 
 /**
@@ -109,29 +131,6 @@ export function toAdapterFileRecord(name: string, raw: AdapterFile, bindings: Bi
     ...(raw.settings ? { settings: structuredClone(raw.settings) as Record<string, unknown> } : {}),
     bindings: bindings.map((binding) => ({ ...binding })),
   };
-}
-
-/**
- * Derive an opaque source ref from raw credential refs.
- *
- * Returns the first account-manager ref found in the credential map, or
- * `undefined` when none is present. This is the only credential field that
- * may surface on the bus-safe read model.
- * @param credentials - Raw credential refs stored in the provider config file.
- * @returns Account-manager source ref string, or `undefined`.
- */
-export function deriveSourceRef(credentials: ProviderConfigFile['credentials']): string | undefined {
-  if (!credentials) {
-    return undefined;
-  }
-
-  for (const ref of Object.values(credentials)) {
-    if (isAccountManagerRef(ref)) {
-      return ref;
-    }
-  }
-
-  return undefined;
 }
 
 /**

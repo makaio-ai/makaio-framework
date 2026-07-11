@@ -1,14 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { IAccountCredentialStore, IAccountMetadataStore, StoredAccount } from './interfaces/account-store.js';
+import type { PreparedNativeCredentialMutation } from './interfaces/credential-source.js';
 import type { CredentialSourceWithOptionalLabel } from './handlers/credential-tracker-types.js';
 import { AccountManagerSubjects } from './bus/namespace.js';
 import { toPublicAccount } from './utils/index.js';
 import { getStoredAccount, listStoredAccounts, removeStoredAccount } from './storage/joined-account-store.js';
-import {
-  appendActivationTimelineBestEffort,
-  commitActivatedAccountState,
-  rollbackActivatedAccountState,
-} from './storage/activation-state.js';
+import { commitActivatedAccountState, rollbackActivatedAccountState } from './storage/activation-state.js';
 import { buildPreparedAccountRollbackSnapshot, prepareStoredAccountCredential } from './native-credential.js';
 import { mergeSourceAccountMetadata } from './utils/source-account-metadata.js';
 import { AccountManagerQuiesceError } from './account-manager-types.js';
@@ -39,6 +36,49 @@ export interface AccountActivationDeps {
   clearDerivedState(clientId: string, accountId: string, fingerprint: string): Promise<void>;
   /** Bus instance for emitting switch and credential-changed events. */
   bus: IMakaioBus;
+}
+
+/** Prepared account switch whose native and durable mutations await one terminal decision. */
+export interface PreparedAccountActivation {
+  /** Account materialized into the client's native store. */
+  readonly account: StoredAccount;
+  /** Commit timeline/tracker state, rolling back account state if finalization fails. */
+  commit(): Promise<void>;
+  /** Restore the exact previous manager-owned native and durable state. */
+  rollback(): Promise<void>;
+}
+
+/** Commit policy for auxiliary activation metadata. */
+export interface PrepareAccountActivationOptions {
+  /** Keep timeline writes best-effort for user-initiated standalone switches. */
+  readonly timelineFailure?: 'rollback' | 'ignore';
+}
+
+/** State captured after durable/native preparation and before terminal finalization. */
+interface PreparedActivationState {
+  /** Target account containing the credential written to native storage. */
+  readonly target: StoredAccount;
+  /** Account selected before preparation, when one existed. */
+  readonly previousActiveId: string | null;
+  /** Exact previous active account snapshot for durable rollback. */
+  readonly previousActive: StoredAccount | null;
+  /** Source-owned native write whose rollback is generation guarded. */
+  readonly nativeMutation: PreparedNativeCredentialMutation;
+  /** Target snapshot reconciled with any prepared credential refresh. */
+  readonly rollbackTarget: StoredAccount;
+  /** Timestamp applied to durable activation state. */
+  readonly activatedAt: number;
+}
+
+/** Stable terminal account-activation failure without credential-bearing causes. */
+export class AccountActivationFinalizationError extends Error {
+  /**
+   * @param code - Stable commit/rollback failure category.
+   */
+  public constructor(public readonly code: 'commit-failed' | 'commit-rollback-failed' | 'rollback-failed') {
+    super(`Account activation finalization failed (${code}).`);
+    this.name = 'AccountActivationFinalizationError';
+  }
 }
 
 /**
@@ -101,58 +141,92 @@ export async function activateAccount(
   existingAccounts?: StoredAccount[],
   preloadedTarget?: StoredAccount,
 ): Promise<StoredAccount> {
-  const { metadataStore, credentialStore, source, setLastSeen, clearDerivedState } = deps;
+  const prepared = await prepareAccountActivation(clientId, accountId, deps, existingAccounts, preloadedTarget, {
+    timelineFailure: 'ignore',
+  });
+  await prepared.commit();
+  return prepared.account;
+}
+
+/**
+ * Prepare a reversible account activation while the caller owns the per-client mutation lock.
+ *
+ * The target credential is refreshed, persisted, and written to the native
+ * client store before this function returns so a replacement connector can
+ * materialize it. Timeline and tracker state are committed only after the
+ * replacement is ready. Rollback restores the previous account selected by
+ * manager state; it never guesses from a provider context.
+ * @param clientId - Client whose native store should be prepared
+ * @param accountId - Account that should become active in native storage
+ * @param deps - Injected dependencies
+ * @param existingAccounts - Optional preloaded account list
+ * @param preloadedTarget - Optional already-loaded target account
+ * @param options - Finalization policy; transactional callers use strict rollback
+ * @returns Reversible activation handle awaiting exactly one terminal action
+ */
+export async function prepareAccountActivation(
+  clientId: string,
+  accountId: string,
+  deps: AccountActivationDeps,
+  existingAccounts?: StoredAccount[],
+  preloadedTarget?: StoredAccount,
+  options: PrepareAccountActivationOptions = {},
+): Promise<PreparedAccountActivation> {
+  const state = await prepareActivationState(clientId, accountId, deps, existingAccounts, preloadedTarget);
+  return createPreparedActivation(clientId, deps, state, options);
+}
+
+/**
+ * Prepare durable and native account state while the caller owns the client lock.
+ * @param clientId - Client whose native account is selected.
+ * @param accountId - Exact account to materialize.
+ * @param deps - Account activation dependencies.
+ * @param existingAccounts - Optional preloaded account list.
+ * @param preloadedTarget - Optional already-loaded target account.
+ * @returns State required for commit or rollback finalization.
+ */
+async function prepareActivationState(
+  clientId: string,
+  accountId: string,
+  deps: AccountActivationDeps,
+  existingAccounts?: StoredAccount[],
+  preloadedTarget?: StoredAccount,
+): Promise<PreparedActivationState> {
+  const { metadataStore, credentialStore, source, clearDerivedState } = deps;
   const target = preloadedTarget ?? (await getStoredAccount(metadataStore, credentialStore, clientId, accountId));
   if (!target) throw new Error(`Account ${accountId} not found for ${clientId}`);
   const accounts = existingAccounts ?? (await listStoredAccounts(metadataStore, credentialStore, clientId));
   const previousActive = accounts.find((account) => account.active) ?? null;
-  const previousActiveId = previousActive?.id ?? null;
-  // Rollback must preserve prepared native credential reconciliations.
   const previousTargetSnapshot = structuredClone(target);
   const previousActiveSnapshot = previousActive ? structuredClone(previousActive) : null;
   const prepared = await prepareStoredAccountCredential(source, target, clientId, accountId);
   if (prepared.status === 'failed') {
-    // The credential is irrecoverable (e.g. refresh token revoked).
-    // Remove the zombie account so the TUI never shows it and no
-    // future switch attempt can write a dead token to the keychain.
     await removeStoredAccount(metadataStore, credentialStore, clientId, accountId);
     throw new AccountManagerQuiesceError(prepared.reason, clearDerivedState(clientId, accountId, target.fingerprint));
   }
   if (prepared.refreshStatus === 'transient') {
-    // The refresh endpoint was temporarily unreachable (5xx, timeout,
-    // network error). The credential is not proven dead — proceed with
-    // the existing credential and let the next activation cycle retry.
     console.warn(
       `[AccountManager] activateAccount — transient refresh failure for ${clientId}:${accountId}: ${prepared.refreshReason}`,
     );
   }
-  const credential = prepared.credential;
-  const rollbackTargetSnapshot = buildPreparedAccountRollbackSnapshot(previousTargetSnapshot, credential);
 
-  // Update stored account with the (possibly refreshed) credential.
-  target.credential = credential;
-  target.fingerprint = credential.fingerprint;
-  target.metadata = mergeSourceAccountMetadata(target.metadata, credential.metadata);
+  target.credential = prepared.credential;
+  target.fingerprint = prepared.credential.fingerprint;
+  target.metadata = mergeSourceAccountMetadata(target.metadata, prepared.credential.metadata);
   const activatedAt = Date.now();
+  const rollbackTarget = buildPreparedAccountRollbackSnapshot(previousTargetSnapshot, prepared.credential);
+  await commitActivatedAccountState({ metadataStore, credentialStore, clientId, accounts, target, activatedAt });
 
-  await commitActivatedAccountState({
-    metadataStore,
-    credentialStore,
-    clientId,
-    accounts,
-    target,
-    activatedAt,
-  });
-
+  let nativeMutation: PreparedNativeCredentialMutation;
   try {
-    await source.write(target.credential);
+    nativeMutation = await source.prepareNativeCredentialMutation(target.credential);
   } catch (error) {
     try {
       await rollbackActivatedAccountState({
         metadataStore,
         credentialStore,
         clientId,
-        previousTarget: rollbackTargetSnapshot,
+        previousTarget: rollbackTarget,
         previousActive: previousActiveSnapshot,
       });
     } catch (rollbackError) {
@@ -162,24 +236,158 @@ export async function activateAccount(
         { cause: rollbackError },
       );
     }
-
     throw error;
   }
 
-  if (previousActiveId !== target.id) {
-    await appendActivationTimelineBestEffort(
-      metadataStore,
-      {
-        clientId,
-        fromAccountId: previousActiveId,
-        toAccountId: target.id,
-        effectiveAt: activatedAt,
-        reason: 'switch',
-      },
-      '[AccountManager] timeline append failed after successful activation:',
-    );
+  const state: PreparedActivationState = {
+    target,
+    previousActiveId: previousActiveSnapshot?.id ?? null,
+    previousActive: previousActiveSnapshot,
+    nativeMutation,
+    rollbackTarget,
+    activatedAt,
+  };
+  if (nativeMutation.coordination === 'uncertain') {
+    try {
+      await restoreActivationState(clientId, deps, state);
+    } catch (error) {
+      if (error instanceof AccountActivationFinalizationError) throw error;
+      throw new AccountActivationFinalizationError('rollback-failed');
+    }
+    throw new Error('Native account activation coordination was uncertain; the prepared activation was restored.');
   }
+  return state;
+}
 
-  setLastSeen(clientId, target.fingerprint);
-  return target;
+/**
+ * Restore the exact manager-owned native and durable state captured before preparation.
+ * @param clientId - Client whose state is restored.
+ * @param deps - Account activation dependencies.
+ * @param state - Prepared state carrying rollback snapshots.
+ * @returns Promise that resolves after both restore paths succeed.
+ */
+async function restoreActivationState(
+  clientId: string,
+  deps: AccountActivationDeps,
+  state: PreparedActivationState,
+): Promise<void> {
+  const rollbackErrors: Error[] = [];
+  let restoreDurableState = false;
+  try {
+    const nativeRollback = await state.nativeMutation.rollback();
+    restoreDurableState = nativeRollback.status === 'restored';
+    if (nativeRollback.status === 'superseded') {
+      rollbackErrors.push(new Error('Native account rollback was superseded by a newer credential generation.'));
+    } else if (nativeRollback.coordination === 'uncertain') {
+      rollbackErrors.push(new Error('Native account rollback coordination is uncertain.'));
+    }
+  } catch {
+    rollbackErrors.push(new Error('Native account rollback failed.'));
+  }
+  if (restoreDurableState) {
+    try {
+      await rollbackActivatedAccountState({
+        metadataStore: deps.metadataStore,
+        credentialStore: deps.credentialStore,
+        clientId,
+        previousTarget: state.rollbackTarget,
+        previousActive: state.previousActive,
+      });
+    } catch {
+      rollbackErrors.push(new Error('Durable account rollback failed.'));
+    }
+  }
+  if (rollbackErrors.length === 1) throw new AccountActivationFinalizationError('rollback-failed');
+  if (rollbackErrors.length > 1) {
+    throw new AggregateError(rollbackErrors, 'Native and durable account activation rollback both failed.');
+  }
+}
+
+/**
+ * Commit timeline and tracker metadata after a replacement connector is ready.
+ * @param clientId - Client whose activation is committed.
+ * @param deps - Account activation dependencies.
+ * @param state - Prepared state being committed.
+ * @param options - Timeline failure policy.
+ * @returns Promise that resolves after commit metadata is recorded.
+ */
+async function commitActivationMetadata(
+  clientId: string,
+  deps: AccountActivationDeps,
+  state: PreparedActivationState,
+  options: PrepareAccountActivationOptions,
+): Promise<void> {
+  if (state.previousActiveId !== state.target.id) {
+    const entry = {
+      clientId,
+      fromAccountId: state.previousActiveId,
+      toAccountId: state.target.id,
+      effectiveAt: state.activatedAt,
+      reason: 'switch' as const,
+    };
+    if (options.timelineFailure === 'ignore') {
+      try {
+        await deps.metadataStore.appendTimeline(entry);
+      } catch (error) {
+        console.warn('[AccountManager] timeline append failed after successful activation:', error);
+      }
+    } else {
+      await deps.metadataStore.appendTimeline(entry);
+    }
+  }
+  deps.setLastSeen(clientId, state.target.fingerprint);
+}
+
+/**
+ * Build the single-terminal-action handle returned to an activation transaction.
+ * @param clientId - Client whose activation awaits finalization.
+ * @param deps - Account activation dependencies.
+ * @param state - Prepared activation state.
+ * @param options - Timeline failure policy.
+ * @returns Reversible activation handle.
+ */
+function createPreparedActivation(
+  clientId: string,
+  deps: AccountActivationDeps,
+  state: PreparedActivationState,
+  options: PrepareAccountActivationOptions,
+): PreparedAccountActivation {
+  let terminal: { readonly action: 'commit' | 'rollback'; readonly promise: Promise<void> } | undefined;
+  const finalize = (action: 'commit' | 'rollback', operation: () => Promise<void>): Promise<void> => {
+    if (terminal !== undefined) {
+      if (terminal.action !== action) {
+        return Promise.reject(new Error('Account activation already received a different terminal action.'));
+      }
+      return terminal.promise;
+    }
+    const promise = operation();
+    terminal = { action, promise };
+    return promise;
+  };
+
+  return {
+    account: state.target,
+    commit: () =>
+      finalize('commit', async () => {
+        try {
+          await commitActivationMetadata(clientId, deps, state, options);
+        } catch {
+          try {
+            await restoreActivationState(clientId, deps, state);
+          } catch {
+            throw new AccountActivationFinalizationError('commit-rollback-failed');
+          }
+          throw new AccountActivationFinalizationError('commit-failed');
+        }
+      }),
+    rollback: () =>
+      finalize('rollback', async () => {
+        try {
+          await restoreActivationState(clientId, deps, state);
+        } catch (error) {
+          if (error instanceof AccountActivationFinalizationError) throw error;
+          throw new AccountActivationFinalizationError('rollback-failed');
+        }
+      }),
+  };
 }

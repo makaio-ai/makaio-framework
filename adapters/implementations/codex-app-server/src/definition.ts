@@ -9,27 +9,30 @@ import { CodexAppServerProviderConfigSchema } from './schemas.js';
 import type { CodexAppServerBus } from './namespaces/index.js';
 import type { CodexAppServerConnector } from './connector.js';
 import type { CodexAppServerAgent } from './agent.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 
 export const adapterDefinition: AIAdapterDefinition<CodexAppServerBus, CodexAppServerConnector, CodexAppServerAgent> = {
   name: CodexAppServerAdapterName,
   displayName: 'Codex App-Server',
   defaultPresetId,
   description: 'Direct integration with codex app-server via stdio subprocess using JSON-RPC 2.0 over JSONL',
-  providers: providerIds.map((definitionId) => ({ definitionId })),
+  providers: providerIds.map((definitionId) => ({
+    definitionId,
+    protocol: 'openai',
+    auth: providerAuthById[definitionId],
+  })),
   providerConfigSchema: CodexAppServerProviderConfigSchema,
   defaultTimeouts: DEFAULT_TIMEOUTS,
-  helpLinks: [{ label: 'Codex Documentation', url: 'https://docs.anthropic.com/en/docs/build-with-claude/codex' }],
+  helpLinks: [{ label: 'Codex App Server', url: 'https://developers.openai.com/codex/app-server/' }],
   clients: [{ id: 'codex', version: '^0.1.0' }],
   protocol: 'openai',
   instructions: `Codex App-Server provides direct integration with the codex app-server via stdio subprocess.
 
 ## Prerequisites
 
-1. Install the codex CLI:
-   \`cargo install codex\`
+1. Install the Codex CLI using the official Codex documentation.
 
-2. Verify installation:
+2. Verify the installation:
    \`codex --version\`
 
 ## Configuration

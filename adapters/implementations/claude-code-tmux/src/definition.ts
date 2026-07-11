@@ -10,7 +10,7 @@ import { ClaudeCodeTmuxProviderConfigSchema } from './schemas.js';
 import type { ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import type { ClaudeCodeTmuxConnector } from './connector.js';
 import type { ClaudeCodeTmuxAgent } from './agent.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 import { createClaudeCodeTmuxAdapter } from './adapter.js';
 
 /**
@@ -30,7 +30,11 @@ export const adapterDefinition: AIAdapterDefinition<
   displayName: 'Claude Code (tmux)',
   defaultPresetId,
   description: 'Claude Code integration via interactive tmux sessions with hook-driven orchestration',
-  providers: providerIds.map((definitionId) => ({ definitionId })),
+  providers: providerIds.map((definitionId) => ({
+    definitionId,
+    protocol: 'anthropic',
+    auth: providerAuthById[definitionId],
+  })),
   providerConfigSchema: ClaudeCodeTmuxProviderConfigSchema,
   defaultTimeouts: DEFAULT_TIMEOUTS,
   helpLinks: [{ label: 'Claude Code Documentation', url: 'https://docs.anthropic.com/en/docs/claude-code' }],

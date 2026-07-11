@@ -546,7 +546,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `results` | `{ clientId: string; found: boolean; version?: string \| undefined; warningMessage?: string \| undefined; }[]` | yes |
+| `results` | `{ clientId: string; found: boolean; binaryPath?: string \| undefined; version?: string \| undefined; warningMessage?: string \| undefined; }[]` | yes |
 
 ### <a id="client.session.account.observe"></a>`client.session.account.observe` (rpc)
 
@@ -775,7 +775,7 @@ Type: Request (RPC)
 
 ### <a id="client.sessionConfig.create"></a>`client.sessionConfig.create` (rpc)
 
-Create an isolated configuration directory for a session.
+Create an isolated configuration directory for a connector lease.
 
 The service seeds the directory from the named profile (or the client
 default when `profileName` is omitted) and returns the path together
@@ -791,20 +791,22 @@ Type: Request (RPC)
 | `baseConfigDir` | `string \| undefined` | no |
 | `clientId` | `string` | yes |
 | `configInheritance` | `"auth-only" \| "full" \| "empty" \| undefined` | no |
+| `leaseId` | `string` | yes |
+| `ownerSessionId` | `string \| undefined` | no |
 | `profileName` | `string \| undefined` | no |
 | `projectDir` | `string \| undefined` | no |
-| `sessionId` | `string` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
+| `authMaterialized` | `boolean` | yes |
 | `env` | `Record<string, string>` | yes |
 | `sessionDir` | `string` | yes |
 
 ### <a id="client.sessionConfig.destroy"></a>`client.sessionConfig.destroy` (rpc)
 
-Destroy the isolated configuration directory for a session.
+Destroy the isolated configuration directory for a connector lease.
 
 Subject: `client.sessionConfig.destroy`
 Type: Request (RPC)
@@ -814,7 +816,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `clientId` | `string` | yes |
-| `sessionId` | `string` | yes |
+| `leaseId` | `string` | yes |
 
 **Response:**
 

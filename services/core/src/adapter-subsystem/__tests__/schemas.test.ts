@@ -16,9 +16,30 @@ const sampleProviderConfigRecord = {
   modelFilterMode: 'show-all' as const,
   isDefault: true,
   enabled: true,
-  isSentinel: false,
-  hasCredentials: true,
-  sourceRef: 'account-manager:["claude-code","account-123"]',
+  auth: {
+    mode: 'explicit' as const,
+    method: { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'api-key' },
+    hasCredentials: true as const,
+  },
+  managedBy: { kind: 'client' as const, clientId: 'claude-code' },
+};
+
+const sampleCompatibleAuthOption = {
+  definitionId: 'anthropic',
+  method: { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'api-key' },
+  mode: 'explicit' as const,
+  label: 'API key',
+  fields: [
+    {
+      id: 'apiKey',
+      label: 'API key',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment' as const, variable: 'ANTHROPIC_API_KEY' }],
+    },
+  ],
+  compatibleAdapterNames: ['claude-agent-sdk'],
+  portability: 'portable' as const,
 };
 
 const sampleBindingRecord = {
@@ -38,17 +59,38 @@ const sampleAdapterFileConfig = {
 };
 
 const sampleProviderContext = {
+  state: 'resolved' as const,
   providerConfigId: 'anthropic-work',
   definitionId: 'anthropic',
   endpointOverrides: {
     anthropic: 'https://api.anthropic.com',
   },
-  credentialRefs: {
-    apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:apiKey'),
+  auth: {
+    mode: 'explicit' as const,
+    method: { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'api-key' },
+    definition: {
+      id: 'api-key',
+      mode: 'explicit' as const,
+      label: 'API key',
+      fields: sampleCompatibleAuthOption.fields,
+    },
+    credentialRefs: {
+      apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:apiKey'),
+    },
   },
-  credentialEnvVars: {
-    apiKey: 'ANTHROPIC_API_KEY',
-  },
+};
+
+const sampleProviderDefinition = {
+  id: 'anthropic',
+  packageName: '@makaio/provider-anthropic',
+  name: 'Anthropic',
+  endpoints: { anthropic: 'https://api.anthropic.com' },
+  availableModels: [],
+  defaultModelFilterMode: 'show-all' as const,
+  authMethods: [sampleProviderContext.auth.definition],
+  enabled: true,
+  createdAt: 1,
+  updatedAt: 1,
 };
 
 const sampleEffectiveAdapter = {
@@ -113,9 +155,15 @@ const requestResponseCases = [
     response: { config: sampleProviderConfigRecord },
   },
   {
-    subject: 'buildProviderContext',
+    subject: 'resolveProviderRuntimeSnapshot',
     request: { providerConfigId: 'anthropic-work' },
-    response: { context: sampleProviderContext },
+    response: {
+      snapshot: {
+        config: sampleProviderConfigRecord,
+        context: sampleProviderContext,
+        definition: sampleProviderDefinition,
+      },
+    },
   },
   {
     subject: 'listAdapters',
@@ -123,11 +171,20 @@ const requestResponseCases = [
     response: { adapters: [sampleEffectiveAdapter] },
   },
   {
+    subject: 'listCompatibleAuthOptions',
+    request: { definitionId: 'anthropic' },
+    response: { options: [sampleCompatibleAuthOption] },
+  },
+  {
     subject: 'createProviderConfig',
     request: {
       definitionId: 'anthropic',
       name: 'Anthropic Work',
-      credentialRefs: { backupKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:backupKey') },
+      auth: {
+        mode: 'explicit' as const,
+        method: { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: { apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:apiKey') },
+      },
       endpointOverrides: { anthropic: 'https://api.anthropic.com' },
       modelVisibility: { 'claude-sonnet-4-6': 'enabled' as const },
       modelFilterMode: 'allowlist' as const,
@@ -148,11 +205,15 @@ const requestResponseCases = [
     response: { config: sampleProviderConfigRecord },
   },
   {
-    subject: 'setProviderConfigCredentialRefs',
+    subject: 'setProviderConfigAuth',
     request: {
       id: 'anthropic-work',
-      credentialRefs: {
-        apiKey: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY'),
+      auth: {
+        mode: 'explicit' as const,
+        method: { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: {
+          apiKey: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY'),
+        },
       },
     },
     response: { config: sampleProviderConfigRecord },
@@ -300,6 +361,10 @@ describe('AdapterSubsystemSchemas', () => {
   it('rejects plaintext credentials on createProviderConfig requests', () => {
     const result = AdapterSubsystemSchemas.createProviderConfig.request.safeParse({
       definitionId: 'anthropic',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
       credentials: { apiKey: 'sk-ant-plaintext' },
     });
 
@@ -310,43 +375,134 @@ describe('AdapterSubsystemSchemas', () => {
     const result = AdapterSubsystemSchemas.createProviderConfig.request.safeParse({
       id: 'anthropic-work',
       definitionId: 'anthropic',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
     });
 
     expect(result.success).toBe(false);
   });
 
-  it('accepts credential refs on createProviderConfig requests', () => {
+  it('accepts a complete normalized auth selection on createProviderConfig requests', () => {
     const result = AdapterSubsystemSchemas.createProviderConfig.request.safeParse({
       definitionId: 'anthropic',
-      credentialRefs: { apiKey: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY') },
+      auth: {
+        mode: 'explicit',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: { apiKey: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY') },
+      },
     });
 
     expect(result.success).toBe(true);
   });
 
-  it('rejects create input that mixes raw credentials with credential refs', () => {
+  it('rejects create input that adds a legacy credential map', () => {
     const result = AdapterSubsystemSchemas.createProviderConfig.request.safeParse({
       definitionId: 'anthropic',
       credentials: { apiKey: 'sk-ant-plaintext' },
-      credentialRefs: { apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:apiKey') },
+      auth: {
+        mode: 'explicit',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: { apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:apiKey') },
+      },
     });
 
     expect(result.success).toBe(false);
   });
 
-  it('accepts credential refs on setProviderConfigCredentialRefs requests', () => {
-    const result = AdapterSubsystemSchemas.setProviderConfigCredentialRefs.request.safeParse({
+  it('accepts complete auth on setProviderConfigAuth requests', () => {
+    const result = AdapterSubsystemSchemas.setProviderConfigAuth.request.safeParse({
       id: 'anthropic-work',
-      credentialRefs: { apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:apiKey') },
+      auth: {
+        mode: 'explicit',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: { apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic-work:apiKey') },
+      },
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it('requires auth on create and keeps compatible auth options definition-scoped', () => {
+    expect(AdapterSubsystemSchemas.createProviderConfig.request.safeParse({ definitionId: 'anthropic' }).success).toBe(
+      false,
+    );
+    expect(
+      AdapterSubsystemSchemas.listCompatibleAuthOptions.response.safeParse({
+        options: [
+          {
+            ...sampleCompatibleAuthOption,
+            method: {
+              owner: 'provider',
+              providerDefinitionId: 'other-provider',
+              methodId: 'api-key',
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      AdapterSubsystemSchemas.listCompatibleAuthOptions.response.safeParse({
+        options: [
+          {
+            ...sampleCompatibleAuthOption,
+            compatibleAdapterNames: ['claude-agent-sdk', 'claude-agent-sdk'],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      AdapterSubsystemSchemas.listCompatibleAuthOptions.response.safeParse({
+        options: [
+          {
+            ...sampleCompatibleAuthOption,
+            fields: [sampleCompatibleAuthOption.fields[0], sampleCompatibleAuthOption.fields[0]],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      AdapterSubsystemSchemas.createProviderConfig.request.safeParse({
+        definitionId: 'anthropic',
+        auth: {
+          mode: 'none',
+          method: { owner: 'provider', providerDefinitionId: 'other-provider', methodId: 'none' },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects foreign provider auth summaries and unknown endpoint protocols on public config reads', () => {
+    expect(
+      AdapterSubsystemSchemas.getProviderConfig.response.safeParse({
+        config: {
+          ...sampleProviderConfigRecord,
+          auth: {
+            ...sampleProviderConfigRecord.auth,
+            method: { owner: 'provider', providerDefinitionId: 'other-provider', methodId: 'api-key' },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      AdapterSubsystemSchemas.getProviderConfig.response.safeParse({
+        config: {
+          ...sampleProviderConfigRecord,
+          endpointOverrides: { unsupported: 'https://provider.example.test' },
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects create input names that violate the canonical provider-config contract', () => {
     const result = AdapterSubsystemSchemas.createProviderConfig.request.safeParse({
       definitionId: 'anthropic',
       name: 'bad::name',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
     });
 
     expect(result.success).toBe(false);
@@ -438,7 +594,27 @@ describe('AdapterSubsystemSchemas', () => {
     expect(result.success).toBe(false);
   });
 
-  it('does not register the retired provider-config composite subject', () => {
+  it('rejects a runtime snapshot whose safe auth summary and context diverge', () => {
+    const result = AdapterSubsystemSchemas.resolveProviderRuntimeSnapshot.response.safeParse({
+      snapshot: {
+        config: sampleProviderConfigRecord,
+        context: {
+          ...sampleProviderContext,
+          auth: {
+            mode: 'none',
+            method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+            definition: { id: 'none', mode: 'none', label: 'No authentication' },
+          },
+        },
+        definition: sampleProviderDefinition,
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('registers one atomic runtime snapshot subject without retired aliases', () => {
+    expect('resolveProviderRuntimeSnapshot' in AdapterSubsystemSchemas).toBe(true);
     expect('getProviderConfigWithContext' in AdapterSubsystemSchemas).toBe(false);
     expect('getProviderRuntimeView' in AdapterSubsystemSchemas).toBe(false);
   });

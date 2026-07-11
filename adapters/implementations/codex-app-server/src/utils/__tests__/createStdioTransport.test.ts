@@ -46,10 +46,10 @@ describe('createStdioTransport', () => {
       cwd: '/test/cwd',
       env: expect.objectContaining({
         PATH: '/usr/bin',
-        RUST_LOG: 'debug',
       }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    expect(mockSpawn.mock.calls[0][2].env).not.toHaveProperty('RUST_LOG');
   });
 
   // createStdioTransport is a thin wrapper around spawn() — asserting spawn
@@ -262,17 +262,33 @@ describe('createStdioTransport', () => {
     expect(mockSubprocess.kill).toHaveBeenCalled();
   });
 
-  it('should log stderr output to console.warn', () => {
+  it('suppresses raw stderr and emits one bounded diagnostic', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     createStdioTransport('/test/cwd', {});
 
     const stderrOnCallback = mockSubprocess.stderr.on.mock.calls[0][1];
-    stderrOnCallback(Buffer.from('Test stderr output\n'));
+    stderrOnCallback(Buffer.from('secret-bearing stderr output\n'));
+    stderrOnCallback(Buffer.from('another stderr chunk\n'));
 
-    expect(warnSpy).toHaveBeenCalledWith('[codex app-server]', 'Test stderr output\n');
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith('[codex app-server] stderr output suppressed');
+    expect(warnSpy.mock.calls.flat().join(' ')).not.toContain('secret-bearing');
 
     warnSpy.mockRestore();
+  });
+
+  it('does not retain malformed protocol payloads in parse errors', () => {
+    const transport = createStdioTransport('/test/cwd', {});
+    const errors: Error[] = [];
+    transport.onError((error) => errors.push(error));
+
+    const stdoutOnCallback = mockSubprocess.stdout.on.mock.calls[0][1];
+    stdoutOnCallback(Buffer.from('{"apiKey":"secret-value"\n'));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toBe('Codex app-server emitted invalid JSONL.');
+    expect(errors[0]?.message).not.toContain('secret-value');
   });
 
   it('should allow registering multiple message callbacks', () => {

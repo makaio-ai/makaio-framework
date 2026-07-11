@@ -142,7 +142,8 @@ export const AgentStorageNamespace = createStorageNamespaceDefinition('agent', {
           cwd: z.string().optional(),
           model: z.string().optional(),
           allowedDirectories: z.array(z.string()).optional(),
-          providerConfigId: z.string().optional(),
+          /** Set a provider config ID, pass null to clear it, or omit to leave it unchanged. */
+          providerConfigId: z.string().nullable().optional(),
         })
         .refine(
           (payload) =>

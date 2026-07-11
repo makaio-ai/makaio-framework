@@ -10,7 +10,6 @@ describe('AdaptersFileSchema', () => {
           providers: {
             anthropic: {
               providerId: 'anthropic',
-              credentials: { apiKey: 'env:ANTHROPIC_API_KEY' },
               isDefault: true,
             },
           },
@@ -19,6 +18,24 @@ describe('AdaptersFileSchema', () => {
     });
 
     expect(parsed.adapters['anthropic-sdk']?.providers.anthropic?.providerId).toBe('anthropic');
+  });
+
+  it('rejects legacy credential refs in adapters.json provider entries', () => {
+    const result = AdaptersFileSchema.safeParse({
+      $schema: 'makaio/adapters-config/v1',
+      adapters: {
+        'anthropic-sdk': {
+          providers: {
+            anthropic: {
+              providerId: 'anthropic',
+              credentials: { apiKey: 'env:ANTHROPIC_API_KEY' },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it('rejects the legacy per-adapter file shape', () => {

@@ -1,28 +1,39 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects } from '@makaio/contracts';
-import type { ProviderContext } from '@makaio/contracts';
+import { AdapterSubjects, type ResolvedProviderContext } from '@makaio/contracts';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
-import { activateProviderContext } from '@makaio/services-core/provider-context';
+import { activateProviderContext, resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AutoActivationConfig } from '../account-manager-types.js';
-import { resolveProviderConfigsForAccount } from '../provider-config-resolution.js';
+import {
+  authSelectsAccount,
+  resolveProviderConfigsForAccount,
+  type ResolvedProviderConfig,
+} from '../provider-config-resolution.js';
 
 /**
  * Resolved activation target for an ephemeral ping.
  *
  * Carries the three adapter-layer coordinates needed to start the agent:
- * the live adapter instance ID, the model to use, and the unresolved
- * credential context the connector will expand locally.
+ * the live adapter instance ID, the model to use, and the validated refs-only
+ * provider context the connector will expand locally.
  */
 interface ActivationTarget {
   /** Live adapter instance identifier from the runtime registry. */
   adapterId: string;
   /** Model slug selected for the ping (fast model preferred). */
   model: string;
-  /** Unresolved provider context passed through to the connector. */
-  providerContext: ProviderContext;
+  /** Validated refs-only provider context passed through to the connector. */
+  providerContext: ResolvedProviderContext;
+}
+
+/** Adapter binding and exact account-selected context chosen for activation. */
+interface ActivationProviderSelection {
+  /** Adapter whose binding selected the provider config. */
+  readonly adapterName: string;
+  /** Exact account-pinned provider context carried into startup. */
+  readonly providerContext: ResolvedProviderContext;
 }
 
 /**
@@ -73,11 +84,8 @@ export class WindowActivator {
         void this.activate(clientId, accountId, windowId, expiredAt, generation);
       }),
     );
-    void this.backfillPendingResets(generation).catch((error: unknown) => {
-      console.warn(
-        '[WindowActivator] Pending reset backfill failed:',
-        error instanceof Error ? error.message : String(error),
-      );
+    void this.backfillPendingResets(generation).catch(() => {
+      console.warn('[WindowActivator] Pending reset backfill failed.');
     });
   }
 
@@ -128,12 +136,11 @@ export class WindowActivator {
 
     try {
       await this.runActivationPipeline(clientId, accountId, windowId, generation);
-    } catch (error) {
+    } catch {
       console.warn('[WindowActivator] Activation pipeline failed:', {
         clientId,
         accountId,
         windowId,
-        error: error instanceof Error ? error.message : String(error),
       });
     } finally {
       this.inFlight.delete(dedupeKey);
@@ -196,7 +203,6 @@ export class WindowActivator {
         clientId,
         accountId,
         adapterId,
-        message: startResult.data.message,
       });
       return;
     }
@@ -215,12 +221,11 @@ export class WindowActivator {
         clientId,
         accountId,
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         console.warn('[WindowActivator] Usage refresh after activation failed:', {
           clientId,
           accountId,
           windowId,
-          error: error instanceof Error ? error.message : String(error),
         });
       });
   }
@@ -228,74 +233,40 @@ export class WindowActivator {
   /**
    * Resolves the adapter-layer coordinates required to dispatch a ping.
    *
-   * Walks steps 1–5 of the resolution chain — provider config, provider
-   * context, default binding, live adapter ID, and fast model — returning
+   * Walks steps 1–4 of the resolution chain — candidate provider config,
+   * binding-qualified runtime context, live adapter ID, and fast model — returning
    * `null` with a warning log at any step that cannot be resolved.
    * @param clientId - Account-manager source identifier
    * @param accountId - Stable account identifier
    * @returns Resolved target, or `null` when any step fails
    */
   private async resolveActivationTarget(clientId: string, accountId: string): Promise<ActivationTarget | null> {
-    // Step 1: Resolve provider configs for this account → providerConfigId, definitionId.
+    // Step 1: Resolve candidate provider configs for this account.
     const providerConfigs = await resolveProviderConfigsForAccount(this.bus, clientId, accountId);
-    const primaryConfig = providerConfigs[0];
-    if (!primaryConfig) {
+    if (providerConfigs.length === 0) {
       console.warn('[WindowActivator] No provider config found for account:', { clientId, accountId });
       return null;
     }
-    const { providerConfigId, definitionId } = primaryConfig;
 
-    // Step 2: Build provider context (credential refs) from the provider config.
-    const providerContextResult = await this.bus.requestOptional(AdapterSubsystemSubjects.buildProviderContext, {
-      providerConfigId,
-    });
-    if (!providerContextResult.handled || !providerContextResult.data.context) {
-      console.warn('[WindowActivator] Could not build provider context:', {
-        clientId,
-        accountId,
-        providerConfigId,
-      });
-      return null;
-    }
-    const providerContext = providerContextResult.data.context;
+    const selected = await this.selectProviderContext(providerConfigs, clientId, accountId);
+    if (selected === null) return null;
+    const { adapterName, providerContext } = selected;
 
-    // Step 3: List bindings for the provider config → pick default binding → adapterName.
-    const bindingsResult = await this.bus.requestOptional(AdapterSubsystemSubjects.listBindingsByConfig, {
-      providerConfigId,
-    });
-    if (!bindingsResult.handled) {
-      console.warn('[WindowActivator] Adapter subsystem unavailable for binding lookup:', {
-        clientId,
-        accountId,
-        providerConfigId,
-      });
-      return null;
-    }
-    const { bindings } = bindingsResult.data;
-    const defaultBinding = bindings.find((b) => b.isDefault) ?? bindings[0];
-    if (!defaultBinding) {
-      console.warn('[WindowActivator] No binding found for provider config:', {
-        clientId,
-        accountId,
-        providerConfigId,
-      });
-      return null;
-    }
-
-    // Step 4: Resolve live adapter instance ID from the adapter name.
+    // Step 3: Resolve live adapter instance ID from the selected binding.
     const resolveIdResult = await this.bus.requestOptional(AdapterRuntimeSubjects.resolveId, {
-      adapterName: defaultBinding.adapterName,
+      adapterName,
     });
     if (!resolveIdResult.handled) {
       console.warn('[WindowActivator] Adapter runtime unavailable for ID resolution:', {
         clientId,
         accountId,
-        adapterName: defaultBinding.adapterName,
+        adapterName,
       });
       return null;
     }
 
-    // Step 5: Fetch the provider definition to resolve the fastest available model.
+    // Step 4: Fetch the provider definition from the same atomic context.
+    const { definitionId } = providerContext;
     const providerResult = await this.bus.requestOptional(ProviderStorageSubjects.get, { id: definitionId });
     if (!providerResult.handled || !providerResult.data.provider) {
       console.warn('[WindowActivator] Provider definition not found:', { clientId, accountId, definitionId });
@@ -308,6 +279,65 @@ export class WindowActivator {
     }
 
     return { adapterId: resolveIdResult.data.adapterId, model, providerContext };
+  }
+
+  /**
+   * Select the first bound runtime context that pins the reset event's account.
+   * @param providerConfigs - Candidate inferred configs for the client.
+   * @param clientId - Client that owns the reset account.
+   * @param accountId - Exact reset account identifier.
+   * @returns Adapter-qualified account selection, or null with a diagnostic warning.
+   */
+  private async selectProviderContext(
+    providerConfigs: readonly ResolvedProviderConfig[],
+    clientId: string,
+    accountId: string,
+  ): Promise<ActivationProviderSelection | null> {
+    let foundBinding = false;
+    let resolvedContext = false;
+    for (const config of providerConfigs) {
+      const bindingsResult = await this.bus.requestOptional(AdapterSubsystemSubjects.listBindingsByConfig, {
+        providerConfigId: config.providerConfigId,
+      });
+      if (!bindingsResult.handled) {
+        console.warn('[WindowActivator] Adapter subsystem unavailable for binding lookup:', {
+          clientId,
+          accountId,
+          providerConfigId: config.providerConfigId,
+        });
+        return null;
+      }
+      const defaultBinding =
+        bindingsResult.data.bindings.find((binding) => binding.isDefault) ?? bindingsResult.data.bindings[0];
+      if (!defaultBinding) continue;
+      foundBinding = true;
+
+      let candidate: ResolvedProviderContext;
+      try {
+        candidate = await resolveRuntimeProviderContext(this.bus, {
+          adapterName: defaultBinding.adapterName,
+          providerConfigId: config.providerConfigId,
+        });
+      } catch {
+        continue;
+      }
+      resolvedContext = true;
+      if (authSelectsAccount(candidate.auth, clientId, accountId)) {
+        return { adapterName: defaultBinding.adapterName, providerContext: candidate };
+      }
+    }
+
+    const message = !foundBinding
+      ? '[WindowActivator] No binding found for provider config:'
+      : resolvedContext
+        ? '[WindowActivator] No exact account-selected provider context found:'
+        : '[WindowActivator] Could not resolve adapter-qualified provider context:';
+    console.warn(message, {
+      clientId,
+      accountId,
+      providerConfigId: providerConfigs[0]?.providerConfigId,
+    });
+    return null;
   }
 
   /**

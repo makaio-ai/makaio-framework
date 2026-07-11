@@ -23,6 +23,7 @@ next: false
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
 | `fetchModels` | [`providerRuntime.fetchModels`](#providerRuntime.fetchModels) | rpc | — |
+| `listModelFetchAdapters` | [`providerRuntime.listModelFetchAdapters`](#providerRuntime.listModelFetchAdapters) | rpc | — |
 
 ## Subject Details
 
@@ -35,6 +36,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `adapterName` | `string` | yes |
 | `providerConfigId` | `string` | yes |
 
 **Response:**
@@ -42,6 +44,23 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `models` | `{ name: string; contextWindowSize: number; labId: string; friendlyName?: string \| undefined; family?: string \| undefined; supportedReasoningLevels?: { none?: string \| number \| undefined; low?: string \| number \| undefined; medium?: string \| number \| undefined; high?: string \| number \| undefined; 'extra-high'?: string \| number \| undefined; } \| undefined; metadata?: { maxOutputTokens?: number \| undefined; capabilities?: { vision?: boolean \| undefined; toolCalling?: boolean \| undefined; parallelToolCalls?: boolean \| undefined; structuredOutput?: boolean \| undefined; pdfUpload?: boolean \| undefined; speechToText?: { modes: ("batch" \| "streaming")[]; vocabularyBiasing?: boolean \| undefined; } \| undefined; textToSpeech?: { modes: ("streaming" \| "buffered")[]; voiceSelection?: boolean \| undefined; voiceInstructions?: boolean \| undefined; outputFormats?: string[] \| undefined; } \| undefined; } \| undefined; pricing?: { token?: { inputPerMillion: number; outputPerMillion: number; inputCachedPerMillion?: number \| undefined; cacheWritePerMillion?: number \| undefined; } \| undefined; request?: { multiplier: number; } \| undefined; } \| undefined; includedInSubscription?: boolean \| undefined; description?: string \| undefined; } \| undefined; }[]` | yes |
+
+### <a id="providerRuntime.listModelFetchAdapters"></a>`providerRuntime.listModelFetchAdapters` (rpc)
+
+Subject: `providerRuntime.listModelFetchAdapters`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `providerConfigId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterNames` | `string[]` | yes |
 
 ---
 

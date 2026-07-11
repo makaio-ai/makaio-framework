@@ -4,6 +4,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, type NativeLocalityVerdict } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { createTestAdapter, MockConnector, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
+import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
 describe('AIAdapter.handleRehydrateAgent native resume context', () => {
   let adapter: ReturnType<typeof createTestAdapter>['adapter'];
@@ -184,7 +185,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       adapterSessionId: 'live-native-session',
       model: 'test-model',
       cwd: os.tmpdir(),
-      providerContext: { providerConfigId: 'provider-config', definitionId: 'provider', credentialRefs: {} },
+      providerContext: createNoAuthTestProviderContext('provider-config', 'provider'),
     });
     expect(startResult.success).toBe(true);
     if (!startResult.success) throw new Error('Failed to start agent');
@@ -401,7 +402,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
       adapterSessionId: 'native-session-clean',
       model: 'test-model',
       cwd: os.tmpdir(),
-      providerContext: { providerConfigId: 'cfg', definitionId: 'provider', credentialRefs: {} },
+      providerContext: createNoAuthTestProviderContext('cfg', 'provider'),
     });
 
     expect(startResult.success).toBe(false);

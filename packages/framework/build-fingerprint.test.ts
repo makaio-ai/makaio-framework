@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -108,6 +109,21 @@ describe('framework dist freshness', () => {
       ).toBe(false);
     });
   });
+
+  it(
+    'fingerprints staged Git input larger than the child-process default buffer',
+    () => {
+      withTempWorkspace((workspaceRoot) => {
+        execFileSync('git', ['init'], { cwd: workspaceRoot, stdio: 'ignore' });
+        writeFileSync(join(workspaceRoot, 'package.json'), `${'x'.repeat(2 * 1024 * 1024)}\n`);
+        execFileSync('git', ['add', 'package.json'], { cwd: workspaceRoot, stdio: 'ignore' });
+
+        const distDir = join(workspaceRoot, 'packages/framework/dist');
+        expect(() => writeFrameworkDistBuildStamp({ workspaceRoot, distDir })).not.toThrow();
+      });
+    },
+    WORKSPACE_FINGERPRINT_TIMEOUT_MS,
+  );
 });
 
 /**

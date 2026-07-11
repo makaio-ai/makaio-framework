@@ -29,5 +29,5 @@ export const clientDefinition = createClientDefinition({
     pathKind: 'file',
   },
   defaultApprovalPolicy: 'always-ask',
-  defaultProviderId: 'google-oauth',
+  authMethods: [],
 });

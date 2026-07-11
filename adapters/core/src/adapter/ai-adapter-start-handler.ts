@@ -21,13 +21,20 @@ import type { ActiveAgentRegistry } from './agent-registry.js';
 import type { ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import {
   AdapterSubjects,
+  ProviderContextSchema,
   SessionContextSchema,
   SessionSubjects,
   type ProviderContext,
   type SessionContext,
 } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
-import { normalizeMessageInput, createSentinelProviderContext } from '../utils/index.js';
+import { createUnresolvedProviderContext, normalizeMessageInput } from '../utils/index.js';
+import {
+  commitAdapterProviderContextActivation,
+  prepareAdapterProviderContextActivation,
+  rollbackAdapterProviderContextActivationAfterFailure,
+  type ProviderContextActivationLifecycle,
+} from './provider-context-activation-lifecycle.js';
 
 type StartAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.startAgent>;
 
@@ -106,10 +113,6 @@ async function persistAndEmitAgent(
 
   // clientId: payload carries it from the caller; adapter definition is the authoritative fallback.
   const resolvedClientId = payload.clientId ?? clientId;
-  // providerConfigId is NOT persisted from the adapter layer — the adapter only has
-  // the definitionId (e.g. 'anthropic'), not the config UUID the orchestrator
-  // uses for credential resolution and rehydration. The orchestrator writes the
-  // selected providerConfigId after startAgent returns the durable agentId.
   try {
     await globalBus.requestOptional(AgentStorageSubjects.set, {
       agentId,
@@ -128,6 +131,9 @@ async function persistAndEmitAgent(
         lastActivityAt: now,
         ...(resolvedClientId !== undefined && { clientId: resolvedClientId }),
         ...(payload.harnessId !== undefined && { harnessId: payload.harnessId }),
+        ...(payload.providerContext.state === 'resolved' && {
+          providerConfigId: payload.providerContext.providerConfigId,
+        }),
       },
     });
   } catch (error) {
@@ -194,48 +200,37 @@ async function rollbackRegisteredAgent<
 }
 
 /**
- * Start an agent or initialize an idle connector, closing the agent if startup fails.
+ * Start an agent or initialize an idle connector.
  * @param agent - Newly created, not-yet-registered agent.
  * @param payload - Start-agent request payload.
  * @param sessionContext - Parsed session context, when provided.
- * @param adapterName - Adapter name for cleanup diagnostics.
  * @returns Adapter session metadata produced by the connector.
  */
 async function startOrInitializeAgent<TBus extends ScopedBus<string>, TConnector extends AIAgentConnector<TBus>>(
   agent: AIAgent<TBus, TConnector>,
   payload: StartAgentRequestPayload,
   sessionContext: SessionContext | undefined,
-  adapterName: string,
 ): Promise<StartAgentExecutionResult> {
-  try {
-    if (payload.initialMessage !== undefined) {
-      const normalizedMessage = normalizeMessageInput(payload.initialMessage);
-      const startResult = await agent.start(normalizedMessage, {
-        systemPrompt: payload.systemPrompt,
-        sessionContext,
-        responseSchema: payload.responseSchema,
-      });
-      return {
-        adapterSessionId: startResult.adapterSessionId,
-        messageId: String(startResult.messageHandle.messageId),
-        messageHandle: startResult.messageHandle,
-      };
-    }
-
-    const adapterSessionId = await agent.initialize({
+  if (payload.initialMessage !== undefined) {
+    const normalizedMessage = normalizeMessageInput(payload.initialMessage);
+    const startResult = await agent.start(normalizedMessage, {
       systemPrompt: payload.systemPrompt,
       sessionContext,
       responseSchema: payload.responseSchema,
     });
-    return { adapterSessionId };
-  } catch (error) {
-    try {
-      await agent.close({ emitSessionClosed: !payload.ephemeral });
-    } catch (closeError) {
-      console.warn(`[AIAdapter:${adapterName}] Agent cleanup failed after startAgent error:`, closeError);
-    }
-    throw error;
+    return {
+      adapterSessionId: startResult.adapterSessionId,
+      messageId: String(startResult.messageHandle.messageId),
+      messageHandle: startResult.messageHandle,
+    };
   }
+
+  const adapterSessionId = await agent.initialize({
+    systemPrompt: payload.systemPrompt,
+    sessionContext,
+    responseSchema: payload.responseSchema,
+  });
+  return { adapterSessionId };
 }
 
 /**
@@ -358,6 +353,7 @@ async function createAndStartAgentWithClaim<
   adapterName: string;
   resumeAdapterSessionId: string | undefined;
   registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
+  globalBus: IMakaioBus;
   createAgent: (agentId: string, sessionId: string, options: AgentCreationOptions) => Promise<TAgent>;
 }): Promise<{ agent: TAgent; startResult: StartAgentExecutionResult }> {
   const {
@@ -369,32 +365,39 @@ async function createAndStartAgentWithClaim<
     adapterName,
     resumeAdapterSessionId,
     registry,
+    globalBus,
   } = params;
-  let agent: TAgent;
+  let activation: ProviderContextActivationLifecycle | undefined;
+  let agent: TAgent | undefined;
   try {
+    activation = await prepareAdapterProviderContextActivation(globalBus, providerContext);
     agent = await params.createAgent(
       agentId,
       sessionId,
       buildCreationOptions(payload, providerContext, sessionContext),
     );
+    const startResult = await startOrInitializeAgent(agent, payload, sessionContext);
+    await commitAdapterProviderContextActivation(activation);
+    return { agent, startResult };
   } catch (error) {
-    if (resumeAdapterSessionId !== undefined) {
-      registry.releaseAdapterSessionClaim(resumeAdapterSessionId);
+    try {
+      if (activation === undefined) throw error;
+      const failedAgent = agent;
+      return await rollbackAdapterProviderContextActivationAfterFailure({
+        activation,
+        primaryError: error,
+        ...(failedAgent !== undefined && {
+          cleanup: () => failedAgent.close({ emitSessionClosed: !payload.ephemeral }),
+        }),
+        operation: `[AIAdapter:${adapterName}] startAgent`,
+        cleanupFailureMessage: `[AIAdapter:${adapterName}] startAgent and connector cleanup both failed.`,
+      });
+    } finally {
+      if (resumeAdapterSessionId !== undefined) {
+        registry.releaseAdapterSessionClaim(resumeAdapterSessionId);
+      }
     }
-    throw error;
   }
-
-  let startResult: StartAgentExecutionResult;
-  try {
-    startResult = await startOrInitializeAgent(agent, payload, sessionContext, adapterName);
-  } catch (error) {
-    if (resumeAdapterSessionId !== undefined) {
-      registry.releaseAdapterSessionClaim(resumeAdapterSessionId);
-    }
-    throw error;
-  }
-
-  return { agent, startResult };
 }
 
 /**
@@ -425,15 +428,11 @@ export function createStartAgentHandler<
     const payload = ctx.payload;
     const agentId = crypto.randomUUID();
 
-    // providerContext is optional to support provider-less adapters (local CLI,
-    // attach without explicit provider) and callers that omit a provider.
-    // When absent, fall back to a minimal sentinel so connectors can apply
-    // env-var or local-tooling credential resolution.
-    //
-    // Cast is safe: zod validated the incoming payload, so credentialRefs values
-    // are genuine CredentialRef-branded strings. Zod loses the brand when inferring
-    // through union schemas, so we restore it here with a single-step cast.
-    const providerContext = (payload.providerContext ?? createSentinelProviderContext()) as ProviderContext;
+    // Absence is a closed configless state, never implicit native or ambient auth.
+    const providerContext: ProviderContext =
+      payload.providerContext === undefined
+        ? createUnresolvedProviderContext()
+        : ProviderContextSchema.parse(payload.providerContext);
 
     assertValidEphemeralStartPayload(payload);
     const sessionId = await resolveSessionId(payload, globalBus);
@@ -463,6 +462,7 @@ export function createStartAgentHandler<
       adapterName: name,
       resumeAdapterSessionId,
       registry,
+      globalBus,
       createAgent,
     });
     const { adapterSessionId, messageId, messageHandle } = startResult;

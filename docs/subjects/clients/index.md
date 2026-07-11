@@ -7,12 +7,12 @@ next: false
 
 # clients
 
-2 namespaces, 24 subjects (1 event, 23 RPCs).
+2 namespaces, 25 subjects (1 event, 24 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
 | [`client:claude-code`](./client-claude-code.md) | client | 16 | 1E / 15R |
-| [`client:codex`](./client-codex.md) | client | 8 | 0E / 8R |
+| [`client:codex`](./client-codex.md) | client | 9 | 0E / 9R |
 
 ---
 

@@ -24,7 +24,22 @@ export const openaiProviderDefinition: ProviderDefinitionInput = {
   defaultModel: 'kimi-k2.5',
   fastModel: 'glm-5.1',
   defaultModelFilterMode: 'allowlist',
-  credentialEnvVars: { apiKey: 'OPENCODE_GO_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'OPENCODE_GO_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };
 
 /**
@@ -49,5 +64,20 @@ export const anthropicProviderDefinition: ProviderDefinitionInput = {
   defaultModel: 'minimax-m2.5',
   fastModel: 'minimax-m2.7',
   defaultModelFilterMode: 'allowlist',
-  credentialEnvVars: { apiKey: 'OPENCODE_GO_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'OPENCODE_GO_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };

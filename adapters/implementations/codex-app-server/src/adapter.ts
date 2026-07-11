@@ -4,6 +4,7 @@ import { CodexAppServerConnector } from './connector.js';
 import { CodexAppServerNamespace, type CodexAppServerBus } from './namespaces/index.js';
 import { CodexAppServerConfig } from './config.js';
 import { CodexAppServerAdapterName } from './constants.js';
+import type { CodexAppServerConfig as CodexConnectorConfig } from './connector/types.js';
 
 export { CodexAppServerAdapterName };
 
@@ -54,7 +55,7 @@ export class CodexAppServerAdapter extends AIAdapter<CodexAppServerBus, CodexApp
         return new CodexAppServerAgent(agentConfig);
       },
       configFactory: CodexAppServerConfig.getConfig,
-      connectorFactory: (fullConfig) => new CodexAppServerConnector(fullConfig),
+      connectorFactory: (fullConfig) => new CodexAppServerConnector(fullConfig as CodexConnectorConfig),
       definitionProviders: config?.definitionProviders,
     });
   }

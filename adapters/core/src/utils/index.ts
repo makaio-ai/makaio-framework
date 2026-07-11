@@ -68,7 +68,6 @@ export {
 export { normalizeMimeType, isTextLikeMimeType } from './normalizeMimeType.js';
 
 // Provider credential resolution
-export { resolvePresetCredentials } from './resolvePresetCredentials.js';
 
-// Provider context sentinel for paths that bypass orchestrator resolution
-export { UNRESOLVED_PROVIDER_DEFINITION_ID, createSentinelProviderContext } from './provider-context-sentinel.js';
+// Closed provider-less context for paths that bypass orchestrator resolution
+export { createUnresolvedProviderContext } from './provider-context.js';

@@ -17,9 +17,15 @@ Static client definition for GitHub Copilot. This package declares the user-faci
 | `binary.name` | `copilot` |
 | `binary.supportedVersions` | `*` |
 | `defaultApprovalPolicy` | `always-ask` |
-| `defaultProviderId` | `github-copilot` |
 | `configIsolation.envVar` | `COPILOT_HOME` |
 | `configIsolation.defaultPath` | `~/.copilot` |
+
+## Authentication
+
+This client declares no client-owned auth method or managed default. The
+`github-copilot` provider owns the explicit `token` method; `COPILOT_TOKEN` is
+one environment source hint for its required `token` field. The adapter maps
+that field to the SDK constructor and suppresses competing token inputs.
 
 ## Native Tools
 

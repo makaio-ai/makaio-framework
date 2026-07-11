@@ -56,6 +56,8 @@ export interface AgentTurnExecutorConfig {
   onMessageHandle: AgentMessageHandleCallback;
   /** Side-effect callback to mark agent status active before dispatch. */
   onBeforeDispatch?: () => void | Promise<void>;
+  /** Serialize the complete pre-hook-to-send boundary with credential mutations. */
+  runDispatch?: <T>(dispatch: () => Promise<T>) => Promise<T>;
   /** When true, PreUserMessage hooks are skipped. */
   ephemeral?: boolean;
 }
@@ -108,6 +110,7 @@ export class AgentTurnExecutor {
   private readonly setPendingStartMode: (mode: StartMode) => void;
   private readonly onMessageHandle: AgentMessageHandleCallback;
   private readonly onBeforeDispatch?: () => void | Promise<void>;
+  private readonly runDispatch: <T>(dispatch: () => Promise<T>) => Promise<T>;
   private readonly ephemeral: boolean;
 
   public constructor(config: AgentTurnExecutorConfig) {
@@ -122,6 +125,7 @@ export class AgentTurnExecutor {
     this.setPendingStartMode = config.setPendingStartMode;
     this.onMessageHandle = config.onMessageHandle;
     this.onBeforeDispatch = config.onBeforeDispatch;
+    this.runDispatch = config.runDispatch ?? (async (dispatch) => dispatch());
     this.ephemeral = config.ephemeral ?? false;
   }
 
@@ -187,47 +191,46 @@ export class AgentTurnExecutor {
    * @returns Resolved messageId from connector handle
    */
   public async executeSendMessage(payload: SendMessageRequestPayload): Promise<{ messageId: string }> {
-    await this.onBeforeDispatch?.();
+    return this.runDispatch(async () => {
+      await this.onBeforeDispatch?.();
 
-    const connector = this.getConnector();
-    const parsedSessionContext = payload.sessionContext
-      ? SessionContextSchema.parse(payload.sessionContext)
-      : undefined;
-    const hookResult = await this.resolvePreUserMessageTurn({
-      message: payload.message,
-      sessionContext: parsedSessionContext,
-      cwd: connector.cwd,
-      messageId: payload.messageId,
-    });
-
-    const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
-
-    const normalizedMessage = normalizeMessageInput(hookResult.message);
-
-    const handle = await connector.sendMessage(normalizedMessage, {
-      deliveryMode: payload.deliveryMode,
-      messageId: payload.messageId,
-      turnId: payload.turnId,
-      messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
-      cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
-      turnContext: buildStructuredOutputTurnContext(
-        hookResult.sessionContext?.turnContext,
-        payload.responseSchema,
-        this.adapterCapabilities,
-      ),
-      requestCorrelation: buildRequestCorrelation(hookResult.sessionContext?.requestCorrelation, {
-        sessionId: this.sessionId,
-        turnId: payload.turnId,
+      const connector = this.getConnector();
+      const parsedSessionContext = payload.sessionContext
+        ? SessionContextSchema.parse(payload.sessionContext)
+        : undefined;
+      const hookResult = await this.resolvePreUserMessageTurn({
+        message: payload.message,
+        sessionContext: parsedSessionContext,
+        cwd: connector.cwd,
         messageId: payload.messageId,
-      }),
-      ...(payload.responseSchema !== undefined && { responseSchema: payload.responseSchema }),
+      });
+
+      const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+      const normalizedMessage = normalizeMessageInput(hookResult.message);
+      const handle = await connector.sendMessage(normalizedMessage, {
+        deliveryMode: payload.deliveryMode,
+        messageId: payload.messageId,
+        turnId: payload.turnId,
+        messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
+        cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
+        turnContext: buildStructuredOutputTurnContext(
+          hookResult.sessionContext?.turnContext,
+          payload.responseSchema,
+          this.adapterCapabilities,
+        ),
+        requestCorrelation: buildRequestCorrelation(hookResult.sessionContext?.requestCorrelation, {
+          sessionId: this.sessionId,
+          turnId: payload.turnId,
+          messageId: payload.messageId,
+        }),
+        ...(payload.responseSchema !== undefined && { responseSchema: payload.responseSchema }),
+      });
+
+      this.assertCanonicalMessageId(payload.messageId, handle, connector, 'sendMessage');
+      this.firePostUserMessageHooks(handle.messageId);
+      await this.onMessageHandle(handle, payload.turnId);
+      return { messageId: handle.messageId };
     });
-    this.assertCanonicalMessageId(payload.messageId, handle, connector, 'sendMessage');
-
-    this.firePostUserMessageHooks(handle.messageId);
-    await this.onMessageHandle(handle, payload.turnId);
-
-    return { messageId: handle.messageId };
   }
 
   /**
@@ -244,46 +247,44 @@ export class AgentTurnExecutor {
     systemPrompt: StartAgentOptions['systemPrompt'],
     responseSchema?: ResponseSchemaDescriptor,
   ): Promise<AgentStartResult> {
-    await this.onBeforeDispatch?.();
+    return this.runDispatch(async () => {
+      await this.onBeforeDispatch?.();
 
-    const connector = this.getConnector();
-    const parsedSessionContext = options?.sessionContext
-      ? SessionContextSchema.parse(options.sessionContext)
-      : undefined;
-    const hookResult = await this.resolvePreUserMessageTurn({
-      message,
-      sessionContext: parsedSessionContext,
-      cwd: connector.cwd,
-      messageId: options?.messageId,
+      const connector = this.getConnector();
+      const parsedSessionContext = options?.sessionContext
+        ? SessionContextSchema.parse(options.sessionContext)
+        : undefined;
+      const hookResult = await this.resolvePreUserMessageTurn({
+        message,
+        sessionContext: parsedSessionContext,
+        cwd: connector.cwd,
+        messageId: options?.messageId,
+      });
+
+      const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+      const normalizedMessage = normalizeMessageInput(hookResult.message);
+      const connectorOptions: ConnectorStartOptions = {
+        systemPrompt,
+        messageId: options?.messageId,
+        messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
+        cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
+        turnContext: buildStructuredOutputTurnContext(
+          hookResult.sessionContext?.turnContext,
+          responseSchema,
+          this.adapterCapabilities,
+        ),
+        requestCorrelation: buildRequestCorrelation(hookResult.sessionContext?.requestCorrelation, {
+          sessionId: this.sessionId,
+        }),
+        ...(responseSchema !== undefined && { responseSchema }),
+      };
+
+      const startResult = await connector.start(normalizedMessage, connectorOptions);
+      this.assertCanonicalMessageId(options?.messageId, startResult.messageHandle, connector, 'start');
+      this.firePostUserMessageHooks(startResult.messageHandle.messageId);
+      await this.onMessageHandle(startResult.messageHandle, undefined);
+      return startResult;
     });
-
-    const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
-
-    const normalizedMessage = normalizeMessageInput(hookResult.message);
-
-    const connectorOptions: ConnectorStartOptions = {
-      systemPrompt,
-      messageId: options?.messageId,
-      messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
-      cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
-      turnContext: buildStructuredOutputTurnContext(
-        hookResult.sessionContext?.turnContext,
-        responseSchema,
-        this.adapterCapabilities,
-      ),
-      requestCorrelation: buildRequestCorrelation(hookResult.sessionContext?.requestCorrelation, {
-        sessionId: this.sessionId,
-      }),
-      ...(responseSchema !== undefined && { responseSchema }),
-    };
-
-    const startResult = await connector.start(normalizedMessage, connectorOptions);
-    this.assertCanonicalMessageId(options?.messageId, startResult.messageHandle, connector, 'start');
-
-    this.firePostUserMessageHooks(startResult.messageHandle.messageId);
-    await this.onMessageHandle(startResult.messageHandle, undefined);
-
-    return startResult;
   }
 
   /**

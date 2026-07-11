@@ -126,28 +126,6 @@ vi.mock('@makaio/subsystem-native-session-supervisor', async (importOriginal) =>
   return { ...original, TmuxBackend, isTmuxAvailable: () => mockState.tmuxAvailable };
 });
 
-vi.mock('@makaio/ai-adapters-core/config', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@makaio/ai-adapters-core/config')>();
-  return {
-    ...original,
-    resolveSessionEnvironment: vi.fn().mockResolvedValue({
-      credentials: {},
-      credEnv: {},
-      resolvedBinary: undefined,
-      spawnEnv: { PATH: '/usr/bin' },
-    }),
-  };
-});
-
-vi.mock('@makaio/ai-adapters-claude-process-shared', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@makaio/ai-adapters-claude-process-shared')>();
-  return {
-    ...original,
-    resolveClaudeProcessEnv: vi.fn((opts: { spawnEnv: Record<string, string> }) => opts.spawnEnv),
-    readClaudeProviderBaseUrl: vi.fn(() => undefined),
-  };
-});
-
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
@@ -169,6 +147,8 @@ async function makeConnector(overrides: Partial<ClaudeCodeTmuxAgentConfig> = {})
     adapterId: 'test-adapter-id',
     cwd: TEST_CWD,
     model: 'claude-sonnet',
+    env: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
+    contextEnv: { PATH: '/usr/bin' },
     ...overrides,
   } as ClaudeCodeTmuxAgentConfig);
 }
@@ -195,15 +175,6 @@ describe('ClaudeCodeTmuxConnector', () => {
     vi.clearAllMocks();
     MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
       ctx.setResult({ applied: 1, skipped: 0 });
-    });
-    MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-      ctx.setResult({
-        sessionDir: '/tmp/claude-session-config',
-        env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
-      });
-    });
-    MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
-      ctx.setResult({ success: true });
     });
     // Reset hook registry between tests.
     mockState.hooks.onSessionStart = undefined;
@@ -270,6 +241,81 @@ describe('ClaudeCodeTmuxConnector', () => {
       expect(mockSpawn).toHaveBeenCalledOnce();
     });
 
+    it('spawns with only the selected API-key delivery', async () => {
+      const connector = await makeConnector({
+        env: {
+          PATH: '/usr/bin',
+          CLAUDE_CONFIG_DIR: '/tmp/claude-session-config',
+          ANTHROPIC_API_KEY: 'api-secret',
+        },
+      });
+      fireSessionStart();
+
+      await connector.initialize();
+
+      const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string> };
+      expect(spawnOptions.env).toMatchObject({ ANTHROPIC_API_KEY: 'api-secret' });
+      expect(spawnOptions.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+    });
+
+    it('spawns with only the selected explicit OAuth-token delivery', async () => {
+      const connector = await makeConnector({
+        env: {
+          PATH: '/usr/bin',
+          CLAUDE_CONFIG_DIR: '/tmp/claude-session-config',
+          CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret',
+        },
+      });
+      fireSessionStart();
+
+      await connector.initialize();
+
+      const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string> };
+      expect(spawnOptions.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' });
+      expect(spawnOptions.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+    });
+
+    it('spawns inferred native state without explicit auth variables', async () => {
+      const connector = await makeConnector();
+      fireSessionStart();
+
+      await connector.initialize();
+
+      const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string> };
+      expect(spawnOptions.env).toMatchObject({ CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' });
+      expect(spawnOptions.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+      expect(spawnOptions.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+    });
+
+    it('uses the central binary selection without resolving it again', async () => {
+      const resolveBinary = vi.fn();
+      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
+        resolveBinary();
+        ctx.setResult({
+          binaryPath: '/unexpected/bin/claude',
+          env: {},
+          configDir: null,
+          source: 'managed',
+          version: null,
+        });
+      });
+      const connector = await makeConnector({
+        clientExecution: {
+          binaryPath: '/selected/bin/claude',
+          env: {},
+          configDir: null,
+          source: 'managed',
+          version: null,
+        },
+      });
+      fireSessionStart();
+
+      await connector.initialize();
+
+      expect(resolveBinary).not.toHaveBeenCalled();
+      expect(mockSpawn).toHaveBeenCalledWith('/selected/bin/claude', expect.any(Array), expect.any(Object));
+    });
+
     it('sets adapterSessionId in constructor (before initialize)', async () => {
       const connector = await makeConnector();
 
@@ -278,7 +324,17 @@ describe('ClaudeCodeTmuxConnector', () => {
     });
 
     it('registers a pinned MCP session and writes the makaio MCP server before spawning', async () => {
-      const connector = await makeConnector({ sessionId: 'makaio-session-1', agentId: 'agent-1' });
+      const connector = await makeConnector({
+        sessionId: 'makaio-session-1',
+        agentId: 'agent-1',
+        env: {
+          PATH: '/usr/bin',
+          CLAUDE_CONFIG_DIR: '/tmp/claude-session-config',
+          ANTHROPIC_API_KEY: 'selected-secret',
+          CLAUDE_CODE_OAUTH_TOKEN: 'opposing-secret',
+        },
+        contextEnv: { PATH: '/usr/bin' },
+      });
       const registrations: unknown[] = [];
       const mcpWrites: unknown[] = [];
 
@@ -304,10 +360,14 @@ describe('ClaudeCodeTmuxConnector', () => {
         pinned: true,
         contextOverrides: {
           cwd: TEST_CWD,
+          env: { PATH: '/usr/bin' },
           sessionId: 'makaio-session-1',
           agentId: 'agent-1',
         },
       });
+      expect(JSON.stringify(registrations[0])).not.toContain('selected-secret');
+      expect(JSON.stringify(registrations[0])).not.toContain('opposing-secret');
+      expect(JSON.stringify(registrations[0])).not.toContain('CLAUDE_CONFIG_DIR');
       expect(mcpWrites).toHaveLength(1);
       expect(mcpWrites[0]).toMatchObject({
         projectDir: TEST_CWD,
@@ -317,59 +377,58 @@ describe('ClaudeCodeTmuxConnector', () => {
       expect(mockSpawn).toHaveBeenCalledOnce();
     });
 
-    it('starts when the MCP bridge is present but the Claude Code config service is absent', async () => {
+    it('uses the centrally supplied config directory without a local config-service request', async () => {
       const connector = await makeConnector();
       const registrations: unknown[] = [];
+      const sessionConfigRequests = vi.fn();
 
       MakaioBus.on(McpSubjects.session.register, (ctx) => {
         registrations.push(ctx.payload);
         ctx.setResult({ port: 4123 });
+      });
+      MakaioBus.on(ClientSubjects.sessionConfig.create, () => {
+        sessionConfigRequests();
+        throw new Error('connector must not request another lease');
       });
       fireSessionStart();
 
       await expect(connector.initialize()).resolves.toBeUndefined();
 
       expect(registrations).toHaveLength(1);
+      expect(sessionConfigRequests).not.toHaveBeenCalled();
       expect(mockSpawn).toHaveBeenCalledOnce();
     });
 
     it('fails early when Claude Code wiring support is missing', async () => {
       MakaioBus.__resetHandlers?.();
-      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-        ctx.setResult({
-          sessionDir: '/tmp/claude-session-config',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
-        });
-      });
       const connector = await makeConnector();
 
       await expect(connector.initialize()).rejects.toThrow('requires active Claude Code wiring support');
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
-    it('fails closed when session config isolation is unavailable', async () => {
+    it('fails closed when the central client lease did not supply a config directory', async () => {
       MakaioBus.__resetHandlers?.();
       MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
         ctx.setResult({ applied: 1, skipped: 0 });
       });
-      const connector = await makeConnector();
+      const connector = await makeConnector({ env: { PATH: '/usr/bin' } });
 
-      await expect(connector.initialize()).rejects.toThrow('requires session-scoped Claude Code config support');
+      await expect(connector.initialize()).rejects.toThrow(
+        'requires CLAUDE_CONFIG_DIR from the central client config lease',
+      );
 
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
     it('wires hooks into the session config directory using user scope', async () => {
       MakaioBus.__resetHandlers?.();
-      const connector = await makeConnector({ sessionId: 'makaio-session-1' });
+      const connector = await makeConnector({
+        sessionId: 'makaio-session-1',
+        env: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/tmp/isolated-claude-config' },
+      });
       const wiringRequests: unknown[] = [];
 
-      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-        ctx.setResult({
-          sessionDir: '/tmp/isolated-claude-config',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/isolated-claude-config' },
-        });
-      });
       MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
         wiringRequests.push(ctx.payload);
         ctx.setResult({ applied: 1, skipped: 0 });
@@ -387,17 +446,14 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
     });
 
-    it('requests auth-only session config inheritance', async () => {
+    it('does not create a second connector-local auth lease', async () => {
       MakaioBus.__resetHandlers?.();
-      const connector = await makeConnector({ sessionId: 'makaio-session-auth-only' });
+      const connector = await makeConnector();
       const sessionConfigRequests: unknown[] = [];
 
       MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
         sessionConfigRequests.push(ctx.payload);
-        ctx.setResult({
-          sessionDir: '/tmp/isolated-claude-config',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/isolated-claude-config' },
-        });
+        throw new Error('connector must not create a second lease');
       });
       MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
         ctx.setResult({ applied: 1, skipped: 0 });
@@ -406,22 +462,10 @@ describe('ClaudeCodeTmuxConnector', () => {
 
       await connector.initialize();
 
-      expect(sessionConfigRequests).toHaveLength(1);
-      expect(sessionConfigRequests.at(-1)).toMatchObject({
-        clientId: 'claude-code',
-        sessionId: connector.adapterSessionId,
-        projectDir: TEST_CWD,
-        configInheritance: 'auth-only',
-      });
+      expect(sessionConfigRequests).toHaveLength(0);
     });
 
     it('checks tmux availability before spawning', async () => {
-      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-        ctx.setResult({
-          sessionDir: '/tmp/claude-session-config',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
-        });
-      });
       const connector = await makeConnector();
       mockState.tmuxAvailable = false;
 
@@ -431,12 +475,6 @@ describe('ClaudeCodeTmuxConnector', () => {
     });
 
     it('subscribes to hooks before waiting for SessionStart after spawn', async () => {
-      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-        ctx.setResult({
-          sessionDir: '/tmp/claude-session-config',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
-        });
-      });
       const connector = await makeConnector();
       fireSessionStart();
 
@@ -450,12 +488,6 @@ describe('ClaudeCodeTmuxConnector', () => {
 
     it('waits for MCP prerequisite cleanup when hook wiring fails first', async () => {
       MakaioBus.__resetHandlers?.();
-      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-        ctx.setResult({
-          sessionDir: '/tmp/claude-session-config',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
-        });
-      });
       const connector = await makeConnector();
       const unregisters: unknown[] = [];
       const removals: unknown[] = [];
@@ -481,6 +513,36 @@ describe('ClaudeCodeTmuxConnector', () => {
       expect(mockSpawn).not.toHaveBeenCalled();
       expect(removals).toHaveLength(1);
       expect(unregisters).toEqual([{ adapterSessionId: connector.adapterSessionId }]);
+    });
+
+    it('preserves initialization and rollback failures when both phases fail', async () => {
+      MakaioBus.__resetHandlers?.();
+      const connector = await makeConnector();
+
+      MakaioBus.on(McpSubjects.session.register, (ctx) => {
+        ctx.setResult({ port: 4123 });
+      });
+      MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+        ctx.setResult({ added: true, replaced: false });
+      });
+      MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, () => {
+        throw new Error('settings removal failed');
+      });
+      MakaioBus.on(McpSubjects.session.unregister, (ctx) => {
+        ctx.setResult({});
+      });
+
+      const failure = await connector.initialize().catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      const aggregate = failure as AggregateError;
+      expect(aggregate.message).toBe('Claude Code tmux initialization and rollback both failed.');
+      expect(aggregate.errors).toHaveLength(2);
+      expect(aggregate.errors[0]).toBeInstanceOf(Error);
+      expect((aggregate.errors[0] as Error).message).toContain('requires active Claude Code wiring support');
+      expect(aggregate.errors[1]).toBeInstanceOf(Error);
+      expect((aggregate.errors[1] as Error).message).toContain('settings removal failed');
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
     });
   });
 
@@ -786,23 +848,17 @@ describe('ClaudeCodeTmuxConnector', () => {
       expect(unregisters).toEqual([{ adapterSessionId: connector.adapterSessionId }]);
     });
 
-    it('disposes backend and destroys session config when MCP removal fails', async () => {
+    it('disposes backend without releasing the central lease when MCP removal fails', async () => {
       MakaioBus.__resetHandlers?.();
       const connector = await makeConnector({ sessionId: 'makaio-session-close-failure' });
-      const destroyedSessionIds: string[] = [];
+      const destroyedLeaseIds: string[] = [];
       const unregisters: unknown[] = [];
 
       MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
         ctx.setResult({ applied: 1, skipped: 0 });
       });
-      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-        ctx.setResult({
-          sessionDir: '/tmp/claude-session-config-close',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config-close' },
-        });
-      });
       MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
-        destroyedSessionIds.push(ctx.payload.sessionId);
+        destroyedLeaseIds.push(ctx.payload.leaseId);
         ctx.setResult({ success: true });
       });
       MakaioBus.on(McpSubjects.session.register, (ctx) => {
@@ -825,7 +881,27 @@ describe('ClaudeCodeTmuxConnector', () => {
 
       expect(unregisters).toEqual([{ adapterSessionId: connector.adapterSessionId }]);
       expect(mockBackendDispose).toHaveBeenCalled();
-      expect(destroyedSessionIds).toEqual([connector.adapterSessionId]);
+      expect(destroyedLeaseIds).toEqual([]);
+    });
+
+    it('does not call the central lease release subject during connector close', async () => {
+      MakaioBus.__resetHandlers?.();
+      const connector = await makeConnector();
+      const destroyRequests = vi.fn();
+
+      MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+        ctx.setResult({ applied: 1, skipped: 0 });
+      });
+      MakaioBus.on(ClientSubjects.sessionConfig.destroy, () => {
+        destroyRequests();
+        throw new Error('connector must not release the central lease');
+      });
+      fireSessionStart();
+      await connector.initialize();
+
+      await expect(connector.close()).resolves.toBeUndefined();
+      expect(mockBackendDispose).toHaveBeenCalled();
+      expect(destroyRequests).not.toHaveBeenCalled();
     });
 
     it('is safe to call without initialization', async () => {

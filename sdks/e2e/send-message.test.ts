@@ -155,9 +155,8 @@ async function buildRustExample(): Promise<string> {
 /**
  * Write minimal OAuth provider + adapter config files into a temp HOME.
  *
- * The `anthropic-oauth` provider definition has no `credentialEnvVars`, so
- * credential resolution short-circuits (empty refs → `{}`). The `claude`
- * binary handles auth via its own OAuth credential store.
+ * The config selects the Claude client's native method explicitly. The
+ * `claude` binary materializes authentication from its own credential store.
  * @param homeDir - Temp HOME directory to write config into.
  */
 async function writeOAuthConfig(homeDir: string): Promise<void> {
@@ -172,9 +171,13 @@ async function writeOAuthConfig(homeDir: string): Promise<void> {
     path.join(providerConfigDir, 'anthropic-oauth.json'),
     JSON.stringify(
       {
-        $schema: 'makaio/provider-config/v1',
+        $schema: 'makaio/provider-config/v2',
         definitionId: 'anthropic-oauth',
         name: 'Anthropic (Subscription)',
+        auth: {
+          mode: 'inferred',
+          method: { owner: 'client', clientId: 'claude-code', methodId: 'native' },
+        },
         enabled: true,
         isDefault: true,
       },
@@ -198,59 +201,6 @@ async function writeOAuthConfig(homeDir: string): Promise<void> {
     ) + '\n',
     'utf8',
   );
-}
-
-/**
- * Symlink the `claude` binary's credential files into the temp HOME.
- *
- * The `claude` binary reads OAuth credentials from `$HOME/.claude/` and may
- * consult `$HOME/.claude.json` for local configuration. By linking/copying
- * these paths we allow the binary to find its auth while Makaio config is
- * isolated in the temp HOME. Writes during the test (e.g. token refresh) go
- * to the real credential store — this is safe and intentional.
- * @param realHome - User's actual HOME directory.
- * @param tempHome - Temp HOME directory for the test.
- */
-async function symlinkClaudeCredentials(realHome: string, tempHome: string): Promise<void> {
-  await symlinkIfPresent(path.join(realHome, '.claude'), path.join(tempHome, '.claude'), 'dir');
-  // On Windows, file symlinks require elevated privileges — copy instead.
-  if (process.platform === 'win32') {
-    await copyIfPresent(path.join(realHome, '.claude.json'), path.join(tempHome, '.claude.json'));
-  } else {
-    await symlinkIfPresent(path.join(realHome, '.claude.json'), path.join(tempHome, '.claude.json'), 'file');
-  }
-}
-
-/**
- * Symlink a credential path when it exists, preserving unexpected filesystem errors.
- * @param sourcePath - Real credential path.
- * @param targetPath - Temp HOME symlink path.
- * @param type - Symlink target type.
- */
-async function symlinkIfPresent(sourcePath: string, targetPath: string, type: 'dir' | 'file'): Promise<void> {
-  try {
-    await fs.stat(sourcePath);
-    // Use 'junction' for directories on Windows — junctions don't require elevated privileges.
-    const linkType = type === 'dir' && process.platform === 'win32' ? 'junction' : type;
-    await fs.symlink(sourcePath, targetPath, linkType);
-  } catch (error) {
-    const missingCredentials = (error as NodeJS.ErrnoException).code === 'ENOENT';
-    if (!missingCredentials) throw error;
-    // Missing Claude credentials/config — test will fail at adapter level with a clear auth error.
-  }
-}
-
-/**
- * Copy a file if it exists, ignoring missing files.
- * @param sourcePath - Source file path.
- * @param targetPath - Destination file path.
- */
-async function copyIfPresent(sourcePath: string, targetPath: string): Promise<void> {
-  try {
-    await fs.copyFile(sourcePath, targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
 }
 
 /**
@@ -308,21 +258,24 @@ async function reserveClosedPort(): Promise<number> {
 describe('SDK send_message E2E (live API)', { timeout: 600_000 }, () => {
   let serve: ServeProcess | null = null;
   let tempRoot: string;
+  let makaioHome: string;
   let busPort: number;
   let pythonVenv: PythonRuntime;
 
   beforeAll(async () => {
     const realHome = process.env['HOME'] ?? os.homedir();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-sdk-e2e-'));
-    const homeDir = path.join(tempRoot, 'home');
-    await fs.mkdir(homeDir, { recursive: true });
+    const isolatedHome = path.join(tempRoot, 'home');
+    makaioHome = path.join(isolatedHome, '.makaio');
+    await fs.mkdir(isolatedHome, { recursive: true });
 
-    await writeOAuthConfig(homeDir);
-    await symlinkClaudeCredentials(realHome, homeDir);
+    await writeOAuthConfig(isolatedHome);
 
     serve = await startCliServe({
       entryPath: CLI_SERVE_ENTRY,
-      env: { HOME: homeDir, USERPROFILE: homeDir },
+      // Native auth belongs to the user's real client home/keychain. Makaio's
+      // own state remains isolated through its independent home override.
+      env: { HOME: realHome, USERPROFILE: realHome, MAKAIO_HOME: makaioHome },
       timeoutMs: BOOT_TIMEOUT_MS,
     });
     busPort = serve.port;
@@ -346,6 +299,12 @@ describe('SDK send_message E2E (live API)', { timeout: 600_000 }, () => {
         await serve.sendSignal('SIGTERM');
         serve = null;
       }
+      const sessionConfigDir = path.join(makaioHome, 'clients', 'claude-code', 'sessions');
+      const remainingLeases = await fs.readdir(sessionConfigDir).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw error;
+      });
+      expect(remainingLeases).toEqual([]);
     } finally {
       if (tempRoot) {
         await fs.rm(tempRoot, { recursive: true, force: true });

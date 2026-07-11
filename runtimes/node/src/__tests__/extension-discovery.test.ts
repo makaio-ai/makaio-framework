@@ -76,6 +76,21 @@ describe('FilesystemDescriptorDiscovery', () => {
     expect(result[0]?.extensionPath).toBe(path.join(nodeModules, 'my-extension'));
   });
 
+  it('discovers the shipped SDK-native Cursor adapter descriptor', async () => {
+    const descriptorPath = path.resolve(
+      import.meta.dirname,
+      '../../../../adapters/implementations/cursor-sdk/descriptor.json',
+    );
+    await writeDescriptor(path.join(nodeModules, 'cursor-sdk'), await fs.readFile(descriptorPath, 'utf8'));
+
+    const discovery = new FilesystemDescriptorDiscovery(tmpDir, { extensionsDir, nodeModulesDir: globalNodeModules });
+    const result = await discovery.discover();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.descriptor.name).toBe('cursor-sdk');
+    expect(result[0]?.descriptor.contributions?.adapters?.[0]?.protocols).toEqual([]);
+  });
+
   it('discovers descriptor.json in node_modules scoped package (@scope/pkg)', async () => {
     await writeDescriptor(path.join(nodeModules, '@scope', 'my-scoped-ext'), JSON.stringify(baseDescriptor));
 

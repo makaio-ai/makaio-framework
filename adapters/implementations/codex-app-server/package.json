@@ -51,6 +51,7 @@
     "@makaio/ai-adapters-stream-session": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
+    "@makaio/client-codex": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/subprocess": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",

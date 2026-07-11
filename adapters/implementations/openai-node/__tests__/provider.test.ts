@@ -1,9 +1,21 @@
-import { ProviderDefinitionSchema } from '@makaio/contracts';
+import { ProviderDefinitionSchema, type ProviderDefinitionInput } from '@makaio/contracts';
 import { describe, expect, it } from 'vitest';
 import { defaultPresetId, testPresetId } from '../src/provider.js';
 import { providerDefinition as nanogptDefinition } from '@makaio/provider-nanogpt';
 import { providerDefinition as openrouterDefinition } from '@makaio/provider-openrouter';
 import { openaiProviderDefinition as opencodeGoDefinition } from '@makaio/provider-opencode-go';
+
+/**
+ * Resolve the environment source declared for a provider's API-key field.
+ * @param definition - Provider definition whose API-key method should be inspected
+ * @returns Declared environment variable, when present
+ */
+function resolveApiKeyEnvironmentSource(definition: ProviderDefinitionInput): string | undefined {
+  const method = definition.authMethods?.find(({ id }) => id === 'api-key');
+  if (method?.mode !== 'explicit') return undefined;
+  return method.fields.find(({ id }) => id === 'apiKey')?.sourceHints.find(({ kind }) => kind === 'environment')
+    ?.variable;
+}
 
 describe('openai-node provider defaults', () => {
   it('uses OpenAI as the host default provider', () => {
@@ -16,7 +28,7 @@ describe('openai-node provider defaults', () => {
 
   it('declares the OpenCode Go definition with an OpenAI-compatible endpoint', () => {
     expect(opencodeGoDefinition.endpoints?.openai).toBe('https://opencode.ai/zen/go/v1');
-    expect(opencodeGoDefinition.credentialEnvVars).toEqual({ apiKey: 'OPENCODE_GO_API_KEY' });
+    expect(resolveApiKeyEnvironmentSource(opencodeGoDefinition)).toBe('OPENCODE_GO_API_KEY');
     expect(opencodeGoDefinition.defaultModel).toBe('kimi-k2.5');
     expect(opencodeGoDefinition.fastModel).toBe('glm-5.1');
     // Model catalog is now YAML-sourced — availableModels is populated by the registry service at boot time.
@@ -51,6 +63,6 @@ describe('OpenRouter definition schema conformance', () => {
   });
 
   it('uses the canonical OpenRouter API key environment variable', () => {
-    expect(openrouterDefinition.credentialEnvVars).toEqual({ apiKey: 'OPENROUTER_API_KEY' });
+    expect(resolveApiKeyEnvironmentSource(openrouterDefinition)).toBe('OPENROUTER_API_KEY');
   });
 });

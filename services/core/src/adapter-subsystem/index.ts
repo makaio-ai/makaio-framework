@@ -8,28 +8,38 @@
 
 export {
   AdapterFileConfigSchema,
+  AdapterRuntimePackagesSchema,
+  AdapterRuntimeSnapshotErrorCodeSchema,
+  AdapterRuntimeSnapshotResolutionSchema,
+  AdapterRuntimeSnapshotSchema,
   AdapterReadinessSchema,
   AdapterSubsystemSchemas,
   BindingRecordSchema,
+  CompatibleAuthOptionSchema,
   EffectiveAdapterSchema,
+  ProviderConfigAuthSummarySchema,
   ProviderConfigFileRecordSchema,
+  ProviderRuntimeSnapshotSchema,
 } from './schemas.js';
 export type {
   AdapterFileConfig,
+  AdapterRuntimePackages,
+  AdapterRuntimeSnapshot,
+  AdapterRuntimeSnapshotErrorCode,
+  AdapterRuntimeSnapshotResolution,
   AdapterReadiness,
   BindingRecord,
+  CompatibleAuthOption,
   EffectiveAdapter,
+  ProviderConfigAuthSummary,
   ProviderConfigFileRecord,
+  ProviderRuntimeSnapshot,
 } from './schemas.js';
 export type { AdapterFileConfigSet, IAdapterConfigRepository, ProviderConfigFileSet } from './types.js';
-export {
-  CanonicalProviderConfigCredentialRefsSchema,
-  CanonicalProviderConfigPatchSchema,
-  CreateCanonicalProviderConfigInputSchema,
-} from './write-types.js';
+export { CanonicalProviderConfigPatchSchema, CreateCanonicalProviderConfigInputSchema } from './write-types.js';
 export type {
-  CanonicalProviderConfigCredentialRefs,
-  CanonicalProviderConfigCredentialRefsPayload,
+  CanonicalProviderConfigAuth,
+  CanonicalProviderConfigAuthPayload,
   CanonicalProviderConfigPatch,
   CreateCanonicalProviderConfigInput,
   CreateCanonicalProviderConfigInputPayload,

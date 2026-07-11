@@ -1,6 +1,15 @@
 import { AsyncEntry } from '@napi-rs/keyring';
 import type { ICredentialBackend } from './credential-backend.js';
 
+/** Secret-free failure from the native keychain boundary. */
+class KeyringBackendError extends Error {
+  /** @param operation - Stable native-keychain operation name. */
+  public constructor(operation: 'read' | 'write' | 'clear') {
+    super(`Native keychain credential ${operation} failed`);
+    this.name = 'KeyringBackendError';
+  }
+}
+
 /**
  * Native keychain backend using `@napi-rs/keyring`.
  *
@@ -24,10 +33,10 @@ export class KeyringBackend implements ICredentialBackend {
    * Reads the credential value from the native keychain using the async API.
    *
    * Returns null only when the entry does not exist (`NoEntry`). All other
-   * errors (locked keychain, permission denied, etc.) are re-thrown so callers
-   * can distinguish a missing credential from an inaccessible keychain.
+   * errors (locked keychain, permission denied, etc.) are normalized without
+   * exposing native keychain context.
    * @returns The stored credential string, or null if not found
-   * @throws If the keychain is locked, access is denied, or another unexpected error occurs
+   * @throws A secret-free error if the keychain is inaccessible.
    */
   public async read(): Promise<string | null> {
     try {
@@ -38,7 +47,7 @@ export class KeyringBackend implements ICredentialBackend {
       if (error instanceof Error && error.name === 'NoEntry') {
         return null;
       }
-      throw error;
+      throw new KeyringBackendError('read');
     }
   }
 
@@ -47,7 +56,21 @@ export class KeyringBackend implements ICredentialBackend {
    * @param value - The credential string to store
    */
   public async write(value: string): Promise<void> {
-    const entry = new AsyncEntry(this.service, this.account);
-    await entry.setPassword(value);
+    try {
+      const entry = new AsyncEntry(this.service, this.account);
+      await entry.setPassword(value);
+    } catch {
+      throw new KeyringBackendError('write');
+    }
+  }
+
+  /** Remove the configured native-keychain credential when it exists. */
+  public async clear(): Promise<void> {
+    try {
+      const entry = new AsyncEntry(this.service, this.account);
+      await entry.deletePassword();
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'NoEntry')) throw new KeyringBackendError('clear');
+    }
   }
 }

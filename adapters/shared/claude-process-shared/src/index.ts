@@ -11,7 +11,6 @@ export { buildSystemPrompt } from './build-system-prompt.js';
 export type { ProviderSystemPrompt } from './build-system-prompt.js';
 export { parseReasoningLevel } from './parse-reasoning-level.js';
 export {
-  CLAUDE_API_KEY_ENV,
   CLAUDE_BASE_URL_ENV,
   readClaudeProviderBaseUrl,
   resolveClaudeProcessEnv,

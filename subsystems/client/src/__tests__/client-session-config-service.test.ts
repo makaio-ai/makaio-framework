@@ -10,7 +10,12 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientSessionConfigSchemas, ClientSubjects, SessionConfigSetupRequestSchema } from '@makaio/contracts/client';
+import {
+  ClientSessionConfigSchemas,
+  ClientSubjects,
+  SessionConfigSetupRequestSchema,
+  SessionConfigSetupResponseSchema,
+} from '@makaio/contracts/client';
 import type { ClientConfigPrimeRequest } from '@makaio/contracts/client';
 import { SessionSubjects } from '@makaio/contracts/session';
 import { createBusNamespace } from '@makaio/core';
@@ -69,7 +74,8 @@ describe('ClientSessionConfigService', () => {
       expect(
         createSchema.safeParse({
           clientId: 'claude-code',
-          sessionId: 'session-policy',
+          leaseId: 'lease-policy',
+          ownerSessionId: 'framework-session',
           projectDir: path.join(baseDir, 'project'),
           configInheritance: 'auth-only',
         }).success,
@@ -77,10 +83,11 @@ describe('ClientSessionConfigService', () => {
       expect(
         createSchema.safeParse({
           clientId: 'claude-code',
-          sessionId: 'session-policy',
+          leaseId: 'lease-policy',
           configInheritance: 'plugins-only',
         }).success,
       ).toBe(false);
+      expect(createSchema.safeParse({ clientId: 'claude-code', sessionId: 'legacy-session' }).success).toBe(false);
     });
 
     it('requires config inheritance on client-owned setup delegation', () => {
@@ -100,15 +107,18 @@ describe('ClientSessionConfigService', () => {
           platform: 'darwin',
         }).success,
       ).toBe(false);
+
+      expect(SessionConfigSetupResponseSchema.safeParse({ env: {} }).success).toBe(false);
+      expect(SessionConfigSetupResponseSchema.safeParse({ env: {}, authMaterialized: false }).success).toBe(true);
     });
 
     it('creates the session directory and returns its path', async () => {
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-abc',
+        leaseId: 'lease-abc',
       });
 
-      const expectedDir = path.join(baseDir, 'claude-code', 'sessions', 'session-abc');
+      const expectedDir = path.join(baseDir, 'claude-code', 'sessions', 'lease-abc');
       expect(result.sessionDir).toBe(expectedDir);
 
       const stat = await fs.stat(expectedDir);
@@ -122,10 +132,11 @@ describe('ClientSessionConfigService', () => {
       // in the framework service itself.
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-env-test',
+        leaseId: 'lease-env-test',
       });
 
       expect(result.env).toEqual({});
+      expect(result.authMaterialized).toBe(false);
     });
 
     it('forwards env vars returned by the client-owned setup handler', async () => {
@@ -134,19 +145,20 @@ describe('ClientSessionConfigService', () => {
       const testNs = createBusNamespace('client:claude-code', {
         'sessionConfig.setup': {
           request: z.object({ sessionDir: z.string(), baseConfigDir: z.string(), platform: z.string() }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
         },
       });
       bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
-        ctx.setResult({ env: { CUSTOM_VAR: ctx.payload.sessionDir } });
+        ctx.setResult({ env: { CUSTOM_VAR: ctx.payload.sessionDir }, authMaterialized: true });
       });
 
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-env-handler',
+        leaseId: 'lease-env-handler',
       });
 
       expect(result.env).toEqual({ CUSTOM_VAR: result.sessionDir });
+      expect(result.authMaterialized).toBe(true);
     });
 
     it('defaults config inheritance to full when delegating setup', async () => {
@@ -158,19 +170,19 @@ describe('ClientSessionConfigService', () => {
             platform: z.string(),
             configInheritance: z.enum(['auth-only', 'full', 'empty']),
           }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
         },
       });
 
       let observedPolicy: string | undefined;
       bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
         observedPolicy = ctx.payload.configInheritance;
-        ctx.setResult({ env: {} });
+        ctx.setResult({ env: {}, authMaterialized: true });
       });
 
       await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-default-policy',
+        leaseId: 'lease-default-policy',
       });
 
       expect(observedPolicy).toBe('full');
@@ -185,24 +197,24 @@ describe('ClientSessionConfigService', () => {
             platform: z.string(),
             configInheritance: z.enum(['auth-only', 'full', 'empty']),
           }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
         },
       });
 
       const observedPolicies: string[] = [];
       bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
         observedPolicies.push(ctx.payload.configInheritance);
-        ctx.setResult({ env: {} });
+        ctx.setResult({ env: {}, authMaterialized: true });
       });
 
       await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-auth-only-policy',
+        leaseId: 'lease-auth-only-policy',
         configInheritance: 'auth-only',
       });
       await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-empty-policy',
+        leaseId: 'lease-empty-policy',
         configInheritance: 'empty',
       });
 
@@ -220,19 +232,19 @@ describe('ClientSessionConfigService', () => {
             platform: z.string(),
             configInheritance: z.enum(['auth-only', 'full', 'empty']),
           }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
         },
       });
 
       let observedProjectDir: string | undefined;
       bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
         observedProjectDir = ctx.payload.projectDir;
-        ctx.setResult({ env: {} });
+        ctx.setResult({ env: {}, authMaterialized: true });
       });
 
       await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-project-dir',
+        leaseId: 'lease-project-dir',
         projectDir,
       });
 
@@ -242,10 +254,11 @@ describe('ClientSessionConfigService', () => {
     it('returns an empty env map for unknown clients', async () => {
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'unknown-client',
-        sessionId: 'session-xyz',
+        leaseId: 'lease-xyz',
       });
 
       expect(result.env).toEqual({});
+      expect(result.authMaterialized).toBe(false);
     });
 
     it('proceeds without a setup handler registered (no-op delegation)', async () => {
@@ -253,26 +266,141 @@ describe('ClientSessionConfigService', () => {
       // must succeed and leave the directory in place.
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-no-handler',
+        leaseId: 'lease-no-handler',
       });
 
       const stat = await fs.stat(result.sessionDir);
       expect(stat.isDirectory()).toBe(true);
     });
 
-    it('creates nested session directories for multiple sessions', async () => {
+    it('creates separate directories for connector-unique leases', async () => {
       const first = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-1',
+        leaseId: 'lease-1',
       });
       const second = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-2',
+        leaseId: 'lease-2',
       });
 
       expect(first.sessionDir).not.toBe(second.sessionDir);
       await expect(fs.access(first.sessionDir)).resolves.toBeUndefined();
       await expect(fs.access(second.sessionDir)).resolves.toBeUndefined();
+    });
+
+    it('rejects an overlapping duplicate lease before materializing or changing its owner', async () => {
+      const setupStarted = Promise.withResolvers<void>();
+      const releaseFirstSetup = Promise.withResolvers<void>();
+      let setupCalls = 0;
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: SessionConfigSetupRequestSchema,
+          response: SessionConfigSetupResponseSchema,
+        },
+      });
+      bus.on(testNs.subjects.sessionConfig.setup, async (ctx) => {
+        setupCalls += 1;
+        if (setupCalls === 1) {
+          setupStarted.resolve();
+          await releaseFirstSetup.promise;
+        }
+        ctx.setResult({ env: {}, authMaterialized: true });
+      });
+
+      const originalRequest = bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-duplicate',
+        ownerSessionId: 'original-owner',
+      });
+      await setupStarted.promise;
+
+      try {
+        await expect(
+          bus.request(ClientSubjects.sessionConfig.create, {
+            clientId: 'claude-code',
+            leaseId: 'lease-duplicate',
+            ownerSessionId: 'replacement-owner',
+          }),
+        ).rejects.toThrow("Config lease 'lease-duplicate' is already active for client 'claude-code'");
+      } finally {
+        releaseFirstSetup.resolve();
+      }
+
+      const original = await originalRequest;
+      expect(setupCalls).toBe(1);
+
+      await bus.emit(SessionSubjects.closed, { sessionId: 'replacement-owner' });
+      await expect(fs.access(original.sessionDir)).resolves.toBeUndefined();
+
+      await bus.emit(SessionSubjects.closed, { sessionId: 'original-owner' });
+      await expect(fs.access(original.sessionDir)).rejects.toThrow();
+    });
+
+    it('settles and cleans a creating lease before allowing its ID to be retried', async () => {
+      const setupStarted = Promise.withResolvers<void>();
+      const releaseSetup = Promise.withResolvers<void>();
+      let setupCalls = 0;
+      let teardownCalls = 0;
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: SessionConfigSetupRequestSchema,
+          response: SessionConfigSetupResponseSchema,
+        },
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      bus.on(testNs.subjects.sessionConfig.setup, async (ctx) => {
+        setupCalls += 1;
+        if (setupCalls === 1) {
+          setupStarted.resolve();
+          await releaseSetup.promise;
+        }
+        ctx.setResult({ env: {}, authMaterialized: true });
+      });
+      bus.on(testNs.subjects.sessionConfig.destroy, (ctx) => {
+        teardownCalls += 1;
+        ctx.setResult({ success: true });
+      });
+
+      const creating = bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-close-during-create',
+        ownerSessionId: 'owner-close-during-create',
+      });
+      const creationFailure = expect(creating).rejects.toThrow(
+        "Config lease 'lease-close-during-create' was released while it was being created",
+      );
+      await setupStarted.promise;
+
+      let closeSettled = false;
+      const close = bus.emit(SessionSubjects.closed, { sessionId: 'owner-close-during-create' }).then(() => {
+        closeSettled = true;
+      });
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      await expect(
+        bus.request(ClientSubjects.sessionConfig.create, {
+          clientId: 'claude-code',
+          leaseId: 'lease-close-during-create',
+        }),
+      ).rejects.toThrow("Config lease 'lease-close-during-create' is already active for client 'claude-code'");
+
+      releaseSetup.resolve();
+      await creationFailure;
+      await close;
+      expect(teardownCalls).toBe(1);
+
+      const retried = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-close-during-create',
+      });
+      expect(setupCalls).toBe(2);
+      await expect(fs.access(retried.sessionDir)).resolves.toBeUndefined();
     });
 
     it('uses the default profile when no explicit profile is supplied', async () => {
@@ -292,17 +420,17 @@ describe('ClientSessionConfigService', () => {
       const testNs = createBusNamespace('client:claude-code', {
         'sessionConfig.setup': {
           request: z.object({ sessionDir: z.string(), baseConfigDir: z.string(), platform: z.string() }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
         },
       });
       bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
         observedBaseConfigDir = ctx.payload.baseConfigDir;
-        ctx.setResult({ env: {} });
+        ctx.setResult({ env: {}, authMaterialized: true });
       });
 
       await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-default-profile',
+        leaseId: 'lease-default-profile',
       });
 
       expect(observedBaseConfigDir).toBe(defaultConfigDir);
@@ -313,17 +441,17 @@ describe('ClientSessionConfigService', () => {
       const testNs = createBusNamespace('client:claude-code', {
         'sessionConfig.setup': {
           request: z.object({ sessionDir: z.string(), baseConfigDir: z.string(), platform: z.string() }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
         },
       });
       bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
         observedBaseConfigDir = ctx.payload.baseConfigDir;
-        ctx.setResult({ env: {} });
+        ctx.setResult({ env: {}, authMaterialized: true });
       });
 
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-native-fallback',
+        leaseId: 'lease-native-fallback',
       });
 
       expect(observedBaseConfigDir).toBe(result.sessionDir);
@@ -333,19 +461,140 @@ describe('ClientSessionConfigService', () => {
       await expect(
         bus.request(ClientSubjects.sessionConfig.create, {
           clientId: 'claude-code',
-          sessionId: 'session-missing-profile',
+          leaseId: 'lease-missing-profile',
           profileName: 'does-not-exist',
         }),
       ).rejects.toThrow("Profile 'does-not-exist' not found for client 'claude-code'");
     });
 
-    it('rejects session IDs that are not safe path components', async () => {
+    it('rejects lease IDs that are not safe path components', async () => {
       await expect(
         bus.request(ClientSubjects.sessionConfig.create, {
           clientId: 'claude-code',
-          sessionId: '../escape',
+          leaseId: '../escape',
         }),
       ).rejects.toThrow();
+    });
+
+    it('runs client teardown and removes the lease directory when setup fails', async () => {
+      const expectedDir = path.join(baseDir, 'claude-code', 'sessions', 'lease-setup-fails');
+      const calls: string[] = [];
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: SessionConfigSetupRequestSchema,
+          response: SessionConfigSetupResponseSchema,
+        },
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      bus.on(testNs.subjects.sessionConfig.setup, async (ctx) => {
+        calls.push('setup');
+        await fs.writeFile(path.join(ctx.payload.sessionDir, 'partial-state'), 'partial', 'utf-8');
+        throw new Error('setup failed');
+      });
+      bus.on(testNs.subjects.sessionConfig.destroy, (ctx) => {
+        calls.push('teardown');
+        expect(ctx.payload.sessionDir).toBe(expectedDir);
+        ctx.setResult({ success: true });
+      });
+
+      await expect(
+        bus.request(ClientSubjects.sessionConfig.create, {
+          clientId: 'claude-code',
+          leaseId: 'lease-setup-fails',
+          ownerSessionId: 'owner-setup-fails',
+        }),
+      ).rejects.toThrow('setup failed');
+
+      expect(calls).toEqual(['setup', 'teardown']);
+      await expect(fs.access(expectedDir)).rejects.toThrow();
+      await bus.emit(SessionSubjects.closed, { sessionId: 'owner-setup-fails' });
+      expect(calls).toEqual(['setup', 'teardown']);
+    });
+
+    it('releases the reservation after failed materialization so the lease can be retried', async () => {
+      let setupAttempts = 0;
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: SessionConfigSetupRequestSchema,
+          response: SessionConfigSetupResponseSchema,
+        },
+      });
+      bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
+        setupAttempts += 1;
+        if (setupAttempts === 1) {
+          throw new Error('first materialization failed');
+        }
+        ctx.setResult({ env: {}, authMaterialized: true });
+      });
+
+      await expect(
+        bus.request(ClientSubjects.sessionConfig.create, {
+          clientId: 'claude-code',
+          leaseId: 'lease-retry-after-failure',
+        }),
+      ).rejects.toThrow('first materialization failed');
+
+      const retried = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-retry-after-failure',
+      });
+
+      expect(setupAttempts).toBe(2);
+      await expect(fs.access(retried.sessionDir)).resolves.toBeUndefined();
+    });
+
+    it('releases the reservation when both materialization and rollback teardown fail', async () => {
+      let setupAttempts = 0;
+      let teardownAttempts = 0;
+      const expectedDir = path.join(baseDir, 'claude-code', 'sessions', 'lease-double-failure');
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: SessionConfigSetupRequestSchema,
+          response: SessionConfigSetupResponseSchema,
+        },
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
+        setupAttempts += 1;
+        if (setupAttempts === 1) {
+          throw new Error('materialization failed');
+        }
+        ctx.setResult({ env: {}, authMaterialized: true });
+      });
+      bus.on(testNs.subjects.sessionConfig.destroy, (ctx) => {
+        teardownAttempts += 1;
+        if (teardownAttempts === 1) {
+          throw new Error('rollback teardown failed');
+        }
+        ctx.setResult({ success: true });
+      });
+
+      await expect(
+        bus.request(ClientSubjects.sessionConfig.create, {
+          clientId: 'claude-code',
+          leaseId: 'lease-double-failure',
+        }),
+      ).rejects.toThrow('Client session config creation and rollback both failed');
+      await expect(fs.access(expectedDir)).rejects.toThrow();
+
+      const retried = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-double-failure',
+      });
+      expect(setupAttempts).toBe(2);
+      await expect(fs.access(retried.sessionDir)).resolves.toBeUndefined();
     });
 
     // -----------------------------------------------------------------------
@@ -375,7 +624,7 @@ describe('ClientSessionConfigService', () => {
       const projectDir = path.join(baseDir, 'my-project');
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-prime-test',
+        leaseId: 'lease-prime-test',
         projectDir,
       });
 
@@ -393,7 +642,7 @@ describe('ClientSessionConfigService', () => {
       // No client:claude-code.config.prime handler — creation must succeed.
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-no-prime-handler',
+        leaseId: 'lease-no-prime-handler',
       });
 
       const stat = await fs.stat(result.sessionDir);
@@ -407,12 +656,12 @@ describe('ClientSessionConfigService', () => {
       const setupNs = createBusNamespace('client:claude-code', {
         'sessionConfig.setup': {
           request: z.object({ sessionDir: z.string(), baseConfigDir: z.string(), platform: z.string() }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
         },
       });
       bus.on(setupNs.subjects.sessionConfig.setup, (ctx) => {
         callOrder.push('setup');
-        ctx.setResult({ env: { SETUP_VAR: 'setup-value' } });
+        ctx.setResult({ env: { SETUP_VAR: 'setup-value' }, authMaterialized: true });
       });
 
       const primeNs = createBusNamespace('client:claude-code', {
@@ -428,7 +677,7 @@ describe('ClientSessionConfigService', () => {
 
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-order-test',
+        leaseId: 'lease-order-test',
       });
 
       // Setup must run before prime.
@@ -439,16 +688,27 @@ describe('ClientSessionConfigService', () => {
 
     it('rejects session config creation when config.prime fails after setup', async () => {
       const callOrder: string[] = [];
-      const expectedDir = path.join(baseDir, 'claude-code', 'sessions', 'session-prime-fails');
+      const expectedDir = path.join(baseDir, 'claude-code', 'sessions', 'lease-prime-fails');
       const setupNs = createBusNamespace('client:claude-code', {
         'sessionConfig.setup': {
           request: z.object({ sessionDir: z.string(), baseConfigDir: z.string(), platform: z.string() }),
-          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+          response: SessionConfigSetupResponseSchema,
+        },
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
         },
       });
       bus.on(setupNs.subjects.sessionConfig.setup, (ctx) => {
         callOrder.push('setup');
-        ctx.setResult({ env: { SETUP_VAR: 'setup-value' } });
+        ctx.setResult({ env: { SETUP_VAR: 'setup-value' }, authMaterialized: true });
+      });
+      bus.on(setupNs.subjects.sessionConfig.destroy, (ctx) => {
+        callOrder.push('teardown');
+        ctx.setResult({ success: true });
       });
 
       const primeNs = createBusNamespace('client:claude-code', {
@@ -465,12 +725,15 @@ describe('ClientSessionConfigService', () => {
       await expect(
         bus.request(ClientSubjects.sessionConfig.create, {
           clientId: 'claude-code',
-          sessionId: 'session-prime-fails',
+          leaseId: 'lease-prime-fails',
+          ownerSessionId: 'owner-prime-fails',
         }),
       ).rejects.toThrow('prime failed');
 
-      expect(callOrder).toEqual(['setup', 'prime']);
+      expect(callOrder).toEqual(['setup', 'prime', 'teardown']);
       await expect(fs.access(expectedDir)).rejects.toThrow();
+      await bus.emit(SessionSubjects.closed, { sessionId: 'owner-prime-fails' });
+      expect(callOrder).toEqual(['setup', 'prime', 'teardown']);
     });
   });
 
@@ -482,7 +745,7 @@ describe('ClientSessionConfigService', () => {
     it('removes an existing session directory', async () => {
       const created = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-to-destroy',
+        leaseId: 'lease-to-destroy',
       });
 
       // Directory must exist before destroy.
@@ -490,7 +753,7 @@ describe('ClientSessionConfigService', () => {
 
       const result = await bus.request(ClientSubjects.sessionConfig.destroy, {
         clientId: 'claude-code',
-        sessionId: 'session-to-destroy',
+        leaseId: 'lease-to-destroy',
       });
 
       expect(result.success).toBe(true);
@@ -522,12 +785,12 @@ describe('ClientSessionConfigService', () => {
 
       const created = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-teardown-handler',
+        leaseId: 'lease-teardown-handler',
       });
 
       const result = await bus.request(ClientSubjects.sessionConfig.destroy, {
         clientId: 'claude-code',
-        sessionId: 'session-teardown-handler',
+        leaseId: 'lease-teardown-handler',
       });
 
       expect(result.success).toBe(true);
@@ -538,7 +801,7 @@ describe('ClientSessionConfigService', () => {
     it('is idempotent: destroy on a non-existent directory still succeeds', async () => {
       const result = await bus.request(ClientSubjects.sessionConfig.destroy, {
         clientId: 'claude-code',
-        sessionId: 'session-never-created',
+        leaseId: 'lease-never-created',
       });
 
       expect(result.success).toBe(true);
@@ -547,23 +810,65 @@ describe('ClientSessionConfigService', () => {
     it('second destroy of the same directory also succeeds', async () => {
       await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-double-destroy',
+        leaseId: 'lease-double-destroy',
       });
 
       const first = await bus.request(ClientSubjects.sessionConfig.destroy, {
         clientId: 'claude-code',
-        sessionId: 'session-double-destroy',
+        leaseId: 'lease-double-destroy',
       });
       const second = await bus.request(ClientSubjects.sessionConfig.destroy, {
         clientId: 'claude-code',
-        sessionId: 'session-double-destroy',
+        leaseId: 'lease-double-destroy',
       });
 
       expect(first.success).toBe(true);
       expect(second.success).toBe(true);
     });
 
-    it('does not run client-owned teardown after the session directory disappeared', async () => {
+    it('shares one cleanup operation across overlapping destroy requests', async () => {
+      const created = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-overlapping-destroy',
+      });
+      const teardownStarted = Promise.withResolvers<void>();
+      const releaseTeardown = Promise.withResolvers<void>();
+      let teardownCalls = 0;
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      bus.on(testNs.subjects.sessionConfig.destroy, async (ctx) => {
+        teardownCalls += 1;
+        teardownStarted.resolve();
+        await releaseTeardown.promise;
+        ctx.setResult({ success: true });
+      });
+
+      const first = bus.request(ClientSubjects.sessionConfig.destroy, {
+        clientId: 'claude-code',
+        leaseId: 'lease-overlapping-destroy',
+      });
+      await teardownStarted.promise;
+      const second = bus.request(ClientSubjects.sessionConfig.destroy, {
+        clientId: 'claude-code',
+        leaseId: 'lease-overlapping-destroy',
+      });
+      await Promise.resolve();
+      expect(teardownCalls).toBe(1);
+
+      releaseTeardown.resolve();
+      await expect(Promise.all([first, second])).resolves.toEqual([{ success: true }, { success: true }]);
+      expect(teardownCalls).toBe(1);
+      await expect(fs.access(created.sessionDir)).rejects.toThrow();
+    });
+
+    it('runs client-owned teardown even after the lease directory disappeared', async () => {
       const testNs = createBusNamespace('client:claude-code', {
         'sessionConfig.destroy': {
           request: z.object({
@@ -582,17 +887,51 @@ describe('ClientSessionConfigService', () => {
 
       const created = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-disappears-before-destroy',
+        leaseId: 'lease-disappears-before-destroy',
       });
       await fs.rm(created.sessionDir, { recursive: true, force: true });
 
       const result = await bus.request(ClientSubjects.sessionConfig.destroy, {
         clientId: 'claude-code',
-        sessionId: 'session-disappears-before-destroy',
+        leaseId: 'lease-disappears-before-destroy',
       });
 
       expect(result.success).toBe(true);
-      expect(teardownCalls).toBe(0);
+      expect(teardownCalls).toBe(1);
+    });
+
+    it('removes the directory and both lease indexes when client teardown fails', async () => {
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      let teardownCalls = 0;
+      bus.on(testNs.subjects.sessionConfig.destroy, () => {
+        teardownCalls += 1;
+        throw new Error('teardown failed');
+      });
+
+      const created = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-teardown-fails',
+        ownerSessionId: 'owner-teardown-fails',
+      });
+
+      await expect(
+        bus.request(ClientSubjects.sessionConfig.destroy, {
+          clientId: 'claude-code',
+          leaseId: 'lease-teardown-fails',
+        }),
+      ).rejects.toThrow('teardown failed');
+      await expect(fs.access(created.sessionDir)).rejects.toThrow();
+
+      await bus.emit(SessionSubjects.closed, { sessionId: 'owner-teardown-fails' });
+      expect(teardownCalls).toBe(1);
     });
   });
 
@@ -605,7 +944,7 @@ describe('ClientSessionConfigService', () => {
       // Create a fresh session directory — it will not be considered stale.
       await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'fresh-session',
+        leaseId: 'fresh-lease',
       });
 
       const result = await bus.request(ClientSubjects.sessionConfig.cleanup, {});
@@ -658,33 +997,46 @@ describe('ClientSessionConfigService', () => {
       await expect(fs.access(staleCodexDir)).resolves.toBeUndefined();
     });
 
-    it('does not remove stale directories for active sessions', async () => {
+    it('does not remove stale-looking directories for live leases', async () => {
       const staleBus = createBusInstance();
-      staleBus.on(SessionSubjects.get, (ctx) => {
-        ctx.setResult({
-          session:
-            ctx.payload.sessionId === 'active-session'
-              ? {
-                  sessionId: 'active-session',
-                  createdAt: 1,
-                  lastActivityAt: 1,
-                  agents: [],
-                  status: 'active',
-                }
-              : null,
-        });
-      });
       const staleService = new ClientSessionConfigService(staleBus, baseDir, futureNow(2 * 60 * 60 * 1000));
       await staleService.init();
 
-      const activeDir = path.join(baseDir, 'claude-code', 'sessions', 'active-session');
-      await fs.mkdir(activeDir, { recursive: true });
+      const active = await staleBus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'active-lease',
+        baseConfigDir: baseDir,
+      });
 
       const result = await staleBus.request(ClientSubjects.sessionConfig.cleanup, {});
       await staleService.destroy();
 
-      expect(result.removed).not.toContain(activeDir);
-      await expect(fs.access(activeDir)).resolves.toBeUndefined();
+      expect(result.removed).not.toContain(active.sessionDir);
+      await expect(fs.access(active.sessionDir)).resolves.toBeUndefined();
+    });
+
+    it('surfaces stale-lease teardown failures after still removing the directory', async () => {
+      const staleBus = createBusInstance();
+      const staleService = new ClientSessionConfigService(staleBus, baseDir, futureNow(2 * 60 * 60 * 1000));
+      await staleService.init();
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      staleBus.on(testNs.subjects.sessionConfig.destroy, () => {
+        throw new Error('stale teardown failed');
+      });
+      const staleDir = path.join(baseDir, 'claude-code', 'sessions', 'stale-teardown-failure');
+      await fs.mkdir(staleDir, { recursive: true });
+
+      await expect(staleBus.request(ClientSubjects.sessionConfig.cleanup, {})).rejects.toThrow('stale teardown failed');
+      await expect(fs.access(staleDir)).rejects.toThrow();
+      await staleService.destroy();
     });
   });
 
@@ -693,15 +1045,78 @@ describe('ClientSessionConfigService', () => {
   // -------------------------------------------------------------------------
 
   describe('session.closed cleanup', () => {
-    it('removes a session config directory when the framework session closes', async () => {
-      const created = await bus.request(ClientSubjects.sessionConfig.create, {
+    it('releases every lease owned by the closed session and leaves other leases live', async () => {
+      const first = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
-        sessionId: 'session-closing',
+        leaseId: 'lease-closing-1',
+        ownerSessionId: 'session-closing',
+      });
+      const second = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'codex',
+        leaseId: 'lease-closing-2',
+        ownerSessionId: 'session-closing',
+      });
+      const other = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-other-owner',
+        ownerSessionId: 'other-session',
       });
 
       await bus.emit(SessionSubjects.closed, { sessionId: 'session-closing' });
 
-      await expect(fs.access(created.sessionDir)).rejects.toThrow();
+      await expect(fs.access(first.sessionDir)).rejects.toThrow();
+      await expect(fs.access(second.sessionDir)).rejects.toThrow();
+      await expect(fs.access(other.sessionDir)).resolves.toBeUndefined();
+    });
+
+    it('releases and untracks every owned lease when one client teardown fails', async () => {
+      const teardownCalls: string[] = [];
+      const claudeNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      const codexNs = createBusNamespace('client:codex', {
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+      bus.on(claudeNs.subjects.sessionConfig.destroy, (ctx) => {
+        teardownCalls.push(ctx.payload.sessionDir);
+        throw new Error('claude teardown failed');
+      });
+      bus.on(codexNs.subjects.sessionConfig.destroy, (ctx) => {
+        teardownCalls.push(ctx.payload.sessionDir);
+        ctx.setResult({ success: true });
+      });
+
+      const first = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId: 'lease-failing-owner-cleanup',
+        ownerSessionId: 'session-failing-cleanup',
+      });
+      const second = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'codex',
+        leaseId: 'lease-successful-owner-cleanup',
+        ownerSessionId: 'session-failing-cleanup',
+      });
+
+      await expect(bus.emit(SessionSubjects.closed, { sessionId: 'session-failing-cleanup' })).rejects.toThrow(
+        "Failed to release config leases owned by session 'session-failing-cleanup'",
+      );
+      await expect(fs.access(first.sessionDir)).rejects.toThrow();
+      await expect(fs.access(second.sessionDir)).rejects.toThrow();
+
+      await bus.emit(SessionSubjects.closed, { sessionId: 'session-failing-cleanup' });
+      expect(teardownCalls).toHaveLength(2);
     });
   });
 

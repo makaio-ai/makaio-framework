@@ -15,6 +15,21 @@ import type { AIModel, AIReasoningLevel, ReasoningLevelMap } from '../../../type
 import type { NormalizedMessageInput } from '../../../utils/index.js';
 import type { McpSessionContext, NativeForkDirective, ProviderContext } from '@makaio/contracts';
 import type { LedgerSessionContext } from '../../session-tool-ledger.js';
+import { AgentStorageSubjects } from '@makaio/services-core/session';
+
+/**
+ * Register the durable-runtime collaborator used by successful mutation tests.
+ * @returns Cleanup function for the storage RPC handler
+ */
+export function registerSuccessfulRuntimeMutationPersistence(): () => void {
+  return MakaioBus.on(
+    AgentStorageSubjects.updateRuntime,
+    (ctx) => {
+      ctx.setResult({ success: true });
+    },
+    { priority: -1_000 },
+  );
+}
 
 /**
  * Mock connector that satisfies the AIAgentConnector interface for testing.
@@ -288,6 +303,12 @@ export class TestableAgent extends AIAgent {
   public testEmitStart(): Promise<void> {
     return this.emitStart();
   }
+
+  /** Return the connector currently published as the agent primary. */
+  public testPrimaryConnector(): MockConnector {
+    // @ts-expect-error -- this test subclass is constructed exclusively with MockConnector factories
+    return this.connector;
+  }
 }
 
 /**
@@ -432,23 +453,34 @@ export interface AgentTestLifecycle {
  * @returns Shared lifecycle context
  */
 export function createAgentTestLifecycle(): AgentTestLifecycle {
-  const ctx: AgentTestLifecycle = {
+  let ctx: AgentTestLifecycle;
+  const createTrackedConnector = (config: {
+    model: string;
+    cwd: string;
+    reasoningEffort?: AIReasoningLevel;
+    supportedReasoningLevels?: ReasoningLevelMap;
+    mcpSessionContext?: McpSessionContext | LedgerSessionContext;
+  }): MockConnector => {
+    const connector = new MockConnector(
+      config.model,
+      config.cwd,
+      config.reasoningEffort,
+      config.supportedReasoningLevels,
+      config.mcpSessionContext,
+    );
+    ctx.createdConnectors.push(connector);
+    return connector;
+  };
+  ctx = {
     createdConnectors: [],
     cleanupFns: [],
     agent: undefined,
-    mockFactory: vi.fn((config) => {
-      const connector = new MockConnector(
-        config.model,
-        config.cwd,
-        config.reasoningEffort,
-        config.supportedReasoningLevels,
-        config.mcpSessionContext,
-      );
-      ctx.createdConnectors.push(connector);
-      return connector;
-    }),
+    mockFactory: vi.fn(createTrackedConnector),
     reset() {
       ctx.createdConnectors = [];
+      ctx.agent = undefined;
+      ctx.mockFactory.mockReset();
+      ctx.mockFactory.mockImplementation(createTrackedConnector);
     },
     teardown: async () => {
       for (const cleanup of ctx.cleanupFns) {

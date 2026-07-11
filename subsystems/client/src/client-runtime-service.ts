@@ -243,10 +243,12 @@ export class ClientRuntimeService extends BaseService {
       const detection = detectionsByBinary.get(client.binaryName);
       const found = detection?.found ?? false;
       const version = detection?.version;
+      const binaryPath = detection?.path;
 
       return {
         clientId: client.clientId,
         found,
+        ...(binaryPath !== undefined && { binaryPath }),
         version,
         warningMessage: resolveWarningMessage(found, version, client.supportedVersions),
       };

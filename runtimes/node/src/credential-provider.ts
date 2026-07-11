@@ -50,9 +50,6 @@ export class NodeCredentialProvider implements CredentialProvider {
   }
 }
 
-/** Prefix identifying account-manager credential references. */
-const ACCOUNT_MANAGER_PREFIX = 'account-manager:';
-
 /**
  * Credential provider that resolves stored refs via credential service.
  *
@@ -107,15 +104,6 @@ export class StoredCredentialProvider implements CredentialProvider {
           throw e;
         }
       }
-    }
-
-    if (ref.startsWith(ACCOUNT_MANAGER_PREFIX)) {
-      console.warn(
-        '[StoredCredentialProvider] account-manager: refs are account identifiers ' +
-          'and cannot be resolved to credentials. The associated adapter should ' +
-          'authenticate via its native credential store.',
-      );
-      return null;
     }
 
     // Guard against stale persisted credential refs that used the removed

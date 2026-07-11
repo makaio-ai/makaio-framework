@@ -11,6 +11,7 @@ import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 import type { LoadedAdapter } from './adapter-runtime-types.js';
 import {
   cloneAdapterClientRefs,
+  resolveAdapterClientDefinitions,
   resolveDefaultClientId,
   validateAdapterClientRefs,
   type AdapterClientCatalogEntry,
@@ -96,6 +97,8 @@ export interface AdapterContributionProcessorOptions {
    * Platform-provided defaults forwarded to adapter factories.
    */
   readonly platformDefaults: PlatformDefaults;
+  /** Trusted host-layer auth preparer forwarded opaquely to adapter factories. */
+  readonly prepareAuthRuntime?: unknown;
 }
 
 /**
@@ -119,6 +122,7 @@ export class AdapterContributionProcessor {
   private readonly coordinator: ExtensionCoordinator;
   private readonly machineId: string;
   private readonly platformDefaults: PlatformDefaults;
+  private readonly prepareAuthRuntime: unknown;
 
   /**
    * Create a new adapter contribution processor.
@@ -130,6 +134,7 @@ export class AdapterContributionProcessor {
     this.coordinator = options.coordinator;
     this.machineId = options.machineId;
     this.platformDefaults = options.platformDefaults;
+    this.prepareAuthRuntime = options.prepareAuthRuntime;
   }
 
   /**
@@ -473,14 +478,12 @@ export class AdapterContributionProcessor {
     await validateAdapterClientRefs(adapterName, manifest.clients, resolvedClientCatalog, bus, {
       checkBinaryVersions: false,
     });
-    const resolvedProviders = await resolveProviderDefinitions(
-      bus,
-      def.providers,
-      adapterName,
-      def.providerConfigSchema,
-      def.providerCredentialSchema,
-      providerDefinitionCache,
-    );
+    const clientDefinitions = resolveAdapterClientDefinitions(manifest.clients, resolvedClientCatalog);
+    const resolvedProviders = await resolveProviderDefinitions(bus, def.providers, adapterName, {
+      ...(def.providerConfigSchema !== undefined && { adapterConfigSchema: def.providerConfigSchema }),
+      ...(clientDefinitions !== undefined && { clientDefinitions }),
+      ...(providerDefinitionCache !== undefined && { providerDefinitionCache }),
+    });
     const providers = await populateProviderModels(bus, adapterName, resolvedProviders, providerModelCache);
 
     return {
@@ -491,17 +494,18 @@ export class AdapterContributionProcessor {
       factory: def.createAdapter as LoadedAdapter['factory'],
       options: {
         adapterId: buildDeterministicAdapterId(this.machineId, adapterName),
+        ...(this.prepareAuthRuntime !== undefined && { prepareAuthRuntime: this.prepareAuthRuntime }),
       },
       adapterConfigSchema: def.adapterConfigSchema as LoadedAdapter['adapterConfigSchema'],
       providerDefinitionIds: def.providers.map((provider) => provider.definitionId),
       providerRefs: [...def.providers],
       providers: providers as LoadedAdapter['providers'],
       providerConfigSchema: def.providerConfigSchema,
-      providerCredentialSchema: def.providerCredentialSchema,
       helpLinks: def.helpLinks as LoadedAdapter['helpLinks'],
       instructions: def.instructions,
       defaultPresetId: def.defaultPresetId,
       clients: cloneAdapterClientRefs(manifest.clients),
+      ...(clientDefinitions !== undefined && { clientDefinitions }),
       protocol: resolveRuntimeProtocol(adapterName, def.protocol, manifest.protocols),
     };
   }

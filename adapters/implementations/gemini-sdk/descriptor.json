@@ -5,6 +5,14 @@
   "makaio": {
     "framework": ">=0.1.0"
   },
+  "dependencies": [
+    {
+      "type": "extension",
+      "name": "provider-google",
+      "version": ">=0.1.0",
+      "optional": true
+    }
+  ],
   "entrypoints": {
     "server": true
   },
@@ -20,7 +28,8 @@
             "version": "^0.1.0"
           }
         ],
-        "protocols": ["openai"]
+        "protocols": [],
+        "defaultProvider": "google"
       }
     ]
   }

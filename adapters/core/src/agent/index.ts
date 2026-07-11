@@ -23,7 +23,14 @@ export {
 export {
   AgentConnectorLifecycleManager,
   type AgentConnectorLifecycleManagerConfig,
+  type ConnectorCleanupDiagnostic,
 } from './agent-connector-lifecycle-manager.js';
+export {
+  closeConnectorRuntime,
+  createConnectorRuntime,
+  type ConnectorRuntimeHandle,
+  type CreateConnectorRuntimeOptions,
+} from './connector-runtime.js';
 export { AgentLifecycleEmitter, type AgentLifecycleEmitterConfig } from './agent-lifecycle-emitter.js';
 export { AgentPayloadEmitter, type AgentPayloadEmitterConfig } from './agent-payload-emitter.js';
 export { registerAgentBusHandlers, type AgentBusHandlerRegistrarConfig } from './agent-bus-handler-registrar.js';

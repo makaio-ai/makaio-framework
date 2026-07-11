@@ -15,15 +15,21 @@ export type { ExtensionPackageJson };
 const FRAMEWORK_PACKAGE_PATHS = {
   '@makaio/build-tooling': 'build-tooling',
   '@makaio/bus-core': 'core/bus-core',
+  '@makaio/client-claude-code': 'clients/claude-code',
+  '@makaio/client-codex': 'clients/codex',
   '@makaio/contracts': 'core/contracts',
   '@makaio/core': 'core/makaio-core',
   '@makaio/runtime-node': 'runtimes/node',
+  '@makaio/services-core': 'services/core',
   '@makaio/service-base': 'packages/service-base',
+  '@makaio/storage-core': 'storage/core',
+  '@makaio/storage-drizzle': 'storage/drizzle',
   '@makaio/test-utils': 'packages/test-utils',
   '@makaio/ui-hooks': 'ui/hooks',
   '@makaio/ui-kernel': 'ui/kernel',
   '@makaio/ui-theme': 'ui/theme',
   '@makaio/ui-views': 'ui/views',
+  '@makaio/utils': 'packages/utils',
 } as const;
 
 const REPO_DEV_ALIAS_PATHS = {

@@ -36,7 +36,7 @@ export async function registerMcpSession(
     pinned: true,
     contextOverrides: {
       cwd: config.cwd,
-      env: config.env,
+      env: config.contextEnv ?? {},
       sessionId: config.makaioSessionId,
       agentId: config.agentId,
       adapterSessionId,

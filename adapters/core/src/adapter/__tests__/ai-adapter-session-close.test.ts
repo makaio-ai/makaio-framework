@@ -13,8 +13,9 @@ import {
   type TestBus,
   type BaseAgentConnectorConfig,
 } from './shared.js';
+import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
-const TEST_PROVIDER_CONTEXT = { providerConfigId: 'test-config', definitionId: 'provider-1', credentialRefs: {} };
+const TEST_PROVIDER_CONTEXT = createNoAuthTestProviderContext('test-config', 'provider-1');
 
 /** Mock connector that can fail on close for specific models. */
 class FailableConnector extends MockConnector {

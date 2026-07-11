@@ -23,7 +23,7 @@ export const clientDefinition = createClientDefinition({
   description: 'Anthropic Claude Code CLI — an agentic coding assistant',
   binary: {
     name: 'claude',
-    supportedVersions: '2.1.143',
+    supportedVersions: '^2.1.143',
   },
   managedInstall: {
     type: 'signed-binary-bucket',
@@ -103,7 +103,31 @@ export const clientDefinition = createClientDefinition({
     },
   ],
   defaultApprovalPolicy: 'full-access',
-  defaultProviderId: 'anthropic-oauth',
+  authMethods: [
+    {
+      id: 'native',
+      mode: 'inferred',
+      label: 'Native account',
+    },
+    {
+      id: 'oauth-token',
+      mode: 'explicit',
+      label: 'OAuth token',
+      fields: [
+        {
+          id: 'oauthToken',
+          label: 'OAuth token',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'CLAUDE_CODE_OAUTH_TOKEN' }],
+        },
+      ],
+    },
+  ],
+  defaultAuth: {
+    providerDefinitionId: 'anthropic-oauth',
+    methodId: 'native',
+  },
   runtimeCapabilities: {
     supportsHooks: true,
     supportsStatusline: true,

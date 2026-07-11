@@ -1,5 +1,10 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
-import { resolveConformanceTestPreset, resolveTestConfig } from '@makaio/ai-adapters-core';
+import {
+  ConformanceConnectorRuntimeRegistry,
+  resolveConformanceTestPreset,
+  resolveTestConfig,
+} from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
 import { GeminiConnector } from './connector.js';
 import { GeminiConnectorNamespace } from './namespaces/index.js';
 import type { GeminiConnectorBus } from './namespaces/index.js';
@@ -8,6 +13,7 @@ import { createGeminiSDKAdapter, GeminiSdkAdapterName } from './adapter.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { GeminiSdkConfig } from './config.js';
 import { providerIds, testPresetId } from './provider.js';
+import { adapterDefinition } from './definition.js';
 
 /**
  * Create a conformance test configuration for the Gemini SDK adapter.
@@ -24,17 +30,24 @@ export const createTestConfig = async (
   const bus = await scopedBus();
   const testPreset = resolveConformanceTestPreset({
     adapterName: GeminiSdkAdapterName,
-    defaultProviderId: testPresetId,
+    testProviderDefinitionId: testPresetId,
     providerIds,
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<GeminiConnectorBus, GeminiConnector>();
 
   return {
-    createConnector: async (options) =>
-      new GeminiConnector(
-        await GeminiSdkConfig.getConfig(resolveTestConfig(options, bus, testPreset.provider, testPreset.providers)),
-      ),
+    createConnector: async (options) => {
+      const config = await GeminiSdkConfig.getConfig({
+        ...resolveTestConfig(options, bus, testPreset.provider, adapterDefinition.providers),
+        globalBus: MakaioBus,
+      });
+      return connectorRuntimes.create({
+        config,
+        connectorFactory: (runtimeConfig) => new GeminiConnector(runtimeConfig),
+      });
+    },
     bus,
     registerToolApprovalHandler,
     capabilities: {
@@ -50,5 +63,6 @@ export const createTestConfig = async (
     createAdapter: async (options) => createGeminiSDKAdapter(options),
     adapterName: GeminiSdkAdapterName,
     testProviderContext: testPreset.providerContext,
+    cleanup: () => connectorRuntimes.closeAll(),
   };
 };

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import {
   AdapterFileSchema,
+  PROVIDER_CONFIG_SCHEMA_VERSION,
   ProviderConfigFileSchema,
   type AdapterFile,
   type ProviderConfigFile,
@@ -12,6 +13,7 @@ import type {
   IAdapterConfigRepository,
   ProviderConfigFileSet,
 } from '@makaio/services-core/adapter-subsystem';
+import { ProviderConfigDiagnosticError } from './provider-config-diagnostic-error.js';
 
 const JSON_FILE_EXTENSION = '.json';
 
@@ -77,12 +79,14 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
 
   /**
    * Load all validated provider config files from disk.
-   * Invalid JSON or schema mismatches are skipped.
+   *
+   * Structurally invalid provider configs fail the load with a typed diagnostic
+   * so legacy authentication semantics are never silently ignored.
    * @returns Validated provider config file set.
    */
   public async loadProviderConfigs(): Promise<ProviderConfigFileSet> {
     const configs = new Map<string, ProviderConfigFile>();
-    const entries = await this.readJsonFiles(this.providerConfigsDir, 'provider config');
+    const entries = await this.readJsonFiles(this.providerConfigsDir, 'provider config', 'reject');
 
     for (const entry of entries) {
       const fileStem = this.getCanonicalLoadedStem(entry.stem, 'provider config', entry.filePath);
@@ -90,13 +94,7 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
         continue;
       }
 
-      const parsed = ProviderConfigFileSchema.safeParse(entry.jsonData);
-      if (!parsed.success) {
-        this.warnInvalidFile('provider config', entry.filePath);
-        continue;
-      }
-
-      configs.set(fileStem, parsed.data);
+      configs.set(fileStem, this.parseProviderConfig(entry.jsonData, fileStem));
     }
 
     return { configs };
@@ -109,8 +107,9 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
    */
   public async writeProviderConfig(id: string, config: ProviderConfigFile): Promise<void> {
     const fileStem = this.assertCanonicalFileStem(id, 'provider config id');
-    const validated = ProviderConfigFileSchema.parse(config);
-    await this.writeJsonFile(path.join(this.providerConfigsDir, `${fileStem}${JSON_FILE_EXTENSION}`), validated);
+    const filePath = path.join(this.providerConfigsDir, `${fileStem}${JSON_FILE_EXTENSION}`);
+    const validated = this.parseProviderConfig(config, fileStem);
+    await this.writeJsonFile(filePath, validated);
   }
 
   /**
@@ -168,11 +167,13 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
    * Read raw JSON files from a directory, returning an empty array when missing.
    * @param directoryPath - Directory to scan.
    * @param label - Human-readable file label for warnings.
+   * @param invalidJsonPolicy - Whether malformed JSON is skipped or rejected.
    * @returns JSON file entries sorted by file name.
    */
   private async readJsonFiles(
     directoryPath: string,
     label: string,
+    invalidJsonPolicy: 'skip' | 'reject' = 'skip',
   ): Promise<Array<{ filePath: string; stem: string; jsonData: unknown }>> {
     try {
       const entries = await fs.readdir(directoryPath, { withFileTypes: true });
@@ -187,10 +188,18 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
             const content = await fs.readFile(filePath, 'utf-8');
             return { filePath, stem: path.parse(entry.name).name, jsonData: JSON.parse(content) };
           } catch (error) {
-            if (
-              error instanceof SyntaxError ||
-              (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT')
-            ) {
+            if (error instanceof SyntaxError) {
+              if (invalidJsonPolicy === 'reject') {
+                throw new ProviderConfigDiagnosticError(
+                  'invalid-provider-config',
+                  sanitizeDiagnosticFileName(entry.name),
+                  'file does not contain valid JSON.',
+                );
+              }
+              this.warnInvalidFile(label, filePath);
+              return null;
+            }
+            if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
               this.warnInvalidFile(label, filePath);
               return null;
             }
@@ -216,6 +225,49 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
    */
   private warnInvalidFile(label: string, filePath: string): void {
     console.warn('[FileAdapterConfigRepository] Skipping invalid %s file: %s', label, filePath);
+  }
+
+  /**
+   * Parse one canonical provider config without reinterpreting legacy fields.
+   * @param value - Raw JSON or repository write input.
+   * @param source - Safe provider-config ID used in diagnostics.
+   * @returns Validated canonical provider config.
+   */
+  private parseProviderConfig(value: unknown, source: string): ProviderConfigFile {
+    const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
+    const schemaVersion = record?.$schema;
+    const legacyFields = ['credentials', 'isSentinel'].filter((field) => Object.hasOwn(record ?? {}, field));
+
+    if (schemaVersion === 'makaio/provider-config/v1' || legacyFields.length > 0) {
+      const legacyDetails = [
+        ...(schemaVersion === 'makaio/provider-config/v1' ? ['schema v1'] : []),
+        ...(legacyFields.length > 0 ? [`legacy fields ${legacyFields.join(', ')}`] : []),
+      ].join(' and ');
+      throw new ProviderConfigDiagnosticError(
+        'legacy-provider-config',
+        source,
+        `${legacyDetails} use retired authentication semantics. ` +
+          'Recreate this config with an explicit normalized authentication method.',
+      );
+    }
+
+    if (schemaVersion !== PROVIDER_CONFIG_SCHEMA_VERSION) {
+      throw new ProviderConfigDiagnosticError(
+        'unsupported-provider-config-version',
+        source,
+        `expected $schema "${PROVIDER_CONFIG_SCHEMA_VERSION}". Recreate the config with the current schema.`,
+      );
+    }
+
+    const parsed = ProviderConfigFileSchema.safeParse(value);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '<root>'}: ${issue.message}`)
+        .join('; ');
+      throw new ProviderConfigDiagnosticError('invalid-provider-config', source, issues);
+    }
+
+    return parsed.data;
   }
 
   /**
@@ -352,4 +404,14 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
 
     return trimmed;
   }
+}
+
+/**
+ * Remove control characters and path-like punctuation from a diagnostic file name.
+ * @param fileName - Directory-entry name that may contain untrusted characters.
+ * @returns Safe basename suitable for an error message or structured diagnostic.
+ */
+function sanitizeDiagnosticFileName(fileName: string): string {
+  const sanitized = path.basename(fileName).replace(/[^A-Za-z0-9._-]/g, '_');
+  return sanitized || 'provider-config.json';
 }

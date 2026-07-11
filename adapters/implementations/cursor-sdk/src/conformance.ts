@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
-import { resolveConformanceTestPreset, resolveTestConfig } from '@makaio/ai-adapters-core';
+import {
+  ConformanceConnectorRuntimeRegistry,
+  resolveConformanceTestPreset,
+  resolveTestConfig,
+} from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
 import { DEFAULT_HOOK_HANDLE_TIMEOUT_MS } from '@makaio/subsystem-client';
@@ -18,6 +22,7 @@ import { DEFAULT_TIMEOUTS, CursorSdkAdapterName } from './constants.js';
 import { providerIds, testPresetId } from './provider.js';
 import { createCursorSdkAdapter } from './adapter.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
+import { adapterDefinition } from './definition.js';
 
 // ---------------------------------------------------------------------------
 // Bus transport for hook subprocesses
@@ -284,7 +289,7 @@ export const createTestConfig = async (
   const bus = await CursorSdkNamespace.scopedBus();
   const testPreset = resolveConformanceTestPreset({
     adapterName: CursorSdkAdapterName,
-    defaultProviderId: testPresetId,
+    testProviderDefinitionId: testPresetId,
     providerIds,
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
@@ -305,22 +310,26 @@ export const createTestConfig = async (
   const previousCursorHome = process.env['CURSOR_HOME'];
   const cursorHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-home-'));
   process.env['CURSOR_HOME'] = cursorHomeDir;
+  const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<CursorSdkBus, CursorSdkConnector>();
 
   logEnvironmentSetup(testWorkspaceRoot, cursorHomeDir, transportHandle.busUrl);
 
   return {
     createConnector: async (options) => {
       logConnectorWorkspace(connectorWorkspace);
-      return new CursorSdkConnector(
-        await CursorSdkConfig.getConfig(
-          resolveTestConfig(
-            { ...options, cwd: connectorWorkspace.workspaceDir } as typeof options,
-            bus,
-            testPreset.provider,
-            testPreset.providers,
-          ),
+      const config = await CursorSdkConfig.getConfig({
+        ...resolveTestConfig(
+          { ...options, cwd: connectorWorkspace.workspaceDir } as typeof options,
+          bus,
+          testPreset.provider,
+          adapterDefinition.providers,
         ),
-      );
+        globalBus: MakaioBus,
+      });
+      return connectorRuntimes.create({
+        config,
+        connectorFactory: (runtimeConfig) => new CursorSdkConnector(runtimeConfig),
+      });
     },
     bus,
     registerToolApprovalHandler,
@@ -341,14 +350,18 @@ export const createTestConfig = async (
     adapterName: CursorSdkAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: async () => {
-      if (previousCursorHome !== undefined) {
-        process.env['CURSOR_HOME'] = previousCursorHome;
-      } else {
-        delete process.env['CURSOR_HOME'];
+      try {
+        await connectorRuntimes.closeAll();
+      } finally {
+        if (previousCursorHome !== undefined) {
+          process.env['CURSOR_HOME'] = previousCursorHome;
+        } else {
+          delete process.env['CURSOR_HOME'];
+        }
+        fs.rmSync(cursorHomeDir, { recursive: true, force: true });
+        fs.rmSync(testWorkspaceRoot, { recursive: true, force: true });
+        await transportHandle.close();
       }
-      fs.rmSync(cursorHomeDir, { recursive: true, force: true });
-      fs.rmSync(testWorkspaceRoot, { recursive: true, force: true });
-      await transportHandle.close();
     },
   };
 };

@@ -87,6 +87,22 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await writeTextFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+/**
+ * Build a minimal canonical no-auth provider config for repository tests.
+ * @param definitionId - Provider definition identifier.
+ * @returns Canonical v2 provider config.
+ */
+function createNoAuthConfig(definitionId: string): ProviderConfigFile {
+  return {
+    $schema: 'makaio/provider-config/v2',
+    definitionId,
+    auth: {
+      mode: 'none',
+      method: { owner: 'provider', providerDefinitionId: definitionId, methodId: 'none' },
+    },
+  };
+}
+
 describe('FileAdapterConfigRepository', () => {
   let ctx: TestContext;
   let warnSpy: ReturnType<typeof vi.spyOn> | undefined;
@@ -103,8 +119,7 @@ describe('FileAdapterConfigRepository', () => {
 
   it('loads validated provider config files and uses the file stem as the providerConfigId', async () => {
     const validConfig: ProviderConfigFile = {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'anthropic',
+      ...createNoAuthConfig('anthropic'),
       name: 'Anthropic Work',
       enabled: true,
     };
@@ -113,25 +128,61 @@ describe('FileAdapterConfigRepository', () => {
     await writeJsonFile(path.join(ctx.makaioDir, 'provider-configs', 'Anthropic.Work.json'), validConfig);
     await writeJsonFile(path.join(ctx.makaioDir, 'provider-configs', 'noncanonical.json.json'), validConfig);
     await writeJsonFile(path.join(ctx.makaioDir, 'provider-configs', ' spaced .json'), validConfig);
-    await writeTextFile(path.join(ctx.makaioDir, 'provider-configs', 'broken.json'), '{ invalid json');
-    await writeJsonFile(path.join(ctx.makaioDir, 'provider-configs', 'wrong-schema.json'), {
-      $schema: 'makaio/provider-config/v1',
-      name: 'Missing definitionId',
-    });
-    await writeJsonFile(path.join(ctx.makaioDir, 'provider-configs', 'plaintext.json'), {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'anthropic',
-      name: 'Plaintext',
-      credentials: {
-        apiKey: 'sk-ant-plaintext',
-      },
-    });
-
     const { configs } = await ctx.repository.loadProviderConfigs();
 
     expect([...configs.keys()]).toEqual(['anthropic.work']);
     expect(configs.get('anthropic.work')).toEqual(validConfig);
     expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('fails malformed provider JSON with a sanitized typed diagnostic', async () => {
+    const filePath = path.join(ctx.makaioDir, 'provider-configs', 'broken.json');
+    await writeTextFile(filePath, '{ secret-looking-invalid-json');
+
+    const load = ctx.repository.loadProviderConfigs();
+
+    await expect(load).rejects.toMatchObject({
+      name: 'ProviderConfigDiagnosticError',
+      code: 'invalid-provider-config',
+      source: 'broken.json',
+    });
+    await expect(load).rejects.not.toThrow(filePath);
+    await expect(load).rejects.not.toThrow('secret-looking-invalid-json');
+  });
+
+  it.each([
+    {
+      name: 'v1 schema',
+      value: { $schema: 'makaio/provider-config/v1', definitionId: 'anthropic' },
+      code: 'legacy-provider-config',
+    },
+    {
+      name: 'legacy credentials field',
+      value: {
+        ...createNoAuthConfig('anthropic'),
+        credentials: { apiKey: 'env:ANTHROPIC_API_KEY' },
+      },
+      code: 'legacy-provider-config',
+    },
+    {
+      name: 'legacy sentinel field',
+      value: { ...createNoAuthConfig('anthropic'), isSentinel: false },
+      code: 'legacy-provider-config',
+    },
+    {
+      name: 'missing required auth',
+      value: { $schema: 'makaio/provider-config/v2', definitionId: 'anthropic' },
+      code: 'invalid-provider-config',
+    },
+  ])('fails loading $name with a typed reset diagnostic', async ({ value, code }) => {
+    const filePath = path.join(ctx.makaioDir, 'provider-configs', 'legacy.json');
+    await writeJsonFile(filePath, value);
+
+    await expect(ctx.repository.loadProviderConfigs()).rejects.toMatchObject({
+      name: 'ProviderConfigDiagnosticError',
+      code,
+      source: 'legacy',
+    });
   });
 
   it('loads validated adapter files and uses the file stem as the adapter name', async () => {
@@ -175,8 +226,7 @@ describe('FileAdapterConfigRepository', () => {
 
   it('writes provider config files by creating parent directories and persisting validated JSON', async () => {
     const config: ProviderConfigFile = {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'openai',
+      ...createNoAuthConfig('openai'),
       name: 'OpenAI Work',
       isDefault: true,
     };
@@ -194,12 +244,12 @@ describe('FileAdapterConfigRepository', () => {
 
   it('keeps the visible provider config file unchanged when the final atomic replace fails', async () => {
     const filePath = path.join(ctx.makaioDir, 'provider-configs', 'atomic.json');
-    await writeJsonFile(filePath, {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'openai',
+    const original = {
+      ...createNoAuthConfig('openai'),
       name: 'Original',
       enabled: true,
-    });
+    };
+    await writeJsonFile(filePath, original);
 
     const failingRepository = new FailingReplaceRepository({
       providerConfigsDir: path.join(ctx.makaioDir, 'provider-configs'),
@@ -208,34 +258,26 @@ describe('FileAdapterConfigRepository', () => {
 
     await expect(
       failingRepository.writeProviderConfig('atomic', {
-        $schema: 'makaio/provider-config/v1',
-        definitionId: 'openai',
+        ...createNoAuthConfig('openai'),
         name: 'Updated',
         enabled: false,
       }),
     ).rejects.toThrow('rename failed');
 
-    expect(JSON.parse(await fs.readFile(filePath, 'utf-8'))).toEqual({
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'openai',
-      name: 'Original',
-      enabled: true,
-    });
+    expect(JSON.parse(await fs.readFile(filePath, 'utf-8'))).toEqual(original);
     expect(await fs.readdir(path.dirname(filePath))).toEqual(['atomic.json']);
   });
 
   it('tightens permissions on an existing provider config file when rewriting it', async () => {
     const filePath = path.join(ctx.makaioDir, 'provider-configs', 'existing.json');
     await writeJsonFile(filePath, {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'openai',
+      ...createNoAuthConfig('openai'),
       name: 'Existing',
     });
     await fs.chmod(filePath, 0o644);
 
     await ctx.repository.writeProviderConfig('existing', {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'openai',
+      ...createNoAuthConfig('openai'),
       name: 'Existing',
       enabled: false,
     });
@@ -283,10 +325,7 @@ describe('FileAdapterConfigRepository', () => {
 
   it('deletes provider config files and returns false when the file is missing', async () => {
     const filePath = path.join(ctx.makaioDir, 'provider-configs', 'delete-me.json');
-    await writeJsonFile(filePath, {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'openai',
-    });
+    await writeJsonFile(filePath, createNoAuthConfig('openai'));
 
     await expect(ctx.repository.deleteProviderConfig('delete-me')).resolves.toBe(true);
     await expect(ctx.repository.deleteProviderConfig('delete-me')).resolves.toBe(false);
@@ -304,10 +343,7 @@ describe('FileAdapterConfigRepository', () => {
   });
 
   it('rejects non-canonical ids and names at the write/delete boundary', async () => {
-    const providerConfig: ProviderConfigFile = {
-      $schema: 'makaio/provider-config/v1',
-      definitionId: 'anthropic',
-    };
+    const providerConfig = createNoAuthConfig('anthropic');
     const adapterConfig: AdapterFile = {
       $schema: 'makaio/adapter-config/v1',
     };

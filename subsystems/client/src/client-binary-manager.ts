@@ -128,6 +128,7 @@ export class ClientBinaryManager extends BaseService {
       resolvedBasePath: this.resolvedBasePath,
       resolvedConfigBasePath: this.resolvedConfigBasePath,
       definitionLookup,
+      ...(config.resolutionPolicy !== undefined && { resolutionPolicy: config.resolutionPolicy }),
     });
   }
 

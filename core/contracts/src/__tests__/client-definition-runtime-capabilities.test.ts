@@ -26,6 +26,7 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
     id: 'claude-code',
     name: 'Claude Code',
     version: '0.1.0',
+    authMethods: [],
     defaultApprovalPolicy: 'always-ask',
     ...overrides,
   };
@@ -156,6 +157,7 @@ describe('createClientDefinition — runtime capability flags', () => {
       id: 'claude-code',
       name: 'Claude Code',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
     });
 
@@ -173,6 +175,7 @@ describe('createClientDefinition — runtime capability flags', () => {
       id: 'claude-code',
       name: 'Claude Code',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'full-access',
       runtimeCapabilities: {
         supportsHooks: true,
@@ -196,6 +199,7 @@ describe('createClientDefinition — runtime capability flags', () => {
       id: 'codex',
       name: 'Codex',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,

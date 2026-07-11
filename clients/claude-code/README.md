@@ -11,11 +11,23 @@ Static client definition and schema library for the Anthropic Claude Code CLI. T
 | `version` | `0.1.0` |
 | `description` | Anthropic Claude Code CLI — an agentic coding assistant |
 | `binary.name` | `claude` |
-| `binary.supportedVersions` | `>=1.0.0` |
+| `binary.supportedVersions` | `^2.1.143` |
 | `defaultApprovalPolicy` | `full-access` |
-| `defaultProviderId` | `anthropic-oauth` |
+| `defaultAuth` | `anthropic-oauth` via client method `native` |
 | `configIsolation.envVar` | `CLAUDE_CONFIG_DIR` |
 | `configIsolation.defaultPath` | `~/.claude` |
+
+### Authentication
+
+| Method | Mode | Fields or native state | Portability |
+|--------|------|------------------------|-------------|
+| `native` | `inferred` | Persisted Claude Code state from the native config location/keychain | Local only |
+| `oauth-token` | `explicit` | Required `oauthToken`; `CLAUDE_CODE_OAUTH_TOKEN` is an environment source hint | Portable |
+
+The managed default uses `native` for `anthropic-oauth`. Anthropic API-key auth
+is provider-owned and remains a separate explicit method. Adapters scrub all
+competing Claude auth variables, create an `auth-only` lease for native auth or
+an `empty` lease for explicit auth, then deliver only the selected method.
 
 ### Runtime Capabilities
 
@@ -24,7 +36,7 @@ Static client definition and schema library for the Anthropic Claude Code CLI. T
 | `supportsHooks` | `true` |
 | `supportsStatusline` | `true` |
 | `supportsSupervisorLaunch` | `false` |
-| `supportsManagedBinary` | `false` |
+| `supportsManagedBinary` | `true` |
 
 ### Hook Events
 
@@ -56,6 +68,7 @@ Static client definition and schema library for the Anthropic Claude Code CLI. T
 |-----------|---------|
 | `claude-code` | `@makaio/ai-adapters-claude-agent-sdk` — Claude Agent SDK bridge |
 | `claude-code-cli` | `@makaio/ai-adapters-claude-code-cli` — stdio streaming via `claude` binary |
+| `claude-code-tmux` | `@makaio/ai-adapters-claude-code-tmux` — interactive tmux-backed CLI |
 
 ## Exports
 

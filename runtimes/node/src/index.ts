@@ -1,4 +1,9 @@
 export { registerAdapterNameResolver } from './register-adapter-name-resolver.js';
+export { registerRuntimeHandlers, runRuntimeHandlerCleanups } from './register-runtime-handlers.js';
+export {
+  createNodeClientBinaryStrategyDependencies,
+  type NodeClientBinaryStrategyDependencyOptions,
+} from './client-binary-strategy-dependencies.js';
 export {
   prepareAdapterRuntime,
   activateAdapterRuntimeIdentity,

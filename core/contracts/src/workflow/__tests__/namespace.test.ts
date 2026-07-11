@@ -948,9 +948,20 @@ describe('WorkflowResolvedRoleSchema', () => {
       systemPrompt: 'You are a code reviewer',
       contextMode: 'fresh',
       providerContext: {
+        state: 'resolved',
         providerConfigId: 'pc-1',
         definitionId: 'openai',
-        credentialRefs: { apiKey: 'env:OPENAI_API_KEY' },
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'openai', methodId: 'api-key' },
+          definition: {
+            id: 'api-key',
+            mode: 'explicit',
+            label: 'API key',
+            fields: [{ id: 'apiKey', label: 'API key', required: true, secret: true, sourceHints: [] }],
+          },
+          credentialRefs: { apiKey: 'env:OPENAI_API_KEY' },
+        },
       },
     });
     expect(role.adapterName).toBe('openai');
@@ -959,7 +970,9 @@ describe('WorkflowResolvedRoleSchema', () => {
     expect(role.harnessId).toBe('harness-reviewer');
     expect(role.systemPrompt).toBe('You are a code reviewer');
     expect(role.contextMode).toBe('fresh');
-    expect(role.providerContext?.providerConfigId).toBe('pc-1');
+    expect(role.providerContext?.state).toBe('resolved');
+    if (role.providerContext?.state !== 'resolved') throw new Error('Expected resolved provider context.');
+    expect(role.providerContext.providerConfigId).toBe('pc-1');
   });
 
   it('rejects a resolved role without adapterName', () => {

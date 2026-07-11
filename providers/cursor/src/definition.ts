@@ -16,5 +16,20 @@ export const providerDefinition: ProviderDefinitionInput = {
   description: 'Cursor — SDK-based AI models',
   defaultModel: 'composer-2.5',
   fastModel: 'composer-2',
-  credentialEnvVars: { apiKey: 'CURSOR_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'CURSOR_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };

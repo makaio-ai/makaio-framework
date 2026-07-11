@@ -2,10 +2,7 @@
 /* eslint max-lines: ["error", { "max": 520 }] */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { buildStoredCredentialRef } from '@makaio/contracts/config';
-import { CredentialSubjects, DEFAULT_CONSTRAINTS, SessionSubjects, SubagentSubjects } from '@makaio/contracts';
-import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
-import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
+import { DEFAULT_CONSTRAINTS, SessionSubjects, SubagentSubjects } from '@makaio/contracts';
 import { SubagentService } from '../subagent-service.js';
 import { setupSubagentServiceMocks, type SubagentServiceMockController } from './subagent-service.mocks.js';
 
@@ -137,73 +134,6 @@ describe('SubagentService', () => {
         disallowedTools: ['delete_file'],
         allowedDirectories: ['/workspace/project'],
       });
-    });
-
-    it('awaits credential.activate before starting a provider-configured subagent', async () => {
-      await service.init();
-
-      MakaioBus.on(SessionSubjects.create, (ctx) => {
-        ctx.setResult({ sessionId: 'child-1' });
-      });
-      MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: ctx.payload.providerConfigId,
-            definitionId: 'provider-def-1',
-            credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-1', 'apiKey') },
-            credentialEnvVars: { apiKey: 'API_KEY' },
-          },
-        });
-      });
-      MakaioBus.on(ProviderStorageSubjects.get, (ctx) => {
-        ctx.setResult({
-          provider: {
-            id: 'provider-def-1',
-            packageName: '@makaio/provider-test',
-            name: 'Provider',
-            endpoints: { anthropic: 'https://api.example.com' },
-            credentialEnvVars: { apiKey: 'API_KEY' },
-            availableModels: [],
-            defaultModelFilterMode: 'show-all',
-            enabled: true,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        });
-      });
-
-      const order: string[] = [];
-      MakaioBus.on(CredentialSubjects.activate, (ctx) => {
-        order.push('activate');
-        expect(ctx.payload.providerConfigId).toBe('provider-config-1');
-        ctx.setResult({});
-      });
-      mocks.setStartAgentHandler((ctx) => {
-        order.push('start');
-        ctx.setResult({
-          success: true,
-          agentId: 'mock-agent',
-          adapterId: 'resolved-claude-code',
-          adapterSessionId: 'adapter-session-1',
-          sessionId: 'child-1',
-          messageId: 'msg-1',
-        });
-      });
-
-      await MakaioBus.emit(SubagentSubjects.spawned, {
-        subagentId: 'sub-1',
-        parentSessionId: 'parent-1',
-        task: 'Do something',
-        config: {
-          task: 'Do something',
-          adapterName: 'claude-code',
-          providerConfigId: 'provider-config-1',
-          contextMode: 'fork',
-        },
-        depth: 1,
-      });
-
-      await vi.waitFor(() => expect(order).toEqual(['activate', 'start']));
     });
 
     it('passes machineId to adapter resolution when configured', async () => {

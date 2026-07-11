@@ -27,6 +27,8 @@ import type { SetupController, SetupState } from '../types.js';
 
 let tempDir: string | null = null;
 
+const expectedProductiveClientIds = ['claude-code', 'codex', 'gemini', 'github-copilot'] as const;
+
 async function makeTempDir(): Promise<string> {
   tempDir = await mkdtemp(join(tmpdir(), 'makaio-setup-ctrl-test-'));
   return tempDir;
@@ -216,8 +218,7 @@ describe('createSetupController — pre-accepted consent', () => {
     const { bus } = createMockBus();
     const controller = await createSetupController({ bus, makaioHome: dir });
 
-    // Detection always runs for all 5 catalog entries even if none are found
-    expect(controller.state.detectedClients).toHaveLength(5);
+    expect(controller.state.detectedClients.map(({ entry }) => entry.clientId)).toEqual(expectedProductiveClientIds);
   });
 
   it('pre-populates selectedClientIds with clientIds of detected clients', async () => {
@@ -284,8 +285,7 @@ describe('advance()', () => {
 
     await controller.advance();
 
-    // Should have one entry per catalog client (5 total)
-    expect(controller.state.detectedClients).toHaveLength(5);
+    expect(controller.state.detectedClients.map(({ entry }) => entry.clientId)).toEqual(expectedProductiveClientIds);
     // Each entry must have an `entry` with a clientId and a boolean `detected`
     for (const dc of controller.state.detectedClients) {
       expect(typeof dc.entry.clientId).toBe('string');

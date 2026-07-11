@@ -1,4 +1,6 @@
 import type { ProceduralConnectorSession } from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
+import { McpSubjects } from '@makaio/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CursorSdkProviderConfig } from '../schemas.js';
 
@@ -51,13 +53,20 @@ async function createConnector(providerConfig?: CursorSdkProviderConfig): Promis
     sessionId: 'session-1',
     model: 'composer-2',
     cwd: process.cwd(),
-    env: { CURSOR_API_KEY: 'test-key' },
+    env: { CURSOR_API_KEY: 'selected-secret', OPENAI_API_KEY: 'opposing-secret' },
+    contextEnv: { PATH: '/usr/bin', CURSOR_CONFIG_DIR: '/isolated/cursor' },
+    adapterAuth: {
+      processEnv: {},
+      connectorDeliveries: [{ target: 'cursor-sdk.agent-create', values: { apiKey: 'test-key' } }],
+      configInheritance: 'empty',
+    },
     providerConfig,
   });
 }
 
 describe('CursorSdkConnector', () => {
   beforeEach(() => {
+    MakaioBus.__resetHandlers?.();
     sdkControls.failCreate = false;
     sdkControls.createCalls.length = 0;
   });
@@ -83,5 +92,33 @@ describe('CursorSdkConnector', () => {
     await connector.initialize();
 
     expect(sdkControls.createCalls[0]).toMatchObject({ mode: 'plan' });
+  });
+
+  it('passes only the selected connector delivery to Agent.create', async () => {
+    const connector = await createConnector();
+
+    await connector.initialize();
+
+    expect(sdkControls.createCalls[0]).toMatchObject({ apiKey: 'test-key' });
+  });
+
+  it('registers only the auth-free context environment with the MCP bridge', async () => {
+    const registrations: unknown[] = [];
+    MakaioBus.on(McpSubjects.session.register, (ctx) => {
+      registrations.push(ctx.payload);
+      ctx.setResult({ port: 4123 });
+    });
+    const connector = await createConnector();
+
+    await connector.initialize();
+
+    expect(registrations).toHaveLength(1);
+    expect(registrations[0]).toMatchObject({
+      contextOverrides: {
+        env: { PATH: '/usr/bin', CURSOR_CONFIG_DIR: '/isolated/cursor' },
+      },
+    });
+    expect(JSON.stringify(registrations[0])).not.toContain('selected-secret');
+    expect(JSON.stringify(registrations[0])).not.toContain('opposing-secret');
   });
 });

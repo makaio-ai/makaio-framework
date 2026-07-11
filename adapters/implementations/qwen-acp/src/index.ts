@@ -31,7 +31,7 @@ export { QwenAcpProviderConfigSchema, ApprovalModeValues, AuthTypeValues } from 
 export type { QwenAcpProviderConfig } from './schemas.js';
 
 // Provider IDs
-export { providerIds, defaultPresetId } from './provider.js';
+export { providerIds } from './provider.js';
 
 // Connector and turn
 export { QwenAcpConnector } from './connector.js';

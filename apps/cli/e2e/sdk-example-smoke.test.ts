@@ -242,11 +242,16 @@ async function writeCanonicalFixtureConfig(homeDir: string): Promise<void> {
     providerConfigPath,
     `${JSON.stringify(
       {
-        $schema: 'makaio/provider-config/v1',
+        $schema: 'makaio/provider-config/v2',
         definitionId: DEVEX_SMOKE_PROVIDER_ID,
         name: DEVEX_SMOKE_PROVIDER_CONFIG_NAME,
-        credentials: {
-          apiKey: `env:${DEVEX_SMOKE_API_KEY_ENV}`,
+        auth: {
+          mode: 'none',
+          method: {
+            owner: 'provider',
+            providerDefinitionId: DEVEX_SMOKE_PROVIDER_ID,
+            methodId: 'none',
+          },
         },
         enabled: true,
         isDefault: true,

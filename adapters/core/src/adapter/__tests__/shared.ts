@@ -93,6 +93,7 @@ export function createTestAdapter(
   options?: {
     configFactory?: AdapterConfigExtensions['configFactory'];
     connectorFactory?: AdapterConfigExtensions['connectorFactory'];
+    prepareAuthRuntime?: AIAdapterConfig<TestBus>['prepareAuthRuntime'];
   },
 ): { adapter: TestAdapter; scopedBus: TestBus } {
   const { bus: scopedBus } = createMockScopedBus();
@@ -121,6 +122,7 @@ export function createTestAdapter(
     connectorFactory:
       options?.connectorFactory ??
       (async (config: BaseAgentConnectorConfig<TestBus> & { adapterId: string }) => new MockConnector(config)),
+    ...(options?.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
   });
 
   return { adapter, scopedBus };

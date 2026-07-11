@@ -16,7 +16,22 @@ export const providerDefinition: ProviderDefinitionInput = {
   endpoints: { openai: 'https://api.openai.com/v1' },
   defaultModel: 'gpt-5.2',
   fastModel: 'gpt-5.4-mini',
-  credentialEnvVars: { apiKey: 'OPENAI_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'OPENAI_API_KEY' }],
+        },
+      ],
+    },
+  ],
   capabilities: {
     structuredOutput: { responseFormatWithTools: true, strict: true },
   },

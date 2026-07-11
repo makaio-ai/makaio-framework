@@ -106,6 +106,7 @@ async function makeAgent(): Promise<{
       cwd: input.cwd ?? tmpdir(),
       env: input.env ?? {},
       allowedDirectories: input.allowedDirectories ?? [],
+      adapterAuth: { processEnv: {}, connectorDeliveries: [], configInheritance: 'auth-only' as const },
     }),
     connectorFactory: (config) => {
       connector = new QwenAcpConnector(config);

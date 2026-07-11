@@ -166,9 +166,10 @@ export interface AdapterManifest {
   /**
    * Wire protocol(s) this adapter implements.
    *
-   * At least one entry is required. Each entry is either a plain
-   * {@link ProtocolId} string or a {@link ProtocolRef} config object with
-   * per-protocol overrides.
+   * Each entry is either a plain {@link ProtocolId} string or a
+   * {@link ProtocolRef} config object with per-protocol overrides. An empty
+   * array explicitly identifies an SDK-native adapter that does not implement
+   * a framework wire protocol.
    */
   readonly protocols: readonly ProtocolRef[];
   /**
@@ -186,7 +187,7 @@ export const AdapterManifestSchema = z.object({
   displayName: z.string().min(1).optional(),
   description: z.string().optional(),
   clients: z.array(AdapterClientRefSchema).readonly().optional(),
-  protocols: z.array(ProtocolRefSchema).min(1).readonly(),
+  protocols: z.array(ProtocolRefSchema).readonly(),
   defaultProvider: z.string().min(1).optional(),
 }) satisfies z.ZodType<AdapterManifest>;
 

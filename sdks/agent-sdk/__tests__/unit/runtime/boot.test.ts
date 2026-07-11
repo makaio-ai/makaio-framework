@@ -90,9 +90,13 @@ describe('ensureRuntime', () => {
       | undefined;
     const discovered = await options?.discovery?.discover();
 
-    expect(discovered?.map((extension) => extension.descriptor.name)).toEqual(
+    const extensionNames = discovered?.map((extension) => extension.descriptor.name);
+
+    expect(extensionNames).toEqual(
       expect.arrayContaining(['anthropic-sdk', 'openai-node', 'provider-openai', 'filesystem', 'shell', 'subagent']),
     );
+    expect(extensionNames).not.toContain('provider-qwen-acp');
+    expect(extensionNames).not.toContain('qwen-acp');
   });
 
   it('returns the MakaioBus singleton', async () => {

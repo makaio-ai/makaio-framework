@@ -5,8 +5,8 @@
 import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
 import { createAnthropicSdkAdapter } from './adapter.js';
 import { AnthropicSdkAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
-import { AnthropicSdkCredentialSchema, AnthropicSdkProviderConfigSchema } from './schemas.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { AnthropicSdkProviderConfigSchema } from './schemas.js';
+import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 import type { AnthropicSdkConnectorBus } from './namespaces/index.js';
 import type { AnthropicSdkConnector } from './connector.js';
 import type { AnthropicSdkAgent } from './agent.js';
@@ -20,9 +20,12 @@ export const adapterDefinition: AIAdapterDefinition<
   displayName: 'Anthropic SDK',
   defaultPresetId,
   description: 'Anthropic Messages API with streaming, tool calling, and extended thinking',
-  providers: providerIds.map((definitionId) => ({ definitionId })),
+  providers: providerIds.map((definitionId) => ({
+    definitionId,
+    protocol: 'anthropic',
+    auth: providerAuthById[definitionId],
+  })),
   providerConfigSchema: AnthropicSdkProviderConfigSchema,
-  providerCredentialSchema: AnthropicSdkCredentialSchema,
   defaultTimeouts: DEFAULT_TIMEOUTS,
   helpLinks: [
     { label: 'Anthropic API Documentation', url: 'https://docs.anthropic.com/en/api' },

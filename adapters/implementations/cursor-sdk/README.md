@@ -15,9 +15,9 @@ leaving Cursor's SDK-owned agentic loop intact.
 
 ## Provider And Client
 
-This adapter serves the `cursor` provider and declares the `cursor` client as
-its native client dependency. Install `@cursor/sdk` as a peer dependency and
-provide credentials through `CURSOR_API_KEY` when required by the SDK.
+This adapter serves the `cursor` provider directly through `@cursor/sdk`; it has
+no managed client or Makaio HTTP protocol. Select the provider's explicit API-key
+method, using `CURSOR_API_KEY` as an environment source when desired.
 
 ## Exports
 

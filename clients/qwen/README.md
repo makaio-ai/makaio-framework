@@ -13,10 +13,14 @@ Static client definition for Qwen Code. This package declares the user-facing id
 | `binary.name` | `qwen` |
 | `binary.supportedVersions` | `*` |
 | `defaultApprovalPolicy` | `always-ask` |
-| `defaultProviderId` | `qwen-oauth` |
-| `configIsolation.envVar` | `QWEN_CODE_SYSTEM_DEFAULTS_PATH` |
-| `configIsolation.defaultPath` | `/etc/qwen-code/system-defaults.json` |
-| `configIsolation.pathKind` | `file` |
+| `configIsolation.envVar` | `QWEN_HOME` |
+| `configIsolation.defaultPath` | `~/.qwen` |
+
+## Authentication
+
+No native method is currently declared. Qwen OAuth is discontinued, and the
+runtime does not yet materialize a safe connector-owned `QWEN_HOME` for the
+remaining interactive/API-key authentication choices.
 
 ## Native Tools
 
@@ -24,9 +28,8 @@ None declared statically. Qwen Code exposes tools via the Agent Client Protocol 
 
 ## Served By (Adapters)
 
-| Adapter ID | Package |
-|-----------|---------|
-| `qwen-acp` | `@makaio/ai-adapters-qwen-acp` — Qwen Code CLI via Agent Client Protocol |
+No production adapter is advertised until a Qwen authentication method has an
+isolated, client-owned lease implementation.
 
 ## Exports
 

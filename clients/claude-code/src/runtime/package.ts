@@ -23,6 +23,11 @@ export { resolveClaudeCodeSettingsPaths } from './settings-paths.js';
 export type { ClaudeCodeSettingsPath, ResolveClaudeCodeSettingsPathsOptions } from './settings-paths.js';
 export { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
 export {
+  executeCredentialSourceLock as executeClaudeCodeNativeCredentialSourceLock,
+  withCredentialSourceLock as withClaudeCodeNativeCredentialSourceLock,
+} from './native-credential-source-lock.js';
+export type { CredentialSourceLockExecution as ClaudeCodeNativeCredentialSourceLockExecution } from './native-credential-source-lock.js';
+export {
   buildClaudeCodeCredentialsKeychainService,
   clearClaudeCodeNativeCredentialsForSession,
   cloneClaudeCodeNativeCredentialsForSession,

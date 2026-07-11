@@ -3,10 +3,71 @@ import { MakaioBus } from '@makaio/bus-core';
 import { createMockScopedBus } from '@makaio/test-utils';
 import { asAgentConnector, MockConnector } from './helpers/mock-agent.js';
 import { AIAgent } from '../ai-agent.js';
-import type { AIAgentConfig } from '../types.js';
+import type { AgentConnectorConfigOverrides, AIAgentConfig } from '../types.js';
 import type { AIAgentConnector } from '../../connector/agent-connector.js';
-import type { NativeForkDirective } from '@makaio/contracts';
+import {
+  AdapterNamespace,
+  AdapterSubjects,
+  AuthCredentialRefSchema,
+  CredentialSubjects,
+  type NativeForkDirective,
+  type ProviderAuthMethodDefinition,
+  type ProviderContext,
+} from '@makaio/contracts';
 import type { ConfigFactoryInput } from '../../adapter/ai-adapter-config.js';
+import type { AdapterProviderDefinition } from '../../types/provider-definition.js';
+import { createTestProviderAuth } from '../../__tests__/__fixtures__/adapter-provider-auth.js';
+
+const TEST_API_KEY_METHOD = {
+  id: 'api-key',
+  mode: 'explicit',
+  label: 'API key',
+  fields: [{ id: 'apiKey', label: 'API key', required: true, secret: true, sourceHints: [] }],
+} satisfies ProviderAuthMethodDefinition;
+
+/** Create a manually released async boundary for swap interleaving tests. */
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((resolver) => {
+    resolve = resolver;
+  });
+  return { promise, resolve: () => resolve?.() };
+}
+
+/**
+ * Build a normalized explicit provider context matching createTestProviderAuth.
+ * @param providerDefinitionId - Provider definition selected by the context
+ * @returns Resolved explicit-auth provider context
+ */
+function explicitProviderContext(providerDefinitionId: string): ProviderContext {
+  const sourceEnvVar = `${providerDefinitionId.replaceAll('-', '_').toUpperCase()}_API_KEY`;
+  return {
+    state: 'resolved',
+    providerConfigId: `${providerDefinitionId}-config`,
+    definitionId: providerDefinitionId,
+    auth: {
+      mode: 'explicit',
+      method: { owner: 'provider', providerDefinitionId, methodId: 'api-key' },
+      definition: TEST_API_KEY_METHOD,
+      credentialRefs: { apiKey: AuthCredentialRefSchema.parse(`env:${sourceEnvVar}`) },
+    },
+  };
+}
+
+/** Build a managed native-account context for direct public-swap coverage. */
+function inferredProviderContext(): ProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId: 'native-config',
+    definitionId: 'test-provider',
+    auth: {
+      mode: 'inferred',
+      method: { owner: 'client', clientId: 'test-client', methodId: 'native' },
+      definition: { id: 'native', mode: 'inferred', label: 'Native client' },
+      account: { managerId: 'account-manager', accountId: 'account-1' },
+    },
+  };
+}
 
 /**
  * Extended test agent for swap-connector tests.
@@ -34,8 +95,14 @@ class SwapTestAgent extends AIAgent {
    * Expose swapConnector for testing.
    * @param configOverrides - Optional config overrides
    */
-  public async testSwapConnector(configOverrides?: Partial<{ cwd: string; model: string }>): Promise<void> {
+  public async testSwapConnector(configOverrides?: AgentConnectorConfigOverrides): Promise<void> {
     await this.swapConnector(configOverrides);
+  }
+
+  /** Return the connector synchronously published as the active primary. */
+  public testPrimaryConnector(): MockConnector {
+    // @ts-expect-error -- this test agent is constructed only with MockConnector factories
+    return this.connector;
   }
 
   /**
@@ -52,10 +119,17 @@ class SwapTestAgent extends AIAgent {
 /**
  * Create a SwapTestAgent instance with factory support.
  * @param mockConnectorFactory - Factory function for creating mock connectors
+ * @param options - Optional provider metadata and config-input observer
  * @returns A configured SwapTestAgent
  */
 function createSwapTestAgent(
   mockConnectorFactory: (config: { model: string; cwd: string }) => MockConnector,
+  options?: {
+    providerContext?: AIAgentConfig['providerContext'];
+    definitionProviders?: AIAgentConfig['definitionProviders'];
+    prepareAuthRuntime?: AIAgentConfig['prepareAuthRuntime'];
+    onConfigInput?: (input: ConfigFactoryInput) => void;
+  },
 ): SwapTestAgent {
   const { bus: mockBus } = createMockScopedBus();
 
@@ -69,14 +143,20 @@ function createSwapTestAgent(
     globalBus: MakaioBus,
     model: 'test-model-1',
     cwd: '/test/cwd1',
-    configFactory: async (input) => ({
-      bus: mockBus,
-      agentId: 'test-agent-swap',
-      adapterId: 'test-adapter',
-      adapterName: 'test',
-      model: input.model ?? 'test-model-1',
-      cwd: input.cwd ?? '/test/cwd1',
-    }),
+    ...(options?.providerContext !== undefined && { providerContext: options.providerContext }),
+    ...(options?.definitionProviders !== undefined && { definitionProviders: options.definitionProviders }),
+    ...(options?.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
+    configFactory: async (input) => {
+      options?.onConfigInput?.(input);
+      return {
+        bus: mockBus,
+        agentId: 'test-agent-swap',
+        adapterId: 'test-adapter',
+        adapterName: 'test',
+        model: input.model ?? 'test-model-1',
+        cwd: input.cwd ?? '/test/cwd1',
+      };
+    },
     connectorFactory: async (factoryConfig) => {
       // MockConnector satisfies the runtime contract for all exercised methods
       return asAgentConnector(
@@ -181,6 +261,26 @@ describe('AIAgent.swapConnector', () => {
     expect(agent.wireEventsCalls).toBe(2);
   });
 
+  it('uses the injected auth preparer for initial creation and every swap', async () => {
+    const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
+      const connector = new MockConnector(config.model, config.cwd);
+      createdConnectors.push(connector);
+      return connector;
+    });
+    const prepareAuthRuntime = vi.fn(
+      async (config: Parameters<NonNullable<AIAgentConfig['prepareAuthRuntime']>>[0]) => {
+        const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
+        return { config: { ...runtimeConfig, contextEnv: Object.freeze({}) } };
+      },
+    );
+
+    agent = createSwapTestAgent(mockFactory, { prepareAuthRuntime });
+    await agent.init();
+    await agent.testSwapConnector({ model: 'test-model-2' });
+
+    expect(prepareAuthRuntime).toHaveBeenCalledTimes(2);
+  });
+
   it('applies both cwd and model overrides', async () => {
     const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
       const connector = new MockConnector(config.model, config.cwd);
@@ -226,13 +326,88 @@ describe('AIAgent.swapConnector', () => {
     expect(agent.currentConnector.cwd).toBe('/test/cwd2');
   });
 
-  it('keeps new connector active when old connector close fails', async () => {
+  it('serializes concurrent public swaps so each replacement owns the latest generation', async () => {
+    const firstInitializeStarted = createDeferred();
+    const releaseFirstInitialize = createDeferred();
+    let factoryCalls = 0;
+    const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
+      factoryCalls += 1;
+      const connector = new MockConnector(config.model, config.cwd);
+      createdConnectors.push(connector);
+      if (factoryCalls === 2) {
+        connector.initialize = vi.fn(async () => {
+          firstInitializeStarted.resolve();
+          await releaseFirstInitialize.promise;
+        });
+      }
+      return connector;
+    });
+
+    agent = createSwapTestAgent(mockFactory);
+    await agent.init();
+
+    const cwdSwap = agent.testSwapConnector({ cwd: '/test/cwd2' });
+    await firstInitializeStarted.promise;
+    const modelSwap = agent.testSwapConnector({ model: 'test-model-2' });
+    await Promise.resolve();
+
+    // The model swap cannot create from generation A while the CWD swap owns it.
+    expect(createdConnectors).toHaveLength(2);
+
+    releaseFirstInitialize.resolve();
+    await Promise.all([cwdSwap, modelSwap]);
+
+    expect(createdConnectors).toHaveLength(3);
+    expect(createdConnectors[0]?.closeCalled).toBe(true);
+    expect(createdConnectors[1]?.closeCalled).toBe(true);
+    expect(agent.currentConnector.cwd).toBe('/test/cwd2');
+    expect(agent.currentConnector.model).toBe('test-model-2');
+  });
+
+  it('activates a managed account before a direct public provider-context swap publishes', async () => {
     const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
       const connector = new MockConnector(config.model, config.cwd);
       createdConnectors.push(connector);
       return connector;
     });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const order: string[] = [];
+    cleanupFns.push(
+      MakaioBus.on(CredentialSubjects.activation.prepare, (ctx) => {
+        order.push('prepare');
+        ctx.setResult({ success: true, transactionId: crypto.randomUUID() });
+      }),
+      MakaioBus.on(CredentialSubjects.activation.commit, (ctx) => {
+        order.push('commit');
+        expect(agent.testPrimaryConnector()).toBe(createdConnectors[0]);
+        ctx.setResult({ success: true });
+      }),
+      MakaioBus.on(CredentialSubjects.activation.rollback, (ctx) => {
+        order.push('rollback');
+        ctx.setResult({ success: true });
+      }),
+    );
+    agent = createSwapTestAgent(mockFactory);
+    await agent.init();
+
+    await agent.testSwapConnector({ providerContext: inferredProviderContext() });
+
+    expect(order).toEqual(['prepare', 'commit']);
+    expect(agent.currentConnector).toBe(createdConnectors[1]);
+  });
+
+  it('keeps the new connector primary and emits a sanitized diagnostic when old cleanup fails', async () => {
+    const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
+      const connector = new MockConnector(config.model, config.cwd);
+      createdConnectors.push(connector);
+      return connector;
+    });
+    MakaioBus.registerNamespaces([AdapterNamespace]);
+    const diagnostics: string[] = [];
+    cleanupFns.push(
+      MakaioBus.on(AdapterSubjects.log, (ctx) => {
+        diagnostics.push(ctx.payload.message);
+      }),
+    );
 
     agent = createSwapTestAgent(mockFactory);
     await agent.init();
@@ -245,9 +420,8 @@ describe('AIAgent.swapConnector', () => {
     await expect(agent.testSwapConnector({ model: 'test-model-2' })).resolves.toBeUndefined();
 
     expect(agent.currentConnector.model).toBe('test-model-2');
-    expect(warnSpy).toHaveBeenCalled();
-
-    warnSpy.mockRestore();
+    expect(diagnostics).toContain('previous-connector-cleanup-failed:swap-old-runtime');
+    expect(diagnostics.join(' ')).not.toContain('close failed');
   });
 
   it('does not forward nativeFork to swapped connector (one-shot consumption)', async () => {
@@ -308,5 +482,91 @@ describe('AIAgent.swapConnector', () => {
 
     expect(capturedInputs).toHaveLength(2);
     expect(capturedInputs[1].nativeFork).toBeUndefined();
+  });
+
+  it('selects auth metadata from the effective provider context for initial and replacement connectors', async () => {
+    const capturedInputs: ConfigFactoryInput[] = [];
+    const providerAAuth = createTestProviderAuth('provider-a');
+    const providerBAuth = createTestProviderAuth('provider-b');
+    const definitionProviders: AdapterProviderDefinition[] = [
+      {
+        definition: {
+          id: 'provider-a',
+          name: 'Provider A',
+          availableModels: [],
+          authMethods: [TEST_API_KEY_METHOD],
+        },
+        auth: providerAAuth,
+      },
+      {
+        definition: {
+          id: 'provider-b',
+          name: 'Provider B',
+          availableModels: [],
+          authMethods: [TEST_API_KEY_METHOD],
+        },
+        auth: providerBAuth,
+      },
+    ];
+    const providerAContext = explicitProviderContext('provider-a');
+    const providerBContext = explicitProviderContext('provider-b');
+    const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
+      const connector = new MockConnector(config.model, config.cwd);
+      createdConnectors.push(connector);
+      return connector;
+    });
+    agent = createSwapTestAgent(mockFactory, {
+      providerContext: providerAContext,
+      definitionProviders,
+      onConfigInput: (input) => capturedInputs.push(input),
+    });
+
+    await agent.init();
+    await agent.testSwapConnector({ model: 'test-model-2', providerContext: providerBContext });
+    await agent.testSwapConnector({ cwd: '/test/cwd2' });
+
+    expect(capturedInputs).toHaveLength(3);
+    expect(capturedInputs[0]?.adapterProviderAuth).toEqual(providerAAuth);
+    expect(capturedInputs[1]?.adapterProviderAuth).toEqual(providerBAuth);
+    expect(capturedInputs[2]?.adapterProviderAuth).toEqual(providerBAuth);
+  });
+
+  it('does not fall back to single-provider auth across unresolved or mismatched connector swaps', async () => {
+    const capturedInputs: ConfigFactoryInput[] = [];
+    const adapterProviderAuth = createTestProviderAuth('provider-a');
+    const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
+      const connector = new MockConnector(config.model, config.cwd);
+      createdConnectors.push(connector);
+      return connector;
+    });
+    agent = createSwapTestAgent(mockFactory, {
+      definitionProviders: [
+        {
+          definition: {
+            id: 'provider-a',
+            name: 'Provider A',
+            availableModels: [],
+            authMethods: [TEST_API_KEY_METHOD],
+          },
+          auth: adapterProviderAuth,
+        },
+      ],
+      onConfigInput: (input) => capturedInputs.push(input),
+    });
+
+    await agent.init();
+    await agent.testSwapConnector({ cwd: '/test/unresolved-swap' });
+    await agent.testSwapConnector({
+      providerContext: explicitProviderContext('provider-b'),
+    });
+    await agent.testSwapConnector({ model: 'test-model-after-mismatch' });
+
+    expect(capturedInputs).toHaveLength(4);
+    expect(capturedInputs.map((input) => input.adapterProviderAuth)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 });

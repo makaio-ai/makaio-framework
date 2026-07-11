@@ -14,8 +14,9 @@ import {
   MessageHandle,
   type AgentStartResult,
 } from './shared.js';
+import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
-const TEST_PROVIDER_CONTEXT = { providerConfigId: 'test-config', definitionId: 'provider-1', credentialRefs: {} };
+const TEST_PROVIDER_CONTEXT = createNoAuthTestProviderContext('test-config', 'provider-1');
 
 /**
  * Observation-only test double that captures the systemPrompt passed to initialize().
@@ -132,7 +133,7 @@ describe('AIAdapter.handleRehydrateAgent', () => {
     });
   });
 
-  it('does not persist providerConfigId from adapter layer (orchestrator owns this field)', async () => {
+  it('persists the resolved providerConfigId with the initial agent record', async () => {
     adapter = createTestAdapter().adapter;
     await adapter.init();
 
@@ -161,11 +162,10 @@ describe('AIAdapter.handleRehydrateAgent', () => {
     });
     expect(startResult.success).toBe(true);
 
-    // The adapter only has definitionId, not the config UUID needed for
-    // rehydration. The orchestrator's persistAgentIdentity writes the
-    // correct providerConfigId — adapter layer must not overwrite it.
+    // The normalized context carries the exact config UUID already used to
+    // create the connector, so the initial record is immediately rehydratable.
     expect(setCalls).toBeGreaterThan(0);
-    expect(persistedProviderConfigId).toBeUndefined();
+    expect(persistedProviderConfigId).toBe('test-config');
   });
 
   it('wraps connector/swap failures with agent context', async () => {

@@ -92,8 +92,9 @@ Conformance-test capabilities returned by `createTestConfig()`:
 The CLI receives that value as `--model`; if omitted, the `claude` binary falls back to its own
 configured default.
 
-The adapter can use a host-resolved managed `claude` binary, an explicit
-`providerConfig.binaryPath`, or PATH lookup for `claude`. An explicit provider config path wins.
+The adapter consumes the host-selected `clientExecution` binary. A `null` binary
+selection delegates to Claude Code's PATH/default resolution; provider config
+cannot override the centrally selected executable.
 
 ## Usage Telemetry
 

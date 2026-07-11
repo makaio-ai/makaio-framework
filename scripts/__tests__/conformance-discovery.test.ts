@@ -1,12 +1,19 @@
 import { relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CONFORMANCE_PATH, discoverConformanceTests } from '../lib/conformance/index.js';
+import { CONFORMANCE_PATH, discoverAdapters, discoverConformanceTests } from '../lib/conformance/index.js';
 
 function toConformanceRelative(files: string[]): string[] {
   return files.map((file) => relative(CONFORMANCE_PATH, file).replace(/\\/g, '/'));
 }
 
 describe('conformance discovery', () => {
+  it('discovers only adapters declared by their real package descriptors', () => {
+    const adapters = discoverAdapters();
+
+    expect(adapters).toContain('gemini-sdk');
+    expect(adapters).not.toContain('qwen-acp');
+  });
+
   it('excludes matching test files after pattern expansion', async () => {
     const files = toConformanceRelative(
       await discoverConformanceTests(

@@ -1,16 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
-import { createTestableAgent, createAgentTestLifecycle } from './helpers/mock-agent.js';
+import {
+  createTestableAgent,
+  createAgentTestLifecycle,
+  registerSuccessfulRuntimeMutationPersistence,
+} from './helpers/mock-agent.js';
 
 describe('AIAgent idle event emission', () => {
   const ctx = createAgentTestLifecycle();
+  let persistenceCleanup: () => void;
 
   beforeEach(() => {
     ctx.reset();
+    persistenceCleanup = registerSuccessfulRuntimeMutationPersistence();
   });
 
   afterEach(async () => {
+    persistenceCleanup();
     await ctx.teardown();
   });
 

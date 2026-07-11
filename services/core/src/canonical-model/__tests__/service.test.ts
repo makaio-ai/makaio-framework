@@ -457,8 +457,11 @@ function makeProviderConfigRecord(overrides: Partial<ProviderConfigFileRecord> =
     modelFilterMode: 'show-all',
     isDefault: true,
     enabled: true,
-    isSentinel: false,
-    hasCredentials: false,
+    auth: {
+      mode: 'none',
+      method: { owner: 'provider', providerDefinitionId: 'def-1', methodId: 'none' },
+      hasCredentials: false,
+    },
     ...overrides,
   };
 }

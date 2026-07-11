@@ -26,9 +26,8 @@ export type AnthropicSdkBus = ScopedBus<typeof ANTHROPIC_SDK_NAMESPACE>;
 /**
  * Provider-specific configuration for the Anthropic SDK connector.
  *
- * Contains only non-credential settings. Credentials (e.g., `apiKey`) are
- * resolved at runtime from `providerContext.credentialRefs` via
- * `resolveConnectorCredentials()` and never appear in this type.
+ * Contains only non-credential settings. Authentication is supplied separately
+ * through the connector-local normalized runtime snapshot.
  */
 export type AnthropicSdkProviderConfig = AnthropicSdkProviderSettings;
 

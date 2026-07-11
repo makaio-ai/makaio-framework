@@ -1,45 +1,17 @@
-/**
- * Integration tests for `client.resolveBinary` integration in the
- * `CodexAppServerConnector`.
- *
- * These tests verify that the connector correctly calls
- * `client.resolveBinary` on the global bus and forwards the resolved binary
- * path and environment variables to `createStdioTransport` before spawning
- * the subprocess.
- *
- * The `node:child_process` module is mocked so no real process is created.
- * The test drives the connector up to the point where `spawn` is called —
- * enough to assert on the binary name and environment — without needing the
- * full JSON-RPC initialize / thread-start handshake to complete.
- *
- * Coverage:
- * - `createStdioTransport` uses the resolved `binaryPath` when a managed
- *   binary is available via `client.resolveBinary`
- * - `createStdioTransport` falls back to the default `'codex'` binary when
- *   no handler is registered for `client.resolveBinary`
- * - `createStdioTransport` falls back to `'codex'` when `binaryPath` is
- *   `null` (global-install resolution)
- * - The resolved `env` (e.g. `CODEX_HOME`) from the managed binary context
- *   is merged into the spawn environment and takes precedence over connector
- *   defaults
- * - `config.clientId` is forwarded to `client.resolveBinary`; absent
- *   `clientId` defaults to `'codex'`
- */
+/** Connector consumption tests for centrally prepared Codex runtime config. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/contracts/client';
+import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
+import { ClientSubjects, type ClientExecutionContext } from '@makaio/contracts/client';
 import { CodexAppServerConnector } from '../connector.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
+import { createApiKeyAdapterAuth } from './shared.js';
 
-// ---------------------------------------------------------------------------
-// Mock subprocess — satisfies createStdioTransport's stream-based API without
-// spawning a real child process.
-// ---------------------------------------------------------------------------
-
+/** Minimal child-process surface required by createStdioTransport. */
 class MockSubprocess {
   stdin = { write: vi.fn() };
   stdout = { on: vi.fn() };
@@ -57,251 +29,178 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Snapshot of a `spawn` invocation captured from `mockSpawn.mock.calls`.
- */
 interface SpawnCapture {
-  /** The binary path or name passed as the first argument to `spawn`. */
-  binary: string;
-  /** The `env` property from the options object passed to `spawn`. */
-  env: Record<string, string>;
+  readonly binary: string;
+  readonly env: Record<string, string>;
 }
 
-/**
- * Wait until `spawn` has been called at least once, then return a snapshot
- * of the first invocation arguments.
- *
- * `vi.waitFor` polls the predicate up to its default timeout (1 s by
- * default) so the connector's async path (credential resolution, binary
- * resolution) has time to complete before the assertion is made.
- * @returns Spawn call capture
- */
+/** Wait for the production spawn boundary and return its finalized inputs. */
 async function waitForSpawn(): Promise<SpawnCapture> {
   await vi.waitFor(() => {
-    expect(mockSpawn.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(mockSpawn).toHaveBeenCalledOnce();
   });
-
-  const [binary, , opts] = mockSpawn.mock.calls[0] as [string, string[], { env: Record<string, string> }];
-  return { binary, env: opts.env };
+  const [binary, , options] = mockSpawn.mock.calls[0] as [string, string[], { env: Record<string, string> }];
+  return { binary, env: options.env };
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+/**
+ * Build one central client execution selection.
+ * @param binaryPath - Exact managed path, or null for global discovery
+ * @param env - Binary-resolution environment retained for comparison
+ * @returns Central client execution selection
+ */
+function execution(binaryPath: string | null, env: Record<string, string> = {}): ClientExecutionContext {
+  return {
+    binaryPath,
+    env,
+    configDir: null,
+    source: binaryPath === null ? 'global' : 'managed',
+    version: null,
+  };
+}
 
-describe('CodexAppServerConnector — client.resolveBinary integration', () => {
-  let subprocess: MockSubprocess;
-  let tempCwd: string;
+/**
+ * Create a connector and advance it only as far as subprocess spawn.
+ * @param options - Finalized runtime inputs supplied to the connector
+ * @returns Connector whose initialization has reached the spawn boundary
+ */
+async function makeConnector(
+  options: {
+    env?: Record<string, string>;
+    clientExecution?: ClientExecutionContext;
+    adapterAuth?: ResolvedAdapterAuth;
+  } = {},
+): Promise<CodexAppServerConnector> {
+  const bus = await CodexAppServerNamespace.scopedBus();
+  const cwd = mkdtempSync(join(tmpdir(), 'codex-central-runtime-test-'));
+  tempDirectories.push(cwd);
+  mockSpawn.mockReturnValue(new MockSubprocess());
 
-  afterEach(() => {
-    MakaioBus.__resetHandlers?.();
-    if (tempCwd) {
-      rmSync(tempCwd, { recursive: true, force: true });
-    }
-    vi.clearAllMocks();
+  const connector = new CodexAppServerConnector({
+    bus,
+    adapterId: 'adapter-test',
+    adapterName: 'codex-app-server',
+    agentId: 'agent-test',
+    model: 'test-model',
+    cwd,
+    ...(options.env !== undefined && { env: options.env }),
+    clientId: 'codex',
+    clientExecution: options.clientExecution,
+    adapterAuth: options.adapterAuth,
   });
+  connectors.push(connector);
+  void connector.initialize().catch(() => undefined);
+  return connector;
+}
 
-  /**
-   * Create a connector backed by the mocked spawn and start initialization
-   * in the background. The returned `connector` can be aborted after the
-   * assertion to prevent the pending `initialize` request from leaking.
-   *
-   * The connector is intentionally created without an injected transport or
-   * JSON-RPC client so the production `createStdioTransport` / `spawn` path
-   * is exercised.
-   * @param clientId - Client identifier forwarded to `client.resolveBinary`
-   * @returns Connector instance
-   */
-  function makeConnector(clientId = 'codex'): Promise<CodexAppServerConnector> {
-    return CodexAppServerNamespace.scopedBus().then((mockBus) => {
-      tempCwd = mkdtempSync(join(tmpdir(), 'codex-resolve-binary-test-'));
-      subprocess = new MockSubprocess();
-      mockSpawn.mockReturnValue(subprocess);
+const connectors: CodexAppServerConnector[] = [];
+const tempDirectories: string[] = [];
 
-      const connector = new CodexAppServerConnector({
-        bus: mockBus,
-        adapterId: 'test-adapter',
-        adapterName: 'codex-app-server',
-        agentId: 'test-agent',
-        model: 'test-model',
-        cwd: tempCwd,
-        env: { BASE_ENV: 'base' },
-        clientId,
-      });
-
-      // Fire-and-forget: we only need the connector to progress far enough
-      // to call `spawn`; we do not need the full initialize handshake.
-      connector.initialize().catch(() => {
-        // Swallow the expected "connection never responded" error that
-        // occurs when the mock subprocess never emits an initialize result.
-      });
-
-      return connector;
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Binary path routing
-  // -------------------------------------------------------------------------
-
-  it('uses the resolved binaryPath when a managed binary is returned', async () => {
-    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-      ctx.setResult({
-        binaryPath: '/usr/local/managed/codex',
-        env: {},
-        configDir: null,
-        source: 'managed',
-        version: '1.0.0',
-      });
-    });
-
-    try {
-      const connector = await makeConnector();
-      const { binary } = await waitForSpawn();
-      connector.abort();
-
-      expect(binary).toBe('/usr/local/managed/codex');
-    } finally {
-      cleanup();
-    }
-  });
-
-  it('falls back to the default codex binary when no resolveBinary handler is registered', async () => {
-    // No handler — requestOptional returns { handled: false }.
-    const connector = await makeConnector();
-    const { binary } = await waitForSpawn();
+afterEach(() => {
+  for (const connector of connectors.splice(0)) {
     connector.abort();
+  }
+  for (const directory of tempDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  MakaioBus.__resetHandlers?.();
+  vi.unstubAllEnvs();
+  vi.clearAllMocks();
+});
 
-    expect(binary).toBe('codex');
-  });
-
-  it('falls back to codex when binaryPath is null (global install)', async () => {
-    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-      ctx.setResult({
-        binaryPath: null,
-        env: {},
-        configDir: null,
-        source: 'global',
-        version: '1.0.0',
-      });
+describe('CodexAppServerConnector — central runtime config', () => {
+  it('uses the centrally selected managed binary and finalized lease environment', async () => {
+    await makeConnector({
+      env: { PATH: '/base/bin', CODEX_HOME: '/isolated/codex' },
+      clientExecution: execution('/managed/bin/codex', { CODEX_HOME: '/must-not-be-merged-again' }),
     });
 
-    try {
-      const connector = await makeConnector();
-      const { binary } = await waitForSpawn();
-      connector.abort();
+    const spawn = await waitForSpawn();
 
-      expect(binary).toBe('codex');
-    } finally {
-      cleanup();
-    }
+    expect(spawn.binary).toBe('/managed/bin/codex');
+    expect(spawn.env).toEqual({ PATH: '/base/bin', CODEX_HOME: '/isolated/codex' });
   });
 
-  // -------------------------------------------------------------------------
-  // Environment variable merging
-  // -------------------------------------------------------------------------
+  it('uses PATH lookup for a global or absent central binary selection', async () => {
+    await makeConnector({ clientExecution: execution(null) });
+    expect((await waitForSpawn()).binary).toBe('codex');
 
-  it('merges CODEX_HOME from the managed binary env into the spawn environment', async () => {
-    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-      ctx.setResult({
-        binaryPath: '/managed/codex',
-        env: { CODEX_HOME: '/managed/home' },
-        configDir: '/managed/home',
-        source: 'managed',
-        version: '1.0.0',
-      });
-    });
-
-    try {
-      const connector = await makeConnector();
-      const { env } = await waitForSpawn();
-      connector.abort();
-
-      expect(env['CODEX_HOME']).toBe('/managed/home');
-    } finally {
-      cleanup();
-    }
+    connectors.splice(0).forEach((connector) => connector.abort());
+    mockSpawn.mockClear();
+    await makeConnector();
+    expect((await waitForSpawn()).binary).toBe('codex');
   });
 
-  it('resolved binary env takes precedence over connector base env', async () => {
-    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-      ctx.setResult({
-        binaryPath: null,
-        env: { BASE_ENV: 'managed-override' },
-        configDir: null,
-        source: 'managed',
-        version: '1.0.0',
-      });
-    });
+  it('treats an omitted host environment as empty instead of inheriting ambient authentication', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'ambient-openai-key');
+    vi.stubEnv('CODEX_API_KEY', 'ambient-codex-key');
+    vi.stubEnv('CODEX_ACCESS_TOKEN', 'ambient-access-token');
 
-    try {
-      const connector = await makeConnector();
-      const { env } = await waitForSpawn();
-      connector.abort();
+    await makeConnector();
 
-      expect(env['BASE_ENV']).toBe('managed-override');
-    } finally {
-      cleanup();
-    }
+    expect((await waitForSpawn()).env).toEqual({});
   });
 
-  // -------------------------------------------------------------------------
-  // clientId routing
-  // -------------------------------------------------------------------------
-
-  it('forwards config.clientId to the resolveBinary request', async () => {
-    const capturedRequests: Array<{ clientId: string }> = [];
-
-    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-      capturedRequests.push(ctx.payload);
-      ctx.setResult({
-        binaryPath: null,
-        env: {},
-        configDir: null,
-        source: 'global',
-        version: null,
-      });
+  it('passes only the selected access-token process auth', async () => {
+    await makeConnector({
+      env: { CODEX_HOME: '/isolated/codex', CODEX_ACCESS_TOKEN: 'selected-access-token' },
+      adapterAuth: {
+        processEnv: { CODEX_ACCESS_TOKEN: 'selected-access-token' },
+        connectorDeliveries: [],
+        configInheritance: 'empty',
+      },
     });
 
-    try {
-      const connector = await makeConnector('custom-codex-id');
-      await waitForSpawn();
-      connector.abort();
+    const { env } = await waitForSpawn();
 
-      expect(capturedRequests).toHaveLength(1);
-      expect(capturedRequests[0].clientId).toBe('custom-codex-id');
-    } finally {
-      cleanup();
-    }
+    expect(env).toEqual({ CODEX_HOME: '/isolated/codex', CODEX_ACCESS_TOKEN: 'selected-access-token' });
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env).not.toHaveProperty('CODEX_API_KEY');
   });
 
-  it("defaults to 'codex' clientId when config.clientId is not set", async () => {
-    const capturedRequests: Array<{ clientId: string }> = [];
-
-    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-      capturedRequests.push(ctx.payload);
-      ctx.setResult({
-        binaryPath: null,
-        env: {},
-        configDir: null,
-        source: 'global',
-        version: null,
-      });
+  it('uses isolated native state without ambient process authentication fallback', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'ambient-openai-key');
+    vi.stubEnv('CODEX_API_KEY', 'ambient-codex-key');
+    vi.stubEnv('CODEX_ACCESS_TOKEN', 'ambient-access-token');
+    await makeConnector({
+      env: { CODEX_HOME: '/isolated/native-codex' },
+      adapterAuth: { processEnv: {}, connectorDeliveries: [], configInheritance: 'auth-only' },
     });
 
-    try {
-      // makeConnector() with no clientId uses the default 'codex'
-      const connector = await makeConnector();
-      await waitForSpawn();
-      connector.abort();
+    const { env } = await waitForSpawn();
 
-      expect(capturedRequests[0].clientId).toBe('codex');
-    } finally {
-      cleanup();
-    }
+    expect(env).toEqual({ CODEX_HOME: '/isolated/native-codex' });
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env).not.toHaveProperty('CODEX_API_KEY');
+    expect(env).not.toHaveProperty('CODEX_ACCESS_TOKEN');
+  });
+
+  it('keeps provider API-key delivery out of the subprocess environment', async () => {
+    await makeConnector({
+      env: { CODEX_HOME: '/isolated/api-key-codex' },
+      adapterAuth: createApiKeyAdapterAuth('private-api-key'),
+    });
+
+    const { env } = await waitForSpawn();
+
+    expect(env).toEqual({ CODEX_HOME: '/isolated/api-key-codex' });
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env).not.toHaveProperty('CODEX_API_KEY');
+    expect(env).not.toHaveProperty('CODEX_ACCESS_TOKEN');
+  });
+
+  it('does not resolve or replace the client binary inside the connector', async () => {
+    const resolveBinary = vi.fn();
+    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
+      resolveBinary();
+      ctx.setResult(execution('/unexpected/bin/codex'));
+    });
+    await makeConnector({ clientExecution: execution('/selected/bin/codex') });
+
+    const spawn = await waitForSpawn();
+    cleanup();
+
+    expect(resolveBinary).not.toHaveBeenCalled();
+    expect(spawn.binary).toBe('/selected/bin/codex');
   });
 });

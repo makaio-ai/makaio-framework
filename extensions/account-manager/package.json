@@ -14,6 +14,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
+    "./constants": "./src/account-manager-id.ts",
     "./schemas": "./src/bus/schemas.ts",
     "./subjects": "./src/bus/namespace.ts",
     "./browser": "./src/browser/index.ts",
@@ -38,6 +39,7 @@
   },
   "dependencies": {
     "@makaio/client-claude-code": "workspace:*",
+    "@makaio/client-codex": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/services-core": "workspace:*",
@@ -77,6 +79,10 @@
   },
   "publishConfig": {
     "exports": {
+      "./constants": {
+        "types": "./dist/account-manager-id.d.ts",
+        "default": "./dist/constants.mjs"
+      },
       "./browser": {
         "types": "./dist/browser/index.d.ts",
         "default": "./dist/browser.mjs"

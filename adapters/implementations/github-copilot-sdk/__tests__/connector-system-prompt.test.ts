@@ -9,21 +9,6 @@ const lifecycleControls = vi.hoisted(() => ({
   sessionDestroyCalls: 0,
 }));
 
-// Mock session environment resolution so tests are not gated on a real credential
-// channel. These tests verify connector system-prompt wiring, not credential resolution.
-vi.mock('@makaio/ai-adapters-core/config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@makaio/ai-adapters-core/config')>();
-  return {
-    ...actual,
-    resolveSessionEnvironment: vi.fn().mockResolvedValue({
-      credentials: { token: 'mock-copilot-token' },
-      credEnv: { COPILOT_TOKEN: 'mock-copilot-token' },
-      resolvedBinary: undefined,
-      spawnEnv: { COPILOT_TOKEN: 'mock-copilot-token' },
-    }),
-  };
-});
-
 vi.mock('@github/copilot-sdk', () => {
   class MockCopilotClient {
     public constructor(config: Record<string, unknown>) {
@@ -70,13 +55,11 @@ vi.mock('../src/session.js', () => {
 
 import { GitHubCopilotConnector } from '../src/connector.js';
 import { GitHubCopilotConnectorNamespace } from '../src/namespaces/index.js';
-import { CredentialRefSchema } from '@makaio/contracts/config';
 
-const testProviderContext = {
-  providerConfigId: 'test-provider-config-id',
-  definitionId: 'github-copilot',
-  credentialRefs: { token: CredentialRefSchema.parse('env:COPILOT_TOKEN') },
-  credentialEnvVars: { token: 'COPILOT_TOKEN' },
+const testAdapterAuth = {
+  processEnv: {},
+  connectorDeliveries: [{ target: 'github-copilot-sdk.constructor', values: { githubToken: 'mock-copilot-token' } }],
+  configInheritance: 'empty' as const,
 };
 
 describe('github-copilot-sdk connector system prompt handling', () => {
@@ -101,7 +84,7 @@ describe('github-copilot-sdk connector system prompt handling', () => {
       model: 'gpt-4o-mini',
       cwd: process.cwd(),
       env: {},
-      providerContext: testProviderContext,
+      adapterAuth: testAdapterAuth,
       providerConfig: {
         systemMessage: providerSystemMessage,
       } as never,
@@ -123,7 +106,7 @@ describe('github-copilot-sdk connector system prompt handling', () => {
       model: 'gpt-4o-mini',
       cwd: process.cwd(),
       env: {},
-      providerContext: testProviderContext,
+      adapterAuth: testAdapterAuth,
     });
 
     await connector.initialize({ systemPrompt: '' });
@@ -147,7 +130,7 @@ describe('github-copilot-sdk connector system prompt handling', () => {
       model: 'gpt-4o-mini',
       cwd: process.cwd(),
       env: {},
-      providerContext: testProviderContext,
+      adapterAuth: testAdapterAuth,
     });
 
     await connector.initialize();
@@ -171,7 +154,7 @@ describe('github-copilot-sdk connector system prompt handling', () => {
       model: 'gpt-4o-mini',
       cwd: process.cwd(),
       env: {},
-      providerContext: testProviderContext,
+      adapterAuth: testAdapterAuth,
     });
 
     const initializePromise = connector.initialize();
@@ -201,7 +184,7 @@ describe('github-copilot-sdk connector system prompt handling', () => {
       model: 'gpt-4o-mini',
       cwd: process.cwd(),
       env: {},
-      providerContext: testProviderContext,
+      adapterAuth: testAdapterAuth,
     });
 
     const initializePromise = connector.initialize();

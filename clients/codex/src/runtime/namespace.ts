@@ -15,6 +15,7 @@
  * - `wiring.apply` — install wiring entries into the target scope
  * - `wiring.remove` — uninstall wiring entries from the target scope
  * - `sessionConfig.setup` — seed an isolated session config directory
+ * - `sessionConfig.destroy` — reconcile and clear isolated native auth
  *
  * **Subject conventions:**
  * - Raw Codex-native events flow in the `client:codex.*` namespace only.
@@ -28,6 +29,8 @@ import {
   ClientConfigPrimeSchema,
   SessionConfigSetupRequestSchema,
   SessionConfigSetupResponseSchema,
+  SessionConfigTeardownRequestSchema,
+  SessionConfigTeardownResponseSchema,
 } from '@makaio/contracts/client';
 import { CodexConfigSchemas } from '../schemas/config.js';
 import { CodexWiringSchemas } from '../schemas/wiring.js';
@@ -39,6 +42,10 @@ const { subjects, namespaceDomain } = createClientNamespace('codex', {
   'sessionConfig.setup': {
     request: SessionConfigSetupRequestSchema,
     response: SessionConfigSetupResponseSchema,
+  },
+  'sessionConfig.destroy': {
+    request: SessionConfigTeardownRequestSchema,
+    response: SessionConfigTeardownResponseSchema,
   },
 });
 
@@ -57,6 +64,7 @@ const { subjects, namespaceDomain } = createClientNamespace('codex', {
  * - `CodexClientSubjects.wiring.apply` → `client:codex.wiring.apply`
  * - `CodexClientSubjects.wiring.remove` → `client:codex.wiring.remove`
  * - `CodexClientSubjects.sessionConfig.setup` → `client:codex.sessionConfig.setup`
+ * - `CodexClientSubjects.sessionConfig.destroy` → `client:codex.sessionConfig.destroy`
  */
 export const CodexClientSubjects = subjects;
 

@@ -11,5 +11,4 @@ export const OpenAINodeConfig = createAdapterConfigFactory<OpenAINodeAgentConfig
   },
   schema: OpenAINodeProviderConfigSchema,
   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
-  protocol: 'openai',
 }));

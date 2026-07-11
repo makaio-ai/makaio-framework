@@ -28,7 +28,7 @@ const cursorClientDefinitionInput: Parameters<typeof createClientDefinition>[0] 
   },
   configIsolation: { envVar: 'CURSOR_HOME', defaultPath: '~/.cursor' },
   defaultApprovalPolicy: 'always-ask',
-  defaultProviderId: 'cursor',
+  authMethods: [],
   runtimeCapabilities: {
     supportsHooks: true,
     hookEvents: [

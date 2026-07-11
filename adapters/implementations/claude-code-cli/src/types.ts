@@ -74,21 +74,6 @@ export type OnTurnStartCallback = (handle: MessageHandle) => void;
 export type OnTurnCompleteCallback = (handle: MessageHandle, result: MessageResult) => void;
 
 /**
- * Execution context for one CLI subprocess spawn.
- */
-export interface ClaudeCliTurnExecutionContext {
-  /** Environment variables for the subprocess */
-  env: Record<string, string>;
-  /** Optional absolute CLI binary path; omitted to use PATH lookup */
-  binaryPath?: string;
-}
-
-/**
- * Resolve the execution context immediately before a CLI turn is spawned.
- */
-export type ResolveClaudeCliTurnExecutionContext = () => Promise<ClaudeCliTurnExecutionContext>;
-
-/**
  * Session configuration for the Claude Code CLI session.
  */
 export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCodeCliConnectorBus> {
@@ -134,11 +119,6 @@ export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCod
    * Falls back to `'claude'` (resolved via PATH) when omitted.
    */
   binaryPath?: string;
-  /**
-   * Optional resolver used to refresh env and binary path before each CLI spawn.
-   * @returns Execution context for the next turn
-   */
-  resolveTurnExecutionContext?: ResolveClaudeCliTurnExecutionContext;
   /**
    * Milliseconds to wait for first stdout byte from the CLI subprocess before
    * killing it and emitting an error. Guards against silent hangs caused by

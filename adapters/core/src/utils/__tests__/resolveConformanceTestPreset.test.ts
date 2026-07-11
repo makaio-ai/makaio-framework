@@ -11,6 +11,7 @@ import {
 const anthropicOAuthProvider: ProviderDefinitionInput = {
   id: 'anthropic-oauth',
   name: 'Anthropic OAuth',
+  authMethods: [],
   defaultModel: 'sonnet',
   fastModel: 'haiku',
 };
@@ -20,7 +21,22 @@ const anthropicApiProvider: ProviderDefinitionInput = {
   name: 'Anthropic API',
   defaultModel: 'claude-sonnet-4-6',
   fastModel: 'claude-haiku-4-5',
-  credentialEnvVars: { apiKey: 'ANTHROPIC_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'ANTHROPIC_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };
 
 const opencodeGoAnthropicProvider: ProviderDefinitionInput = {
@@ -29,13 +45,28 @@ const opencodeGoAnthropicProvider: ProviderDefinitionInput = {
   endpoints: { anthropic: 'https://opencode.example.test/anthropic' },
   defaultModel: 'minimax-m2.5',
   fastModel: 'minimax-m2.7',
-  credentialEnvVars: { apiKey: 'OPENCODE_GO_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'OPENCODE_GO_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };
 
 function resolveWithEnv(env: Record<string, string | undefined>) {
   return resolveConformanceTestPreset({
     adapterName: 'claude-code',
-    defaultProviderId: 'anthropic-oauth',
+    testProviderDefinitionId: 'anthropic-oauth',
     providerIds: ['anthropic-oauth', 'anthropic', 'opencode-go-anthropic'],
     providerDefinitions: [anthropicOAuthProvider, anthropicApiProvider, opencodeGoAnthropicProvider],
     reasoningEffort: 'low',
@@ -58,10 +89,7 @@ describe('resolveConformanceTestPreset', () => {
       modelName: 'sonnet',
       reasoningEffort: 'low',
     });
-    expect(preset.providerContext).toMatchObject({
-      definitionId: 'anthropic-oauth',
-      credentialRefs: {},
-    });
+    expect(preset.providerContext).toEqual({ state: 'unresolved' });
   });
 
   it('resolves provider credentials and endpoint overrides from MAKAIO_CONFORMANCE_PROVIDER', () => {
@@ -79,12 +107,14 @@ describe('resolveConformanceTestPreset', () => {
       modelName: 'minimax-m2.5',
     });
     expect(preset.providerContext).toMatchObject({
+      state: 'resolved',
       definitionId: 'opencode-go-anthropic',
-      credentialEnvVars: { apiKey: 'OPENCODE_GO_API_KEY' },
-      credentialRefs: { apiKey: 'env:OPENCODE_GO_API_KEY' },
       endpointOverrides: { anthropic: 'https://opencode.example.test/anthropic' },
+      auth: {
+        mode: 'explicit',
+        credentialRefs: { apiKey: 'env:OPENCODE_GO_API_KEY' },
+      },
     });
-    expect(preset.providerContext.ambientCredentialEnvVars).toEqual(['ANTHROPIC_API_KEY', 'OPENCODE_GO_API_KEY']);
   });
 
   it('allows primary and secondary model overrides on the selected provider', () => {
@@ -129,7 +159,7 @@ describe('resolveConformanceTestPreset', () => {
   it('can read provider definitions from the conformance worker environment', () => {
     const preset = resolveConformanceTestPreset({
       adapterName: 'claude-code',
-      defaultProviderId: 'anthropic-oauth',
+      testProviderDefinitionId: 'anthropic-oauth',
       providerIds: ['anthropic-oauth', 'opencode-go-anthropic'],
       reasoningEffort: 'low',
       readEnv: (name) =>
@@ -139,14 +169,14 @@ describe('resolveConformanceTestPreset', () => {
     });
 
     expect(preset.provider.id).toBe('anthropic-oauth');
-    expect(preset.providerContext.ambientCredentialEnvVars).toEqual(['OPENCODE_GO_API_KEY']);
+    expect(preset.providerContext).toEqual({ state: 'unresolved' });
   });
 
   it('adds env-var context to malformed provider definition JSON errors', () => {
     expect(() =>
       resolveConformanceTestPreset({
         adapterName: 'claude-code',
-        defaultProviderId: 'anthropic-oauth',
+        testProviderDefinitionId: 'anthropic-oauth',
         providerIds: ['anthropic-oauth'],
         readEnv: (name) => (name === MAKAIO_CONFORMANCE_PROVIDER_DEFINITIONS_ENV ? '{' : undefined),
       }),
@@ -157,7 +187,7 @@ describe('resolveConformanceTestPreset', () => {
     expect(() =>
       resolveConformanceTestPreset({
         adapterName: 'claude-code',
-        defaultProviderId: 'anthropic-oauth',
+        testProviderDefinitionId: 'anthropic-oauth',
         providerIds: ['anthropic-oauth'],
         readEnv: (name) =>
           name === MAKAIO_CONFORMANCE_PROVIDER_DEFINITIONS_ENV ? JSON.stringify([{ name: 'Missing ID' }]) : undefined,

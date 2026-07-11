@@ -10,15 +10,15 @@ import { dep } from '@makaio/contracts';
 import type { MakaioNodeExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { GeminiSdkAdapterName } from './constants.js';
+import { defaultPresetId } from './provider.js';
 
 const clients = adapterDefinition.clients;
 
 /**
  * Package descriptor for the Gemini SDK adapter.
  *
- * Uses the official Google Gemini SDK. Declares the `openai` wire protocol
- * because the adapter communicates with Gemini through an OpenAI-compatible
- * completions interface.
+ * Uses the official Google Gemini SDK and therefore declares no Makaio HTTP
+ * inference protocol.
  */
 export const geminiSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: GeminiSdkAdapterName,
@@ -32,7 +32,8 @@ export const geminiSdkPackage: MakaioNodeExtension<IMakaioBus> = {
         displayName: 'Gemini SDK',
         description: 'Google Gemini SDK integration',
         ...(clients ? { clients } : {}),
-        protocols: ['openai'],
+        protocols: [],
+        defaultProvider: defaultPresetId,
       },
       definition: adapterDefinition,
     },

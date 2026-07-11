@@ -26,7 +26,7 @@ const result = await MakaioBus.request(AdapterSubjects.startAgent, {
 | Field | Value |
 |-------|-------|
 | `adapterName` | `'pi-sdk'` |
-| `protocol` | `'anthropic'` |
+| Provider protocols | `anthropic` or `openai`, selected by the exact provider ref |
 | `providers` | `anthropic`, `openai`, `opencode-go` |
 | `defaultPresetId` | `'anthropic'` |
 | `defaultModel` | `'claude-sonnet-4-6'` |
@@ -91,10 +91,11 @@ provider-specific options:
 |-------|------|-------------|
 | `noTools` | `'all' \| 'builtin'` (optional) | Tool suppression mode at session creation |
 
-Credentials are resolved via the provider context's `credentialRefs` at session
-initialization time. An `apiKey` credential ref is injected into Pi's
-`AuthStorage` when present; endpoint overrides can be supplied via
-`providerContext.endpointOverrides`.
+The trusted runtime resolves the selected explicit `apiKey` once and delivers
+it through Pi's provider-auth connector target. The connector injects that exact
+value into `AuthStorage`; it does not inspect credential refs or ambient
+environment variables. Endpoint overrides remain available through the resolved
+provider context.
 
 Default timeouts:
 

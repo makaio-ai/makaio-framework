@@ -1,6 +1,15 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
-import { resolveConformanceTestPreset, resolveTestConfig } from '@makaio/ai-adapters-core';
+import {
+  ConformanceConnectorRuntimeRegistry,
+  resolveConformanceTestPreset,
+  resolveTestConfig,
+} from '@makaio/ai-adapters-core';
 import { registerToolApprovalHandler } from '@makaio/ai-adapters-claude-shared';
+import {
+  acquireClaudeConformanceSessionConfigFixture,
+  closeClaudeConformanceConnectorRuntimes,
+  createClaudeConformanceProviderContext,
+} from '@makaio/ai-adapters-claude-process-shared/testing';
 import { MakaioBus } from '@makaio/bus-core';
 import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
 import { createClaudeAdapter, ClaudeCodeAdapterName } from './adapter.js';
@@ -11,6 +20,7 @@ import type { ClaudeCodeAgent } from './agent.js';
 import { createSessionAccountObservationRequester } from './account-observation-requester.js';
 import { ClaudeCodeConfig } from './config.js';
 import { providerIds, testPresetId } from './provider.js';
+import { adapterDefinition } from './definition.js';
 
 /**
  * Create a test configuration for conformance testing.
@@ -26,26 +36,37 @@ export const createTestConfig = async (
   const bus = await scopedBus();
   const testPreset = resolveConformanceTestPreset({
     adapterName: ClaudeCodeAdapterName,
-    defaultProviderId: testPresetId,
+    testProviderDefinitionId: testPresetId,
     providerIds,
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider);
+  const sessionConfigFixture = await acquireClaudeConformanceSessionConfigFixture();
+  const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<ClaudeCodeConnectorBus, ClaudeSdkConnector>();
 
   return {
-    createConnector: async (options) =>
-      new ClaudeSdkConnector({
-        ...(await ClaudeCodeConfig.getConfig(
-          resolveTestConfig(options, bus, testPreset.provider, testPreset.providers),
-        )),
+    createConnector: async (options) => {
+      const providerContext = options?.providerContext ?? testProviderContext;
+      const config = await ClaudeCodeConfig.getConfig({
+        ...resolveTestConfig({ ...options, providerContext }, bus, testPreset.provider, adapterDefinition.providers),
+        providerContextRequired: true,
         clientId: claudeClientDefinition.id,
-        // Conformance tests create `bus` via `Namespace.scopedBus()`, which is a
-        // typed view over the same MakaioBus context rather than a separate
-        // handler registry. Cross-namespace account observations still need the
-        // global client subject, so the requester intentionally targets
-        // MakaioBus here.
-        requestSessionAccountObservation: createSessionAccountObservationRequester(MakaioBus),
-      }),
+        globalBus: MakaioBus,
+      });
+      return connectorRuntimes.create({
+        config,
+        connectorFactory: (resolvedConfig) =>
+          new ClaudeSdkConnector({
+            ...resolvedConfig,
+            // Conformance tests create `bus` via `Namespace.scopedBus()`, which is a
+            // typed view over the same MakaioBus context rather than a separate
+            // handler registry. Cross-namespace account observations still need the
+            // global client subject, so the requester intentionally targets MakaioBus.
+            requestSessionAccountObservation: createSessionAccountObservationRequester(MakaioBus),
+          }),
+      });
+    },
     bus,
     registerToolApprovalHandler: (connector, context, globalBus) =>
       registerToolApprovalHandler(connector, ClaudeCodeConnectorSubjects, context, globalBus),
@@ -63,6 +84,7 @@ export const createTestConfig = async (
     },
     createAdapter: async (options) => createClaudeAdapter(options),
     adapterName: ClaudeCodeAdapterName,
-    testProviderContext: testPreset.providerContext,
+    testProviderContext,
+    cleanup: () => closeClaudeConformanceConnectorRuntimes(() => connectorRuntimes.closeAll(), sessionConfigFixture),
   };
 };

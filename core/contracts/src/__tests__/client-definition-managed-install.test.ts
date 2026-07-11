@@ -32,6 +32,7 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
     id: 'claude-code',
     name: 'Claude Code',
     version: '0.1.0',
+    authMethods: [],
     defaultApprovalPolicy: 'always-ask',
     ...overrides,
   };
@@ -575,6 +576,7 @@ describe('createClientDefinition — managed install integration', () => {
       id: 'claude-code',
       name: 'Claude Code',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'full-access',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {
@@ -601,6 +603,7 @@ describe('createClientDefinition — managed install integration', () => {
       id: 'codex',
       name: 'Codex',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {

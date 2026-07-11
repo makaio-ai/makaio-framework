@@ -5,11 +5,11 @@
 import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
 import { createGitHubCopilotSDKAdapter } from './adapter.js';
 import { GitHubCopilotSdkAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
-import { GitHubCopilotSdkCredentialSchema, GitHubCopilotSdkProviderConfigSchema } from './schemas.js';
+import { GitHubCopilotSdkProviderConfigSchema } from './schemas.js';
 import type { GitHubCopilotConnectorBus } from './namespaces/index.js';
 import type { GitHubCopilotConnector } from './connector.js';
 import type { GitHubCopilotAgent } from './agent.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 
 /**
  * GitHub Copilot adapter definition.
@@ -27,13 +27,11 @@ export const adapterDefinition: AIAdapterDefinition<
   displayName: 'GitHub Copilot',
   defaultPresetId,
   description: 'GitHub Copilot SDK integration',
-  providers: providerIds.map((definitionId) => ({ definitionId })),
+  providers: providerIds.map((definitionId) => ({ definitionId, auth: providerAuthById[definitionId] })),
   providerConfigSchema: GitHubCopilotSdkProviderConfigSchema,
-  providerCredentialSchema: GitHubCopilotSdkCredentialSchema,
   defaultTimeouts: DEFAULT_TIMEOUTS,
   helpLinks: [{ label: 'GitHub Copilot', url: 'https://github.com/features/copilot' }],
   clients: [{ id: 'github-copilot', version: '^0.1.0' }],
-  protocol: 'openai',
   instructions: `Use GitHub Copilot for AI-powered code suggestions.
 
 1. Ensure you have an active GitHub Copilot subscription

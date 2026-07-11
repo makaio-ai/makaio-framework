@@ -12,13 +12,13 @@ import { AdapterSubjects } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects, type BindingRecord } from '@makaio/services-core/adapter-subsystem';
 import { LogImportSubjects } from '@makaio/services-log-import/log-import';
-import type { AgentSelection, ProviderContext } from '@makaio/contracts';
+import type { AgentSelection, ResolvedProviderContext } from '@makaio/contracts';
 import type { LogImportMode } from '@makaio/services-log-import/log-import';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';
 import { ExtensionConfigStorageSubjects } from '@makaio/services-core/settings/storage/extension-configs/namespace';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ExtensionInfo } from '@makaio/kernel';
-import { buildProviderContext } from '@makaio/services-core/provider-context';
+import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
 import { onboardingStepRegistry, findCategory, deriveDefaultEnabled } from '@makaio/ui-kernel';
 import type { OnboardingStepDefinition as KernelOnboardingStepDefinition } from '@makaio/ui-kernel';
 import { persistPluginEnabled } from './plugin-persistence.js';
@@ -29,6 +29,7 @@ import { setOnboardingCompleted } from './skip-flag.js';
 import { scanOnboarding } from './scan-onboarding-adapters.js';
 import type { OnboardingAdapter, OnboardingClient } from './scan-onboarding-adapters.js';
 import { listProviderConfigSummaryViews, type ProviderConfigSummaryView } from '../provider-config/selectors.js';
+import { authDraftRequiresStorage, compileProviderConfigAuthDraft } from '../provider-config/auth-draft.js';
 import type {
   OnboardingFlowActions,
   OnboardingFlowState,
@@ -105,39 +106,39 @@ async function createOnboardingProviderConfig(
     await refreshProviderConfigs();
     return configId;
   }
-  const hasPlaintextCredentials = !!input.credentials && Object.keys(input.credentials).length > 0;
-  const hasCredentialRefs = !!input.credentialRefs && Object.keys(input.credentialRefs).length > 0;
-  if (hasPlaintextCredentials && !hasCredentialRefs) {
+  if (authDraftRequiresStorage(input.auth)) {
     throw new Error('useOnboardingFlow: plaintext provider-config creation requires a host-owned create bridge.');
   }
-  const { credentials: _credentials, ...createInput } = input;
-  const { config } = await MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, createInput);
+  const { auth } = compileProviderConfigAuthDraft(input.auth);
+  const { auth: _authDraft, ...configInput } = input;
+  const { config } = await MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
+    ...configInput,
+    auth,
+  });
   await refreshProviderConfigs();
   return config.id;
 }
 /**
  * Build the provider context for a health-check inference call.
  *
- * Selects the effective default binding for the adapter and assembles
- * credential refs + endpoint overrides into a {@link ProviderContext}.
+ * Selects the effective default binding for the adapter and resolves its
+ * adapter-qualified atomic runtime context.
  * Returns `undefined` for adapters with no usable provider binding
  * (e.g. local claude-code).
  * @param adapterName - Adapter type name to look up
- * @returns Provider context with credential refs, or undefined when no binding exists
+ * @returns Resolved provider context, or undefined when no binding exists
+ * @throws RuntimeProviderContextResolutionError when the selected binding is unavailable or incompatible
  */
-async function buildHealthCheckProviderContext(adapterName: string): Promise<ProviderContext | undefined> {
+async function resolveHealthCheckProviderContext(adapterName: string): Promise<ResolvedProviderContext | undefined> {
   const bindingResult = await MakaioBus.requestOptional(AdapterSubsystemSubjects.getDefaultBinding, { adapterName });
   if (!bindingResult.handled || !bindingResult.data.binding) {
     return undefined;
   }
   const { binding } = bindingResult.data;
-  try {
-    return await buildProviderContext(MakaioBus, binding.providerConfigId);
-  } catch (error) {
-    // Context build failure during health check is non-fatal; log so credential misconfiguration is visible.
-    console.warn(`[onboarding] buildProviderContext failed for ${binding.providerConfigId}:`, error);
-    return undefined;
-  }
+  return resolveRuntimeProviderContext(MakaioBus, {
+    adapterName: binding.adapterName,
+    providerConfigId: binding.providerConfigId,
+  });
 }
 /**
  * Core orchestrator hook for the onboarding flow.
@@ -273,6 +274,11 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
     healthCheckAbortMap.current.get(adapterName)?.abort();
     const abortController = new AbortController();
     healthCheckAbortMap.current.set(adapterName, abortController);
+    const clearCurrentAbortController = (): void => {
+      if (healthCheckAbortMap.current.get(adapterName) === abortController) {
+        healthCheckAbortMap.current.delete(adapterName);
+      }
+    };
 
     let adapterId: string;
     try {
@@ -285,6 +291,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       );
       adapterId = resolved.adapterId;
     } catch (err) {
+      clearCurrentAbortController();
       if (abortController.signal.aborted) return { status: 'pending' }; // guard: stale resolveId errors
       const message = err instanceof Error ? err.message : String(err);
       const result: HealthCheckResult = {
@@ -295,17 +302,16 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       return result;
     }
 
-    if (abortController.signal.aborted) return { status: 'pending' };
-    const providerContext = await buildHealthCheckProviderContext(adapterName);
-    if (abortController.signal.aborted) return { status: 'pending' };
-    const startMs = Date.now();
-    const inferPayload = {
-      adapterId,
-      prompt: HEALTH_CHECK_PROMPT,
-      ...(providerContext && { providerContext }),
-    };
-
     try {
+      if (abortController.signal.aborted) return { status: 'pending' };
+      const providerContext = await resolveHealthCheckProviderContext(adapterName);
+      if (abortController.signal.aborted) return { status: 'pending' };
+      const startMs = Date.now();
+      const inferPayload = {
+        adapterId,
+        prompt: HEALTH_CHECK_PROMPT,
+        ...(providerContext && { providerContext }),
+      };
       await MakaioBus.request(AdapterSubjects.infer, inferPayload, {
         timeout: HEALTH_CHECK_TIMEOUT_MS,
         signal: abortController.signal,
@@ -323,9 +329,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       setHealthCheckResults((prev) => new Map([...prev, [adapterName, result]]));
       return result;
     } finally {
-      if (healthCheckAbortMap.current.get(adapterName) === abortController) {
-        healthCheckAbortMap.current.delete(adapterName);
-      }
+      clearCurrentAbortController();
     }
   }, []);
 

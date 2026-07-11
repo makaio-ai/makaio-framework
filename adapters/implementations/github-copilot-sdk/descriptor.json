@@ -5,6 +5,14 @@
   "makaio": {
     "framework": ">=0.1.0"
   },
+  "dependencies": [
+    {
+      "type": "extension",
+      "name": "provider-github-copilot",
+      "version": ">=0.1.0",
+      "optional": true
+    }
+  ],
   "entrypoints": {
     "server": true
   },
@@ -20,7 +28,7 @@
             "version": "^0.1.0"
           }
         ],
-        "protocols": ["openai"]
+        "protocols": []
       }
     ]
   }

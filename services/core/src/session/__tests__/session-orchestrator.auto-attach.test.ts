@@ -12,12 +12,15 @@ import {
   CanonicalModelSubjects,
   CredentialSubjects,
   SessionSubjects,
+  defineAdapterProviderAuth,
+  type ResolvedProviderContext,
 } from '@makaio/contracts';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import type { IMakaioSession } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '../../adapter-runtime/index.js';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
 import { SessionBridge } from '../session-bridge.js';
+import type { AdapterRuntimeSnapshotResolution, ProviderRuntimeSnapshot } from '../../adapter-subsystem/schemas.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
@@ -41,6 +44,100 @@ import {
   collectUserMessageAcknowledgedEvents,
   type UnsubscribeFunction,
 } from '../testing/orchestrator-shared.js';
+
+/**
+ * Build a managed inferred context for auto-attach activation tests.
+ * @param providerConfigId - Provider config selected for the test.
+ * @param definitionId - Provider definition selected for the test.
+ * @returns Resolved provider context fixture.
+ */
+function makeProviderContext(providerConfigId: string, definitionId: string): ResolvedProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId,
+    definitionId,
+    auth: {
+      mode: 'inferred',
+      method: { owner: 'client', clientId: 'test-client', methodId: 'native' },
+      definition: { id: 'native', mode: 'inferred', label: 'Native account' },
+      account: { managerId: 'account-manager', accountId: 'account-1' },
+    },
+  };
+}
+
+/**
+ * Build the atomic provider snapshot consumed by auto-attach.
+ * @param providerContext - Resolved provider context represented by the snapshot.
+ * @returns Complete provider runtime snapshot fixture.
+ */
+function makeProviderRuntimeSnapshot(providerContext: ResolvedProviderContext): ProviderRuntimeSnapshot {
+  if (providerContext.auth.mode !== 'inferred') throw new Error('Expected inferred provider context fixture.');
+  return {
+    config: {
+      id: providerContext.providerConfigId,
+      definitionId: providerContext.definitionId,
+      name: 'Test Provider',
+      modelFilterMode: 'show-all' as const,
+      isDefault: false,
+      enabled: true,
+      auth: {
+        mode: providerContext.auth.mode,
+        method: providerContext.auth.method,
+        account: providerContext.auth.account,
+        hasCredentials: false as const,
+      },
+    },
+    context: providerContext,
+    definition: {
+      id: providerContext.definitionId,
+      packageName: '@makaio/provider-test',
+      name: 'Test Provider',
+      availableModels: [],
+      authMethods: [],
+      defaultModelFilterMode: 'show-all' as const,
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  };
+}
+
+/**
+ * Build an adapter-qualified atomic runtime resolution for auto-attach.
+ * @param providerContext - Resolved provider context represented by the snapshot.
+ * @param adapterName - Adapter selected by the runtime request.
+ * @returns Successful adapter runtime resolution fixture.
+ */
+function makeAdapterRuntimeResolution(
+  providerContext: ResolvedProviderContext,
+  adapterName: string,
+): AdapterRuntimeSnapshotResolution {
+  if (providerContext.auth.mode !== 'inferred') throw new Error('Expected inferred provider context fixture.');
+  const clientId = providerContext.auth.method.clientId;
+  return {
+    status: 'resolved' as const,
+    runtime: {
+      snapshot: makeProviderRuntimeSnapshot(providerContext),
+      adapterName,
+      adapterClientId: clientId,
+      adapterProviderAuth: defineAdapterProviderAuth({
+        bindings: [
+          {
+            method: providerContext.auth.method,
+            deliveries: [{ kind: 'native-client' as const, clientId }],
+          },
+        ],
+        scrubEnvVars: ['TEST_API_KEY'],
+      }),
+      compatibleProviderAuths: [],
+      runtimePackages: {
+        adapter: { packageName: '@makaio/adapter-test' },
+        provider: { packageName: '@makaio/provider-test', definitionId: providerContext.definitionId },
+        client: { packageName: '@makaio/client-test', clientId },
+      },
+    },
+  };
+}
 
 describe('SessionOrchestrator - Auto-attach', () => {
   let orchestrator: SessionOrchestrator;
@@ -186,6 +283,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
 
       const order: string[] = [];
+      let credentialActivated = false;
       const runtimeUpdates: Array<{ agentId: string; providerConfigId?: string }> = [];
       let receivedPayload: Record<string, unknown> | undefined;
       let startedAgentId: string | undefined;
@@ -202,22 +300,16 @@ describe('SessionOrchestrator - Auto-attach', () => {
         );
       }
       unsubscribers.push(
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
+        MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
           expect(ctx.payload.providerConfigId).toBe(providerConfigId);
-          ctx.setResult({
-            context: {
-              providerConfigId,
-              definitionId,
-              credentialRefs: { apiKey: buildStoredCredentialRef(providerConfigId, 'apiKey') },
-            },
-          });
+          const providerContext = makeProviderContext(providerConfigId, definitionId);
+          ctx.setResult(makeAdapterRuntimeResolution(providerContext, ctx.payload.adapterName));
         }),
       );
       unsubscribers.push(
         MakaioBus.on(CredentialSubjects.activate, (ctx) => {
-          order.push('activate');
-          expect(ctx.payload.providerConfigId).toBe(providerConfigId);
-          ctx.setResult({});
+          credentialActivated = true;
+          ctx.setResult({ success: true });
         }),
       );
       unsubscribers.push(
@@ -227,21 +319,23 @@ describe('SessionOrchestrator - Auto-attach', () => {
           const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
           startedAgentId = agentId;
           const adapterSessionId = `adapter-session-${sessionId}`;
+          const adapterId = ctx.payload.adapterId;
+          if (adapterId === null || adapterId === undefined) throw new Error('Expected resolved adapter id.');
           ctx.setResult({
             success: true as const,
             agentId,
-            adapterId: ctx.payload.adapterId,
+            adapterId,
             adapterSessionId,
             sessionId,
           });
-          emitAgentAdded({ sessionId, agentId, adapterId: ctx.payload.adapterId, adapterSessionId });
+          emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
         }),
       );
       unsubscribers.push(
         MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
           runtimeUpdates.push({
             agentId: ctx.payload.agentId,
-            providerConfigId: ctx.payload.providerConfigId,
+            providerConfigId: ctx.payload.providerConfigId ?? undefined,
           });
           ctx.setResult({ success: true });
         }),
@@ -256,7 +350,8 @@ describe('SessionOrchestrator - Auto-attach', () => {
         message: 'Hello!',
       });
 
-      expect(order).toEqual(['activate', 'start']);
+      expect(order).toEqual(['start']);
+      expect(credentialActivated).toBe(false);
       expect(receivedPayload).toMatchObject({
         ...(resolvedModel !== undefined && { model: resolvedModel }),
         providerContext: {
@@ -280,26 +375,21 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
       const runtimeUpdates: Array<{ agentId: string; providerConfigId?: string }> = [];
       let receivedPayload: Record<string, unknown> | undefined;
-      let buildProviderContextCalled = false;
+      let runtimeContextResolved = false;
       let credentialActivated = false;
       let startedAgentId: string | undefined;
 
       unsubscribers.push(
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-          buildProviderContextCalled = true;
-          ctx.setResult({
-            context: {
-              providerConfigId: ctx.payload.providerConfigId,
-              definitionId: 'unexpected-provider-def',
-              credentialRefs: {},
-            },
-          });
+        MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+          runtimeContextResolved = true;
+          const resolved = makeProviderContext(ctx.payload.providerConfigId, 'unexpected-provider-def');
+          ctx.setResult(makeAdapterRuntimeResolution(resolved, ctx.payload.adapterName));
         }),
       );
       unsubscribers.push(
         MakaioBus.on(CredentialSubjects.activate, (ctx) => {
           credentialActivated = true;
-          ctx.setResult({});
+          ctx.setResult({ success: true });
         }),
       );
       unsubscribers.push(
@@ -308,21 +398,23 @@ describe('SessionOrchestrator - Auto-attach', () => {
           const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
           startedAgentId = agentId;
           const adapterSessionId = `adapter-session-${sessionId}`;
+          const adapterId = ctx.payload.adapterId;
+          if (adapterId === null || adapterId === undefined) throw new Error('Expected resolved adapter id.');
           ctx.setResult({
             success: true as const,
             agentId,
-            adapterId: ctx.payload.adapterId,
+            adapterId,
             adapterSessionId,
             sessionId,
           });
-          emitAgentAdded({ sessionId, agentId, adapterId: ctx.payload.adapterId, adapterSessionId });
+          emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
         }),
       );
       unsubscribers.push(
         MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
           runtimeUpdates.push({
             agentId: ctx.payload.agentId,
-            providerConfigId: ctx.payload.providerConfigId,
+            providerConfigId: ctx.payload.providerConfigId ?? undefined,
           });
           ctx.setResult({ success: true });
         }),
@@ -337,7 +429,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
         message: 'Hello!',
       });
 
-      expect(buildProviderContextCalled).toBe(false);
+      expect(runtimeContextResolved).toBe(false);
       expect(credentialActivated).toBe(false);
       expect(receivedPayload).not.toHaveProperty('providerContext');
       expect(sessions.get(sessionId)?.agents[0]?.providerConfigId).toBeUndefined();

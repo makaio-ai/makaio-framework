@@ -25,6 +25,8 @@ import {
   type DynamicToolCallResponse,
 } from '../dynamic-tool-handling.js';
 import { initializeConnection, type ConnectionManagerContext } from './connection-manager.js';
+import { resolveCodexApiKeyAccountLogin, type CodexApiKeyAccountLogin } from './account-login.js';
+import { abortCodexConnection, closeCodexConnection } from './connector-shutdown.js';
 import {
   startThread,
   processQueue,
@@ -65,28 +67,20 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   /** Pending resolvers for {@link waitForCommandInfo}, keyed by itemId. */
   private readonly commandInfoWaiters = new Map<string, (info: { command: string; cwd: string }) => void>();
   private disabledNativeTools: ReadonlySet<string> = new Set();
+  /** Private connector delivery retained only until this connector closes. */
+  private accountLogin: CodexApiKeyAccountLogin | undefined;
 
   /** Stable contexts passed to connection-manager and turn-flow-handlers; state accessed via closures. */
   private readonly connCtx: ConnectionManagerContext;
   private readonly turnCtx: TurnFlowContext;
 
   public constructor(config: CodexAppServerConfig) {
-    super({
-      bus: config.bus,
-      globalBus: config.globalBus,
-      adapterId: config.adapterId,
-      adapterName: config.adapterName ?? 'codex-app-server',
-      agentId: config.agentId,
-      model: config.model,
-      cwd: config.cwd,
-      env: config.env,
-      onMessageSent: config.onMessageSent,
-      toolLedger: config.toolLedger,
-      reasoningEffort: config.reasoningEffort,
-      clientId: config.clientId,
-      harnessId: config.harnessId,
-      providerContext: config.providerContext,
-    });
+    const { adapterAuth, ...baseConfig } = config;
+    // A missing host environment is a closed input. The central runtime passes
+    // the finalized environment explicitly; direct construction must not fall
+    // back to ambient process authentication in the base connector.
+    super({ ...baseConfig, env: baseConfig.env ?? {} });
+    this.accountLogin = resolveCodexApiKeyAccountLogin(adapterAuth);
 
     const fullConfig = config as CodexAppServerConfig & {
       providerConfig?: { approvalPolicy?: string; sandboxMode?: string; reasoningEffort?: string };
@@ -140,10 +134,10 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       cwd: this.cwd,
       env: this.env,
       adapterName: this.adapterName,
-      providerContext: this.config.providerContext,
       clientId: this.config.clientId,
+      clientExecution: this.config.clientExecution,
+      getAccountLogin: () => this.accountLogin,
       harnessId: this.config.harnessId,
-      bus: this.config.bus,
       globalBus: this.globalBus,
       registerClientHandlers: () => this.registerClientHandlers(),
       handleError: (error, terminate) => this.handleError(error, terminate),
@@ -406,14 +400,24 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   public abort(): void {
     if (this.isTerminated) return;
     this.isTerminated = true;
-    this.jsonRpcClient?.close();
+    abortCodexConnection({
+      closeClient: () => this.jsonRpcClient?.close(),
+      discardAuth: () => {
+        this.accountLogin = undefined;
+      },
+    });
   }
 
   public async close(): Promise<void> {
     if (this.isTerminated) return;
     this.isTerminated = true;
-    await this.archiveThread();
-    this.jsonRpcClient?.close();
+    await closeCodexConnection({
+      archive: () => this.archiveThread(),
+      closeClient: () => this.jsonRpcClient?.close(),
+      discardAuth: () => {
+        this.accountLogin = undefined;
+      },
+    });
   }
 
   // jsonRpcClient is guaranteed initialized: archiveThread is only called
@@ -424,14 +428,10 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     const archiveRequest = this.jsonRpcClient?.request('thread/archive', { threadId });
     if (!archiveRequest) return;
 
-    try {
-      await Promise.race([
-        archiveRequest,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('archive timeout')), 2000)),
-      ]);
-    } catch {
-      // Best-effort — process may already be unresponsive
-    }
+    await Promise.race([
+      archiveRequest,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('archive timeout')), 2000)),
+    ]);
   }
 
   protected acceptsImmediate(): boolean {

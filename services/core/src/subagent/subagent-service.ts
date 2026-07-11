@@ -22,7 +22,10 @@ import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import type { ExecutionTarget } from '@makaio/services-core/execution-target';
 import { ExecutionTargetSubjects } from '../execution-target/namespace.js';
 import { SessionStorageSubjects } from '../session/storage/namespace.js';
-import { activateProviderContext, buildProviderContext } from '@makaio/services-core/provider-context';
+import {
+  resolveRuntimeProviderContext,
+  RuntimeProviderContextResolutionError,
+} from '@makaio/services-core/provider-context';
 import { SubagentManager } from './manager/index.js';
 import {
   handleGetStatusRpc,
@@ -60,6 +63,20 @@ type ExecuteSubagentPayload = ExtractSubjectPayload<typeof SubagentSubjects.exec
 type ToChildPayload = ExtractSubjectPayload<typeof SubagentSubjects.toChild>;
 type ChildSessionCreatePayload = ExtractSubjectPayload<typeof SessionSubjects.create>;
 type AgentCompletePayload = ExtractSubjectPayload<typeof AgentSubjects.complete>;
+
+/** Stable failures while finalizing a failed subagent spawn. */
+export type SubagentFailureFinalizationErrorCode = 'child-session-close-failed' | 'failure-publication-failed';
+
+/** Credential-free diagnostic for one failed spawn-finalization operation. */
+export class SubagentFailureFinalizationError extends Error {
+  /**
+   * @param code - Stable finalization failure category.
+   */
+  public constructor(public readonly code: SubagentFailureFinalizationErrorCode) {
+    super(`Subagent failure finalization failed (${code}).`);
+    this.name = 'SubagentFailureFinalizationError';
+  }
+}
 
 /**
  * Orchestrates subagent execution lifecycle.
@@ -407,12 +424,31 @@ export class SubagentService extends BaseService {
       adapterName,
       ...(this.machineId !== undefined && { machineId: this.machineId }),
     });
-    const providerContext =
-      config.providerContext ??
-      (config.providerConfigId ? await buildProviderContext(this.bus, config.providerConfigId) : undefined);
-    if (providerContext !== undefined) {
-      await activateProviderContext(this.bus, providerContext);
+    const suppliedProviderContext = config.providerContext;
+    if (
+      suppliedProviderContext?.state === 'resolved' &&
+      config.providerConfigId !== undefined &&
+      config.providerConfigId !== suppliedProviderContext.providerConfigId
+    ) {
+      throw new Error(
+        `Subagent providerConfigId "${config.providerConfigId}" does not match its resolved provider context "${suppliedProviderContext.providerConfigId}".`,
+      );
     }
+    if (suppliedProviderContext?.state === 'unresolved' && config.providerConfigId !== undefined) {
+      throw new RuntimeProviderContextResolutionError(
+        'provider-context-unresolved',
+        adapterName,
+        config.providerConfigId,
+      );
+    }
+    const providerContext =
+      suppliedProviderContext ??
+      (config.providerConfigId
+        ? await resolveRuntimeProviderContext(this.bus, {
+            adapterName,
+            providerConfigId: config.providerConfigId,
+          })
+        : undefined);
     const result = await this.bus.request(AdapterSubjects.startAgent, {
       adapterId,
       role: 'lead',
@@ -442,6 +478,7 @@ export class SubagentService extends BaseService {
    * @param phase - Spawn phase where failure occurred
    * @param reason - Error object or message
    * @returns Normalized error message
+   * @throws AggregateError when child cleanup or failure publication also fails.
    */
   private async failSpawn(
     subagentId: string,
@@ -449,10 +486,29 @@ export class SubagentService extends BaseService {
     phase: SubagentExecutionFailed['phase'],
     reason: unknown,
   ): Promise<string> {
-    const error = reason instanceof Error ? reason.message : String(reason);
-    this.manager.markFailed(subagentId, error);
-    await this.emitExecutionFailed(subagentId, parentSessionId, phase, reason);
-    return error;
+    const primaryFailure = reason instanceof Error ? reason : new Error(String(reason));
+    this.manager.markFailed(subagentId, primaryFailure.message);
+
+    const [closeResult, publicationResult] = await Promise.allSettled([
+      this.manager.get(subagentId)?.childSessionId !== undefined
+        ? this.requestChildSessionClose(subagentId)
+        : Promise.resolve(),
+      this.emitExecutionFailed(subagentId, parentSessionId, phase, primaryFailure),
+    ]);
+    const finalizationFailures: SubagentFailureFinalizationError[] = [];
+    if (closeResult.status === 'rejected') {
+      finalizationFailures.push(new SubagentFailureFinalizationError('child-session-close-failed'));
+    }
+    if (publicationResult.status === 'rejected') {
+      finalizationFailures.push(new SubagentFailureFinalizationError('failure-publication-failed'));
+    }
+    if (finalizationFailures.length > 0) {
+      throw new AggregateError(
+        [primaryFailure, ...finalizationFailures],
+        'Subagent spawn failed and failure finalization also failed.',
+      );
+    }
+    return primaryFailure.message;
   }
 
   /**
@@ -592,6 +648,22 @@ export class SubagentService extends BaseService {
    * @param subagentId - Subagent whose child session should be closed.
    */
   private async closeChildSession(subagentId: string): Promise<void> {
+    try {
+      await this.requestChildSessionClose(subagentId);
+    } catch {
+      console.error(
+        `[SubagentService] Failed to close child session for subagent ${subagentId}:`,
+        new SubagentFailureFinalizationError('child-session-close-failed'),
+      );
+    }
+  }
+
+  /**
+   * Close a tracked child session while preserving failures for transactional callers.
+   * @param subagentId - Subagent whose child session should be closed.
+   * @throws Error when the session close request fails.
+   */
+  private async requestChildSessionClose(subagentId: string): Promise<void> {
     const tracked = this.manager.get(subagentId);
     if (!tracked) return;
     if (!tracked.childSessionId) {
@@ -599,12 +671,7 @@ export class SubagentService extends BaseService {
       return;
     }
     this.pendingChildSessionClose.delete(subagentId);
-
-    try {
-      await this.bus.request(SessionSubjects.close, { sessionId: tracked.childSessionId });
-    } catch (err) {
-      console.error(`[SubagentService] Failed to close child session for subagent ${subagentId}:`, err);
-    }
+    await this.bus.request(SessionSubjects.close, { sessionId: tracked.childSessionId });
   }
 
   /**
@@ -724,15 +791,11 @@ export class SubagentService extends BaseService {
     err: unknown,
   ): Promise<void> {
     const error = err instanceof Error ? err.message : String(err);
-    await this.bus
-      .emit(SubagentSubjects.executionFailed, {
-        subagentId,
-        parentSessionId,
-        phase,
-        error,
-      })
-      .catch((emitErr) => {
-        console.error('[SubagentService] Failed to emit executionFailed:', emitErr);
-      });
+    await this.bus.emit(SubagentSubjects.executionFailed, {
+      subagentId,
+      parentSessionId,
+      phase,
+      error,
+    });
   }
 }

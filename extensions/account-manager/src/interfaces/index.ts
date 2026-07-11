@@ -1,4 +1,10 @@
-export type { ICredentialSource, RawCredential } from './credential-source.js';
+export type {
+  ICredentialSource,
+  NativeCredentialCoordination,
+  NativeCredentialRollbackResult,
+  PreparedNativeCredentialMutation,
+  RawCredential,
+} from './credential-source.js';
 export type {
   AccountTimelineReason,
   IAccountCredentialStore,

@@ -6,6 +6,7 @@
   "private": true,
   "exports": {
     ".": "./src/index.ts",
+    "./managed-install": "./src/managed-install.ts",
     "./package.json": "./package.json"
   },
   "makaio": {
@@ -47,6 +48,7 @@
   "publishConfig": {
     "exports": {
       ".": "./dist/index.mjs",
+      "./managed-install": "./dist/managed-install.mjs",
       "./package.json": "./package.json"
     }
   },

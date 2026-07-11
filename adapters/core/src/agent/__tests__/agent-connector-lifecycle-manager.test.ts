@@ -17,10 +17,11 @@ describe('AgentConnectorLifecycleManager', () => {
         emitIdle: async () => {
           throw new Error('emit idle failed');
         },
-        getConnector: () => ({}) as never,
-        setConnector: () => {},
+        getConnectorRuntime: () => ({ connector: {} }) as never,
+        setConnectorRuntime: () => {},
         getRuntimeSystemPrompt: () => undefined,
         setLastKnownAdapterSessionId: () => {},
+        reportCleanupFailure: () => {},
       });
 
       const connector = {
@@ -38,5 +39,41 @@ describe('AgentConnectorLifecycleManager', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it('removes replacement wiring when initialization rolls back', async () => {
+    const replacementUnsubscribe = vi.fn();
+    const replacementClose = vi.fn(async () => {});
+    const previousConnector = {
+      cwd: '/workspace',
+      model: 'model-a',
+      getProcessingState: () => 'idle',
+    };
+    const replacementConnector = {
+      onProcessingStateChanged: () => replacementUnsubscribe,
+      initialize: async () => {
+        throw new Error('replacement initialization failed');
+      },
+      close: replacementClose,
+    };
+    const manager = new AgentConnectorLifecycleManager({
+      agentId: 'agent-test',
+      buildConfigInput: () => ({}) as never,
+      configFactory: async () => ({ adapterId: 'adapter-test' }) as never,
+      connectorFactory: async () => replacementConnector as never,
+      createOnMessageSent: () => () => {},
+      wireEvents: async () => {},
+      emitIdle: async () => {},
+      getConnectorRuntime: () => ({ connector: previousConnector }) as never,
+      setConnectorRuntime: () => {},
+      getRuntimeSystemPrompt: () => undefined,
+      setLastKnownAdapterSessionId: () => {},
+      reportCleanupFailure: () => {},
+    });
+
+    await expect(manager.swapConnector()).rejects.toThrow('replacement initialization failed');
+
+    expect(replacementUnsubscribe).toHaveBeenCalledOnce();
+    expect(replacementClose).toHaveBeenCalledOnce();
   });
 });

@@ -1,1 +1,1 @@
-export { keychainRead, keychainWrite } from '@makaio/utils/keychain';
+export { keychainDelete, keychainRead, keychainWrite } from '@makaio/utils/keychain';

@@ -1,6 +1,5 @@
 import type { ProviderDefinition, ProviderAIModel } from '@makaio/contracts';
 import { type BindingRecord } from '../../adapter-subsystem/index.js';
-import type { ProviderConfigRecord, ProviderConfigSummary } from '../../provider-config/types.js';
 
 /**
  * Builds a minimal binding record for use in tests.
@@ -17,41 +16,13 @@ export function makeBinding(overrides: Partial<BindingRecord> = {}): BindingReco
 }
 
 /**
- * Builds a minimal {@link ProviderConfigRecord} for use in tests.
+ * Builds the ID-only provider-config lookup shape used by the resolver seam.
  * @param overrides - Field overrides
  * @returns Provider config record
  */
-export function makeConfigRecord(overrides: Partial<ProviderConfigRecord> = {}): ProviderConfigRecord {
+export function makeConfigRecord(overrides: Partial<{ readonly id: string }> = {}): { readonly id: string } {
   return {
     id: 'config-1',
-    definitionId: 'def-1',
-    name: 'Anthropic Default',
-    isDefault: true,
-    enabled: true,
-    isSentinel: false,
-    modelFilterMode: 'show-all',
-    createdAt: 0,
-    updatedAt: 0,
-    ...overrides,
-  };
-}
-
-/**
- * Builds a minimal {@link ProviderConfigSummary} for use in tests.
- * @param overrides - Field overrides
- * @returns Provider config summary
- */
-export function makeConfigSummary(overrides: Partial<ProviderConfigSummary> = {}): ProviderConfigSummary {
-  return {
-    id: 'config-1',
-    definitionId: 'def-1',
-    name: 'Anthropic Default',
-    isDefault: true,
-    enabled: true,
-    isSentinel: false,
-    modelFilterMode: 'show-all',
-    hasCredentials: false,
-    supportedProtocols: [],
     ...overrides,
   };
 }
@@ -65,6 +36,7 @@ export function makeDefinition(overrides: Partial<ProviderDefinition> = {}): Pro
   return {
     id: 'def-1',
     name: 'Anthropic',
+    authMethods: [],
     availableModels: [],
     ...overrides,
   };

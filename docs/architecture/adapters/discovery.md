@@ -58,7 +58,6 @@ interface AdapterContribution<TAdapter = unknown> {
 | `createAdapter` | `function` | Factory: `(options?) => Promise<TAdapter>` |
 | `adapterConfigSchema?` | Zod schema | Adapter-level config schema |
 | `providerConfigSchema?` | Zod schema | Default config schema for providers |
-| `providerCredentialSchema?` | Zod schema | Default credential schema |
 | `helpLinks?` | array | External help links for UI |
 | `instructions?` | `string` | Setup instructions |
 | `clientId?` | `string` | Client identifier for binary management |

@@ -1,165 +1,126 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createChannelEndpoint, MakaioBus } from '@makaio/bus-core';
-import { CredentialSubjects } from '@makaio/contracts';
-import { buildStoredCredentialRef, type AdapterFile, type ProviderConfigFile } from '@makaio/contracts/config';
+import { MakaioBus, RequestError } from '@makaio/bus-core';
+import { AuthCredentialRefSchema, type ProviderAuthMethodDefinition } from '@makaio/contracts/auth';
+import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
 import {
   AdapterSubsystemSubjects,
   type AdapterFileConfigSet,
   type IAdapterConfigRepository,
   type ProviderConfigFileSet,
 } from '@makaio/services-core/adapter-subsystem';
-import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
-import type { ChannelEndpoint } from '@makaio/bus-core';
-import { AdapterSubsystemService } from '@makaio/subsystem-adapter';
-import type { ExtensionCoordinator } from '@makaio/kernel';
-import { resolveProviderResolution } from '../resolve-provider-resolution.js';
+import { ProviderStorageSubjects, type ProviderRecord } from '@makaio/services-core/settings/storage';
+import { AdapterSubsystemService, ProviderConfigAuthValidationError } from '@makaio/subsystem-adapter';
+import { ExtensionCoordinator } from '@makaio/kernel';
+import { resolveProviderResolution, ProviderResolutionError } from '../resolve-provider-resolution.js';
 
-const TEST_CHANNEL_TOKEN = 'resolve-provider-resolution-test-token';
+const API_KEY_METHOD = {
+  id: 'api-key',
+  mode: 'explicit',
+  label: 'API key',
+  fields: [
+    {
+      id: 'apiKey',
+      label: 'API key',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment', variable: 'PROVIDER_API_KEY' }],
+    },
+  ],
+} satisfies ProviderAuthMethodDefinition;
 
-let resolveStore: Map<string, string | null>;
+const PROVIDER_CONFIG: ProviderConfigFile = {
+  $schema: 'makaio/provider-config/v2',
+  definitionId: 'provider-1',
+  name: 'Provider Config',
+  auth: {
+    mode: 'explicit',
+    method: { owner: 'provider', providerDefinitionId: 'provider-1', methodId: 'api-key' },
+    credentialRefs: { apiKey: AuthCredentialRefSchema.parse('env:PROVIDER_API_KEY') },
+  },
+  endpointOverrides: { anthropic: 'https://override.example.com' },
+  modelFilterMode: 'show-all',
+  isDefault: true,
+  enabled: true,
+};
+
+const PROVIDER_RECORD: ProviderRecord = {
+  id: 'provider-1',
+  packageName: '@makaio/provider-test',
+  name: 'Provider',
+  endpoints: { anthropic: 'https://default.example.com' },
+  availableModels: [],
+  authMethods: [API_KEY_METHOD],
+  defaultModelFilterMode: 'show-all',
+  enabled: true,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
 let cleanupFns: Array<() => void | Promise<void>>;
-let channelEndpoint: ChannelEndpoint | null;
 let subsystemService: AdapterSubsystemService | null;
 
-interface ProviderResolutionFixtureOptions {
-  readonly providerConfigId?: string;
-  readonly definitionId?: string;
-  readonly endpointOverrides?: Record<string, string>;
-  readonly credentialRefs?: Record<string, ReturnType<typeof buildStoredCredentialRef>>;
-  readonly providerEndpoints?: Record<string, string>;
-  readonly providerExists?: boolean;
-  readonly onProviderLookup?: (providerId: string) => void;
-}
-
 class ProviderResolutionRepository implements IAdapterConfigRepository {
-  public constructor(
-    private readonly providerConfigs: Map<string, ProviderConfigFile>,
-    private readonly adapters: Map<string, AdapterFile>,
-  ) {}
+  public constructor(private readonly providerConfigs: Map<string, ProviderConfigFile>) {}
 
   public async loadAdapterConfigs(): Promise<AdapterFileConfigSet> {
-    return { configs: new Map([...this.adapters.entries()].map(([name, config]) => [name, structuredClone(config)])) };
+    return { configs: new Map<string, AdapterFile>() };
   }
 
   public async loadProviderConfigs(): Promise<ProviderConfigFileSet> {
-    return {
-      configs: new Map([...this.providerConfigs.entries()].map(([id, config]) => [id, structuredClone(config)])),
-    };
+    return { configs: new Map([...this.providerConfigs].map(([id, config]) => [id, structuredClone(config)])) };
   }
 
-  public async writeProviderConfig(): Promise<void> {
-    throw new Error('resolve-provider-resolution tests should not write provider configs');
+  public async writeProviderConfig(id: string, config: ProviderConfigFile): Promise<void> {
+    this.providerConfigs.set(id, structuredClone(config));
   }
 
   public async deleteProviderConfig(): Promise<boolean> {
-    throw new Error('resolve-provider-resolution tests should not delete provider configs');
+    throw new Error('Provider resolution tests must not delete provider configs.');
   }
 
   public async writeAdapterFile(): Promise<void> {
-    throw new Error('resolve-provider-resolution tests should not write adapter configs');
+    throw new Error('Provider resolution tests must not write adapter configs.');
   }
 
   public async deleteAdapterFile(): Promise<boolean> {
-    throw new Error('resolve-provider-resolution tests should not delete adapter configs');
+    throw new Error('Provider resolution tests must not delete adapter configs.');
   }
 }
 
 /**
- * Register the credential channel used by provider-resolution tests.
- * @returns Nothing. Installs channel cleanup into the shared cleanup list.
+ * Register the real adapter subsystem and provider-definition read handler.
+ * @param options - Optional provider configs and definition-read behavior
+ * @returns Promise resolved after subsystem initialization
  */
-function setupCredentialBus(): void {
-  cleanupFns.push(
-    MakaioBus.on(CredentialSubjects.getChannelToken, (ctx) => {
-      ctx.setResult({ token: TEST_CHANNEL_TOKEN });
-    }),
-  );
-
-  channelEndpoint = createChannelEndpoint(
-    MakaioBus.getContext(),
-    'credentials',
-    (channel) => {
-      channel.on(CredentialSubjects.resolve, (ctx) => {
-        const { ref } = ctx.payload;
-        if (!resolveStore.has(ref)) {
-          ctx.setResult({ value: null, error: `Ref not found: ${ref}` });
-          return;
-        }
-        ctx.setResult({ value: resolveStore.get(ref) ?? null });
-      });
-    },
-    { token: TEST_CHANNEL_TOKEN },
-  );
-
-  cleanupFns.push(() => channelEndpoint?.close());
-}
-
-/**
- * Register a real adapter-subsystem service plus provider definition lookup.
- * @param options - Canonical provider-config/provider-definition fixture options.
- * @returns Nothing. Installs service cleanup into the shared cleanup list.
- */
-function registerProviderResolutionHandlers(options: ProviderResolutionFixtureOptions = {}): void {
-  const definitionId = options.definitionId ?? 'provider-1';
-  const providerConfigId = options.providerConfigId ?? 'cfg-1';
-  const repository = new ProviderResolutionRepository(
-    new Map<string, ProviderConfigFile>([
-      [
-        providerConfigId,
-        {
-          $schema: 'makaio/provider-config/v1',
-          definitionId,
-          name: 'Provider Config',
-          ...(options.endpointOverrides ? { endpointOverrides: options.endpointOverrides } : {}),
-          ...(options.credentialRefs ? { credentials: options.credentialRefs } : {}),
-          modelFilterMode: 'show-all',
-          isDefault: true,
-          enabled: true,
-          isSentinel: false,
-        },
-      ],
-    ]),
-    new Map(),
-  );
+async function setupResolution(options?: {
+  readonly configs?: Map<string, ProviderConfigFile>;
+  readonly resolveProvider?: (readIndex: number) => ProviderRecord | null | Promise<ProviderRecord | null>;
+}): Promise<void> {
   subsystemService = new AdapterSubsystemService({
     bus: MakaioBus,
-    configRepository: repository,
-    coordinator: { registerContributionProcessor: () => () => {} } as unknown as ExtensionCoordinator,
+    configRepository: new ProviderResolutionRepository(
+      options?.configs ?? new Map([['cfg-1', structuredClone(PROVIDER_CONFIG)]]),
+    ),
+    coordinator: new ExtensionCoordinator(MakaioBus),
     machineId: 'test-machine',
     platformDefaults: {},
   });
   cleanupFns.push(() => subsystemService?.destroy().catch(() => undefined));
 
+  let readIndex = 0;
   cleanupFns.push(
-    MakaioBus.on(ProviderStorageSubjects.get, (ctx) => {
-      options.onProviderLookup?.(ctx.payload.id);
-      if (options.providerExists === false) {
-        ctx.setResult({ provider: null });
-        return;
-      }
+    MakaioBus.on(ProviderStorageSubjects.get, async (ctx) => {
+      readIndex += 1;
       ctx.setResult({
-        provider: {
-          id: ctx.payload.id,
-          packageName: '@makaio/provider-test',
-          name: 'Provider',
-          endpoints: options.providerEndpoints ?? {
-            anthropic: 'https://default.example.com',
-          },
-          availableModels: [],
-          defaultModelFilterMode: 'show-all',
-          enabled: true,
-          createdAt: 1,
-          updatedAt: 1,
-        },
+        provider: options?.resolveProvider ? await options.resolveProvider(readIndex) : PROVIDER_RECORD,
       });
     }),
   );
+  await subsystemService.init();
 }
 
 beforeEach(() => {
-  resolveStore = new Map();
   cleanupFns = [];
-  channelEndpoint = null;
   subsystemService = null;
   MakaioBus.__resetHandlers?.();
 });
@@ -168,214 +129,106 @@ afterEach(async () => {
   for (const cleanup of cleanupFns) {
     await cleanup();
   }
-  cleanupFns = [];
-  channelEndpoint = null;
-  subsystemService = null;
   MakaioBus.__resetHandlers?.();
 });
 
 describe('resolveProviderResolution', () => {
-  it('combines the canonical config read with runtime context assembly', async () => {
-    setupCredentialBus();
-    resolveStore.set(buildStoredCredentialRef('cfg-1', 'apiKey'), 'sk-test-123');
-    let requestedProviderId: string | null = null;
+  it('returns the safe config, definition, endpoint, and refs-only normalized auth', async () => {
+    await setupResolution();
 
-    registerProviderResolutionHandlers({
-      endpointOverrides: {
-        anthropic: 'https://override.example.com',
-      },
-      credentialRefs: {
-        apiKey: buildStoredCredentialRef('cfg-1', 'apiKey'),
-      },
-      onProviderLookup: (providerId) => {
-        requestedProviderId = providerId;
-      },
-    });
-    await subsystemService?.init();
+    const result = await resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic');
 
-    await expect(resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic')).resolves.toEqual({
+    expect(result).toEqual({
       config: {
         id: 'cfg-1',
         definitionId: 'provider-1',
         name: 'Provider Config',
-        endpointOverrides: {
-          anthropic: 'https://override.example.com',
-        },
+        endpointOverrides: { anthropic: 'https://override.example.com' },
         modelFilterMode: 'show-all',
         isDefault: true,
         enabled: true,
-        isSentinel: false,
-        hasCredentials: true,
-      },
-      definition: {
-        id: 'provider-1',
-        packageName: '@makaio/provider-test',
-        name: 'Provider',
-        endpoints: {
-          anthropic: 'https://default.example.com',
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'provider-1', methodId: 'api-key' },
+          hasCredentials: true,
         },
-        availableModels: [],
-        defaultModelFilterMode: 'show-all',
-        enabled: true,
-        createdAt: 1,
-        updatedAt: 1,
       },
+      definition: PROVIDER_RECORD,
       baseUrl: 'https://override.example.com',
-      credentials: {
-        apiKey: 'sk-test-123',
+      auth: {
+        mode: 'explicit',
+        method: { owner: 'provider', providerDefinitionId: 'provider-1', methodId: 'api-key' },
+        definition: API_KEY_METHOD,
+        credentialRefs: { apiKey: 'env:PROVIDER_API_KEY' },
       },
     });
-    expect(requestedProviderId).toBe('provider-1');
+    expect(result).not.toHaveProperty('credentials');
   });
 
-  it('uses separate canonical config and runtime context reads', async () => {
-    setupCredentialBus();
-    resolveStore.set(buildStoredCredentialRef('cfg-1', 'apiKey'), 'sk-test-123');
-    let providerConfigReads = 0;
-    let providerContextReads = 0;
+  it('uses the definition endpoint when the config has no override', async () => {
+    const config = structuredClone(PROVIDER_CONFIG);
+    delete config.endpointOverrides;
+    await setupResolution({ configs: new Map([['cfg-1', config]]) });
 
-    registerProviderResolutionHandlers({
-      credentialRefs: {
-        apiKey: buildStoredCredentialRef('cfg-1', 'apiKey'),
-      },
-    });
-    await subsystemService?.init();
-
-    cleanupFns.push(
-      MakaioBus.on(
-        AdapterSubsystemSubjects.getProviderConfig,
-        async (ctx) => {
-          providerConfigReads += 1;
-          await ctx.next();
-        },
-        { priority: 100 },
-      ),
-    );
-    cleanupFns.push(
-      MakaioBus.on(
-        AdapterSubsystemSubjects.buildProviderContext,
-        async (ctx) => {
-          providerContextReads += 1;
-          await ctx.next();
-        },
-        { priority: 100 },
-      ),
-    );
-
-    await resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic');
-
-    expect(providerConfigReads).toBe(1);
-    expect(providerContextReads).toBe(1);
-  });
-
-  it('falls back to the provider definition endpoint when no override is present', async () => {
-    setupCredentialBus();
-    resolveStore.set(buildStoredCredentialRef('cfg-1', 'apiKey'), 'sk-test-123');
-
-    registerProviderResolutionHandlers({
-      credentialRefs: {
-        apiKey: buildStoredCredentialRef('cfg-1', 'apiKey'),
-      },
-    });
-    await subsystemService?.init();
-
-    await expect(resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic')).resolves.toEqual({
-      config: {
-        id: 'cfg-1',
-        definitionId: 'provider-1',
-        name: 'Provider Config',
-        modelFilterMode: 'show-all',
-        isDefault: true,
-        enabled: true,
-        isSentinel: false,
-        hasCredentials: true,
-      },
-      definition: {
-        id: 'provider-1',
-        packageName: '@makaio/provider-test',
-        name: 'Provider',
-        endpoints: {
-          anthropic: 'https://default.example.com',
-        },
-        availableModels: [],
-        defaultModelFilterMode: 'show-all',
-        enabled: true,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+    await expect(resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic')).resolves.toMatchObject({
       baseUrl: 'https://default.example.com',
-      credentials: {
-        apiKey: 'sk-test-123',
-      },
     });
   });
 
-  it('throws when the provider config cannot be found', async () => {
-    registerProviderResolutionHandlers({ providerConfigId: 'cfg-1' });
-    await subsystemService?.init();
-    await expect(resolveProviderResolution(MakaioBus, 'missing-config', 'anthropic')).rejects.toThrow(
-      "ProviderConfig 'missing-config' not found",
-    );
+  it('throws a typed error when the provider config cannot be found', async () => {
+    await setupResolution();
+
+    const error = await resolveProviderResolution(MakaioBus, 'missing', 'anthropic').catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(ProviderResolutionError);
+    expect((error as ProviderResolutionError).code).toBe('provider-config-not-found');
   });
 
-  it('preserves the provider-config error contract when context building observes a missing config', async () => {
-    registerProviderResolutionHandlers({ providerConfigId: 'cfg-1' });
-    await subsystemService?.init();
-    cleanupFns.push(
-      MakaioBus.on(
-        AdapterSubsystemSubjects.buildProviderContext,
-        (ctx) => {
-          ctx.setResult({ context: null });
-        },
-        { priority: 100 },
-      ),
-    );
-
-    await expect(resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic')).rejects.toThrow(
-      "ProviderConfig 'cfg-1' not found",
-    );
-  });
-
-  it('rejects mismatched config and context snapshots during resolution', async () => {
-    let providerLookups = 0;
-    registerProviderResolutionHandlers({
-      definitionId: 'provider-1',
-      onProviderLookup: () => {
-        providerLookups += 1;
-      },
-    });
-    await subsystemService?.init();
-    cleanupFns.push(
-      MakaioBus.on(
-        AdapterSubsystemSubjects.buildProviderContext,
-        (ctx) => {
-          ctx.setResult({
-            context: {
-              providerConfigId: ctx.payload.providerConfigId,
-              definitionId: 'provider-2',
-              credentialRefs: {},
+  it('keeps config metadata and credential refs on one captured snapshot during concurrent mutation', async () => {
+    await setupResolution({
+      resolveProvider: async (readIndex) => {
+        if (readIndex === 1) {
+          await MakaioBus.request(AdapterSubsystemSubjects.updateProviderConfig, {
+            id: 'cfg-1',
+            patch: { endpointOverrides: { anthropic: 'https://new.example.com' } },
+          });
+          await MakaioBus.request(AdapterSubsystemSubjects.setProviderConfigAuth, {
+            id: 'cfg-1',
+            auth: {
+              mode: 'explicit',
+              method: { owner: 'provider', providerDefinitionId: 'provider-1', methodId: 'api-key' },
+              credentialRefs: { apiKey: 'env:NEW_PROVIDER_API_KEY' },
             },
           });
-        },
-        { priority: 100 },
-      ),
-    );
+        }
+        return PROVIDER_RECORD;
+      },
+    });
 
-    await expect(resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic')).rejects.toThrow(
-      "ProviderConfig 'cfg-1' changed during resolution; retry",
-    );
-    expect(providerLookups).toBe(0);
+    const captured = await resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic');
+    expect(captured.config.endpointOverrides).toEqual({ anthropic: 'https://override.example.com' });
+    expect(captured.baseUrl).toBe('https://override.example.com');
+    expect(captured.auth).toMatchObject({
+      credentialRefs: { apiKey: 'env:PROVIDER_API_KEY' },
+    });
+
+    const { snapshot: current } = await MakaioBus.request(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
+      providerConfigId: 'cfg-1',
+    });
+    expect(current?.config.endpointOverrides).toEqual({ anthropic: 'https://new.example.com' });
+    expect(current?.context.auth).toMatchObject({
+      credentialRefs: { apiKey: 'env:NEW_PROVIDER_API_KEY' },
+    });
   });
 
-  it('throws when the provider definition cannot be found', async () => {
-    registerProviderResolutionHandlers({
-      definitionId: 'missing-provider',
-      providerExists: false,
-    });
-    await subsystemService?.init();
+  it('preserves the typed dangling-definition failure from snapshot assembly', async () => {
+    await setupResolution({ resolveProvider: () => null });
 
-    await expect(resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic')).rejects.toThrow(
-      "ProviderDefinition 'missing-provider' not found for config 'cfg-1'",
-    );
+    const error = await resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic').catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(RequestError);
+    const cause = (error as RequestError).cause;
+    expect(cause).toBeInstanceOf(ProviderConfigAuthValidationError);
+    expect((cause as ProviderConfigAuthValidationError).code).toBe('provider-definition-not-found');
   });
 });

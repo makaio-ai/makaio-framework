@@ -14,7 +14,7 @@ framework.
 The Claude Agent SDK locks you into a single provider with API-token billing.
 This package gives you the same programmatic surface with two extras:
 
-1. **Any provider** — route to Claude, Gemini, Codex, Qwen, or any other
+1. **Any provider** — route to Claude, Gemini, Codex, or any other
    Makaio adapter through canonical model names.
 2. **Subscription-powered Claude** — combine with the
    [`claude-code-tmux`](../../adapters/implementations/claude-code-tmux/README.md)

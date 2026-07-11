@@ -38,8 +38,8 @@ export interface CursorSessionConfig {
   makaioSessionId?: string;
   /** Working directory for the Cursor agent. */
   cwd: string;
-  /** Environment variables passed to the agent. */
-  env?: Record<string, string>;
+  /** Auth-free environment forwarded to the MCP bridge context. */
+  contextEnv?: Readonly<Record<string, string>>;
   /** Model to use for the session. */
   model: string;
   /** API key for Cursor SDK authentication. */

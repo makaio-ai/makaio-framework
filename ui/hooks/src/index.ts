@@ -120,6 +120,8 @@ export type {
   OnboardingFlowState,
   OnboardingFlowActions,
   OnboardingStepProps,
+  OnboardingProviderConfigDraft,
+  OnboardingProviderConfigCreator,
   UseOnboardingFlowOptions,
   UseOnboardingFlowResult,
 } from './onboarding/types.js';
@@ -148,8 +150,28 @@ export type { ProviderInfo, BoundAdapter } from './state/provider-store.js';
 // ---------------------------------------------------------------------------
 // Provider-config selectors
 // ---------------------------------------------------------------------------
-export { listProviderConfigSummaryViews, getProviderConfigDetailView } from './provider-config/selectors.js';
+export {
+  getProviderConfigDetailView,
+  listCompatibleAuthOptions,
+  listProviderConfigSummaryViews,
+} from './provider-config/selectors.js';
 export type { ProviderConfigSummaryView, ProviderConfigDetailView } from './provider-config/selectors.js';
+export {
+  authDraftRequiresStorage,
+  authMethodRefKey,
+  buildProviderConfigAuthDraft,
+  compileProviderConfigAuthDraft,
+  createInitialAuthFieldDrafts,
+} from './provider-config/auth-draft.js';
+export type {
+  AuthFieldDraft,
+  CompiledProviderConfigAuthDraft,
+  EnvironmentAuthFieldDraft,
+  ProviderConfigAuthDraft,
+  StoredAuthFieldDraft,
+} from './provider-config/auth-draft.js';
+export { useCompatibleAuthOptions } from './provider-config/use-compatible-auth-options.js';
+export type { UseCompatibleAuthOptionsResult } from './provider-config/use-compatible-auth-options.js';
 
 // ---------------------------------------------------------------------------
 // Utilities

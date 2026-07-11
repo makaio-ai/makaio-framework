@@ -31,9 +31,8 @@ export type SdkPermissionRequestResult = PermissionRequestResult;
 /**
  * Provider-specific configuration for the GitHub Copilot SDK connector.
  *
- * Contains only non-credential settings. The Copilot token is resolved at
- * runtime from `providerContext.credentialRefs` via `resolveConnectorCredentials()`
- * and never appears in this type.
+ * Contains only non-credential settings. Authentication is supplied separately
+ * through the connector-local normalized runtime snapshot.
  */
 export type GitHubCopilotProviderConfig = GitHubCopilotSdkProviderSettings;
 

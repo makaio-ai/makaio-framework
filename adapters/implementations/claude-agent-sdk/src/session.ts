@@ -11,6 +11,7 @@ import {
   type MessageHandle,
 } from '@makaio/ai-adapters-core';
 import { DeferredPromise } from '@makaio/utils';
+import { MakaioBus } from '@makaio/bus-core';
 import { AsyncQuerySource } from '@makaio/ai-adapters-claude-shared';
 import { ClaudeConnectorTurn } from './turn.js';
 import { UserMessageQueue, processQueueMessages, rejectQueuedHandles } from '@makaio/ai-adapters-core';
@@ -18,8 +19,8 @@ import { buildSdkUserMessage } from './sdk-message-builder.js';
 import { ClaudeCodeConnectorSubjects } from './namespace/index.js';
 import { ClaudeSessionConfig, CreateToolApprovalHandler } from './types/index.js';
 import { buildMcpServersRecord, buildQueryOptions } from './utils/buildQueryOptions.js';
-import type { McpResolvedServer, ResponseSchemaDescriptor } from '@makaio/contracts';
-import { registerMcpSession, unregisterMcpSession } from './mcp-session-bridge.js';
+import { McpSubjects, type McpResolvedServer, type ResponseSchemaDescriptor } from '@makaio/contracts';
+import { unregisterMcpSession } from './mcp-session-bridge.js';
 import { handleClaudeResultMessage } from './result-handling.js';
 import { TerminalResultDrain } from './terminal-result-drain.js';
 
@@ -142,9 +143,27 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       return;
     }
     this.registeredMcpSessionId = this.sessionId;
-    const port = await registerMcpSession(this.sessionId, this.config);
-    if (port !== undefined) {
-      this.mcpServerPort = port;
+    const makaioSessionId = this.config.sessionId ?? this.sessionId;
+    // MakaioBus (global singleton) is intentional here — MCP subjects live in
+    // the `mcp` namespace, which is unreachable from the adapter's scoped bus.
+    // Same pattern used by ToolSubjects.execute and AgentSubjects throughout
+    // the adapter layer for all cross-namespace RPCs.
+    const result = await MakaioBus.requestOptional(McpSubjects.session.register, {
+      adapterSessionId: this.sessionId,
+      agentId: this.config.agentId,
+      adapterId: this.config.adapterId,
+      adapterName: this.config.adapterName,
+      sessionId: makaioSessionId,
+      contextOverrides: {
+        cwd: this.config.cwd,
+        env: this.config.contextEnv ?? {},
+        sessionId: makaioSessionId,
+        agentId: this.config.agentId,
+        adapterSessionId: this.sessionId,
+      },
+    });
+    if (result.handled) {
+      this.mcpServerPort = result.data.port;
     }
   }
 

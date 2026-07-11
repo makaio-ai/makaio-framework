@@ -49,6 +49,28 @@ export function cloneAdapterClientRefs(
 }
 
 /**
+ * Resolve adapter-declared client refs to their authoritative definitions.
+ * @param clients - Client references declared by the adapter contribution.
+ * @param catalogClients - Active client contribution catalog.
+ * @returns Definitions in adapter declaration order, or undefined for a clientless adapter.
+ */
+export function resolveAdapterClientDefinitions(
+  clients: readonly AdapterClientRef[] | undefined,
+  catalogClients: readonly AdapterClientCatalogEntry[],
+): readonly ClientDefinition[] | undefined {
+  if (clients === undefined || clients.length === 0) return undefined;
+
+  const definitionsById = new Map(catalogClients.map((entry) => [entry.definition.id, entry.definition] as const));
+  return clients.map((ref) => {
+    const definition = definitionsById.get(ref.id);
+    if (definition === undefined) {
+      throw new Error(`Adapter client definition "${ref.id}" is missing from the active contribution catalog.`);
+    }
+    return definition;
+  });
+}
+
+/**
  * Resolve the default runtime client ID for a loaded adapter.
  *
  * `clientId` remains an initialization-time selected client override, but only

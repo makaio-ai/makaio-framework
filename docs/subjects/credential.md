@@ -23,6 +23,9 @@ next: false
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
 | `activate` | [`credential.activate`](#credential.activate) | rpc | — |
+| `activation.commit` | [`credential.activation.commit`](#credential.activation.commit) | rpc | — |
+| `activation.prepare` | [`credential.activation.prepare`](#credential.activation.prepare) | rpc | — |
+| `activation.rollback` | [`credential.activation.rollback`](#credential.activation.rollback) | rpc | — |
 | `changed` | [`credential.changed`](#credential.changed) | rpc | — |
 | `delete` | [`credential.delete`](#credential.delete) | rpc | — |
 | `exists` | [`credential.exists`](#credential.exists) | rpc | — |
@@ -30,6 +33,7 @@ next: false
 | `getChannelToken` | [`credential.getChannelToken`](#credential.getChannelToken) | rpc | — |
 | `resolve` | [`credential.resolve`](#credential.resolve) | rpc | — |
 | `store` | [`credential.store`](#credential.store) | rpc | — |
+| `storeGrant.create` | [`credential.storeGrant.create`](#credential.storeGrant.create) | rpc | — |
 
 ## Subject Details
 
@@ -39,9 +43,8 @@ Pre-resolution activation hook for credential extensions.
 
 Emitted before `resolveConnectorCredentials()` runs so extensions
 (e.g., account-manager) can prepare native credential stores.
-Awaited before credential resolution — handler failures are suppressed
-(errors cannot block agent start), but completion is guaranteed before
-`resolveConnectorCredentials()` runs.
+Awaited before credential resolution. A selected account is mandatory:
+unavailable managers and failed activation block agent startup.
 
 Subject: `credential.activate`
 Type: Request (RPC)
@@ -50,13 +53,74 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `credentialRefs` | `Record<string, string>` | yes |
-| `definitionId` | `string` | yes |
-| `providerConfigId` | `string` | yes |
+| `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; }` | yes |
 
 **Response:**
 
-_Empty object._
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
+
+### <a id="credential.activation.commit"></a>`credential.activation.commit` (rpc)
+
+Commit one prepared account activation exactly once.
+
+Subject: `credential.activation.commit`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `transactionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
+
+### <a id="credential.activation.prepare"></a>`credential.activation.prepare` (rpc)
+
+Prepare a reversible managed-account activation for an atomic connector swap.
+
+Local-only because the opaque transaction is owned by the in-process
+account manager and holds its per-client mutation lock until commit or
+rollback consumes the identifier.
+
+Subject: `credential.activation.prepare`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; }` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
+
+### <a id="credential.activation.rollback"></a>`credential.activation.rollback` (rpc)
+
+Roll back one prepared account activation exactly once.
+
+Subject: `credential.activation.rollback`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `transactionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
 
 ### <a id="credential.changed"></a>`credential.changed` (rpc)
 
@@ -73,9 +137,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `changeSequence` | `number` | yes |
-| `credentialRefs` | `Record<string, string>` | yes |
-| `definitionId` | `string` | yes |
-| `providerConfigId` | `string` | yes |
+| `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; }` | yes |
 | `sessionId` | `string` | yes |
 
 **Response:**
@@ -201,6 +263,31 @@ Type: Request (RPC)
 **Response:**
 
 _Empty object._
+
+### <a id="credential.storeGrant.create"></a>`credential.storeGrant.create` (rpc)
+
+Request a one-shot, config-bound channel that exposes only `store`.
+
+This normal transported subject deliberately contains only a config ID and
+capability metadata. Credential plaintext must be sent through the returned
+DirectChannel. The host issues grants only for disabled reservations and
+rechecks that state immediately before storage.
+
+Subject: `credential.storeGrant.create`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `configId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `endpoint` | `string` | yes |
+| `token` | `string` | yes |
 
 ---
 

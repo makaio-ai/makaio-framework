@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { AIModelSchema } from '../model/index.js';
 import { ModelFilterModeSchema, ModelVisibilitySchema } from '../provider/visibility.js';
 import { TimeoutConfigSchema } from '../timeout/index.js';
-import { CredentialRefSchema } from './credential-ref.js';
 
 export { AIModelSchema };
 
@@ -31,25 +30,22 @@ export type StoredProtocolEndpoints = z.infer<typeof StoredProtocolEndpointsSche
  * This lower-layer contract is shared by adapter config parsing and settings
  * RPC schemas, so it must remain outside adapter-core to avoid package cycles.
  */
-export const ProviderDefaultsSchema = z.object({
-  model: z.string().optional().describe('Model identifier (adapter-specific, e.g., sonnet, opus)'),
+export const ProviderDefaultsSchema = z
+  .object({
+    model: z.string().optional().describe('Model identifier (adapter-specific, e.g., sonnet, opus)'),
 
-  timeouts: TimeoutConfigSchema.optional().describe('Timeout overrides for this provider'),
+    timeouts: TimeoutConfigSchema.optional().describe('Timeout overrides for this provider'),
 
-  cwd: z.string().optional().describe('Working directory for agent execution'),
+    cwd: z.string().optional().describe('Working directory for agent execution'),
 
-  env: z.record(z.string(), z.string()).optional().describe('Environment variables to pass to agent execution'),
+    env: z.record(z.string(), z.string()).optional().describe('Environment variables to pass to agent execution'),
 
-  credentials: z
-    .record(z.string(), CredentialRefSchema)
-    .optional()
-    .describe('Credential references resolved at runtime (e.g., keychain:service:account)'),
-
-  providerSettings: z
-    .record(z.string(), z.unknown())
-    .optional()
-    .describe('Provider-specific configuration (non-credential settings only)'),
-});
+    providerSettings: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe('Provider-specific configuration (non-credential settings only)'),
+  })
+  .strict();
 
 /**
  * Configuration for a single adapter provider.

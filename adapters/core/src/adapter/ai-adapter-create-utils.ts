@@ -4,11 +4,17 @@
  * Extracted to keep ai-adapter.ts below the ESLint line-count ceiling.
  */
 
-import { SessionContextSchema, type AIModel, type NativeForkDirective } from '@makaio/contracts';
+import {
+  SessionContextSchema,
+  type AdapterProviderAuth,
+  type AIModel,
+  type NativeForkDirective,
+  type ProtocolId,
+  type ProviderContext,
+} from '@makaio/contracts';
 import type { AIAgentConfig } from '../agent/types.js';
 import type { AgentCreationOptions } from './types.js';
 import type { AdapterProviderDefinition } from '../types/index.js';
-import { UNRESOLVED_PROVIDER_DEFINITION_ID } from '../utils/index.js';
 
 /** Non-generic optional fields of AIAgentConfig that createAgent sets conditionally. */
 export type OptionalAgentRuntimeFields = Partial<
@@ -90,6 +96,84 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
 }
 
 /**
+ * Resolve authentication metadata for the provider selected by a provider context.
+ *
+ * Selection is definition-ID exact. It deliberately does not use the single-provider
+ * or model-name fallbacks used for display metadata because auth delivery must never
+ * be inferred from an ambiguous provider selection.
+ * @param definitionProviders - Provider definitions registered on the adapter
+ * @param providerDefinitionId - Definition ID selected by the effective provider context
+ * @returns Matching adapter-provider auth metadata, or undefined when none is declared
+ */
+export function resolveAdapterProviderAuth(
+  definitionProviders: readonly AdapterProviderDefinition[] | undefined,
+  providerDefinitionId: string,
+): AdapterProviderAuth | undefined {
+  return definitionProviders?.find((provider) => provider.definition.id === providerDefinitionId)?.auth;
+}
+
+/**
+ * Resolve the exact HTTP protocol declared for one adapter/provider path.
+ * @param definitionProviders - Provider definitions registered on the adapter
+ * @param providerDefinitionId - Definition ID selected by the provider context
+ * @returns Selected protocol, or undefined for SDK-native transports
+ */
+export function resolveAdapterProviderProtocol(
+  definitionProviders: readonly AdapterProviderDefinition[] | undefined,
+  providerDefinitionId: string,
+): ProtocolId | undefined {
+  return definitionProviders?.find((provider) => provider.definition.id === providerDefinitionId)?.protocol;
+}
+
+/**
+ * Resolve all other adapter/provider auth declarations that contribute to the
+ * adapter-wide environment scrub set.
+ * @param definitionProviders - Provider definitions registered on the adapter
+ * @param selectedProviderDefinitionId - Definition selected for this connector
+ * @returns Compatible auth declarations in adapter definition order
+ */
+export function resolveCompatibleAdapterProviderAuths(
+  definitionProviders: readonly AdapterProviderDefinition[] | undefined,
+  selectedProviderDefinitionId: string,
+): AdapterProviderAuth[] {
+  return (
+    definitionProviders?.flatMap((provider) =>
+      provider.definition.id !== selectedProviderDefinitionId && provider.auth !== undefined ? [provider.auth] : [],
+    ) ?? []
+  );
+}
+
+/** Adapter metadata selected by one canonical provider context. */
+export interface AdapterProviderSelection {
+  /** Exact transport protocol, when the adapter/provider path declares one. */
+  readonly providerProtocol?: ProtocolId;
+  /** Exact selected authentication delivery declaration. */
+  readonly adapterProviderAuth?: AdapterProviderAuth;
+  /** Other compatible declarations contributing to ambient env scrubbing. */
+  readonly compatibleProviderAuths: readonly AdapterProviderAuth[];
+}
+
+/**
+ * Resolve protocol and auth metadata for one canonical provider context.
+ * @param definitionProviders - Provider definitions registered on the adapter
+ * @param providerContext - Canonical refs-only provider execution context
+ * @returns Exact adapter metadata, or an empty selection for provider-less execution
+ */
+export function resolveAdapterProviderSelection(
+  definitionProviders: readonly AdapterProviderDefinition[] | undefined,
+  providerContext: ProviderContext,
+): AdapterProviderSelection {
+  if (providerContext.state === 'unresolved') {
+    return { compatibleProviderAuths: [] };
+  }
+  return {
+    providerProtocol: resolveAdapterProviderProtocol(definitionProviders, providerContext.definitionId),
+    adapterProviderAuth: resolveAdapterProviderAuth(definitionProviders, providerContext.definitionId),
+    compatibleProviderAuths: resolveCompatibleAdapterProviderAuths(definitionProviders, providerContext.definitionId),
+  };
+}
+
+/**
  * Resolve execution-time model metadata for context-window lookup.
  *
  * Rules:
@@ -112,7 +196,7 @@ export function resolveExecutionModels(
     return undefined;
   }
 
-  if (providerDefinitionId && providerDefinitionId !== UNRESOLVED_PROVIDER_DEFINITION_ID) {
+  if (providerDefinitionId) {
     const selectedProvider = definitionProviders.find((provider) => provider.definition.id === providerDefinitionId);
     return selectedProvider?.definition.availableModels;
   }

@@ -20,9 +20,11 @@ import { AgentLifecycleEmitter, type AgentLifecycleEmitterConfig } from './agent
 import { AgentPayloadEmitter, type AgentPayloadEmitterConfig } from './agent-payload-emitter.js';
 import { AgentTurnExecutor } from './agent-turn-executor.js';
 import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
-import { AgentConnectorLifecycleManager } from './agent-connector-lifecycle-manager.js';
+import { AgentConnectorLifecycleManager, type ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
 import type { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import type { ToolCallTracker } from './tool-call-tracker.js';
+import type { ConnectorRuntimeHandle } from './connector-runtime.js';
+import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 
 /**
  * Input bundle for {@link createAgentPayloadEmitter}.
@@ -154,6 +156,7 @@ export function createAgentTurnExecutor(config: {
   setPendingStartMode: (mode: StartMode) => void;
   onMessageHandle: (messageHandle: MessageHandle, turnId: string | undefined) => Promise<void>;
   onBeforeDispatch?: () => void | Promise<void>;
+  runDispatch?: <T>(dispatch: () => Promise<T>) => Promise<T>;
   ephemeral?: boolean;
 }): AgentTurnExecutor {
   return new AgentTurnExecutor(config);
@@ -169,7 +172,11 @@ export function createAgentRuntimeMutationManager(config: {
   sessionId?: string;
   globalBus: IMakaioBus;
   getConnector: () => AIAgentConnector;
-  swapConnector: (configOverrides?: AgentConnectorConfigOverrides) => Promise<void>;
+  runExclusive: <T>(action: () => Promise<T>) => Promise<T>;
+  swapConnectorUnlocked: (
+    configOverrides?: AgentConnectorConfigOverrides,
+    beforeCommit?: ConnectorSwapCommitGuard,
+  ) => Promise<void>;
   emitGlobal: AgentPayloadEmitter['emitGlobal'];
   getProviderContext: () => ProviderContext | undefined;
   setProviderContext: (providerContext: ProviderContext) => void;
@@ -184,7 +191,8 @@ export function createAgentRuntimeMutationManager(config: {
     sessionId: config.sessionId,
     globalBus: config.globalBus,
     getConnector: config.getConnector,
-    swapConnector: config.swapConnector,
+    runExclusive: config.runExclusive,
+    swapConnectorUnlocked: config.swapConnectorUnlocked,
     emitCwdChanged: async (payload) => {
       await config.emitGlobal(AgentSubjects.cwd.changed, payload);
     },
@@ -214,11 +222,12 @@ export function createAgentConnectorLifecycleManager<
   connectorFactory: (
     config: BaseAgentConnectorConfig<TBus> & { adapterId: string },
   ) => Promise<TConnector> | TConnector;
+  prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus>;
   createOnMessageSent: () => (handle: MessageHandle) => void;
   wireEvents: (connector: TConnector) => void | Promise<void>;
   emitGlobal: AgentPayloadEmitter['emitGlobal'];
-  getConnector: () => TConnector;
-  setConnector: (connector: TConnector) => void;
+  getConnectorRuntime: () => ConnectorRuntimeHandle<TConnector>;
+  setConnectorRuntime: (runtime: ConnectorRuntimeHandle<TConnector>) => void;
   getRuntimeSystemPrompt: () => SystemPrompt | undefined;
   setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void;
 }): AgentConnectorLifecycleManager<TBus, TConnector> {
@@ -227,14 +236,25 @@ export function createAgentConnectorLifecycleManager<
     buildConfigInput: config.buildConfigInput,
     configFactory: config.configFactory,
     connectorFactory: config.connectorFactory,
+    prepareAuthRuntime: config.prepareAuthRuntime,
     createOnMessageSent: config.createOnMessageSent,
     wireEvents: config.wireEvents,
     emitIdle: async () => {
       await config.emitGlobal(AgentSubjects.idle, {});
     },
-    getConnector: config.getConnector,
-    setConnector: config.setConnector,
+    getConnectorRuntime: config.getConnectorRuntime,
+    setConnectorRuntime: config.setConnectorRuntime,
     getRuntimeSystemPrompt: config.getRuntimeSystemPrompt,
     setLastKnownAdapterSessionId: config.setLastKnownAdapterSessionId,
+    reportCleanupFailure: (diagnostic) =>
+      config.emitGlobal(
+        AdapterSubjects.log,
+        {
+          message: `${diagnostic.code}:${diagnostic.stage}`,
+          timestamp: Date.now(),
+          level: 'warn',
+        },
+        { includeEventMetadata: false },
+      ),
   });
 }

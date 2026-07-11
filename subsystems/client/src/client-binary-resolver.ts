@@ -17,7 +17,7 @@ import type { ClientDefinition, ClientExecutionContext, VersionCommand } from '@
 import { ClientBinaryStorageSubjects } from './storage/client-binary-storage-namespace.js';
 import { BinaryNotFoundError } from './client-binary-errors.js';
 import { isPathWithinBase } from './client-binary-manager-types.js';
-import type { ClientDefinitionLookup } from './client-binary-manager-types.js';
+import type { ClientBinaryResolutionPolicy, ClientDefinitionLookup } from './client-binary-manager-types.js';
 import { assertSupportedBinaryVersion } from './client-binary-version-support.js';
 
 // ---------------------------------------------------------------------------
@@ -48,6 +48,8 @@ export interface ClientBinaryResolverDeps {
   resolvedConfigBasePath: string;
   /** Client definition lookup for retrieving registered definitions. */
   definitionLookup: ClientDefinitionLookup;
+  /** Filesystem ownership policy for managed state versus local PATH. */
+  resolutionPolicy?: ClientBinaryResolutionPolicy;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +63,8 @@ export interface ClientBinaryResolverDeps {
  * - Look up the active managed version from storage and build a fully-populated
  *   {@link ClientExecutionContext} with the versioned binary path and optional
  *   isolated config dir.
- * - Fall back to a global PATH scan when no managed version is active.
+ * - Fall back to a global PATH scan when no managed version is active, preserving
+ *   the scanner's exact executable path when available.
  * - Validate stored install paths against the expected managed-binary directory.
  *
  * This class has no dependency on `pendingClients`, the job runner, or the
@@ -73,6 +76,7 @@ export class ClientBinaryResolver {
   private readonly resolvedBasePath: string;
   private readonly resolvedConfigBasePath: string;
   private readonly definitionLookup: ClientDefinitionLookup;
+  private readonly resolutionPolicy: ClientBinaryResolutionPolicy;
 
   /**
    * @param deps - Resolution dependencies
@@ -82,6 +86,7 @@ export class ClientBinaryResolver {
     this.resolvedBasePath = deps.resolvedBasePath;
     this.resolvedConfigBasePath = deps.resolvedConfigBasePath;
     this.definitionLookup = deps.definitionLookup;
+    this.resolutionPolicy = deps.resolutionPolicy ?? 'managed-first';
   }
 
   // -------------------------------------------------------------------------
@@ -96,10 +101,11 @@ export class ClientBinaryResolver {
    *    versioned binary path, an isolated config dir (when `configIsolation` is
    *    declared), and the corresponding env override.
    * 2. **Global fallback:** If no managed version is active, request
-   *    `client.scan` to detect the binary on PATH. Returns `binaryPath: null`
-   *    (caller uses PATH) and the `defaultPath` from `configIsolation` (tilde
-   *    expanded), or its parent directory for file-level overrides, as the
-   *    config dir.
+   *    `client.scan` to detect the binary on PATH. Returns the scanner's exact
+   *    absolute executable path when available, otherwise `binaryPath: null`
+   *    so SDKs with their own discovery can use their native default. The
+   *    `defaultPath` from `configIsolation` (tilde expanded), or its parent
+   *    directory for file-level overrides, remains the global config dir.
    *
    * Throws when:
    * - No definition is registered for `clientId`.
@@ -114,17 +120,19 @@ export class ClientBinaryResolver {
       throw new Error(`client.resolveBinary: no definition registered for client '${clientId}'`);
     }
 
-    // Read the active pointer and installed-version rows from one storage
-    // snapshot so a version change cannot pair an activeVersion from one
-    // commit with version rows from another.
-    const { state, versions } = await this.bus.request(ClientBinaryStorageSubjects.getSnapshot, { clientId });
-    const activeVersion = state?.activeVersion ?? null;
+    if (this.resolutionPolicy === 'managed-first') {
+      // Read the active pointer and installed-version rows from one storage
+      // snapshot so a version change cannot pair an activeVersion from one
+      // commit with version rows from another.
+      const { state, versions } = await this.bus.request(ClientBinaryStorageSubjects.getSnapshot, { clientId });
+      const activeVersion = state?.activeVersion ?? null;
 
-    if (activeVersion !== null) {
-      return this.buildManagedContext(clientId, activeVersion, definition, versions);
+      if (activeVersion !== null) {
+        return this.buildManagedContext(clientId, activeVersion, definition, versions);
+      }
     }
 
-    // No active managed version — fall back to global PATH detection.
+    // No accessible managed version — fall back to this runtime's PATH.
     return this.buildGlobalContext(clientId, definition);
   }
 
@@ -250,7 +258,7 @@ export class ClientBinaryResolver {
    * Throws when the scan reports `found: false` or returns no entry.
    * @param clientId - Stable client identifier
    * @param definition - Client definition
-   * @returns Global execution context with null binaryPath
+   * @returns Global execution context with the detected absolute binary path when available
    */
   private async buildGlobalContext(clientId: string, definition: ClientDefinition): Promise<ClientExecutionContext> {
     if (!definition.binary?.name) {
@@ -278,8 +286,12 @@ export class ClientBinaryResolver {
       'detected global binary version',
     );
     const configDir = this.resolveGlobalConfigDir(definition);
+    const binaryPath = scanResult.binaryPath ?? null;
+    if (binaryPath !== null && !path.isAbsolute(binaryPath)) {
+      throw new Error(`client.resolveBinary: detected global binary path for '${clientId}' is not absolute`);
+    }
 
-    return { binaryPath: null, env: {}, configDir, source: 'global', version };
+    return { binaryPath, env: {}, configDir, source: 'global', version };
   }
 
   /**

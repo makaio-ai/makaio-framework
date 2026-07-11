@@ -1,8 +1,8 @@
 /**
  * Tool Handling for Qwen ACP Adapter
  *
- * Centralizes tool approval transformation and bus registration for both
- * production (agent.ts) and test (createTestConfig) use cases.
+ * Centralizes tool approval transformation and bus registration for the
+ * adapter agent and focused connector tests.
  *
  * Pattern:
  * - toGlobalToolApproval: ScopedToolApprovalRequest → AgentToolApproveRequest
@@ -50,7 +50,7 @@ export function fromGlobalToolApproval(response: AgentToolApproveResponse): Agen
  * Register tool approval handler that bridges the connector's scoped
  * `permission_request` subject to the global `AgentSubjects.toolApprove` bus.
  *
- * Used by both `createTestConfig` (test harness) and `agent.ts` (production).
+ * Used by the adapter agent and focused connector tests.
  */
 export const registerToolApprovalHandler = createToolApprovalHandler(
   QwenAcpSubjects.permission_request,

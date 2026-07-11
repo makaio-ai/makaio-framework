@@ -3,8 +3,9 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, type McpSessionContext } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { createTestAdapter, MockConnector, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
+import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
-const TEST_PROVIDER_CONTEXT = { providerConfigId: 'test-config', definitionId: 'provider-1', credentialRefs: {} };
+const TEST_PROVIDER_CONTEXT = createNoAuthTestProviderContext('test-config', 'provider-1');
 
 function createMcpSessionContext(): McpSessionContext {
   return {

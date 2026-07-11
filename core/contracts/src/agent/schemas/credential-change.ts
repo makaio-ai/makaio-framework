@@ -1,8 +1,17 @@
 import { z } from 'zod';
-import { observability } from '@makaio/core';
-import { CredentialRefSchema } from '../../config/credential-ref.js';
+import { ResolvedProviderContextSchema } from '../../adapter/schemas/provider-context.js';
 import { CredentialChangeSequenceSchema } from '../../credential/change-sequence.js';
 import { BaseAgentEventSchema } from './base-event.js';
+
+const CredentialChangeFailureReasonSchema = z.enum([
+  'provider_mismatch',
+  'stale_change',
+  'turn_active',
+  'credential_activation_failed:manager-unavailable',
+  'credential_activation_failed:account-not-found',
+  'credential_activation_failed:activation-failed',
+  'credential_swap_failed',
+]);
 
 /**
  * Request to change agent credentials mid-session.
@@ -13,29 +22,31 @@ import { BaseAgentEventSchema } from './base-event.js';
  * Handler: AIAgent re-resolves credentials, rebuilds connector if SDK-based
  */
 export const CredentialChangeSchema = {
-  request: BaseAgentEventSchema.extend({
-    /** Provider config UUID whose credentials changed. */
-    providerConfigId: observability.attribute(z.string(), 'makaio.provider.config_id'),
-    /** Provider definition ID (e.g., `'anthropic'`). */
-    definitionId: z.string(),
-    /** Monotonic per-provider-config change token used to reject stale fan-out. */
-    changeSequence: CredentialChangeSequenceSchema,
-    /** Updated credential references to resolve. */
-    credentialRefs: z.record(z.string(), CredentialRefSchema),
-  }),
+  request: BaseAgentEventSchema.omit({ providerConfigId: true })
+    .extend({
+      /** Monotonic per-provider-config change token used to reject stale fan-out. */
+      changeSequence: CredentialChangeSequenceSchema,
+      /** Complete refs-only provider context that replaces the active selection. */
+      providerContext: ResolvedProviderContextSchema,
+    })
+    .strict(),
   response: z.discriminatedUnion('success', [
-    z.object({
-      /** Credential change applied successfully. */
-      success: z.literal(true),
-      /** Connector was rebuilt — credential rotation forces a full connector swap so both SDK and subprocess adapters re-resolve. */
-      swapped: z.literal(true),
-    }),
-    z.object({
-      /** Credential change was not applied. */
-      success: z.literal(false),
-      /** Reason for failure (e.g., `'turn_active'`, `'credential_swap_failed: ...'`). */
-      reason: z.string(),
-    }),
+    z
+      .object({
+        /** Credential change applied successfully. */
+        success: z.literal(true),
+        /** Connector was rebuilt — credential rotation forces a full connector swap so both SDK and subprocess adapters re-resolve. */
+        swapped: z.literal(true),
+      })
+      .strict(),
+    z
+      .object({
+        /** Credential change was not applied. */
+        success: z.literal(false),
+        /** Stable credential-free failure category. */
+        reason: CredentialChangeFailureReasonSchema,
+      })
+      .strict(),
   ]),
 };
 

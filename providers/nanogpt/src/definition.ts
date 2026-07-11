@@ -19,5 +19,20 @@ export const providerDefinition: ProviderDefinitionInput = {
   description: 'NanoGPT - OpenAI-compatible API',
   endpoints: { openai: 'https://nano-gpt.com/api/v1' },
   defaultModelFilterMode: 'allowlist',
-  credentialEnvVars: { apiKey: 'NANOGPT_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'NANOGPT_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };

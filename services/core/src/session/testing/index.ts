@@ -3,6 +3,7 @@
  * Includes mock handlers and shared schema installers for session-focused tests.
  */
 import { MakaioBus } from '@makaio/bus-core';
+import { defineAdapterProviderAuth } from '@makaio/contracts';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import type { SessionMessage } from '@makaio/contracts';
 import { ProviderStorageSubjects } from '../../settings/storage/providers-namespace.js';
@@ -40,8 +41,8 @@ export function registerMockStorageHandlers(): () => void {
 /**
  * Register mock provider and execution target handlers.
  * Covers AdapterSubsystemSubjects.getProviderConfig,
- * AdapterSubsystemSubjects.buildProviderContext, ProviderStorageSubjects, and
- * ExecutionTargetSubjects.
+ * adapter-qualified and provider-only runtime snapshots,
+ * ProviderStorageSubjects, and ExecutionTargetSubjects.
  * Required for platform tests that exercise provider resolution or execution
  * target routing.
  * @returns Unsubscribe function to clean up handlers
@@ -296,13 +297,28 @@ function registerExecutionTargetHandlers(unsubs: Array<() => void>): void {
 /**
  * Register mock provider config and definition handlers.
  *
- * Returns a minimal stub ProviderConfig and ProviderDefinition so that
- * {@link buildProviderContext} succeeds in tests that include a `providerConfigId`
- * without registering their own storage handlers. Tests that need specific
- * provider data should override these with higher-priority handlers.
+ * Returns a minimal normalized provider snapshot plus an adapter-qualified
+ * runtime response for tests that include a `providerConfigId` without
+ * registering their own subsystem handlers. Tests that need specific provider
+ * data should override these with higher-priority handlers.
  * @param unsubs - Array to collect cleanup functions
  */
 function registerProviderHandlers(unsubs: Array<() => void>): void {
+  const authMethod = {
+    id: 'api-key',
+    mode: 'explicit' as const,
+    label: 'API key',
+    fields: [
+      {
+        id: 'apiKey',
+        label: 'API key',
+        required: true,
+        secret: true,
+        sourceHints: [{ kind: 'environment' as const, variable: 'API_KEY' }],
+      },
+    ],
+  };
+
   unsubs.push(
     MakaioBus.on(AdapterSubsystemSubjects.getProviderConfig, (ctx) => {
       ctx.setResult({
@@ -313,28 +329,99 @@ function registerProviderHandlers(unsubs: Array<() => void>): void {
           modelFilterMode: 'show-all' as const,
           isDefault: false,
           enabled: true,
-          isSentinel: false,
-          hasCredentials: true,
+          auth: {
+            mode: 'explicit' as const,
+            method: { owner: 'provider' as const, providerDefinitionId: 'test-provider', methodId: 'api-key' },
+            hasCredentials: true as const,
+          },
         },
       });
     }),
   );
 
   unsubs.push(
-    MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
+    MakaioBus.on(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, (ctx) => {
+      const config = {
+        id: ctx.payload.providerConfigId,
+        definitionId: 'test-provider',
+        name: 'Test Provider',
+        modelFilterMode: 'show-all' as const,
+        isDefault: false,
+        enabled: true,
+        auth: {
+          mode: 'explicit' as const,
+          method: { owner: 'provider' as const, providerDefinitionId: 'test-provider', methodId: 'api-key' },
+          hasCredentials: true as const,
+        },
+      };
+      const definition = {
+        id: 'test-provider',
+        packageName: '@makaio/test-provider',
+        name: 'Test Provider',
+        availableModels: [],
+        authMethods: [authMethod],
+        defaultModelFilterMode: 'show-all' as const,
+        enabled: true,
+        createdAt: 0,
+        updatedAt: 0,
+      };
       ctx.setResult({
-        context: {
-          providerConfigId: ctx.payload.providerConfigId,
-          definitionId: 'test-provider',
-          credentialRefs: {
-            apiKey: buildStoredCredentialRef(ctx.payload.providerConfigId, 'apiKey'),
-          },
-          credentialEnvVars: {
-            apiKey: 'API_KEY',
+        snapshot: {
+          config,
+          definition,
+          context: {
+            state: 'resolved' as const,
+            providerConfigId: ctx.payload.providerConfigId,
+            definitionId: 'test-provider',
+            auth: {
+              mode: 'explicit' as const,
+              method: { owner: 'provider' as const, providerDefinitionId: 'test-provider', methodId: 'api-key' },
+              definition: authMethod,
+              credentialRefs: {
+                apiKey: buildStoredCredentialRef(ctx.payload.providerConfigId, 'apiKey'),
+              },
+            },
           },
         },
       });
     }),
+  );
+
+  unsubs.push(
+    MakaioBus.on(
+      AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot,
+      async (ctx) => {
+        const { snapshot } = await MakaioBus.request(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
+          providerConfigId: ctx.payload.providerConfigId,
+        });
+        if (!snapshot) {
+          ctx.setResult({ status: 'error', code: 'provider-config-not-found' });
+          return;
+        }
+        ctx.setResult({
+          status: 'resolved',
+          runtime: {
+            snapshot,
+            adapterName: ctx.payload.adapterName,
+            adapterProviderAuth: defineAdapterProviderAuth({
+              bindings: [
+                {
+                  method: snapshot.context.auth.method,
+                  deliveries: [{ kind: 'process-env', fields: { apiKey: 'API_KEY' } }],
+                },
+              ],
+              scrubEnvVars: ['API_KEY'],
+            }),
+            compatibleProviderAuths: [],
+            runtimePackages: {
+              adapter: { packageName: '@makaio/adapter-test' },
+              provider: { packageName: '@makaio/test-provider', definitionId: snapshot.context.definitionId },
+            },
+          },
+        });
+      },
+      { priority: -100 },
+    ),
   );
 
   unsubs.push(
@@ -345,6 +432,7 @@ function registerProviderHandlers(unsubs: Array<() => void>): void {
           packageName: '@makaio/test-provider',
           name: 'Test Provider',
           availableModels: [],
+          authMethods: [authMethod],
           defaultModelFilterMode: 'show-all' as const,
           enabled: true,
           createdAt: 0,

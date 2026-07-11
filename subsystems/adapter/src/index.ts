@@ -19,6 +19,18 @@ import type { ExtensionCoordinator } from '@makaio/kernel';
 import { AdapterSubsystemService } from './adapter-subsystem-service.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 export { FileAdapterConfigRepository } from './config-repository.js';
+export {
+  ProviderConfigDiagnosticError,
+  type ProviderConfigDiagnosticCode,
+} from './provider-config-diagnostic-error.js';
+export {
+  assertProviderConfigAuthDefinitionsEnabled,
+  ProviderConfigAuthValidationError,
+  validateProviderConfigAuth,
+  type ProviderConfigAuthValidationCode,
+  type ValidatedProviderConfigAuth,
+} from './provider-config-auth-validation.js';
+export { ProviderRuntimeContextError, type ProviderRuntimeContextErrorCode } from './provider-runtime-view.js';
 
 /** Extension token for the adapter subsystem service. */
 export const AdapterSubsystemToken = extensionToken<AdapterSubsystemService>('adapter-subsystem');
@@ -44,6 +56,8 @@ export interface CreateAdapterSubsystemPackageOptions {
    * Platform-provided defaults forwarded to adapter factories.
    */
   readonly platformDefaults: PlatformDefaults;
+  /** Trusted host-layer auth preparer forwarded opaquely to adapter factories. */
+  readonly prepareAuthRuntime?: unknown;
 }
 
 /**
@@ -73,6 +87,7 @@ export function createAdapterSubsystemPackage(
         coordinator: options.coordinator,
         machineId: ctx.machineId,
         platformDefaults: options.platformDefaults,
+        ...(options.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
       }),
   };
 }

@@ -1,4 +1,9 @@
-import type { CredentialRefreshResult, ICredentialSource, RawCredential } from '../../interfaces/credential-source.js';
+import type {
+  CredentialRefreshResult,
+  ICredentialSource,
+  PreparedNativeCredentialMutation,
+  RawCredential,
+} from '../../interfaces/credential-source.js';
 import type { ILabelProvider } from '../../interfaces/label-provider.js';
 import type { AccountUsage } from '../../bus/schemas.js';
 import type { IUsageProvider, UsageResult } from '../../interfaces/usage-provider.js';
@@ -81,6 +86,36 @@ export class InMemoryCredentialSource implements ICredentialSource, Partial<ILab
   async write(credential: RawCredential): Promise<void> {
     this.credential = credential;
     this.writeHistory.push(credential);
+  }
+
+  /** Clear the in-memory native credential. */
+  async clear(): Promise<void> {
+    this.credential = null;
+  }
+
+  /**
+   * Prepare an in-memory write with the same generation-checked rollback as real sources.
+   * @param credential - Target credential to materialize.
+   * @returns Prepared mutation retaining the previous value privately.
+   */
+  async prepareNativeCredentialMutation(credential: RawCredential): Promise<PreparedNativeCredentialMutation> {
+    const previous = this.credential === null ? null : structuredClone(this.credential);
+    const target = structuredClone(credential);
+    await this.write(target);
+    return {
+      coordination: 'released',
+      rollback: async () => {
+        if (this.credential?.token !== target.token) {
+          return { status: 'superseded', coordination: 'released' };
+        }
+        if (previous === null) {
+          await this.clear();
+        } else {
+          await this.write(previous);
+        }
+        return { status: 'restored', coordination: 'released' };
+      },
+    };
   }
 
   // --- Test helpers ---

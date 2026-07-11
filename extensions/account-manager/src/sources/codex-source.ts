@@ -1,14 +1,16 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parse as parseTOML, stringify as stringifyTOML } from 'smol-toml';
+import { executeCodexNativeAuthSourceLock } from '@makaio/client-codex/runtime';
+import { parse as parseTOML } from 'smol-toml';
 import { AccountUsageSchema } from '../bus/schemas.js';
 import type { AccountUsage } from '../bus/schemas.js';
 import type {
   CredentialRefreshOptions,
   CredentialRefreshResult,
   ICredentialSource,
+  PreparedNativeCredentialMutation,
   RawCredential,
 } from '../interfaces/credential-source.js';
 import type { ILabelProvider } from '../interfaces/label-provider.js';
@@ -24,7 +26,13 @@ import { buildChatgptFingerprint, extractIdTokenIdentity, isIdTokenConsistent } 
 import { mapOAuthErrorToRefreshResult, performOAuthTokenRequest } from '../utils/oauth-token-request.js';
 import { parseRetryAfterMs } from '../utils/retry-after.js';
 import { parseAdditionalRateLimits, parseUsageWindow } from './codex-usage-parser.js';
+import { configureCodexFileCredentialMode } from './codex-file-mode.js';
 import type { CodexAuth, CodexSourceOptions, CodexTokens } from './codex-source-types.js';
+import {
+  clearBackendNativeCredential,
+  prepareBackendNativeCredentialMutation,
+  writeBackendNativeCredential,
+} from './native-credential-mutation.js';
 
 export type { CodexSourceOptions } from './codex-source-types.js';
 
@@ -105,7 +113,31 @@ export class CodexSource implements ICredentialSource, ILabelProvider, IUsagePro
    * @param credential - The credential to write
    */
   public async write(credential: RawCredential): Promise<void> {
-    await this.backend.write(credential.token);
+    await writeBackendNativeCredential(this.clientId, this.codexHome, this.backend, credential, (operation) =>
+      executeCodexNativeAuthSourceLock(this.codexHome, operation),
+    );
+  }
+
+  /** Remove Codex credentials through the configured backend. */
+  public async clear(): Promise<void> {
+    await clearBackendNativeCredential(this.clientId, this.codexHome, this.backend, (operation) =>
+      executeCodexNativeAuthSourceLock(this.codexHome, operation),
+    );
+  }
+
+  /**
+   * Prepare an atomic native write with source-owned generation rollback.
+   * @param credential - Target credential to materialize.
+   * @returns Prepared mutation whose rollback never overwrites a newer refresh.
+   */
+  public async prepareNativeCredentialMutation(credential: RawCredential): Promise<PreparedNativeCredentialMutation> {
+    return prepareBackendNativeCredentialMutation(
+      this.clientId,
+      this.codexHome,
+      this.backend,
+      credential,
+      (operation) => executeCodexNativeAuthSourceLock(this.codexHome, operation),
+    );
   }
 
   /**
@@ -302,26 +334,11 @@ export class CodexSource implements ICredentialSource, ILabelProvider, IUsagePro
    * home-directory resolution separately from availability/config probing.
    */
   public async configureFileMode(): Promise<void> {
-    const backupPath = `${this.configPath}.bak`;
-
-    let content = '';
     try {
-      content = await readFile(this.configPath, 'utf-8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
+      await configureCodexFileCredentialMode(this.codexHome);
+    } catch {
+      throw new Error('Codex native credential configuration failed');
     }
-
-    if (content) {
-      await writeFile(backupPath, content, { mode: 0o600 });
-    }
-
-    const config = content ? (parseTOML(content) as Record<string, unknown>) : {};
-    config.cli_auth_credentials_store = 'file';
-
-    await mkdir(this.codexHome, { recursive: true });
-    await writeFile(this.configPath, stringifyTOML(config), { mode: 0o600 });
   }
 
   /**

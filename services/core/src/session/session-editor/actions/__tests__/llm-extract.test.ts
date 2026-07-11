@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentResolutionSubjects } from '@makaio/contracts';
+import { AdapterSubjects, AgentResolutionSubjects, defineAdapterProviderAuth } from '@makaio/contracts';
+import { CredentialRefSchema } from '@makaio/contracts/config';
 import { AdapterSubsystemSubjects } from '../../../../adapter-subsystem/namespace.js';
 import { ExtractedContextSchema } from '@makaio/services-core/compression/schemas';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
@@ -155,25 +156,77 @@ describe('serializeMessagesForExtraction', () => {
 });
 
 /**
- * Register canned `AdapterSubsystemSubjects.buildProviderContext`
- * handlers required by `buildProviderContext`. Returns the unsubscribe callbacks.
- * @param providerConfigId - Config ID the handler responds to (default `'provider-abc'`)
+ * Register one atomic adapter/provider runtime snapshot for inference tests.
+ * @param providerConfigId - Config ID returned by the runtime snapshot.
+ * @returns Unsubscribe callback.
  */
-function registerProviderContextHandlers(providerConfigId = 'provider-abc'): Array<() => void> {
-  return [
-    MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-      ctx.setResult({
-        context: {
-          providerConfigId,
-          definitionId: 'def-anthropic',
-          credentialRefs: {},
-          endpointOverrides: {
-            anthropic: 'https://api.test.example',
+function registerRuntimeSnapshotHandler(providerConfigId = 'provider-abc'): () => void {
+  const method = { owner: 'provider' as const, providerDefinitionId: 'def-anthropic', methodId: 'api-key' };
+  const methodDefinition = {
+    id: 'api-key',
+    mode: 'explicit' as const,
+    label: 'API key',
+    fields: [
+      {
+        id: 'apiKey',
+        label: 'API key',
+        required: true,
+        secret: true,
+        sourceHints: [{ kind: 'environment' as const, variable: 'ANTHROPIC_API_KEY' }],
+      },
+    ],
+  };
+  return MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+    ctx.setResult({
+      status: 'resolved',
+      runtime: {
+        snapshot: {
+          config: {
+            id: providerConfigId,
+            definitionId: 'def-anthropic',
+            name: 'Anthropic Test',
+            modelFilterMode: 'show-all',
+            isDefault: true,
+            enabled: true,
+            auth: { mode: 'explicit', method, hasCredentials: true },
+          },
+          context: {
+            state: 'resolved',
+            providerConfigId,
+            definitionId: 'def-anthropic',
+            endpointOverrides: { anthropic: 'https://api.test.example' },
+            auth: {
+              mode: 'explicit',
+              method,
+              definition: methodDefinition,
+              credentialRefs: { apiKey: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY') },
+            },
+          },
+          definition: {
+            id: 'def-anthropic',
+            packageName: '@makaio/provider-anthropic',
+            name: 'Anthropic',
+            availableModels: [],
+            authMethods: [methodDefinition],
+            defaultModelFilterMode: 'show-all',
+            enabled: true,
+            createdAt: 1,
+            updatedAt: 1,
           },
         },
-      });
-    }),
-  ];
+        adapterName: 'claude-code',
+        adapterProviderAuth: defineAdapterProviderAuth({
+          bindings: [{ method, deliveries: [{ kind: 'process-env', fields: { apiKey: 'ANTHROPIC_API_KEY' } }] }],
+          scrubEnvVars: ['ANTHROPIC_API_KEY'],
+        }),
+        compatibleProviderAuths: [],
+        runtimePackages: {
+          adapter: { packageName: '@makaio/adapter-claude-code' },
+          provider: { packageName: '@makaio/provider-anthropic', definitionId: 'def-anthropic' },
+        },
+      },
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -228,8 +281,7 @@ describe('createLlmExtractAction — success path', () => {
       }),
     );
 
-    // Provider context build chain (called by buildProviderContext before infer).
-    unsubs.push(...registerProviderContextHandlers());
+    unsubs.push(registerRuntimeSnapshotHandler());
 
     unsubs.push(
       MakaioBus.on(AdapterSubjects.infer, (ctx) => {
@@ -260,9 +312,13 @@ describe('createLlmExtractAction — success path', () => {
     // Verify providerContext was resolved and passed to the infer call.
     expect(inferPayload).toMatchObject({
       providerContext: expect.objectContaining({
+        state: 'resolved',
         providerConfigId: 'provider-abc',
         definitionId: 'def-anthropic',
-        credentialRefs: {},
+        auth: expect.objectContaining({
+          mode: 'explicit',
+          credentialRefs: { apiKey: 'env:ANTHROPIC_API_KEY' },
+        }),
       }),
     });
     expect(inferPayload).not.toHaveProperty('providerContext.credentials');
@@ -339,9 +395,8 @@ describe('createLlmExtractAction — graceful degradation', () => {
     const unsub2 = MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
       ctx.setResult({ adapterId: 'adapter-1' });
     });
-    // AdapterSubsystemSubjects.buildProviderContext throws — provider config not found.
-    const unsub3 = MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, () => {
-      throw new Error('Provider config not found');
+    const unsub3 = MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+      ctx.setResult({ status: 'error', code: 'provider-config-not-found' });
     });
 
     const action = createLlmExtractAction(MakaioBus);
@@ -355,8 +410,8 @@ describe('createLlmExtractAction — graceful degradation', () => {
   });
 
   // The following tests include providerConfigId in the resolution result and
-  // register provider-config handlers so
-  // the full buildProviderContext code path is exercised — matching production
+  // register atomic runtime handlers so the complete adapter/provider
+  // compatibility path is exercised — matching production
   // where AgentResolution typically returns a provider config binding.
 
   it('returns pass-through when AdapterSubjects.infer throws', async () => {
@@ -372,7 +427,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     const unsub2 = MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
       ctx.setResult({ adapterId: 'adapter-1' });
     });
-    const providerUnsubs = registerProviderContextHandlers();
+    const providerUnsub = registerRuntimeSnapshotHandler();
     const unsub5 = MakaioBus.on(AdapterSubjects.infer, () => {
       throw new Error('Model quota exceeded');
     });
@@ -382,7 +437,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
 
     unsub1();
     unsub2();
-    providerUnsubs.forEach((u) => u());
+    providerUnsub();
     unsub5();
 
     expect(result).toEqual({ kind: 'messages', messages });
@@ -401,7 +456,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     const unsub2 = MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
       ctx.setResult({ adapterId: 'adapter-1' });
     });
-    const providerUnsubs = registerProviderContextHandlers();
+    const providerUnsub = registerRuntimeSnapshotHandler();
     const unsub5 = MakaioBus.on(AdapterSubjects.infer, (ctx) => {
       ctx.setResult({ text: 'Sorry, I cannot help with that.' });
     });
@@ -411,7 +466,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
 
     unsub1();
     unsub2();
-    providerUnsubs.forEach((u) => u());
+    providerUnsub();
     unsub5();
 
     expect(result).toEqual({ kind: 'messages', messages });
@@ -430,7 +485,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     const unsub2 = MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
       ctx.setResult({ adapterId: 'adapter-1' });
     });
-    const providerUnsubs = registerProviderContextHandlers();
+    const providerUnsub = registerRuntimeSnapshotHandler();
     // Missing required fields like current_state
     const partialJson = { resolved_items: ['something'] };
     const unsub5 = MakaioBus.on(AdapterSubjects.infer, (ctx) => {
@@ -442,7 +497,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
 
     unsub1();
     unsub2();
-    providerUnsubs.forEach((u) => u());
+    providerUnsub();
     unsub5();
 
     expect(result).toEqual({ kind: 'messages', messages });
@@ -471,7 +526,7 @@ describe('integration: pipeline with llm-extract and messages-to-context', () =>
 
   // This test intentionally omits providerConfigId from the resolution result
   // to exercise the fallback path where no provider config binding exists.
-  // The llm-extract action handles this gracefully by skipping buildProviderContext.
+  // The llm-extract action handles this gracefully by skipping runtime-context resolution.
   it('terminates pipeline at llm-extract when extraction succeeds', async () => {
     // Register the llm-extract action in the registry
     const llmExtractAction = createLlmExtractAction(MakaioBus);

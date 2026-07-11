@@ -27,13 +27,6 @@ export const CLIENT_CATALOG: readonly SetupClientEntry[] = [
     extensionPackages: ['@makaio/client-gemini', '@makaio/provider-google', '@makaio/adapter-gemini-sdk'],
   },
   {
-    clientId: 'qwen',
-    displayName: 'Qwen Code',
-    binaryName: 'qwen',
-    detectPaths: ['~/.qwen'],
-    extensionPackages: ['@makaio/client-qwen', '@makaio/provider-qwen-acp', '@makaio/adapter-qwen-acp'],
-  },
-  {
     clientId: 'github-copilot',
     displayName: 'GitHub Copilot',
     binaryName: 'copilot',

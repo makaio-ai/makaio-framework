@@ -55,6 +55,7 @@ describe('ClientHookEventDeclaration', () => {
       id: 'test-client',
       name: 'Test',
       version: '0.1.0',
+      authMethods: [],
       nativeTools: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {

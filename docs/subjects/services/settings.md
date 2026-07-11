@@ -52,7 +52,6 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `credentials` | `Record<string, string & $brand<"CredentialRef">> \| undefined` | no |
 | `cwd` | `string \| undefined` | no |
 | `env` | `Record<string, string> \| undefined` | no |
 | `model` | `string \| undefined` | no |
@@ -71,7 +70,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterName` | `string` | yes |
-| `defaults` | `{ model?: string \| undefined; timeouts?: unknown; cwd?: string \| undefined; env?: Record<string, string> \| undefined; credentials?: Record<string, string> \| undefined; providerSettings?: Record<string, unknown> \| undefined; }` | yes |
+| `defaults` | `{ model?: string \| undefined; timeouts?: unknown; cwd?: string \| undefined; env?: Record<string, string> \| undefined; providerSettings?: Record<string, unknown> \| undefined; }` | yes |
 
 **Response:**
 
@@ -129,7 +128,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `adapters` | `{ adapterName: string; displayName: string; enabled: boolean; configCount: number; supportsLogImport: boolean; description?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; readiness?: "ready" \| "needs-setup" \| "missing-credentials" \| undefined; clientId?: string \| undefined; protocol?: "anthropic" \| "openai" \| undefined; providerDefinitionIds?: string[] \| undefined; }[]` | yes |
+| `adapters` | `{ adapterName: string; displayName: string; enabled: boolean; configCount: number; supportsLogImport: boolean; readiness: "ready" \| "needs-setup"; description?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; clientId?: string \| undefined; protocol?: "anthropic" \| "openai" \| undefined; providerDefinitionIds?: string[] \| undefined; }[]` | yes |
 
 ### <a id="settings.adapter.setEnabled"></a>`settings.adapter.setEnabled` (rpc)
 

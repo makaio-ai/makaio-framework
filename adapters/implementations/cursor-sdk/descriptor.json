@@ -5,6 +5,14 @@
   "makaio": {
     "framework": ">=0.1.0"
   },
+  "dependencies": [
+    {
+      "type": "extension",
+      "name": "provider-cursor",
+      "version": ">=0.1.0",
+      "optional": true
+    }
+  ],
   "entrypoints": {
     "server": true
   },
@@ -13,7 +21,7 @@
       {
         "name": "cursor-sdk",
         "displayName": "Cursor SDK",
-        "description": "Cursor Composer via its native TypeScript SDK",
+        "description": "Cursor AI editor agent via TypeScript SDK",
         "protocols": []
       }
     ]

@@ -11,6 +11,10 @@
       "source": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./testing": {
+      "source": "./src/testing/index.ts",
+      "default": "./src/testing/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "devDependencies": {
@@ -18,6 +22,7 @@
   },
   "dependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
     "@makaio/client-claude-code": "workspace:*",
     "@makaio/contracts": "workspace:*"
   },

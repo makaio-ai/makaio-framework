@@ -1,5 +1,10 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
-import { resolveConformanceTestPreset, resolveTestConfig } from '@makaio/ai-adapters-core';
+import {
+  ConformanceConnectorRuntimeRegistry,
+  resolveConformanceTestPreset,
+  resolveTestConfig,
+} from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
 import { AnthropicSdkConnector } from './connector.js';
 import { AnthropicSdkConnectorNamespace } from './namespaces/index.js';
 import type { AnthropicSdkConnectorBus } from './namespaces/index.js';
@@ -8,6 +13,7 @@ import { createAnthropicSdkAdapter, AnthropicSdkAdapterName } from './adapter.js
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { AnthropicSdkConfig } from './config.js';
 import { providerIds, testPresetId } from './provider.js';
+import { adapterDefinition } from './definition.js';
 
 /**
  * Create a conformance test configuration for the Anthropic SDK adapter.
@@ -24,17 +30,24 @@ export const createTestConfig = async (
   const bus = await scopedBus();
   const testPreset = resolveConformanceTestPreset({
     adapterName: AnthropicSdkAdapterName,
-    defaultProviderId: testPresetId,
+    testProviderDefinitionId: testPresetId,
     providerIds,
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<AnthropicSdkConnectorBus, AnthropicSdkConnector>();
 
   return {
-    createConnector: async (options) =>
-      new AnthropicSdkConnector(
-        await AnthropicSdkConfig.getConfig(resolveTestConfig(options, bus, testPreset.provider, testPreset.providers)),
-      ),
+    createConnector: async (options) => {
+      const config = await AnthropicSdkConfig.getConfig({
+        ...resolveTestConfig(options, bus, testPreset.provider, adapterDefinition.providers),
+        globalBus: MakaioBus,
+      });
+      return connectorRuntimes.create({
+        config,
+        connectorFactory: (runtimeConfig) => new AnthropicSdkConnector(runtimeConfig),
+      });
+    },
     bus,
     registerToolApprovalHandler,
     capabilities: {
@@ -51,5 +64,6 @@ export const createTestConfig = async (
     createAdapter: async (options) => createAnthropicSdkAdapter({ adapterId: options?.adapterId }),
     adapterName: AnthropicSdkAdapterName,
     testProviderContext: testPreset.providerContext,
+    cleanup: () => connectorRuntimes.closeAll(),
   };
 };

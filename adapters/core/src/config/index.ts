@@ -21,15 +21,29 @@ export {
 } from './factory.js';
 
 // Provider endpoint resolution (for non-agent consumers like bridges)
-export { resolveProviderEndpoint, type ProviderEndpoint } from './resolve-provider-endpoint.js';
+export {
+  resolveProviderEndpoint,
+  ProviderEndpointAuthError,
+  type ProviderEndpoint,
+  type ProviderEndpointAuthRequirement,
+  type ProviderEndpointAuthErrorCode,
+} from './resolve-provider-endpoint.js';
 
-// Shared provider resolution helper (config + definition + endpoint + credentials in one call)
+// Shared refs-only provider resolution helper
 /** @public */
-export { resolveProviderResolution, type ProviderResolution } from './resolve-provider-resolution.js';
+export {
+  resolveProviderResolution,
+  ProviderResolutionError,
+  type ProviderResolution,
+  type ProviderResolutionErrorCode,
+} from './resolve-provider-resolution.js';
 
 // Connector-layer credential resolution (moved from services-core in Phase 2)
-export { resolveConnectorCredentials } from './resolve-connector-credentials.js';
-export { buildCredentialEnv } from './build-credential-env.js';
+export {
+  resolveConnectorCredentials,
+  ConnectorCredentialResolutionError,
+  type ConnectorCredentialResolutionErrorCode,
+} from './resolve-connector-credentials.js';
 
 // Consolidated session environment helper for subprocess connectors
 export {
@@ -37,3 +51,38 @@ export {
   type SessionEnvironmentOptions,
   type SessionEnvironmentResult,
 } from './resolve-session-environment.js';
+
+// Normalized adapter authentication compiler and connector-local resolver
+export {
+  bindProviderAuth,
+  getOptionalAuthCredentialFields,
+  resolveBoundProviderAuth,
+  AdapterAuthError,
+  type AdapterAuthErrorReason,
+  type BindProviderAuthOptions,
+  type BoundProviderAuthContext,
+  type ResolveAuthCredentialRefs,
+  type ResolvedAuthCredentialValues,
+  type ResolvedAdapterAuth,
+  type ResolvedConnectorAuthDelivery,
+} from './resolve-adapter-auth.js';
+
+// Central normalized auth materialization and explicit lease ownership
+export {
+  applySuppliedAdapterAuthRuntime,
+  prepareAdapterAuthRuntime,
+  type AdapterAuthLeaseHandle,
+  type AdapterAuthRuntimePreparer,
+  type BoundAdapterRuntimeConfig,
+  type PreparedAdapterAuthRuntime,
+  type ResolvedAdapterRuntimeConfig,
+  type SuppliedAdapterAuthRuntime,
+} from './adapter-auth-runtime.js';
+
+// Atomic loaded-adapter/provider metadata read and refs-only binding
+export {
+  resolveAdapterRuntimeSnapshot,
+  AdapterRuntimeSnapshotError,
+  type AdapterRuntimeSnapshotErrorCode,
+  type BoundAdapterRuntimeSnapshot,
+} from './resolve-adapter-runtime-snapshot.js';

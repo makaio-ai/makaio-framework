@@ -5,15 +5,21 @@ import { createPortablePackageJson, createRepoDevAliases, type ExtensionPackageJ
 const FRAMEWORK_VERSIONS = {
   '@makaio/build-tooling': '0.1.0',
   '@makaio/bus-core': '0.1.0',
+  '@makaio/client-claude-code': '0.1.0',
+  '@makaio/client-codex': '0.1.0',
   '@makaio/contracts': '0.1.0',
   '@makaio/core': '0.1.0',
   '@makaio/runtime-node': '0.1.0',
+  '@makaio/services-core': '0.1.0',
   '@makaio/service-base': '0.1.0',
+  '@makaio/storage-core': '0.1.0',
+  '@makaio/storage-drizzle': '0.1.0',
   '@makaio/test-utils': '0.1.0',
   '@makaio/ui-hooks': '0.1.0',
   '@makaio/ui-kernel': '0.1.0',
   '@makaio/ui-theme': '0.1.0',
   '@makaio/ui-views': '0.1.0',
+  '@makaio/utils': '0.1.0',
 } as const;
 
 /** UI framework packages whose workspace specifiers are rewritten by createPortablePackageJson. */
@@ -39,7 +45,7 @@ describe('createRepoDevAliases', () => {
 });
 
 describe('createPortablePackageJson', () => {
-  it('rewrites local framework links into versioned portable dev dependencies', () => {
+  it('rewrites local framework links into versioned portable dependencies', () => {
     const packageJson = {
       name: '@makaio/extension-account-manager',
       version: '0.1.0',
@@ -52,6 +58,10 @@ describe('createPortablePackageJson', () => {
       peerDependencies: {
         '@makaio/bus-core': 'link:../../framework/core/bus-core',
         ink: '^6.3.1',
+      },
+      dependencies: {
+        '@makaio/client-claude-code': 'workspace:*',
+        '@makaio/client-codex': 'workspace:*',
       },
       devDependencies: {
         '@makaio/build-tooling': 'link:../../framework/build-tooling',
@@ -72,6 +82,10 @@ describe('createPortablePackageJson', () => {
     expect(portablePackageJson.peerDependencies).toEqual({
       '@makaio/bus-core': '^0.1.0',
       ink: '^6.3.1',
+    });
+    expect(portablePackageJson.dependencies).toEqual({
+      '@makaio/client-claude-code': '^0.1.0',
+      '@makaio/client-codex': '^0.1.0',
     });
     const uiExpected = Object.fromEntries(
       UI_PACKAGE_REFERENCES.map(([name]) => [name, `^${FRAMEWORK_VERSIONS[name]}`]),

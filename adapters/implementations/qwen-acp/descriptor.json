@@ -8,20 +8,5 @@
   "entrypoints": {
     "server": true
   },
-  "contributions": {
-    "adapters": [
-      {
-        "name": "qwen-acp",
-        "displayName": "Qwen Code (ACP)",
-        "description": "Qwen Code CLI via Agent Client Protocol",
-        "clients": [
-          {
-            "id": "qwen",
-            "version": "^0.1.0"
-          }
-        ],
-        "protocols": ["openai"]
-      }
-    ]
-  }
+  "contributions": {}
 }

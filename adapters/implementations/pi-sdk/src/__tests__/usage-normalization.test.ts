@@ -11,9 +11,11 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import { createNoAuthTestProviderContext } from '@makaio/ai-adapters-core';
 import { PiAgent } from '../agent.js';
 import { PiConnector } from '../connector.js';
 import { PiSdkNamespace, PiSdkSubjects } from '../namespaces/index.js';
+import { PI_PROVIDER_AUTH_TARGET } from '../provider-auth.js';
 
 const TEST_AGENT_ID = 'agent-pi-usage-test';
 const TEST_ADAPTER_ID = 'adapter-pi-usage-test';
@@ -60,6 +62,13 @@ async function makeAgent(): Promise<{ agent: PiAgent; connector: TestPiConnector
       adapterId: TEST_ADAPTER_ID,
       model: input.model ?? TEST_MODEL,
       cwd: input.cwd ?? tmpdir(),
+      adapterAuth: {
+        processEnv: {},
+        connectorDeliveries: [{ target: PI_PROVIDER_AUTH_TARGET, values: { apiKey: 'test-key' } }],
+        configInheritance: 'empty' as const,
+      },
+      providerContext: createNoAuthTestProviderContext('pi-test-config', 'anthropic'),
+      providerProtocol: 'anthropic' as const,
     }),
     connectorFactory: (config) => {
       connector = new TestPiConnector({ ...config, adapterId: TEST_ADAPTER_ID });

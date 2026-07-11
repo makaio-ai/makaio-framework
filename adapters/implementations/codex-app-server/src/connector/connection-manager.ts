@@ -1,21 +1,39 @@
 /**
  * Connection lifecycle management for the Codex App-Server connector.
  *
- * Handles JSON-RPC client creation, subprocess spawning, credential resolution,
- * the ACP `initialize` handshake, and error-path teardown. The connector holds all
+ * Handles JSON-RPC client creation, subprocess spawning, the Codex `initialize`
+ * and normalized account-login handshake, and error-path teardown. The connector holds all
  * mutable state; this module mutates it only through the typed accessors in
  * {@link ConnectionManagerContext}.
  * @packageDocumentation
  */
 
-import type { IMakaioBus } from '@makaio/bus-core';
 import { resolveDisabledNativeTools } from '@makaio/ai-adapters-core';
-import type { ProviderContext } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { InitializeParams } from '../protocol/generated/index.js';
 import { createJsonRpcClient as makeJsonRpcClient, type JsonRpcClient } from '../utils/jsonRpcClient.js';
 import { createStdioTransport, type StdioTransport } from '../utils/createStdioTransport.js';
-import { resolveSessionEnvironment, type SessionEnvironmentOptions } from '@makaio/ai-adapters-core/config';
 import { CLIENT_INFO } from './types.js';
+import { loginCodexApiKeyAccount, type CodexApiKeyAccountLogin } from './account-login.js';
+
+/** Stable, credential-free process-reset failure categories. */
+export type CodexConnectionResetErrorReason = 'client-close-failed' | 'transport-close-failed';
+
+/** Process-reset failure that never retains a transport or protocol error payload. */
+export class CodexConnectionResetError extends Error {
+  /**
+   * @param reason - Stable reset stage safe for diagnostics
+   */
+  public constructor(public readonly reason: CodexConnectionResetErrorReason) {
+    super(
+      reason === 'client-close-failed'
+        ? 'Codex app-server client reset failed.'
+        : 'Codex app-server transport reset failed.',
+    );
+    this.name = 'CodexConnectionResetError';
+  }
+}
 
 /**
  * Mutable connector state and callbacks required by the connection manager.
@@ -46,18 +64,18 @@ export interface ConnectionManagerContext {
   setDisabledNativeTools: (tools: ReadonlySet<string>) => void;
   /** Working directory passed to the subprocess on first spawn. */
   cwd: string;
-  /** Environment variables merged into the subprocess environment. */
+  /** Subprocess environment finalized by the central adapter runtime. */
   env: Record<string, string>;
   /** Adapter type name used for harness tool policy lookup. */
   adapterName: string;
-  /** Provider context carrying credential refs for resolution. */
-  providerContext: ProviderContext | undefined;
-  /** Optional client identifier for binary resolution (defaults to `'codex'`). */
+  /** Optional client identity used for harness tool policy lookup. */
   clientId: string | undefined;
+  /** Managed binary selection finalized by the central adapter runtime. */
+  clientExecution: ClientExecutionContext | undefined;
+  /** Private API-key protocol delivery retained for reconnecting this connector. */
+  getAccountLogin: () => CodexApiKeyAccountLogin | undefined;
   /** Optional harness ID for native-tool policy lookup. */
   harnessId: string | undefined;
-  /** Scoped bus used for credential resolution. */
-  bus: SessionEnvironmentOptions['bus'];
   /** Global bus used for cross-namespace harness policy lookup. */
   globalBus: IMakaioBus;
   /**
@@ -78,8 +96,8 @@ export interface ConnectionManagerContext {
  * Create and attach the JSON-RPC client to the connector.
  *
  * If the context already has a client (from a test injection or a prior call),
- * only registers handlers and returns immediately. Otherwise, resolves credentials
- * and the managed binary path, spawns the subprocess via stdio transport, and
+ * only registers handlers and returns immediately. Otherwise, consumes the
+ * centrally finalized environment and binary selection, spawns the subprocess, and
  * registers the error callback.
  * @param ctx - Connection manager context
  */
@@ -96,15 +114,8 @@ async function createClient(ctx: ConnectionManagerContext): Promise<void> {
     return;
   }
 
-  const { resolvedBinary, spawnEnv } = await resolveSessionEnvironment({
-    bus: ctx.bus,
-    providerContext: ctx.providerContext,
-    clientId: ctx.clientId ?? 'codex',
-    baseEnv: ctx.env,
-  });
-
   const transport =
-    ctx.getInjectedTransport() ?? createStdioTransport(ctx.cwd, spawnEnv, resolvedBinary?.binaryPath ?? undefined);
+    ctx.getInjectedTransport() ?? createStdioTransport(ctx.cwd, ctx.env, ctx.clientExecution?.binaryPath ?? undefined);
   if (!ctx.getInjectedTransport()) {
     ctx.setOwnedTransport(transport);
   }
@@ -130,23 +141,44 @@ export function resetClient(ctx: ConnectionManagerContext): void {
   ctx.setOwnedTransport(undefined);
 
   const injected = ctx.getInjectedJsonRpcClient();
-  if (!injected) {
-    ctx.getJsonRpcClient()?.close();
-    if (!ctx.getJsonRpcClient() && transport) {
-      transport.close();
-    }
-    ctx.setJsonRpcClient(undefined);
+  if (injected) {
+    ctx.setJsonRpcClient(injected);
     return;
   }
 
-  ctx.setJsonRpcClient(injected);
+  const client = ctx.getJsonRpcClient();
+  const failures: CodexConnectionResetError[] = [];
+  try {
+    if (client !== undefined) {
+      try {
+        client.close();
+      } catch {
+        failures.push(new CodexConnectionResetError('client-close-failed'));
+      }
+    }
+    if (transport !== undefined && (client === undefined || failures.length > 0)) {
+      try {
+        transport.close();
+      } catch {
+        failures.push(new CodexConnectionResetError('transport-close-failed'));
+      }
+    }
+  } finally {
+    ctx.setJsonRpcClient(undefined);
+  }
+
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, 'Codex connection reset encountered multiple failures.');
+  }
 }
 
 /**
- * Perform the full ACP `initialize` handshake in a single flight.
+ * Perform the full Codex process-ready handshake in a single flight.
  *
  * Spawns the subprocess (or reuses an injected client), resolves disabled native
- * tools via the global harness bus, sends `initialize`, and fires `initialized`.
+ * tools via the global harness bus, sends `initialize`/`initialized`, and applies
+ * the selected API-key login before publishing the connection as ready.
  * On any error the client is torn down via {@link resetClient} before re-throwing
  * so the next call starts from a clean state.
  * @param ctx - Connection manager context
@@ -155,8 +187,8 @@ async function performConnectionInit(ctx: ConnectionManagerContext): Promise<voi
   try {
     await createClient(ctx);
 
-    // Harness lookups remain global-bus scoped: harness subjects live in the
-    // global namespace, while credential refs resolve through the connector bus.
+    // Harness lookups remain global-bus scoped because harness subjects live
+    // in the global namespace.
     ctx.setDisabledNativeTools(
       new Set(await resolveDisabledNativeTools(ctx.globalBus, ctx.adapterName, ctx.harnessId, ctx.clientId)),
     );
@@ -170,9 +202,19 @@ async function performConnectionInit(ctx: ConnectionManagerContext): Promise<voi
     if (!client) throw new Error('JSON-RPC client not initialized');
     await client.request('initialize', initParams);
     client.notification('initialized', {});
+    const accountLogin = ctx.getAccountLogin();
+    if (accountLogin !== undefined) {
+      await loginCodexApiKeyAccount(client, accountLogin);
+    }
     ctx.setIsConnected(true);
   } catch (error) {
-    resetClient(ctx);
+    try {
+      resetClient(ctx);
+    } catch (resetError) {
+      throw new AggregateError([error, resetError], 'Codex process-ready handshake and reset both failed.', {
+        cause: error,
+      });
+    }
     throw error;
   }
 }

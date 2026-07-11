@@ -51,6 +51,15 @@ describe('client schemas', () => {
     expect(ClientScanResultSchema.safeParse({ clientId: '', found: true }).success).toBe(false);
   });
 
+  it('accepts only absolute executable paths in client scan results', () => {
+    expect(
+      ClientScanResultSchema.safeParse({ clientId: 'claude-code', found: true, binaryPath: '/opt/bin/claude' }).success,
+    ).toBe(true);
+    expect(
+      ClientScanResultSchema.safeParse({ clientId: 'claude-code', found: true, binaryPath: 'bin/claude' }).success,
+    ).toBe(false);
+  });
+
   it('validates client.account.observe requests and responses', () => {
     const request = ClientAccountObserveSchema.request.parse({
       clientId: 'client-alpha',

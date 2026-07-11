@@ -9,14 +9,17 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CodexAppServerConnector } from '../connector.js';
+import { CodexConnectorCloseError } from '../connector/connector-shutdown.js';
 import {
   createConnectorTestContext,
   cleanupConnectorTestContext,
   MockJsonRpcClient,
+  createApiKeyAdapterAuth,
   startConnectorAndEmitThreadStarted,
   startConnectorWithThread,
   type ConnectorTestContext,
 } from './shared.js';
+import { CodexAccountLoginError } from '../connector/account-login.js';
 
 describe('CodexAppServerConnector - Initialization', () => {
   let ctx: ConnectorTestContext;
@@ -85,6 +88,173 @@ describe('CodexAppServerConnector - Initialization', () => {
     const threadStart = ctx.mockJsonRpcClient.sentRequests.find((r) => r.method === 'thread/start');
     expect(threadStart).toBeDefined();
     expect((threadStart?.params as { experimentalRawEvents?: boolean }).experimentalRawEvents).toBe(false);
+  });
+
+  it('performs API-key login after initialize and before every thread operation', async () => {
+    cleanupConnectorTestContext(ctx);
+    ctx = await createConnectorTestContext({ adapterAuth: createApiKeyAdapterAuth('private-api-key') });
+
+    await ctx.connector.initialize();
+
+    expect(ctx.mockJsonRpcClient.operations.slice(0, 4)).toEqual([
+      { kind: 'request', method: 'initialize', params: expect.any(Object) },
+      { kind: 'notification', method: 'initialized', params: {} },
+      {
+        kind: 'request',
+        method: 'account/login/start',
+        params: { type: 'apiKey', apiKey: 'private-api-key' },
+      },
+      { kind: 'request', method: 'thread/start', params: expect.any(Object) },
+    ]);
+  });
+
+  it('logs in at most once for one successfully initialized app-server process', async () => {
+    cleanupConnectorTestContext(ctx);
+    ctx = await createConnectorTestContext({ adapterAuth: createApiKeyAdapterAuth() });
+
+    await ctx.connector.initialize();
+    await ctx.connector.initialize();
+
+    expect(ctx.mockJsonRpcClient.sentRequests.filter(({ method }) => method === 'account/login/start')).toHaveLength(1);
+    expect(ctx.mockJsonRpcClient.sentRequests.filter(({ method }) => method.startsWith('thread/'))).toHaveLength(1);
+  });
+
+  it('does not issue API-key login for native or access-token process auth', async () => {
+    cleanupConnectorTestContext(ctx);
+    const native = await createConnectorTestContext({ env: { CODEX_HOME: '/isolated/native-codex' } });
+    const accessToken = await createConnectorTestContext({
+      env: { CODEX_HOME: '/isolated/token-codex', CODEX_ACCESS_TOKEN: 'access-token' },
+      adapterAuth: {
+        processEnv: { CODEX_ACCESS_TOKEN: 'access-token' },
+        connectorDeliveries: [],
+        configInheritance: 'empty',
+      },
+    });
+
+    try {
+      await native.connector.initialize();
+      await accessToken.connector.initialize();
+      expect(native.mockJsonRpcClient.sentRequests.some(({ method }) => method === 'account/login/start')).toBe(false);
+      expect(accessToken.mockJsonRpcClient.sentRequests.some(({ method }) => method === 'account/login/start')).toBe(
+        false,
+      );
+    } finally {
+      await native.connector.close();
+      await accessToken.connector.close();
+      cleanupConnectorTestContext(native);
+      cleanupConnectorTestContext(accessToken);
+    }
+  });
+
+  it('blocks thread startup, sanitizes login failure, and retries the full process-ready handshake', async () => {
+    class FailFirstLoginClient extends MockJsonRpcClient {
+      private shouldFailLogin = true;
+
+      public override async request<T>(method: string, params: unknown): Promise<T> {
+        if (method === 'account/login/start' && this.shouldFailLogin) {
+          this.shouldFailLogin = false;
+          this.sentRequests.push({ method, params });
+          this.operations.push({ kind: 'request', method, params });
+          throw new Error('provider echoed private-api-key');
+        }
+        return super.request<T>(method, params);
+      }
+    }
+
+    cleanupConnectorTestContext(ctx);
+    const client = new FailFirstLoginClient();
+    ctx = await createConnectorTestContext({
+      adapterAuth: createApiKeyAdapterAuth('private-api-key'),
+      jsonRpcClient: client,
+    });
+
+    let loginError: unknown;
+    try {
+      await ctx.connector.initialize();
+    } catch (error) {
+      loginError = error;
+    }
+
+    expect(loginError).toBeInstanceOf(CodexAccountLoginError);
+    expect((loginError as Error).message).not.toContain('private-api-key');
+    expect(client.sentRequests.some(({ method }) => method.startsWith('thread/'))).toBe(false);
+
+    await ctx.connector.initialize();
+
+    expect(client.sentRequests.filter(({ method }) => method === 'initialize')).toHaveLength(2);
+    expect(client.sentRequests.filter(({ method }) => method === 'account/login/start')).toHaveLength(2);
+    expect(client.sentRequests.filter(({ method }) => method === 'thread/start')).toHaveLength(1);
+  });
+
+  it('discards private API-key login material when the connector closes', async () => {
+    cleanupConnectorTestContext(ctx);
+    ctx = await createConnectorTestContext({ adapterAuth: createApiKeyAdapterAuth('private-api-key') });
+    await ctx.connector.initialize();
+
+    expect(Reflect.get(ctx.connector, 'accountLogin')).toMatchObject({ type: 'apiKey' });
+
+    await ctx.connector.close();
+
+    expect(Reflect.get(ctx.connector, 'accountLogin')).toBeUndefined();
+  });
+
+  it('attempts client close, sanitizes both shutdown failures, and discards private login material', async () => {
+    class FailingShutdownClient extends MockJsonRpcClient {
+      public override async request<T>(method: string, params: unknown): Promise<T> {
+        if (method === 'thread/archive') {
+          throw new Error('archive echoed private-api-key');
+        }
+        return super.request<T>(method, params);
+      }
+
+      public override close(): void {
+        super.close();
+        throw new Error('close echoed private-api-key');
+      }
+    }
+
+    cleanupConnectorTestContext(ctx);
+    const client = new FailingShutdownClient();
+    ctx = await createConnectorTestContext({
+      adapterAuth: createApiKeyAdapterAuth('private-api-key'),
+      jsonRpcClient: client,
+    });
+    await ctx.connector.initialize();
+
+    let closeError: unknown;
+    try {
+      await ctx.connector.close();
+    } catch (error) {
+      closeError = error;
+    }
+
+    expect(closeError).toBeInstanceOf(AggregateError);
+    expect((closeError as AggregateError).errors).toEqual([
+      expect.objectContaining<Partial<CodexConnectorCloseError>>({ reason: 'archive-failed' }),
+      expect.objectContaining<Partial<CodexConnectorCloseError>>({ reason: 'client-close-failed' }),
+    ]);
+    expect((closeError as Error).message).not.toContain('private-api-key');
+    expect(client.operations.some(({ kind }) => kind === 'close')).toBe(true);
+    expect(Reflect.get(ctx.connector, 'accountLogin')).toBeUndefined();
+  });
+
+  it('sanitizes an abort close failure and still discards private login material', async () => {
+    class FailingCloseClient extends MockJsonRpcClient {
+      public override close(): void {
+        throw new Error('close echoed private-api-key');
+      }
+    }
+
+    cleanupConnectorTestContext(ctx);
+    ctx = await createConnectorTestContext({
+      adapterAuth: createApiKeyAdapterAuth('private-api-key'),
+      jsonRpcClient: new FailingCloseClient(),
+    });
+
+    expect(() => ctx.connector.abort()).toThrowError(
+      expect.objectContaining<Partial<CodexConnectorCloseError>>({ reason: 'client-close-failed' }),
+    );
+    expect(Reflect.get(ctx.connector, 'accountLogin')).toBeUndefined();
   });
 
   it('should include reasoningEffort in turn/start request when configured', async () => {

@@ -53,7 +53,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `audioTransport` | `"none" \| "ws"` | yes |
-| `strategy` | `{ stt: { runtime: "server" \| "client"; providerId: string; providerName: string; }; tts: { runtime: "server" \| "client"; providerId: string; providerName: string; }; }` | yes |
+| `strategy` | `{ stt: { runtime: "client" \| "server"; providerId: string; providerName: string; }; tts: { runtime: "client" \| "server"; providerId: string; providerName: string; }; }` | yes |
 
 ### <a id="voice.session.stop"></a>`voice.session.stop` (rpc)
 

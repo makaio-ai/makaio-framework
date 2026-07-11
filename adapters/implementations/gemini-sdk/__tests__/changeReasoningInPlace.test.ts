@@ -73,7 +73,7 @@ describe('GeminiConnector.changeReasoningInPlace()', () => {
 
     await connector.changeReasoningInPlace('high');
 
-    const geminiConfig = connector.getModelMutationConfig();
+    const geminiConfig = await connector.getModelMutationConfig();
     const resolved = geminiConfig.modelConfigService.getResolvedConfig({ model: 'gemini-2.5-flash' });
     const thinkingConfig = resolved.generateContentConfig?.thinkingConfig as
       | { thinkingBudget?: number; thinkingLevel?: string }
@@ -125,7 +125,7 @@ describe('GeminiConnector.changeReasoningInPlace()', () => {
     connector.currentReasoningEffort = 'high'; // Caller owns this mutation
 
     // Now change the model — it should propagate 'high', not the stale 'low' from config.
-    const geminiConfig = connector.getModelMutationConfig();
+    const geminiConfig = await connector.getModelMutationConfig();
     await connector.changeModelInPlace('gemini-2.5-pro');
 
     const resolved = geminiConfig.modelConfigService.getResolvedConfig({ model: 'gemini-2.5-pro' });

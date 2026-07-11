@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { ClientAuthMethodsSchema, ClientDefaultAuthSchema } from '../auth/definitions.js';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
 import { isPortableAbsolutePath, NonEmptyStringSchema } from './primitives.js';
 import { VersionLiteralSchema, type VersionRange, VersionRangeSchema } from '../version/index.js';
@@ -477,10 +478,14 @@ export const ClientDefinitionSchema = z
     /** Log source definitions used by the log-import service. */
     logSources: z.array(LogSourceDefinitionSchema).optional(),
     /**
-     * Provider definition ID to use for client-managed auth (sentinel
-     * ProviderConfig). References a ProviderDefinition.id.
+     * Authentication methods owned by this client definition.
      */
-    defaultProviderId: z.string().optional(),
+    authMethods: ClientAuthMethodsSchema,
+    /**
+     * Native authentication method used for the client's managed default
+     * provider configuration.
+     */
+    defaultAuth: ClientDefaultAuthSchema.optional(),
     /**
      * Declarative runtime capability flags for this client.
      *
@@ -559,6 +564,20 @@ export const ClientDefinitionSchema = z
   .refine((definition) => definition.managedInstall === undefined || definition.versionCommand !== undefined, {
     message: 'versionCommand is required when managedInstall is provided',
     path: ['versionCommand'],
+  })
+  .superRefine((definition, ctx) => {
+    if (definition.defaultAuth === undefined) {
+      return;
+    }
+
+    const method = definition.authMethods.find(({ id }) => id === definition.defaultAuth?.methodId);
+    if (method?.mode !== 'inferred') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'defaultAuth.methodId must reference an inferred method declared by this client.',
+        path: ['defaultAuth', 'methodId'],
+      });
+    }
   })
   .superRefine((definition, ctx) => {
     if (definition.managedInstall === undefined || definition.versionCommand === undefined) {

@@ -5,7 +5,7 @@ export {
   AgentStorageNamespace,
   AgentStorageSubjects,
   assembleForkContext,
-  buildProviderContext,
+  resolveRuntimeProviderContext,
   buildRecoveryContext,
   buildRecoveryContextWithPipeline,
   buildSessionContext,
@@ -185,39 +185,41 @@ export {
   ModelRegistryService,
   ModelRegistrySubjects,
   ProviderModelOverrideSchema,
-} from './model-registry/index.js';
-export type {
-  IModelRegistryCache,
-  IModelRegistryFetcher,
-  ModelRegistry,
-  ModelRegistryCheckModelInProvidersRequest,
-  ModelRegistryCheckModelInProvidersResponse,
-  ModelRegistryGetForProviderRequest,
-  ModelRegistryGetForProviderResponse,
-  ModelRegistryGetLabModelsRequest,
-  ModelRegistryGetLabModelsResponse,
-  ModelRegistryGetProviderModelsRequest,
-  ModelRegistryGetProviderModelsResponse,
-  ModelRegistryRefreshRequest,
-  ModelRegistryRefreshResponse,
-  ModelRegistryServiceOptions,
-  ProviderModelOverride,
+  type IModelRegistryCache,
+  type IModelRegistryFetcher,
+  type ModelRegistry,
+  type ModelRegistryCheckModelInProvidersRequest,
+  type ModelRegistryCheckModelInProvidersResponse,
+  type ModelRegistryGetForProviderRequest,
+  type ModelRegistryGetForProviderResponse,
+  type ModelRegistryGetLabModelsRequest,
+  type ModelRegistryGetLabModelsResponse,
+  type ModelRegistryGetProviderModelsRequest,
+  type ModelRegistryGetProviderModelsResponse,
+  type ModelRegistryRefreshRequest,
+  type ModelRegistryRefreshResponse,
+  type ModelRegistryServiceOptions,
+  type ProviderModelOverride,
 } from './model-registry/index.js';
 export {
   canonicalModelPackage,
   CanonicalModelResolutionError,
   CanonicalModelResolver,
   CanonicalModelService,
+  type AmbiguousMatch,
+  type CanonicalModelResolutionErrorCode,
+  type CanonicalModelResolverDeps,
+  type DefaultModelResolution,
+  type ResolvedDefaultTarget,
+  type ResolvedSelection,
 } from './canonical-model/index.js';
-export type {
-  AmbiguousMatch,
-  CanonicalModelResolutionErrorCode,
-  CanonicalModelResolverDeps,
-  DefaultModelResolution,
-  ResolvedDefaultTarget,
-  ResolvedSelection,
-} from './canonical-model/index.js';
-export { activateProviderContext, activateProviderContextStrict } from './provider-context/index.js';
+export {
+  activateProviderContext,
+  ProviderContextActivationError,
+  type ProviderContextActivationErrorCode,
+  RuntimeProviderContextResolutionError,
+  type RuntimeProviderContextResolutionErrorCode,
+} from './provider-context/index.js';
 export {
   artifactSchemaRegistryPackage,
   ArtifactSchemaRegistryToken,
@@ -253,6 +255,7 @@ export {
   WorkflowBlockRegistryToken,
 } from './framework-packages.js';
 export {
+  SubagentFailureFinalizationError,
   SubagentManager,
   SubagentService,
   subagentServicePackage,
@@ -260,6 +263,7 @@ export {
   type InputResolver,
   type InternalPendingRequest,
   type SpawnOptions,
+  type SubagentFailureFinalizationErrorCode,
   type TrackedSubagent,
   type TrackOptions,
 } from './subagent/index.js';
@@ -385,13 +389,11 @@ export {
   SubagentTemplateSpawnedEventSchema,
   SubagentTemplateSpawnRequestSchema,
   SubagentTemplateSubjects,
-} from './subagent-template/index.js';
-export type {
-  SubagentTemplate,
-  SubagentTemplateCreate,
-  SubagentTemplateSummary,
-  SubagentTemplateUpdate,
-  SubagentTemplateInstance,
-  SubagentTemplateInstanceStatus,
-  SubagentTemplateSpawnRequest,
+  type SubagentTemplate,
+  type SubagentTemplateCreate,
+  type SubagentTemplateSummary,
+  type SubagentTemplateUpdate,
+  type SubagentTemplateInstance,
+  type SubagentTemplateInstanceStatus,
+  type SubagentTemplateSpawnRequest,
 } from './subagent-template/index.js';

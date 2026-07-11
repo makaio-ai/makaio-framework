@@ -1,53 +1,60 @@
 import { z } from 'zod';
 import { ProtocolEndpointsSchema, ProviderCapabilitiesSchema } from '../../provider/definition.js';
-import { CredentialRefSchema } from '../../config/credential-ref.js';
+import { ResolvedProviderAuthSchema } from '../../auth/resolved.js';
 
 /**
- * Unresolved provider context passed on the public bus.
+ * Provider context whose persisted config and authentication method were
+ * resolved against the current provider/client definitions.
+ */
+export const ResolvedProviderContextSchema = z
+  .object({
+    state: z.literal('resolved'),
+
+    /** Provider config ID. Links back to the config that produced this snapshot. */
+    providerConfigId: z.string().trim().min(1),
+
+    /** Provider definition ID (e.g., `'anthropic'`, `'alibaba'`). */
+    definitionId: z.string().trim().min(1),
+
+    /** Endpoint URL overrides keyed by protocol. */
+    endpointOverrides: ProtocolEndpointsSchema.optional(),
+
+    /** Normalized auth selection with refs only; plaintext is never bus-visible. */
+    auth: ResolvedProviderAuthSchema,
+
+    /** Provider-declared capability hints interpreted by concrete adapters. */
+    capabilities: ProviderCapabilitiesSchema.optional(),
+  })
+  .strict()
+  .superRefine((context, ctx) => {
+    if (context.auth.method.owner === 'provider' && context.auth.method.providerDefinitionId !== context.definitionId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Provider-owned authentication must belong to the resolved provider definition.',
+        path: ['auth', 'method', 'providerDefinitionId'],
+      });
+    }
+  });
+
+/**
+ * Deliberately configless provider state.
  *
- * Carries credential references (not plaintext) so credentials never
- * travel on the public bus. Connectors call `resolveConnectorCredentials()`
- * to obtain plaintext locally.
+ * This state carries no partial provider or auth fields, so it cannot be
+ * misread as native authentication or an ambient-credential fallback.
  */
-export const ProviderContextSchema = z.object({
-  /** Provider config UUID. Links back to the ProviderConfig that produced this context. */
-  providerConfigId: z.string(),
+export const UnresolvedProviderContextSchema = z.object({ state: z.literal('unresolved') }).strict();
 
-  /** Provider definition ID (e.g., `'anthropic'`, `'alibaba'`). */
-  definitionId: z.string(),
+/** Public refs-only provider execution context. */
+export const ProviderContextSchema = z.discriminatedUnion('state', [
+  ResolvedProviderContextSchema,
+  UnresolvedProviderContextSchema,
+]);
 
-  /** Endpoint URL overrides keyed by protocol. */
-  endpointOverrides: ProtocolEndpointsSchema.optional(),
+/** Provider context with a validated provider config and auth method. */
+export type ResolvedProviderContext = z.infer<typeof ResolvedProviderContextSchema>;
 
-  /** Credential references resolved at the connector layer, not on the bus. */
-  credentialRefs: z.record(z.string(), CredentialRefSchema),
+/** Deliberately configless provider context. */
+export type UnresolvedProviderContext = z.infer<typeof UnresolvedProviderContextSchema>;
 
-  /**
-   * Maps credential keys to environment variable names for subprocess adapters.
-   * E.g., `{ apiKey: 'ANTHROPIC_API_KEY' }`.
-   */
-  credentialEnvVars: z.record(z.string(), z.string()).optional(),
-
-  /**
-   * Provider credential environment variables known to the host.
-   *
-   * Subprocess adapters remove these from ambient `process.env` before spawning
-   * clients, then add back only credentials explicitly resolved from
-   * `credentialRefs`.
-   */
-  ambientCredentialEnvVars: z.array(z.string()).optional(),
-
-  /**
-   * Provider-declared capability hints forwarded from the provider definition.
-   *
-   * Opaque to the bus — adapters narrow-cast to protocol-specific types
-   * at the connector layer for feature detection (e.g., structured output
-   * modes, tool-call semantics).
-   */
-  capabilities: ProviderCapabilitiesSchema.optional(),
-});
-
-/**
- * Inferred type for an unresolved provider context.
- */
+/** Runtime provider context union. */
 export type ProviderContext = z.infer<typeof ProviderContextSchema>;

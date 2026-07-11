@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import { JsonObjectContractSchema } from '../shared/index.js';
-import { EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
+import { AbsolutePathSchema, EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
 import { VersionRangeSchema } from '../version/index.js';
 
 /**
@@ -62,6 +62,8 @@ export const ClientMetadataSchema = z.record(z.string(), z.unknown()).optional()
 export const ClientScanResultSchema = z.object({
   clientId: NonEmptyStringSchema,
   found: z.boolean(),
+  /** Absolute executable selected by PATH discovery, when the scanner can resolve it. */
+  binaryPath: AbsolutePathSchema.optional(),
   version: z.string().optional(),
   warningMessage: z.string().optional(),
 });

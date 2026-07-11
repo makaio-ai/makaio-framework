@@ -10,6 +10,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ISessionToolLedger } from '@makaio/ai-adapters-core';
+import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
+import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { AIReasoningLevel, NativeForkDirective } from '@makaio/contracts';
 import { CodexAppServerConnector } from '../connector.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
@@ -48,20 +50,26 @@ export interface MockTurn {
 export class MockJsonRpcClient implements JsonRpcClient {
   sentRequests: Array<{ method: string; params: unknown }> = [];
   sentNotifications: Array<{ method: string; params: unknown }> = [];
+  operations: Array<{ kind: 'request' | 'notification' | 'close'; method?: string; params?: unknown }> = [];
   notificationHandlers = new Map<string, NotificationHandler>();
   serverRequestHandler: ServerRequestHandler | null = null;
   closed = false;
 
   async request<T>(method: string, params: unknown): Promise<T> {
     this.sentRequests.push({ method, params });
+    this.operations.push({ kind: 'request', method, params });
     if (method === 'thread/start' || method === 'thread/resume' || method === 'thread/fork') {
       return { thread: createMockThread() } as T;
+    }
+    if (method === 'account/login/start') {
+      return { type: 'apiKey' } as T;
     }
     return {} as T;
   }
 
   notification(method: string, params: unknown): void {
     this.sentNotifications.push({ method, params });
+    this.operations.push({ kind: 'notification', method, params });
   }
 
   onNotification(method: string, handler: NotificationHandler): void {
@@ -74,6 +82,7 @@ export class MockJsonRpcClient implements JsonRpcClient {
 
   close(): void {
     this.closed = true;
+    this.operations.push({ kind: 'close' });
   }
 
   async receiveNotification(method: string, params: unknown): Promise<void> {
@@ -151,6 +160,14 @@ export interface CreateConnectorTestContextOptions {
   resumeAdapterSessionId?: string;
   /** Native fork directive — when present, connector uses thread/fork instead of thread/start. */
   nativeFork?: NativeForkDirective;
+  /** Finalized environment supplied by the central adapter runtime. */
+  env?: Record<string, string>;
+  /** Finalized managed/global client binary selection. */
+  clientExecution?: ClientExecutionContext;
+  /** Final connector-local auth snapshot. */
+  adapterAuth?: ResolvedAdapterAuth;
+  /** Optional JSON-RPC client override for failure/reconnect tests. */
+  jsonRpcClient?: MockJsonRpcClient;
 }
 
 /**
@@ -163,7 +180,7 @@ export async function createConnectorTestContext(
 ): Promise<ConnectorTestContext> {
   const tempCwd = mkdtempSync(join(tmpdir(), 'codex-test-'));
   const mockBus = await CodexAppServerNamespace.scopedBus();
-  const mockJsonRpcClient = new MockJsonRpcClient();
+  const mockJsonRpcClient = options.jsonRpcClient ?? new MockJsonRpcClient();
 
   const connector = new CodexAppServerConnector({
     bus: mockBus,
@@ -172,8 +189,11 @@ export async function createConnectorTestContext(
     agentId: 'test-agent',
     model: 'claude-3-5-sonnet-20241022',
     cwd: tempCwd,
-    env: {},
+    env: options.env ?? {},
     jsonRpcClient: mockJsonRpcClient,
+    clientId: 'codex',
+    ...(options.clientExecution !== undefined && { clientExecution: options.clientExecution }),
+    ...(options.adapterAuth !== undefined && { adapterAuth: options.adapterAuth }),
     ...(options.reasoningEffort !== undefined && { reasoningEffort: options.reasoningEffort }),
     ...(options.approvalPolicy !== undefined && { approvalPolicy: options.approvalPolicy }),
     ...(options.sandboxMode !== undefined && { sandboxMode: options.sandboxMode }),
@@ -184,6 +204,24 @@ export async function createConnectorTestContext(
   });
 
   return { mockBus, mockJsonRpcClient, connector, tempCwd };
+}
+
+/**
+ * Build the finalized connector delivery for provider-owned Codex API-key auth.
+ * @param apiKey - Test-only API key value
+ * @returns Connector-local auth snapshot
+ */
+export function createApiKeyAdapterAuth(apiKey = 'codex-test-api-key'): ResolvedAdapterAuth {
+  return {
+    processEnv: {},
+    connectorDeliveries: [
+      {
+        target: 'codex.account-login.api-key',
+        values: { type: 'apiKey', apiKey },
+      },
+    ],
+    configInheritance: 'empty',
+  };
 }
 
 /**

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { executeClaudeCodeNativeCredentialSourceLock } from '@makaio/client-claude-code/runtime';
 import { AccountUsageSchema } from '../bus/schemas.js';
 import type { AccountUsage } from '../bus/schemas.js';
 import type { ICredentialBackend } from '../backends/credential-backend.js';
@@ -8,6 +9,7 @@ import type {
   CredentialRefreshOptions,
   CredentialRefreshResult,
   ICredentialSource,
+  PreparedNativeCredentialMutation,
   RawCredential,
 } from '../interfaces/credential-source.js';
 import type { ILabelProvider } from '../interfaces/label-provider.js';
@@ -21,6 +23,11 @@ import { mapOAuthErrorToRefreshResult, performOAuthTokenRequest } from '../utils
 import { parseRetryAfterMs } from '../utils/retry-after.js';
 import { logEmptyClaudeUsageWindows, parseClaudeUsageCredits, parseUsageWindow } from './claude-code-usage-parser.js';
 import type { ClaudeCodeSourceOptions, OAuthProfile } from './claude-code-source-types.js';
+import {
+  clearBackendNativeCredential,
+  prepareBackendNativeCredentialMutation,
+  writeBackendNativeCredential,
+} from './native-credential-mutation.js';
 
 export type { ClaudeCodeSourceOptions } from './claude-code-source-types.js';
 
@@ -110,7 +117,7 @@ export class ClaudeCodeSource implements ICredentialSource, ILabelProvider, IUsa
    * @returns `true` if the directory exists and the backend returns a value.
    */
   public async isAvailable(): Promise<boolean> {
-    if (!existsSync(this.options.installDir ?? join(homedir(), '.claude'))) return false;
+    if (!existsSync(this.installDir)) return false;
     try {
       const raw = await this.backend.read();
       return raw !== null;
@@ -167,7 +174,39 @@ export class ClaudeCodeSource implements ICredentialSource, ILabelProvider, IUsa
    * @param credential - The credential to persist.
    */
   public async write(credential: RawCredential): Promise<void> {
-    await this.backend.write(credential.token);
+    await writeBackendNativeCredential(this.clientId, this.installDir, this.backend, credential, (operation) =>
+      executeClaudeCodeNativeCredentialSourceLock(this.installDir, operation),
+    );
+  }
+
+  /** Remove Claude Code credentials through the configured backend. */
+  public async clear(): Promise<void> {
+    await clearBackendNativeCredential(this.clientId, this.installDir, this.backend, (operation) =>
+      executeClaudeCodeNativeCredentialSourceLock(this.installDir, operation),
+    );
+  }
+
+  /**
+   * Prepare an atomic native write with source-owned generation rollback.
+   * @param credential - Target credential to materialize.
+   * @returns Prepared mutation whose rollback never overwrites a newer refresh.
+   */
+  public async prepareNativeCredentialMutation(credential: RawCredential): Promise<PreparedNativeCredentialMutation> {
+    return prepareBackendNativeCredentialMutation(
+      this.clientId,
+      this.installDir,
+      this.backend,
+      credential,
+      (operation) => executeClaudeCodeNativeCredentialSourceLock(this.installDir, operation),
+    );
+  }
+
+  /**
+   * Canonical Claude Code config home that owns this source's credentials.
+   * @returns Config directory used as the shared credential lock identity.
+   */
+  private get installDir(): string {
+    return this.options.installDir ?? join(homedir(), '.claude');
   }
 
   /**

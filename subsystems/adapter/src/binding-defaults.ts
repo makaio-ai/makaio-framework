@@ -16,7 +16,8 @@ export function isProviderConfigEnabled(
   providerConfigs: Map<string, ProviderConfigFile>,
   providerConfigId: string,
 ): boolean {
-  return providerConfigs.get(providerConfigId)?.enabled ?? false;
+  const config = providerConfigs.get(providerConfigId);
+  return config !== undefined && (config.enabled ?? true);
 }
 
 /**

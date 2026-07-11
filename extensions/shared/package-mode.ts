@@ -124,13 +124,11 @@ export function createPortablePackageJson<FrameworkPackageName extends string>(
   versions: PackageVersionsWithBusCore<FrameworkPackageName>,
   packagePaths: PackagePathsWithBusCore<FrameworkPackageName>,
 ): ExtensionPackageJson {
-  const devDependencies = { ...(packageJson.devDependencies ?? {}) };
-  for (const packageName of Object.keys(packagePaths) as FrameworkPackageName[]) {
-    const currentVersion = devDependencies[packageName];
-    if (isLocalPackageReference(currentVersion)) {
-      devDependencies[packageName] = `^${versions[packageName]}`;
-    }
-  }
+  const dependencies =
+    packageJson.dependencies === undefined
+      ? undefined
+      : rewriteLocalPackageReferences(packageJson.dependencies, versions, packagePaths);
+  const devDependencies = rewriteLocalPackageReferences(packageJson.devDependencies ?? {}, versions, packagePaths);
 
   const peerDependencies = { ...(packageJson.peerDependencies ?? {}) };
   // Portable extensions share the host process bus, so bus-core must remain a
@@ -149,8 +147,30 @@ export function createPortablePackageJson<FrameworkPackageName extends string>(
       verify: 'vitest run test/verify.test.ts --config vitest.config.ts',
     },
     peerDependencies,
+    ...(dependencies === undefined ? {} : { dependencies }),
     devDependencies,
   };
+}
+
+/**
+ * Replace local references to configured framework packages with published versions.
+ * @param dependencies - Dependency map from the repo-dev manifest.
+ * @param versions - Published versions for configured framework packages.
+ * @param packagePaths - Configured framework package identities.
+ * @returns Dependency map suitable for portable package installation.
+ */
+function rewriteLocalPackageReferences<FrameworkPackageName extends string>(
+  dependencies: Record<string, string>,
+  versions: Record<FrameworkPackageName, string>,
+  packagePaths: Record<FrameworkPackageName, string>,
+): Record<string, string> {
+  const rewritten = { ...dependencies };
+  for (const packageName of Object.keys(packagePaths) as FrameworkPackageName[]) {
+    if (isLocalPackageReference(rewritten[packageName])) {
+      rewritten[packageName] = `^${versions[packageName]}`;
+    }
+  }
+  return rewritten;
 }
 
 /**

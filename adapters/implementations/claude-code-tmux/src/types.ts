@@ -80,11 +80,6 @@ export interface ClaudeCodeTmuxSessionConfig extends ConnectorSessionConfig<Clau
    */
   systemPrompt?: SystemPrompt;
   /**
-   * Absolute path to the `claude` CLI binary.
-   * Falls back to `'claude'` (resolved via PATH) when omitted.
-   */
-  binaryPath?: string;
-  /**
    * Working directory for the tmux session.
    * Also used as the project directory for `.mcp.json` and hook config.
    */

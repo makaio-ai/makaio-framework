@@ -408,7 +408,7 @@ function buildDelegateRoleSessionId(ctx: RuntimeContext, params: DelegateRoleSes
  * embedded deployments. The `providerConfigId` is still set on the selection
  * for storage and tracking purposes.
  * @param role - Workflow role resolution result.
- * @returns Adapter selection with optional resolved provider context for the
+ * @returns Adapter selection with optional normalized provider context for the
  *   `attachResolved` local seam.
  */
 function buildDelegateRoleAgentSelection(
@@ -420,12 +420,8 @@ function buildDelegateRoleAgentSelection(
     ...(role.model !== undefined ? { model: role.model } : {}),
     ...(role.reasoningEffort !== undefined ? { reasoningEffort: role.reasoningEffort } : {}),
     ...(role.systemPrompt !== undefined ? { systemPrompt: role.systemPrompt } : {}),
-    ...(role.providerContext !== undefined
-      ? {
-          providerConfigId: role.providerContext.providerConfigId,
-          providerContext: role.providerContext,
-        }
-      : {}),
+    ...(role.providerContext?.state === 'resolved' ? { providerConfigId: role.providerContext.providerConfigId } : {}),
+    ...(role.providerContext !== undefined ? { providerContext: role.providerContext } : {}),
   };
 }
 

@@ -14,6 +14,7 @@
  */
 
 import type { z } from 'zod';
+import type { AdapterProviderAuth } from '../auth/adapter-binding.js';
 import type { ProtocolId, ProviderDefinitionInput } from '../provider/definition.js';
 import type { RequiredTimeoutConfig } from '../timeout/index.js';
 
@@ -26,12 +27,19 @@ import type { RequiredTimeoutConfig } from '../timeout/index.js';
  *
  * The adapter declares which providers it can serve by stable definition ID.
  * The adapter subsystem resolves each ID to a full {@link ProviderDefinitionInput}
- * from the provider registry at boot. Optional schemas override the adapter-level
- * defaults for this specific provider.
+ * from the provider registry at boot. An optional config schema overrides the
+ * adapter-level default for this specific provider.
  */
 export interface AdapterProviderRef {
   /** Stable provider definition ID (e.g., `'anthropic'`, `'openai'`). */
   readonly definitionId: string;
+  /**
+   * Exact HTTP inference protocol used through this adapter/provider path.
+   *
+   * Omit for SDK-native or subprocess-native transports that do not consume a
+   * Makaio protocol endpoint.
+   */
+  readonly protocol?: ProtocolId;
   /**
    * Provider-specific config schema override.
    *
@@ -39,11 +47,10 @@ export interface AdapterProviderRef {
    */
   readonly configSchema?: z.ZodObject<z.ZodRawShape>;
   /**
-   * Provider-specific credential schema override.
-   *
-   * When present, overrides any adapter-level credential schema for this provider.
+   * Runtime-only compatibility, delivery, and environment-scrubbing metadata
+   * for authentication methods supported through this provider path.
    */
-  readonly credentialSchema?: z.ZodObject<z.ZodRawShape>;
+  readonly auth?: AdapterProviderAuth;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +74,8 @@ export interface AdapterProviderDefinitionContract {
    * narrows after the adapter subsystem merges the registry data.
    */
   readonly definition: ProviderDefinitionInput;
+  /** Exact protocol copied from the selected adapter/provider declaration. */
+  readonly protocol?: ProtocolId;
   /**
    * Zod schema for provider-specific configuration fields.
    *
@@ -76,13 +85,12 @@ export interface AdapterProviderDefinitionContract {
    */
   readonly configSchema?: z.ZodObject<z.ZodRawShape>;
   /**
-   * Zod schema for provider credential fields (e.g., API key, token).
+   * Validated adapter-specific authentication compatibility and delivery metadata.
    *
-   * When present, the adapter subsystem uses this schema to validate
-   * credentials before forwarding them to the adapter factory.
-   * Not serializable — kept in the definition, not the manifest.
+   * Runtime-only: the adapter subsystem resolves this from the matching
+   * {@link AdapterProviderRef} and carries it alongside the provider definition.
    */
-  readonly credentialSchema?: z.ZodObject<z.ZodRawShape>;
+  readonly auth?: AdapterProviderAuth;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,11 +155,6 @@ export interface AdapterDefinitionContract<TAdapter = unknown, TOptions = never>
    * per-provider via {@link AdapterProviderRef.configSchema}.
    */
   readonly providerConfigSchema?: z.ZodObject<z.ZodRawShape>;
-  /**
-   * Default credential schema applied to all providers unless overridden
-   * per-provider via {@link AdapterProviderRef.credentialSchema}.
-   */
-  readonly providerCredentialSchema?: z.ZodObject<z.ZodRawShape>;
   /**
    * Required timeout defaults for all adapter operations.
    *

@@ -17,6 +17,7 @@ import {
   resolveExecutionModels,
 } from './ai-adapter-create-utils.js';
 import { createStartAgentHandler } from './ai-adapter-start-handler.js';
+import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 
 /**
  * Base class for AI adapters.
@@ -72,6 +73,8 @@ export abstract class AIAdapter<
   protected platformDefaults?: PlatformDefaults;
   /** Provider definitions for model lookup. Injected by runtime. */
   protected readonly definitionProviders: readonly AdapterProviderDefinition[];
+  /** Trusted host-local normalized auth preparation strategy. */
+  protected readonly prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus>;
   protected agentFactory: (agentConfig: AIAgentConfig<TBus, TConnector>) => TAgent;
   /** Config factory - transforms partial input into full adapter-specific config (includes adapterId) */
   protected configFactory: (
@@ -84,7 +87,6 @@ export abstract class AIAdapter<
 
   /**
    * Create a new AIAdapter instance.
-   * Constructor is synchronous - stores config only. Call init() to complete setup.
    * @param config - Adapter configuration
    */
   protected constructor(config: AIAdapterConstructorConfig<TBus, TConnector, TAgent>) {
@@ -101,6 +103,7 @@ export abstract class AIAdapter<
     this.clientId = config.clientId;
     this.platformDefaults = config.platformDefaults;
     this.definitionProviders = config.definitionProviders ?? [];
+    this.prepareAuthRuntime = config.prepareAuthRuntime as AdapterAuthRuntimePreparer<TBus> | undefined;
     this.registry = new ActiveAgentRegistry({ globalBus: this.globalBus, adapterName: this.name });
     this.rehydrationManager = new AgentRehydrationManager({
       globalBus: this.globalBus,
@@ -133,10 +136,13 @@ export abstract class AIAdapter<
           globalBus: this.globalBus,
           adapterId: this.adapterId,
           adapterName: this.name,
+          clientId: this.clientId,
           adapterCapabilities: this.capabilities,
+          definitionProviders: this.definitionProviders,
           platformDefaults: this.platformDefaults,
           configFactory: this.configFactory,
           connectorFactory: this.connectorFactory,
+          prepareAuthRuntime: this.prepareAuthRuntime,
         }),
       ),
       filteredBus.on(AgentSubjects.session.closed, this.handleSessionClosed),
@@ -269,12 +275,10 @@ export abstract class AIAdapter<
 
     this.setupHandlers();
 
-    // Subclass hook
     await this.onInit();
 
     this.initialized = true;
 
-    // Emit initialized event
     await this.globalBus.emit(AdapterSubjects.initialized, {
       adapterId: this.adapterId,
       adapterName: this.name,
@@ -312,7 +316,7 @@ export abstract class AIAdapter<
     const availableModels = resolveExecutionModels(
       this.definitionProviders,
       model,
-      request.providerContext?.definitionId,
+      request.providerContext?.state === 'resolved' ? request.providerContext.definitionId : undefined,
     );
     const toolLedger = mcpSessionContext !== undefined ? new SessionToolLedger() : undefined;
 
@@ -325,8 +329,10 @@ export abstract class AIAdapter<
       capabilities: this.capabilities,
       nativeTools: this.nativeTools,
       availableModels,
+      definitionProviders: this.definitionProviders,
       configFactory: this.configFactory,
       connectorFactory: this.connectorFactory,
+      ...(this.prepareAuthRuntime !== undefined && { prepareAuthRuntime: this.prepareAuthRuntime }),
       sessionId: sessionId,
       ...(request.providerContext !== undefined && { providerContext: request.providerContext }),
       ...buildOptionalAgentConfig({

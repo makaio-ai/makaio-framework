@@ -120,6 +120,68 @@ export type {
   TTSCapability,
 } from './model/index.js';
 export {
+  AdapterAuthBindingSchema,
+  AdapterAuthConstantSchema,
+  AdapterAuthDeliverySchema,
+  AdapterProviderAuthSchema,
+  AuthCredentialFieldDefinitionSchema,
+  AuthCredentialRefSchema,
+  AuthCredentialSourceHintSchema,
+  AuthEnvironmentVariableNameSchema,
+  AuthFieldIdSchema,
+  AuthMethodRefSchema,
+  ClientAuthMethodDefinitionSchema,
+  ClientAuthMethodRefSchema,
+  ClientAuthMethodsSchema,
+  ClientDefaultAuthSchema,
+  ConnectorAdapterAuthDeliverySchema,
+  ExplicitAuthMethodDefinitionSchema,
+  InferredAuthMethodDefinitionSchema,
+  NativeAccountSelectionSchema,
+  NativeClientAdapterAuthDeliverySchema,
+  NoAdapterAuthDeliverySchema,
+  NoAuthMethodDefinitionSchema,
+  ProviderAuthMethodDefinitionSchema,
+  ProviderAuthMethodRefSchema,
+  ProviderAuthMethodsSchema,
+  ProviderConfigAuthSchema,
+  ProviderConfigManagerSchema,
+  ProcessEnvAdapterAuthDeliverySchema,
+  ResolvedProviderAuthSchema,
+  assertAdapterAuthBindingMatchesMethod,
+  defineAdapterProviderAuth,
+} from './auth/index.js';
+export type {
+  AdapterAuthBinding,
+  AdapterAuthBindingMethodDefinition,
+  AdapterAuthConstant,
+  AdapterAuthDelivery,
+  AdapterProviderAuth,
+  AdapterProviderAuthInput,
+  AuthCredentialFieldDefinition,
+  AuthCredentialRef,
+  AuthCredentialSourceHint,
+  AuthEnvironmentVariableName,
+  AuthFieldId,
+  AuthMethodRef,
+  ClientAuthMethodDefinition,
+  ClientAuthMethodRef,
+  ClientDefaultAuth,
+  ConnectorAdapterAuthDelivery,
+  ExplicitAuthMethodDefinition,
+  InferredAuthMethodDefinition,
+  NativeAccountSelection,
+  NativeClientAdapterAuthDelivery,
+  NoAdapterAuthDelivery,
+  NoAuthMethodDefinition,
+  ProcessEnvAdapterAuthDelivery,
+  ProviderAuthMethodDefinition,
+  ProviderAuthMethodRef,
+  ProviderConfigAuth,
+  ProviderConfigManager,
+  ResolvedProviderAuth,
+} from './auth/index.js';
+export {
   ModelFilterModeSchema,
   ModelVisibilitySchema,
   ProtocolEndpointsSchema,
@@ -149,6 +211,7 @@ export {
   FORK_SESSION_LINEAGE_KIND,
   ForkSessionLineageSchema,
   ProviderContextSchema,
+  ResolvedProviderContextSchema,
   ROOT_SESSION_LINEAGE_KIND,
   RootSessionLineageSchema,
   SESSION_LINEAGE_KINDS,
@@ -156,6 +219,7 @@ export {
   SessionLineageKindSchema,
   SUBAGENT_SESSION_LINEAGE_KIND,
   SubagentSessionLineageSchema,
+  UnresolvedProviderContextSchema,
 } from './adapter/index.js';
 export type {
   AdapterRuntimeOptions,
@@ -164,11 +228,13 @@ export type {
   AgentSelectionBase,
   AgentSelectionKindMap,
   ProviderContext,
+  ResolvedProviderContext,
   SessionDiscovered,
   SessionLineage,
   SessionLineageKind,
   StartAgentRequest,
   StartAgentResponse,
+  UnresolvedProviderContext,
 } from './adapter/index.js';
 export {
   CanonicalModelSubjects,
@@ -1086,7 +1152,18 @@ export type {
   WidgetProps,
   WindowParamSpec,
 } from './extension/index.js';
-export { CredentialSubjects } from './credential/index.js';
+export {
+  CredentialStoreGrantRequestSchema,
+  CredentialStoreGrantResponseSchema,
+  CredentialStoreRequestSchema,
+  CredentialStoreResponseSchema,
+  CredentialSubjects,
+} from './credential/index.js';
+export type {
+  CredentialStoreGrantRequest,
+  CredentialStoreGrantResponse,
+  CredentialStoreRequest,
+} from './credential/index.js';
 export {
   ClientAccountIdentifierSchema,
   ClientBinaryCompatibilitySchema,
@@ -1153,6 +1230,11 @@ export type {
 } from './native-session-supervisor/index.js';
 export { ConfigSchema } from './config/config-schema.js';
 export type { Config, RelayConfig } from './config/config-schema.js';
+export {
+  PROVIDER_CONFIG_SCHEMA_VERSION,
+  ProviderConfigFileSchema,
+  type ProviderConfigFile,
+} from './config/provider-config-file.js';
 export { ConfigSchemas } from './config/config-subjects.js';
 export type { ConfigGetResponse, ConfigUpdateRequest, ConfigUpdateResponse } from './config/config-subjects.js';
 export { ConfigSubjects } from './config/config-namespace.js';

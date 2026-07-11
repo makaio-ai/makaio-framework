@@ -33,7 +33,7 @@ describe('GeminiConnector.changeModelInPlace()', () => {
       env: {},
     });
 
-    const geminiConfig = connector.getModelMutationConfig();
+    const geminiConfig = await connector.getModelMutationConfig();
     expect(geminiConfig.getModel()).toBe('gemini-2.5-flash');
 
     await connector.changeModelInPlace('gemini-2.5-pro');
@@ -72,7 +72,7 @@ describe('GeminiConnector.changeModelInPlace()', () => {
       reasoningEffort: 'medium',
     });
 
-    const geminiConfig = connector.getModelMutationConfig();
+    const geminiConfig = await connector.getModelMutationConfig();
     await connector.changeModelInPlace('gemini-2.5-pro');
 
     const resolved = geminiConfig.modelConfigService.getResolvedConfig({

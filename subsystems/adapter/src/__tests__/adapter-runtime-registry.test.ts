@@ -4,7 +4,9 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   AdapterSubjects,
   ProviderDefinitionSchema,
+  defineAdapterProviderAuth,
   type AdapterContribution,
+  type ProviderDefinition,
   type ProviderDefinitionInput,
   createClientDefinition,
 } from '@makaio/contracts';
@@ -124,6 +126,53 @@ function getFactoryInitOptions(factory: { mock: { calls: Array<[unknown?, ...unk
     throw new Error(`Factory call ${callIndex} was not recorded`);
   }
   return options as AdapterInitOptions;
+}
+
+/**
+ * Create adapter/provider auth metadata for one provider-backed API-key method.
+ * @param providerDefinitionId - Provider definition that owns the method.
+ * @returns Validated adapter/provider auth metadata.
+ */
+function createTestProviderAuth(providerDefinitionId: string) {
+  return defineAdapterProviderAuth({
+    bindings: [
+      {
+        method: { owner: 'provider', providerDefinitionId, methodId: 'api-key' },
+        deliveries: [{ kind: 'process-env', fields: { apiKey: 'TEST_PROVIDER_API_KEY' } }],
+      },
+    ],
+    scrubEnvVars: ['TEST_PROVIDER_API_KEY'],
+  });
+}
+
+/**
+ * Create a provider definition matching {@link createTestProviderAuth}.
+ * @param id - Stable provider definition ID.
+ * @param name - Human-readable provider name.
+ * @returns Provider definition with one explicit API-key method.
+ */
+function createTestAuthProviderDefinition(id: string, name: string): ProviderDefinition {
+  return ProviderDefinitionSchema.parse({
+    id,
+    name,
+    authMethods: [
+      {
+        id: 'api-key',
+        mode: 'explicit',
+        label: 'API key',
+        fields: [
+          {
+            id: 'apiKey',
+            label: 'API key',
+            required: true,
+            secret: true,
+            sourceHints: [{ kind: 'environment', variable: 'TEST_PROVIDER_API_KEY' }],
+          },
+        ],
+      },
+    ],
+    availableModels: [],
+  });
 }
 
 describe('readAdapterFactoryOptions', () => {
@@ -376,28 +425,34 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
-  it('loads provider definitions with empty models when the model registry has no provider entry', async () => {
+  it('preserves parsed auth metadata while populating provider models for initial activation', async () => {
     const repository = new MemoryRepository(
       new Map(),
       new Map<string, AdapterFile>([['test-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
     );
+    const prepareAuthRuntime = vi.fn();
     service = new AdapterSubsystemService({
       bus: MakaioBus,
       configRepository: repository,
       coordinator: createStubCoordinator(),
       machineId: TEST_MACHINE_ID,
       platformDefaults: TEST_PLATFORM_DEFAULTS,
+      prepareAuthRuntime,
     });
     await service.init();
     const registryHandler = vi.fn((providerId: string) => {
       throw new ModelRegistryProviderNotFoundError(providerId);
     });
+    const adapterProviderAuth = createTestProviderAuth('test-provider');
+    const factory = vi.fn(async (options?: unknown) => ({
+      adapterId: readAdapterFactoryOptions(options).adapterId,
+    }));
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
         providers: [
           {
             packageName: '@owner/provider-package',
-            definition: { id: 'test-provider', name: 'Test Provider', availableModels: [] },
+            definition: createTestAuthProviderDefinition('test-provider', 'Test Provider'),
           },
         ],
         clients: [],
@@ -411,21 +466,69 @@ describe('AdapterContributionProcessor rollback', () => {
       await service.processAdapterContributions(
         '@owner/provider-package',
         createExtension('@owner/provider-package', [
-          createContribution(
-            'test-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
-            [{ definitionId: 'test-provider' }],
-          ),
+          createContribution('test-adapter', factory, [{ definitionId: 'test-provider', auth: adapterProviderAuth }]),
         ]),
         TEST_EXTENSION_CONTEXT,
       );
 
-      expect(service.getLoadedAdapters()[0]?.providers[0]?.definition.availableModels).toEqual([]);
+      const resolvedProvider = service.getLoadedAdapters()[0]?.providers[0];
+      expect(resolvedProvider?.definition.availableModels).toEqual([]);
+      expect(resolvedProvider?.auth).toEqual(adapterProviderAuth);
+      expect(resolvedProvider?.auth).not.toBe(adapterProviderAuth);
+      expect(getFactoryInitOptions(factory, 0).definitionProviders?.[0]?.auth).toEqual(adapterProviderAuth);
+      expect(getFactoryInitOptions(factory, 0).prepareAuthRuntime).toBe(prepareAuthRuntime);
       expect(registryHandler).toHaveBeenCalledOnce();
       expect(registryHandler).toHaveBeenCalledWith('test-provider');
     } finally {
       offCatalog();
       offRegistry();
+    }
+  });
+
+  it('rejects malformed auth metadata at the central provider-resolution boundary', async () => {
+    const repository = new MemoryRepository();
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const malformedAuth = structuredClone(createTestProviderAuth('test-provider'));
+    malformedAuth.scrubEnvVars.push('TEST_PROVIDER_API_KEY');
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [
+          {
+            packageName: '@owner/provider-package',
+            definition: createTestAuthProviderDefinition('test-provider', 'Test Provider'),
+          },
+        ],
+        clients: [],
+      });
+    });
+
+    try {
+      await expect(
+        service.processAdapterContributions(
+          '@owner/adapter-package',
+          createExtension('@owner/adapter-package', [
+            createContribution(
+              'malformed-auth-adapter',
+              async (options?: unknown) => ({
+                adapterId: readAdapterFactoryOptions(options).adapterId,
+              }),
+              [{ definitionId: 'test-provider', auth: malformedAuth }],
+            ),
+          ]),
+          TEST_EXTENSION_CONTEXT,
+        ),
+      ).rejects.toThrow(/Duplicate scrub environment variable/);
+      expect(service.getLoadedAdapters()).toEqual([]);
+    } finally {
+      offCatalog();
     }
   });
 
@@ -451,6 +554,7 @@ describe('AdapterContributionProcessor rollback', () => {
             definition: {
               id: 'external-provider',
               name: 'External Provider',
+              authMethods: [],
               availableModels: [
                 {
                   name: 'external-model',
@@ -515,6 +619,7 @@ describe('AdapterContributionProcessor rollback', () => {
             definition: {
               id: 'transient-provider',
               name: 'Transient Provider',
+              authMethods: [],
               availableModels: [
                 {
                   name: 'transient-model',
@@ -561,6 +666,7 @@ describe('AdapterContributionProcessor rollback', () => {
     const providerDefinition = {
       id: 'runtime-provider',
       name: 'Runtime Provider',
+      authMethods: [],
       description: 'Provider contributed by a framework-only extension',
       endpoints: {
         anthropic: 'https://runtime-provider.example/anthropic',
@@ -568,9 +674,6 @@ describe('AdapterContributionProcessor rollback', () => {
       defaultModel: 'runtime-model',
       fastModel: 'runtime-fast-model',
       defaultModelFilterMode: 'allowlist',
-      credentialEnvVars: {
-        apiKey: 'RUNTIME_PROVIDER_API_KEY',
-      },
       availableModels: [
         {
           name: 'runtime-model',
@@ -629,9 +732,6 @@ describe('AdapterContributionProcessor rollback', () => {
         defaultModel: 'runtime-model',
         fastModel: 'runtime-fast-model',
         defaultModelFilterMode: 'allowlist',
-        credentialEnvVars: {
-          apiKey: 'RUNTIME_PROVIDER_API_KEY',
-        },
         enabled: true,
         createdAt: 0,
         updatedAt: 0,
@@ -649,6 +749,7 @@ describe('AdapterContributionProcessor rollback', () => {
     const providerDefinition = {
       id: 'runtime-provider',
       name: 'Runtime Provider',
+      authMethods: [],
       availableModels: [],
     } satisfies ProviderDefinitionInput;
     const repository = new MemoryRepository();
@@ -721,6 +822,7 @@ describe('AdapterContributionProcessor rollback', () => {
           packageName: '@owner/host-storage',
           name: 'Host Storage Provider',
           availableModels: [],
+          authMethods: [],
           defaultModelFilterMode: 'show-all',
           enabled: true,
           createdAt: 1,
@@ -741,7 +843,7 @@ describe('AdapterContributionProcessor rollback', () => {
               [{ definitionId: 'runtime-provider' }],
             ),
           ],
-          [{ id: 'runtime-provider', name: 'Runtime Provider' }],
+          [{ id: 'runtime-provider', name: 'Runtime Provider', authMethods: [] }],
         ),
         TEST_EXTENSION_CONTEXT,
       );
@@ -821,6 +923,8 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     const providers: ProviderDefinitionInput[] = [];
+    const lateProviderDefinition = createTestAuthProviderDefinition('late-provider', 'Late Provider');
+    const adapterProviderAuth = createTestProviderAuth('late-provider');
     const factory = vi.fn(async (options?: unknown) => {
       const adapterOptions = options as AdapterInitOptions;
       return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
@@ -840,7 +944,9 @@ describe('AdapterContributionProcessor rollback', () => {
       await service.processAdapterContributions(
         '@owner/adapter-package',
         createExtension('@owner/adapter-package', [
-          createContribution('late-provider-adapter', factory, [{ definitionId: 'late-provider' }]),
+          createContribution('late-provider-adapter', factory, [
+            { definitionId: 'late-provider', auth: adapterProviderAuth },
+          ]),
         ]),
         TEST_EXTENSION_CONTEXT,
       );
@@ -853,7 +959,7 @@ describe('AdapterContributionProcessor rollback', () => {
       expect(service.getAdapterInstances().size).toBe(0);
       expect(factory).not.toHaveBeenCalled();
 
-      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+      providers.push(lateProviderDefinition);
 
       await service.processAdapterContributions(
         '@owner/provider-package',
@@ -865,9 +971,7 @@ describe('AdapterContributionProcessor rollback', () => {
         MakaioBus.request(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
           adapterName: 'late-provider-adapter',
         }),
-      ).resolves.toEqual({
-        definitions: [{ id: 'late-provider', name: 'Late Provider', availableModels: [] }],
-      });
+      ).resolves.toEqual({ definitions: [lateProviderDefinition] });
       await expect(MakaioBus.request(ProviderStorageSubjects.get, { id: 'late-provider' })).resolves.toMatchObject({
         provider: {
           id: 'late-provider',
@@ -878,6 +982,7 @@ describe('AdapterContributionProcessor rollback', () => {
       expect(service.getAdapterInstances().size).toBe(1);
       expect(factory).toHaveBeenCalledOnce();
       expect(getFactoryInitOptions(factory, 0).definitionProviders?.[0]?.definition.id).toBe('late-provider');
+      expect(getFactoryInitOptions(factory, 0).definitionProviders?.[0]?.auth).toEqual(adapterProviderAuth);
     } finally {
       offCatalog();
       warnSpy.mockRestore();
@@ -903,6 +1008,7 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     const providers: ProviderDefinitionInput[] = [];
+    const adapterProviderAuth = createTestProviderAuth('late-provider');
     const firstCloseAsync = vi.fn().mockResolvedValue(undefined);
     const factory = createRestartTrackingFactory(firstCloseAsync, 'closeAsync');
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
@@ -920,7 +1026,9 @@ describe('AdapterContributionProcessor rollback', () => {
       await service.processAdapterContributions(
         '@owner/adapter-package',
         createExtension('@owner/adapter-package', [
-          createContribution('late-live-adapter', factory, [{ definitionId: 'late-provider' }]),
+          createContribution('late-live-adapter', factory, [
+            { definitionId: 'late-provider', auth: adapterProviderAuth },
+          ]),
         ]),
         TEST_EXTENSION_CONTEXT,
       );
@@ -930,7 +1038,7 @@ describe('AdapterContributionProcessor rollback', () => {
       expect(getFactoryInitOptions(factory, 0).definitionProviders).toEqual([]);
 
       loadedProviderIds.add('late-provider');
-      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+      providers.push(createTestAuthProviderDefinition('late-provider', 'Late Provider'));
 
       await service.processAdapterContributions(
         '@owner/provider-package',
@@ -943,6 +1051,7 @@ describe('AdapterContributionProcessor rollback', () => {
       expect(getFactoryInitOptions(factory, 1).definitionProviders?.[0]).toMatchObject({
         providerPackageName: '@owner/provider-package',
         definition: { id: 'late-provider', name: 'Late Provider' },
+        auth: adapterProviderAuth,
       });
     } finally {
       offCatalog();
@@ -998,7 +1107,7 @@ describe('AdapterContributionProcessor rollback', () => {
       );
 
       loadedProviderIds.add('late-provider');
-      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+      providers.push({ id: 'late-provider', name: 'Late Provider', authMethods: [], availableModels: [] });
 
       await service.processAdapterContributions(
         '@owner/provider-package',
@@ -1048,6 +1157,7 @@ describe('AdapterContributionProcessor rollback', () => {
             definition: ProviderDefinitionSchema.parse({
               id: 'runtime-provider',
               name: 'Runtime Provider',
+              authMethods: [],
               availableModels: [],
             }),
           },
@@ -1170,6 +1280,7 @@ describe('AdapterContributionProcessor rollback', () => {
               definition: ProviderDefinitionSchema.parse({
                 id: 'runtime-provider',
                 name: 'Runtime Provider',
+                authMethods: [],
                 availableModels: [],
               }),
             },
@@ -1251,7 +1362,7 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension(
           '@owner/unrelated-provider-package',
           [],
-          [{ id: 'unrelated-provider', name: 'Unrelated Provider', availableModels: [] }],
+          [{ id: 'unrelated-provider', name: 'Unrelated Provider', authMethods: [], availableModels: [] }],
         ),
         TEST_EXTENSION_CONTEXT,
       );
@@ -1307,7 +1418,7 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension(
           '@owner/provider-package',
           [],
-          [{ id: 'activating-provider', name: 'Activating Provider', availableModels: [] }],
+          [{ id: 'activating-provider', name: 'Activating Provider', authMethods: [], availableModels: [] }],
         ),
         TEST_EXTENSION_CONTEXT,
       );
@@ -1362,7 +1473,7 @@ describe('AdapterContributionProcessor rollback', () => {
         TEST_EXTENSION_CONTEXT,
       );
 
-      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+      providers.push({ id: 'late-provider', name: 'Late Provider', authMethods: [], availableModels: [] });
 
       await expect(
         service.processAdapterContributions(
@@ -1413,6 +1524,7 @@ describe('AdapterContributionProcessor rollback', () => {
             definition: ProviderDefinitionSchema.parse({
               id: 'installed-provider',
               name: 'Installed Provider',
+              authMethods: [],
               availableModels: [],
             }),
           },
@@ -1541,9 +1653,8 @@ describe('AdapterContributionProcessor rollback', () => {
     expect(service.getLoadedAdapters()[0]?.protocol).toBeUndefined();
   });
 
-  it('applies adapter-level provider schemas and preserves per-provider overrides during resolution', async () => {
+  it('applies the adapter-level provider config schema and preserves per-provider overrides', async () => {
     const adapterLevelConfigSchema = z.object({ baseUrl: z.string().url() });
-    const adapterLevelCredentialSchema = z.object({ apiKey: z.string().min(1) });
     const providerOverrideConfigSchema = z.object({ endpoint: z.string().url() });
     const repository = new MemoryRepository(
       new Map(),
@@ -1562,11 +1673,21 @@ describe('AdapterContributionProcessor rollback', () => {
         providers: [
           {
             packageName: '@owner/provider-package',
-            definition: { id: 'default-schema-provider', name: 'Default Schema Provider', availableModels: [] },
+            definition: {
+              id: 'default-schema-provider',
+              name: 'Default Schema Provider',
+              authMethods: [],
+              availableModels: [],
+            },
           },
           {
             packageName: '@owner/provider-package',
-            definition: { id: 'override-schema-provider', name: 'Override Schema Provider', availableModels: [] },
+            definition: {
+              id: 'override-schema-provider',
+              name: 'Override Schema Provider',
+              authMethods: [],
+              availableModels: [],
+            },
           },
         ],
         clients: [],
@@ -1591,7 +1712,6 @@ describe('AdapterContributionProcessor rollback', () => {
             definition: {
               ...contribution.definition,
               providerConfigSchema: adapterLevelConfigSchema,
-              providerCredentialSchema: adapterLevelCredentialSchema,
             },
           },
         ]),
@@ -1600,9 +1720,7 @@ describe('AdapterContributionProcessor rollback', () => {
 
       const [defaultProvider, overrideProvider] = service.getLoadedAdapters()[0]?.providers ?? [];
       expect(defaultProvider?.configSchema).toBe(adapterLevelConfigSchema);
-      expect(defaultProvider?.credentialSchema).toBe(adapterLevelCredentialSchema);
       expect(overrideProvider?.configSchema).toBe(providerOverrideConfigSchema);
-      expect(overrideProvider?.credentialSchema).toBe(adapterLevelCredentialSchema);
     } finally {
       offCatalog();
     }
@@ -1755,6 +1873,7 @@ describe('AdapterContributionProcessor rollback', () => {
               id: 'claude-code',
               name: 'Claude Code',
               version: '1.2.0',
+              authMethods: [],
               defaultApprovalPolicy: 'always-ask',
             }),
           },
@@ -1764,6 +1883,7 @@ describe('AdapterContributionProcessor rollback', () => {
               id: 'claude-code-nightly',
               name: 'Claude Code Nightly',
               version: '2.0.0',
+              authMethods: [],
               defaultApprovalPolicy: 'always-ask',
             }),
           },
@@ -1884,6 +2004,7 @@ describe('AdapterContributionProcessor rollback', () => {
               id: 'claude-code',
               name: 'Claude Code',
               version: '1.2.0',
+              authMethods: [],
               defaultApprovalPolicy: 'always-ask',
             }),
           },
@@ -1944,6 +2065,7 @@ describe('AdapterContributionProcessor rollback', () => {
               id: 'claude-code',
               name: 'Claude Code',
               version: '1.2.0',
+              authMethods: [],
               defaultApprovalPolicy: 'always-ask',
             }),
           },
@@ -2010,6 +2132,7 @@ describe('AdapterContributionProcessor rollback', () => {
               id: 'claude-code',
               name: 'Claude Code',
               version: '1.2.0',
+              authMethods: [],
               defaultApprovalPolicy: 'always-ask',
             }),
           },
@@ -2077,6 +2200,7 @@ describe('AdapterContributionProcessor rollback', () => {
               id: 'claude-code',
               name: 'Claude Code',
               version: '1.2.0',
+              authMethods: [],
               defaultApprovalPolicy: 'always-ask',
             }),
           },

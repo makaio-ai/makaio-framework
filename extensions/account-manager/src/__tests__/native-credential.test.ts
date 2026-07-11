@@ -51,6 +51,15 @@ function makeAccountIdSource(
     async write(credential: RawCredential) {
       void credential;
     },
+    async clear() {},
+    async prepareNativeCredentialMutation() {
+      return {
+        coordination: 'released' as const,
+        async rollback() {
+          return { status: 'restored' as const, coordination: 'released' as const };
+        },
+      };
+    },
     extractCredentialKey(rawToken: string) {
       const parsed = JSON.parse(rawToken) as Record<string, unknown>;
       const accountId = parsed['account_id'];

@@ -167,7 +167,7 @@ export class SupervisorService extends BaseService {
   private readonly registry: RuntimeRegistry;
   private readonly ptyRuntime: PtyRuntime;
   private readonly pendingExits = new Map<string, PtyExitEvent>();
-  private readonly sessionConfigBindings = new Map<string, { clientId: string; sessionId: string }>();
+  private readonly sessionConfigBindings = new Map<string, { clientId: string; leaseId: string }>();
   #destroyed = false;
 
   /**
@@ -186,7 +186,13 @@ export class SupervisorService extends BaseService {
         /* output routing is handled by downstream consumers */
       },
       onExit: (evt) => {
-        void this._handlePtyExit(evt);
+        void this._handlePtyExit(evt).catch((error: unknown) => {
+          const errorName = error instanceof Error ? error.name : 'UnknownError';
+          console.error('[SupervisorService] PTY exit finalization failed', {
+            supervisorSessionId: evt.supervisorSessionId,
+            errorName,
+          });
+        });
       },
     });
   }
@@ -216,14 +222,31 @@ export class SupervisorService extends BaseService {
     this.registerHandler(NativeSessionSupervisorSubjects.status, (ctx) => this._handleStatus(ctx));
   }
 
-  /**
-   * Tear down the PTY runtime on service shutdown.
-   */
+  /** Tear down the PTY runtime and release every bound config lease. */
   protected override async onDestroy(): Promise<void> {
     this.#destroyed = true;
-    await this.ptyRuntime.destroy();
+    const errors: Error[] = [];
+    try {
+      await this.ptyRuntime.destroy();
+    } catch {
+      errors.push(new Error('PTY runtime teardown failed'));
+    }
     this.pendingExits.clear();
-    this.sessionConfigBindings.clear();
+
+    const bindings = [...this.sessionConfigBindings.keys()];
+    const cleanupResults = await Promise.allSettled(bindings.map((id) => this.destroySessionConfig(id)));
+    for (let index = 0; index < cleanupResults.length; index += 1) {
+      if (cleanupResults[index]?.status === 'rejected') {
+        errors.push(new Error(`Config lease cleanup failed for supervised runtime '${bindings[index]}'`));
+      }
+    }
+
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Native session supervisor teardown failed');
+    }
   }
 
   /**
@@ -269,7 +292,11 @@ export class SupervisorService extends BaseService {
         },
       }));
     } catch (error) {
-      await this.destroySessionConfig(supervisorSessionId);
+      try {
+        await this.destroySessionConfig(supervisorSessionId);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Native runtime spawn and config cleanup both failed');
+      }
       throw error;
     }
 
@@ -289,12 +316,17 @@ export class SupervisorService extends BaseService {
       });
     } catch (error) {
       this.ptyRuntime.kill(supervisorSessionId, 'SIGTERM');
-      await this.destroySessionConfig(supervisorSessionId);
-      // Race note: a PTY exit event arriving after this delete would re-add to
-      // pendingExits. This window is extremely narrow (kill is synchronous, exit
-      // callback is async) and a leaked entry is harmless — it will be checked
-      // and discarded on the next register() for an unrelated ID.
-      this.pendingExits.delete(supervisorSessionId);
+      try {
+        await this.destroySessionConfig(supervisorSessionId);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Runtime registration and config cleanup both failed');
+      } finally {
+        // Race note: a PTY exit event arriving after this delete would re-add to
+        // pendingExits. This window is extremely narrow (kill is synchronous, exit
+        // callback is async) and a leaked entry is harmless — it will be checked
+        // and discarded on the next register() for an unrelated ID.
+        this.pendingExits.delete(supervisorSessionId);
+      }
       throw error;
     }
 
@@ -495,10 +527,10 @@ export class SupervisorService extends BaseService {
     profileName: string | undefined;
     env: Record<string, string> | undefined;
   }): Promise<{ env: Record<string, string> | undefined }> {
-    const configSessionId = options.sessionId ?? options.supervisorSessionId;
     const result = await this.bus.requestOptional(ClientSubjects.sessionConfig.create, {
       clientId: options.clientId,
-      sessionId: configSessionId,
+      leaseId: options.supervisorSessionId,
+      ...(options.sessionId !== undefined ? { ownerSessionId: options.sessionId } : {}),
       profileName: options.profileName,
     });
 
@@ -511,7 +543,7 @@ export class SupervisorService extends BaseService {
 
     this.sessionConfigBindings.set(options.supervisorSessionId, {
       clientId: options.clientId,
-      sessionId: configSessionId,
+      leaseId: options.supervisorSessionId,
     });
     return { env: { ...(options.env ?? {}), ...result.data.env } };
   }
@@ -525,13 +557,20 @@ export class SupervisorService extends BaseService {
     if (binding === undefined) {
       return;
     }
-    this.sessionConfigBindings.delete(supervisorSessionId);
-    await this.bus
-      .requestOptional(ClientSubjects.sessionConfig.destroy, {
+    try {
+      const result = await this.bus.requestOptional(ClientSubjects.sessionConfig.destroy, {
         clientId: binding.clientId,
-        sessionId: binding.sessionId,
-      })
-      .catch(() => {});
+        leaseId: binding.leaseId,
+      });
+      if (!result.handled || !result.data.success) {
+        throw new Error('Config lease cleanup was not handled successfully');
+      }
+    } catch {
+      throw new Error(`Failed to release config lease for supervised runtime '${supervisorSessionId}'`);
+    }
+    if (this.sessionConfigBindings.get(supervisorSessionId) === binding) {
+      this.sessionConfigBindings.delete(supervisorSessionId);
+    }
   }
 
   /**

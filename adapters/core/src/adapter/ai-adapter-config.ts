@@ -14,7 +14,13 @@ import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIReasoningLevel, ReasoningLevelMap } from '../types/ai-model.js';
 import type { BaseAgentConnectorConfig } from '../agent/types.js';
 import type { TimeoutConfig } from '@makaio/utils';
-import type { McpRuntimeSessionContext, McpSessionContext, ProviderContext } from '@makaio/contracts';
+import type {
+  AdapterProviderAuth,
+  McpRuntimeSessionContext,
+  McpSessionContext,
+  ProtocolId,
+  ProviderContext,
+} from '@makaio/contracts';
 import type { LedgerSessionContext, ISessionToolLedger } from '../agent/session-tool-ledger.js';
 
 /**
@@ -35,11 +41,16 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
   adapterId: string;
   /** Adapter type name (required - provided by AIAgent from adapter) */
   adapterName: string;
-  /**
-   * Unresolved provider context (credential refs, not plaintext).
-   * Connectors resolve credentials locally via `resolveConnectorCredentials()`.
-   */
+  /** Refs-only normalized provider selection consumed by the common auth runtime. */
   providerContext: ProviderContext;
+  /** Exact HTTP protocol declared by the selected adapter/provider reference. */
+  providerProtocol?: ProtocolId;
+  /** Adapter/provider auth metadata selected by `providerContext.definitionId`. */
+  adapterProviderAuth?: AdapterProviderAuth;
+  /** Other adapter/provider auth declarations contributing to the scrub union. */
+  compatibleProviderAuths?: readonly AdapterProviderAuth[];
+  /** Whether this adapter rejects the unresolved provider state. */
+  providerContextRequired?: boolean;
   /** Provider's session ID for resuming existing conversations */
   adapterSessionId?: string;
   /** Makaio session ID for tool execution context and multi-session correlation */

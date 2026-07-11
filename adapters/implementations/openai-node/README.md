@@ -175,12 +175,11 @@ src/
 ├── package.ts            # MakaioExtension package descriptor
 ├── server.ts             # Server entrypoint exporting the package descriptor
 ├── provider.ts           # Provider registration
-├── provider.fetcher.ts   # Model fetcher
 ├── model-normalization.ts # Model metadata normalization
 ├── mcp-integration.ts    # MCP tool integration
 ├── tool-handling.ts      # Tool approval and execution
 ├── stream-bridge.ts      # SDK stream normalization
-├── schemas.ts            # Provider config and credential schemas
+├── schemas.ts            # Non-secret provider config schema
 ├── namespaces/
 │   ├── index.ts          # Namespace registration
 │   └── schemas/          # Event type schemas

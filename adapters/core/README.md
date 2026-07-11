@@ -86,7 +86,6 @@ await processDiscriminatedItems(sdkStreamChunks, handlers, emit);
 | `createToolApprovalHandler()` | Wire the standard tool-approval pipeline |
 | `serializeTurnContext()` | Serialize session context blocks for prompt injection |
 | `normalizeMessageInput()` | Normalize diverse message input shapes to canonical form |
-| `resolvePresetCredentials()` | Resolve provider credentials from config presets |
 | `cleanEnvForAdapter()` | Strip unsafe env vars before spawning adapter subprocesses |
 | `normalizeMimeType()` / `isTextLikeMimeType()` | MIME type helpers for attachment handling |
 | `type AIAdapterConfig` | Adapter configuration shape |

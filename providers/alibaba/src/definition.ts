@@ -25,5 +25,20 @@ export const providerDefinition: ProviderDefinitionInput = {
   defaultModel: 'qwen3.5-plus',
   fastModel: 'minimax-m2.5',
   defaultModelFilterMode: 'allowlist',
-  credentialEnvVars: { apiKey: 'BAILIAN_CODING_PLAN_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'BAILIAN_CODING_PLAN_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };

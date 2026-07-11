@@ -1,32 +1,172 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus, createBusInstance } from '@makaio/bus-core';
-import { CredentialSubjects, SessionSubjects } from '@makaio/contracts';
-import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
+import {
+  CredentialSubjects,
+  SessionSubjects,
+  defineAdapterProviderAuth,
+  type ResolvedProviderContext,
+} from '@makaio/contracts';
+import {
+  AdapterSubsystemSubjects,
+  type AdapterRuntimeSnapshotResolution,
+  type ProviderConfigFileRecord,
+  type ProviderRuntimeSnapshot,
+} from '@makaio/services-core/adapter-subsystem';
 import { resetCredentialChangeSequences } from '@makaio/services-core/credential-change';
-import { ClientStorageSubjects } from '@makaio/services-core/settings/storage';
-import { AccountManagerSubjects } from '../bus/namespace.js';
-import { CredentialRefSchema } from '@makaio/contracts/config';
-import type { RawCredential } from '../interfaces/credential-source.js';
+
 import { AccountManager } from '../account-manager.js';
+import { AccountManagerSubjects } from '../bus/namespace.js';
+import type { RawCredential } from '../interfaces/credential-source.js';
 import { computeFingerprint } from '../utils/fingerprint.js';
-import { InMemoryCredentialSource } from './testing/in-memory-source.js';
 import { InMemoryAccountStore } from './testing/in-memory-store.js';
+import { InMemoryCredentialSource } from './testing/in-memory-source.js';
 
 /**
- * Creates a test credential with a deterministic fingerprint derived from the token.
- * @param token - Token string to use as the credential payload
- * @param meta - Optional metadata
- * @returns A RawCredential with a computed fingerprint
+ * Create a test credential with a deterministic fingerprint.
+ * @param token - Credential token used by the fixture.
+ * @param meta - Optional credential metadata.
  */
 function makeCredential(token: string, meta: Record<string, unknown> = {}): RawCredential {
+  return { token, fingerprint: computeFingerprint(token), metadata: meta };
+}
+
+/**
+ * Build normalized inferred auth for a current or account-pinned native client.
+ * @param accountId - Optional account selected through the manager.
+ * @param managerId - Account-manager identity recorded in the selector.
+ */
+function makeInferredAuth(accountId?: string, managerId = 'account-manager') {
   return {
-    token,
-    fingerprint: computeFingerprint(token),
-    metadata: meta,
+    mode: 'inferred' as const,
+    method: { owner: 'client' as const, clientId: 'claude-code', methodId: 'native' },
+    ...(accountId ? { account: { managerId, accountId } } : {}),
   };
 }
 
-describe('AccountManager', () => {
+/**
+ * Build a complete refs-only provider context for native Claude auth.
+ * @param providerConfigId - Provider config represented by the context.
+ * @param accountId - Optional native account selected by the context.
+ */
+function makeProviderContext(providerConfigId: string, accountId?: string): ResolvedProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId,
+    definitionId: 'anthropic',
+    auth: {
+      ...makeInferredAuth(accountId),
+      definition: { id: 'native', mode: 'inferred', label: 'Native Claude Code' },
+    },
+  };
+}
+
+/**
+ * Build the credential-free read model corresponding to a runtime context.
+ * @param context - Runtime context summarized by the config record.
+ */
+function makeConfigRecord(context: ResolvedProviderContext): ProviderConfigFileRecord {
+  if (context.auth.mode !== 'inferred') {
+    throw new Error('Account-manager test config must use inferred authentication.');
+  }
+  return {
+    id: context.providerConfigId,
+    definitionId: context.definitionId,
+    name: context.providerConfigId,
+    modelFilterMode: 'show-all',
+    isDefault: false,
+    enabled: true,
+    auth: {
+      mode: 'inferred',
+      method: context.auth.method,
+      ...(context.auth.account ? { account: context.auth.account } : {}),
+      hasCredentials: false,
+    },
+  };
+}
+
+/**
+ * Build a validated atomic provider-runtime snapshot for the context helper.
+ * @param context - Runtime context represented by the snapshot.
+ */
+function makeRuntimeSnapshot(context: ResolvedProviderContext): ProviderRuntimeSnapshot {
+  return {
+    config: makeConfigRecord(context),
+    context,
+    definition: {
+      id: 'anthropic',
+      packageName: '@makaio/provider-anthropic',
+      name: 'Anthropic',
+      availableModels: [],
+      authMethods: [],
+      defaultModelFilterMode: 'show-all',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  };
+}
+
+/**
+ * Build an adapter-qualified atomic runtime response for one fan-out consumer.
+ * @param context - Runtime context represented by the response.
+ * @param adapterName - Exact adapter selected by the consumer.
+ */
+function makeAdapterRuntimeResolution(
+  context: ResolvedProviderContext,
+  adapterName: string,
+): AdapterRuntimeSnapshotResolution {
+  return {
+    status: 'resolved',
+    runtime: {
+      snapshot: makeRuntimeSnapshot(context),
+      adapterName,
+      adapterClientId: 'claude-code',
+      adapterProviderAuth: defineAdapterProviderAuth({
+        bindings: [
+          {
+            method: { owner: 'client', clientId: 'claude-code', methodId: 'native' },
+            deliveries: [{ kind: 'native-client', clientId: 'claude-code' }],
+          },
+        ],
+        scrubEnvVars: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+      }),
+      compatibleProviderAuths: [],
+      runtimePackages: {
+        adapter: { packageName: `@makaio/adapter-${adapterName}` },
+        provider: { packageName: '@makaio/provider-anthropic', definitionId: 'anthropic' },
+        client: { packageName: '@makaio/client-claude-code', clientId: 'claude-code' },
+      },
+    },
+  };
+}
+
+/**
+ * Build one active session with agents bound to the supplied config IDs.
+ * @param sessionId - Stable session identity.
+ * @param providerConfigIds - Provider configs selected by the session agents.
+ * @param adapterNames - Optional adapter names paired with the provider configs.
+ */
+function makeSession(sessionId: string, providerConfigIds: string[], adapterNames: string[] = []) {
+  return {
+    sessionId,
+    createdAt: 1,
+    lastActivityAt: 1,
+    status: 'active' as const,
+    agents: providerConfigIds.map((providerConfigId, index) => ({
+      agentId: `agent-${index + 1}`,
+      adapterId: `adapter-${index + 1}`,
+      adapterName: adapterNames[index] ?? 'claude-code-cli',
+      sessionId,
+      role: index === 0 ? ('lead' as const) : ('member' as const),
+      status: 'idle' as const,
+      createdAt: 1,
+      lastActivityAt: 1,
+      providerConfigId,
+    })),
+  };
+}
+
+describe('AccountManager bus handlers', () => {
   let source: InMemoryCredentialSource;
   let store: InMemoryAccountStore;
   let service: AccountManager;
@@ -52,840 +192,788 @@ describe('AccountManager', () => {
     vi.useRealTimers();
   });
 
-  describe('bus handlers', () => {
-    it('listAccounts returns public accounts without credentials', async () => {
-      const cred = makeCredential('token-1');
-      source.setCredential(cred);
-      await vi.advanceTimersByTimeAsync(1000);
+  it('lists public accounts without credential material', async () => {
+    source.setCredential(makeCredential('token-1'));
+    await vi.advanceTimersByTimeAsync(1000);
 
-      const result = await MakaioBus.request(AccountManagerSubjects.accounts.list, {
-        clientId: 'claude-code',
-      });
+    const result = await MakaioBus.request(AccountManagerSubjects.accounts.list, { clientId: 'claude-code' });
+    expect(result.accounts).toHaveLength(1);
+    expect(result.accounts[0].id).toMatch(/^[0-9a-f-]+$/);
+    expect('credential' in result.accounts[0]).toBe(false);
+  });
 
-      expect(result.accounts).toHaveLength(1);
-      expect(result.accounts[0].id).toMatch(/^[0-9a-f-]+$/);
-      // Stored credential must not appear in the public response
-      expect('credential' in result.accounts[0]).toBe(false);
+  it('returns the active account and null before any account exists', async () => {
+    await expect(
+      MakaioBus.request(AccountManagerSubjects.accounts.getActive, { clientId: 'claude-code' }),
+    ).resolves.toEqual({ account: null });
+
+    source.setCredential(makeCredential('token-1'));
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await MakaioBus.request(AccountManagerSubjects.accounts.getActive, { clientId: 'claude-code' });
+    expect(result.account).toMatchObject({ active: true });
+  });
+
+  it('reports available credential sources', async () => {
+    const result = await MakaioBus.request(AccountManagerSubjects.accounts.getSources, {});
+    expect(result.sources).toContainEqual(
+      expect.objectContaining({ clientId: 'claude-code', displayName: 'Claude Code', available: true }),
+    );
+  });
+
+  it('credential.activate writes the exact normalized account selection to native storage', async () => {
+    const accountId = '00000000-0000-0000-0000-000000000001';
+    const target = makeCredential('token-target');
+    await store.upsert('claude-code', {
+      id: accountId,
+      fingerprint: target.fingerprint,
+      label: 'Target',
+      metadata: {},
+      active: false,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: target,
+    });
+    source.setCredential(makeCredential('token-other'));
+
+    const result = await MakaioBus.request(CredentialSubjects.activate, {
+      providerContext: makeProviderContext('provider-config-1', accountId),
     });
 
-    it('getActiveAccount returns the active account', async () => {
-      const cred = makeCredential('token-1');
-      source.setCredential(cred);
-      await vi.advanceTimersByTimeAsync(1000);
+    expect(result).toEqual({ success: true });
+    expect(source.getLastWritten()).toEqual(target);
+    expect((await store.list('claude-code')).find((account) => account.active)?.id).toBe(accountId);
+  });
 
-      const result = await MakaioBus.request(AccountManagerSubjects.accounts.getActive, {
-        clientId: 'claude-code',
-      });
+  it('credential.activate refreshes the selected credential before writing', async () => {
+    const accountId = '00000000-0000-0000-0000-000000000005';
+    const expired = makeCredential('token-expired');
+    const refreshed = makeCredential('token-refreshed');
+    await store.upsert('claude-code', {
+      id: accountId,
+      fingerprint: expired.fingerprint,
+      label: 'Expired',
+      metadata: {},
+      active: false,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: expired,
+    });
+    source.setCredential(null);
+    source.setRefreshHandler(async () => ({ status: 'refreshed', credential: refreshed }));
 
-      expect(result.account).not.toBeNull();
-      expect(result.account!.id).toMatch(/^[0-9a-f-]+$/);
-      expect(result.account!.active).toBe(true);
+    await expect(
+      MakaioBus.request(CredentialSubjects.activate, {
+        providerContext: makeProviderContext('provider-config-1', accountId),
+      }),
+    ).resolves.toEqual({ success: true });
+    expect(source.getLastWritten()).toEqual(refreshed);
+  });
+
+  it('credential.activate reports a typed missing-account failure without mutating native state', async () => {
+    const result = await MakaioBus.request(CredentialSubjects.activate, {
+      providerContext: makeProviderContext('provider-config-1', 'missing-account'),
     });
 
-    it('getActiveAccount returns null when no accounts exist', async () => {
-      const result = await MakaioBus.request(AccountManagerSubjects.accounts.getActive, {
-        clientId: 'claude-code',
-      });
-      expect(result.account).toBeNull();
+    expect(result).toEqual({ success: false, code: 'account-not-found' });
+    expect(source.getLastWritten()).toBeUndefined();
+  });
+
+  it('credential.activate falls through when another manager owns the selector', async () => {
+    const context = makeProviderContext('provider-config-1', 'account-1');
+    if (context.auth.mode !== 'inferred' || !context.auth.account) throw new Error('Expected inferred auth fixture.');
+    context.auth.account.managerId = 'other-manager';
+
+    await expect(MakaioBus.requestOptional(CredentialSubjects.activate, { providerContext: context })).resolves.toEqual(
+      { handled: false },
+    );
+  });
+
+  it('consumes prepared activation tokens exactly once', async () => {
+    const accountId = '00000000-0000-0000-0000-000000000006';
+    const target = makeCredential('token-transaction');
+    await store.upsert('claude-code', {
+      id: accountId,
+      fingerprint: target.fingerprint,
+      label: 'Transaction target',
+      metadata: {},
+      active: false,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: target,
     });
 
-    it('getSources returns available sources', async () => {
-      const result = await MakaioBus.request(AccountManagerSubjects.accounts.getSources, {});
-      expect(result.sources).toHaveLength(1);
-      expect(result.sources[0]).toMatchObject({
-        clientId: 'claude-code',
-        displayName: 'Claude Code',
-        available: true,
-      });
+    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-transaction', accountId),
+    });
+    if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
+
+    await expect(
+      MakaioBus.request(CredentialSubjects.activation.commit, { transactionId: prepared.transactionId }),
+    ).resolves.toEqual({ success: true });
+    await expect(
+      MakaioBus.request(CredentialSubjects.activation.commit, { transactionId: prepared.transactionId }),
+    ).resolves.toEqual({ success: false, code: 'transaction-not-found' });
+    await expect(
+      MakaioBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+    ).resolves.toEqual({ success: false, code: 'transaction-not-found' });
+  });
+
+  it('retains an in-flight finalization through shutdown and rejects competing terminal decisions', async () => {
+    const accountId = '00000000-0000-0000-0000-000000000106';
+    const target = makeCredential('token-finalization-in-flight');
+    await store.upsert('claude-code', {
+      id: accountId,
+      fingerprint: target.fingerprint,
+      label: 'In-flight target',
+      metadata: {},
+      active: false,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: target,
+    });
+    const commitStarted = Promise.withResolvers<void>();
+    const continueCommit = Promise.withResolvers<void>();
+    const appendTimeline = store.metadataStore.appendTimeline.bind(store.metadataStore);
+    vi.spyOn(store.metadataStore, 'appendTimeline').mockImplementation(async (entry) => {
+      commitStarted.resolve();
+      await continueCommit.promise;
+      await appendTimeline(entry);
     });
 
-    it('credential.activate writes the requested account-manager account to native storage', async () => {
-      const TARGET_ID = '00000000-0000-0000-0000-000000000001';
-      const target = makeCredential('token-target');
-      await store.upsert('claude-code', {
-        id: TARGET_ID,
-        fingerprint: target.fingerprint,
-        label: 'Target',
-        metadata: {},
-        active: false,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: target,
-      });
-      source.setCredential(makeCredential('token-other'));
-
-      await MakaioBus.request(CredentialSubjects.activate, {
-        providerConfigId: 'provider-config-1',
-        definitionId: 'anthropic',
-        credentialRefs: {
-          token: `account-manager:["claude-code","${TARGET_ID}"]`,
-        },
-      });
-
-      expect(source.getLastWritten()).toEqual(target);
-      const active = (await store.list('claude-code')).find((account) => account.active);
-      expect(active?.id).toBe(TARGET_ID);
+    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-finalization-in-flight', accountId),
     });
-
-    it('credential.activate refreshes the credential before writing', async () => {
-      const TARGET_ID = '00000000-0000-0000-0000-000000000005';
-      const expired = makeCredential('token-expired');
-      const refreshed = makeCredential('token-refreshed');
-
-      await store.upsert('claude-code', {
-        id: TARGET_ID,
-        fingerprint: expired.fingerprint,
-        label: 'Expired Account',
-        metadata: {},
-        active: false,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: expired,
-      });
-
-      // source.read() returns null — no different keychain credential to adopt.
-      // refreshIfNeeded is the only upgrade path.
-      source.setCredential(null);
-      source.setRefreshHandler(async () => ({ status: 'refreshed', credential: refreshed }));
-
-      await MakaioBus.request(CredentialSubjects.activate, {
-        providerConfigId: 'provider-config-1',
-        definitionId: 'anthropic',
-        credentialRefs: {
-          token: `account-manager:["claude-code","${TARGET_ID}"]`,
-        },
-      });
-
-      expect(source.getLastWritten()).toEqual(refreshed);
+    if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
+    const commit = MakaioBus.request(CredentialSubjects.activation.commit, {
+      transactionId: prepared.transactionId,
     });
+    await commitStarted.promise;
 
-    it('ignores definition fallback for provider configs not owned by account-manager', async () => {
-      const ORIGINAL_ID = '00000000-0000-0000-0000-000000000002';
-      const OTHER_ID = '00000000-0000-0000-0000-000000000003';
-      const original = makeCredential('token-original');
-      const other = makeCredential('token-other');
-      await store.upsert('claude-code', {
-        id: ORIGINAL_ID,
-        fingerprint: original.fingerprint,
-        label: 'Original',
-        metadata: {},
-        active: true,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: original,
-      });
-      await store.upsert('claude-code', {
-        id: OTHER_ID,
-        fingerprint: other.fingerprint,
-        label: 'Other',
-        metadata: {},
-        active: false,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: other,
-      });
-      source.setCredential(original);
-
-      const cleanups = [
-        MakaioBus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-          ctx.setResult({
-            configs: [
-              {
-                id: 'provider-config-1',
-                definitionId: 'anthropic',
-                name: 'Regular provider config',
-                modelFilterMode: 'show-all',
-                isDefault: true,
-                enabled: true,
-                isSentinel: false,
-                hasCredentials: true,
-              },
-            ],
-          });
-        }),
-        MakaioBus.on(ClientStorageSubjects.list, (ctx) => {
-          ctx.setResult({
-            clients: [
-              {
-                id: 'claude-code',
-                packageName: '@makaio/client-claude-code',
-                name: 'Claude Code',
-                defaultApprovalPolicy: 'always-ask',
-                nativeTools: [],
-                defaultProviderId: 'anthropic',
-                enabled: true,
-                createdAt: 1,
-                updatedAt: 1,
-              },
-            ],
-          });
-        }),
-      ];
-
-      try {
-        await MakaioBus.request(CredentialSubjects.activate, {
-          providerConfigId: 'provider-config-1',
-          definitionId: 'anthropic',
-          credentialRefs: {},
-        });
-
-        expect(source.getLastWritten()).toBeUndefined();
-        const active = (await store.list('claude-code')).find((account) => account.active);
-        expect(active?.id).toBe(ORIGINAL_ID);
-      } finally {
-        cleanups.forEach((cleanup) => cleanup());
-      }
+    let destroySettled = false;
+    const destroy = service.destroy().then(() => {
+      destroySettled = true;
     });
-
-    it('switchAccount emits credential.changed for matching active sessions', async () => {
-      const ACCOUNT_A_ID = '00000000-0000-0000-0000-00000000000a';
-      const ACCOUNT_B_ID = '00000000-0000-0000-0000-00000000000b';
-      const credA = makeCredential('token-a');
-      const credB = makeCredential('token-b');
-      await store.upsert('claude-code', {
-        id: ACCOUNT_A_ID,
-        fingerprint: credA.fingerprint,
-        label: 'A',
-        metadata: {},
-        active: true,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credA,
-      });
-      await store.upsert('claude-code', {
-        id: ACCOUNT_B_ID,
-        fingerprint: credB.fingerprint,
-        label: 'B',
-        metadata: {},
-        active: false,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credB,
-      });
-
-      const cleanups = [
-        MakaioBus.on(ClientStorageSubjects.get, (ctx) => {
-          ctx.setResult({
-            client: {
-              id: 'claude-code',
-              packageName: '@makaio/client-claude-code',
-              name: 'Claude Code',
-              defaultApprovalPolicy: 'always-ask',
-              nativeTools: [],
-              defaultProviderId: 'anthropic',
-              enabled: true,
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-          ctx.setResult({
-            configs: [
-              {
-                id: 'cfg-account',
-                definitionId: 'anthropic',
-                name: 'Work',
-                modelFilterMode: 'show-all',
-                isDefault: false,
-                enabled: true,
-                isSentinel: false,
-                hasCredentials: true,
-                sourceRef: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-              },
-              {
-                id: 'cfg-sentinel',
-                definitionId: 'anthropic',
-                name: 'Claude Code (auto)',
-                modelFilterMode: 'show-all',
-                isDefault: true,
-                enabled: true,
-                isSentinel: true,
-                hasCredentials: false,
-              },
-            ],
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-          if (ctx.payload.providerConfigId === 'cfg-account') {
-            ctx.setResult({
-              context: {
-                providerConfigId: 'cfg-account',
-                definitionId: 'anthropic',
-                credentialRefs: {
-                  token: CredentialRefSchema.parse(`account-manager:["claude-code","${ACCOUNT_B_ID}"]`),
-                },
-              },
-            });
-            return;
-          }
-          ctx.setResult({
-            context: {
-              providerConfigId: 'cfg-sentinel',
-              definitionId: 'anthropic',
-              credentialRefs: {},
-            },
-          });
-        }),
-        MakaioBus.on(SessionSubjects.list, (ctx) => {
-          ctx.setResult({
-            sessions: [
-              {
-                sessionId: 'session-1',
-                createdAt: 1,
-                lastActivityAt: 1,
-                status: 'active',
-                agents: [
-                  {
-                    agentId: 'agent-1',
-                    adapterId: 'adapter-1',
-                    adapterName: 'claude-code-cli',
-                    sessionId: 'session-1',
-                    role: 'lead',
-                    status: 'idle',
-                    createdAt: 1,
-                    lastActivityAt: 1,
-                    providerConfigId: 'cfg-account',
-                  },
-                  {
-                    agentId: 'agent-2',
-                    adapterId: 'adapter-2',
-                    adapterName: 'claude-code-cli',
-                    sessionId: 'session-1',
-                    role: 'member',
-                    status: 'idle',
-                    createdAt: 1,
-                    lastActivityAt: 1,
-                    providerConfigId: 'cfg-sentinel',
-                  },
-                ],
-              },
-            ],
-            total: 1,
-          });
-        }),
-      ];
-
-      const changedPayloads: unknown[] = [];
-      const changedCleanup = MakaioBus.on(CredentialSubjects.changed, (ctx) => {
-        changedPayloads.push(ctx.payload);
-        ctx.setResult({});
-      });
-
-      try {
-        const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
-          clientId: 'claude-code',
-          accountId: ACCOUNT_B_ID,
-        });
-
-        expect(result.success).toBe(true);
-        expect(changedPayloads).toEqual([
-          {
-            sessionId: 'session-1',
-            providerConfigId: 'cfg-account',
-            definitionId: 'anthropic',
-            changeSequence: 1,
-            credentialRefs: {
-              token: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-            },
-          },
-          {
-            sessionId: 'session-1',
-            providerConfigId: 'cfg-sentinel',
-            definitionId: 'anthropic',
-            changeSequence: 1,
-            credentialRefs: {},
-          },
-        ]);
-      } finally {
-        changedCleanup();
-        cleanups.forEach((cleanup) => cleanup());
-      }
+    await Promise.resolve();
+    const settledBeforeCommit = destroySettled;
+    const duplicateCommit = MakaioBus.request(CredentialSubjects.activation.commit, {
+      transactionId: prepared.transactionId,
     });
-
-    it('switchAccount continues credential fan-out when one relevant provider config disappears', async () => {
-      const ACCOUNT_A_ID = '00000000-0000-0000-0000-00000000001a';
-      const ACCOUNT_B_ID = '00000000-0000-0000-0000-00000000001b';
-      const credA = makeCredential('token-a-fanout');
-      const credB = makeCredential('token-b-fanout');
-      await store.upsert('claude-code', {
-        id: ACCOUNT_A_ID,
-        fingerprint: credA.fingerprint,
-        label: 'A',
-        metadata: {},
-        active: true,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credA,
-      });
-      await store.upsert('claude-code', {
-        id: ACCOUNT_B_ID,
-        fingerprint: credB.fingerprint,
-        label: 'B',
-        metadata: {},
-        active: false,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credB,
-      });
-
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const cleanups = [
-        MakaioBus.on(ClientStorageSubjects.get, (ctx) => {
-          ctx.setResult({
-            client: {
-              id: 'claude-code',
-              packageName: '@makaio/client-claude-code',
-              name: 'Claude Code',
-              defaultApprovalPolicy: 'always-ask',
-              nativeTools: [],
-              defaultProviderId: 'anthropic',
-              enabled: true,
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-          ctx.setResult({
-            configs: [
-              {
-                id: 'cfg-broken',
-                definitionId: 'anthropic',
-                name: 'Broken Work',
-                modelFilterMode: 'show-all',
-                isDefault: false,
-                enabled: true,
-                isSentinel: false,
-                hasCredentials: true,
-                sourceRef: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-              },
-              {
-                id: 'cfg-good',
-                definitionId: 'anthropic',
-                name: 'Good Work',
-                modelFilterMode: 'show-all',
-                isDefault: false,
-                enabled: true,
-                isSentinel: false,
-                hasCredentials: true,
-                sourceRef: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-              },
-            ],
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-          if (ctx.payload.providerConfigId === 'cfg-broken') {
-            ctx.setResult({ context: null });
-            return;
-          }
-          ctx.setResult({
-            context: {
-              providerConfigId: 'cfg-good',
-              definitionId: 'anthropic',
-              credentialRefs: {
-                token: CredentialRefSchema.parse(`account-manager:["claude-code","${ACCOUNT_B_ID}"]`),
-              },
-            },
-          });
-        }),
-        MakaioBus.on(SessionSubjects.list, (ctx) => {
-          ctx.setResult({
-            sessions: [
-              {
-                sessionId: 'session-broken',
-                createdAt: 1,
-                lastActivityAt: 1,
-                status: 'active',
-                agents: [
-                  {
-                    agentId: 'agent-broken',
-                    adapterId: 'adapter-1',
-                    adapterName: 'claude-code-cli',
-                    sessionId: 'session-broken',
-                    role: 'lead',
-                    status: 'idle',
-                    createdAt: 1,
-                    lastActivityAt: 1,
-                    providerConfigId: 'cfg-broken',
-                  },
-                ],
-              },
-              {
-                sessionId: 'session-good',
-                createdAt: 1,
-                lastActivityAt: 1,
-                status: 'active',
-                agents: [
-                  {
-                    agentId: 'agent-good',
-                    adapterId: 'adapter-2',
-                    adapterName: 'claude-code-cli',
-                    sessionId: 'session-good',
-                    role: 'lead',
-                    status: 'idle',
-                    createdAt: 1,
-                    lastActivityAt: 1,
-                    providerConfigId: 'cfg-good',
-                  },
-                ],
-              },
-            ],
-            total: 2,
-          });
-        }),
-      ];
-
-      const changedPayloads: unknown[] = [];
-      const changedCleanup = MakaioBus.on(CredentialSubjects.changed, (ctx) => {
-        changedPayloads.push(ctx.payload);
-        ctx.setResult({});
-      });
-
-      try {
-        const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
-          clientId: 'claude-code',
-          accountId: ACCOUNT_B_ID,
-        });
-
-        expect(result.success).toBe(true);
-        expect(changedPayloads).toEqual([
-          {
-            sessionId: 'session-good',
-            providerConfigId: 'cfg-good',
-            definitionId: 'anthropic',
-            changeSequence: 1,
-            credentialRefs: {
-              token: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-            },
-          },
-        ]);
-        expect(warnSpy).toHaveBeenCalledTimes(1);
-        expect(warnSpy.mock.calls[0]?.[0]).toBe(
-          '[AccountManager] provider config disappeared during credential fan-out:',
-        );
-        expect(warnSpy.mock.calls[0]?.[1]).toMatchObject({
-          clientId: 'claude-code',
-          providerConfigId: 'cfg-broken',
-        });
-      } finally {
-        changedCleanup();
-        cleanups.forEach((cleanup) => cleanup());
-        warnSpy.mockRestore();
-      }
+    const conflictingRollback = MakaioBus.request(CredentialSubjects.activation.rollback, {
+      transactionId: prepared.transactionId,
     });
+    continueCommit.resolve();
 
-    it('switchAccount fails when provider-context assembly errors for a surviving config', async () => {
-      const ACCOUNT_A_ID = '00000000-0000-0000-0000-00000000001a';
-      const ACCOUNT_B_ID = '00000000-0000-0000-0000-00000000001b';
-      const credA = makeCredential('token-a-broken-context');
-      const credB = makeCredential('token-b-broken-context');
-      await store.upsert('claude-code', {
-        id: ACCOUNT_A_ID,
-        fingerprint: credA.fingerprint,
-        label: 'A',
-        metadata: {},
-        active: true,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credA,
-      });
-      await store.upsert('claude-code', {
-        id: ACCOUNT_B_ID,
-        fingerprint: credB.fingerprint,
-        label: 'B',
-        metadata: {},
-        active: false,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credB,
-      });
+    await expect(commit).resolves.toEqual({ success: true });
+    await expect(duplicateCommit).resolves.toEqual({ success: false, code: 'transaction-not-found' });
+    await expect(conflictingRollback).resolves.toEqual({ success: false, code: 'transaction-not-found' });
+    await destroy;
+    expect(settledBeforeCommit).toBe(false);
+  });
 
-      const cleanups = [
-        MakaioBus.on(ClientStorageSubjects.get, (ctx) => {
-          ctx.setResult({
-            client: {
-              id: 'claude-code',
-              packageName: '@makaio/client-claude-code',
-              name: 'Claude Code',
-              defaultApprovalPolicy: 'always-ask',
-              nativeTools: [],
-              defaultProviderId: 'anthropic',
-              enabled: true,
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-          ctx.setResult({
-            configs: [
-              {
-                id: 'cfg-broken',
-                definitionId: 'anthropic',
-                name: 'Broken config',
-                sourceRef: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-                modelFilterMode: 'show-all',
-                isDefault: true,
-                enabled: true,
-                isSentinel: false,
-                hasCredentials: true,
-              },
-            ],
-          });
-        }),
-        MakaioBus.on(SessionSubjects.list, (ctx) => {
-          ctx.setResult({
-            sessions: [
-              {
-                sessionId: 'session-broken',
-                createdAt: 1,
-                lastActivityAt: 1,
-                status: 'active',
-                agents: [
-                  {
-                    agentId: 'agent-broken',
-                    adapterId: 'adapter-1',
-                    adapterName: 'claude-code',
-                    sessionId: 'session-broken',
-                    role: 'lead',
-                    status: 'idle',
-                    createdAt: 1,
-                    lastActivityAt: 1,
-                    providerConfigId: 'cfg-broken',
-                  },
-                ],
-              },
-            ],
-            total: 1,
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, () => {
-          throw new Error('provider definition unavailable');
-        }),
-      ];
+  it('closes prepare admission before shutdown rolls back an accepted in-flight preparation', async () => {
+    class PausingFirstWriteSource extends InMemoryCredentialSource {
+      public readonly writeStarted = Promise.withResolvers<void>();
+      public readonly continueWrite = Promise.withResolvers<void>();
+      private writeCount = 0;
 
-      try {
-        const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
-          clientId: 'claude-code',
-          accountId: ACCOUNT_B_ID,
-        });
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('provider definition unavailable');
-      } finally {
-        cleanups.forEach((cleanup) => cleanup());
-      }
-    });
-
-    it('switchAccount emits credential.changed once per session and provider config when matches overlap', async () => {
-      const ACCOUNT_A_ID = '00000000-0000-0000-0000-00000000002a';
-      const ACCOUNT_B_ID = '00000000-0000-0000-0000-00000000002b';
-      const credA = makeCredential('token-a-overlap');
-      const credB = makeCredential('token-b-overlap');
-      await store.upsert('claude-code', {
-        id: ACCOUNT_A_ID,
-        fingerprint: credA.fingerprint,
-        label: 'A',
-        metadata: {},
-        active: true,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credA,
-      });
-      await store.upsert('claude-code', {
-        id: ACCOUNT_B_ID,
-        fingerprint: credB.fingerprint,
-        label: 'B',
-        metadata: {},
-        active: false,
-        detectedAt: 1,
-        lastSeenAt: 1,
-        credential: credB,
-      });
-
-      const cleanups = [
-        MakaioBus.on(ClientStorageSubjects.get, (ctx) => {
-          ctx.setResult({
-            client: {
-              id: 'claude-code',
-              packageName: '@makaio/client-claude-code',
-              name: 'Claude Code',
-              defaultApprovalPolicy: 'always-ask',
-              nativeTools: [],
-              defaultProviderId: 'anthropic',
-              enabled: true,
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-          const overlappingConfig = {
-            id: 'cfg-overlap',
-            definitionId: 'anthropic',
-            name: 'Overlap',
-            modelFilterMode: 'show-all' as const,
-            isDefault: false,
-            enabled: true,
-            isSentinel: false,
-            hasCredentials: true,
-            sourceRef: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-          };
-          ctx.setResult({
-            configs: [overlappingConfig, { ...overlappingConfig }],
-          });
-        }),
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-          ctx.setResult({
-            context: {
-              providerConfigId: 'cfg-overlap',
-              definitionId: 'anthropic',
-              credentialRefs: {
-                token: CredentialRefSchema.parse(`account-manager:["claude-code","${ACCOUNT_B_ID}"]`),
-              },
-            },
-          });
-        }),
-        MakaioBus.on(SessionSubjects.list, (ctx) => {
-          ctx.setResult({
-            sessions: [
-              {
-                sessionId: 'session-overlap',
-                createdAt: 1,
-                lastActivityAt: 1,
-                status: 'active',
-                agents: [
-                  {
-                    agentId: 'agent-overlap',
-                    adapterId: 'adapter-1',
-                    adapterName: 'claude-code-cli',
-                    sessionId: 'session-overlap',
-                    role: 'lead',
-                    status: 'idle',
-                    createdAt: 1,
-                    lastActivityAt: 1,
-                    providerConfigId: 'cfg-overlap',
-                  },
-                ],
-              },
-            ],
-            total: 1,
-          });
-        }),
-      ];
-
-      const changedPayloads: unknown[] = [];
-      const changedCleanup = MakaioBus.on(CredentialSubjects.changed, (ctx) => {
-        changedPayloads.push(ctx.payload);
-        ctx.setResult({});
-      });
-
-      try {
-        const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
-          clientId: 'claude-code',
-          accountId: ACCOUNT_B_ID,
-        });
-
-        expect(result.success).toBe(true);
-        expect(changedPayloads).toEqual([
-          {
-            sessionId: 'session-overlap',
-            providerConfigId: 'cfg-overlap',
-            definitionId: 'anthropic',
-            changeSequence: 1,
-            credentialRefs: {
-              token: `account-manager:["claude-code","${ACCOUNT_B_ID}"]`,
-            },
-          },
-        ]);
-      } finally {
-        changedCleanup();
-        cleanups.forEach((cleanup) => cleanup());
-      }
-    });
-
-    it('labelAccount updates the account label', async () => {
-      const cred = makeCredential('token-1');
-      source.setCredential(cred);
-      await vi.advanceTimersByTimeAsync(1000);
-
-      const detectedAccounts = await store.list('claude-code');
-      const detectedId = detectedAccounts[0].id;
-
-      const result = await MakaioBus.request(AccountManagerSubjects.accounts.label, {
-        clientId: 'claude-code',
-        accountId: detectedId,
-        label: 'Work',
-      });
-
-      expect(result.success).toBe(true);
-
-      const accounts = await store.list('claude-code');
-      expect(accounts[0].label).toBe('Work');
-    });
-
-    it('removeAccount removes the account', async () => {
-      const cred = makeCredential('token-1');
-      source.setCredential(cred);
-      await vi.advanceTimersByTimeAsync(1000);
-
-      const detectedAccounts = await store.list('claude-code');
-      const detectedId = detectedAccounts[0].id;
-
-      const result = await MakaioBus.request(AccountManagerSubjects.accounts.remove, {
-        clientId: 'claude-code',
-        accountId: detectedId,
-      });
-
-      expect(result.success).toBe(true);
-
-      const accounts = await store.list('claude-code');
-      expect(accounts).toHaveLength(0);
-    });
-
-    it('configureFileMode returns error for unsupported clients', async () => {
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.configureFileMode, {
-        clientId: 'claude-code',
-      });
-      expect(result.success).toBe(false);
-      expect(result.error).toBeDefined();
-    });
-
-    it('configureFileMode returns success when source implements the method', async () => {
-      let called = false;
-
-      /** Extends the base in-memory source with a configureFileMode implementation. */
-      class FileModeSupportedSource extends InMemoryCredentialSource {
-        async configureFileMode(): Promise<void> {
-          called = true;
+      public override async write(credential: RawCredential): Promise<void> {
+        this.writeCount += 1;
+        if (this.writeCount === 1) {
+          this.writeStarted.resolve();
+          await this.continueWrite.promise;
         }
+        await super.write(credential);
       }
+    }
 
-      // Use an isolated bus instance so this handler does not collide with the
-      // outer service's configureFileMode handler registered on MakaioBus.
-      const isolatedBus = createBusInstance();
-      const fileModeSource = new FileModeSupportedSource('claude-code-fm', 'Claude Code FM');
-      const fileModeStore = new InMemoryAccountStore();
-      const fileModeService = new AccountManager(isolatedBus, {
-        sources: [fileModeSource],
-        credentialStore: fileModeStore.credentialStore,
-        metadataStore: fileModeStore.metadataStore,
-        usageSnapshotStore: fileModeStore.usageSnapshotStore,
-        pollIntervalMs: 1000,
-        makaioCommand: 'makaio-test',
-      });
-      await fileModeService.init();
-
-      try {
-        const result = await isolatedBus.request(AccountManagerSubjects.credentials.configureFileMode, {
-          clientId: 'claude-code-fm',
-        });
-        expect(result.success).toBe(true);
-        expect(called).toBe(true);
-      } finally {
-        await fileModeService.destroy();
-      }
+    await service.destroy();
+    const isolatedBus = createBusInstance();
+    const pausingSource = new PausingFirstWriteSource('claude-code', 'Claude Code');
+    const isolatedStore = new InMemoryAccountStore();
+    service = new AccountManager(isolatedBus, {
+      sources: [pausingSource],
+      credentialStore: isolatedStore.credentialStore,
+      metadataStore: isolatedStore.metadataStore,
+      usageSnapshotStore: isolatedStore.usageSnapshotStore,
+      pollIntervalMs: 1000,
+      makaioCommand: 'makaio-test',
     });
+    await service.init();
+    const accountId = '00000000-0000-0000-0000-000000000107';
+    const target = makeCredential('token-prepare-during-shutdown');
+    await isolatedStore.upsert('claude-code', {
+      id: accountId,
+      fingerprint: target.fingerprint,
+      label: 'Preparing target',
+      metadata: {},
+      active: false,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: target,
+    });
+
+    const acceptedPrepare = isolatedBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-accepted-before-shutdown', accountId),
+    });
+    await pausingSource.writeStarted.promise;
+    let destroySettled = false;
+    const destroy = service.destroy().then(() => {
+      destroySettled = true;
+    });
+    const latePrepare = isolatedBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-rejected-during-shutdown', accountId),
+    });
+    await Promise.resolve();
+    const settledBeforeWrite = destroySettled;
+    pausingSource.continueWrite.resolve();
+
+    await expect(acceptedPrepare).resolves.toEqual({ success: false, code: 'activation-failed' });
+    await expect(latePrepare).resolves.toEqual({ success: false, code: 'activation-failed' });
+    await destroy;
+    expect(settledBeforeWrite).toBe(false);
+    await expect(pausingSource.read()).resolves.toBeNull();
+    await expect(isolatedStore.metadataStore.getActive('claude-code')).resolves.toBeNull();
+  });
+
+  it('keeps prepare admission closed when initialization fails after handlers register', async () => {
+    await service.destroy();
+    const isolatedBus = createBusInstance();
+    const isolatedSource = new InMemoryCredentialSource('claude-code', 'Claude Code');
+    const isolatedStore = new InMemoryAccountStore();
+    const accountId = '00000000-0000-0000-0000-000000000206';
+    const target = makeCredential('token-never-admitted-during-init');
+    await isolatedStore.upsert('claude-code', {
+      id: accountId,
+      fingerprint: target.fingerprint,
+      label: 'Initialization target',
+      metadata: {},
+      active: false,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: target,
+    });
+    isolatedSource.setAvailable(false);
+    const syncStarted = Promise.withResolvers<void>();
+    const failSync = Promise.withResolvers<void>();
+    const list = isolatedStore.metadataStore.list.bind(isolatedStore.metadataStore);
+    let listCalls = 0;
+    vi.spyOn(isolatedStore.metadataStore, 'list').mockImplementation(async (clientId) => {
+      listCalls += 1;
+      if (listCalls === 2) {
+        syncStarted.resolve();
+        await failSync.promise;
+        throw new Error('startup account sync failed');
+      }
+      return list(clientId);
+    });
+    service = new AccountManager(isolatedBus, {
+      sources: [isolatedSource],
+      credentialStore: isolatedStore.credentialStore,
+      metadataStore: isolatedStore.metadataStore,
+      usageSnapshotStore: isolatedStore.usageSnapshotStore,
+      pollIntervalMs: 1000,
+      makaioCommand: 'makaio-test',
+    });
+
+    const initialization = service.init();
+    const initializationResult = initialization.then(
+      () => ({ status: 'fulfilled' as const }),
+      (error: unknown) => ({ status: 'rejected' as const, error }),
+    );
+    await syncStarted.promise;
+    await expect(
+      isolatedBus.request(CredentialSubjects.activation.prepare, {
+        providerContext: makeProviderContext('provider-config-during-failed-init', accountId),
+      }),
+    ).resolves.toEqual({ success: false, code: 'activation-failed' });
+    failSync.resolve();
+
+    await expect(initializationResult).resolves.toMatchObject({
+      status: 'rejected',
+      error: expect.objectContaining({ message: 'startup account sync failed' }),
+    });
+    expect(await isolatedSource.read()).toBeNull();
+  });
+
+  it('clears native credentials when rolling back to previous account absence', async () => {
+    const accountId = '00000000-0000-0000-0000-000000000007';
+    const target = makeCredential('token-first-native');
+    await store.upsert('claude-code', {
+      id: accountId,
+      fingerprint: target.fingerprint,
+      label: 'First native account',
+      metadata: {},
+      active: false,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: target,
+    });
+    source.setCredential(null);
+
+    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-first-native', accountId),
+    });
+    if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
+    expect(await source.read()).toEqual(target);
+
+    await expect(
+      MakaioBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+    ).resolves.toEqual({ success: true });
+    expect(await source.read()).toBeNull();
+    expect(await store.metadataStore.getActive('claude-code')).toBeNull();
+  });
+
+  it('keeps the prepared durable selection when native rollback is superseded by a newer generation', async () => {
+    const accountAId = '00000000-0000-0000-0000-000000000207';
+    const accountBId = '00000000-0000-0000-0000-000000000208';
+    const accountA = makeCredential('token-before-superseded-rollback');
+    const accountB = makeCredential('token-prepared-before-refresh');
+    const refreshedAccountB = makeCredential('token-refreshed-during-connector-start');
+    await store.upsert('claude-code', {
+      id: accountAId,
+      fingerprint: accountA.fingerprint,
+      label: 'Previous',
+      metadata: {},
+      active: true,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: accountA,
+    });
+    await store.upsert('claude-code', {
+      id: accountBId,
+      fingerprint: accountB.fingerprint,
+      label: 'Prepared target',
+      metadata: {},
+      active: false,
+      detectedAt: 2,
+      lastSeenAt: 2,
+      credential: accountB,
+    });
+    source.setCredential(accountA);
+
+    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-superseded-rollback', accountBId),
+    });
+    if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
+    source.setCredential(refreshedAccountB);
+
+    await expect(
+      MakaioBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+    ).resolves.toEqual({ success: false, code: 'rollback-failed' });
+    expect(await source.read()).toEqual(refreshedAccountB);
+    expect(await store.metadataStore.getActive('claude-code')).toMatchObject({ id: accountBId });
+  });
+
+  it('aborts and fully restores a prepare whose native write coordination is uncertain', async () => {
+    class UncertainPreparedWriteSource extends InMemoryCredentialSource {
+      public override async prepareNativeCredentialMutation(credential: RawCredential) {
+        const prepared = await super.prepareNativeCredentialMutation(credential);
+        return { ...prepared, coordination: 'uncertain' as const };
+      }
+    }
+
+    await service.destroy();
+    const isolatedBus = createBusInstance();
+    const uncertainSource = new UncertainPreparedWriteSource('claude-code', 'Claude Code');
+    const isolatedStore = new InMemoryAccountStore();
+    service = new AccountManager(isolatedBus, {
+      sources: [uncertainSource],
+      credentialStore: isolatedStore.credentialStore,
+      metadataStore: isolatedStore.metadataStore,
+      usageSnapshotStore: isolatedStore.usageSnapshotStore,
+      pollIntervalMs: 1000,
+      makaioCommand: 'makaio-test',
+    });
+    await service.init();
+    const accountAId = '00000000-0000-0000-0000-000000000209';
+    const accountBId = '00000000-0000-0000-0000-00000000020a';
+    const accountA = makeCredential('token-before-uncertain-write');
+    const accountB = makeCredential('token-uncertain-write');
+    await isolatedStore.upsert('claude-code', {
+      id: accountAId,
+      fingerprint: accountA.fingerprint,
+      label: 'Previous',
+      metadata: {},
+      active: true,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: accountA,
+    });
+    await isolatedStore.upsert('claude-code', {
+      id: accountBId,
+      fingerprint: accountB.fingerprint,
+      label: 'Uncertain target',
+      metadata: {},
+      active: false,
+      detectedAt: 2,
+      lastSeenAt: 2,
+      credential: accountB,
+    });
+    uncertainSource.setCredential(accountA);
+
+    await expect(
+      isolatedBus.request(CredentialSubjects.activation.prepare, {
+        providerContext: makeProviderContext('provider-config-uncertain-write', accountBId),
+      }),
+    ).resolves.toEqual({ success: false, code: 'activation-failed' });
+    expect(await uncertainSource.read()).toEqual(accountA);
+    expect(await isolatedStore.metadataStore.getActive('claude-code')).toMatchObject({ id: accountAId });
+  });
+
+  it('surfaces uncertain rollback coordination after restoring native and durable state', async () => {
+    class UncertainRollbackSource extends InMemoryCredentialSource {
+      public override async prepareNativeCredentialMutation(credential: RawCredential) {
+        const prepared = await super.prepareNativeCredentialMutation(credential);
+        return {
+          ...prepared,
+          rollback: async () => ({ ...(await prepared.rollback()), coordination: 'uncertain' as const }),
+        };
+      }
+    }
+
+    await service.destroy();
+    const isolatedBus = createBusInstance();
+    const uncertainSource = new UncertainRollbackSource('claude-code', 'Claude Code');
+    const isolatedStore = new InMemoryAccountStore();
+    service = new AccountManager(isolatedBus, {
+      sources: [uncertainSource],
+      credentialStore: isolatedStore.credentialStore,
+      metadataStore: isolatedStore.metadataStore,
+      usageSnapshotStore: isolatedStore.usageSnapshotStore,
+      pollIntervalMs: 1000,
+      makaioCommand: 'makaio-test',
+    });
+    await service.init();
+    const accountAId = '00000000-0000-0000-0000-00000000020b';
+    const accountBId = '00000000-0000-0000-0000-00000000020c';
+    const accountA = makeCredential('token-before-uncertain-rollback');
+    const accountB = makeCredential('token-before-rollback');
+    for (const account of [
+      { id: accountAId, credential: accountA, active: true, detectedAt: 1 },
+      { id: accountBId, credential: accountB, active: false, detectedAt: 2 },
+    ]) {
+      await isolatedStore.upsert('claude-code', {
+        id: account.id,
+        fingerprint: account.credential.fingerprint,
+        label: account.active ? 'Previous' : 'Target',
+        metadata: {},
+        active: account.active,
+        detectedAt: account.detectedAt,
+        lastSeenAt: account.detectedAt,
+        credential: account.credential,
+      });
+    }
+    uncertainSource.setCredential(accountA);
+
+    const prepared = await isolatedBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-uncertain-rollback', accountBId),
+    });
+    if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
+    await expect(
+      isolatedBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+    ).resolves.toEqual({ success: false, code: 'rollback-failed' });
+    expect(await uncertainSource.read()).toEqual(accountA);
+    expect(await isolatedStore.metadataStore.getActive('claude-code')).toMatchObject({ id: accountAId });
+  });
+
+  it('self-rolls back native and durable state when strict commit persistence fails', async () => {
+    const accountAId = '00000000-0000-0000-0000-000000000008';
+    const accountBId = '00000000-0000-0000-0000-000000000009';
+    const accountA = makeCredential('token-before-commit');
+    const accountB = makeCredential('token-commit-target');
+    await store.upsert('claude-code', {
+      id: accountAId,
+      fingerprint: accountA.fingerprint,
+      label: 'Before',
+      metadata: {},
+      active: true,
+      detectedAt: 1,
+      lastSeenAt: 1,
+      credential: accountA,
+    });
+    await store.upsert('claude-code', {
+      id: accountBId,
+      fingerprint: accountB.fingerprint,
+      label: 'Target',
+      metadata: {},
+      active: false,
+      detectedAt: 2,
+      lastSeenAt: 2,
+      credential: accountB,
+    });
+    source.setCredential(accountA);
+    vi.spyOn(store.metadataStore, 'appendTimeline').mockRejectedValueOnce(new Error('timeline unavailable'));
+
+    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+      providerContext: makeProviderContext('provider-config-strict-commit', accountBId),
+    });
+    if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
+    expect(await source.read()).toEqual(accountB);
+
+    await expect(
+      MakaioBus.request(CredentialSubjects.activation.commit, { transactionId: prepared.transactionId }),
+    ).resolves.toEqual({ success: false, code: 'commit-failed' });
+    expect(await source.read()).toEqual(accountA);
+    expect(await store.metadataStore.getActive('claude-code')).toMatchObject({ id: accountAId });
+  });
+
+  it('switchAccount emits full normalized contexts for pinned and current-native configs', async () => {
+    const accountA = '00000000-0000-0000-0000-00000000000a';
+    const accountB = '00000000-0000-0000-0000-00000000000b';
+    await seedSwitchAccounts(store, accountA, accountB);
+    const pinned = makeProviderContext('cfg-account', accountB);
+    const currentNative = makeProviderContext('cfg-native-current');
+    const cleanups = registerFanoutFixtures(
+      [pinned, currentNative],
+      [makeSession('session-1', ['cfg-account', 'cfg-native-current'])],
+    );
+    const changedPayloads: unknown[] = [];
+    cleanups.push(
+      MakaioBus.on(CredentialSubjects.changed, (ctx) => {
+        changedPayloads.push(ctx.payload);
+        ctx.setResult({});
+      }),
+    );
+
+    try {
+      await expect(
+        MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+          clientId: 'claude-code',
+          accountId: accountB,
+        }),
+      ).resolves.toEqual({ success: true });
+      expect(changedPayloads).toEqual([
+        { sessionId: 'session-1', changeSequence: 1, providerContext: pinned },
+        { sessionId: 'session-1', changeSequence: 1, providerContext: currentNative },
+      ]);
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+    }
+  });
+
+  it('continues credential fan-out when one matching config disappears', async () => {
+    const accountA = '00000000-0000-0000-0000-00000000001a';
+    const accountB = '00000000-0000-0000-0000-00000000001b';
+    await seedSwitchAccounts(store, accountA, accountB);
+    const broken = makeProviderContext('cfg-broken', accountB);
+    const good = makeProviderContext('cfg-good', accountB);
+    const cleanups = registerFanoutFixtures(
+      [broken, good],
+      [makeSession('session-broken', ['cfg-broken']), makeSession('session-good', ['cfg-good'])],
+      new Set(['cfg-broken']),
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const changedPayloads: unknown[] = [];
+    cleanups.push(
+      MakaioBus.on(CredentialSubjects.changed, (ctx) => {
+        changedPayloads.push(ctx.payload);
+        ctx.setResult({});
+      }),
+    );
+
+    try {
+      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+        clientId: 'claude-code',
+        accountId: accountB,
+      });
+      expect(changedPayloads).toEqual([{ sessionId: 'session-good', changeSequence: 1, providerContext: good }]);
+      expect(warnSpy).toHaveBeenCalledWith('[AccountManager] provider config unavailable during credential fan-out:', {
+        clientId: 'claude-code',
+        adapterName: 'claude-code-cli',
+        providerConfigId: 'cfg-broken',
+      });
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('emits credential.changed once for duplicate config read rows', async () => {
+    const accountA = '00000000-0000-0000-0000-00000000002a';
+    const accountB = '00000000-0000-0000-0000-00000000002b';
+    await seedSwitchAccounts(store, accountA, accountB);
+    const context = makeProviderContext('cfg-overlap', accountB);
+    const cleanups = registerFanoutFixtures([context, context], [makeSession('session-overlap', ['cfg-overlap'])]);
+    const changedPayloads: unknown[] = [];
+    cleanups.push(
+      MakaioBus.on(CredentialSubjects.changed, (ctx) => {
+        changedPayloads.push(ctx.payload);
+        ctx.setResult({});
+      }),
+    );
+
+    try {
+      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+        clientId: 'claude-code',
+        accountId: accountB,
+      });
+      expect(changedPayloads).toEqual([{ sessionId: 'session-overlap', changeSequence: 1, providerContext: context }]);
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+    }
+  });
+
+  it('resolves one atomic context per affected adapter and reuses it across sessions', async () => {
+    const accountA = '00000000-0000-0000-0000-00000000003a';
+    const accountB = '00000000-0000-0000-0000-00000000003b';
+    await seedSwitchAccounts(store, accountA, accountB);
+    const context = makeProviderContext('cfg-shared', accountB);
+    const runtimeReads: Array<{ adapterName: string; providerConfigId: string }> = [];
+    const cleanups = registerFanoutFixtures(
+      [context],
+      [
+        makeSession('session-cli-1', ['cfg-shared'], ['claude-code-cli']),
+        makeSession('session-cli-2', ['cfg-shared'], ['claude-code-cli']),
+        makeSession('session-sdk', ['cfg-shared'], ['claude-agent-sdk']),
+      ],
+      new Set(),
+      runtimeReads,
+    );
+    const changedPayloads: unknown[] = [];
+    cleanups.push(
+      MakaioBus.on(CredentialSubjects.changed, (ctx) => {
+        changedPayloads.push(ctx.payload);
+        ctx.setResult({});
+      }),
+    );
+
+    try {
+      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+        clientId: 'claude-code',
+        accountId: accountB,
+      });
+
+      expect(runtimeReads).toEqual([
+        { adapterName: 'claude-code-cli', providerConfigId: 'cfg-shared' },
+        { adapterName: 'claude-agent-sdk', providerConfigId: 'cfg-shared' },
+      ]);
+      expect(changedPayloads).toEqual([
+        { sessionId: 'session-cli-1', changeSequence: 1, providerContext: context },
+        { sessionId: 'session-cli-2', changeSequence: 1, providerContext: context },
+        { sessionId: 'session-sdk', changeSequence: 1, providerContext: context },
+      ]);
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+    }
+  });
+
+  it('labels and removes accounts through the public handlers', async () => {
+    source.setCredential(makeCredential('token-1'));
+    await vi.advanceTimersByTimeAsync(1000);
+    const accountId = (await store.list('claude-code'))[0].id;
+
+    await expect(
+      MakaioBus.request(AccountManagerSubjects.accounts.label, {
+        clientId: 'claude-code',
+        accountId,
+        label: 'Work',
+      }),
+    ).resolves.toEqual({ success: true });
+    expect((await store.list('claude-code'))[0].label).toBe('Work');
+
+    await expect(
+      MakaioBus.request(AccountManagerSubjects.accounts.remove, { clientId: 'claude-code', accountId }),
+    ).resolves.toEqual({ success: true });
+    expect(await store.list('claude-code')).toHaveLength(0);
+  });
+
+  it('configureFileMode reports unsupported sources', async () => {
+    const result = await MakaioBus.request(AccountManagerSubjects.credentials.configureFileMode, {
+      clientId: 'claude-code',
+    });
+    expect(result).toMatchObject({ success: false });
+  });
+
+  it('configureFileMode invokes a supported source', async () => {
+    let called = false;
+    class FileModeSupportedSource extends InMemoryCredentialSource {
+      public async configureFileMode(): Promise<void> {
+        called = true;
+      }
+    }
+
+    const isolatedBus = createBusInstance();
+    const isolatedStore = new InMemoryAccountStore();
+    const isolatedService = new AccountManager(isolatedBus, {
+      sources: [new FileModeSupportedSource('claude-code-fm', 'Claude Code FM')],
+      credentialStore: isolatedStore.credentialStore,
+      metadataStore: isolatedStore.metadataStore,
+      usageSnapshotStore: isolatedStore.usageSnapshotStore,
+      pollIntervalMs: 1000,
+      makaioCommand: 'makaio-test',
+    });
+    await isolatedService.init();
+    try {
+      await expect(
+        isolatedBus.request(AccountManagerSubjects.credentials.configureFileMode, { clientId: 'claude-code-fm' }),
+      ).resolves.toEqual({ success: true });
+      expect(called).toBe(true);
+    } finally {
+      await isolatedService.destroy();
+    }
   });
 });
+
+/**
+ * Seed an active A account and inactive B account for switch tests.
+ * @param store - In-memory account store populated for the switch.
+ * @param accountA - Initially active account identifier.
+ * @param accountB - Initially inactive account identifier.
+ */
+async function seedSwitchAccounts(store: InMemoryAccountStore, accountA: string, accountB: string): Promise<void> {
+  const credentialA = makeCredential(`token-${accountA}`);
+  const credentialB = makeCredential(`token-${accountB}`);
+  await store.upsert('claude-code', {
+    id: accountA,
+    fingerprint: credentialA.fingerprint,
+    label: 'A',
+    metadata: {},
+    active: true,
+    detectedAt: 1,
+    lastSeenAt: 1,
+    credential: credentialA,
+  });
+  await store.upsert('claude-code', {
+    id: accountB,
+    fingerprint: credentialB.fingerprint,
+    label: 'B',
+    metadata: {},
+    active: false,
+    detectedAt: 1,
+    lastSeenAt: 1,
+    credential: credentialB,
+  });
+}
+
+/**
+ * Register config, runtime-snapshot, and active-session fan-out fixtures.
+ * @param contexts - Provider contexts exposed through the runtime handlers.
+ * @param sessions - Active sessions returned by the session-list handler.
+ * @param missingConfigIds - Config IDs resolved as missing.
+ * @param runtimeReads - Collector for adapter-qualified runtime requests.
+ */
+function registerFanoutFixtures(
+  contexts: ResolvedProviderContext[],
+  sessions: ReturnType<typeof makeSession>[],
+  missingConfigIds: ReadonlySet<string> = new Set(),
+  runtimeReads: Array<{ adapterName: string; providerConfigId: string }> = [],
+): Array<() => void> {
+  const contextById = new Map(contexts.map((context) => [context.providerConfigId, context]));
+  return [
+    MakaioBus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
+      ctx.setResult({ configs: contexts.map(makeConfigRecord) });
+    }),
+    MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+      runtimeReads.push(ctx.payload);
+      const context = contextById.get(ctx.payload.providerConfigId);
+      if (!context || missingConfigIds.has(ctx.payload.providerConfigId)) {
+        ctx.setResult({ status: 'error', code: 'provider-config-not-found' });
+        return;
+      }
+      ctx.setResult(makeAdapterRuntimeResolution(context, ctx.payload.adapterName));
+    }),
+    MakaioBus.on(SessionSubjects.list, (ctx) => {
+      ctx.setResult({ sessions, total: sessions.length });
+    }),
+  ];
+}

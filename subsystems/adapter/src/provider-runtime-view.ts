@@ -1,72 +1,147 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ProviderContext } from '@makaio/contracts';
-import { type ProviderConfigFile, brandCredentialRecord } from '@makaio/contracts/config';
-import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
+import {
+  ResolvedProviderContextSchema,
+  type ResolvedProviderAuth,
+  type ResolvedProviderContext,
+} from '@makaio/contracts';
+import type {
+  ClientAuthMethodDefinition,
+  ProviderAuthMethodDefinition,
+  ProviderConfigAuth,
+} from '@makaio/contracts/auth';
+import type { ProviderConfigFile } from '@makaio/contracts/config';
 import type { ProviderRecord } from '@makaio/services-core/settings/storage';
+import {
+  assertProviderConfigAuthDefinitionsEnabled,
+  ProviderConfigAuthValidationError,
+  validateProviderConfigAuth,
+} from './provider-config-auth-validation.js';
+
+/** Stable runtime-context assembly failure categories. */
+export type ProviderRuntimeContextErrorCode = 'provider-config-disabled';
+
+/** Typed failure raised before a config can reach adapter startup. */
+export class ProviderRuntimeContextError extends Error {
+  /**
+   * Create a runtime provider-context failure.
+   * @param code - Stable failure category.
+   * @param message - Credential-free diagnostic.
+   */
+  public constructor(
+    public readonly code: ProviderRuntimeContextErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ProviderRuntimeContextError';
+  }
+}
+
+/** Definition-backed pieces derived from one provider runtime lookup. */
+export interface ProviderRuntimeContextView {
+  /** Refs-only context assembled from the captured provider config. */
+  readonly context: ResolvedProviderContext;
+  /** Exact provider definition used to validate and assemble the context. */
+  readonly definition: ProviderRecord;
+}
 
 /**
- * Build provider context from one captured raw provider-config snapshot.
- * @param bus - Bus used to resolve provider-definition metadata.
+ * Build a resolved provider context from one captured provider-config snapshot.
+ *
+ * The selected auth method is validated against provider/client definition
+ * storage before the refs-only context is emitted. Invalid, disabled, or
+ * dangling configs fail here and never become an inferred/ambient fallback.
+ * @param bus - Bus used to resolve provider/client definition metadata.
  * @param providerConfigId - Provider config identifier.
  * @param raw - Raw canonical provider-config file from the captured snapshot.
- * @returns Bus-safe runtime provider context.
+ * @returns Validated refs-only context plus the exact provider definition used.
  */
-export async function buildProviderContextFromRaw(
+export async function buildProviderRuntimeContextFromRaw(
   bus: IMakaioBus,
   providerConfigId: string,
   raw: ProviderConfigFile,
-): Promise<ProviderContext> {
-  const { provider } = await bus.request(ProviderStorageSubjects.get, { id: raw.definitionId });
-  if (!provider) {
-    throw new Error(`ProviderDefinition '${raw.definitionId}' not found for config '${providerConfigId}'`);
+): Promise<ProviderRuntimeContextView> {
+  if (raw.enabled === false) {
+    throw new ProviderRuntimeContextError(
+      'provider-config-disabled',
+      `ProviderConfig '${providerConfigId}' is disabled and cannot be used for adapter startup.`,
+    );
   }
-  const providers = await listProvidersForAmbientCredentials(bus, provider);
-  const endpointOverrides = { ...(provider.endpoints ?? {}), ...(raw.endpointOverrides ?? {}) };
-  const ambientCredentialEnvVars = collectCredentialEnvVars(providers);
-  return {
+
+  const validated = await validateProviderConfigAuth(bus, raw.definitionId, raw.auth);
+  assertProviderConfigAuthDefinitionsEnabled(validated);
+  const auth = buildResolvedProviderAuth(raw.auth, validated.method);
+  const endpointOverrides = { ...(validated.provider.endpoints ?? {}), ...(raw.endpointOverrides ?? {}) };
+
+  const context = ResolvedProviderContextSchema.parse({
+    state: 'resolved',
     providerConfigId,
-    definitionId: provider.id,
+    definitionId: validated.provider.id,
     ...(Object.keys(endpointOverrides).length > 0 ? { endpointOverrides } : {}),
-    credentialRefs: brandCredentialRecord(raw.credentials) ?? {},
-    ...(provider.credentialEnvVars ? { credentialEnvVars: { ...provider.credentialEnvVars } } : {}),
-    ...(ambientCredentialEnvVars.length > 0 ? { ambientCredentialEnvVars } : {}),
-    ...(provider.capabilities ? { capabilities: provider.capabilities } : {}),
+    auth,
+    ...(validated.provider.capabilities ? { capabilities: validated.provider.capabilities } : {}),
+  });
+
+  return {
+    context,
+    definition: structuredClone(validated.provider),
   };
 }
 
 /**
- * Reads all known providers for ambient credential cleanup while always
- * including the selected provider from the context build.
- * @param bus - Bus used to query provider storage
- * @param provider - Selected provider definition for this context
- * @returns Provider definitions visible for ambient credential discovery
+ * Resolve the validated static method into the refs-only runtime auth union.
+ * @param auth - Persisted normalized auth selection.
+ * @param method - Exact definition-backed method selected by the config.
+ * @returns Runtime auth selection with the static definition attached.
  */
-async function listProvidersForAmbientCredentials(
-  bus: IMakaioBus,
-  provider: ProviderRecord,
-): Promise<readonly ProviderRecord[]> {
-  try {
-    const providerListResult = await bus.requestOptional(ProviderStorageSubjects.list, {});
-    if (!providerListResult.handled) {
-      return [provider];
-    }
-    const providers = providerListResult.data.providers;
-    return providers.some((entry) => entry.id === provider.id) ? providers : [provider, ...providers];
-  } catch (error) {
-    console.debug('[AdapterSubsystem] Provider list unavailable for ambient credential discovery', error);
-    return [provider];
+function buildResolvedProviderAuth(
+  auth: ProviderConfigAuth,
+  method: ProviderAuthMethodDefinition | ClientAuthMethodDefinition,
+): ResolvedProviderAuth {
+  switch (auth.mode) {
+    case 'explicit':
+      if (method.mode !== 'explicit') {
+        throw impossibleModeMismatch(auth.mode, method.mode);
+      }
+      return {
+        mode: auth.mode,
+        method: { ...auth.method },
+        definition: structuredClone(method),
+        credentialRefs: { ...auth.credentialRefs },
+      };
+    case 'inferred':
+      if (method.mode !== 'inferred') {
+        throw impossibleModeMismatch(auth.mode, method.mode);
+      }
+      return {
+        mode: auth.mode,
+        method: { ...auth.method },
+        definition: { ...method },
+        ...(auth.account ? { account: { ...auth.account } } : {}),
+      };
+    case 'none':
+      if (method.mode !== 'none') {
+        throw impossibleModeMismatch(auth.mode, method.mode);
+      }
+      return {
+        mode: auth.mode,
+        method: { ...auth.method },
+        definition: { ...method },
+      };
   }
 }
 
 /**
- * Collect provider credential env var names from provider records.
- * @param providers - Provider records visible to the host
- * @returns Unique credential environment variable names
+ * Build the defensive failure used when validation and assembly ever diverge.
+ * @param selectedMode - Persisted selected mode.
+ * @param declaredMode - Definition-declared mode.
+ * @returns Typed auth-validation error without credential material.
  */
-function collectCredentialEnvVars(providers: readonly ProviderRecord[]): string[] {
-  return [
-    ...new Set(
-      providers.flatMap((provider) => (provider.credentialEnvVars ? Object.values(provider.credentialEnvVars) : [])),
-    ),
-  ];
+function impossibleModeMismatch(
+  selectedMode: ProviderConfigAuth['mode'],
+  declaredMode: ProviderAuthMethodDefinition['mode'] | ClientAuthMethodDefinition['mode'],
+): ProviderConfigAuthValidationError {
+  return new ProviderConfigAuthValidationError(
+    'auth-mode-mismatch',
+    `Validated authentication mode changed during context assembly: selected "${selectedMode}", declared "${declaredMode}".`,
+  );
 }

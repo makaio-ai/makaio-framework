@@ -19,6 +19,7 @@ function makeSession(overrides: Partial<ConstructorParameters<typeof ClaudeConne
     cwd: '/tmp',
     model: 'claude-sonnet',
     env: {},
+    contextEnv: {},
     ...overrides,
   });
 }
@@ -126,7 +127,12 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
       adapterId: 'adapter-abc',
       adapterName: 'claude-agent-sdk',
       cwd: '/workspace',
-      env: { SOME_VAR: 'value' },
+      env: {
+        SOME_VAR: 'connector-value',
+        ANTHROPIC_API_KEY: 'selected-secret',
+        CLAUDE_CODE_OAUTH_TOKEN: 'opposing-secret',
+      },
+      contextEnv: { SOME_VAR: 'value' },
     });
 
     session.injectQueryInstance({
@@ -150,6 +156,9 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
         agentId: 'agent-xyz',
       },
     });
+    expect(JSON.stringify(payload)).not.toContain('selected-secret');
+    expect(JSON.stringify(payload)).not.toContain('opposing-secret');
+    expect(JSON.stringify(payload)).not.toContain('CLAUDE_CONFIG_DIR');
   });
 
   it('refreshMcpContext triggers setMcpServers when port changes', async () => {
