@@ -20,6 +20,7 @@ import {
   resolveShardForFile,
   type TestCategory,
 } from './lib/vitest-categories.js';
+import { isBunTestFile, isTestFile } from './lib/test-runner-contract.js';
 
 const SCRIPT_DIR = import.meta.dirname;
 const FRAMEWORK_ROOT = resolve(SCRIPT_DIR, '..');
@@ -29,10 +30,6 @@ const FRAMEWORK_ROOT = resolve(SCRIPT_DIR, '..');
  * @param arg - CLI argument.
  * @returns True if the argument matches a test file suffix pattern.
  */
-function looksLikeTestFile(arg: string): boolean {
-  return /\.(test|integration\.test|spec)\.(tsx?|jsx?)$/.test(arg);
-}
-
 /**
  * Normalizes a user-provided file path to be relative to the vitest config root.
  * @param inputPath - Raw path from CLI.
@@ -82,9 +79,23 @@ function runVitest(args: string[], cwd: string, env?: Record<string, string>): v
   });
 }
 
+/**
+ * Executes Bun-owned framework tests through the explicit runner.
+ * @param filePaths - Optional framework-relative Bun test file paths
+ * @param options - Bun test options passed through unchanged
+ */
+function runBunTests(filePaths: string[], options: string[] = []): void {
+  execFileSync('bun', ['scripts/run-bun-tests.ts', ...options, ...filePaths], {
+    env: { ...process.env, CI: process.env.CI ?? 'true' },
+    stdio: 'inherit',
+    cwd: FRAMEWORK_ROOT,
+  });
+}
+
 /** Runs the full framework-only test suite with all categories enabled. */
 function runFullSuiteFrameworkOnly(): void {
   runVitest([], FRAMEWORK_ROOT, { MAKAIO_TEST_CATEGORIES: 'unit,ui,integration' });
+  runBunTests([]);
 }
 
 /** Runs the requested framework tests. */
@@ -96,8 +107,8 @@ function main(): void {
     return;
   }
 
-  const testFiles = args.filter((a) => looksLikeTestFile(a));
-  const otherArgs = args.filter((a) => !looksLikeTestFile(a));
+  const testFiles = args.filter((a) => isTestFile(a));
+  const otherArgs = args.filter((a) => !isTestFile(a));
 
   if (testFiles.length === 0) {
     runVitest(args, FRAMEWORK_ROOT);
@@ -106,6 +117,11 @@ function main(): void {
 
   for (const file of testFiles) {
     const normalizedFile = normalizeFilePath(file);
+    if (isBunTestFile(normalizedFile)) {
+      console.info(`${normalizedFile}\n  runner: bun\n`);
+      runBunTests([normalizedFile], otherArgs);
+      continue;
+    }
     const resolved = resolveTest(file);
     if (!resolved) {
       console.error(`Could not resolve shard for: ${file}`);

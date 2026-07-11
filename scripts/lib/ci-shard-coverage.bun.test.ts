@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { checkShardCoverage, extractShardsFromWorkflowYaml } from './ci-shard-coverage.js';
 
 describe('checkShardCoverage', () => {
@@ -43,10 +43,7 @@ describe('checkShardCoverage', () => {
     });
 
     it('reports stale claims even with an empty project list', () => {
-      const issues = checkShardCoverage({
-        projectNames: [],
-        claimedShards: ['Core'],
-      });
+      const issues = checkShardCoverage({ projectNames: [], claimedShards: ['Core'] });
       expect(issues).toHaveLength(1);
       expect(issues[0]).toMatch(/Core/);
     });
@@ -92,8 +89,7 @@ jobs:
     with:
       test_shards: '["Core", "Packages", "Platform"]'
 `;
-    const result = extractShardsFromWorkflowYaml(yaml);
-    expect(result).toEqual(['Core', 'Packages', 'Platform']);
+    expect(extractShardsFromWorkflowYaml(yaml)).toEqual(['Core', 'Packages', 'Platform']);
   });
 
   it('extracts shard list from a double-quoted test_shards YAML line', () => {
@@ -106,12 +102,10 @@ jobs:
   });
 
   it('throws when the JSON array is malformed', () => {
-    const yaml = `      test_shards: '["Core", broken'`;
-    expect(() => extractShardsFromWorkflowYaml(yaml)).toThrow();
+    expect(() => extractShardsFromWorkflowYaml(`      test_shards: '["Core", broken'`)).toThrow();
   });
 
   it('throws when the extracted value is not a string array', () => {
-    const yaml = `      test_shards: '[42, true]'`;
-    expect(() => extractShardsFromWorkflowYaml(yaml)).toThrow(/string array/i);
+    expect(() => extractShardsFromWorkflowYaml(`      test_shards: '[42, true]'`)).toThrow(/string array/i);
   });
 });

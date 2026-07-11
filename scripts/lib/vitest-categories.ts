@@ -6,6 +6,8 @@
  * the common logic.
  */
 
+import { removeTestRunnerAffix } from './test-runner-contract.js';
+
 export type TestCategory = 'unit' | 'ui' | 'integration' | 'adapters';
 
 const DEFAULT_CATEGORIES: readonly TestCategory[] = ['unit', 'ui', 'integration'];
@@ -165,8 +167,9 @@ export const GIT_SERIAL_TEST_GLOBS = ['subsystems/git/src/**/*.test.ts'];
  * @param filePath - Test file path.
  */
 export function inferCategory(filePath: string): TestCategory {
-  if (filePath.endsWith('.integration.test.ts')) return 'integration';
-  if (filePath.endsWith('.test.tsx')) return 'ui';
+  const categoryPath = removeTestRunnerAffix(filePath);
+  if (categoryPath.endsWith('.integration.test.ts')) return 'integration';
+  if (categoryPath.endsWith('.test.tsx')) return 'ui';
   return 'unit';
 }
 
