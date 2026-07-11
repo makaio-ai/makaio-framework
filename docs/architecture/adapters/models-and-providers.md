@@ -5,9 +5,10 @@ description: Configure AI models, providers, and credentials in the Makaio Frame
 
 Models and providers are the configuration layer between adapters and AI services. A
 `ProviderDefinition` declares what an AI service offers — its endpoints, default models,
-and credential conventions. A `ProviderConfig` binds user credentials and settings to a
-definition. Canonical model names let you address any model through a unified string
-format that the framework resolves to the right adapter and provider at runtime.
+and provider-owned authentication methods. A `ProviderConfig` selects exactly one auth
+method and stores credential references or native-account identity. Canonical model names
+let you address any model through a unified string format that the framework resolves to the
+right adapter and provider at runtime.
 
 ## Canonical Model Names
 
@@ -99,7 +100,7 @@ interface ProviderDefinition {
   fastModel?: string;              // Fast/cheap model for background work
   defaultModelFilterMode?: 'show-all' | 'allowlist';
   availableModels: AIModel[];      // Populated at runtime from model registry
-  credentialEnvVars?: Record<string, string>; // Credential field → env var
+  authMethods: ProviderAuthMethodDefinition[];
 }
 ```
 
@@ -117,7 +118,18 @@ Example — Anthropic:
   endpoints: { anthropic: 'https://api.anthropic.com' },
   defaultModel: 'claude-sonnet-4-6',
   fastModel: 'claude-haiku-4-5',
-  credentialEnvVars: { apiKey: 'ANTHROPIC_API_KEY' },
+  authMethods: [{
+    id: 'api-key',
+    mode: 'explicit',
+    label: 'API key',
+    fields: [{
+      id: 'apiKey',
+      label: 'API key',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment', variable: 'ANTHROPIC_API_KEY' }],
+    }],
+  }],
 }
 ```
 
@@ -131,7 +143,18 @@ Example — Z.AI (dual-protocol provider exposing both wire formats):
     anthropic: 'https://api.z.ai/api/anthropic',
     openai: 'https://api.z.ai/api/openai',
   },
-  credentialEnvVars: { apiKey: 'Z_AI_API_KEY' },
+  authMethods: [{
+    id: 'api-key',
+    mode: 'explicit',
+    label: 'API key',
+    fields: [{
+      id: 'apiKey',
+      label: 'API key',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment', variable: 'Z_AI_API_KEY' }],
+    }],
+  }],
 }
 ```
 
@@ -141,31 +164,57 @@ Example — GitHub Copilot (SDK-only provider, no HTTP endpoints):
 {
   id: 'github-copilot',
   name: 'GitHub Copilot',
-  credentialEnvVars: { token: 'COPILOT_TOKEN' },
+  authMethods: [{
+    id: 'token',
+    mode: 'explicit',
+    label: 'Token',
+    fields: [{
+      id: 'token',
+      label: 'Token',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment', variable: 'COPILOT_TOKEN' }],
+    }],
+  }],
   // endpoints intentionally omitted — uses proprietary SDK transport
 }
 ```
 
 Provider definitions are contributed by provider extensions and discovered during boot. Adapters
-declare the provider definition IDs they support.
+declare the provider definition IDs they support and attach runtime-only auth bindings to each
+adapter/provider reference. Client definitions separately declare client-owned methods, including
+`inferred` native auth and explicit tokens. A client's optional `defaultAuth` selects an inferred
+method for its managed default provider configuration.
 
 ## Provider Configs
 
-A `ProviderConfigFile` binds user credentials and settings to a provider definition.
+A `ProviderConfigFile` binds one normalized authentication selection and settings to a provider
+definition.
 
 ```ts
 interface ProviderConfigFile {
-  $schema: 'makaio/provider-config/v1';
-  definitionId: string;                          // Reference to ProviderDefinition.id
-  name?: string;                                 // Display override
-  credentials?: Record<string, CredentialRef>;   // Bound credentials
+  $schema: 'makaio/provider-config/v2';
+  definitionId: string;
+  name?: string;
+  auth:
+    | {
+        mode: 'explicit';
+        method: AuthMethodRef;
+        credentialRefs: Record<string, AuthCredentialRef>;
+      }
+    | {
+        mode: 'inferred';
+        method: ClientAuthMethodRef;
+        account?: { managerId: string; accountId: string };
+      }
+    | { mode: 'none'; method: AuthMethodRef };
+  managedBy?: { kind: 'client'; clientId: string };
   endpointOverrides?: {
     anthropic?: string;
     openai?: string;
   };
   modelFilterMode?: 'show-all' | 'allowlist';
   modelVisibility?: Record<string, ModelVisibility>;
-  isSentinel?: boolean;
   isDefault?: boolean;
   enabled?: boolean;
 }
@@ -173,32 +222,33 @@ interface ProviderConfigFile {
 
 Files are stored at: `$MAKAIO_HOME/provider-configs/<providerConfigId>.json`
 
-`CredentialRef` is a typed string with prefixes such as `env:VAR`, `keychain:service:account`,
-`file:/path`, `stored:providerConfig:<configId>:<key>`, or
-`account-manager:["<clientId>","<accountId>"]`. Plaintext secrets never appear in config files.
+`AuthCredentialRef` accepts resolvable references such as `env:VAR`,
+`keychain:service:account`, `file:/path`, or
+`stored:providerConfig:<configId>:<key>`. Plaintext secrets never appear in config files.
+Managed native-account identity is carried by `auth.account`, not encoded as a credential ref.
 
 ## Credentials
 
-Providers declare which environment variables hold credentials via `credentialEnvVars` in
-their definition. The framework reads these as a last-resort fallback when credentials are
-not provided via saved config or runtime input.
+Authentication has three explicit modes:
 
-| Provider | Credential field | Environment variable |
-|----------|-----------------|---------------------|
-| Anthropic | `apiKey` | `ANTHROPIC_API_KEY` |
-| OpenAI | `apiKey` | `OPENAI_API_KEY` |
-| OpenRouter | `apiKey` | `OPENROUTER_API_KEY` |
-| GitHub Copilot | `token` | `COPILOT_TOKEN` |
-| Google AI | `apiKey` | `GEMINI_API_KEY` |
-| Z.AI | `apiKey` | `Z_AI_API_KEY` |
-| Alibaba Model Studio | `apiKey` | `BAILIAN_CODING_PLAN_API_KEY` |
+- `explicit` selects a declared provider- or client-owned method and stores one credential ref
+  per required field. Environment source hints such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, or `CODEX_ACCESS_TOKEN` help configuration surfaces create
+  `env:` refs; they are not ambient runtime fallbacks.
+- `inferred` selects a client-owned native method. The client materializes its declared home,
+  profile, or Keychain state into a connector-scoped config lease. Absence of that state is a
+  typed auth failure.
+- `none` is a deliberate no-auth selection for providers that declare it.
 
-Providers that use the framework's credential service for OAuth flows (such as
-`anthropic-oauth`) intentionally omit `credentialEnvVars` — they do not accept raw
-API keys and have no env var fallback.
+Each adapter/provider reference declares how a selected method is delivered: mapped process
+environment fields, an adapter-owned connector operation, native-client state, or no delivery.
+There is no single credential variable per adapter. One adapter may accept provider API keys,
+client OAuth/access tokens, and native auth through different owner-qualified methods.
 
-For subprocess adapters, `buildCredentialEnv()` transforms resolved credentials into
-environment variables before spawning the child process.
+Before connector construction, Adapter Core resolves credential refs once, removes the complete
+adapter auth source/sink environment set, applies only the selected delivery, and creates any
+required client config lease. SDK constructors receive structured connector deliveries; spawned
+clients receive the final scrubbed environment only.
 
 ## Model Registry
 
@@ -236,11 +286,14 @@ When the framework receives `model: 'anthropic::sonnet'`:
    `{ kind: 'qualified', segment1: 'anthropic', model: 'sonnet' }`.
 2. A bus request on `canonicalModel.resolve` maps the routing segments to an adapter name
    and provider config ID.
-3. The adapter subsystem locates the enabled adapter and its live instance.
-4. The adapter resolves credentials using its provider config and credential references.
-5. The connector receives the model name and credentials and calls the provider API. Subprocess
-   adapters may use `buildCredentialEnv()` to pass resolved credentials through environment
-   variables.
+3. The adapter subsystem captures one adapter-qualified runtime snapshot containing the safe
+   provider config, refs-only provider context, selected adapter/provider auth binding, protocol,
+   client identity, and runtime package metadata.
+4. Adapter Core binds the owner-qualified auth method and resolves explicit credential refs once
+   inside the trusted runtime boundary, or prepares the selected native-client lease.
+5. The connector receives one immutable auth snapshot plus its exact selected protocol endpoint.
+   It never guesses credentials from ambient environment variables or chooses the first available
+   provider endpoint.
 
 Virtual references (`~my-alias`) are expanded at the agent-resolution layer before
 reaching the canonical-model resolver. The framework-owned resolver handles only `bare`
@@ -252,14 +305,16 @@ and `qualified` forms.
 
 | File | Purpose |
 |------|---------|
-| `../../packages/contracts/src/canonical-model/parser.ts` | `parseCanonicalModel()` and `isCanonicalModelParseError()` |
-| `../../packages/contracts/src/canonical-model/types.ts` | Canonical model types and Zod schemas |
-| `../../packages/contracts/src/canonical-model/schemas.ts` | Bus schemas for `canonicalModel.resolve` |
-| `../../packages/contracts/src/provider/definition.ts` | `ProviderDefinition` interface and Zod schema |
-| `../../packages/contracts/src/config/provider-config-file.ts` | `ProviderConfigFile` interface and Zod schema |
-| `../../packages/contracts/src/config/credential-ref.ts` | `CredentialRef` type and builder helpers |
-| `../../adapters/core/src/config/build-credential-env.ts` | `buildCredentialEnv()` |
-| `../../runtimes/node/src/boot-model-registry.ts` | Model registry fetcher chain |
-| `../../extensions/prompt/README.md` | CLI model reference examples |
+| `../../../core/contracts/src/canonical-model/parser.ts` | `parseCanonicalModel()` and `isCanonicalModelParseError()` |
+| `../../../core/contracts/src/canonical-model/types.ts` | Canonical model types and Zod schemas |
+| `../../../core/contracts/src/canonical-model/schemas.ts` | Bus schemas for `canonicalModel.resolve` |
+| `../../../core/contracts/src/provider/definition.ts` | Provider definition and protocol schemas |
+| `../../../core/contracts/src/auth/definitions.ts` | Provider/client authentication method schemas |
+| `../../../core/contracts/src/auth/selection.ts` | Normalized provider-config auth selection |
+| `../../../core/contracts/src/auth/adapter-binding.ts` | Runtime-only adapter delivery bindings |
+| `../../../core/contracts/src/config/provider-config-file.ts` | `ProviderConfigFile` v2 schema |
+| `../../../adapters/core/src/config/adapter-auth-runtime.ts` | Central auth materialization and lease ownership |
+| `../../../runtimes/node/src/boot-model-registry.ts` | Model registry fetcher chain |
+| `../../../extensions/prompt/README.md` | CLI model reference examples |
 
 <!-- /web:hide -->

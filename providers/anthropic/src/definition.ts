@@ -16,5 +16,20 @@ export const providerDefinition: ProviderDefinitionInput = {
   endpoints: { anthropic: 'https://api.anthropic.com' },
   defaultModel: 'claude-sonnet-4-6',
   fastModel: 'claude-haiku-4-5',
-  credentialEnvVars: { apiKey: 'ANTHROPIC_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'ANTHROPIC_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };

@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 104 |
-| Subjects | 954 (401 events, 553 RPCs) |
+| Subjects | 959 (400 events, 559 RPCs) |
 | framework | 100 |
 | extension | 4 |
 | kind: bus | 74 |
@@ -27,9 +27,9 @@ next: false
 | Directory | Namespaces | Subjects |
 |-----------|-----------|----------|
 | [adapters/](./adapters/index.md) | 1 | 3 |
-| [clients/](./clients/index.md) | 2 | 24 |
+| [clients/](./clients/index.md) | 2 | 25 |
 | [extensions/](./extensions/index.md) | 4 | 18 |
-| [services/](./services/index.md) | 32 | 223 |
+| [services/](./services/index.md) | 32 | 227 |
 | [ui/](./ui/index.md) | 3 | 9 |
 
 ## Core Namespaces
@@ -53,12 +53,12 @@ next: false
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
-| [`client`](./client.md) | bus | 37 | 12E / 25R |
+| [`client`](./client.md) | bus | 36 | 11E / 25R |
 | [`client-binary:storage`](./client-binary-storage.md) | bus | 11 | 0E / 11R |
 | [`client-profile:storage`](./client-profile-storage.md) | bus | 7 | 0E / 7R |
 | [`client-runtime:storage`](./client-runtime-storage.md) | bus | 2 | 0E / 2R |
 | [`config`](./config.md) | bus | 2 | 0E / 2R |
-| [`credential`](./credential.md) | bus | 8 | 0E / 8R |
+| [`credential`](./credential.md) | bus | 12 | 0E / 12R |
 | [`facet`](./facet.md) | bus | 3 | 1E / 2R |
 | [`gitHook`](./githook.md) | bus | 3 | 2E / 1R |
 | [`harness`](./harness.md) | bus | 10 | 3E / 7R |
@@ -83,7 +83,7 @@ next: false
 | [`storage:sessionEvent`](./storage-sessionevent.md) | storage | 5 | 0E / 5R |
 | [`storage:skill`](./storage-skill.md) | storage | 5 | 0E / 5R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
-| [`storage:workflow`](./storage-workflow.md) | storage | 31 | 0E / 31R |
+| [`storage:workflow`](./storage-workflow.md) | storage | 29 | 0E / 29R |
 | [`subagent`](./subagent.md) | bus | 16 | 6E / 10R |
 | [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
@@ -96,7 +96,7 @@ next: false
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
 | [`widget`](./widget.md) | bus | 4 | 4E / 0R |
 | [`worker-node`](./worker-node.md) | bus | 12 | 10E / 2R |
-| [`workflow`](./workflow.md) | bus | 56 | 26E / 30R |
+| [`workflow`](./workflow.md) | bus | 55 | 26E / 29R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

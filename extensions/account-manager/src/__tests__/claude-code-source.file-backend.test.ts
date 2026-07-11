@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -49,9 +49,10 @@ describe('ClaudeCodeSource', () => {
 
       try {
         await mkdir(claudeHome, { recursive: true });
+        const canonicalClaudeHome = await realpath(claudeHome);
 
         const source = new ClaudeCodeSource(new FileBackend(credentialPath), {
-          installDir: claudeHome,
+          installDir: canonicalClaudeHome,
         });
 
         await source.write({

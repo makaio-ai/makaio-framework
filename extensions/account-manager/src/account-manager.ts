@@ -11,12 +11,8 @@ import type {
   IAccountUsageSnapshotStore,
 } from './interfaces/account-store.js';
 import { toPublicAccount } from './utils/index.js';
-import {
-  emitCredentialChangedForClient,
-  isAccountManagerManagedProviderConfig,
-  parseAccountManagerRef,
-  resolveClientByDefinitionId,
-} from './credential-lifecycle.js';
+import { emitCredentialChangedForClient } from './credential-lifecycle.js';
+import { ACCOUNT_MANAGER_ID } from './account-manager-id.js';
 import {
   ClientAccountLinker,
   CredentialTracker,
@@ -26,13 +22,16 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
 } from './handlers/index.js';
 import type { CredentialSourceWithOptionalLabel } from './handlers/index.js';
-import { listStoredAccounts, removeStoredAccount } from './storage/joined-account-store.js';
+import { getStoredAccount, listStoredAccounts, removeStoredAccount } from './storage/joined-account-store.js';
 import { buildLabelSources, buildUsageSources } from './source-capability-maps.js';
 import { collectAccountManagerHealthWarnings } from './health-warnings.js';
 import { AccountManagerQuiesceError, hasEnabledAutoActivationSource } from './account-manager-types.js';
 import type { AccountManagerOptions } from './account-manager-types.js';
-import { switchAccount, activateAccount } from './account-activation.js';
+import { switchAccount, activateAccount, prepareAccountActivation } from './account-activation.js';
+import { AccountActivationTransactions } from './account-activation-transactions.js';
 import { prepareUsageCredential } from './account-usage-credential.js';
+import { registerAccountManagerSourceHandlers } from './account-manager-source-handlers.js';
+import { ClientMutationQueue } from './client-mutation-queue.js';
 
 export type { AccountManagerOptions };
 
@@ -61,7 +60,10 @@ export class AccountManager extends BaseService {
   private readonly makaioCommand: string;
 
   /** Serializes multi-step mutations per client so active-account state stays coherent. */
-  private readonly clientMutations = new Map<string, Promise<void>>();
+  private readonly clientMutations = new ClientMutationQueue();
+
+  /** Owns prepared account switches through one terminal action or shutdown. */
+  private readonly activationTransactions: AccountActivationTransactions;
 
   private readonly credentialTracker: CredentialTracker;
   private readonly clientAccountLinker: ClientAccountLinker;
@@ -90,7 +92,7 @@ export class AccountManager extends BaseService {
       sources: this.sources,
       credentialStore: this.credentialStore,
       metadataStore: this.metadataStore,
-      withClientMutation: (clientId, action) => this.withClientMutation(clientId, action),
+      withClientMutation: (clientId, action) => this.clientMutations.run(clientId, action),
       pollIntervalMs: this.pollIntervalMs,
     });
 
@@ -119,6 +121,16 @@ export class AccountManager extends BaseService {
         prepareUsageCredential(clientId, accountId, this.getSource(clientId), this.metadataStore, this.credentialStore),
     });
 
+    this.activationTransactions = new AccountActivationTransactions({
+      clientMutations: this.clientMutations,
+      prepareActivation: async (clientId, accountId) => {
+        const target = await getStoredAccount(this.metadataStore, this.credentialStore, clientId, accountId);
+        return target === null
+          ? null
+          : prepareAccountActivation(clientId, accountId, this.buildActivationDeps(clientId), undefined, target);
+      },
+    });
+
     if (hasEnabledAutoActivationSource(options.autoActivation)) {
       this.windowActivator = new WindowActivator(bus, options.autoActivation);
     }
@@ -137,14 +149,29 @@ export class AccountManager extends BaseService {
       this.addCleanup(() => windowActivator.stop());
     }
     this.registerHandlers();
-    this.registerSourceHandlers();
-    this.registerConfigurationHandlers();
+    this.addCleanup(
+      registerAccountManagerSourceHandlers({
+        bus: this.bus,
+        sources: this.sources,
+        withClientMutation: (clientId, action) => this.clientMutations.run(clientId, action),
+      }),
+    );
     this.registerCredentialLifecycleHandlers();
     await this.credentialTracker.start();
     this.addCleanup(() => this.credentialTracker.stop());
     this.addCleanup(() => this.usageTracker.stop());
     await this.clientAccountLinker.syncExistingAccounts();
     this.usageTracker.bootstrap();
+    // Admission opens only after every fallible initialization step. BaseService
+    // does not call onDestroy when onInit rejects, so opening earlier could leave
+    // a prepared transaction waiting forever after handler cleanup.
+    this.activationTransactions.start();
+  }
+
+  /** Roll back every unconsumed activation before service-owned handlers are removed. */
+  protected override async onDestroy(): Promise<void> {
+    this.usageTracker.requestStop();
+    await this.activationTransactions.shutdown();
   }
 
   /**
@@ -152,14 +179,14 @@ export class AccountManager extends BaseService {
    */
   private registerHandlers(): void {
     this.registerHandler(AccountManagerSubjects.accounts.list, async (ctx) => {
-      const accounts = await this.withClientMutation(ctx.payload.clientId, async () =>
+      const accounts = await this.clientMutations.run(ctx.payload.clientId, async () =>
         listStoredAccounts(this.metadataStore, this.credentialStore, ctx.payload.clientId),
       );
       ctx.setResult({ accounts: accounts.map(toPublicAccount) });
     });
 
     this.registerHandler(AccountManagerSubjects.accounts.getActive, async (ctx) => {
-      const active = await this.withClientMutation(ctx.payload.clientId, async () =>
+      const active = await this.clientMutations.run(ctx.payload.clientId, async () =>
         this.metadataStore.getActive(ctx.payload.clientId),
       );
       ctx.setResult({ account: active });
@@ -172,7 +199,7 @@ export class AccountManager extends BaseService {
 
     this.registerHandler(AccountManagerSubjects.credentials.switch, async (ctx) => {
       try {
-        const activatedAccountId = await this.withClientMutation(ctx.payload.clientId, async () =>
+        const activatedAccountId = await this.clientMutations.run(ctx.payload.clientId, async () =>
           switchAccount(ctx.payload.clientId, ctx.payload.accountId, this.buildActivationDeps(ctx.payload.clientId)),
         );
         // Credential fanout runs outside the mutation lock — see poll() comment.
@@ -192,7 +219,7 @@ export class AccountManager extends BaseService {
     });
 
     this.registerHandler(AccountManagerSubjects.accounts.label, async (ctx) => {
-      await this.withClientMutation(ctx.payload.clientId, async () => {
+      await this.clientMutations.run(ctx.payload.clientId, async () => {
         const { clientId, accountId, label } = ctx.payload;
         const account = await this.metadataStore.setLabel(clientId, accountId, label);
         if (!account) {
@@ -204,7 +231,7 @@ export class AccountManager extends BaseService {
     });
 
     this.registerHandler(AccountManagerSubjects.accounts.remove, async (ctx) => {
-      const quiesceFactory = await this.withClientMutation(ctx.payload.clientId, async () => {
+      const quiesceFactory = await this.clientMutations.run(ctx.payload.clientId, async () => {
         const { clientId, accountId } = ctx.payload;
         // Fetch before removal so we can compare the fingerprint below.
         const accountToRemove = await this.credentialStore.get(clientId, accountId);
@@ -248,63 +275,8 @@ export class AccountManager extends BaseService {
   }
 
   /**
-   * Registers the source-discovery handler.
-   *
-   * Per-source try/catch ensures one failing source (e.g. locked keychain)
-   * degrades gracefully instead of breaking the entire getSources RPC.
-   */
-  private registerSourceHandlers(): void {
-    this.registerHandler(AccountManagerSubjects.accounts.getSources, async (ctx) => {
-      const sources = await Promise.all(
-        this.sources.map(async (source) => {
-          try {
-            const available = await source.isAvailable();
-            const result: {
-              clientId: string;
-              displayName: string;
-              available: boolean;
-              configIssue?: { reason: string; action: string };
-            } = {
-              clientId: source.clientId,
-              displayName: source.displayName,
-              available,
-            };
-
-            if (available && source.getConfigIssue) {
-              const issue = await source.getConfigIssue();
-              if (issue) {
-                result.configIssue = issue;
-              }
-            }
-
-            return result;
-          } catch (error) {
-            return {
-              clientId: source.clientId,
-              displayName: source.displayName,
-              available: false,
-              configIssue: {
-                reason: error instanceof Error ? error.message : String(error),
-                action: 'Verify that this credential source is accessible and try again.',
-              },
-            };
-          }
-        }),
-      );
-      ctx.setResult({ sources });
-    });
-  }
-
-  /**
-   * Reports integration health warnings after startup.
-   *
-   * Inspects each credential source and returns an {@link ExtensionWarning} for
-   * sources that are not installed, have a correctable configuration issue, or
-   * have incomplete integration wiring. An unavailable source (tool not installed)
-   * produces an `'info'` warning; an installed but misconfigured or unwired
-   * source produces a `'recommended'` warning with a `configure-integration`
-   * action so the UI can route the user directly to integration settings.
-   * @returns Active health warnings, one per affected source/integration issue.
+   * Report integration health warnings after startup.
+   * @returns Active health warnings, one per affected source or integration issue.
    */
   public async checkHealth(): Promise<ExtensionWarning[]> {
     const makaioCommand = typeof this.makaioCommand === 'string' ? this.makaioCommand.trim() : '';
@@ -314,70 +286,76 @@ export class AccountManager extends BaseService {
     return collectAccountManagerHealthWarnings(this.bus, this.sources, { makaioCommand });
   }
 
-  /** Registers source-configuration handlers. */
-  private registerConfigurationHandlers(): void {
-    this.registerHandler(AccountManagerSubjects.credentials.configureFileMode, async (ctx) => {
-      try {
-        await this.withClientMutation(ctx.payload.clientId, async () => {
-          const source = this.getSource(ctx.payload.clientId);
-          if (!source.configureFileMode) {
-            throw new Error(`configureFileMode is not supported for ${ctx.payload.clientId}`);
-          }
-          // Source-owned config mutation keeps tool-specific path logic in one
-          // place instead of splitting it between source and service layers.
-          await source.configureFileMode();
-        });
-        ctx.setResult({ success: true });
-      } catch (error) {
-        ctx.setResult({
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    });
-  }
-
   /**
    * Registers integration hooks for the credential activation/rotation flow.
    */
   private registerCredentialLifecycleHandlers(): void {
     this.registerHandler(CredentialSubjects.activate, async (ctx) => {
-      const refs = Object.values(ctx.payload.credentialRefs);
-      const targetRef = refs
-        .map((ref) => parseAccountManagerRef(ref))
-        .find((parsed): parsed is { clientId: string; accountId: string } => parsed !== null);
-
-      if (targetRef) {
-        await this.withClientMutation(targetRef.clientId, async () => {
-          await activateAccount(targetRef.clientId, targetRef.accountId, this.buildActivationDeps(targetRef.clientId));
-        });
-        ctx.setResult({});
+      const { providerContext } = ctx.payload;
+      if (providerContext.auth.mode !== 'inferred' || providerContext.auth.account === undefined) {
+        await ctx.next();
         return;
       }
 
-      // definitionId fallback: when no account-manager ref is present in credentialRefs,
-      // resolve by provider definition so the native credential store stays in sync
-      // whenever any adapter for this provider type starts up — regardless of which
-      // config triggered activation.
-      if (!(await isAccountManagerManagedProviderConfig(this.bus, ctx.payload.providerConfigId))) {
-        ctx.setResult({});
+      const { account, method } = providerContext.auth;
+      if (account.managerId !== ACCOUNT_MANAGER_ID) {
+        await ctx.next();
         return;
       }
 
-      const client = await resolveClientByDefinitionId(this.bus, ctx.payload.definitionId);
-      if (!client?.defaultProviderId) {
-        ctx.setResult({});
-        return;
-      }
-
-      await this.withClientMutation(client.id, async () => {
-        const active = await this.metadataStore.getActive(client.id);
-        if (!active?.id) {
-          return;
+      let quiesce: Promise<void> | undefined;
+      const result = await this.clientMutations.run(method.clientId, async () => {
+        try {
+          const target = await getStoredAccount(
+            this.metadataStore,
+            this.credentialStore,
+            method.clientId,
+            account.accountId,
+          );
+          if (!target) {
+            return { success: false as const, code: 'account-not-found' as const };
+          }
+          await activateAccount(
+            method.clientId,
+            account.accountId,
+            this.buildActivationDeps(method.clientId),
+            undefined,
+            target,
+          );
+          return { success: true as const };
+        } catch (error) {
+          if (error instanceof AccountManagerQuiesceError) {
+            quiesce = error.quiesce;
+          }
+          return { success: false as const, code: 'activation-failed' as const };
         }
-        await activateAccount(client.id, active.id, this.buildActivationDeps(client.id));
       });
-      ctx.setResult({});
+      if (quiesce) {
+        await quiesce.catch(() => undefined);
+      }
+      ctx.setResult(result);
+    });
+
+    this.registerHandler(CredentialSubjects.activation.prepare, async (ctx) => {
+      const { providerContext } = ctx.payload;
+      if (providerContext.auth.mode !== 'inferred' || providerContext.auth.account === undefined) {
+        await ctx.next();
+        return;
+      }
+      const { account, method } = providerContext.auth;
+      if (account.managerId !== ACCOUNT_MANAGER_ID) {
+        await ctx.next();
+        return;
+      }
+      ctx.setResult(await this.activationTransactions.prepare(method.clientId, account.accountId));
+    });
+
+    this.registerHandler(CredentialSubjects.activation.commit, async (ctx) => {
+      ctx.setResult(await this.activationTransactions.commit(ctx.payload.transactionId));
+    });
+
+    this.registerHandler(CredentialSubjects.activation.rollback, async (ctx) => {
+      ctx.setResult(await this.activationTransactions.rollback(ctx.payload.transactionId));
     });
   }
 
@@ -430,32 +408,5 @@ export class AccountManager extends BaseService {
     const source = this.sources.find((s) => s.clientId === clientId);
     if (!source) throw new Error(`No credential source found for ${clientId}`);
     return source;
-  }
-
-  /**
-   * Serializes multi-step mutations per client.
-   *
-   * Store implementations defend their own files, but the service also needs a
-   * higher-level lock so poll, switch, label, and remove do not interleave
-   * active-account transitions against different snapshots.
-   * @param clientId - Client whose mutation queue should be used
-   * @param action - Workflow to run exclusively for that client
-   * @returns The workflow result
-   */
-  private async withClientMutation<T>(clientId: string, action: () => Promise<T>): Promise<T> {
-    const previous = this.clientMutations.get(clientId) ?? Promise.resolve();
-    const run = previous.then(action, action);
-    const settled = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.clientMutations.set(clientId, settled);
-    try {
-      return await run;
-    } finally {
-      if (this.clientMutations.get(clientId) === settled) {
-        this.clientMutations.delete(clientId);
-      }
-    }
   }
 }

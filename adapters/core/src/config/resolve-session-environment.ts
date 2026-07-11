@@ -1,131 +1,120 @@
-import type { MakaioBusContext } from '@makaio/bus-core';
-import type { CredentialRef } from '@makaio/contracts/config';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
 import { resolveClientBinary } from '@makaio/subsystem-client';
-import { resolveConnectorCredentials } from './resolve-connector-credentials.js';
-import { buildCredentialEnv } from './build-credential-env.js';
 import { cleanEnvForAdapter } from '../utils/cleanEnvForAdapter.js';
-
-/** Minimal bus surface needed for session environment resolution. */
-interface SessionEnvironmentBus {
-  getContext(): MakaioBusContext;
-}
-
-/**
- * Unresolved provider context fields needed for session environment resolution.
- *
- * Mirrors the relevant subset of {@link ProviderContext} from `@makaio/contracts`
- * so callers can pass the full provider context object without importing it here.
- */
-interface ProviderContextShape {
-  /** Provider config UUID carried by full provider contexts. */
-  providerConfigId?: string;
-  /** Provider definition ID carried by full provider contexts. */
-  definitionId?: string;
-  /** Credential references keyed by field name. */
-  credentialRefs: Record<string, CredentialRef>;
-  /** Maps credential field names to env var names for subprocess adapters. */
-  credentialEnvVars?: Record<string, string>;
-  /** Ambient provider credential env vars to strip before explicit credential injection. */
-  ambientCredentialEnvVars?: readonly string[];
-}
 
 /**
  * Input options for {@link resolveSessionEnvironment}.
  */
 export interface SessionEnvironmentOptions {
-  /** Bus instance used to resolve credential references. */
-  bus: SessionEnvironmentBus;
-  /**
-   * Unresolved provider context carrying credential refs and env-var mapping.
-   * When `undefined`, the credential steps are skipped and `credentials` / `credEnv`
-   * are returned as empty objects.
-   */
-  providerContext: ProviderContextShape | undefined;
+  /** Runtime bus that owns client binary resolution. */
+  globalBus?: IMakaioBus;
   /**
    * Stable client identifier passed to `resolveClientBinary`
-   * (e.g. `'claude-code'`, `'qwen'`, `'github-copilot'`).
+   * (e.g. `'claude-code'`, `'qwen'`, `'github-copilot'`). Omit for
+   * connector-only SDK adapters with no managed binary.
    */
-  clientId: string;
+  clientId?: string;
   /**
-   * Base environment variables that are merged into `spawnEnv` before credential
-   * env and binary env are applied.  Typically the connector's own `this.env`.
+   * Base environment variables explicitly supplied by the host. This function
+   * never falls back to ambient `process.env`.
    */
   baseEnv?: Record<string, string>;
+  /** Non-auth session environment composed over the base environment. */
+  sessionEnv?: Readonly<Record<string, string>>;
+  /** Pre-resolved non-auth binary environment supplied by an external host. */
+  binaryEnv?: Readonly<Record<string, string>>;
+  /** Complete normalized auth source/sink set removed before selected delivery. */
+  scrubEnvVars?: readonly string[];
+  /** Environment returned by the connector-owned client config lease. */
+  leaseEnv?: Readonly<Record<string, string>>;
+  /** Selected normalized process-environment delivery, applied last. */
+  selectedAuthEnv?: Readonly<Record<string, string>>;
 }
 
 /**
  * Fully resolved session environment returned by {@link resolveSessionEnvironment}.
  *
- * All three resolution steps are returned individually so callers that need
- * non-standard composition (e.g. optional binary env) can do so without
- * repeating the resolution calls.
+ * Binary resolution is returned alongside process-private and shared-context
+ * environment views derived from one authoritative merge.
  */
 export interface SessionEnvironmentResult {
-  /**
-   * Plaintext credentials keyed by field name.
-   * Empty when `providerContext` is `undefined` or carries no credential refs.
-   */
-  credentials: Record<string, string>;
-  /**
-   * Environment variables derived from `credentials` via the provider's
-   * `credentialEnvVars` mapping.
-   * Empty when `providerContext` is `undefined` or carries no `credentialEnvVars`.
-   */
-  credEnv: Record<string, string>;
   /**
    * Execution context for the resolved client binary, or `undefined` when
    * no `client.resolveBinary` handler is registered (framework-only boot).
    */
   resolvedBinary: ClientExecutionContext | undefined;
   /**
-   * Merged spawn environment for the common case:
-   * `{ ...cleanBaseEnv, ...credEnv, ...(resolvedBinary?.env ?? {}) }`.
+   * Process-private connector environment:
+   * `{ ...scrub({ ...baseEnv, ...sessionEnv, ...resolvedBinaryEnv, ...binaryEnv, ...leaseEnv }), ...selectedAuthEnv }`.
    *
-   * Ambient provider credential env vars are stripped from base env first.
-   * Credential env then takes precedence so that explicitly resolved secrets are
-   * restored. Binary env finally wins over credential env to enforce config
-   * isolation.
+   * This view may contain the selected plaintext process delivery and must not
+   * be copied into bus payloads, logs, or other shared execution contexts.
    */
-  spawnEnv: Record<string, string>;
+  connectorEnv: Record<string, string>;
+  /**
+   * Shared execution-context environment produced from host/session/binary
+   * inputs after the full auth scrub. Connector-private lease variables are
+   * excluded even when another source supplied the same variable name.
+   *
+   * Connector-owned bus and tool payloads use this view so explicitly shareable
+   * variables remain available without exporting process authentication or
+   * config-directory capabilities.
+   */
+  contextEnv: Readonly<Record<string, string>>;
 }
 
 /**
- * Resolve credentials, build credential environment variables, and locate the
- * client binary — the three-step pattern shared by subprocess connectors.
+ * Resolve the selected client binary and compose the two environment views.
  *
- * Encapsulates:
- * 1. `resolveConnectorCredentials(bus, credentialRefs)` — opens an encrypted
- *    DirectChannel, resolves each ref, and closes the channel.
- * 2. `buildCredentialEnv(credentials, credentialEnvVars)` — maps credential
- *    values to subprocess env var names.
- * 3. `resolveClientBinary(clientId)` — dispatches `client.resolveBinary` on the
- *    static bus; returns `undefined` in framework-only boot.
- *
- * The returned {@link SessionEnvironmentResult} includes every intermediate
- * value so callers with non-standard composition strategies (e.g. connectors
- * that treat binary env as optional or pass credentials through a different
- * channel) can compose the final env themselves.
+ * Credential refs are deliberately absent from this contract. The normalized
+ * adapter-auth runtime resolves them once and passes only the selected process
+ * delivery. Lease keys are connector-private capabilities: the same names are
+ * removed from the shared view regardless of which environment source supplied
+ * them, while the connector view still receives the scrubbed lease values.
  * @param options - Session environment resolution options
- * @returns Resolved credentials, credential env, binary execution context, and
- *   merged spawn environment
+ * @returns Binary execution context and merged connector/context environments
  */
 export async function resolveSessionEnvironment(options: SessionEnvironmentOptions): Promise<SessionEnvironmentResult> {
-  const { bus, providerContext, clientId, baseEnv = {} } = options;
+  const {
+    globalBus,
+    clientId,
+    baseEnv = {},
+    sessionEnv = {},
+    binaryEnv = {},
+    scrubEnvVars = [],
+    leaseEnv = {},
+    selectedAuthEnv = {},
+  } = options;
 
-  const credentialRefs = providerContext?.credentialRefs ?? {};
-  const credentials = await resolveConnectorCredentials(bus, credentialRefs);
-  const credEnv = buildCredentialEnv(credentials, providerContext?.credentialEnvVars);
-  const resolvedBinary = await resolveClientBinary(clientId);
-  const cleanBaseEnv = cleanEnvForAdapter(baseEnv, {
-    omitEnvVars: providerContext?.ambientCredentialEnvVars,
-  });
-
-  const spawnEnv: Record<string, string> = {
-    ...cleanBaseEnv,
-    ...credEnv,
+  let resolvedBinary: ClientExecutionContext | undefined;
+  if (clientId !== undefined) {
+    if (globalBus === undefined) {
+      throw new Error('Client binary resolution requires the adapter runtime global bus.');
+    }
+    resolvedBinary = await resolveClientBinary(globalBus, clientId);
+  }
+  const sharedEnv: Record<string, string> = {
+    ...baseEnv,
+    ...sessionEnv,
     ...(resolvedBinary?.env ?? {}),
+    ...binaryEnv,
   };
+  const connectorEnvBeforeScrub: Record<string, string> = {
+    ...sharedEnv,
+    ...leaseEnv,
+  };
+  const connectorPrivateEnvVars = Object.keys(leaseEnv);
+  const contextEnv: Record<string, string> = cleanEnvForAdapter(sharedEnv, {
+    omitEnvVars: [...new Set([...scrubEnvVars, ...connectorPrivateEnvVars])],
+  });
+  const scrubbedConnectorEnv = cleanEnvForAdapter(connectorEnvBeforeScrub, { omitEnvVars: scrubEnvVars });
+  const connectorEnv: Record<string, string> = {
+    ...scrubbedConnectorEnv,
+    ...selectedAuthEnv,
+  };
+  Object.freeze(contextEnv);
+  Object.freeze(connectorEnv);
 
-  return { credentials, credEnv, resolvedBinary, spawnEnv };
+  return { resolvedBinary, connectorEnv, contextEnv };
 }

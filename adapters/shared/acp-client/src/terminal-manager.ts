@@ -31,7 +31,23 @@ interface ManagedTerminal {
  */
 export class TerminalManager {
   private readonly terminals = new Map<string, ManagedTerminal>();
+  private readonly baseEnv: Readonly<Record<string, string>>;
+  private readonly scrubEnvVars: ReadonlySet<string>;
   private nextId = 0;
+
+  /**
+   * Create a terminal manager bound to one finalized connector environment.
+   * @param options - Sanitized base environment and variables that terminal requests may not restore
+   */
+  public constructor(options: {
+    readonly baseEnv: Readonly<Record<string, string>>;
+    readonly scrubEnvVars?: readonly string[];
+  }) {
+    this.scrubEnvVars = new Set(options.scrubEnvVars ?? []);
+    this.baseEnv = Object.freeze(
+      Object.fromEntries(Object.entries(options.baseEnv).filter(([name]) => !this.scrubEnvVars.has(name))),
+    );
+  }
 
   /**
    * Creates a new terminal subprocess.
@@ -42,12 +58,10 @@ export class TerminalManager {
     const terminalId = `terminal-${(++this.nextId).toString()}`;
     const outputByteLimit = params.outputByteLimit ?? 1024 * 1024; // 1 MiB default
 
-    const env: Record<string, string> = { ...process.env } as Record<string, string>;
-    if (params.env) {
-      for (const envVar of params.env) {
-        env[envVar.name] = envVar.value;
-      }
-    }
+    const requestEnv = (params.env ?? [])
+      .filter(({ name }) => !this.scrubEnvVars.has(name))
+      .map(({ name, value }) => [name, value] as const);
+    const env = Object.fromEntries([...Object.entries(this.baseEnv), ...requestEnv]);
 
     const proc = spawn(params.command, params.args ?? [], {
       cwd: params.cwd ?? undefined,

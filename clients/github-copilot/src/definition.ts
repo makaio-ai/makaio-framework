@@ -28,5 +28,5 @@ export const clientDefinition = createClientDefinition({
   },
   configIsolation: { envVar: 'COPILOT_HOME', defaultPath: '~/.copilot' },
   defaultApprovalPolicy: 'always-ask',
-  defaultProviderId: 'github-copilot',
+  authMethods: [],
 });

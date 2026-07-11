@@ -90,6 +90,16 @@ async function makeConnector(): Promise<ObservableWireConnector> {
     model: 'gpt-4o-mini',
     cwd: process.cwd(),
     env: {},
+    adapterAuth: {
+      processEnv: {},
+      connectorDeliveries: [
+        {
+          target: 'github-copilot-sdk.constructor',
+          values: { githubToken: 'selected-token' },
+        },
+      ],
+      configInheritance: 'empty',
+    },
   });
 }
 

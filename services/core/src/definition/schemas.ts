@@ -2,7 +2,7 @@
  * Definition namespace bus schemas — pure Zod, no side effects.
  *
  * Provides Zod schemas for querying JSON Schema descriptions of a
- * provider definition's config and credential fields. Import this module
+ * provider definition's non-secret config fields. Import this module
  * when you only need types or validation shapes without registering the
  * namespace on the bus.
  *
@@ -37,19 +37,6 @@ export const DefinitionSchemas = {
     }),
     response: z.object({
       /** `true` when the definition exposes a config schema. */
-      hasSchema: z.boolean(),
-      /** JSON Schema object, or `null` when none is available. */
-      schema: JsonSchemaSchema,
-    }),
-  },
-  /** Get the JSON Schema for a provider definition's credential fields. */
-  getCredentialSchema: {
-    request: z.object({
-      /** Stable provider definition identifier (e.g. `'openai'`). */
-      definitionId: z.string(),
-    }),
-    response: z.object({
-      /** `true` when the definition exposes a credential schema. */
       hasSchema: z.boolean(),
       /** JSON Schema object, or `null` when none is available. */
       schema: JsonSchemaSchema,

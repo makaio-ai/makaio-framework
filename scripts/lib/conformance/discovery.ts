@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { isAbsolute, join, relative, resolve } from 'path';
 import { pathToFileURL } from 'url';
 import { globby } from 'globby';
@@ -40,7 +40,15 @@ export function discoverAdapters(): string[] {
         !dirent.name.startsWith('.') &&
         !dirent.name.includes('node_modules'),
     )
-    .map((dirent) => dirent.name);
+    .map((dirent) => dirent.name)
+    .filter((adapterName) => {
+      const descriptorPath = join(ADAPTERS_PATH, adapterName, 'descriptor.json');
+      if (!existsSync(descriptorPath)) return false;
+      const descriptor = JSON.parse(readFileSync(descriptorPath, 'utf8')) as {
+        contributions?: { adapters?: readonly unknown[] };
+      };
+      return (descriptor.contributions?.adapters?.length ?? 0) > 0;
+    });
 }
 
 /**

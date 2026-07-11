@@ -11,5 +11,4 @@ export const ClaudeCodeTmuxConfig = createAdapterConfigFactory<ClaudeCodeTmuxAge
   },
   schema: ClaudeCodeTmuxProviderConfigSchema,
   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
-  protocol: 'anthropic',
 }));

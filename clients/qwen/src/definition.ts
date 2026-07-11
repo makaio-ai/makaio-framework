@@ -24,10 +24,9 @@ export const clientDefinition = createClientDefinition({
     supportedVersions: '*',
   },
   configIsolation: {
-    envVar: 'QWEN_CODE_SYSTEM_DEFAULTS_PATH',
-    defaultPath: '/etc/qwen-code/system-defaults.json',
-    pathKind: 'file',
+    envVar: 'QWEN_HOME',
+    defaultPath: '~/.qwen',
   },
   defaultApprovalPolicy: 'always-ask',
-  defaultProviderId: 'qwen-oauth',
+  authMethods: [],
 });

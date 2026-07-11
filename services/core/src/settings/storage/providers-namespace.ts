@@ -7,6 +7,7 @@ import {
   ProtocolEndpointsSchema,
   ProtocolIdSchema,
 } from '@makaio/contracts';
+import { ProviderAuthMethodsSchema } from '@makaio/contracts/auth';
 import { StorageIdRequestSchema } from './shared-schemas.js';
 
 /**
@@ -15,36 +16,38 @@ import { StorageIdRequestSchema } from './shared-schemas.js';
  * Mirrors the `providers` table columns with nulls converted to undefined.
  * This is a read-only view — all writes are owned by the provider sync service.
  */
-export const ProviderRecordSchema = z.object({
-  /** Stable provider identifier (e.g., `'anthropic'`, `'z-ai'`). */
-  id: z.string(),
-  /** npm package name that contributed this provider (e.g., `'@makaio/provider-anthropic'`). */
-  packageName: z.string(),
-  /** Display name for the provider (e.g., `'Anthropic'`). */
-  name: z.string(),
-  /** Short human-readable description of the provider. */
-  description: z.string().optional(),
-  /** Wire protocol endpoint URLs — maps protocol ids to base URLs. */
-  endpoints: ProtocolEndpointsSchema.optional(),
-  /** Default model identifier for general-purpose tasks. */
-  defaultModel: z.string().optional(),
-  /** Fast/cheap model identifier for cost-sensitive operations. */
-  fastModel: z.string().optional(),
-  /** Static model catalog declared by the provider package. */
-  availableModels: z.array(AIModelSchema),
-  /** Default model filter mode applied when a provider record is first created. */
-  defaultModelFilterMode: ModelFilterModeSchema,
-  /** Credential environment variable names — maps field names to env var names. */
-  credentialEnvVars: z.record(z.string(), z.string()).optional(),
-  /** Provider-declared capability hints, opaque to storage — interpreted by adapters. */
-  capabilities: ProviderCapabilitiesSchema.optional(),
-  /** Whether this provider is enabled. */
-  enabled: z.boolean(),
-  /** Timestamp when record was created (Unix milliseconds). */
-  createdAt: z.number(),
-  /** Timestamp when record was last updated (Unix milliseconds). */
-  updatedAt: z.number(),
-});
+export const ProviderRecordSchema = z
+  .object({
+    /** Stable provider identifier (e.g., `'anthropic'`, `'z-ai'`). */
+    id: z.string(),
+    /** npm package name that contributed this provider (e.g., `'@makaio/provider-anthropic'`). */
+    packageName: z.string(),
+    /** Display name for the provider (e.g., `'Anthropic'`). */
+    name: z.string(),
+    /** Short human-readable description of the provider. */
+    description: z.string().optional(),
+    /** Wire protocol endpoint URLs — maps protocol ids to base URLs. */
+    endpoints: ProtocolEndpointsSchema.optional(),
+    /** Default model identifier for general-purpose tasks. */
+    defaultModel: z.string().optional(),
+    /** Fast/cheap model identifier for cost-sensitive operations. */
+    fastModel: z.string().optional(),
+    /** Static model catalog declared by the provider package. */
+    availableModels: z.array(AIModelSchema),
+    /** Default model filter mode applied when a provider record is first created. */
+    defaultModelFilterMode: ModelFilterModeSchema,
+    /** Authentication methods declared by the provider package. */
+    authMethods: ProviderAuthMethodsSchema,
+    /** Provider-declared capability hints, opaque to storage — interpreted by adapters. */
+    capabilities: ProviderCapabilitiesSchema.optional(),
+    /** Whether this provider is enabled. */
+    enabled: z.boolean(),
+    /** Timestamp when record was created (Unix milliseconds). */
+    createdAt: z.number(),
+    /** Timestamp when record was last updated (Unix milliseconds). */
+    updatedAt: z.number(),
+  })
+  .strict();
 
 /**
  * Storage namespace for system-managed provider records.

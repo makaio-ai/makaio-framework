@@ -13,6 +13,7 @@ import type { ConfigFactoryInput } from './ai-adapter-config.js';
 import type { BaseAgentConnectorConfig, AIAgentConfig } from '../agent/types.js';
 import type { AIAgentConnector } from '../agent/index.js';
 import type { AIAgent } from '../agent/ai-agent.js';
+import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import {
   AdapterSubjects,
@@ -150,6 +151,8 @@ export interface AIAdapterConfig<TBus extends ScopedBus<string> = ScopedBus<stri
   definitionProviders?: readonly AdapterProviderDefinition[];
   /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'codex'). Omit for API-only adapters. */
   clientId?: string;
+  /** Trusted non-serializable normalized auth preparer injected by the host. */
+  prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus>;
 }
 
 /**

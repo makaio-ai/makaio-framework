@@ -19,6 +19,7 @@ function makeSession(overrides: Partial<ConstructorParameters<typeof ClaudeCliSe
     cwd: '/tmp',
     model: 'claude-sonnet',
     env: {},
+    contextEnv: {},
     ...overrides,
   });
 }
@@ -29,34 +30,13 @@ type McpConfigResult = { config: string; hasBridge: boolean } | undefined;
  * Invoke the private MCP config builder without weakening test types.
  * @param session - Session under test
  * @param sessionIdForMcp - Adapter session ID for MCP routing
- * @param env - Environment expected in MCP context overrides
  * @returns MCP config result
  */
-function registerMcpContextForTest(
-  session: ClaudeCliSession,
-  sessionIdForMcp: string,
-  env: Record<string, string>,
-): Promise<McpConfigResult> {
+function registerMcpContextForTest(session: ClaudeCliSession, sessionIdForMcp: string): Promise<McpConfigResult> {
   const register = Reflect.get(session, 'registerMcpContextAndBuildConfig') as (
     sessionIdForMcp: string,
-    env: Record<string, string>,
   ) => Promise<McpConfigResult>;
-  return register.call(session, sessionIdForMcp, env);
-}
-
-/**
- * Invoke the private execution-context resolver without `any` casts.
- * @param session - Session under test
- * @returns Turn execution context
- */
-function resolveAndPersistTurnExecutionContextForTest(
-  session: ClaudeCliSession,
-): Promise<{ env: Record<string, string>; binaryPath?: string }> {
-  const resolveContext = Reflect.get(session, 'resolveAndPersistTurnExecutionContext') as () => Promise<{
-    env: Record<string, string>;
-    binaryPath?: string;
-  }>;
-  return resolveContext.call(session);
+  return register.call(session, sessionIdForMcp);
 }
 
 /**
@@ -95,7 +75,7 @@ describe('ClaudeCliSession — MCP bus registration', () => {
     const session = makeSession({ makaioSessionId: 'makaio-session-1' });
     const sessionIdForMcp = 'adapter-session-1';
 
-    const result = expectMcpConfig(await registerMcpContextForTest(session, sessionIdForMcp, {}));
+    const result = expectMcpConfig(await registerMcpContextForTest(session, sessionIdForMcp));
 
     expect(result.hasBridge).toBe(true);
 
@@ -110,7 +90,7 @@ describe('ClaudeCliSession — MCP bus registration', () => {
     // No handler and no upstream servers — graceful degradation: return undefined.
     const session = makeSession();
 
-    const result = await registerMcpContextForTest(session, 'adapter-session-2', {});
+    const result = await registerMcpContextForTest(session, 'adapter-session-2');
 
     expect(result).toBeUndefined();
   });
@@ -127,7 +107,7 @@ describe('ClaudeCliSession — MCP bus registration', () => {
       ],
     });
 
-    const result = expectMcpConfig(await registerMcpContextForTest(session, 'adapter-session-3', {}));
+    const result = expectMcpConfig(await registerMcpContextForTest(session, 'adapter-session-3'));
 
     expect(result.hasBridge).toBe(false);
 
@@ -159,7 +139,7 @@ describe('ClaudeCliSession — MCP bus registration', () => {
       ],
     });
 
-    const result = expectMcpConfig(await registerMcpContextForTest(session, sessionIdForMcp, {}));
+    const result = expectMcpConfig(await registerMcpContextForTest(session, sessionIdForMcp));
 
     expect(result.hasBridge).toBe(true);
 
@@ -186,13 +166,18 @@ describe('ClaudeCliSession — MCP bus registration', () => {
       adapterId: 'adapter-abc',
       adapterName: 'claude-code-cli',
       cwd: '/workspace',
-      env: { SOME_VAR: 'value' },
+      env: {
+        SOME_VAR: 'connector-value',
+        ANTHROPIC_API_KEY: 'selected-secret',
+        CLAUDE_CODE_OAUTH_TOKEN: 'opposing-secret',
+      },
+      contextEnv: { SOME_VAR: 'fresh-value' },
       makaioSessionId: 'makaio-session-payload',
     });
 
     const sessionIdForMcp = 'adapter-session-payload';
 
-    await registerMcpContextForTest(session, sessionIdForMcp, { SOME_VAR: 'fresh-value' });
+    await registerMcpContextForTest(session, sessionIdForMcp);
 
     expect(capturedPayloads).toHaveLength(1);
     const payload = capturedPayloads[0] as Record<string, unknown>;
@@ -209,28 +194,8 @@ describe('ClaudeCliSession — MCP bus registration', () => {
         agentId: 'agent-xyz',
       },
     });
-  });
-
-  it('persists freshly resolved execution context for each turn', async () => {
-    let calls = 0;
-    const session = makeSession({
-      env: { STALE_VAR: 'stale' },
-      binaryPath: '/stale/claude',
-      resolveTurnExecutionContext: async () => {
-        calls += 1;
-        return calls === 1
-          ? { env: { TURN_ENV: 'first' }, binaryPath: '/managed/first/claude' }
-          : { env: { TURN_ENV: 'second' }, binaryPath: '/managed/second/claude' };
-      },
-    });
-
-    const first = await resolveAndPersistTurnExecutionContextForTest(session);
-    const second = await resolveAndPersistTurnExecutionContextForTest(session);
-    const config = Reflect.get(session, 'config') as { env: Record<string, string>; binaryPath?: string };
-
-    expect(first).toEqual({ env: { TURN_ENV: 'first' }, binaryPath: '/managed/first/claude' });
-    expect(second).toEqual({ env: { TURN_ENV: 'second' }, binaryPath: '/managed/second/claude' });
-    expect(config.env).toEqual({ TURN_ENV: 'second' });
-    expect(config.binaryPath).toBe('/managed/second/claude');
+    expect(JSON.stringify(payload)).not.toContain('selected-secret');
+    expect(JSON.stringify(payload)).not.toContain('opposing-secret');
+    expect(JSON.stringify(payload)).not.toContain('CLAUDE_CONFIG_DIR');
   });
 });

@@ -38,24 +38,6 @@ export const AnthropicSdkProviderConfigSchema = z.object({
 });
 
 /**
- * Zod schema for Anthropic SDK credential input.
- *
- * Used for:
- * 1. Write-only credential capture in settings UI
- * 2. Secure storage in credential service
- */
-export const AnthropicSdkCredentialSchema = z.object({
-  /**
-   * API key for Anthropic.
-   */
-  apiKey: z.string().optional().meta({
-    title: 'API Key',
-    format: 'password',
-    description: 'Anthropic API key',
-  }),
-});
-
-/**
  * Provider settings input type (pre-validation, fields optional).
  */
 export type AnthropicSdkProviderSettings = z.input<typeof AnthropicSdkProviderConfigSchema>;

@@ -1,12 +1,8 @@
 export { ConfigSchema, type Config, type RelayConfig } from './config-schema.js';
 export {
   CredentialRefSchema,
-  buildAccountManagerCredentialRef,
   buildStoredCredentialRef,
   parseStoredCredentialRef,
-  brandCredentialRecord,
-  unbrandCredentials,
-  isAccountManagerRef,
   type CredentialRef,
 } from './credential-ref.js';
 export {
@@ -14,6 +10,8 @@ export {
   ProviderDefaultsSchema,
   ProviderConfigSchema,
   BaseAdapterConfigSchema,
+  StoredProtocolEndpointsSchema,
+  type StoredProtocolEndpoints,
 } from './provider-defaults.js';
 export {
   ProviderConfigFileSchema,

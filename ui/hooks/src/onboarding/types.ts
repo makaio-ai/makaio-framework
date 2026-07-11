@@ -10,7 +10,6 @@
  */
 
 import type { AgentSelection } from '@makaio/contracts';
-import type { CredentialRef } from '@makaio/contracts/config';
 import type { ModelFilterMode, ModelVisibility, ProtocolEndpoints } from '@makaio/contracts/provider';
 import type { BindingRecord } from '@makaio/services-core/adapter-subsystem';
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -24,6 +23,7 @@ import type {
   OnboardingStepProps as KernelOnboardingStepProps,
 } from '@makaio/ui-kernel';
 import type { ProviderConfigSummaryView } from '../provider-config/selectors.js';
+import type { ProviderConfigAuthDraft } from '../provider-config/auth-draft.js';
 import type { OnboardingAdapter, OnboardingClient } from './scan-onboarding-adapters.js';
 
 // ---------------------------------------------------------------------------
@@ -94,10 +94,8 @@ export interface OnboardingProviderConfigDraft {
   definitionId: string;
   /** Optional display name. */
   name?: string;
-  /** Plaintext credentials captured by a host step. */
-  credentials?: Record<string, string>;
-  /** Pre-resolved credential refs for externally managed credentials. */
-  credentialRefs?: Record<string, CredentialRef>;
+  /** Exactly one normalized authentication method and its UI field sources. */
+  auth: ProviderConfigAuthDraft;
   /** Optional endpoint overrides. */
   endpointOverrides?: ProtocolEndpoints;
   /** Optional per-model visibility overrides. */

@@ -12,49 +12,37 @@ import {
   ConnectorStartOptions,
   type AgentStartResult,
 } from '@makaio/ai-adapters-core';
-import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
+import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
 import { type Config, GeminiChat } from '@google/gemini-cli-core';
 import { type SystemPrompt } from '@makaio/contracts';
 import type { GeminiConnectorConfig } from './types/index.js';
 import { type GeminiConnectorBus, GeminiConnectorNamespace, type SdkEvent } from './namespaces/index.js';
 import { GeminiConnectorSubjects } from './namespaces/index.js';
 import { createGeminiConfig, applyReasoningOverride } from './utils/create-config.js';
-import { buildGeminiAuthOptions, initGemini } from './utils/init-gemini.js';
+import { initGemini } from './utils/init-gemini.js';
 import { GeminiConnectorSession } from './session.js';
 import { UserMessageQueue } from '@makaio/ai-adapters-core';
 import { GeminiSdkAdapterName } from './adapter.js';
 import { geminiRateLimiter } from './rate-limiter.js';
 import { fetchToolsForGemini, type GeminiRegistryToolDeclaration } from './tool-handling.js';
-
+import { resolveGeminiAuthOptions } from './refresh-auth.js';
+import { selectGeminiSdkEnvironment, withGeminiSdkEnvironment } from './gemini-sdk-environment.js';
 /** Shared adapter identifier for all GeminiConnector instances in this process. */
 const adapterId = crypto.randomUUID();
 /** Maximum number of registry tool fetch attempts before giving up and proceeding without them. */
 const MAX_REGISTRY_FETCH_ATTEMPTS = 3;
-/** Env var read by gemini-cli-core for system settings file isolation. */
-const GEMINI_SYSTEM_SETTINGS_ENV = 'GEMINI_CLI_SYSTEM_SETTINGS_PATH';
 const defaultBus = await GeminiConnectorNamespace.scopedBus();
-
-/**
- * Gemini SDK Connector - Wraps the Gemini SDK for agentic chat completions.
- *
- * This is the lowest layer in the three-layer architecture:
- * - GeminiAdapter (AIAdapter) -\> GeminiAgent (AIAgent) -\> GeminiConnector (AIAgentConnector)
- *
- * Implements the agentic loop pattern:
- * 1. Send user message to Gemini
- * 2. Process streaming response from Turn.run() generator
- * 3. If tool_calls present, execute tools and recurse
- * 4. When no tool_calls, mark turn complete
- */
 export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus> {
   /** Gemini CLI core config. */
-  private readonly geminiConfig: Config;
+  private geminiConfig: Config | undefined;
   /** Gemini chat instance for conversation management (created after initialization). */
   private geminiChat?: GeminiChat;
   /** Whether agent has been initialized. */
   private isInitialized = false;
+  private sessionInitialization: Promise<GeminiConnectorSession> | undefined;
   /** Whether agent has been terminated/aborted. */
   private isTerminated = false;
+  private terminationCleanup: Promise<void> | undefined;
   /** SDK's base system instruction (from initGemini, with memory instructions stripped). */
   private baseSystemInstruction?: string;
   /** Session manages Turn lifecycle. */
@@ -69,43 +57,19 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
   private registryToolsFetched = false;
   /** Number of registry fetch attempts made (bounds retries on persistent failure). */
   private registryFetchAttempts = 0;
+  private readonly adapterAuth: ResolvedAdapterAuth | undefined;
 
-  /**
-   * Create a new GeminiConnector instance.
-   * @param config - Configuration including bus, model, cwd
-   */
   public constructor(config: GeminiConnectorConfig) {
+    const { adapterAuth, ...baseConfig } = config;
     super({
-      ...config,
+      ...baseConfig,
+      env: baseConfig.env ?? {},
       bus: config?.bus ?? defaultBus,
       adapterId: config?.adapterId ?? adapterId, // Prefer config's adapterId, fallback to module default
       adapterName: GeminiSdkAdapterName,
     });
-    const previousSettingsPath = process.env[GEMINI_SYSTEM_SETTINGS_ENV];
-    const isolatedSettingsPath = this.env[GEMINI_SYSTEM_SETTINGS_ENV];
-    try {
-      // gemini-cli-core reads this process env var during Config construction.
-      // Scope the mutation to construction so one connector cannot leak its
-      // isolated settings path into later in-process Gemini connectors.
-      if (isolatedSettingsPath === undefined) delete process.env[GEMINI_SYSTEM_SETTINGS_ENV];
-      else {
-        process.env[GEMINI_SYSTEM_SETTINGS_ENV] = isolatedSettingsPath;
-      }
-      this.geminiConfig = createGeminiConfig({
-        ...this.config,
-        sessionId: this.config.adapterSessionId,
-      });
-    } finally {
-      if (previousSettingsPath === undefined) {
-        delete process.env[GEMINI_SYSTEM_SETTINGS_ENV];
-      } else {
-        process.env[GEMINI_SYSTEM_SETTINGS_ENV] = previousSettingsPath;
-      }
-    }
-    this.adapterSessionId = this.geminiConfig.getSessionId();
+    this.adapterAuth = adapterAuth;
   }
-
-  // --- ProceduralAgentConnector abstract implementations ---
 
   /**
    * Get the Gemini session instance.
@@ -120,40 +84,52 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
    * @returns The initialized session
    */
   protected async ensureSession(): Promise<ProceduralConnectorSession> {
-    // Design: session creation is not gated on fetchTools success. The session starts
-    // immediately with whatever tools are available; fetchTools retries on subsequent
-    // turns via the registryToolsFetched flag. Blocking session creation on registry
-    // availability would prevent the user from starting any conversation when the
-    // registry is temporarily down.
+    this.assertOpen();
+    if (this.session) return this.session;
+    if (this.sessionInitialization) return await this.sessionInitialization;
+
+    // Publish the shared promise before initialization can re-enter and terminate.
+    const initialization = Promise.resolve().then(async () => await this.createSession());
+    this.sessionInitialization = initialization;
+    void initialization.then(
+      () => {
+        if (this.sessionInitialization === initialization) this.sessionInitialization = undefined;
+      },
+      () => {
+        if (this.sessionInitialization === initialization) this.sessionInitialization = undefined;
+      },
+    );
+    return await initialization;
+  }
+
+  /**
+   * Create the SDK chat and session once for the connector.
+   * @returns - The new session.
+   */
+  private async createSession(): Promise<GeminiConnectorSession> {
+    this.assertOpen();
+    // Tool fetch failures do not block session startup; subsequent calls retry.
     if (!this.registryToolsFetched) {
       await this.fetchTools();
     }
+    this.assertOpen();
     if (!this.isInitialized) {
       await this.ensureInitialized();
+      this.assertOpen();
       await this.emitSdkEvent({
         type: 'session.created',
         cwd: this.cwd,
         model: this.model ?? 'unknown',
       });
     }
-    if (!this.session) {
-      await this.initializeSession();
-    }
-    return this.session!;
+    this.assertOpen();
+    return await this.initializeSession();
   }
 
-  /**
-   * Get the message queue for Gemini connector.
-   * @returns The session message queue
-   */
   protected getSessionQueue(): UserMessageQueue {
     return this.sessionMessageQueue;
   }
 
-  /**
-   * Get Gemini namespace turn subjects.
-   * @returns Turn subject definitions
-   */
   protected getTurnSubjects(): WireSessionSubjects<GeminiConnectorBus['namespace']> {
     return GeminiConnectorSubjects.turn;
   }
@@ -222,33 +198,44 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
     }
   }
 
-  /** Initialize Config and create GeminiChat.
-   * Rate-limited because initialization makes API calls (auth refresh, experiments, etc.).
-   * Registry tools are already loaded by ensureSession before this is called.
-   */
+  /** Initialize Config and GeminiChat through the rate-limited SDK boundary. @returns - Nothing. */
   private async ensureInitialized(): Promise<void> {
+    this.assertOpen();
     if (this.isInitialized) return;
 
-    // Resolve credentials locally before initializing the SDK.
-    // Preserve explicit credential presence here instead of truthiness.
-    // `initGemini()` is the single owner of "blank key is invalid" vs
-    // "auth omitted means OAuth fallback" semantics.
-    const credentialRefs = this.config.providerContext?.credentialRefs ?? {};
-    const credentials = await resolveConnectorCredentials(this.config.bus, credentialRefs);
-    const authOptions = buildGeminiAuthOptions(credentials);
-
-    // Harness lookups remain global-bus scoped: harness subjects live in the
-    // global namespace, while credential refs resolve through the connector bus.
-    const disabledNativeTools = await resolveDisabledNativeTools(
-      this.globalBus,
-      this.adapterName,
-      this.config.harnessId,
-      this.config.clientId,
-    );
     const result = await geminiRateLimiter.add(
-      async () => initGemini(this.geminiConfig, disabledNativeTools, this.registryToolDeclarations, authOptions),
+      async () => {
+        if (this.isInitialized || this.isTerminated) return undefined;
+        // This global harness lookup stays behind the queued termination check.
+        const disabledNativeTools = await resolveDisabledNativeTools(
+          this.globalBus,
+          this.adapterName,
+          this.config.harnessId,
+          this.config.clientId,
+        );
+        if (this.isTerminated) return undefined;
+        const selection = selectGeminiSdkEnvironment(this.env);
+        return await withGeminiSdkEnvironment(selection, async () => {
+          this.assertOpen();
+          const authOptions = resolveGeminiAuthOptions(this.adapterAuth);
+          const geminiConfig =
+            this.geminiConfig ??
+            createGeminiConfig({
+              ...this.config,
+              sessionId: this.config.adapterSessionId,
+            });
+          this.geminiConfig = geminiConfig;
+          this.adapterSessionId = geminiConfig.getSessionId();
+          return await initGemini(geminiConfig, disabledNativeTools, authOptions, this.registryToolDeclarations);
+        });
+      },
       { priority: 0 },
     );
+    if (result === undefined) {
+      this.assertOpen();
+      return;
+    }
+    this.assertOpen();
     this.geminiChat = result.geminiChat;
     this.baseSystemInstruction = result.baseSystemInstruction;
     this.applySystemPrompt();
@@ -256,16 +243,18 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
   }
 
   /**
-   * Initialize Session for SDK lifecycle management.
-   * Called on first start() to setup Session/Turn abstractions.
+   * Initialize the session lifecycle.
+   * @returns - The new session.
    */
-  private async initializeSession(): Promise<void> {
+  private async initializeSession(): Promise<GeminiConnectorSession> {
     if (!this.geminiChat) {
       throw new Error('GeminiChat not initialized');
     }
+    const bus = this.config.bus ?? (await GeminiConnectorNamespace.scopedBus(this.globalBus.getContext()));
+    this.assertOpen();
 
     this.session = new GeminiConnectorSession({
-      bus: this.config.bus ?? (await GeminiConnectorNamespace.scopedBus(this.globalBus.getContext())),
+      bus,
       globalBus: this.globalBus,
       adapterId: this.config.adapterId ?? '',
       adapterName: this.config.adapterName ?? '',
@@ -273,7 +262,7 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
       cwd: this.cwd,
       model: this.model ?? '',
       env: this.config.env ?? {},
-      geminiConfig: this.geminiConfig,
+      geminiConfig: this.requireGeminiConfig(),
       geminiChat: this.geminiChat,
       emitSdkEvent: this.emitSdkEvent.bind(this),
       handleError: this.handleError.bind(this),
@@ -290,8 +279,8 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
       getCurrentTurnNumber: () => this.currentTurnNumber,
     });
 
-    // Wire turn events AFTER session is created
     this.wireSessionEvents();
+    return this.session;
   }
 
   /**
@@ -361,16 +350,12 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
 
   /** Abort the session and cleanup resources. */
   public abort(): void {
-    if (this.isTerminated) return;
-    this.isTerminated = true;
-    void this.session?.abort();
+    void this.beginTermination();
   }
 
   /** Gracefully close the session. */
   public async close(): Promise<void> {
-    if (this.isTerminated) return;
-    this.isTerminated = true;
-    await this.session?.abort();
+    await this.beginTermination();
   }
 
   /**
@@ -386,6 +371,27 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
    */
   public async interrupt(): Promise<void> {
     await this.session?.abort();
+  }
+
+  private beginTermination(): Promise<void> {
+    if (this.terminationCleanup === undefined) {
+      this.isTerminated = true;
+      this.terminationCleanup = this.abortAfterInitialization();
+    }
+    return this.terminationCleanup;
+  }
+
+  private async abortAfterInitialization(): Promise<void> {
+    try {
+      await this.sessionInitialization;
+    } catch {
+      // A failed initialization cannot own a session, but a partially created one can.
+    }
+    await this.session?.abort();
+  }
+
+  private assertOpen(): void {
+    if (this.isTerminated) throw new Error('Gemini connector is closed.');
   }
 
   /**
@@ -427,14 +433,15 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
    * @returns Always true — Gemini Config is mutable
    */
   public override async changeModelInPlace(newModel: string): Promise<boolean> {
-    this.geminiConfig.setModel(newModel);
+    const geminiConfig = await this.ensureGeminiConfig();
+    geminiConfig.setModel(newModel);
 
     // Re-register thinking override for the new model name.
     // The original override (from createGeminiConfig) targets the old model via `match: { model }`.
     // Use currentReasoningEffort rather than the immutable config field so that any
     // in-place reasoning change applied after construction is reflected here.
     if (this.currentReasoningEffort) {
-      applyReasoningOverride(this.geminiConfig, newModel, this.currentReasoningEffort);
+      applyReasoningOverride(geminiConfig, newModel, this.currentReasoningEffort);
     }
 
     return true;
@@ -459,7 +466,7 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
       return false;
     }
 
-    applyReasoningOverride(this.geminiConfig, this.model, newLevel);
+    applyReasoningOverride(await this.ensureGeminiConfig(), this.model, newLevel);
     return true;
   }
 
@@ -471,7 +478,23 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
    * with reflection, which is brittle and obscures the real contract.
    * @returns Config operations used by in-place model mutation logic
    */
-  public getModelMutationConfig(): Pick<Config, 'setModel' | 'getModel' | 'modelConfigService'> {
+  public async getModelMutationConfig(): Promise<Pick<Config, 'setModel' | 'getModel' | 'modelConfigService'>> {
+    return await this.ensureGeminiConfig();
+  }
+
+  private async ensureGeminiConfig(): Promise<Config> {
+    if (this.geminiConfig !== undefined) return this.geminiConfig;
+    return await withGeminiSdkEnvironment(selectGeminiSdkEnvironment(this.env), async () => {
+      if (this.geminiConfig === undefined) {
+        this.geminiConfig = createGeminiConfig({ ...this.config, sessionId: this.config.adapterSessionId });
+        this.adapterSessionId = this.geminiConfig.getSessionId();
+      }
+      return this.geminiConfig;
+    });
+  }
+
+  private requireGeminiConfig(): Config {
+    if (this.geminiConfig === undefined) throw new Error('Gemini config was not initialized.');
     return this.geminiConfig;
   }
 }

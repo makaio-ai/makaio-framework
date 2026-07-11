@@ -31,20 +31,6 @@ export const AuthTypeValues = ['openai', 'anthropic', 'qwen-oauth', 'gemini', 'v
  */
 export const QwenAcpProviderConfigSchema = z.object({
   /**
-   * Path to the `qwen` CLI binary.
-   * Defaults to `"qwen"` (resolved via PATH) when omitted.
-   */
-  binaryPath: z
-    .preprocess(
-      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
-      z.string().trim().min(1).optional(),
-    )
-    .meta({
-      title: 'Binary Path',
-      description: 'Path to qwen CLI binary (default: "qwen")',
-    }),
-
-  /**
    * How tool execution approval is handled.
    */
   approvalMode: z.enum(ApprovalModeValues).optional().meta({

@@ -10,14 +10,14 @@
  * applied.
  *
  * On macOS, client-owned native credential helpers clone the Keychain entry to
- * Claude Code's `CLAUDE_CONFIG_DIR`-hashed service name. On Linux and Windows,
+ * Claude Code's isolated secure-storage service name. On Linux and Windows,
  * `.credentials.json` is symlinked from the base dir into the session dir so
  * the process can authenticate without prompting the user. When Windows denies
  * symlink creation, credentials are copied into the isolated session directory
  * instead.
  *
- * Returns `{ env: { CLAUDE_CONFIG_DIR: sessionDir } }` so the spawned process
- * inherits the isolated session directory as its configuration root.
+ * Returns the isolated config environment together with whether native
+ * credentials were materialized for the requested inheritance policy.
  * @packageDocumentation
  */
 
@@ -94,17 +94,18 @@ async function tryMaterializeSettingsFile(
  */
 function resolveSourceConfigDir(sessionDir: string, baseConfigDir: string): string {
   if (path.resolve(sessionDir) === path.resolve(baseConfigDir)) {
-    return path.join(os.homedir(), '.claude');
+    return resolveNativeClaudeConfigDir();
   }
   return baseConfigDir;
 }
 
 /**
  * Resolve the current native Claude Code config directory.
- * @returns Native `~/.claude` config directory for the active environment.
+ * @returns Absolute `CLAUDE_CONFIG_DIR`, or native `~/.claude` when unset.
  */
 function resolveNativeClaudeConfigDir(): string {
-  return path.join(os.homedir(), '.claude');
+  const configured = process.env.CLAUDE_CONFIG_DIR;
+  return configured === undefined ? path.join(os.homedir(), '.claude') : path.resolve(configured);
 }
 
 /**
@@ -194,7 +195,8 @@ async function inheritAuthState(
  *   not exist.
  * - `settings.local.json` — copied only when present in `baseConfigDir`.
  * - macOS Keychain credentials — cloned for `full` and `auth-only` to the
- *   session-specific service name Claude Code derives from `CLAUDE_CONFIG_DIR`.
+ *   session-specific service name Claude Code derives from its secure-storage
+ *   config identity.
  * - `.credentials.json` — inherited for `full` and `auth-only` on
  *   Linux/Windows, with a Windows copy fallback when symlink creation is
  *   denied.
@@ -207,13 +209,14 @@ async function inheritAuthState(
  * operations without exposing credential material as a bus payload.
  * @param payload - Validated setup-delegation payload carrying `sessionDir`,
  *   `baseConfigDir`, and `platform`
- * @returns Response carrying the `CLAUDE_CONFIG_DIR` env var for the session
+ * @returns Session environment and native-auth materialization status.
  */
 export async function handleClaudeCodeSessionConfigSetup(
   payload: SessionConfigSetupRequest,
 ): Promise<SessionConfigSetupResponse> {
   const { sessionDir, baseConfigDir, platform, configInheritance, projectDir } = payload;
   const sourceConfigDir = resolveSourceConfigDir(sessionDir, baseConfigDir);
+  let authMaterialized = false;
 
   if (configInheritance === 'full') {
     await tryMaterializeSettingsFile(
@@ -228,16 +231,27 @@ export async function handleClaudeCodeSessionConfigSetup(
       'skip',
       true,
     );
-    await inheritClaudeCodeNativeCredentialsForSession({ sourceConfigDir, sessionDir, platform });
+    const credentialResult = await inheritClaudeCodeNativeCredentialsForSession({
+      sourceConfigDir,
+      sessionDir,
+      platform,
+    });
+    authMaterialized = credentialResult.prepared;
     await inheritAuthState(sourceConfigDir, sessionDir, projectDir);
   } else {
     await fs.writeFile(path.join(sessionDir, 'settings.json'), '{}', 'utf-8');
     await fs.rm(path.join(sessionDir, 'settings.local.json'), { force: true });
     await fs.rm(path.join(sessionDir, '.claude.json'), { force: true });
-    await clearClaudeCodeNativeCredentialsForSession({ sessionDir, platform });
     if (configInheritance === 'auth-only') {
-      await inheritClaudeCodeNativeCredentialsForSession({ sourceConfigDir, sessionDir, platform });
+      const credentialResult = await inheritClaudeCodeNativeCredentialsForSession({
+        sourceConfigDir,
+        sessionDir,
+        platform,
+      });
+      authMaterialized = credentialResult.prepared;
       await inheritAuthState(sourceConfigDir, sessionDir, projectDir);
+    } else {
+      await clearClaudeCodeNativeCredentialsForSession({ sessionDir, platform });
     }
   }
 
@@ -248,5 +262,11 @@ export async function handleClaudeCodeSessionConfigSetup(
     ...(projectDir !== undefined ? { projectDir } : {}),
   });
 
-  return { env: { CLAUDE_CONFIG_DIR: sessionDir } };
+  return {
+    env: {
+      CLAUDE_CONFIG_DIR: sessionDir,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
+    },
+    authMaterialized,
+  };
 }

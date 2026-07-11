@@ -2,7 +2,6 @@ import Anthropic from '@anthropic-ai/sdk';
 import { MakaioBus } from '@makaio/bus-core';
 import type { WireSessionSubjects } from '@makaio/ai-adapters-core';
 import { BaseStreamConnector } from '@makaio/ai-adapters-stream-session';
-import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
 import {
   AnthropicSdkConnectorNamespace,
   AnthropicSdkConnectorSubjects,
@@ -12,6 +11,7 @@ import type { AnthropicSdkAgentConfig, AnthropicSdkBus } from './types/index.js'
 import { fetchToolsForAnthropic } from './tool-handling.js';
 import { AnthropicSdkSession } from './session.js';
 import { AnthropicSdkAdapterName, DEFAULT_MODEL } from './constants.js';
+import { resolveAnthropicConstructorAuth } from './constructor-auth.js';
 
 /** Default scoped bus for Anthropic SDK adapter */
 // Intentional module-level await: keeps constructor synchronous while sharing one
@@ -31,17 +31,15 @@ const defaultBus = await AnthropicSdkConnectorNamespace.scopedBus();
  * on the first turn. Tool execution routes through MakaioBus.request(ToolSubjects.execute)
  * to the ToolRegistry, which validates input and executes the tool handler.
  *
- * Credential resolution happens in `fetchTools()` (the first async lifecycle hook)
- * via `resolveConnectorCredentials()`. Plaintext credentials are stored in instance
- * fields and never leave the connector.
+ * Authentication is resolved once by the central adapter runtime and delivered
+ * through the Anthropic constructor target.
  */
 export class AnthropicSdkConnector extends BaseStreamConnector<
   AnthropicSdkBus,
   AnthropicSdkSession,
   AnthropicSdkAgentConfig
 > {
-  /** Resolved API key (populated in fetchTools before createSession is called). */
-  private resolvedApiKey = '';
+  private readonly constructorAuth: ReturnType<typeof resolveAnthropicConstructorAuth>;
   private client?: Anthropic;
   /** Anthropic-format tools for messages.create (fetched from bus on first turn) */
   private anthropicTools: Awaited<ReturnType<typeof fetchToolsForAnthropic>> = [];
@@ -55,12 +53,15 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
   }
 
   public constructor(config: AnthropicSdkAgentConfig & { adapterId?: string }) {
+    const { adapterAuth, ...baseConfig } = config;
     super({
-      ...config,
+      ...baseConfig,
+      env: baseConfig.env ?? {},
       bus: config?.bus ?? defaultBus,
       adapterId: config?.adapterId ?? crypto.randomUUID(),
       adapterName: config?.adapterName ?? AnthropicSdkAdapterName,
     });
+    this.constructorAuth = resolveAnthropicConstructorAuth(adapterAuth);
 
     this.model = config?.model ?? DEFAULT_MODEL;
 
@@ -74,23 +75,16 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
   // ---------------------------------------------------------------------------
 
   /**
-   * Resolve credentials and fetch available tools from the bus.
-   *
-   * Resolves `apiKey` from `providerContext.credentialRefs` via the encrypted
-   * credential channel, then initializes the Anthropic SDK client. Called once
-   * by `BaseStreamConnector.initializeSession()` before `createSession()`.
+   * Initialize the Anthropic SDK with the centrally delivered authentication
+   * snapshot and fetch available tools from the bus.
    *
    * Also converts fetched tools to Anthropic format and caches them in
    * `this.anthropicTools` for use in `createSession`.
    */
   protected async fetchTools(): Promise<void> {
-    const credentialRefs = this.config.providerContext?.credentialRefs ?? {};
-    const credentials = await resolveConnectorCredentials(this.config.bus, credentialRefs);
-    this.resolvedApiKey = credentials['apiKey'] ?? '';
-
     const baseUrl = this.config.providerConfig?.baseUrl;
     this.client = new Anthropic({
-      ...(this.resolvedApiKey ? { apiKey: this.resolvedApiKey } : {}),
+      ...this.constructorAuth,
       baseURL: baseUrl ?? undefined,
     });
 
@@ -155,7 +149,7 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
       model: this.model ?? '',
       reasoningEffort: this.config.reasoningEffort,
       streamStartTimeoutMs: this.getTimeoutMs('eventWait'),
-      env: this.config.env ?? {},
+      env: { ...(this.config.contextEnv ?? {}) },
       client: this.client,
       anthropicTools: this.anthropicTools,
       requestCorrelationHeaders: this.config.providerConfig?.requestCorrelationHeaders,

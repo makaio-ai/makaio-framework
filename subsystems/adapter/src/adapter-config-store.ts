@@ -1,5 +1,5 @@
 import { type IMakaioBus } from '@makaio/bus-core';
-import { CapabilitySubjects, type ProviderContext } from '@makaio/contracts';
+import { CapabilitySubjects } from '@makaio/contracts';
 import {
   ADAPTER_FILE_SCHEMA_VERSION,
   type AdapterFile,
@@ -12,6 +12,7 @@ import {
   type EffectiveAdapter,
   type IAdapterConfigRepository,
   type ProviderConfigFileRecord,
+  type ProviderRuntimeSnapshot,
 } from '@makaio/services-core/adapter-subsystem';
 import {
   type AdapterConfigPatch,
@@ -24,9 +25,10 @@ import {
   buildAdapterConfigDerivedState,
   deriveProviderDefinitionIds,
   toBindingRecords,
+  toProviderConfigRecord,
 } from './adapter-config-derived-state.js';
 import { promoteEnabledBindingDefault, promoteEnabledProviderConfigDefault } from './binding-defaults.js';
-import { buildProviderContextFromRaw } from './provider-runtime-view.js';
+import { buildProviderRuntimeContextFromRaw } from './provider-runtime-view.js';
 import { SnapshotMutationQueue } from './snapshot-mutation-queue.js';
 
 /**
@@ -41,6 +43,14 @@ export interface AdapterConfigStoreOptions {
    * Bus instance used for capability queries and log-import invalidation subscriptions.
    */
   readonly bus: IMakaioBus;
+}
+
+/** One coherent provider snapshot and adapter-binding authorization capture. */
+export interface BoundProviderRuntimeSnapshot {
+  /** Refs-only provider snapshot captured with the binding state, or `null` when absent. */
+  readonly snapshot: ProviderRuntimeSnapshot | null;
+  /** Whether the requested adapter bound the selected config in that same captured state. */
+  readonly isBound: boolean;
 }
 
 /**
@@ -341,18 +351,6 @@ export class AdapterConfigStore {
   }
 
   /**
-   * Return the raw provider config file for a given ID.
-   *
-   * Used by components that need access to raw credential and endpoint data
-   * before conversion to the bus-safe read model.
-   * @param id - Provider config ID.
-   * @returns Raw provider config file, or `undefined` when missing.
-   */
-  public getRawProviderConfig(id: string): ProviderConfigFile | undefined {
-    return this.snapshot.providerConfigs.get(id);
-  }
-
-  /**
    * Return the provider config IDs for a definition in snapshot order.
    * @param definitionId - Provider definition ID.
    * @returns Matching provider config IDs.
@@ -513,20 +511,67 @@ export class AdapterConfigStore {
   }
 
   // ---------------------------------------------------------------------------
-  // Provider context
+  // Provider runtime snapshot
   // ---------------------------------------------------------------------------
 
   /**
-   * Build the runtime provider context for one provider config.
+   * Resolve one atomic provider runtime snapshot.
+   *
+   * The raw config reference is captured before the asynchronous definition
+   * lookup. Snapshot mutations replace config values rather than mutating them,
+   * so the safe read and refs-only context below always derive from that same
+   * captured value without adding a second lock or read.
    * @param providerConfigId - Provider config ID.
-   * @returns Runtime provider context, or `null` when the config does not exist.
+   * @returns Safe config, runtime context, and definition, or `null` when missing.
    */
-  public async buildProviderContext(providerConfigId: string): Promise<ProviderContext | null> {
+  public async resolveProviderRuntimeSnapshot(providerConfigId: string): Promise<ProviderRuntimeSnapshot | null> {
     const raw = this.snapshot.providerConfigs.get(providerConfigId);
     if (!raw) {
       return null;
     }
-    return buildProviderContextFromRaw(this.bus, providerConfigId, raw);
+    const { context, definition } = await buildProviderRuntimeContextFromRaw(this.bus, providerConfigId, raw);
+    return {
+      config: toProviderConfigRecord(providerConfigId, raw),
+      context,
+      definition,
+    };
+  }
+
+  /**
+   * Resolve a provider runtime snapshot with adapter-binding authorization from
+   * one immutable config-store snapshot.
+   *
+   * Snapshot writes replace the entire state object. Capturing that object
+   * before the asynchronous definition lookup therefore keeps the binding
+   * proof and returned provider runtime snapshot coherent without a second
+   * authorization read.
+   * @param adapterName - Adapter whose binding is required.
+   * @param providerConfigId - Provider config selected for runtime use.
+   * @returns Coherent binding proof and refs-only runtime snapshot.
+   */
+  public async resolveBoundProviderRuntimeSnapshot(
+    adapterName: string,
+    providerConfigId: string,
+  ): Promise<BoundProviderRuntimeSnapshot> {
+    const capturedSnapshot = this.snapshot;
+    const raw = capturedSnapshot.providerConfigs.get(providerConfigId);
+    const adapter = capturedSnapshot.adapters.get(adapterName);
+    const isBound =
+      raw !== undefined &&
+      toBindingRecords(adapterName, adapter?.bindings).some((binding) => binding.providerConfigId === providerConfigId);
+    if (!raw) {
+      return { snapshot: null, isBound: false };
+    }
+
+    const { context, definition } = await buildProviderRuntimeContextFromRaw(this.bus, providerConfigId, raw);
+    return {
+      isBound,
+      snapshot: {
+        config: toProviderConfigRecord(providerConfigId, raw),
+        context,
+        definition,
+      },
+    };
   }
 
   // ---------------------------------------------------------------------------

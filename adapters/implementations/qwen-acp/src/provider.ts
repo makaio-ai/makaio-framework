@@ -5,12 +5,21 @@
  * subsystem resolves each ID to a full ProviderDefinitionInput from the
  * provider registry at boot time.
  */
-export const providerIds = ['qwen-oauth'] as const;
+import type { AdapterProviderAuth } from '@makaio/contracts';
 
-/**
- * Default provider id to use when no provider is explicitly configured.
- */
-export const defaultPresetId = 'qwen-oauth';
+/** No production provider is advertised until Qwen auth can be isolated safely. */
+export const providerIds = [] as const;
 
-/** Provider id used for conformance tests (same as host default for this adapter). */
-export const testPresetId: string = defaultPresetId;
+type ProviderId = (typeof providerIds)[number];
+
+export const QWEN_ACP_AUTH_SCRUB_ENV_VARS = [
+  'DASHSCOPE_API_KEY',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+] as const;
+
+/** Validated authentication metadata keyed by supported provider definition ID. */
+export const providerAuthById = {} satisfies Record<ProviderId, AdapterProviderAuth>;

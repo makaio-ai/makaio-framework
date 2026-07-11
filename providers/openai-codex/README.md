@@ -1,6 +1,10 @@
 # @makaio/provider-openai-codex
 
-Type-only package that declares the OpenAI Codex provider identity for the Makaio framework. It exports a single `providerDefinition: ProviderDefinitionInput` for the Codex App-Server. Codex is a subprocess-based provider — it communicates through the Codex app-server binary via a local subprocess and does not expose a network HTTP endpoint, so no `endpoints` or `credentialEnvVars` are declared. No runtime logic, network calls, or model catalog is included — the model catalog is populated from the YAML lab registry at boot time. The `openaiCodexPackage` descriptor wraps the definition for unified package discovery.
+Type-only package that declares the OpenAI Codex provider identity for the
+Makaio framework. It exports one `ProviderDefinitionInput` for Codex App Server.
+The app server communicates over a local subprocess rather than a provider HTTP
+endpoint. No runtime logic, network calls, or model catalog is included; the
+model registry populates the catalog at boot.
 
 ## Provider Identity
 
@@ -8,10 +12,21 @@ Type-only package that declares the OpenAI Codex provider identity for the Makai
 |-------|-------|
 | `id` | `openai-codex` |
 | `name` | `OpenAI Codex` |
-| `defaultModel` | `gpt-5.1-codex-mini` |
+| `defaultModel` | `gpt-5.5` |
 | `fastModel` | `gpt-5.4-mini` |
 
-No `endpoints` or `credentialEnvVars` are declared — the subprocess transport manages credentials internally.
+## Authentication
+
+| Owner | Method | Mode | Source or native state | Codex delivery |
+|-------|--------|------|------------------------|----------------|
+| Provider `openai-codex` | `api-key` | `explicit` | Required `apiKey`; `OPENAI_API_KEY` is an environment source hint | `account/login/start` with `type: "apiKey"` after initialization |
+| Client `codex` | `access-token` | `explicit` | Required `accessToken`; `CODEX_ACCESS_TOKEN` is an environment source hint | Selected subprocess environment |
+| Client `codex` | `native` | `inferred` | Persisted Codex file or keychain state | Isolated local `CODEX_HOME` lease |
+
+`OPENAI_API_KEY` and `CODEX_ACCESS_TOKEN` are distinct methods. The former is
+only a possible source for the provider API key; it is not injected into the
+app-server process. Native auth is local-only and is never inferred from
+ambient environment variables.
 
 ## Served By
 

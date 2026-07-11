@@ -15,6 +15,12 @@ export { CodexClientSubjects, CODEX_CLIENT_NAMESPACE } from './namespace.js';
 export { CodexClientSessionService } from './codex-client-session-service.js';
 export { normalizeCodexHook } from './hook-normalizer.js';
 export type { CodexNormalizedEvent, CodexNormalizedSubject } from './hook-normalizer.js';
+export {
+  buildCodexNativeAuthSourceLockPath,
+  executeCodexNativeAuthSourceLock,
+  withCodexNativeAuthSourceLock,
+} from './native-auth-source-lock.js';
+export type { CodexNativeAuthSourceLockExecution } from './native-auth-source-lock.js';
 
 /**
  * MakaioExtension manifest for the Codex client session normalization service.

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import type { ICredentialBackend } from './credential-backend.js';
 
 /**
@@ -46,5 +47,19 @@ export class FileBackend implements ICredentialBackend {
     } finally {
       await rm(tmpPath, { force: true }).catch(() => undefined);
     }
+  }
+
+  /** Remove the configured credential file when it exists. */
+  public async clear(): Promise<void> {
+    await rm(this.path, { force: true });
+  }
+
+  /**
+   * Rebind this credential filename below a pinned canonical config directory.
+   * @param configDir - Canonical directory verified by the source.
+   * @returns File backend that no longer follows the caller's lexical alias.
+   */
+  public bindToCanonicalConfigDirectory(configDir: string): ICredentialBackend {
+    return new FileBackend(join(configDir, basename(this.path)));
   }
 }

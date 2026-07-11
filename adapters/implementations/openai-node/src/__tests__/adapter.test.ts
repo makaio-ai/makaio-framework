@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OpenAIAdapter } from '../adapter.js';
+import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
+import { OpenAIAdapter, OpenAIModelFetchAuthError } from '../adapter.js';
 import { MODEL_FETCH_TIMEOUT_MS } from '../constants.js';
+
+const SELECTED_AUTH: ResolvedAdapterAuth = {
+  processEnv: {},
+  connectorDeliveries: [
+    {
+      target: 'openai-node.constructor',
+      values: { apiKey: 'sk-test', adminAPIKey: null },
+    },
+  ],
+  configInheritance: 'empty',
+};
 
 function createFetchStub(
   implementation: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
@@ -24,7 +36,7 @@ describe('OpenAIAdapter.fetchModels', () => {
     });
     vi.stubGlobal('fetch', fetchStub);
 
-    const models = await new OpenAIAdapter().fetchModels('https://example.test/v1', { apiKey: 'sk-test' });
+    const models = await new OpenAIAdapter().fetchModels('https://example.test/v1', SELECTED_AUTH);
 
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
     expect(models).toMatchObject([{ name: 'name-only-model', friendlyName: 'name-only-model' }]);
@@ -41,7 +53,7 @@ describe('OpenAIAdapter.fetchModels', () => {
     });
     vi.stubGlobal('fetch', fetchStub);
 
-    const result = new OpenAIAdapter().fetchModels('https://example.test/v1', { apiKey: 'sk-test' });
+    const result = new OpenAIAdapter().fetchModels('https://example.test/v1', SELECTED_AUTH);
     const expectation = expect(result).rejects.toThrow(`timed out after ${MODEL_FETCH_TIMEOUT_MS}ms`);
     await vi.advanceTimersByTimeAsync(MODEL_FETCH_TIMEOUT_MS);
 
@@ -55,10 +67,24 @@ describe('OpenAIAdapter.fetchModels', () => {
       createFetchStub(async () => new Response('', { status: 500, statusText: 'Server Error' })),
     );
 
-    await expect(new OpenAIAdapter().fetchModels('https://example.test/v1', { apiKey: 'sk-test' })).rejects.toThrow(
+    await expect(new OpenAIAdapter().fetchModels('https://example.test/v1', SELECTED_AUTH)).rejects.toThrow(
       /500 Server Error/,
     );
 
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects an empty auth snapshot without falling back to ambient SDK credentials', async () => {
+    const fetchStub = vi.fn();
+    vi.stubGlobal('fetch', createFetchStub(fetchStub));
+
+    await expect(
+      new OpenAIAdapter().fetchModels(undefined, {
+        processEnv: {},
+        connectorDeliveries: [],
+        configInheritance: 'empty',
+      }),
+    ).rejects.toBeInstanceOf(OpenAIModelFetchAuthError);
+    expect(fetchStub).not.toHaveBeenCalled();
   });
 });

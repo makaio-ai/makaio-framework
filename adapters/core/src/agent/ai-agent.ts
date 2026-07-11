@@ -10,16 +10,8 @@ import type {
   AgentContext,
   AgentIdentity,
   AgentStartResult,
-  AgentCredentialChangeRequestPayload,
-  AgentCredentialChangeResponsePayload,
-  AgentCwdChangeRequestPayload,
-  AgentCwdChangeResponsePayload,
   AgentInterruptRequestPayload,
   AgentInterruptResponsePayload,
-  AgentModelChangeRequestPayload,
-  AgentModelChangeResponsePayload,
-  AgentMcpServersSetRequestPayload,
-  AgentMcpServersSetResponsePayload,
   AIAgentConfig,
   ContextWindowInput,
   GetCapabilitiesResponsePayload,
@@ -48,9 +40,7 @@ import {
   type AgentStarted,
   AgentSubjects,
   type MessageInput,
-  McpSubjects,
   type ProviderContext,
-  SessionSubjects,
   type SessionContext,
   type SessionMessageBlock,
   type StartMode,
@@ -75,7 +65,7 @@ import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { AgentEventBridge } from './agent-event-bridge.js';
 import { AgentTurnExecutor } from './agent-turn-executor.js';
 import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
-import { AgentConnectorLifecycleManager } from './agent-connector-lifecycle-manager.js';
+import { AgentConnectorLifecycleManager, type ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
 import { registerAgentBusHandlers } from './agent-bus-handler-registrar.js';
 import { AgentPayloadEmitter } from './agent-payload-emitter.js';
 import { AgentLifecycleEmitter } from './agent-lifecycle-emitter.js';
@@ -88,6 +78,13 @@ import {
   createAgentTurnExecutor,
 } from './agent-internal-factories.js';
 import { AgentStructuredOutputManager } from './agent-structured-output-manager.js';
+import {
+  closeConnectorRuntime,
+  createConnectorRuntime,
+  rollbackAgentInitialization,
+  type ConnectorRuntimeHandle,
+} from './connector-runtime.js';
+import { AgentConnectorSwapCoordinator } from './agent-connector-swap-coordinator.js';
 
 /**
  * Abstract base class for AI agents.
@@ -102,6 +99,8 @@ export abstract class AIAgent<
 > {
   /** The underlying connector instance (created in init) */
   protected connector!: TConnector;
+  /** Connector and auth lease are replaced and released as one lifecycle unit. */
+  private connectorRuntime: ConnectorRuntimeHandle<TConnector> | undefined;
   protected confirmedModel?: string;
   protected initialModel?: string;
   /** Cached adapterSessionId from the last connector that had a session — survives connector swaps. */
@@ -126,6 +125,8 @@ export abstract class AIAgent<
   private readonly runtimeMutationManager: AgentRuntimeMutationManager;
   /** Connector lifecycle helper for swap/wiring ownership. */
   private readonly connectorLifecycleManager: AgentConnectorLifecycleManager<TBus, TConnector>;
+  /** Serialized connector replacement and runtime-config publication owner. */
+  private readonly connectorSwapCoordinator: AgentConnectorSwapCoordinator<TBus, TConnector>;
   /** Payload enrichment and global emission helper. */
   private readonly payloadEmitter: AgentPayloadEmitter;
   /** Stateful lifecycle emitter for start/complete/error/session.closed. */
@@ -163,7 +164,12 @@ export abstract class AIAgent<
     };
     this.payloadEmitter = createAgentPayloadEmitter({
       globalBus: this.globalBus,
-      getAgentContextBase: this.getAgentContextBase.bind(this),
+      getAgentContextBase: () => ({
+        agentId: this.agentId,
+        adapterId: this.adapterId,
+        adapterName: this.adapterName,
+        sessionId: this.sessionId,
+      }),
       lifecycleTracker: this.lifecycleTracker,
       getConnectorAdapterSessionId: () => this.connector?.getConfirmedAdapterSessionId(),
       getLastKnownAdapterSessionId: () => this.lastKnownAdapterSessionId,
@@ -179,6 +185,12 @@ export abstract class AIAgent<
       incrementBlockIndex: this.incrementBlockIndex.bind(this),
       getUsageModel: () => this.confirmedModel ?? this.initialModel,
     });
+    this.connectorLifecycleManager = this.createConnectorLifecycleManager(emitGlobal, setLastKnownAdapterSessionId);
+    this.connectorSwapCoordinator = new AgentConnectorSwapCoordinator(
+      this.globalBus,
+      this.connectorLifecycleManager,
+      this.config,
+    );
     this.turnExecutor = createAgentTurnExecutor({
       agentId: this.agentId,
       adapterId: this.adapterId,
@@ -190,7 +202,7 @@ export abstract class AIAgent<
       hasResumeTarget: () => this.config.resumeAdapterSessionId !== undefined,
       setPendingStartMode: this.setPendingStartMode.bind(this),
       onMessageHandle: this.onMessageHandle.bind(this),
-      onBeforeDispatch: () => this.runtimeMutationManager.applyStagedMutations(),
+      runDispatch: (dispatch) => this.runtimeMutationManager.runTurnDispatch(dispatch),
       ephemeral: this.config.ephemeral,
     });
     this.runtimeMutationManager = createAgentRuntimeMutationManager({
@@ -198,28 +210,14 @@ export abstract class AIAgent<
       sessionId: this.sessionId,
       globalBus: this.globalBus,
       getConnector: () => this.connector,
-      swapConnector: this.swapConnector.bind(this),
+      runExclusive: (action) => this.connectorSwapCoordinator.runExclusive(action),
+      swapConnectorUnlocked: this.connectorSwapCoordinator.swapConnectorUnlocked.bind(this.connectorSwapCoordinator),
       emitGlobal,
       getProviderContext: () => this.config.providerContext,
       setProviderContext: (providerContext: ProviderContext) => void (this.config.providerContext = providerContext),
       setReasoningEffort: (reasoningEffort) => void (this.config.reasoningEffort = reasoningEffort),
       setMcpSessionContext: (mcpSessionContext) => (this.config.mcpSessionContext = mcpSessionContext),
       resolveSupportedReasoningLevels: (model: string) => resolveSupportedReasoningLevels(this.availableModels, model),
-    });
-    this.connectorLifecycleManager = createAgentConnectorLifecycleManager<TBus, TConnector>({
-      agentId: this.agentId,
-      buildConfigInput: this.buildConfigInput.bind(this),
-      configFactory: this.config.configFactory,
-      connectorFactory: this.config.connectorFactory,
-      createOnMessageSent: this.createOnMessageSent.bind(this),
-      wireEvents: this.wireEvents.bind(this),
-      emitGlobal,
-      getConnector: () => this.connector,
-      setConnector: (connector: TConnector) => {
-        this.connector = connector;
-      },
-      getRuntimeSystemPrompt: () => this.runtimeSystemPrompt,
-      setLastKnownAdapterSessionId,
     });
     this.lifecycleEmitter = createAgentLifecycleEmitter({
       agentId: this.agentId,
@@ -236,19 +234,46 @@ export abstract class AIAgent<
     });
   }
 
-  private getAgentContextBase() {
-    return {
+  /**
+   * Create the connector lifecycle collaborator bound to this agent instance.
+   * @param emitGlobal - Enriched global event emitter
+   * @param setLastKnownAdapterSessionId - Sink for the latest confirmed provider session
+   * @returns Connector lifecycle manager for this agent
+   */
+  private createConnectorLifecycleManager(
+    emitGlobal: AgentPayloadEmitter['emitGlobal'],
+    setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void,
+  ): AgentConnectorLifecycleManager<TBus, TConnector> {
+    return createAgentConnectorLifecycleManager<TBus, TConnector>({
       agentId: this.agentId,
-      adapterId: this.adapterId,
-      adapterName: this.adapterName,
-      sessionId: this.sessionId,
-    };
+      buildConfigInput: this.buildConfigInput.bind(this),
+      configFactory: this.config.configFactory,
+      connectorFactory: this.config.connectorFactory,
+      prepareAuthRuntime: this.config.prepareAuthRuntime,
+      createOnMessageSent: this.createOnMessageSent.bind(this),
+      wireEvents: this.wireEvents.bind(this),
+      emitGlobal,
+      getConnectorRuntime: () => {
+        if (this.connectorRuntime === undefined) {
+          throw new Error(`AIAgent ${this.agentId} connector runtime is not initialized.`);
+        }
+        return this.connectorRuntime;
+      },
+      setConnectorRuntime: (runtime: ConnectorRuntimeHandle<TConnector>) => {
+        this.connectorRuntime = runtime;
+        this.connector = runtime.connector;
+      },
+      getRuntimeSystemPrompt: () => this.runtimeSystemPrompt,
+      setLastKnownAdapterSessionId,
+    });
   }
 
   private getEventMetadataDefaults() {
     return {
       clientId: this.config.clientId,
-      providerConfigId: this.connector?.providerConfigId ?? this.config.providerContext?.providerConfigId,
+      providerConfigId:
+        this.connector?.providerConfigId ??
+        (this.config.providerContext?.state === 'resolved' ? this.config.providerContext.providerConfigId : undefined),
       occurredAt: Date.now(),
     };
   }
@@ -304,84 +329,64 @@ export abstract class AIAgent<
     // Step 2: Get full config from adapter's config factory (applies defaults like model)
     const fullConfig = await this.config.configFactory(configInput);
 
-    // Step 3: Create connector with the full config
-    this.connector = await this.config.connectorFactory({
-      ...fullConfig,
+    // Step 3: Materialize auth and create connector with explicit lease ownership.
+    const connectorRuntime = await createConnectorRuntime({
+      config: fullConfig,
+      connectorFactory: this.config.connectorFactory,
       onMessageSent: this.createOnMessageSent(),
+      prepareAuthRuntime: this.config.prepareAuthRuntime,
     });
+    this.connectorRuntime = connectorRuntime;
+    this.connector = connectorRuntime.connector;
 
-    // One-shot consumption: the fork directive has been captured by the
-    // connector's config.  Clear the agent-level copy so subsequent
-    // buildConfigInput() calls (connector swaps, MCP server changes,
-    // credential rotations) never re-fork the source session.
-    this.config.nativeFork = undefined;
+    try {
+      // One-shot consumption: the fork directive has been captured by the
+      // connector's config.  Clear the agent-level copy so subsequent
+      // buildConfigInput() calls (connector swaps, MCP server changes,
+      // credential rotations) never re-fork the source session.
+      this.config.nativeFork = undefined;
 
-    this.busHandlerCleanups.push(
-      ...registerAgentBusHandlers({
-        globalBus: this.globalBus,
-        agentId: this.agentId,
-        onSendMessage: async (ctx: RequestContext<SendMessageRequestPayload, SendMessageResponsePayload>) => {
-          await this.sendMessage(ctx);
-        },
-        onInterrupt: async (ctx: RequestContext<AgentInterruptRequestPayload, AgentInterruptResponsePayload>) => {
-          await this.handleInterrupt(ctx);
-        },
-        getCapabilities: (): GetCapabilitiesResponsePayload => ({
-          capabilities: this.capabilities,
-          nativeTools: this.nativeTools,
-          model: this.connector?.model ?? this.confirmedModel ?? this.initialModel,
-        }),
-        // Runtime mutation requests unwrap the ctx envelope and delegate straight
-        // to the mutation manager, which owns native-vs-swap decision logic.
-        onCwdChange: async (ctx: RequestContext<AgentCwdChangeRequestPayload, AgentCwdChangeResponsePayload>) => {
-          ctx.setResult(await this.runtimeMutationManager.handleCwdChange(ctx.payload));
-        },
-        onModelChange: async (ctx: RequestContext<AgentModelChangeRequestPayload, AgentModelChangeResponsePayload>) => {
-          ctx.setResult(await this.runtimeMutationManager.handleModelChange(ctx.payload));
-        },
-        onMcpServersSet: async (
-          ctx: RequestContext<AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload>,
-        ) => {
-          ctx.setResult(await this.runtimeMutationManager.handleMcpServersSet(ctx.payload));
-        },
-        onCredentialChange: async (
-          ctx: RequestContext<AgentCredentialChangeRequestPayload, AgentCredentialChangeResponsePayload>,
-        ) => {
-          ctx.setResult(await this.runtimeMutationManager.handleCredentialChanged(ctx.payload));
-        },
-      }),
-      ...this.structuredOutputManager.registerDefaultHandlers(),
-    );
-
-    // Step 4b: Subscribe to MCP tool change events so connectors can refresh at the next turn
-    // boundary. Goes into busHandlerCleanups (not connectorWiringCleanups): MCP subscriptions
-    // are agent-lifetime — they must survive connector swaps.
-    if (this.sessionId) {
       this.busHandlerCleanups.push(
-        this.globalBus.on(
-          SessionSubjects.turn.started,
-          (ctx) => {
-            if (!ctx.payload.agentIds.includes(this.agentId)) {
-              return;
-            }
-            this.connector.setCanonicalTurnNumber(ctx.payload.turnNumber);
+        ...registerAgentBusHandlers({
+          globalBus: this.globalBus,
+          agentId: this.agentId,
+          sessionId: this.sessionId,
+          onSendMessage: async (ctx: RequestContext<SendMessageRequestPayload, SendMessageResponsePayload>) => {
+            await this.sendMessage(ctx);
           },
-          { filter: { sessionId: this.sessionId } },
-        ),
+          onInterrupt: async (ctx: RequestContext<AgentInterruptRequestPayload, AgentInterruptResponsePayload>) => {
+            await this.handleInterrupt(ctx);
+          },
+          getCapabilities: (): GetCapabilitiesResponsePayload => ({
+            capabilities: this.capabilities,
+            nativeTools: this.nativeTools,
+            model: this.connector?.model ?? this.confirmedModel ?? this.initialModel,
+          }),
+          onCwdChange: (payload) => this.runtimeMutationManager.handleCwdChange(payload),
+          onModelChange: (payload) => this.runtimeMutationManager.handleModelChange(payload),
+          onMcpServersSet: (payload) => this.runtimeMutationManager.handleMcpServersSet(payload),
+          onCredentialChange: (payload) => this.runtimeMutationManager.handleCredentialChanged(payload),
+          onTurnStarted: (turnNumber) => this.connector.setCanonicalTurnNumber(turnNumber),
+          onMcpToolsChanged: () => this.connector.markToolRefreshPending(),
+        }),
+        ...this.structuredOutputManager.registerDefaultHandlers(),
       );
+
+      await this.connectorLifecycleManager.wireAllConnectorEvents(this.connector);
+
+      this.initialized = true;
+    } catch (error) {
+      const handlerCleanups = this.busHandlerCleanups;
+      this.busHandlerCleanups = [];
+      this.connectorLifecycleManager.clearConnectorWiring();
+      this.connectorRuntime = undefined;
+      await rollbackAgentInitialization({
+        runtime: connectorRuntime,
+        handlerCleanups,
+        primaryError: error,
+        agentId: this.agentId,
+      });
     }
-    this.busHandlerCleanups.push(
-      this.globalBus.on(McpSubjects.tools.updated, () => {
-        this.connector.markToolRefreshPending();
-      }),
-      this.globalBus.on(McpSubjects.tools.enabled, () => {
-        this.connector.markToolRefreshPending();
-      }),
-    );
-
-    await this.connectorLifecycleManager.wireAllConnectorEvents(this.connector);
-
-    this.initialized = true;
   }
 
   /**
@@ -626,29 +631,26 @@ export abstract class AIAgent<
   /**
    * Replace the current connector with a fresh one.
    *
-   * Uses create-before-close pattern with rollback for safety:
+   * Serializes the complete create-before-close pattern with rollback for safety:
    * 1. Create new connector first (old connector still alive)
-   * 2. Wire events to new connector (accumulate cleanups separately)
-   * 3. If successful: close old connector, assign new one
-   * 4. If failed: close new connector, restore old wiring, throw
+   * 2. Wire and initialize the replacement (accumulate cleanups separately)
+   * 3. Run the final guard and commit any selected managed account
+   * 4. Synchronously publish the ready replacement, then close the old runtime
+   * 5. On any pre-publication failure: close the replacement, restore old wiring, and roll back account selection
    *
    * This ensures the agent always has a working connector, even if factory or wiring fails.
    *
    * Preserves runtime overrides across sequential swaps by using current connector values
    * as baseline for non-overridden fields.
    * @param configOverrides - Optional config overrides (e.g., new cwd, model)
+   * @param beforeCommit - Optional guard executed before replacing the active connector
    * @throws Error if connector is currently processing a turn
    */
-  public async swapConnector(configOverrides?: AgentConnectorConfigOverrides): Promise<void> {
-    await this.connectorLifecycleManager.swapConnector(configOverrides);
-    if (configOverrides?.providerContext !== undefined) {
-      // Persist successful provider overrides so later swaps rebuild from the
-      // latest credential/env/endpoint context instead of the start-time config.
-      this.config.providerContext = configOverrides.providerContext;
-    }
-    if (configOverrides?.mcpSessionContext !== undefined) {
-      this.config.mcpSessionContext = configOverrides.mcpSessionContext;
-    }
+  public async swapConnector(
+    configOverrides?: AgentConnectorConfigOverrides,
+    beforeCommit?: ConnectorSwapCommitGuard,
+  ): Promise<void> {
+    await this.connectorSwapCoordinator.swapConnector(configOverrides, beforeCommit);
   }
 
   /**
@@ -748,7 +750,11 @@ export abstract class AIAgent<
 
     this.connectorLifecycleManager.clearConnectorWiring();
 
-    await this.connector.close();
+    const runtime = this.connectorRuntime;
+    this.connectorRuntime = undefined;
+    if (runtime !== undefined) {
+      await closeConnectorRuntime(runtime);
+    }
   }
 
   /**
@@ -756,7 +762,7 @@ export abstract class AIAgent<
    * @returns The initialized connector instance
    */
   private ensureConnector(): TConnector {
-    if (!this.connector) {
+    if (this.connectorRuntime === undefined) {
       throw new Error(`AIAgent ${this.agentId} connector not initialized. Call init() or start() first.`);
     }
     return this.connector;

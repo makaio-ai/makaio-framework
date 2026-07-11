@@ -7,29 +7,19 @@ directly.
 
 ## Quick Start
 
-```typescript
-import { createQwenAcpAdapter } from '@makaio/ai-adapters-qwen-acp';
-import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects } from '@makaio/contracts';
-
-const adapter = await createQwenAcpAdapter();
-
-const result = await MakaioBus.request(AdapterSubjects.startAgent, {
-  adapterId: adapter.adapterId,
-  role: 'lead',
-  initialMessage: 'Inspect this repository',
-});
-```
+The implementation is not currently contributed by its runtime package. Qwen
+OAuth is discontinued, and no remaining Qwen authentication mode yet has a
+connector-owned isolated lease. Direct connector tests may provide an isolated
+auth snapshot, but production discovery does not advertise the adapter as
+startable.
 
 ## Adapter Identity
 
 | Field | Value |
 |-------|-------|
 | `adapterName` | `'qwen-acp'` |
-| `protocol` | `'openai'` |
-| `providers` | `qwen-oauth` |
-| `defaultPresetId` | `'qwen-oauth'` |
-| `defaultModel` | `'qwen3.5-plus(openai)'` |
+| `protocol` | SDK-native ACP subprocess (no HTTP protocol) |
+| `providers` | None until an isolated authentication path is implemented |
 | `clients` | `[{ id: 'qwen', version: '^0.1.0' }]` |
 
 ## Architecture
@@ -66,14 +56,6 @@ Runtime capabilities declared by the adapter:
 | `streaming` | Incremental message and thought chunk events |
 | `systemPrompt:override` | Replace the system prompt via `QWEN_SYSTEM_MD` |
 
-Conformance-test capabilities returned by `createTestConfig()`:
-
-| Feature | Supported |
-|---------|-----------|
-| `supportsReplace` | Yes |
-| `supportsInterrupt` | Yes — ACP `session/cancel` |
-| `supportsUsageMetrics` | Yes — per-turn tokens from `agent_message_chunk._meta.usage` |
-
 ## Configuration
 
 Provider configuration is resolved from the `ProviderContext` supplied on
@@ -82,14 +64,12 @@ provider-specific options:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `binaryPath` | `string` (optional) | Path to `qwen` CLI binary (default: `"qwen"` via PATH) |
 | `approvalMode` | `'plan' \| 'default' \| 'auto-edit' \| 'yolo'` (optional) | How tool approval is handled by the CLI |
 | `authType` | `'openai' \| 'anthropic' \| 'qwen-oauth' \| 'gemini' \| 'vertex-ai'` (optional) | Authentication method for the underlying model provider |
 
 The `qwen` binary is resolved in this priority order:
-1. Explicit `providerConfig.binaryPath`
-2. Managed binary resolved from the provider context
-3. `qwen` on PATH
+1. Exact managed/global binary selected by the client subsystem
+2. `qwen` on PATH when central resolution deliberately returns no exact path
 
 Default timeouts:
 
@@ -118,6 +98,7 @@ import { createTestConfig } from '@makaio/ai-adapters-qwen-acp';
 const config = await createTestConfig();
 ```
 
+
 ## File Index
 
 | File | Purpose |
@@ -130,16 +111,14 @@ const config = await createTestConfig();
 | `src/tool-execution.ts` | ACP filesystem read/write execution |
 | `src/permission.ts` | Maps Makaio approval responses to ACP permission outcomes |
 | `src/system-prompt.ts` | System prompt lifecycle and reinitialisation logic |
-| `src/provider.ts` | Provider IDs and preset configuration |
-| `src/provider.fetcher.ts` | Model fetcher for provider resolution |
+| `src/provider.ts` | Empty production provider declaration and ambient-auth scrub set |
 | `src/config.ts` | `QwenAcpConfig` — adapter config factory |
 | `src/schemas.ts` | `QwenAcpProviderConfigSchema` |
 | `src/constants.ts` | `QwenAcpAdapterName`, `DefaultModel`, `DEFAULT_TIMEOUTS` |
 | `src/types.ts` | `QwenAcpConnectorConfig` type |
 | `src/definition.ts` | Internal adapter definition consumed by the package descriptor |
-| `src/package.ts` | `MakaioExtension` package descriptor with `adapters[]` contribution |
+| `src/package.ts` | Unavailable package descriptor with no production contributions |
 | `src/server.ts` | Server entrypoint that re-exports the package descriptor as default |
-| `src/conformance.ts` | `createTestConfig` for the shared conformance test suite |
 | `src/namespaces/` | Bus namespace (`adapter:qwen-acp`), subjects, and event schemas |
 | `src/utils/` | Utility functions (CLI args builder, prompt builder, MCP server mapping) |
 

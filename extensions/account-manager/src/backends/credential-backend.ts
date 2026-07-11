@@ -9,4 +9,13 @@ export interface ICredentialBackend {
   read(): Promise<string | null>;
   /** Write a credential value to the pre-configured location. */
   write(value: string): Promise<void>;
+  /** Remove the credential value from the pre-configured location. */
+  clear(): Promise<void>;
+  /**
+   * Rebind a path-backed backend to an already pinned canonical config directory.
+   * Location-independent backends omit this capability.
+   * @param configDir - Canonical config directory retained by the source lock.
+   * @returns Backend addressing the same credential filename below that directory.
+   */
+  bindToCanonicalConfigDirectory?(configDir: string): ICredentialBackend;
 }

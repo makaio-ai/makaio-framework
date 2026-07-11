@@ -11,7 +11,6 @@ import {
   MessageHandle,
   AIReasoningLevel,
 } from '@makaio/ai-adapters-core';
-import { resolveSessionEnvironment } from '@makaio/ai-adapters-core/config';
 import {
   parseReasoningLevel,
   readClaudeProviderBaseUrl,
@@ -116,41 +115,24 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     // Create session config
     const agentConfig = this.config as ClaudeAgentConfig;
 
-    // Resolve credentials, credential env, and binary in one call.
-    // Fallback to 'claude-code' is intentional — this adapter is Claude-specific
-    // and the clientId field is optional for callers that don't override the default.
-    const { credentials, spawnEnv, resolvedBinary } = await resolveSessionEnvironment({
-      bus: this.config.bus,
-      providerContext: this.config.providerContext,
-      clientId: this.config.clientId?.trim() || 'claude-code',
-      baseEnv: this.env,
-    });
-
-    // Thread the resolved binary path into the provider config query options so
-    // the SDK spawns the same managed binary that provided the isolated env.
-    // Falls back to the original providerConfig when no managed binary is active
-    // (global install or no handler).
-    // Explicit null+undefined check: binaryPath is `string | null` in the
-    // contract — null signals "use PATH" (global context), while undefined
-    // means the resolution call was not handled. A truthy check would also
-    // reject empty strings, which the AbsolutePathSchema already prevents.
-    const resolvedProviderConfig =
-      resolvedBinary?.binaryPath !== null && resolvedBinary?.binaryPath !== undefined
-        ? {
-            ...agentConfig.providerConfig,
-            queryOptions: {
-              ...(agentConfig.providerConfig?.queryOptions ?? {}),
-              // Managed binary resolution is authoritative. Allowing provider
-              // query options to override this would pair the managed env with
-              // a different executable and break config isolation.
-              pathToClaudeCodeExecutable: resolvedBinary.binaryPath,
-            },
-          }
-        : agentConfig.providerConfig;
+    // Central client resolution is authoritative whenever it selected an
+    // executable. A null path deliberately leaves discovery to the SDK; never
+    // replace it with a bare command because the SDK expects this option to be
+    // an executable path rather than performing shell PATH lookup itself.
+    const selectedClaudeExecutable = agentConfig.clientExecution?.binaryPath ?? undefined;
+    const { pathToClaudeCodeExecutable: _discardedProviderExecutable, ...queryOptionsWithoutExecutable } =
+      agentConfig.providerConfig?.queryOptions ?? {};
+    const resolvedProviderConfig = {
+      ...agentConfig.providerConfig,
+      queryOptions: {
+        ...queryOptionsWithoutExecutable,
+        ...(selectedClaudeExecutable !== undefined && {
+          pathToClaudeCodeExecutable: selectedClaudeExecutable,
+        }),
+      },
+    };
     const sessionEnv = resolveClaudeProcessEnv({
-      spawnEnv,
-      credentials,
-      providerContext: this.config.providerContext,
+      spawnEnv: this.env,
       baseUrl: readClaudeProviderBaseUrl(resolvedProviderConfig),
     });
 
@@ -164,6 +146,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       cwd: this.cwd,
       model: this.model,
       env: sessionEnv,
+      contextEnv: agentConfig.contextEnv ?? {},
       reasoningEffort: this.config.reasoningEffort,
       providerConfig: resolvedProviderConfig,
       systemPrompt: this.runtimeSystemPrompt,

@@ -7,6 +7,7 @@ export default defineConfig({
   entry: [
     './src/adapter/index.ts',
     './src/adapter/schemas/session-lineage.ts',
+    './src/auth/index.ts',
     './src/client/index.ts',
     './src/common/index.ts',
     './src/config/index.ts',

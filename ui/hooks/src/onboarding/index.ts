@@ -22,6 +22,8 @@ export type {
   OnboardingFlowState,
   OnboardingFlowActions,
   OnboardingStepProps,
+  OnboardingProviderConfigDraft,
+  OnboardingProviderConfigCreator,
   UseOnboardingFlowOptions,
   UseOnboardingFlowResult,
 } from './types.js';

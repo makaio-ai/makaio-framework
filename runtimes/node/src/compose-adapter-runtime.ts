@@ -44,6 +44,8 @@ export interface PrepareAdapterRuntimeInput {
   readonly configRepository: IAdapterConfigRepository;
   /** Platform defaults (cwd/env) supplied to adapter instances. */
   readonly platformDefaults: PlatformDefaults;
+  /** Trusted non-serializable auth preparer forwarded to every loaded adapter. */
+  readonly prepareAuthRuntime?: unknown;
 }
 
 /** Result of {@link prepareAdapterRuntime}. */
@@ -88,9 +90,14 @@ export interface ActivatedAdapterRuntimeIdentity {
  * @returns The adapter-subsystem package to add to the coordinator load set.
  */
 export function prepareAdapterRuntime(input: PrepareAdapterRuntimeInput): PreparedAdapterRuntime {
-  const { coordinator, configRepository, platformDefaults } = input;
+  const { coordinator, configRepository, platformDefaults, prepareAuthRuntime } = input;
 
-  const adapterSubsystemPackage = createAdapterSubsystemPackage({ configRepository, coordinator, platformDefaults });
+  const adapterSubsystemPackage = createAdapterSubsystemPackage({
+    configRepository,
+    coordinator,
+    platformDefaults,
+    ...(prepareAuthRuntime !== undefined && { prepareAuthRuntime }),
+  });
 
   coordinator.registerContributionProcessor(
     createAdapterSubsystemContributionProcessor({

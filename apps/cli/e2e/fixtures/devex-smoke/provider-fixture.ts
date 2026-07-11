@@ -10,6 +10,7 @@ import { DEVEX_SMOKE_MODEL, DEVEX_SMOKE_PROVIDER_ID, DEVEX_SMOKE_PROVIDER_NAME }
 export const providerDefinition: ProviderDefinition = {
   id: DEVEX_SMOKE_PROVIDER_ID,
   name: DEVEX_SMOKE_PROVIDER_NAME,
+  authMethods: [{ id: 'none', mode: 'none', label: 'No authentication' }],
   description: 'Local-only provider used by the CLI SDK smoke test',
   defaultModel: DEVEX_SMOKE_MODEL,
   fastModel: DEVEX_SMOKE_MODEL,

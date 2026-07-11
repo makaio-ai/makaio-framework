@@ -11,7 +11,4 @@ export const GitHubCopilotConfig = createAdapterConfigFactory<CopilotSessionOpti
   },
   schema: GitHubCopilotSdkProviderConfigSchema,
   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
-  // GitHub Copilot communicates via a proprietary SDK; 'openai' is used
-  // here as the closest wire protocol for endpoint lookup purposes.
-  protocol: 'openai',
 }));

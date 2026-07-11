@@ -2,7 +2,8 @@ import { z } from 'zod';
 import type { Simplify } from 'type-fest';
 import type { BaseAgentConnectorConfig } from '../agent/types.js';
 import { resolveTimeouts, type TrackedTimeoutConfig, type TimeoutConfig } from '@makaio/utils';
-import type { ProtocolId, ProviderContext } from '@makaio/contracts';
+import type { AdapterProviderAuth, ProtocolId, ProviderContext } from '@makaio/contracts';
+import { AdapterAuthError, bindProviderAuth, type BoundProviderAuthContext } from './resolve-adapter-auth.js';
 
 /**
  * Adapter-level defaults that can be set by the factory.
@@ -34,8 +35,6 @@ export interface CreateAdapterConfigFactoryOptions<TConfig extends BaseAgentConn
   schema: z.ZodObject<z.ZodRawShape> | null;
   /** Adapter definition containing defaultTimeouts */
   adapterDefinition: { defaultTimeouts?: TimeoutConfig };
-  /** Wire protocol used to select the correct provider endpoint URL from endpointOverrides. */
-  protocol: ProtocolId;
 }
 
 /**
@@ -47,11 +46,18 @@ export interface AdapterConfigFactoryInput<TConfig extends BaseAgentConnectorCon
   agentId: string;
   adapterName: string;
   adapterId: string;
-  /**
-   * Unresolved provider context (credential refs, not plaintext).
-   * Connectors resolve credentials locally via `resolveConnectorCredentials()`.
-   */
+  /** Resolved refs-only provider context or the closed provider-less state. */
   providerContext: ProviderContext;
+  /** Exact protocol declared by the selected adapter/provider reference. */
+  providerProtocol?: ProtocolId;
+  /** Adapter/provider auth metadata selected by `providerContext.definitionId`. */
+  adapterProviderAuth?: AdapterProviderAuth;
+  /** Other adapter/provider auth declarations contributing to the scrub union. */
+  compatibleProviderAuths?: readonly AdapterProviderAuth[];
+  /** Whether this adapter rejects the unresolved provider state. */
+  providerContextRequired?: boolean;
+  /** Runtime client identity used to validate client-owned auth methods. */
+  clientId?: string;
   model?: string;
   cwd?: string;
   env?: Record<string, string>;
@@ -68,6 +74,8 @@ export interface FactoryGuaranteedFields<TProviderConfig> {
   cwd: string;
   timeouts: TrackedTimeoutConfig;
   providerConfig: TProviderConfig;
+  /** Exact refs-only auth binding consumed once by the central runtime. */
+  boundProviderAuth?: BoundProviderAuthContext;
 }
 
 /**
@@ -78,7 +86,11 @@ export type ConfigFactoryResult<
   TInput extends AdapterConfigFactoryInput<TConfig>,
   TConfig extends BaseAgentConnectorConfig,
   TProviderConfig = TConfig['providerConfig'],
-> = Simplify<AdapterDefaults<TConfig> & Omit<TInput, 'providerConfig'> & FactoryGuaranteedFields<TProviderConfig>>;
+> = Simplify<
+  AdapterDefaults<TConfig> &
+    Omit<TInput, 'providerConfig' | 'adapterProviderAuth' | 'compatibleProviderAuths' | 'providerContextRequired'> &
+    FactoryGuaranteedFields<TProviderConfig>
+>;
 
 type AdapterConfigFactory<TConfig extends BaseAgentConnectorConfig, TProviderConfig> = {
   getConfig: <TInput extends AdapterConfigFactoryInput<TConfig>>(
@@ -93,12 +105,12 @@ type AdapterConfigFactory<TConfig extends BaseAgentConnectorConfig, TProviderCon
  * Create a standardized adapter config factory.
  *
  * Eliminates ceremony by encapsulating the common pattern:
- * 1. Read unresolved providerContext (credential refs only — no plaintext on the bus)
+ * 1. Bind the refs-only provider auth selection to one exact adapter declaration
  * 2. resolveTimeouts with adapter + runtime layers
- * 3. Merge providerConfigDefaults with runtime providerConfig (credentials resolved by connector)
+ * 3. Merge providerConfigDefaults with runtime providerConfig
  *
- * The factory is pure: it does not dispatch any bus requests and does not
- * resolve credentials. Connectors call `resolveConnectorCredentials()` locally.
+ * The factory is pure: it does not dispatch any bus requests or resolve
+ * credential refs. The central connector runtime consumes the bound result.
  *
  * Options are provided via thunk to enable lazy evaluation, avoiding circular
  * dependency issues when config.ts imports from index.ts (for adapterDefinition)
@@ -112,7 +124,6 @@ type AdapterConfigFactory<TConfig extends BaseAgentConnectorConfig, TProviderCon
  *   adapterDefaults: { model: 'gemini-2.5-pro' },
  *   schema: null,
  *   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
- *   protocol: 'openai',
  * }));
  * ```
  */
@@ -122,50 +133,110 @@ export function createAdapterConfigFactory<
 >(optionsThunk: () => CreateAdapterConfigFactoryOptions<TConfig>): AdapterConfigFactory<TConfig, TProviderConfig> {
   return {
     getDefaults: () => optionsThunk().adapterDefaults,
-    getConfig: async <TInput extends AdapterConfigFactoryInput<TConfig>>(input: TInput) => {
-      const { adapterName, adapterDefaults, adapterDefinition, protocol } = optionsThunk();
-
-      // 1. Read unresolved provider context — credentials are NOT spread here.
-      //    Connectors call resolveConnectorCredentials() locally at connection time.
-      const { providerContext } = input;
-      const baseUrl = providerContext.endpointOverrides?.[protocol] ?? null;
-
-      // 2. Resolve timeouts
-      const timeouts = resolveTimeouts([
-        { layer: 'adapter', source: adapterName, config: adapterDefinition.defaultTimeouts },
-        { layer: 'runtime', source: 'config.ts', config: input.runtimeTimeouts },
-      ]);
-
-      // 3. Build provider config: adapter defaults < runtime overrides < baseUrl
-      //    Credentials are intentionally absent — connectors resolve them locally.
-      const providerConfig = {
-        ...adapterDefaults.providerConfig,
-        ...input.providerConfig,
-        baseUrl:
-          baseUrl ??
-          (input.providerConfig as Record<string, unknown> | undefined)?.['baseUrl'] ??
-          (adapterDefaults.providerConfig as Record<string, unknown> | undefined)?.['baseUrl'],
-      } as TProviderConfig;
-
-      // 4. Build result
-      const model = input.model ?? adapterDefaults.model;
-      if (!model) {
-        throw new Error(
-          `No model resolved for adapter "${adapterName}" (agentId: ${input.agentId}). ` +
-            'Provide a model explicitly or configure adapterDefaults.model.',
-        );
-      }
-
-      const result: ConfigFactoryResult<TInput, TConfig, TProviderConfig> = {
-        ...adapterDefaults,
-        ...input,
-        adapterName: input.adapterName,
-        model,
-        cwd: input.cwd ?? adapterDefaults.cwd ?? process.cwd(),
-        timeouts,
-        providerConfig,
-      };
-      return result;
-    },
+    getConfig: <TInput extends AdapterConfigFactoryInput<TConfig>>(input: TInput) =>
+      resolveFactoryConfig<TConfig, TProviderConfig, TInput>(optionsThunk, input),
   };
+}
+
+/**
+ * Resolve one adapter connector config from runtime input and factory defaults.
+ * @param optionsThunk - Lazy factory defaults and adapter metadata
+ * @param input - Runtime connector config input
+ * @returns Fully resolved connector config with refs-only auth binding
+ */
+async function resolveFactoryConfig<
+  TConfig extends BaseAgentConnectorConfig,
+  TProviderConfig,
+  TInput extends AdapterConfigFactoryInput<TConfig>,
+>(
+  optionsThunk: () => CreateAdapterConfigFactoryOptions<TConfig>,
+  input: TInput,
+): Promise<ConfigFactoryResult<TInput, TConfig, TProviderConfig>> {
+  const { adapterName, adapterDefaults, adapterDefinition } = optionsThunk();
+  const boundProviderAuth = bindFactoryProviderAuth(input);
+  const baseUrl =
+    input.providerContext.state === 'resolved' && input.providerProtocol !== undefined
+      ? (input.providerContext.endpointOverrides?.[input.providerProtocol] ?? null)
+      : null;
+  const timeouts = resolveTimeouts([
+    { layer: 'adapter', source: adapterName, config: adapterDefinition.defaultTimeouts },
+    { layer: 'runtime', source: 'config.ts', config: input.runtimeTimeouts },
+  ]);
+  const providerConfig = {
+    ...adapterDefaults.providerConfig,
+    ...input.providerConfig,
+    baseUrl:
+      baseUrl ??
+      (input.providerConfig as Record<string, unknown> | undefined)?.['baseUrl'] ??
+      (adapterDefaults.providerConfig as Record<string, unknown> | undefined)?.['baseUrl'],
+  } as TProviderConfig;
+  const model = requireFactoryModel(input.model ?? adapterDefaults.model, adapterName, input.agentId);
+  const {
+    providerConfig: _providerConfig,
+    adapterProviderAuth: _adapterProviderAuth,
+    compatibleProviderAuths: _compatibleProviderAuths,
+    providerContextRequired: _providerContextRequired,
+    ...runtimeInput
+  } = input;
+  return {
+    ...adapterDefaults,
+    ...runtimeInput,
+    adapterName: input.adapterName,
+    model,
+    cwd: input.cwd ?? adapterDefaults.cwd ?? process.cwd(),
+    timeouts,
+    providerConfig,
+    ...(boundProviderAuth !== undefined && { boundProviderAuth }),
+  };
+}
+
+/**
+ * Require an explicit or default model before constructing connector config.
+ * @param model - Explicit or default model candidate
+ * @param adapterName - Adapter name used in the failure diagnostic
+ * @param agentId - Agent identifier used in the failure diagnostic
+ * @returns Non-empty resolved model identifier
+ */
+function requireFactoryModel(model: string | undefined, adapterName: string, agentId: string): string {
+  if (model !== undefined && model.length > 0) return model;
+  throw new Error(
+    `No model resolved for adapter "${adapterName}" (agentId: ${agentId}). ` +
+      'Provide a model explicitly or configure adapterDefaults.model.',
+  );
+}
+
+/**
+ * Bind a resolved provider context or reject an unresolved required context.
+ * @param input - Factory input carrying provider context and adapter metadata
+ * @returns Immutable refs-only binding, or undefined for a provider-less adapter
+ */
+function bindFactoryProviderAuth<TConfig extends BaseAgentConnectorConfig>(
+  input: AdapterConfigFactoryInput<TConfig>,
+): BoundProviderAuthContext | undefined {
+  if (input.providerContext.state === 'unresolved') {
+    if (input.providerContextRequired === true) {
+      throw new AdapterAuthError(
+        'provider-context-unresolved',
+        'This adapter requires a resolved provider authentication context.',
+      );
+    }
+    return undefined;
+  }
+
+  if (input.adapterProviderAuth === undefined) {
+    throw new AdapterAuthError('binding-missing', 'The selected provider has no adapter authentication declaration.');
+  }
+
+  const bound = bindProviderAuth({
+    auth: input.providerContext.auth,
+    adapterProviderAuth: input.adapterProviderAuth,
+    compatibleProviderAuths: input.compatibleProviderAuths,
+  });
+  if (bound.auth.method.owner === 'client' && bound.auth.method.clientId !== input.clientId) {
+    throw new AdapterAuthError(
+      'client-mismatch',
+      'Selected authentication client does not match the adapter runtime client.',
+    );
+  }
+  return bound;
 }

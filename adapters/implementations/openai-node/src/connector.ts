@@ -3,12 +3,12 @@ import type { ChatCompletionTool } from 'openai/resources/index.js';
 import { MakaioBus } from '@makaio/bus-core';
 import type { WireSessionSubjects } from '@makaio/ai-adapters-core';
 import { BaseStreamConnector } from '@makaio/ai-adapters-stream-session';
-import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
 import { OpenAINodeConnectorNamespace, OpenAINodeConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { OpenAINodeAgentConfig, OpenAIBus } from './types/index.js';
 import { fetchToolsForOpenAI } from './tool-handling.js';
 import { OpenAIConnectorSession } from './session.js';
 import { DEFAULT_MODEL } from './constants.js';
+import { resolveOpenAIConstructorAuth } from './constructor-auth.js';
 
 /**
  * Typed narrow-cast of the opaque provider `capabilities` bag
@@ -24,6 +24,19 @@ interface OpenAIProviderCapabilities {
     /** Whether `strict: true` is accepted on `json_schema` response format payloads. */
     strict?: boolean;
   };
+}
+
+/**
+ * Read OpenAI protocol capabilities only from a resolved provider context.
+ * @param providerContext - Normalized provider context supplied to the connector
+ * @returns OpenAI protocol capability flags when the context is resolved
+ */
+function getOpenAIProviderCapabilities(
+  providerContext: OpenAINodeAgentConfig['providerContext'],
+): OpenAIProviderCapabilities | undefined {
+  return providerContext?.state === 'resolved'
+    ? (providerContext.capabilities as OpenAIProviderCapabilities | undefined)
+    : undefined;
 }
 
 /** Default adapter identifier for standalone OpenAINodeAgent instances (without adapter layer) */
@@ -45,13 +58,11 @@ const defaultBus = await OpenAINodeConnectorNamespace.scopedBus();
  * on the first turn. Tool execution routes through MakaioBus.request(ToolSubjects.execute)
  * to the ToolRegistry, which validates input and executes the tool handler.
  *
- * Credential resolution happens in `fetchTools()` (the first async lifecycle hook)
- * via `resolveConnectorCredentials()`. Plaintext credentials are stored in instance
- * fields and never leave the connector.
+ * Authentication is resolved once by the central adapter runtime and delivered
+ * through the OpenAI constructor target.
  */
 export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAIConnectorSession, OpenAINodeAgentConfig> {
-  /** Resolved API key (populated in fetchTools before createSession is called). */
-  private resolvedApiKey = '';
+  private readonly constructorAuth: ReturnType<typeof resolveOpenAIConstructorAuth>;
   private client?: OpenAI;
   /** OpenAI-format tools for chat completions API (fetched from bus on first turn) */
   private openAITools: ChatCompletionTool[] = [];
@@ -66,12 +77,15 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
   }
 
   public constructor(config: OpenAINodeAgentConfig & { adapterId?: string }) {
+    const { adapterAuth, ...baseConfig } = config;
     super({
-      ...config,
+      ...baseConfig,
+      env: baseConfig.env ?? {},
       bus: config?.bus ?? defaultBus,
       adapterId: config?.adapterId ?? defaultAdapterId,
       adapterName: config?.adapterName ?? 'openai-node',
     });
+    this.constructorAuth = resolveOpenAIConstructorAuth(adapterAuth);
 
     this.model = config?.model ?? DEFAULT_MODEL;
 
@@ -85,24 +99,16 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
   // ---------------------------------------------------------------------------
 
   /**
-   * Resolve credentials and fetch available tools from the bus.
-   *
-   * Resolves `apiKey` from `providerContext.credentialRefs` via the encrypted
-   * credential channel, then initializes the OpenAI SDK client. Called once
-   * by `BaseStreamConnector.initializeSession()` before `createSession()`.
+   * Initialize OpenAI with the centrally delivered authentication snapshot and
+   * fetch available tools from the bus.
    *
    * Also converts fetched tools to OpenAI format and caches them in
    * `this.openAITools` for use in `createSession`.
    */
   protected async fetchTools(): Promise<void> {
-    const credentialRefs = this.config.providerContext?.credentialRefs ?? {};
-    const credentials = await resolveConnectorCredentials(this.config.bus, credentialRefs);
-    this.resolvedApiKey = credentials['apiKey'] ?? '';
-
     const baseUrl = this.config.providerConfig?.baseUrl;
     this.client = new OpenAI({
-      // Omit apiKey entirely when absent so the SDK can still honor OPENAI_API_KEY.
-      ...(this.resolvedApiKey ? { apiKey: this.resolvedApiKey } : {}),
+      ...this.constructorAuth,
       baseURL: baseUrl,
     });
 
@@ -137,7 +143,7 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
    * Construct the OpenAI connector session with all required config.
    *
    * Called by `BaseStreamConnector.initializeSession()` after `fetchTools()`
-   * has resolved credentials and initialized `this.client`.
+   * has initialized `this.client` from the delivered auth snapshot.
    * @returns A new `OpenAIConnectorSession` instance
    */
   protected createSession(): OpenAIConnectorSession {
@@ -145,7 +151,7 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       throw new Error('[OpenAINodeConnector] createSession() called before fetchTools() — client not initialized');
     }
     const systemPrompt = this.resolveSystemPrompt();
-    const caps = this.config.providerContext?.capabilities as OpenAIProviderCapabilities | undefined;
+    const caps = getOpenAIProviderCapabilities(this.config.providerContext);
 
     return new OpenAIConnectorSession({
       bus: this.config.bus,
@@ -158,7 +164,7 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       model: this.model ?? '',
       reasoningEffort: this.config.reasoningEffort,
       streamStartTimeoutMs: this.getTimeoutMs('eventWait'),
-      env: this.config.env ?? {},
+      env: { ...(this.config.contextEnv ?? {}) },
       client: this.client,
       openAITools: this.openAITools,
       requestCorrelationHeaders: this.config.providerConfig?.requestCorrelationHeaders,

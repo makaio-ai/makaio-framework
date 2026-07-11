@@ -1,4 +1,4 @@
-import { AdapterSubjects } from '@makaio/contracts';
+import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
 import { SessionStorageSubjects } from '../../session/storage/namespace.js';
@@ -61,6 +61,14 @@ export function setupSubagentServiceMocks(
       },
     });
   });
+
+  bus.on(
+    SessionSubjects.close,
+    (ctx) => {
+      ctx.setResult({ success: true });
+    },
+    { priority: -100 },
+  );
 
   let startAgentHandler: StartAgentHandler = (ctx) => {
     ctx.setResult({

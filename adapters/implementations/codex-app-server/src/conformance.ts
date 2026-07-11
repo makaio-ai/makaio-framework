@@ -1,5 +1,10 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
-import { resolveConformanceTestPreset, resolveTestConfig } from '@makaio/ai-adapters-core';
+import {
+  ConformanceConnectorRuntimeRegistry,
+  resolveConformanceTestPreset,
+  resolveTestConfig,
+} from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
 import { CodexAppServerNamespace } from './namespaces/index.js';
 import type { CodexAppServerBus } from './namespaces/index.js';
 import type { CodexAppServerAgent } from './agent.js';
@@ -8,6 +13,11 @@ import { createCodexAppServerAdapter, CodexAppServerAdapterName } from './adapte
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { CodexAppServerConfig } from './config.js';
 import { providerIds, testPresetId } from './provider.js';
+import { adapterDefinition } from './definition.js';
+import {
+  acquireCodexConformanceSessionConfigFixture,
+  closeCodexConformanceResources,
+} from './test/session-config-fixture.js';
 
 /**
  * Create a conformance test configuration for the Codex App-Server adapter.
@@ -24,19 +34,27 @@ export const createTestConfig = async (
   const bus = await scopedBus();
   const testPreset = resolveConformanceTestPreset({
     adapterName: CodexAppServerAdapterName,
-    defaultProviderId: testPresetId,
+    testProviderDefinitionId: testPresetId,
     providerIds,
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const sessionConfigFixture = await acquireCodexConformanceSessionConfigFixture();
+  const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<CodexAppServerBus, CodexAppServerConnector>();
 
   return {
-    createConnector: async (connectorOptions) =>
-      new CodexAppServerConnector(
-        await CodexAppServerConfig.getConfig(
-          resolveTestConfig(connectorOptions, bus, testPreset.provider, testPreset.providers),
-        ),
-      ),
+    createConnector: async (connectorOptions) => {
+      const config = await CodexAppServerConfig.getConfig({
+        ...resolveTestConfig(connectorOptions, bus, testPreset.provider, adapterDefinition.providers),
+        providerContextRequired: true,
+        clientId: 'codex',
+        globalBus: MakaioBus,
+      });
+      return connectorRuntimes.create({
+        config,
+        connectorFactory: (runtimeConfig) => new CodexAppServerConnector(runtimeConfig),
+      });
+    },
     bus,
     registerToolApprovalHandler,
     capabilities: {
@@ -54,5 +72,6 @@ export const createTestConfig = async (
     createAdapter: async (adapterOptions) => createCodexAppServerAdapter(adapterOptions),
     adapterName: CodexAppServerAdapterName,
     testProviderContext: testPreset.providerContext,
+    cleanup: () => closeCodexConformanceResources(() => connectorRuntimes.closeAll(), sessionConfigFixture),
   };
 };

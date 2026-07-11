@@ -1,23 +1,21 @@
 /**
- * Tests for `client.resolveBinary` integration in the GitHub Copilot SDK connector.
+ * Tests consumption of centrally finalized GitHub Copilot runtime inputs.
  *
- * Verifies that `performSessionInit()` threads the resolved binary path and env
- * into the `CopilotClient` constructor, and that the adapter degrades gracefully
- * when no handler is registered for `client.resolveBinary`.
+ * Verifies that `performSessionInit()` does not re-resolve or re-merge binary,
+ * environment, or authentication inputs.
  *
  * Design invariants under test:
  * - When `client.resolveBinary` returns a managed context, `CopilotClient` receives
- *   `cliPath` and a merged `env` that includes base env, credential env, and binary env.
+ *   its selected `cliPath` and the already-finalized connector environment.
  * - When `client.resolveBinary` returns a global context (`binaryPath: null`, empty
- *   env), no `cliPath` is passed; `env` still contains base env and credential env.
+ *   env), no `cliPath` is passed and no binary environment is merged again.
  * - When `client.resolveBinary` has no handler (framework-only boot), the connector
- *   initializes successfully; `env` contains base env and credential env only.
+ *   initializes successfully with an explicit empty environment instead of ambient auth.
  */
 
 import os from 'node:os';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/contracts/client';
+import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { NormalizedMessageInput } from '@makaio/ai-adapters-core';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +28,7 @@ const sdkHarness = vi.hoisted(() => {
   const capturedOptions: Array<{
     cliPath?: string;
     env?: Record<string, string | undefined>;
+    githubToken?: string;
   }> = [];
 
   /** Mock client returned from each `new CopilotClient(...)` call. */
@@ -50,8 +49,12 @@ const sdkHarness = vi.hoisted(() => {
 
 vi.mock('@github/copilot-sdk', () => {
   class CopilotClient {
-    constructor(options: { cliPath?: string; env?: Record<string, string | undefined> }) {
-      sdkHarness.capturedOptions.push({ cliPath: options.cliPath, env: options.env });
+    constructor(options: { cliPath?: string; env?: Record<string, string | undefined>; githubToken?: string }) {
+      sdkHarness.capturedOptions.push({
+        cliPath: options.cliPath,
+        env: options.env,
+        githubToken: options.githubToken,
+      });
       const mock = sdkHarness.makeMockClient();
       Object.assign(this, mock);
     }
@@ -59,34 +62,6 @@ vi.mock('@github/copilot-sdk', () => {
 
   return {
     CopilotClient,
-  };
-});
-
-// ---------------------------------------------------------------------------
-// Session environment mock — supplies a synthetic GitHub token for the
-// connector's token-presence guard while allowing the real resolveClientBinary
-// call to go through the bus so tests can wire resolveBinary handlers.
-// ---------------------------------------------------------------------------
-
-vi.mock('@makaio/ai-adapters-core/config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@makaio/ai-adapters-core/config')>();
-  const { resolveClientBinary } = await import('@makaio/subsystem-client');
-  return {
-    ...actual,
-    resolveSessionEnvironment: vi
-      .fn()
-      .mockImplementation(
-        async ({ clientId, baseEnv = {} }: { clientId: string; baseEnv?: Record<string, string> }) => {
-          const resolvedBinary = await resolveClientBinary(clientId);
-          const credEnv = { COPILOT_TOKEN: 'test-github-token' };
-          return {
-            credentials: { token: 'test-github-token' },
-            credEnv,
-            resolvedBinary,
-            spawnEnv: { ...baseEnv, ...credEnv, ...(resolvedBinary?.env ?? {}) },
-          };
-        },
-      ),
   };
 });
 
@@ -98,7 +73,7 @@ import { GitHubCopilotConnector } from '../connector.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Build a minimal `ClientExecutionContext` for `resolveBinary` mock handlers.
+ * Build a minimal centrally resolved `ClientExecutionContext`.
  * @param binaryPath - Absolute path to the binary, or `null` for global.
  * @param env - Environment variables to inject, or empty object.
  * @param source - Resolution source (`'managed'` or `'global'`).
@@ -108,13 +83,7 @@ function makeExecutionContext(
   binaryPath: string | null,
   env: Record<string, string>,
   source: 'managed' | 'global' = 'managed',
-): {
-  binaryPath: string | null;
-  env: Record<string, string>;
-  configDir: null;
-  source: 'managed' | 'global';
-  version: null;
-} {
+): ClientExecutionContext {
   return { binaryPath, env, configDir: null, source, version: null };
 }
 
@@ -128,9 +97,13 @@ const TEST_MESSAGE: NormalizedMessageInput = {
 /**
  * Create a `GitHubCopilotConnector` configured for unit tests.
  * @param connectorEnv - Base environment variables for the connector.
+ * @param clientExecution - Central binary selection.
  * @returns Connector instance ready for `ensureSession()`.
  */
-async function makeConnector(connectorEnv: Record<string, string> = {}): Promise<GitHubCopilotConnector> {
+async function makeConnector(
+  connectorEnv: Record<string, string> = {},
+  clientExecution?: ClientExecutionContext,
+): Promise<GitHubCopilotConnector> {
   const bus = await GitHubCopilotConnectorNamespace.scopedBus();
   return new GitHubCopilotConnector({
     bus,
@@ -141,6 +114,12 @@ async function makeConnector(connectorEnv: Record<string, string> = {}): Promise
     model: 'gpt-4o',
     cwd: os.tmpdir(),
     env: connectorEnv,
+    clientExecution,
+    adapterAuth: {
+      processEnv: {},
+      connectorDeliveries: [{ target: 'github-copilot-sdk.constructor', values: { githubToken: 'test-github-token' } }],
+      configInheritance: 'empty',
+    },
   });
 }
 
@@ -164,63 +143,47 @@ async function triggerInit(connector: GitHubCopilotConnector): Promise<void> {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('GitHubCopilotConnector — client.resolveBinary integration', () => {
-  let cleanupHandlers: Array<() => void>;
+describe('GitHubCopilotConnector — central runtime inputs', () => {
   let connectors: GitHubCopilotConnector[];
 
   beforeEach(() => {
-    MakaioBus.__resetHandlers?.();
     sdkHarness.capturedOptions.length = 0;
-    cleanupHandlers = [];
     connectors = [];
+    vi.unstubAllEnvs();
   });
 
   afterEach(async () => {
-    for (const cleanup of cleanupHandlers) cleanup();
-    cleanupHandlers = [];
     await Promise.all(connectors.map((c) => c.close()));
     connectors = [];
-    MakaioBus.__resetHandlers?.();
+    vi.unstubAllEnvs();
   });
 
   // -------------------------------------------------------------------------
   // Managed context — binary path and env are resolved
   // -------------------------------------------------------------------------
 
-  it('passes cliPath and env when resolveBinary returns a managed context', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(
-          makeExecutionContext('/usr/local/lib/makaio/copilot/1.0.0/gh-copilot', {
-            COPILOT_HOME: '/usr/local/lib/makaio/profiles/copilot',
-          }),
-        );
+  it('passes the centrally selected cliPath and finalized environment', async () => {
+    const connector = await makeConnector(
+      { COPILOT_HOME: '/isolated/copilot' },
+      makeExecutionContext('/usr/local/lib/makaio/copilot/1.0.0/gh-copilot', {
+        COPILOT_HOME: '/must-not-be-merged-again',
       }),
     );
-
-    const connector = await makeConnector();
     connectors.push(connector);
     await triggerInit(connector);
 
     expect(sdkHarness.capturedOptions).toHaveLength(1);
     expect(sdkHarness.capturedOptions[0]?.cliPath).toBe('/usr/local/lib/makaio/copilot/1.0.0/gh-copilot');
-    expect(sdkHarness.capturedOptions[0]?.env).toMatchObject({
-      COPILOT_HOME: '/usr/local/lib/makaio/profiles/copilot',
-    });
+    expect(sdkHarness.capturedOptions[0]?.env).toEqual({ COPILOT_HOME: '/isolated/copilot' });
+    expect(sdkHarness.capturedOptions[0]?.githubToken).toBe('test-github-token');
   });
 
   // -------------------------------------------------------------------------
   // Global context — no cliPath, no extra env
   // -------------------------------------------------------------------------
 
-  it('does not pass cliPath when resolveBinary returns a global context', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(makeExecutionContext(null, {}, 'global'));
-      }),
-    );
-
-    const connector = await makeConnector();
+  it('does not pass cliPath for a centrally selected global binary', async () => {
+    const connector = await makeConnector({}, makeExecutionContext(null, {}, 'global'));
     connectors.push(connector);
     await triggerInit(connector);
 
@@ -228,34 +191,22 @@ describe('GitHubCopilotConnector — client.resolveBinary integration', () => {
     expect(sdkHarness.capturedOptions[0]?.cliPath).toBeUndefined();
   });
 
-  it('passes merged spawnEnv (base + credentials) when resolveBinary returns a global context with empty env', async () => {
-    const baseEnv = { EXISTING_VAR: 'base-value' };
-
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(makeExecutionContext(null, {}, 'global'));
-      }),
-    );
-
-    const connector = await makeConnector(baseEnv);
+  it('keeps constructor token delivery out of the subprocess environment', async () => {
+    const connector = await makeConnector({ EXISTING_VAR: 'base-value' }, makeExecutionContext(null, {}, 'global'));
     connectors.push(connector);
     await triggerInit(connector);
 
     expect(sdkHarness.capturedOptions).toHaveLength(1);
-    // spawnEnv now includes base env and credential env even when the binary has no extra env.
-    expect(sdkHarness.capturedOptions[0]?.env).toMatchObject({
-      EXISTING_VAR: 'base-value',
-      COPILOT_TOKEN: 'test-github-token',
-    });
+    expect(sdkHarness.capturedOptions[0]?.env).toEqual({ EXISTING_VAR: 'base-value' });
+    expect(sdkHarness.capturedOptions[0]?.env).not.toHaveProperty('COPILOT_TOKEN');
     expect(sdkHarness.capturedOptions[0]?.cliPath).toBeUndefined();
   });
 
   // -------------------------------------------------------------------------
-  // No handler — framework-only boot, falls back to current behaviour
+  // Absent central binary selection — PATH lookup remains the connector default
   // -------------------------------------------------------------------------
 
-  it('initializes without error when no handler is registered for client.resolveBinary', async () => {
-    // No handler registered — requestOptional returns { handled: false }
+  it('initializes without a managed binary selection', async () => {
     const connector = await makeConnector();
     connectors.push(connector);
     await expect(triggerInit(connector)).resolves.toBeUndefined();
@@ -265,30 +216,17 @@ describe('GitHubCopilotConnector — client.resolveBinary integration', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Env merge order — resolved binary env takes precedence over base connector env
+  // Ambient environment is never inherited by the Copilot child
   // -------------------------------------------------------------------------
 
-  it('binary env overrides base connector env when both are present', async () => {
-    const baseEnv = { COPILOT_HOME: '/old/path', BASE_VAR: 'keep-me' };
-
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(
-          makeExecutionContext('/path/to/copilot', {
-            COPILOT_HOME: '/new/managed/path',
-          }),
-        );
-      }),
-    );
-
-    const connector = await makeConnector(baseEnv);
+  it('passes an empty finalized environment instead of ambient auth variables', async () => {
+    vi.stubEnv('COPILOT_TOKEN', 'ambient-token');
+    vi.stubEnv('GITHUB_TOKEN', 'ambient-github-token');
+    const connector = await makeConnector();
     connectors.push(connector);
     await triggerInit(connector);
 
-    expect(sdkHarness.capturedOptions[0]?.env).toMatchObject({
-      COPILOT_HOME: '/new/managed/path',
-      BASE_VAR: 'keep-me',
-      COPILOT_TOKEN: 'test-github-token',
-    });
+    expect(sdkHarness.capturedOptions[0]?.env).toEqual({});
+    expect(sdkHarness.capturedOptions[0]?.githubToken).toBe('test-github-token');
   });
 });

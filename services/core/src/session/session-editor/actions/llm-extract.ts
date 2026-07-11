@@ -4,7 +4,7 @@ import { AdapterSubjects, AgentResolutionSubjects } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import type { SessionEditorAction, ActionResult } from '../../../session-editor/types.js';
 import { ExtractedContextSchema } from '../../../compression/schemas.js';
-import { buildProviderContext } from '@makaio/services-core/provider-context';
+import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
 
 /**
  * System prompt for context extraction.
@@ -130,9 +130,12 @@ export function createLlmExtractAction(bus: IMakaioBus): SessionEditorAction {
         // Step 3: Serialize conversation for the LLM prompt
         const prompt = serializeMessagesForExtraction(messages);
 
-        // Step 4: Build provider context (credential refs), then run ephemeral inference
+        // Step 4: Resolve the adapter-qualified runtime context, then run ephemeral inference.
         const providerContext = resolvedTarget.providerConfigId
-          ? await buildProviderContext(bus, resolvedTarget.providerConfigId)
+          ? await resolveRuntimeProviderContext(bus, {
+              adapterName: resolvedTarget.adapterName,
+              providerConfigId: resolvedTarget.providerConfigId,
+            })
           : undefined;
 
         const { text } = await bus.request(AdapterSubjects.infer, {

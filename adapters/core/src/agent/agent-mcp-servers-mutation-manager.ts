@@ -8,7 +8,7 @@ export interface AgentMcpServersMutationManagerConfig {
   /** Read current connector. */
   getConnector: () => AIAgentConnector;
   /** Swap connector with runtime overrides. */
-  swapConnector: (
+  swapConnectorUnlocked: (
     configOverrides?: Partial<{
       cwd: string;
       model: string;
@@ -25,13 +25,17 @@ export interface AgentMcpServersMutationManagerConfig {
 /** Handles `agent.mcp.servers.set` runtime mutation state. */
 export class AgentMcpServersMutationManager {
   private readonly getConnector: () => AIAgentConnector;
-  private readonly swapConnector: AgentMcpServersMutationManagerConfig['swapConnector'];
+  private readonly swapConnectorUnlocked: AgentMcpServersMutationManagerConfig['swapConnectorUnlocked'];
   private readonly setMcpSessionContext: AgentMcpServersMutationManagerConfig['setMcpSessionContext'];
   private stagedMcpServersSet?: AgentMcpServersSetRequestPayload;
 
+  /**
+   * Create the MCP mutation collaborator.
+   * @param config - Runtime dependencies used inside the parent mutation barrier
+   */
   public constructor(config: AgentMcpServersMutationManagerConfig) {
     this.getConnector = config.getConnector;
-    this.swapConnector = config.swapConnector;
+    this.swapConnectorUnlocked = config.swapConnectorUnlocked;
     this.setMcpSessionContext = config.setMcpSessionContext;
   }
 
@@ -66,11 +70,16 @@ export class AgentMcpServersMutationManager {
     }
 
     try {
-      await this.swapConnector({ mcpSessionContext: payload.mcpSessionContext });
-      this.setMcpSessionContext(payload.mcpSessionContext);
-      return { success: true, swapped: true };
-    } catch (error) {
-      return { success: false, reason: `mcp_servers_set_failed: ${(error as Error).message}` };
+      await this.swapConnectorUnlocked({ mcpSessionContext: payload.mcpSessionContext });
+    } catch {
+      return { success: false, reason: 'mcp_servers_set_failed: connector_replacement_failed' };
     }
+
+    try {
+      this.setMcpSessionContext(payload.mcpSessionContext);
+    } catch {
+      return { success: false, reason: 'mcp_servers_set_committed_postprocess_failed' };
+    }
+    return { success: true, swapped: true };
   }
 }

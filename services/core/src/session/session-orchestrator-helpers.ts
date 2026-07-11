@@ -18,4 +18,4 @@ export {
   buildRecoveryContextWithPipeline,
   recoverAgent,
 } from './utils/agent-recovery.js';
-export { buildProviderContext } from '../provider-context/index.js';
+export { resolveRuntimeProviderContext } from '../provider-context/index.js';

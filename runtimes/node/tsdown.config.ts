@@ -6,6 +6,7 @@ export default defineConfig({
   dts: false,
   entry: {
     index: './src/index.ts',
+    'client-binary-strategy-dependencies': './src/client-binary-strategy-dependencies.ts',
     'extension-discovery': './src/extension-discovery.ts',
     'extension-validation': './src/extension-validation.ts',
     'makaio-config': './src/makaio-config.ts',

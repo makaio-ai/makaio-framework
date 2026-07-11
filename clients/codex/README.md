@@ -11,11 +11,24 @@ Static client definition and schema library for the OpenAI Codex CLI. This packa
 | `version` | `0.1.0` |
 | `description` | OpenAI Codex CLI — an agentic coding assistant |
 | `binary.name` | `codex` |
-| `binary.supportedVersions` | `*` |
+| `binary.supportedVersions` | `0.130.0` |
 | `defaultApprovalPolicy` | `full-access` |
-| `defaultProviderId` | `openai-codex` |
+| `defaultAuth` | `openai-codex` via client method `native` |
 | `configIsolation.envVar` | `CODEX_HOME` |
 | `configIsolation.defaultPath` | `~/.codex` |
+
+### Authentication
+
+| Method | Mode | Fields or native state | Codex delivery |
+|--------|------|------------------------|----------------|
+| `native` | `inferred` | Persisted `auth.json` or `Codex Auth` keychain state | Isolated local `CODEX_HOME` lease |
+| `access-token` | `explicit` | Required `accessToken`; `CODEX_ACCESS_TOKEN` is an environment source hint | Selected subprocess environment |
+
+The provider-owned `openai-codex/api-key` method is separate: its `apiKey` may
+come from `OPENAI_API_KEY`, but the app-server adapter delivers it through
+`account/login/start` after initialization. It is never treated as the Codex
+access-token method. Native leases use compare-and-swap write-back so a refresh
+is preserved without overwriting a concurrently changed canonical credential.
 
 ### Runtime Capabilities
 
@@ -24,7 +37,7 @@ Static client definition and schema library for the OpenAI Codex CLI. This packa
 | `supportsHooks` | `true` |
 | `supportsStatusline` | `false` |
 | `supportsSupervisorLaunch` | `true` |
-| `supportsManagedBinary` | `false` |
+| `supportsManagedBinary` | `true` |
 
 ### Hook Events
 

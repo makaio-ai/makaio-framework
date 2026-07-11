@@ -611,12 +611,14 @@ describe('ExtensionCoordinator', () => {
     const providerDefinition: ProviderDefinition = {
       id: 'openai',
       name: 'OpenAI',
+      authMethods: [],
       availableModels: [],
     };
     const clientDefinition = createClientDefinition({
       id: 'codex',
       name: 'Codex',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'full-access',
     });
     const packages: MakaioExtension[] = [
@@ -626,7 +628,7 @@ describe('ExtensionCoordinator', () => {
         create: (ctx) => makeMockService(ctx.bus),
       }),
       makePackage('disabled-ext', {
-        providers: [{ id: 'disabled-provider', name: 'Disabled Provider', availableModels: [] }],
+        providers: [{ id: 'disabled-provider', name: 'Disabled Provider', authMethods: [], availableModels: [] }],
       }),
     ];
 

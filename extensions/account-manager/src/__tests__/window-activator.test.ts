@@ -1,11 +1,20 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, CredentialSubjects } from '@makaio/contracts';
-import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
+import {
+  AdapterSubjects,
+  CredentialSubjects,
+  defineAdapterProviderAuth,
+  type ResolvedProviderContext,
+} from '@makaio/contracts';
+import {
+  AdapterSubsystemSubjects,
+  type AdapterRuntimeSnapshotResolution,
+  type ProviderConfigFileRecord,
+  type ProviderRuntimeSnapshot,
+} from '@makaio/services-core/adapter-subsystem';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
-import { buildAccountManagerCredentialRef } from '@makaio/contracts/config';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AutoActivationConfig } from '../account-manager-types.js';
 import { WindowActivator } from '../handlers/window-activator.js';
@@ -24,7 +33,108 @@ const ADAPTER_ID = 'adapter-runtime-uuid-123';
 const FAST_MODEL = 'claude-haiku-4-5';
 const EXPIRED_AT = 1_000_000;
 
-const ACCOUNT_REF = buildAccountManagerCredentialRef(CLIENT_ID, ACCOUNT_ID);
+const PROVIDER_CONTEXT: ResolvedProviderContext = {
+  state: 'resolved',
+  providerConfigId: PROVIDER_CONFIG_ID,
+  definitionId: DEFINITION_ID,
+  auth: {
+    mode: 'inferred',
+    method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+    definition: { id: 'native', mode: 'inferred', label: 'Native Claude Code' },
+    account: { managerId: 'account-manager', accountId: ACCOUNT_ID },
+  },
+};
+
+const PROVIDER_CONFIG: ProviderConfigFileRecord = {
+  id: PROVIDER_CONFIG_ID,
+  definitionId: DEFINITION_ID,
+  name: 'Work Account',
+  modelFilterMode: 'show-all',
+  isDefault: false,
+  enabled: true,
+  auth: {
+    mode: 'inferred',
+    method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+    account: { managerId: 'account-manager', accountId: ACCOUNT_ID },
+    hasCredentials: false,
+  },
+};
+
+const PROVIDER_DEFINITION: ProviderRuntimeSnapshot['definition'] = {
+  id: DEFINITION_ID,
+  packageName: '@makaio/provider-anthropic',
+  name: 'Anthropic',
+  defaultModel: 'claude-sonnet-4-6',
+  fastModel: FAST_MODEL,
+  availableModels: [],
+  authMethods: [],
+  defaultModelFilterMode: 'show-all',
+  enabled: true,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+const PROVIDER_RUNTIME_SNAPSHOT: ProviderRuntimeSnapshot = {
+  config: PROVIDER_CONFIG,
+  context: PROVIDER_CONTEXT,
+  definition: PROVIDER_DEFINITION,
+};
+
+const CURRENT_NATIVE_CONFIG: ProviderConfigFileRecord = {
+  ...PROVIDER_CONFIG,
+  id: 'cfg-current-native',
+  name: 'Current Native Account',
+  auth: {
+    mode: 'inferred',
+    method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+    hasCredentials: false,
+  },
+};
+
+const CURRENT_NATIVE_CONTEXT = {
+  state: 'resolved',
+  providerConfigId: CURRENT_NATIVE_CONFIG.id,
+  definitionId: DEFINITION_ID,
+  auth: {
+    mode: 'inferred',
+    method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+    definition: { id: 'native', mode: 'inferred', label: 'Native Claude Code' },
+  },
+} satisfies ResolvedProviderContext;
+
+/**
+ * Build a complete adapter-qualified runtime response for activation tests.
+ * @param snapshot - Atomic provider snapshot returned to the activator.
+ * @param adapterName - Exact adapter selected by the binding.
+ */
+function makeAdapterRuntimeResolution(
+  snapshot: ProviderRuntimeSnapshot = PROVIDER_RUNTIME_SNAPSHOT,
+  adapterName: string = ADAPTER_NAME,
+): AdapterRuntimeSnapshotResolution {
+  return {
+    status: 'resolved',
+    runtime: {
+      snapshot,
+      adapterName,
+      adapterClientId: CLIENT_ID,
+      adapterProviderAuth: defineAdapterProviderAuth({
+        bindings: [
+          {
+            method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+            deliveries: [{ kind: 'native-client', clientId: CLIENT_ID }],
+          },
+        ],
+        scrubEnvVars: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+      }),
+      compatibleProviderAuths: [],
+      runtimePackages: {
+        adapter: { packageName: '@makaio/adapter-claude-code-cli' },
+        provider: { packageName: '@makaio/provider-anthropic', definitionId: DEFINITION_ID },
+        client: { packageName: '@makaio/client-claude-code', clientId: CLIENT_ID },
+      },
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Fixture factories
@@ -73,35 +183,16 @@ function registerSuccessHandlers(
   return [
     bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
       ctx.setResult({
-        configs: [
-          {
-            id: PROVIDER_CONFIG_ID,
-            definitionId: DEFINITION_ID,
-            name: 'Work Account',
-            modelFilterMode: 'show-all' as const,
-            isDefault: false,
-            enabled: true,
-            isSentinel: false,
-            hasCredentials: true,
-            sourceRef: ACCOUNT_REF,
-          },
-        ],
+        configs: [PROVIDER_CONFIG],
       });
     }),
     bus.on(
-      AdapterSubsystemSubjects.buildProviderContext,
+      AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot,
       (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: PROVIDER_CONFIG_ID,
-            definitionId: DEFINITION_ID,
-            credentialRefs: {
-              token: ACCOUNT_REF,
-            },
-          },
-        });
+        expect(ctx.payload).toEqual({ adapterName: ADAPTER_NAME, providerConfigId: PROVIDER_CONFIG_ID });
+        ctx.setResult(makeAdapterRuntimeResolution());
       },
-      { filter: { providerConfigId: PROVIDER_CONFIG_ID } },
+      { filter: { adapterName: ADAPTER_NAME, providerConfigId: PROVIDER_CONFIG_ID } },
     ),
     bus.on(
       AdapterSubsystemSubjects.listBindingsByConfig,
@@ -123,18 +214,7 @@ function registerSuccessHandlers(
       ProviderStorageSubjects.get,
       (ctx) => {
         ctx.setResult({
-          provider: {
-            id: DEFINITION_ID,
-            packageName: '@makaio/provider-anthropic',
-            name: 'Anthropic',
-            defaultModel: 'claude-sonnet-4-6',
-            fastModel: FAST_MODEL,
-            availableModels: [],
-            defaultModelFilterMode: 'show-all' as const,
-            enabled: true,
-            createdAt: 1,
-            updatedAt: 1,
-          },
+          provider: PROVIDER_DEFINITION,
         });
       },
       { filter: { id: DEFINITION_ID } },
@@ -142,7 +222,7 @@ function registerSuccessHandlers(
     bus.on(CredentialSubjects.activate, (ctx) => {
       capture.credentialActivations?.push(ctx.payload);
       capture.order?.push('credential.activate');
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     }),
     bus.on(AdapterSubjects.startAgent, (ctx) => {
       capture.startAgentPayloads?.push(ctx.payload);
@@ -214,30 +294,10 @@ describe('WindowActivator', () => {
 
     cleanups.push(
       bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-        ctx.setResult({
-          configs: [
-            {
-              id: PROVIDER_CONFIG_ID,
-              definitionId: DEFINITION_ID,
-              name: 'Work Account',
-              modelFilterMode: 'show-all' as const,
-              isDefault: false,
-              enabled: true,
-              isSentinel: false,
-              hasCredentials: true,
-              sourceRef: ACCOUNT_REF,
-            },
-          ],
-        });
+        ctx.setResult({ configs: [PROVIDER_CONFIG] });
       }),
-      bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: PROVIDER_CONFIG_ID,
-            definitionId: DEFINITION_ID,
-            credentialRefs: { token: ACCOUNT_REF },
-          },
-        });
+      bus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+        ctx.setResult(makeAdapterRuntimeResolution());
       }),
       bus.on(AdapterSubsystemSubjects.listBindingsByConfig, (ctx) => {
         ctx.setResult({
@@ -255,6 +315,7 @@ describe('WindowActivator', () => {
             name: 'Anthropic',
             fastModel: FAST_MODEL,
             availableModels: [],
+            authMethods: [],
             defaultModelFilterMode: 'show-all' as const,
             enabled: true,
             createdAt: 1,
@@ -262,6 +323,7 @@ describe('WindowActivator', () => {
           },
         });
       }),
+      bus.on(CredentialSubjects.activate, (ctx) => ctx.setResult({ success: true })),
       bus.on(AdapterSubjects.startAgent, async (ctx) => {
         startAgentCallCount++;
         releaseFirst();
@@ -312,30 +374,10 @@ describe('WindowActivator', () => {
 
     cleanups.push(
       bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-        ctx.setResult({
-          configs: [
-            {
-              id: PROVIDER_CONFIG_ID,
-              definitionId: DEFINITION_ID,
-              name: 'Work Account',
-              modelFilterMode: 'show-all' as const,
-              isDefault: false,
-              enabled: true,
-              isSentinel: false,
-              hasCredentials: true,
-              sourceRef: ACCOUNT_REF,
-            },
-          ],
-        });
+        ctx.setResult({ configs: [PROVIDER_CONFIG] });
       }),
-      bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: PROVIDER_CONFIG_ID,
-            definitionId: DEFINITION_ID,
-            credentialRefs: { token: ACCOUNT_REF },
-          },
-        });
+      bus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+        ctx.setResult(makeAdapterRuntimeResolution());
       }),
       bus.on(AdapterSubsystemSubjects.listBindingsByConfig, (ctx) => {
         ctx.setResult({
@@ -353,6 +395,7 @@ describe('WindowActivator', () => {
             name: 'Anthropic',
             fastModel: FAST_MODEL,
             availableModels: [],
+            authMethods: [],
             defaultModelFilterMode: 'show-all' as const,
             enabled: true,
             createdAt: 1,
@@ -360,6 +403,7 @@ describe('WindowActivator', () => {
           },
         });
       }),
+      bus.on(CredentialSubjects.activate, (ctx) => ctx.setResult({ success: true })),
       bus.on(AdapterSubjects.startAgent, async (ctx) => {
         startAgentCallCount++;
         if (startAgentCallCount === 1) {
@@ -426,29 +470,62 @@ describe('WindowActivator', () => {
     expect(activatedEvents).toHaveLength(0);
   });
 
-  it('returns early without error when buildProviderContext is unavailable', async () => {
+  it('does not use a current-native config for an account-specific reset event', async () => {
+    const bus = createBusInstance();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const startAgentPayloads: unknown[] = [];
+    cleanups.push(
+      bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
+        ctx.setResult({ configs: [CURRENT_NATIVE_CONFIG] });
+      }),
+      bus.on(AdapterSubsystemSubjects.listBindingsByConfig, (ctx) => {
+        ctx.setResult({
+          bindings: [{ adapterName: ADAPTER_NAME, providerConfigId: CURRENT_NATIVE_CONFIG.id, isDefault: true }],
+        });
+      }),
+      bus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+        ctx.setResult(
+          makeAdapterRuntimeResolution({
+            config: CURRENT_NATIVE_CONFIG,
+            context: CURRENT_NATIVE_CONTEXT,
+            definition: PROVIDER_DEFINITION,
+          }),
+        );
+      }),
+      bus.on(AdapterSubjects.startAgent, (ctx) => {
+        startAgentPayloads.push(ctx.payload);
+        ctx.setResult({ success: false, message: 'must not start' });
+      }),
+    );
+
+    const activator = new WindowActivator(bus, makeConfig(true));
+    activator.start();
+    cleanups.push(() => activator.stop());
+    await emitWindowReset(bus);
+
+    await vi.waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[WindowActivator] No exact account-selected provider context found:',
+        expect.objectContaining({ clientId: CLIENT_ID, accountId: ACCOUNT_ID }),
+      );
+    });
+    expect(startAgentPayloads).toHaveLength(0);
+  });
+
+  it('returns early without error when adapter-qualified provider context resolution is unavailable', async () => {
     const bus = createBusInstance();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     cleanups.push(
       bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
+        ctx.setResult({ configs: [PROVIDER_CONFIG] });
+      }),
+      bus.on(AdapterSubsystemSubjects.listBindingsByConfig, (ctx) => {
         ctx.setResult({
-          configs: [
-            {
-              id: PROVIDER_CONFIG_ID,
-              definitionId: DEFINITION_ID,
-              name: 'Work Account',
-              modelFilterMode: 'show-all' as const,
-              isDefault: false,
-              enabled: true,
-              isSentinel: false,
-              hasCredentials: true,
-              sourceRef: ACCOUNT_REF,
-            },
-          ],
+          bindings: [{ adapterName: ADAPTER_NAME, providerConfigId: PROVIDER_CONFIG_ID, isDefault: true }],
         });
       }),
-      // No buildProviderContext handler — requestOptional returns handled=false.
+      // No atomic runtime-snapshot handler — resolution rejects and the pipeline returns early.
     );
 
     const activator = new WindowActivator(bus, makeConfig(true));
@@ -466,7 +543,7 @@ describe('WindowActivator', () => {
 
     await vi.waitFor(() => {
       expect(warnSpy).toHaveBeenCalledWith(
-        '[WindowActivator] Could not build provider context:',
+        '[WindowActivator] Could not resolve adapter-qualified provider context:',
         expect.objectContaining({ clientId: CLIENT_ID, accountId: ACCOUNT_ID }),
       );
     });
@@ -479,30 +556,7 @@ describe('WindowActivator', () => {
 
     cleanups.push(
       bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-        ctx.setResult({
-          configs: [
-            {
-              id: PROVIDER_CONFIG_ID,
-              definitionId: DEFINITION_ID,
-              name: 'Work Account',
-              modelFilterMode: 'show-all' as const,
-              isDefault: false,
-              enabled: true,
-              isSentinel: false,
-              hasCredentials: true,
-              sourceRef: ACCOUNT_REF,
-            },
-          ],
-        });
-      }),
-      bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: PROVIDER_CONFIG_ID,
-            definitionId: DEFINITION_ID,
-            credentialRefs: { token: ACCOUNT_REF },
-          },
-        });
+        ctx.setResult({ configs: [PROVIDER_CONFIG] });
       }),
       // No listBindingsByConfig handler — requestOptional returns handled=false.
     );
@@ -561,24 +615,14 @@ describe('WindowActivator', () => {
       model: FAST_MODEL,
     });
     expect(capture.order).toEqual(['credential.activate', 'adapter.startAgent']);
-    expect(capture.credentialActivations).toEqual([
-      {
-        providerConfigId: PROVIDER_CONFIG_ID,
-        definitionId: DEFINITION_ID,
-        credentialRefs: { token: ACCOUNT_REF },
-      },
-    ]);
+    expect(capture.credentialActivations).toEqual([{ providerContext: PROVIDER_CONTEXT }]);
     expect(capture.startAgentPayloads).toEqual([
       {
         adapterId: ADAPTER_ID,
         role: 'lead',
         ephemeral: true,
         model: FAST_MODEL,
-        providerContext: {
-          providerConfigId: PROVIDER_CONFIG_ID,
-          definitionId: DEFINITION_ID,
-          credentialRefs: { token: ACCOUNT_REF },
-        },
+        providerContext: PROVIDER_CONTEXT,
         initialMessage: 'ok',
         systemPrompt: 'Reply concisely.',
       },
@@ -737,30 +781,10 @@ describe('WindowActivator', () => {
 
     cleanups.push(
       bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-        ctx.setResult({
-          configs: [
-            {
-              id: PROVIDER_CONFIG_ID,
-              definitionId: DEFINITION_ID,
-              name: 'Work Account',
-              modelFilterMode: 'show-all' as const,
-              isDefault: false,
-              enabled: true,
-              isSentinel: false,
-              hasCredentials: true,
-              sourceRef: ACCOUNT_REF,
-            },
-          ],
-        });
+        ctx.setResult({ configs: [PROVIDER_CONFIG] });
       }),
-      bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: PROVIDER_CONFIG_ID,
-            definitionId: DEFINITION_ID,
-            credentialRefs: { token: ACCOUNT_REF },
-          },
-        });
+      bus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+        ctx.setResult(makeAdapterRuntimeResolution());
       }),
       bus.on(AdapterSubsystemSubjects.listBindingsByConfig, (ctx) => {
         ctx.setResult({
@@ -780,6 +804,7 @@ describe('WindowActivator', () => {
             defaultModel: 'claude-sonnet-4-6',
             // fastModel intentionally absent
             availableModels: [],
+            authMethods: [],
             defaultModelFilterMode: 'show-all' as const,
             enabled: true,
             createdAt: 1,
@@ -787,6 +812,7 @@ describe('WindowActivator', () => {
           },
         });
       }),
+      bus.on(CredentialSubjects.activate, (ctx) => ctx.setResult({ success: true })),
       bus.on(AdapterSubjects.startAgent, (ctx) => {
         ctx.setResult({
           success: true,

@@ -143,6 +143,25 @@ describe('registerDrizzleAgentStorage.updateRuntime', () => {
     expect(agent?.allowedDirectories).toEqual(['/tmp/old']);
   });
 
+  it('clears providerConfigId without treating null as an omitted update', async () => {
+    await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      agentId: 'runtime-test',
+      providerConfigId: 'provider-2',
+    });
+
+    const result = await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      agentId: 'runtime-test',
+      providerConfigId: null,
+    });
+
+    expect(result.success).toBe(true);
+    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, {
+      agentId: 'runtime-test',
+    });
+    expect(agent?.providerConfigId).toBeUndefined();
+    expect(agent?.model).toBe('model-v1');
+  });
+
   it('updates adapterId without overwriting other runtime fields', async () => {
     const result = await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
       agentId: 'runtime-test',

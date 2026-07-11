@@ -36,7 +36,7 @@ export {
   buildRecoveryContextWithPipeline,
   recoverAgent,
   resolveExecutionTarget,
-  buildProviderContext,
+  resolveRuntimeProviderContext,
   type RecoveryConfig,
 } from './session-orchestrator-helpers.js';
 

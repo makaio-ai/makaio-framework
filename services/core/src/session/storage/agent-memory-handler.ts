@@ -19,8 +19,8 @@ interface RuntimeUpdateOptions {
   model?: string;
   /** Directory restrictions. */
   allowedDirectories?: string[];
-  /** New provider config UUID. */
-  providerConfigId?: string;
+  /** New provider config UUID; null clears the current selection. */
+  providerConfigId?: string | null;
 }
 
 /**
@@ -48,7 +48,11 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
   if (cwd !== undefined) agent.cwd = cwd;
   if (model !== undefined) agent.model = model;
   if (allowedDirectories !== undefined) agent.allowedDirectories = allowedDirectories;
-  if (providerConfigId !== undefined) agent.providerConfigId = providerConfigId;
+  if (providerConfigId === null) {
+    delete agent.providerConfigId;
+  } else if (providerConfigId !== undefined) {
+    agent.providerConfigId = providerConfigId;
+  }
   return true;
 }
 

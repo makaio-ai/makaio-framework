@@ -11,7 +11,6 @@ import {
   type ProceduralConnectorSession,
   type WireSessionSubjects,
 } from '@makaio/ai-adapters-core';
-import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
 import {
   AuthStorage,
   createAgentSession,
@@ -22,7 +21,7 @@ import {
   SettingsManager,
 } from '@mariozechner/pi-coding-agent';
 import type { Model } from '@mariozechner/pi-ai';
-import type { AIReasoningLevel, SystemPrompt } from '@makaio/contracts';
+import type { AIReasoningLevel, ProtocolId, ResolvedProviderContext, SystemPrompt } from '@makaio/contracts';
 import type { PiSdkBus } from './namespaces/index.js';
 import { PiSdkSubjects } from './namespaces/index.js';
 import { PiConnectorSession } from './session.js';
@@ -30,6 +29,7 @@ import type { PiConnectorConfig, PiThinkingLevel } from './types/index.js';
 import { PiSdkAdapterName } from './constants.js';
 import { fetchToolsForPi, type PiToolHandlerContext } from './tool-conversion.js';
 import { registerMakaioProviderModel, REASONING_TO_THINKING } from './provider-registry.js';
+import { requirePiProviderContext, requirePiProviderProtocol, resolvePiProviderApiKey } from './provider-auth.js';
 
 /**
  * Pi SDK Connector — wraps `createAgentSession()` + `session.prompt()`.
@@ -63,17 +63,28 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
 
   /** Terminal lifecycle guard set after close(). */
   private closed = false;
+  /** Selected connector-local provider key reused across registry rebuilds. */
+  private readonly apiKey: string;
+  /** Exact resolved provider identity used for registry and endpoint selection. */
+  private readonly providerContext: ResolvedProviderContext;
+  /** Exact protocol declared by the selected adapter/provider reference. */
+  private readonly providerProtocol: ProtocolId;
 
   /**
    * Create a new PiConnector instance.
    * @param config - Fully-resolved connector configuration
    */
   public constructor(config: PiConnectorConfig) {
+    const { adapterAuth, ...baseConfig } = config;
     super({
-      ...config,
+      ...baseConfig,
+      env: baseConfig.env ?? {},
       adapterId: config.adapterId ?? crypto.randomUUID(),
       adapterName: PiSdkAdapterName,
     });
+    this.apiKey = resolvePiProviderApiKey(adapterAuth);
+    this.providerContext = requirePiProviderContext(config.providerContext);
+    this.providerProtocol = requirePiProviderProtocol(config.providerProtocol);
   }
 
   // ---------------------------------------------------------------------------
@@ -201,7 +212,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
       agentId: this.agentId,
       cwd,
       model: this.model,
-      env: this.config.env ?? {},
+      env: { ...(this.config.contextEnv ?? {}) },
       systemPrompt,
       initialCustomToolNames: customTools.map((t) => t.name),
       requestToolApproval: (payload) => this.requestToolApproval(PiSdkSubjects.tool_approval, payload),
@@ -254,7 +265,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
       agentId: this.agentId,
       sessionId: this.sessionId ?? '',
       cwd: this.cwd,
-      env: this.env,
+      env: { ...(this.config.contextEnv ?? {}) },
       allowedDirectories: this.config.allowedDirectories,
       getTurnExecutionContext: () => this.session?.getToolExecutionTurnContext() ?? {},
       consumeApprovedToolInput: (toolCallId) => this.session?.consumeApprovedToolInput(toolCallId),
@@ -262,7 +273,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
   }
 
   /**
-   * Resolve credentials and build an `AuthStorage`-backed `ModelRegistry`.
+   * Build an `AuthStorage`-backed `ModelRegistry` from the selected auth snapshot.
    *
    * Registers the Makaio provider so `getAvailable()` includes the requested
    * model. Shared by `initializeSession()` and `changeModelInPlace()`.
@@ -272,24 +283,18 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
   private async buildModelRegistry(
     modelId: string,
   ): Promise<{ authStorage: AuthStorage; modelRegistry: ModelRegistry; providerName: string }> {
-    const credentialRefs = this.config.providerContext?.credentialRefs ?? {};
-    const credentials = await resolveConnectorCredentials(this.config.bus, credentialRefs);
-
     const authStorage = AuthStorage.create();
-    const providerName = this.config.providerContext?.definitionId ?? 'anthropic';
-    const apiKey = credentials['apiKey'];
-    if (apiKey) {
-      authStorage.setRuntimeApiKey(providerName, apiKey);
-    }
+    const providerName = this.providerContext.definitionId;
+    authStorage.setRuntimeApiKey(providerName, this.apiKey);
 
     const modelRegistry = ModelRegistry.create(authStorage);
-    const credentialEnvVar = this.config.providerContext?.credentialEnvVars?.['apiKey'];
     registerMakaioProviderModel(
       modelRegistry,
       providerName,
       modelId,
-      this.config.providerContext?.endpointOverrides,
-      apiKey ?? credentialEnvVar,
+      this.providerProtocol,
+      this.providerContext.endpointOverrides,
+      this.apiKey,
     );
 
     return { authStorage, modelRegistry, providerName };
@@ -305,7 +310,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    */
   private async resolvePiModel(modelRegistry: ModelRegistry): Promise<Model<never> | undefined> {
     const available = await modelRegistry.getAvailable();
-    const providerName = this.config.providerContext?.definitionId ?? 'anthropic';
+    const providerName = this.providerContext.definitionId;
     const modelId = this.model;
     const found = available.find((m) => m.id === modelId && m.provider === providerName);
     if (!found) {

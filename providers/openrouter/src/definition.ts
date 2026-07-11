@@ -19,5 +19,20 @@ export const providerDefinition: ProviderDefinitionInput = {
   description: 'OpenRouter — unified API for 300+ AI models across providers.',
   endpoints: { openai: 'https://openrouter.ai/api/v1' },
   defaultModelFilterMode: 'allowlist',
-  credentialEnvVars: { apiKey: 'OPENROUTER_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'OPENROUTER_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };

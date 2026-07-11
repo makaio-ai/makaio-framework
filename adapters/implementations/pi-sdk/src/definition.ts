@@ -9,14 +9,18 @@ import { PiSdkProviderConfigSchema } from './schemas.js';
 import type { PiSdkBus } from './namespaces/index.js';
 import type { PiConnector } from './connector.js';
 import type { PiAgent } from './agent.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { defaultPresetId, providerAuthById } from './provider.js';
 
 export const adapterDefinition: AIAdapterDefinition<PiSdkBus, PiConnector, PiAgent> = {
   name: PiSdkAdapterName,
   displayName: 'Pi SDK',
   defaultPresetId,
   description: 'Pi coding agent SDK wrapper',
-  providers: providerIds.map((definitionId) => ({ definitionId })),
+  providers: [
+    { definitionId: 'anthropic', protocol: 'anthropic', auth: providerAuthById.anthropic },
+    { definitionId: 'openai', protocol: 'openai', auth: providerAuthById.openai },
+    { definitionId: 'opencode-go', protocol: 'openai', auth: providerAuthById['opencode-go'] },
+  ],
   providerConfigSchema: PiSdkProviderConfigSchema,
   defaultTimeouts: DEFAULT_TIMEOUTS,
   helpLinks: [],

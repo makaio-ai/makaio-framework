@@ -18,7 +18,7 @@ import {
   type AIAdapterConfig,
   type AdapterProviderDefinition,
 } from '@makaio/ai-adapters-core';
-import type { AdapterProviderRef } from '@makaio/contracts';
+import { defineAdapterProviderAuth, type AdapterProviderRef } from '@makaio/contracts';
 import { DEFAULT_TIMEOUTS } from '@makaio/utils';
 import { providerDefinition } from './provider-fixture.js';
 import { DEVEX_SMOKE_ADAPTER_NAME } from './shared.js';
@@ -27,7 +27,20 @@ const DevexSmokeNamespace = createAdapterNamespace(`adapter:${DEVEX_SMOKE_ADAPTE
 /** Resolved provider definitions forwarded to adapter init options at runtime. */
 const PROVIDER_DEFINITIONS: AdapterProviderDefinition[] = [{ definition: providerDefinition }];
 /** Provider refs declared in the adapter definition for boot-time resolution. */
-const PROVIDER_REFS: AdapterProviderRef[] = [{ definitionId: providerDefinition.id }];
+const PROVIDER_REFS: AdapterProviderRef[] = [
+  {
+    definitionId: providerDefinition.id,
+    auth: defineAdapterProviderAuth({
+      bindings: [
+        {
+          method: { owner: 'provider', providerDefinitionId: providerDefinition.id, methodId: 'none' },
+          deliveries: [{ kind: 'none' }],
+        },
+      ],
+      scrubEnvVars: [],
+    }),
+  },
+];
 
 type DevexSmokeBus = ScopedBus<string>;
 

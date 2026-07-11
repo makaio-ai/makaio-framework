@@ -1,5 +1,10 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
-import { resolveConformanceTestPreset, resolveTestConfig } from '@makaio/ai-adapters-core';
+import {
+  ConformanceConnectorRuntimeRegistry,
+  resolveConformanceTestPreset,
+  resolveTestConfig,
+} from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
 import { OpenAINodeConnector } from './connector.js';
 import { OpenAINodeConnectorNamespace } from './namespaces/index.js';
 import type { OpenAINodeConnectorBus } from './namespaces/index.js';
@@ -8,6 +13,7 @@ import { createOpenAINodeAdapter, OpenAINodeAdapterName } from './adapter.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { OpenAINodeConfig } from './config.js';
 import { providerIds, testPresetId } from './provider.js';
+import { adapterDefinition } from './definition.js';
 
 /**
  * Create a conformance test configuration for the OpenAI Node adapter.
@@ -24,17 +30,24 @@ export const createTestConfig = async (
   const bus = await scopedBus();
   const testPreset = resolveConformanceTestPreset({
     adapterName: OpenAINodeAdapterName,
-    defaultProviderId: testPresetId,
+    testProviderDefinitionId: testPresetId,
     providerIds,
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<OpenAINodeConnectorBus, OpenAINodeConnector>();
 
   return {
-    createConnector: async (options) =>
-      new OpenAINodeConnector(
-        await OpenAINodeConfig.getConfig(resolveTestConfig(options, bus, testPreset.provider, testPreset.providers)),
-      ),
+    createConnector: async (options) => {
+      const config = await OpenAINodeConfig.getConfig({
+        ...resolveTestConfig(options, bus, testPreset.provider, adapterDefinition.providers),
+        globalBus: MakaioBus,
+      });
+      return connectorRuntimes.create({
+        config,
+        connectorFactory: (runtimeConfig) => new OpenAINodeConnector(runtimeConfig),
+      });
+    },
     bus,
     registerToolApprovalHandler,
     capabilities: {
@@ -51,5 +64,6 @@ export const createTestConfig = async (
     createAdapter: async (options) => createOpenAINodeAdapter({ adapterId: options?.adapterId }),
     adapterName: OpenAINodeAdapterName,
     testProviderContext: testPreset.providerContext,
+    cleanup: () => connectorRuntimes.closeAll(),
   };
 };

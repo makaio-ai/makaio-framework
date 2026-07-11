@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -219,8 +219,11 @@ describe('CodexSource', () => {
 
   describe('write()', () => {
     it('delegates the token to the backend', async () => {
+      const root = await mkdtemp(join(await realpath(tmpdir()), 'codex-source-'));
+      const codexHome = join(root, '.codex');
+      await mkdir(codexHome, { recursive: true });
       const backend = new InMemoryBackend();
-      const source = new CodexSource(backend);
+      const source = new CodexSource(backend, { codexHome });
       const token = JSON.stringify({
         tokens: { account_id: 'acct-abc' },
       });
@@ -230,9 +233,12 @@ describe('CodexSource', () => {
         metadata: { authMode: 'chatgpt' },
       };
 
-      await source.write(credential);
-
-      expect(await backend.read()).toBe(token);
+      try {
+        await source.write(credential);
+        expect(await backend.read()).toBe(token);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     });
   });
 

@@ -12,6 +12,7 @@ export { ClientBinaryManager } from './client-binary-manager.js';
 export { isPathWithinBase, resolveAndValidateBasePath } from './client-binary-manager-types.js';
 export type {
   ClientBinaryManagerConfig,
+  ClientBinaryResolutionPolicy,
   ClientDefinitionLookup,
   InstallJob,
   JobCompletedCallback,
@@ -22,7 +23,9 @@ export type {
   PostInstallHandler,
 } from './client-binary-manager-types.js';
 export { ClientBinaryJobRunner } from './client-binary-job-runner.js';
-export type { StrategyDependencies } from './binary-strategies/index.js';
+export { createStrategy } from './binary-strategies/index.js';
+export type { InstallArtifact, InstallStrategy, StrategyDependencies } from './binary-strategies/index.js';
+export { verifyInstalledVersion } from './client-binary-version-verifier.js';
 export { ClientDefinitionRegistry } from './client-definition-registry.js';
 export { ClientBinaryVersionResolver } from './client-binary-version-resolver.js';
 export type { ResolvedInstallVersion } from './client-binary-version-resolver.js';

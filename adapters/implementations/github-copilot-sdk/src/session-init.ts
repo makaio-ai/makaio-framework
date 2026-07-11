@@ -1,6 +1,6 @@
 import { CopilotClient, type SessionConfig } from '@github/copilot-sdk';
-import { resolveSessionEnvironment, type SessionEnvironmentOptions } from '@makaio/ai-adapters-core/config';
 import type { SystemPrompt } from '@makaio/contracts';
+import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CopilotSessionEvent, GitHubCopilotConnectorBus } from './namespaces/index.js';
 import { fetchToolsForCopilot } from './tool-handling.js';
@@ -35,11 +35,10 @@ export interface SessionInitContext {
   defaultSessionConfig: SessionConfig;
   /** Current system prompt, if any. */
   systemPrompt: SystemPrompt | undefined;
-  /**
-   * Provider context for credential resolution.
-   * Forwarded verbatim to {@link resolveSessionEnvironment}.
-   */
-  providerContext: SessionEnvironmentOptions['providerContext'];
+  /** Selected token delivered to the Copilot SDK constructor. */
+  githubToken: string;
+  /** Managed/global binary selected by the central adapter runtime. */
+  clientExecution: ClientExecutionContext | undefined;
   /** Optional tool ledger for MCP call tracking. */
   toolLedger?: ISessionToolLedger;
   /** Current turn number supplier for ledger bookkeeping. */
@@ -103,7 +102,7 @@ export interface SessionInitCallbacks {
 /**
  * Perform a single session initialization flight.
  *
- * Resolves credentials and the binary path, fetches registry tools, creates
+ * Consumes the finalized environment and binary selection, fetches registry tools, creates
  * the {@link CopilotClient} and {@link CopilotConnectorSession}, and initializes
  * the session. On failure, cleans up any provisional
  * resources before re-throwing.
@@ -122,23 +121,6 @@ export async function performSessionInit(
   callbacks: SessionInitCallbacks,
   assertCurrent: () => void,
 ): Promise<SessionInitResult> {
-  // Resolve credentials, credential env, and binary before creating the SDK
-  // client/session so that a missing token throws fast outside the try block.
-  const { credentials, credEnv, resolvedBinary, spawnEnv } = await resolveSessionEnvironment({
-    bus: ctx.bus,
-    providerContext: ctx.providerContext,
-    clientId: 'github-copilot',
-    baseEnv: ctx.env,
-  });
-  // credEnv carries COPILOT_TOKEN when the provider maps the credential field to
-  // that env var name.  When providerContext is absent (host supplies the token
-  // directly via config.env / process.env) credEnv is empty but spawnEnv already
-  // merges baseEnv (this.env), so spawnEnv['COPILOT_TOKEN'] covers that path.
-  const githubToken = credEnv['COPILOT_TOKEN'] ?? credentials['token'] ?? spawnEnv['COPILOT_TOKEN'];
-
-  if (!githubToken) {
-    throw new Error('GitHub Copilot token not provided. Configure credentials via provider settings.');
-  }
   assertCurrent();
 
   let client: CopilotClient | undefined;
@@ -169,20 +151,14 @@ export async function performSessionInit(
       tools: [...(ctx.defaultSessionConfig.tools ?? []), ...registryTools],
     };
 
-    // The CopilotClient `env` option replaces process.env entirely for the
-    // spawned subprocess. `spawnEnv` is already the merged result of the
-    // connector's base env, credential env vars, and binary isolation env
-    // (in that order, with binary env taking final precedence). Only pass it
-    // when it carries anything beyond the empty base so the subprocess
-    // inherits process.env in the common framework-only case.
-    const hasSpawnEnv = Object.keys(spawnEnv).length > 0;
-
     client = new CopilotClient({
       cliArgs: ['--disable-builtin-mcps'],
       cwd: ctx.cwd,
-      githubToken,
-      ...(resolvedBinary?.binaryPath ? { cliPath: resolvedBinary.binaryPath } : {}),
-      ...(hasSpawnEnv ? { env: spawnEnv } : {}),
+      githubToken: ctx.githubToken,
+      ...(ctx.clientExecution?.binaryPath ? { cliPath: ctx.clientExecution.binaryPath } : {}),
+      // CopilotClient replaces rather than merges process.env. Passing the
+      // finalized snapshot even when empty prevents ambient auth inheritance.
+      env: ctx.env,
     });
 
     session = new CopilotConnectorSession({

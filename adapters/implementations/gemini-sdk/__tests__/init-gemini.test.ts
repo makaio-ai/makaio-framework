@@ -1,11 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Config } from '@google/gemini-cli-core';
-import {
-  buildGeminiAuthOptions,
-  filterToolDeclarations,
-  initGemini,
-  type GeminiInitConfig,
-} from '../src/utils/init-gemini.js';
+import { filterToolDeclarations, initGemini, type GeminiInitConfig } from '../src/utils/init-gemini.js';
 
 type GeminiToolsArg = Array<{ functionDeclarations: Array<{ name: string }> }>;
 type GeminiChatCtor = (config: Config, systemPrompt: string, tools: GeminiToolsArg) => void;
@@ -44,7 +39,6 @@ vi.mock('@google/gemini-cli-core', () => {
     getCoreSystemPrompt: getCoreSystemPromptMock,
     AuthType: {
       USE_GEMINI: 'USE_GEMINI',
-      LOGIN_WITH_GOOGLE: 'LOGIN_WITH_GOOGLE',
     },
   };
 });
@@ -61,17 +55,6 @@ describe('filterToolDeclarations', () => {
   });
 });
 
-describe('buildGeminiAuthOptions', () => {
-  it('returns undefined when the apiKey credential is absent', () => {
-    expect(buildGeminiAuthOptions({})).toBeUndefined();
-  });
-
-  it('preserves blank apiKey values so initGemini can reject them explicitly', () => {
-    expect(buildGeminiAuthOptions({ apiKey: '' })).toEqual({ apiKey: '' });
-    expect(buildGeminiAuthOptions({ apiKey: '   ' })).toEqual({ apiKey: '   ' });
-  });
-});
-
 describe('initGemini', () => {
   beforeEach(() => {
     geminiChatCtor.mockClear();
@@ -80,7 +63,7 @@ describe('initGemini', () => {
 
   it('creates GeminiChat instance', async () => {
     const geminiConfig = makeGeminiConfig([{ name: 'read_file' }, { name: 'run_shell_command' }]);
-    await initGemini(geminiConfig, ['run_shell_command']);
+    await initGemini(geminiConfig, ['run_shell_command'], { apiKey: 'test-key' });
 
     expect(geminiChatCtor.mock.calls.length).toBe(1);
     expect(getCoreSystemPromptMock).toHaveBeenCalledTimes(1);
@@ -88,24 +71,15 @@ describe('initGemini', () => {
 
   it('uses Gemini API auth when a non-empty apiKey is provided', async () => {
     const geminiConfig = makeGeminiConfig([{ name: 'read_file' }]);
-    await initGemini(geminiConfig, [], undefined, { apiKey: '  test-key  ' });
+    await initGemini(geminiConfig, [], { apiKey: '  test-key  ' });
 
     expect(geminiConfig.refreshAuth).toHaveBeenCalledWith('USE_GEMINI', 'test-key');
-  });
-
-  it('throws when authOptions is provided without a valid apiKey', async () => {
-    const geminiConfig = makeGeminiConfig([{ name: 'read_file' }]);
-
-    await expect(initGemini(geminiConfig, [], undefined, {})).rejects.toThrow(
-      'Gemini authOptions were provided without a valid API key.',
-    );
-    expect(geminiConfig.refreshAuth).not.toHaveBeenCalled();
   });
 
   it('throws when an explicit apiKey is empty', async () => {
     const geminiConfig = makeGeminiConfig([{ name: 'read_file' }]);
 
-    await expect(initGemini(geminiConfig, [], undefined, { apiKey: '' })).rejects.toThrow(
+    await expect(initGemini(geminiConfig, [], { apiKey: '' })).rejects.toThrow(
       'Gemini API key was provided but is empty or whitespace-only.',
     );
   });
@@ -113,15 +87,8 @@ describe('initGemini', () => {
   it('throws when an explicit apiKey is whitespace-only', async () => {
     const geminiConfig = makeGeminiConfig([{ name: 'read_file' }]);
 
-    await expect(initGemini(geminiConfig, [], undefined, { apiKey: '   ' })).rejects.toThrow(
+    await expect(initGemini(geminiConfig, [], { apiKey: '   ' })).rejects.toThrow(
       'Gemini API key was provided but is empty or whitespace-only.',
     );
-  });
-
-  it('falls back to OAuth only when authOptions is omitted', async () => {
-    const geminiConfig = makeGeminiConfig([{ name: 'read_file' }]);
-    await initGemini(geminiConfig, []);
-
-    expect(geminiConfig.refreshAuth).toHaveBeenCalledWith('LOGIN_WITH_GOOGLE');
   });
 });

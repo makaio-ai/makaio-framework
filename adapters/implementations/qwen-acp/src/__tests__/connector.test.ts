@@ -49,6 +49,8 @@ const TEST_MESSAGE: NormalizedMessageInput = {
   blocks: [{ type: 'text', content: 'Hello' }],
 };
 
+const NATIVE_AUTH = { processEnv: {}, connectorDeliveries: [], configInheritance: 'auth-only' as const };
+
 interface ToolApprovalRequester {
   requestToolApprovalWithHandling: (subject: unknown, payload: unknown) => Promise<{ action: 'allow' | 'deny' }>;
 }
@@ -81,6 +83,7 @@ async function makeConnector(options: { globalBus?: IMakaioBus } = {}) {
     model: 'qwen3-coder',
     cwd: tmpdir(),
     env: {},
+    adapterAuth: NATIVE_AUTH,
     allowedDirectories: ['/workspace/project'],
     globalBus: options.globalBus,
   });
@@ -458,6 +461,7 @@ describe('QwenAcpConnector', () => {
       model: 'qwen3-coder',
       cwd: tmpdir(),
       env: {},
+      adapterAuth: NATIVE_AUTH,
       allowedDirectories: ['/workspace/project'],
     });
     const turn = new QwenAcpTurn(
@@ -523,6 +527,7 @@ describe('QwenAcpConnector', () => {
       model: 'qwen3-coder',
       cwd: tmpdir(),
       env: {},
+      adapterAuth: NATIVE_AUTH,
       allowedDirectories: [],
     });
     connector['turnUsageAccumulator'] = {};
@@ -564,6 +569,7 @@ describe('QwenAcpConnector', () => {
       model: 'qwen3-coder',
       cwd: tmpdir(),
       env: {},
+      adapterAuth: NATIVE_AUTH,
       allowedDirectories: [],
     });
     connector['turnUsageAccumulator'] = {};
@@ -614,6 +620,7 @@ describe('QwenAcpConnector', () => {
       model: 'qwen3-coder',
       cwd: tmpdir(),
       env: {},
+      adapterAuth: NATIVE_AUTH,
       allowedDirectories: [],
     });
     connector['turnUsageAccumulator'] = {};
@@ -647,6 +654,7 @@ describe('QwenAcpConnector', () => {
       model: 'qwen3-coder',
       cwd: tmpdir(),
       env: {},
+      adapterAuth: NATIVE_AUTH,
       allowedDirectories: [],
     });
     connector['turnUsageAccumulator'] = {};

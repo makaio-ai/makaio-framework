@@ -1,5 +1,5 @@
 /**
- * Tests for `client.resolveBinary` integration in the Qwen ACP connector.
+ * Tests consumption of centrally finalized Qwen runtime inputs.
  *
  * Verifies that `initializeConnection()` threads the resolved binary path and env
  * into `createAcpConnection`, and that the adapter degrades gracefully when no
@@ -7,20 +7,18 @@
  *
  * Design invariants under test:
  * - When `client.resolveBinary` returns a managed context, the subprocess is
- *   spawned with the resolved binary path and the resolved env vars merged last
- *   (binary-isolation vars take precedence over credential env).
+ *   spawned with the selected binary path and the already-finalized connector env;
+ *   the binary environment is not merged a second time.
  * - When `client.resolveBinary` returns a global context (empty binaryPath and
  *   env), the default `'qwen'` command and base env are used.
- * - When `client.resolveBinary` has no handler (framework-only boot), existing
- *   behaviour is preserved.
- * - An explicit `providerConfig.binaryPath` still wins over the resolved path
- *   (user override takes priority).
+ * - When the central runtime supplies no binary selection, PATH lookup uses
+ *   the default command with an explicit empty environment.
+ * - Adapter provider config cannot override the centrally resolved executable.
  */
 
 import { tmpdir } from 'node:os';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/contracts/client';
+import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
 
 // ---------------------------------------------------------------------------
@@ -70,7 +68,7 @@ import { QwenAcpConnector } from '../connector.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Build a minimal `ClientExecutionContext` for `resolveBinary` mock handlers.
+ * Build a minimal centrally resolved `ClientExecutionContext`.
  * @param binaryPath - Absolute path to the binary, or `null` for global.
  * @param env - Environment variables to inject.
  * @param source - Resolution source (`'managed'` or `'global'`).
@@ -80,13 +78,7 @@ function makeExecutionContext(
   binaryPath: string | null,
   env: Record<string, string>,
   source: 'managed' | 'global' = 'managed',
-): {
-  binaryPath: string | null;
-  env: Record<string, string>;
-  configDir: null;
-  source: 'managed' | 'global';
-  version: null;
-} {
+): ClientExecutionContext {
   return { binaryPath, env, configDir: null, source, version: null };
 }
 
@@ -96,7 +88,7 @@ function makeExecutionContext(
  * @returns Connector instance ready for `initialize()`.
  */
 async function makeConnector(
-  overrides: { env?: Record<string, string>; providerConfig?: { binaryPath?: string } } = {},
+  overrides: { env?: Record<string, string>; clientExecution?: ClientExecutionContext } = {},
 ): Promise<QwenAcpConnector> {
   const bus = await QwenAcpNamespace.scopedBus();
   return new QwenAcpConnector({
@@ -108,8 +100,9 @@ async function makeConnector(
     model: 'qwen3-coder',
     cwd: tmpdir(),
     env: overrides.env ?? {},
+    clientExecution: overrides.clientExecution,
+    adapterAuth: { processEnv: {}, connectorDeliveries: [], configInheritance: 'auth-only' },
     allowedDirectories: [],
-    ...(overrides.providerConfig ? { providerConfig: overrides.providerConfig } : {}),
   });
 }
 
@@ -117,63 +110,46 @@ async function makeConnector(
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('QwenAcpConnector — client.resolveBinary integration', () => {
-  let cleanupHandlers: Array<() => void>;
+describe('QwenAcpConnector — central runtime inputs', () => {
   let connectors: QwenAcpConnector[];
 
   beforeEach(() => {
-    MakaioBus.__resetHandlers?.();
     acpHarness.capturedCalls.length = 0;
-    cleanupHandlers = [];
     connectors = [];
+    vi.unstubAllEnvs();
   });
 
   afterEach(async () => {
-    for (const cleanup of cleanupHandlers) cleanup();
-    cleanupHandlers = [];
     await Promise.all(connectors.map((c) => c.close()));
     connectors = [];
-    MakaioBus.__resetHandlers?.();
+    vi.unstubAllEnvs();
   });
 
   // -------------------------------------------------------------------------
   // Managed context — binary path and env are resolved
   // -------------------------------------------------------------------------
 
-  it('spawns the resolved binary and merges env when resolveBinary returns a managed context', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(
-          makeExecutionContext('/usr/local/lib/makaio/qwen/1.0.0/qwen', {
-            QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/usr/local/lib/makaio/profiles/qwen',
-          }),
-        );
+  it('spawns the centrally selected binary with the finalized environment', async () => {
+    const connector = await makeConnector({
+      env: { QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/isolated/qwen' },
+      clientExecution: makeExecutionContext('/usr/local/lib/makaio/qwen/1.0.0/qwen', {
+        QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/must-not-be-merged-again',
       }),
-    );
-
-    const connector = await makeConnector();
+    });
     connectors.push(connector);
     await connector.initialize();
 
     expect(acpHarness.capturedCalls).toHaveLength(1);
     expect(acpHarness.capturedCalls[0]?.command).toBe('/usr/local/lib/makaio/qwen/1.0.0/qwen');
-    expect(acpHarness.capturedCalls[0]?.env).toMatchObject({
-      QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/usr/local/lib/makaio/profiles/qwen',
-    });
+    expect(acpHarness.capturedCalls[0]?.env).toEqual({ QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/isolated/qwen' });
   });
 
   // -------------------------------------------------------------------------
   // Global context — default command, no extra env
   // -------------------------------------------------------------------------
 
-  it('uses default qwen command when resolveBinary returns a global context with null binaryPath', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(makeExecutionContext(null, {}, 'global'));
-      }),
-    );
-
-    const connector = await makeConnector();
+  it('uses default qwen command for a centrally selected global binary', async () => {
+    const connector = await makeConnector({ clientExecution: makeExecutionContext(null, {}, 'global') });
     connectors.push(connector);
     await connector.initialize();
 
@@ -185,8 +161,7 @@ describe('QwenAcpConnector — client.resolveBinary integration', () => {
   // No handler — framework-only boot, falls back to current behaviour
   // -------------------------------------------------------------------------
 
-  it('initializes without error when no handler is registered for client.resolveBinary', async () => {
-    // No handler registered — requestOptional returns { handled: false }
+  it('initializes without a managed binary selection', async () => {
     const connector = await makeConnector();
     connectors.push(connector);
     await expect(connector.initialize()).resolves.toBeUndefined();
@@ -196,56 +171,16 @@ describe('QwenAcpConnector — client.resolveBinary integration', () => {
   });
 
   // -------------------------------------------------------------------------
-  // User override wins — providerConfig.binaryPath beats resolved path
+  // Ambient environment is never inherited by the Qwen child
   // -------------------------------------------------------------------------
 
-  it('providerConfig.binaryPath takes priority over the resolved binary path', async () => {
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(
-          makeExecutionContext('/managed/qwen/1.0.0/qwen', {
-            QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/managed/profiles',
-          }),
-        );
-      }),
-    );
-
-    const connector = await makeConnector({ providerConfig: { binaryPath: '/custom/qwen' } });
+  it('passes an empty finalized environment instead of ambient auth variables', async () => {
+    vi.stubEnv('DASHSCOPE_API_KEY', 'ambient-key');
+    vi.stubEnv('OPENAI_API_KEY', 'ambient-openai-key');
+    const connector = await makeConnector();
     connectors.push(connector);
     await connector.initialize();
 
-    expect(acpHarness.capturedCalls).toHaveLength(1);
-    expect(acpHarness.capturedCalls[0]?.command).toBe('/custom/qwen');
-    // Resolved env is still applied even when user overrides the binary path.
-    expect(acpHarness.capturedCalls[0]?.env).toMatchObject({
-      QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/managed/profiles',
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // Env merge order — resolved binary env takes precedence over base connector env
-  // -------------------------------------------------------------------------
-
-  it('binary env overrides base connector env when both are present', async () => {
-    const baseEnv = { QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/old/path', BASE_VAR: 'keep-me' };
-
-    cleanupHandlers.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(
-          makeExecutionContext('/path/to/qwen', {
-            QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/new/managed/path',
-          }),
-        );
-      }),
-    );
-
-    const connector = await makeConnector({ env: baseEnv });
-    connectors.push(connector);
-    await connector.initialize();
-
-    expect(acpHarness.capturedCalls[0]?.env).toMatchObject({
-      QWEN_CODE_SYSTEM_DEFAULTS_PATH: '/new/managed/path',
-      BASE_VAR: 'keep-me',
-    });
+    expect(acpHarness.capturedCalls[0]?.env).toEqual({});
   });
 });

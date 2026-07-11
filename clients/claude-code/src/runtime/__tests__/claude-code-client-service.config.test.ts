@@ -378,7 +378,10 @@ describe('ClaudeCodeClientService — config subjects', () => {
         configInheritance: 'full',
       });
 
-      expect(result.env).toEqual({ CLAUDE_CONFIG_DIR: sessionDir });
+      expect(result.env).toEqual({
+        CLAUDE_CONFIG_DIR: sessionDir,
+        CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
+      });
       const settings = await readSettings(path.join(sessionDir, 'settings.json'));
       expect(settings).toMatchObject({ theme: 'dark', env: { DISABLE_AUTOUPDATER: '1' } });
     });

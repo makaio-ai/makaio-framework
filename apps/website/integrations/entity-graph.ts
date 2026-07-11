@@ -21,6 +21,10 @@ export interface AdapterEntity {
   description: string;
   protocols: string[];
   clients: { id: string; version: string }[];
+  /** Extension package names declared as dependencies by the adapter package. */
+  extensionDependencies: string[];
+  /** Exact default provider for SDK-native descriptors that support one provider. */
+  defaultProvider?: string;
   /** Filesystem directory name (e.g. `anthropic-sdk`). */
   slug: string;
 }
@@ -31,6 +35,8 @@ export interface ProviderEntity {
   description: string;
   protocols: string[];
   requiredClient?: string;
+  /** Stable extension package identity that contributes this provider. */
+  packageName: string;
   /** Filesystem directory name (e.g. `anthropic`). */
   slug: string;
 }
@@ -84,6 +90,7 @@ interface ClientDescriptor {
 }
 
 interface AdapterDescriptor {
+  dependencies?: { type: string; name: string }[];
   contributions?: {
     adapters?: {
       name: string;
@@ -91,11 +98,13 @@ interface AdapterDescriptor {
       description: string;
       protocols?: string[];
       clients?: { id: string; version: string }[];
+      defaultProvider?: string;
     }[];
   };
 }
 
 interface ProviderDescriptor {
+  name: string;
   contributions?: {
     providers?: {
       id: string;
@@ -154,13 +163,18 @@ function discoverAdapters(): AdapterEntity[] {
   for (const entry of fs.readdirSync(implDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const descriptor = readJsonSafe<AdapterDescriptor>(path.join(implDir, entry.name, 'descriptor.json'));
-    for (const adapter of descriptor?.contributions?.adapters ?? []) {
+    if (!descriptor) continue;
+    const extensionDependencies =
+      descriptor.dependencies?.filter((dependency) => dependency.type === 'extension').map(({ name }) => name) ?? [];
+    for (const adapter of descriptor.contributions?.adapters ?? []) {
       entities.push({
         name: adapter.name,
         displayName: adapter.displayName,
         description: adapter.description,
         protocols: adapter.protocols ?? [],
         clients: adapter.clients ?? [],
+        extensionDependencies,
+        ...(adapter.defaultProvider !== undefined && { defaultProvider: adapter.defaultProvider }),
         slug: entry.name,
       });
     }
@@ -180,13 +194,15 @@ function discoverProviders(): ProviderEntity[] {
   for (const entry of fs.readdirSync(providersDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const descriptor = readJsonSafe<ProviderDescriptor>(path.join(providersDir, entry.name, 'descriptor.json'));
-    for (const provider of descriptor?.contributions?.providers ?? []) {
+    if (!descriptor) continue;
+    for (const provider of descriptor.contributions?.providers ?? []) {
       entities.push({
         id: provider.id,
         name: provider.name,
         description: provider.description,
         protocols: provider.protocols ?? [],
         requiredClient: provider.requiredClient,
+        packageName: descriptor.name,
         slug: entry.name,
       });
     }
@@ -209,17 +225,25 @@ function protocolsIntersect(a: readonly string[], b: readonly string[]): boolean
 }
 
 /**
- * An adapter is compatible with a provider when:
- * 1. Their protocols intersect, AND
- * 2. The provider has no `requiredClient`, or the required client is one of the adapter's declared clients.
+ * An adapter is compatible with a provider when either:
+ * 1. Their protocols intersect and the provider's optional `requiredClient` is declared by the adapter, or
+ * 2. The adapter is SDK-native and depends on the extension package that contributes the provider.
+ *
+ * SDK-native adapters deliberately declare no framework wire protocol. Their
+ * provider-extension dependency supplies an exact, serializable compatibility
+ * edge without falsely advertising a generic HTTP protocol or client binding.
  * @param adapter - Adapter to check.
  * @param provider - Provider to check against.
  * @returns `true` when the adapter can serve the provider.
  */
 function adapterCompatibleWithProvider(adapter: AdapterEntity, provider: ProviderEntity): boolean {
+  if (adapter.protocols.length === 0) {
+    if (!adapter.extensionDependencies.includes(provider.packageName)) return false;
+    return adapter.defaultProvider === undefined || adapter.defaultProvider === provider.id;
+  }
   if (!protocolsIntersect(adapter.protocols, provider.protocols)) return false;
   if (!provider.requiredClient) return true;
-  return adapter.clients.some((c) => c.id === provider.requiredClient);
+  return adapter.clients.some((client) => client.id === provider.requiredClient);
 }
 
 /**
@@ -238,7 +262,7 @@ function mapPush<K, V>(map: Map<K, V[]>, key: K, value: V): void {
 }
 
 /**
- * Computes bidirectional adapter ↔ provider compatibility via protocol intersection and requiredClient check.
+ * Computes bidirectional adapter ↔ provider compatibility via protocol compatibility or exact provider-package dependency.
  * @param adapters - All discovered adapters.
  * @param providers - All discovered providers.
  * @returns Pair of maps: provider→adapters and adapter→providers.

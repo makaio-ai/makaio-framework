@@ -16,9 +16,8 @@ const clients = adapterDefinition.clients;
 /**
  * Package descriptor for the GitHub Copilot SDK adapter.
  *
- * API-only adapter that targets the GitHub Copilot completions endpoint.
- * Declares the `openai` wire protocol since GitHub Copilot exposes an
- * OpenAI-compatible chat completions interface.
+ * Uses the GitHub Copilot SDK and its managed CLI transport, so it declares no
+ * Makaio HTTP inference protocol.
  */
 export const githubCopilotSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: GitHubCopilotSdkAdapterName,
@@ -32,7 +31,7 @@ export const githubCopilotSdkPackage: MakaioNodeExtension<IMakaioBus> = {
         displayName: 'GitHub Copilot',
         description: 'GitHub Copilot SDK integration',
         ...(clients ? { clients } : {}),
-        protocols: ['openai'],
+        protocols: [],
       },
       definition: adapterDefinition,
     },

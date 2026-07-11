@@ -8,6 +8,7 @@ import {
   WorkflowNamespace,
   WorkflowSubjects,
   type JsonValue,
+  type ProviderContext,
   type SpanRecord,
   type StationHandler,
   type WorkflowDefinition,
@@ -105,6 +106,33 @@ const emptyExpressionCtx = {
 };
 
 const SESSION_LINK_TEST_CLEANUP_TIMEOUT_MS = 60_000;
+
+const REVIEW_PROVIDER_CONTEXT = {
+  state: 'resolved',
+  providerConfigId: 'provider-config-review',
+  definitionId: 'provider-definition-review',
+  auth: {
+    mode: 'none',
+    method: {
+      owner: 'provider',
+      providerDefinitionId: 'provider-definition-review',
+      methodId: 'none',
+    },
+    definition: { id: 'none', mode: 'none', label: 'No authentication' },
+  },
+  capabilities: {
+    structuredOutput: {
+      responseFormatWithTools: true,
+    },
+  },
+} satisfies ProviderContext;
+
+const REVIEW_PROVIDER_CONTEXT_WITHOUT_CAPABILITIES = {
+  state: 'resolved',
+  providerConfigId: 'provider-config-review',
+  definitionId: 'provider-definition-review',
+  auth: REVIEW_PROVIDER_CONTEXT.auth,
+} satisfies ProviderContext;
 
 // ─────────────────────────────────────────────────────────────
 // Station node tests
@@ -1161,16 +1189,7 @@ describe('executeDelegateNode', () => {
         model: 'sonnet',
         reasoningEffort: 'high',
         systemPrompt: 'Review carefully.',
-        providerContext: {
-          providerConfigId: 'provider-config-review',
-          definitionId: 'provider-definition-review',
-          credentialRefs: {},
-          capabilities: {
-            structuredOutput: {
-              responseFormatWithTools: true,
-            },
-          },
-        },
+        providerContext: REVIEW_PROVIDER_CONTEXT,
       });
     });
     const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
@@ -1249,16 +1268,7 @@ describe('executeDelegateNode', () => {
             reasoningEffort: 'high',
             providerConfigId: 'provider-config-review',
             systemPrompt: 'Review carefully.',
-            providerContext: {
-              providerConfigId: 'provider-config-review',
-              definitionId: 'provider-definition-review',
-              credentialRefs: {},
-              capabilities: {
-                structuredOutput: {
-                  responseFormatWithTools: true,
-                },
-              },
-            },
+            providerContext: REVIEW_PROVIDER_CONTEXT,
           }),
         }),
       ]);
@@ -1363,11 +1373,7 @@ describe('executeDelegateNode', () => {
         harnessId: 'review-harness',
         systemPrompt: 'Review carefully.',
         contextMode: 'fresh',
-        providerContext: {
-          providerConfigId: 'provider-config-review',
-          definitionId: 'provider-definition-review',
-          credentialRefs: {},
-        },
+        providerContext: REVIEW_PROVIDER_CONTEXT_WITHOUT_CAPABILITIES,
       });
     });
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
@@ -1408,11 +1414,7 @@ describe('executeDelegateNode', () => {
             harnessId: 'review-harness',
             systemPrompt: 'Review carefully.',
             contextMode: 'fresh',
-            providerContext: {
-              providerConfigId: 'provider-config-review',
-              definitionId: 'provider-definition-review',
-              credentialRefs: {},
-            },
+            providerContext: REVIEW_PROVIDER_CONTEXT_WITHOUT_CAPABILITIES,
             responseSchema: { schema: { type: 'object' } },
           }),
         }),

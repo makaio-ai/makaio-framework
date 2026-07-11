@@ -9,7 +9,7 @@ import { ClaudeCodeCliProviderConfigSchema } from './schemas.js';
 import type { ClaudeCodeCliConnectorBus } from './namespace/index.js';
 import type { ClaudeCliConnector } from './connector.js';
 import type { ClaudeCodeCliAgent } from './agent.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 
 /**
  * Adapter definition for the Claude Code CLI adapter.
@@ -23,7 +23,11 @@ export const adapterDefinition: AIAdapterDefinition<ClaudeCodeCliConnectorBus, C
     displayName: 'Claude Code (CLI)',
     defaultPresetId,
     description: 'Claude Code integration via the `claude` CLI binary using stdio JSON streaming',
-    providers: providerIds.map((definitionId) => ({ definitionId })),
+    providers: providerIds.map((definitionId) => ({
+      definitionId,
+      protocol: 'anthropic',
+      auth: providerAuthById[definitionId],
+    })),
     providerConfigSchema: ClaudeCodeCliProviderConfigSchema,
     defaultTimeouts: DEFAULT_TIMEOUTS,
     helpLinks: [{ label: 'Claude Code Documentation', url: 'https://docs.anthropic.com/en/docs/claude-code' }],

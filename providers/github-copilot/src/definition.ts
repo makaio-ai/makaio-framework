@@ -16,5 +16,20 @@ export const providerDefinition: ProviderDefinitionInput = {
   description: 'GitHub Copilot — premium request-based AI models',
   defaultModel: 'gpt-5.1-codex-mini',
   fastModel: 'gpt-5.4-mini',
-  credentialEnvVars: { token: 'COPILOT_TOKEN' },
+  authMethods: [
+    {
+      id: 'token',
+      mode: 'explicit',
+      label: 'Token',
+      fields: [
+        {
+          id: 'token',
+          label: 'Token',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'COPILOT_TOKEN' }],
+        },
+      ],
+    },
+  ],
 };

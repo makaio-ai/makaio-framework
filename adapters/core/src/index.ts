@@ -67,8 +67,10 @@ export {
   mergeScopedToolApproval,
   normalizeMimeType,
   isTextLikeMimeType,
-  resolvePresetCredentials,
 } from './utils/index.js';
+
+// Conformance testing
+export { ConformanceConnectorRuntimeRegistry, createNoAuthTestProviderContext } from './testing/index.js';
 export type {
   SerializedContextBlock,
   NormalizedMessageInput,

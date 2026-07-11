@@ -11,7 +11,6 @@ import type {
   StartAgentRequest,
   StartAgentResponse,
 } from '@makaio/contracts';
-import { activateProviderContext } from '../../provider-context/index.js';
 
 /** Runtime options plus model, providerContext, and reasoningEffort. */
 export type ExtractableRuntimeOptions = Partial<
@@ -190,21 +189,20 @@ export interface LaunchAttachAgentInput {
   readonly resumeAdapterSessionId: string | undefined;
   readonly harnessId: string | undefined;
   readonly attachSessionContext: SessionContext | undefined;
-  readonly providerContext: ProviderContext | undefined;
 }
 
 /**
- * Build the startAgent request, activate provider credentials if needed, dispatch
- * the request, and surface any startup failure as a thrown error.
+ * Build and dispatch the startAgent request, then surface any startup failure
+ * as a thrown error.
  *
- * Groups the three tightly-coupled startup operations — request construction,
- * credential activation, and adapter dispatch — into a single named step so
+ * Groups the tightly-coupled startup operations — request construction and
+ * adapter dispatch — into a single named step so
  * `attachAgent` reads as a clear orchestration of resolved-inputs → launch →
  * persist-identity → turn-setup.
  *
  * Startup failures are surfaced directly to the caller (UI/SDK) rather than
  * entering a degrade-and-retry path — that belongs to the coordinator layer.
- * @param bus - Bus instance for credential activation and adapter dispatch
+ * @param bus - Bus instance for adapter dispatch
  * @param input - All resolved attach parameters required to construct and send the request
  * @returns The successful idle startAgent response containing agentId and adapterId
  */
@@ -220,7 +218,6 @@ export async function launchAttachAgent(
     resumeAdapterSessionId,
     harnessId,
     attachSessionContext,
-    providerContext,
   } = input;
 
   const startAgentRequest = buildStartAgentRequest(
@@ -232,9 +229,6 @@ export async function launchAttachAgent(
     harnessId,
     attachSessionContext,
   );
-  if (providerContext !== undefined) {
-    await activateProviderContext(bus, providerContext);
-  }
   const startResult = await bus.request(AdapterSubjects.startAgent, startAgentRequest);
   if (!startResult.success) {
     throw new Error(`[attach-handler] Failed to start agent: ${startResult.message}`);

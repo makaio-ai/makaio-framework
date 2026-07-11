@@ -42,8 +42,8 @@ interface CreateGeminiConfigInput {
 }
 
 /**
- * Create Config instance for Makaio integration with real OAuth authentication.
- * Uses stored Google OAuth credentials (same as gemini CLI).
+ * Create the SDK configuration before the connector applies the Adapter
+ * Core-resolved API key through {@link Config.refreshAuth}.
  * @param connectorConfig - Connector configuration with model, cwd, and provider options
  * @returns Configured Config instance
  */

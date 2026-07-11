@@ -6,6 +6,9 @@ const execFileAsync = promisify(execFile);
 /** macOS Security framework exit code for "item not found" (errSecItemNotFound). */
 const KEYCHAIN_ITEM_NOT_FOUND = 44;
 
+/** Supported macOS keychain operation names used in secret-free failures. */
+type KeychainOperation = 'read' | 'write' | 'delete';
+
 /**
  * Parses the password line from `security find-generic-password -g` stderr output.
  *
@@ -26,8 +29,26 @@ function parseSecurityPassword(stderr: string): string {
     return quotedMatch[1];
   }
 
-  const redactedStderr = stderr.replace(/^password:.*$/gm, 'password: [REDACTED]');
-  throw new Error(`Unexpected security output format: ${redactedStderr}`);
+  throw new Error('Unexpected macOS keychain output format');
+}
+
+/**
+ * Read the stable process exit code without retaining platform error details.
+ * @param error - Rejected `security` process error.
+ * @returns Process exit code when present.
+ */
+function getSecurityExitCode(error: unknown): string | number | undefined {
+  if (!(error instanceof Error)) return undefined;
+  return (error as Error & { code?: string | number }).code;
+}
+
+/**
+ * Build an error that cannot retain command arguments, stderr, or credential bytes.
+ * @param operation - Keychain operation that failed.
+ * @returns Secret-free public failure.
+ */
+function keychainOperationError(operation: KeychainOperation): Error {
+  return new Error(`macOS keychain ${operation} failed`);
 }
 
 /**
@@ -47,12 +68,8 @@ export async function keychainRead(service: string, account?: string): Promise<s
     const { stderr } = await execFileAsync('/usr/bin/security', args);
     return parseSecurityPassword(stderr);
   } catch (error) {
-    if (error instanceof Error) {
-      const code = (error as Error & { code?: string | number }).code;
-      if (code === 'ENOENT') throw error;
-      if (code === KEYCHAIN_ITEM_NOT_FOUND) return null;
-    }
-    throw error;
+    if (getSecurityExitCode(error) === KEYCHAIN_ITEM_NOT_FOUND) return null;
+    throw keychainOperationError('read');
   }
 }
 
@@ -67,7 +84,11 @@ export async function keychainRead(service: string, account?: string): Promise<s
  */
 export async function keychainWrite(service: string, account: string, value: string): Promise<void> {
   const hex = Buffer.from(value, 'utf-8').toString('hex');
-  await execFileAsync('/usr/bin/security', ['add-generic-password', '-U', '-s', service, '-a', account, '-X', hex]);
+  try {
+    await execFileAsync('/usr/bin/security', ['add-generic-password', '-U', '-s', service, '-a', account, '-X', hex]);
+  } catch {
+    throw keychainOperationError('write');
+  }
 }
 
 /**
@@ -84,11 +105,7 @@ export async function keychainDelete(service: string, account?: string): Promise
   try {
     await execFileAsync('/usr/bin/security', args);
   } catch (error) {
-    if (error instanceof Error) {
-      const code = (error as Error & { code?: string | number }).code;
-      if (code === 'ENOENT') throw error;
-      if (code === KEYCHAIN_ITEM_NOT_FOUND) return;
-    }
-    throw error;
+    if (getSecurityExitCode(error) === KEYCHAIN_ITEM_NOT_FOUND) return;
+    throw keychainOperationError('delete');
   }
 }

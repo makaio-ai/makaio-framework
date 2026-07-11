@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const nativeCredentialMockState = vi.hoisted(() => ({
   inheritCalls: [] as Array<{ sourceConfigDir: string; sessionDir: string; platform: NodeJS.Platform }>,
   clearCalls: [] as Array<{ sessionDir: string; platform: NodeJS.Platform }>,
+  inheritPrepared: true,
 }));
 
 // Native credential inheritance has its own real-filesystem coverage; this
@@ -15,7 +16,7 @@ vi.mock('../native-credentials.js', () => ({
   inheritClaudeCodeNativeCredentialsForSession: vi.fn(
     async (request: { sourceConfigDir: string; sessionDir: string; platform: NodeJS.Platform }) => {
       nativeCredentialMockState.inheritCalls.push(request);
-      return { prepared: true };
+      return { prepared: nativeCredentialMockState.inheritPrepared };
     },
   ),
   clearClaudeCodeNativeCredentialsForSession: vi.fn(
@@ -34,6 +35,7 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     vi.unstubAllEnvs();
     nativeCredentialMockState.inheritCalls.length = 0;
     nativeCredentialMockState.clearCalls.length = 0;
+    nativeCredentialMockState.inheritPrepared = true;
     let dir = tempDirs.pop();
     while (dir !== undefined) {
       rmSync(dir, { recursive: true, force: true });
@@ -80,7 +82,34 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     expect(sessionSettings).toMatchObject({ theme: 'dark', env: { DISABLE_AUTOUPDATER: '1' } });
     // Native source is never modified by the session setup.
     await expect(fs.readFile(path.join(nativeConfigDir, 'settings.json'), 'utf-8')).resolves.toBe('{"theme":"dark"}');
-    expect(result.env).toEqual({ CLAUDE_CONFIG_DIR: sessionDir });
+    expect(result.env).toEqual({
+      CLAUDE_CONFIG_DIR: sessionDir,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
+    });
+    expect(result.authMaterialized).toBe(true);
+  });
+
+  it('uses ambient CLAUDE_CONFIG_DIR as the native source and overrides child identities', async () => {
+    const sourceDir = await makeTempDir('makaio-claude-custom-home-');
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+    await fs.writeFile(path.join(sourceDir, 'settings.json'), '{"theme":"custom"}', 'utf-8');
+    vi.stubEnv('CLAUDE_CONFIG_DIR', sourceDir);
+    vi.stubEnv('CLAUDE_SECURESTORAGE_CONFIG_DIR', '/ambient/secure-storage');
+
+    const result = await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: sessionDir,
+      platform: 'linux',
+      configInheritance: 'auth-only',
+    });
+
+    expect(nativeCredentialMockState.inheritCalls).toEqual([
+      { sourceConfigDir: sourceDir, sessionDir, platform: 'linux' },
+    ]);
+    expect(result.env).toEqual({
+      CLAUDE_CONFIG_DIR: sessionDir,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
+    });
   });
 
   it('full inheritance scrubs stale Makaio wiring from copied settings files', async () => {
@@ -143,7 +172,7 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     await fs.writeFile(path.join(sourceDir, 'settings.json'), '{"theme":"dark"}', 'utf-8');
     await fs.writeFile(path.join(sourceDir, 'settings.local.json'), '{"enabledPlugins":{"user-plugin":true}}', 'utf-8');
 
-    await handleClaudeCodeSessionConfigSetup({
+    const result = await handleClaudeCodeSessionConfigSetup({
       sessionDir,
       baseConfigDir: sourceDir,
       platform: 'linux',
@@ -156,6 +185,22 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     expect(nativeCredentialMockState.inheritCalls).toEqual([
       { sourceConfigDir: sourceDir, sessionDir, platform: 'linux' },
     ]);
+    expect(result.authMaterialized).toBe(true);
+  });
+
+  it('reports missing native credentials for auth-only inheritance', async () => {
+    const sourceDir = await makeTempDir('makaio-claude-source-');
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+    nativeCredentialMockState.inheritPrepared = false;
+
+    const result = await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: sourceDir,
+      platform: 'linux',
+      configInheritance: 'auth-only',
+    });
+
+    expect(result.authMaterialized).toBe(false);
   });
 
   it('auth-only inheritance copies only Claude auth state from native global state', async () => {
@@ -279,7 +324,7 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     const sessionDir = await makeTempDir('makaio-claude-session-');
     await fs.writeFile(path.join(sourceDir, 'settings.json'), '{"theme":"dark"}', 'utf-8');
 
-    await handleClaudeCodeSessionConfigSetup({
+    const result = await handleClaudeCodeSessionConfigSetup({
       sessionDir,
       baseConfigDir: sourceDir,
       platform: 'linux',
@@ -289,6 +334,7 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     const sessionSettings = JSON.parse(await fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8'));
     expect(sessionSettings).toEqual({ env: { DISABLE_AUTOUPDATER: '1' } });
     expect(nativeCredentialMockState.clearCalls).toEqual([{ sessionDir, platform: 'linux' }]);
+    expect(result.authMaterialized).toBe(false);
   });
 
   it('empty inheritance delegates macOS native credential cleanup', async () => {

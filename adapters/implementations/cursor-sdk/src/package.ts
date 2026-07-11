@@ -12,8 +12,6 @@ import { adapterDefinition } from './definition.js';
 import { CursorSdkAdapterName } from './constants.js';
 import { providerIds } from './provider.js';
 
-const clients = adapterDefinition.clients;
-
 /**
  * Package descriptor for the Cursor SDK adapter.
  *
@@ -33,7 +31,6 @@ export const cursorSdkPackage: MakaioNodeExtension<IMakaioBus> = {
         name: CursorSdkAdapterName,
         displayName: 'Cursor SDK',
         description: 'Cursor AI editor agent via TypeScript SDK',
-        ...(clients ? { clients } : {}),
         protocols: [],
       },
       definition: adapterDefinition,

@@ -19,21 +19,6 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const capturedSessionConfigs = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
-// Mock session environment resolution so tests are not gated on a real credential
-// channel. These tests verify connector reasoning wiring, not credential resolution.
-vi.mock('@makaio/ai-adapters-core/config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@makaio/ai-adapters-core/config')>();
-  return {
-    ...actual,
-    resolveSessionEnvironment: vi.fn().mockResolvedValue({
-      credentials: { token: 'mock-copilot-token' },
-      credEnv: { COPILOT_TOKEN: 'mock-copilot-token' },
-      resolvedBinary: undefined,
-      spawnEnv: { COPILOT_TOKEN: 'mock-copilot-token' },
-    }),
-  };
-});
-
 vi.mock('@github/copilot-sdk', () => {
   class MockCopilotClient {
     public constructor(_config: unknown) {}
@@ -59,7 +44,12 @@ vi.mock('@github/copilot-sdk', () => {
 import { GitHubCopilotConnector, toSdkReasoningEffort } from '../src/connector.js';
 import { GitHubCopilotConnectorNamespace } from '../src/namespaces/index.js';
 import type { AIReasoningLevel } from '@makaio/contracts';
-import { CredentialRefSchema } from '@makaio/contracts/config';
+
+const testAdapterAuth = {
+  processEnv: {},
+  connectorDeliveries: [{ target: 'github-copilot-sdk.constructor', values: { githubToken: 'mock-copilot-token' } }],
+  configInheritance: 'empty' as const,
+};
 
 // ---------------------------------------------------------------------------
 // Pure mapping function
@@ -102,12 +92,7 @@ describe('github-copilot-sdk connector reasoning wiring', () => {
       cwd: process.cwd(),
       env: {},
       reasoningEffort,
-      providerContext: {
-        providerConfigId: 'test-provider-config-id',
-        definitionId: 'github-copilot',
-        credentialRefs: { token: CredentialRefSchema.parse('env:COPILOT_TOKEN') },
-        credentialEnvVars: { token: 'COPILOT_TOKEN' },
-      },
+      adapterAuth: testAdapterAuth,
     });
   }
 
@@ -215,12 +200,7 @@ describe('github-copilot-sdk connector reasoning wiring', () => {
       cwd: process.cwd(),
       env: {},
       reasoningEffort: 'none',
-      providerContext: {
-        providerConfigId: 'test-provider-config-id',
-        definitionId: 'github-copilot',
-        credentialRefs: { token: CredentialRefSchema.parse('env:COPILOT_TOKEN') },
-        credentialEnvVars: { token: 'COPILOT_TOKEN' },
-      },
+      adapterAuth: testAdapterAuth,
       // Cast required: providerConfig type does not declare reasoningEffort,
       // but we want to verify the runtime guard handles unexpected fields.
       providerConfig: { reasoningEffort: 'high' } as never,
@@ -243,12 +223,7 @@ describe('github-copilot-sdk connector reasoning wiring', () => {
       model: 'gpt-4o-mini',
       cwd: process.cwd(),
       env: {},
-      providerContext: {
-        providerConfigId: 'test-provider-config-id',
-        definitionId: 'github-copilot',
-        credentialRefs: { token: CredentialRefSchema.parse('env:COPILOT_TOKEN') },
-        credentialEnvVars: { token: 'COPILOT_TOKEN' },
-      },
+      adapterAuth: testAdapterAuth,
       providerConfig: {
         sessionId: 'provider-session',
         model: 'provider-model',

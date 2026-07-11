@@ -10,7 +10,7 @@ import type { CursorSdkAgent } from './agent.js';
 import { CursorSdkAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
 import { CursorSdkProviderConfigSchema } from './schemas.js';
 import { createCursorSdkAdapter } from './adapter.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 
 /** Adapter definition for the Cursor SDK adapter. */
 export const adapterDefinition: AIAdapterDefinition<CursorSdkBus, CursorSdkConnector, CursorSdkAgent> = {
@@ -18,12 +18,11 @@ export const adapterDefinition: AIAdapterDefinition<CursorSdkBus, CursorSdkConne
   displayName: 'Cursor SDK',
   description: 'Cursor AI editor agent via TypeScript SDK',
   defaultPresetId,
-  providers: providerIds.map((definitionId) => ({ definitionId })),
+  providers: providerIds.map((definitionId) => ({ definitionId, auth: providerAuthById[definitionId] })),
   providerConfigSchema: CursorSdkProviderConfigSchema,
   defaultTimeouts: DEFAULT_TIMEOUTS,
   helpLinks: [],
   instructions: 'Install the Cursor SDK and ensure `@cursor/sdk` is available as a peer dependency.',
   protocol: undefined,
-  clients: [{ id: 'cursor', version: '^1.0.0' }],
   createAdapter: createCursorSdkAdapter,
 };

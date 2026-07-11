@@ -10,6 +10,9 @@ import * as testApi from '../test/index.js';
 describe('pi-sdk provider declarations', () => {
   it('declares supported providers as subsystem-resolved provider refs', () => {
     expect(adapterDefinition.providers.map(({ definitionId }) => definitionId)).toEqual([...providerIds]);
+    expect(
+      Object.fromEntries(adapterDefinition.providers.map(({ definitionId, protocol }) => [definitionId, protocol])),
+    ).toEqual({ anthropic: 'anthropic', openai: 'openai', 'opencode-go': 'openai' });
     expect(adapterDefinition.providerConfigSchema).toBe(PiSdkProviderConfigSchema);
 
     for (const providerRef of adapterDefinition.providers) {

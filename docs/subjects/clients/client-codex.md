@@ -25,6 +25,7 @@ next: false
 | `config.hooks.list` | [`client:codex.config.hooks.list`](#client:codex.config.hooks.list) | rpc | [`config.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/config.ts) |
 | `config.hooks.remove` | [`client:codex.config.hooks.remove`](#client:codex.config.hooks.remove) | rpc | [`config.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/config.ts) |
 | `config.prime` | [`client:codex.config.prime`](#client:codex.config.prime) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `sessionConfig.destroy` | [`client:codex.sessionConfig.destroy`](#client:codex.sessionConfig.destroy) | rpc | — |
 | `sessionConfig.setup` | [`client:codex.sessionConfig.setup`](#client:codex.sessionConfig.setup) | rpc | — |
 | `wiring.apply` | [`client:codex.wiring.apply`](#client:codex.wiring.apply) | rpc | [`wiring.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/wiring.ts) |
 | `wiring.list` | [`client:codex.wiring.list`](#client:codex.wiring.list) | rpc | [`wiring.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/wiring.ts) |
@@ -135,6 +136,24 @@ Type: Request (RPC)
 |-------|------|----------|
 | `primed` | `boolean` | yes |
 
+### <a id="client:codex.sessionConfig.destroy"></a>`client:codex.sessionConfig.destroy` (rpc)
+
+Subject: `client:codex.sessionConfig.destroy`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `platform` | `"darwin" \| "linux" \| "win32"` | yes |
+| `sessionDir` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
+
 ### <a id="client:codex.sessionConfig.setup"></a>`client:codex.sessionConfig.setup` (rpc)
 
 Subject: `client:codex.sessionConfig.setup`
@@ -154,6 +173,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `authMaterialized` | `boolean` | yes |
 | `env` | `Record<string, string> \| undefined` | no |
 
 ### <a id="client:codex.wiring.apply"></a>`client:codex.wiring.apply` (rpc)

@@ -10,13 +10,11 @@ import {
   type ConnectorSendMessageOptions,
   type ConnectorStartOptions,
 } from '@makaio/ai-adapters-core';
-import { resolveSessionEnvironment } from '@makaio/ai-adapters-core/config';
 import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
 import { MakaioBus } from '@makaio/bus-core';
 import { isTmuxAvailable, TmuxBackend } from '@makaio/subsystem-native-session-supervisor';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import { McpSubjects } from '@makaio/contracts';
-import { ClientSubjects } from '@makaio/contracts/client';
 import { TmuxSession } from './session.js';
 import { ClaudeCodeTmuxConnectorSubjects, type ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import { ADAPTER_NAME, DEFAULT_INTERRUPT_SETTLE_MS, TMUX_SERVER_NAME } from './constants.js';
@@ -82,21 +80,12 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   // ---------------------------------------------------------------------------
 
   /**
-   * Resolve process environment for spawning Claude Code.
-   * @returns Spawn environment with API key and base URL mapped to Anthropic names.
+   * Apply the non-secret provider endpoint to the centrally finalized environment.
+   * @returns Spawn environment for Claude Code.
    */
-  private async resolveSpawnEnv(): Promise<Record<string, string>> {
-    const { credentials, spawnEnv } = await resolveSessionEnvironment({
-      bus: this.config.bus,
-      providerContext: this.config.providerContext,
-      clientId: 'claude-code',
-      baseEnv: this.env,
-    });
-
+  private resolveSpawnEnv(): Record<string, string> {
     return resolveClaudeProcessEnv({
-      spawnEnv,
-      credentials,
-      providerContext: this.config.providerContext,
+      spawnEnv: this.env,
       baseUrl: readClaudeProviderBaseUrl(this.config.providerConfig),
     });
   }
@@ -135,9 +124,8 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * The server entry uses a session-scoped name (`makaio-<short-id>`) so that
    * concurrent sessions and existing user entries are never overwritten.
    * @param projectDir - Project directory whose `.mcp.json` Claude Code reads.
-   * @param env - Spawn environment forwarded into tool execution context.
    */
-  private async registerMcpSession(projectDir: string, env: Record<string, string>): Promise<void> {
+  private async registerMcpSession(projectDir: string): Promise<void> {
     const result = await MakaioBus.requestOptional(McpSubjects.session.register, {
       adapterSessionId: this.claudeSessionId,
       agentId: this.agentId,
@@ -147,7 +135,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       pinned: true,
       contextOverrides: {
         cwd: projectDir,
-        env,
+        env: this.config.contextEnv ?? {},
         sessionId: this.sessionId ?? this.claudeSessionId,
         agentId: this.agentId,
         adapterSessionId: this.claudeSessionId,
@@ -243,8 +231,8 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * @param token - Lifecycle token captured when initialization started.
    */
   private async _doInitializeSession(token: number): Promise<void> {
-    const env = await this.resolveSpawnEnv();
-    const binaryPath = this.config.providerConfig?.binaryPath ?? 'claude';
+    const env = this.resolveSpawnEnv();
+    const binaryPath = this.config.clientExecution?.binaryPath ?? 'claude';
     const projectDir = this.cwd;
     let earlySessionStartUnsubscribe: (() => void) | undefined;
     let earlySessionStartId: string | undefined;
@@ -257,11 +245,8 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       const mergedEnv = await prepareLaunchPrerequisites({
         projectDir,
         baseEnv: env,
-        sessionId: this.claudeSessionId,
-        agentId: this.agentId,
-        clientProfileName: this.config.clientProfileName,
         ensureHookWiring: (dir, configDir) => this.ensureHookWiring(dir, configDir),
-        registerMcpSession: (dir, mcpEnv) => this.registerMcpSession(dir, mcpEnv),
+        registerMcpSession: (dir) => this.registerMcpSession(dir),
         assertLifecycleCurrent: () => this.assertLifecycleCurrent(token),
       });
 
@@ -316,7 +301,13 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       this.wireSessionEvents();
     } catch (error) {
       earlySessionStartUnsubscribe?.();
-      await this.teardown({ finalizeActiveTurn: false, cleanupMcp: true });
+      try {
+        await this.teardown({ finalizeActiveTurn: false, cleanupMcp: true });
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], 'Claude Code tmux initialization and rollback both failed.', {
+          cause: error,
+        });
+      }
       throw error;
     }
   }
@@ -592,10 +583,6 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     const cleanupTasks = [
       ...(options?.cleanupMcp ? [this.cleanupMcpSession(this.cwd)] : []),
       this.backend?.dispose() ?? Promise.resolve(),
-      MakaioBus.requestOptional(ClientSubjects.sessionConfig.destroy, {
-        clientId: 'claude-code',
-        sessionId: this.claudeSessionId,
-      }).catch(() => {}),
     ];
     const cleanupResults = await Promise.allSettled(cleanupTasks);
 

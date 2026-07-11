@@ -4,15 +4,14 @@ import { ConfigSchema, EntityUIConfigSchema, ProtocolIdSchema } from '@makaio/co
 import { ProviderDefaultsSchema } from '@makaio/contracts/config';
 
 /**
- * Readiness signal: whether this adapter can operate with zero explicit config.
+ * Readiness signal derived from canonical adapter bindings.
  *
- * - `ready`: adapter has a default preset and all required credentials are available
- * - `missing-credentials`: adapter has a default preset but required credential env vars are not set
- * - `needs-setup`: adapter has no default preset or preset metadata; explicit setup is required
+ * - `ready`: the adapter has an enabled provider-config binding
+ * - `needs-setup`: the adapter has no enabled binding; explicit setup is required
  */
-export const AdapterReadinessSchema = z.enum(['ready', 'missing-credentials', 'needs-setup']);
+export const AdapterReadinessSchema = z.enum(['ready', 'needs-setup']);
 
-/** Readiness signal for zero-config adapter enablement. */
+/** Readiness signal for canonical adapter configuration. */
 export type AdapterReadiness = z.infer<typeof AdapterReadinessSchema>;
 
 /**
@@ -45,8 +44,8 @@ export const AdapterInfoSchema = z.object({
     .optional(),
   /** Setup instructions in Markdown format */
   instructions: z.string().optional(),
-  /** Readiness signal: whether this adapter can operate with zero explicit config */
-  readiness: AdapterReadinessSchema.optional(),
+  /** Readiness signal derived from canonical adapter bindings */
+  readiness: AdapterReadinessSchema,
   /**
    * Stable client identifier this adapter belongs to (e.g. `'claude-code'`).
    * Omitted for API-only adapters that have no associated CLI client.

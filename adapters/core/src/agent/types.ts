@@ -6,6 +6,7 @@ import type {
   McpSessionContext,
   Message,
   NativeForkDirective,
+  ProtocolId,
   ProviderContext,
   ResponseSchemaDescriptor,
   RequestCorrelationContext,
@@ -22,6 +23,10 @@ import type { ConfigFactoryInput } from '../adapter/ai-adapter-config.js';
 import { AgentSchemas, AgentSubjects } from '@makaio/contracts';
 import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
 import type { MessageHandle, ProcessingState, SendMessageOptions } from '../message-handle/index.js';
+import type { AdapterProviderDefinition } from '../types/provider-definition.js';
+import type { ClientExecutionContext } from '@makaio/contracts/client';
+import type { ResolvedAdapterAuth } from '../config/resolve-adapter-auth.js';
+import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 
 // ============================================================================
 // Base Types - DRY foundations for agent identity and runtime options
@@ -116,14 +121,13 @@ export interface BaseAgentConnectorConfig<
   providerConfigId?: string;
 
   /**
-   * Unresolved provider context (credential refs, not plaintext).
-   *
-   * Passed through from the factory input so connectors can call
-   * `resolveConnectorCredentials()` locally during initialization.
-   * Connectors must NOT read plaintext credentials from this field —
-   * they must resolve refs via `resolveConnectorCredentials()`.
+   * Refs-only normalized provider selection retained for runtime introspection.
+   * Plaintext authentication is available only through {@link adapterAuth}.
    */
   providerContext?: ProviderContext;
+
+  /** Exact HTTP protocol selected by the active adapter/provider reference. */
+  providerProtocol?: ProtocolId;
 
   providerConfig?: TProviderConfig;
 
@@ -153,6 +157,25 @@ export interface BaseAgentConnectorConfig<
 
   /** Client profile name for session-scoped config isolation. */
   clientProfileName?: string;
+
+  /**
+   * Auth-free environment safe for bus-routable tool and MCP contexts.
+   *
+   * The central adapter runtime derives this from the same merged inputs as
+   * `env`, but omits the selected process authentication delivery.
+   */
+  contextEnv?: Readonly<Record<string, string>>;
+
+  /**
+   * Single connector-local normalized auth snapshot.
+   *
+   * Plaintext exists only on this trusted connector config and must never be
+   * emitted, persisted, stringified, or copied back into provider context.
+   */
+  adapterAuth?: ResolvedAdapterAuth;
+
+  /** Managed client binary selected by the central runtime, when applicable. */
+  clientExecution?: ClientExecutionContext;
 
   /** Callback when a user message is enqueued */
   onMessageSent?: (messageHandle: MessageHandle) => void;
@@ -209,11 +232,7 @@ export interface AIAgentConfig<
   adapterSessionId?: string;
   /** Makaio session identifier */
   sessionId?: string;
-  /**
-   * Unresolved provider context (credential refs, not plaintext).
-   * Set by the orchestrator before forwarding the startAgent request.
-   * Connectors resolve credentials locally via `resolveConnectorCredentials()`.
-   */
+  /** Refs-only normalized provider selection set by session orchestration. */
   providerContext?: ProviderContext;
   /** Previous adapter session ID for resume attempts (from recovery). */
   resumeAdapterSessionId?: string;
@@ -223,6 +242,8 @@ export interface AIAgentConfig<
   clientId?: string;
   /** Client profile name for session-scoped config isolation. */
   clientProfileName?: string;
+  /** Trusted non-serializable auth preparation strategy injected by the host. */
+  prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus>;
   /** Global bus instance (defaults to MakaioBus singleton) */
   globalBus?: IMakaioBus;
   /** Scoped bus for adapter-specific events */
@@ -235,6 +256,8 @@ export interface AIAgentConfig<
   nativeTools: string[];
   /** Available models for this adapter (used for context window lookup) */
   availableModels?: AIModel[];
+  /** Resolved provider definitions, including adapter-provider auth metadata. */
+  definitionProviders?: readonly AdapterProviderDefinition[];
 
   // Runtime options from StartAgentRequest
   /** Allowed tool names (adapter-specific). Empty array = disable all tools. */

@@ -10,6 +10,7 @@ import {
   type TestModelRef,
   normalizeMessageInput,
   AIAdapter,
+  createNoAuthTestProviderContext,
 } from '@makaio/ai-adapters-core';
 import { MakaioBus, createChannelEndpoint } from '@makaio/bus-core';
 import { registerMemorySessionStorage, MakaioSessionService } from '@makaio/services-core/session';
@@ -171,11 +172,8 @@ export function resolveModelRef(
   return {
     model: ref.modelName,
     ...(ref.reasoningEffort !== undefined && { reasoningEffort: ref.reasoningEffort }),
-    providerContext: testProviderContext ?? {
-      providerConfigId: 'test-provider-config-id',
-      definitionId: ref.definitionId,
-      credentialRefs: {},
-    },
+    providerContext:
+      testProviderContext ?? createNoAuthTestProviderContext('test-provider-config-id', ref.definitionId),
   };
 }
 

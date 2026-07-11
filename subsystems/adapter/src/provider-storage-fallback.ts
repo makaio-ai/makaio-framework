@@ -113,7 +113,7 @@ function addProviderRecord(
     ...(definition.fastModel !== undefined ? { fastModel: definition.fastModel } : {}),
     availableModels: definition.availableModels,
     defaultModelFilterMode: definition.defaultModelFilterMode ?? 'show-all',
-    ...(definition.credentialEnvVars !== undefined ? { credentialEnvVars: definition.credentialEnvVars } : {}),
+    authMethods: definition.authMethods,
     ...(definition.capabilities !== undefined ? { capabilities: definition.capabilities } : {}),
     enabled: true,
     createdAt: RUNTIME_RECORD_TIMESTAMP,

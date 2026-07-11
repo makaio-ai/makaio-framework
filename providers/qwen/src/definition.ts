@@ -16,4 +16,5 @@ export const providerDefinition: ProviderDefinitionInput = {
   description: 'Qwen Code CLI via Agent Client Protocol',
   defaultModel: 'qwen3.5-plus(openai)',
   fastModel: 'qwen3-coder-plus(openai)',
+  authMethods: [],
 };

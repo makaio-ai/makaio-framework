@@ -48,7 +48,13 @@ describe('handleClaudeCodeSessionConfigSetup filesystem integration', () => {
         configInheritance: 'auth-only',
       });
 
-      expect(result).toEqual({ env: { CLAUDE_CONFIG_DIR: sessionDir } });
+      expect(result).toEqual({
+        env: {
+          CLAUDE_CONFIG_DIR: sessionDir,
+          CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
+        },
+        authMaterialized: true,
+      });
       const sessionSettings = JSON.parse(await fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8'));
       expect(sessionSettings).toEqual({ env: { DISABLE_AUTOUPDATER: '1' } });
       await expect(fs.access(path.join(sessionDir, 'settings.local.json'))).rejects.toThrow();

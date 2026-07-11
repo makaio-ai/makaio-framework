@@ -206,6 +206,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
       id: 'test-handle',
       name: 'Test Handle',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,
@@ -225,6 +226,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
       id: 'test-event',
       name: 'Test Event',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,
@@ -243,6 +245,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
       id: 'test-mixed',
       name: 'Test Mixed',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,
@@ -267,6 +270,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
       id: 'test-no-subject',
       name: 'Test No Subject',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,
@@ -285,6 +289,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
       id: 'test-empty',
       name: 'Test Empty',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,

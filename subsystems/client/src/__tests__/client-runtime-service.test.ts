@@ -342,7 +342,9 @@ describe('ClientRuntimeService', () => {
     });
     const cleanupScan = bus.on(CLIDetectionSubjects.scan, (ctx) => {
       expect(ctx.payload.binaries).toEqual(['codex']);
-      ctx.setResult({ results: [{ binary: 'codex', found: true, version: '1.1.0' }] });
+      ctx.setResult({
+        results: [{ binary: 'codex', found: true, path: '/usr/local/bin/codex', version: '1.1.0' }],
+      });
     });
 
     const result = await bus.request(ClientSubjects.scan, {
@@ -356,6 +358,7 @@ describe('ClientRuntimeService', () => {
       {
         clientId: 'codex',
         found: true,
+        binaryPath: '/usr/local/bin/codex',
         version: '1.1.0',
         warningMessage: 'Unsupported version: requires >=1.2.0',
       },

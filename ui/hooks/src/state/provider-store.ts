@@ -65,7 +65,6 @@ async function fetchAllProviders(): Promise<ProviderInfo[]> {
         enabled: config.enabled,
         modelFilterMode: config.modelFilterMode,
         modelVisibility: config.modelVisibility,
-        hasCredentials: config.hasCredentials,
         boundAdapters: bindingsByConfigId.get(config.id) ?? [],
       }) satisfies ProviderInfo,
   );
@@ -114,8 +113,6 @@ export interface ProviderInfo {
   enabled: boolean;
   /** Controls default visibility for models without explicit overrides. */
   modelFilterMode: ModelFilterMode;
-  /** True when at least one credential key exists in storage. */
-  hasCredentials: boolean;
   /** Sparse per-model visibility overrides. */
   modelVisibility?: Record<string, ModelVisibility>;
   /**

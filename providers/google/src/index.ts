@@ -1,9 +1,8 @@
 import { providerDefinition } from './definition.js';
-import { providerDefinitionOAuth } from './definition-oauth.js';
 
-/** Google provider definitions exposed by this package. */
-export const providerDefinitions = [providerDefinition, providerDefinitionOAuth];
+/** Google provider definition exposed by this package. */
+export const providerDefinitions = [providerDefinition];
 
-export { providerDefinition, providerDefinitionOAuth };
+export { providerDefinition };
 /** Google provider package descriptor for unified package discovery. */
 export { googlePackage } from './package.js';

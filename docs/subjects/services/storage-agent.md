@@ -167,7 +167,7 @@ Type: Request (RPC)
 | `allowedDirectories` | `string[] \| undefined` | no |
 | `cwd` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
-| `providerConfigId` | `string \| undefined` | no |
+| `providerConfigId` | `string \| null \| undefined` | no |
 
 **Response:**
 

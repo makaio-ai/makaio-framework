@@ -9,8 +9,14 @@ import { ClientSubjects } from '@makaio/contracts/client';
 import { createTestConfig } from '../test/index.js';
 
 const providerDefinitions: ProviderDefinitionInput[] = [
-  { id: 'anthropic', name: 'Anthropic', defaultModel: 'claude-sonnet', fastModel: 'claude-haiku' },
-  { id: 'anthropic-oauth', name: 'Anthropic OAuth', defaultModel: 'claude-sonnet', fastModel: 'claude-haiku' },
+  { id: 'anthropic', name: 'Anthropic', defaultModel: 'claude-sonnet', fastModel: 'claude-haiku', authMethods: [] },
+  {
+    id: 'anthropic-oauth',
+    name: 'Anthropic OAuth',
+    defaultModel: 'claude-sonnet',
+    fastModel: 'claude-haiku',
+    authMethods: [],
+  },
 ];
 
 describe('Claude Code tmux conformance wiring', () => {
@@ -56,13 +62,24 @@ describe('Claude Code tmux conformance wiring', () => {
       throw new Error('Expected test config cleanup');
     }
     cleanup = cleanupForTest;
-    await config.createConnector({
-      cwd: os.tmpdir(),
-      agentId: 'agent-cleanup-failure',
-      sessionId: 'session-cleanup-failure',
-      model: 'claude-sonnet',
-      reasoningEffort: 'low',
-    });
+    const unsubscribeCreate = MakaioBus.on(
+      ClientSubjects.sessionConfig.create,
+      (ctx) => {
+        ctx.setResult({ sessionDir: os.tmpdir(), env: {}, authMaterialized: true });
+      },
+      { priority: 10_000 },
+    );
+    try {
+      await config.createConnector({
+        cwd: os.tmpdir(),
+        agentId: 'agent-cleanup-failure',
+        sessionId: 'session-cleanup-failure',
+        model: 'claude-sonnet',
+        reasoningEffort: 'low',
+      });
+    } finally {
+      unsubscribeCreate?.();
+    }
 
     const unsubscribe = MakaioBus.on(ClientSubjects.sessionConfig.destroy, () => {
       throw new Error('destroy failed');

@@ -1,4 +1,8 @@
-export { SubagentService } from './subagent-service.js';
+export {
+  SubagentFailureFinalizationError,
+  SubagentService,
+  type SubagentFailureFinalizationErrorCode,
+} from './subagent-service.js';
 export { subagentServicePackage, SubagentServiceToken } from './package.js';
 export { SubagentManager, type TrackOptions } from './manager/index.js';
 export type {

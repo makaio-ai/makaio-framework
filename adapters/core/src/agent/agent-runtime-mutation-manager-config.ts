@@ -10,6 +10,7 @@ import {
 } from '@makaio/contracts';
 import type { AIAgentConnector } from '../connector/index.js';
 import type { LedgerSessionContext } from './session-tool-ledger.js';
+import type { ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
 
 /** Connector fields that can be overridden during runtime connector swaps. */
 export interface AgentRuntimeConnectorOverrides {
@@ -31,8 +32,13 @@ export interface AgentRuntimeMutationManagerConfig {
   globalBus: IMakaioBus;
   /** Read current connector. */
   getConnector: () => AIAgentConnector;
-  /** Swap connector with runtime overrides. */
-  swapConnector: (configOverrides?: Partial<AgentRuntimeConnectorOverrides>) => Promise<void>;
+  /** Agent-wide exclusivity boundary for connector-affecting operations. */
+  runExclusive: <T>(action: () => Promise<T>) => Promise<T>;
+  /** Swap connector while the caller already owns the agent-wide runtime barrier. */
+  swapConnectorUnlocked: (
+    configOverrides?: Partial<AgentRuntimeConnectorOverrides>,
+    beforeCommit?: ConnectorSwapCommitGuard,
+  ) => Promise<void>;
   /** Emit cwd.changed payload. */
   emitCwdChanged: (
     payload: Omit<

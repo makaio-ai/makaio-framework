@@ -74,7 +74,6 @@ next: false
 | `step.skipped` | [`workflow.step.skipped`](#workflow.step.skipped) | event | — |
 | `step.started` | [`workflow.step.started`](#workflow.step.started) | event | — |
 | `worklog.changed` | [`workflow.worklog.changed`](#workflow.worklog.changed) | event | — |
-| `worklog.frame.get` | [`workflow.worklog.frame.get`](#workflow.worklog.frame.get) | rpc | — |
 | `worklog.get` | [`workflow.worklog.get`](#workflow.worklog.get) | rpc | — |
 | `worklog.list` | [`workflow.worklog.list`](#workflow.worklog.list) | rpc | — |
 | `worklog.stats` | [`workflow.worklog.stats`](#workflow.worklog.stats) | rpc | — |
@@ -120,11 +119,11 @@ Type: Request (RPC)
 
 ### <a id="workflow.completeExternalExecution"></a>`workflow.completeExternalExecution` (rpc)
 
-Complete an external execution and its WorkLog projection atomically.
+Complete an external execution by updating its terminal status.
 
-Identical terminal replays succeed. Conflicting execution status, metadata,
-or frame identity fails without overwriting the existing settlement.
-Lifecycle events may still be emitted for advisory consumers.
+Callers should also emit the corresponding lifecycle event
+(`execution.completed`, `execution.failed`, or `execution.cancelled`)
+so that WorkLog projections update the summary row.
 
 Cross-field invariants (enforced by schema refinement):
 - `'failed'` requires a non-empty `error` string.
@@ -141,7 +140,6 @@ Type: Request (RPC)
 | `completedAt` | `number \| undefined` | no |
 | `error` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
-| `frame` | `{ frameId: string; nodeId: string; nodeType: "station" \| "delegate-agent" \| "delegate-role" \| "gate"; path: string[]; startedAt: number; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; durationMs?: number \| undefined; } \| undefined` | no |
 | `reason` | `string \| undefined` | no |
 | `status` | `"completed" \| "cancelled" \| "failed"` | yes |
 
@@ -807,18 +805,18 @@ _Empty object._
 
 Register an external execution that is not driven by the workflow engine.
 
-Atomically creates the `workflow_executions` row, its running WorkLog
-summary, and the optional initial frame. A caller-supplied external ID
-makes an identical registration replay idempotent; conflicting replays are
-rejected without overwriting durable state.
+Creates a minimal `workflow_executions` row so that subsequent lifecycle
+events (`execution.started`, `frame.*`, `execution.completed/failed`)
+satisfy the foreign-key constraints on WorkLog projection tables.
 
 External executions are not associated with a persisted workflow definition
 and do not create coordinator sessions, run-context snapshots, or
-runtime state.
+runtime state. They exist solely to provide a legitimate parent row for
+telemetry projections.
 
-Standard execution and frame lifecycle events remain useful as advisory
-signals for other consumers, but WorkLog durability does not depend on
-those events.
+After registration the caller is responsible for emitting the standard
+execution and frame lifecycle events on the bus. The WorkLog projection
+consumes them exactly as it does for engine-driven executions.
 
 Subject: `workflow.registerExternalExecution`
 Type: Request (RPC)
@@ -828,12 +826,9 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `artifactRef` | `{ kind: string; id: string; } \| undefined` | no |
-| `executionId` | `string \| undefined` | no |
-| `frame` | `{ nodeId: string; nodeType: "station" \| "delegate-agent" \| "delegate-role" \| "gate"; frameId?: string \| undefined; path?: string[] \| undefined; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; } \| undefined` | no |
 | `input` | `unknown` | no |
 | `name` | `string` | yes |
 | `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
-| `startedAt` | `number \| undefined` | no |
 | `triggerPayload` | `Record<string, unknown> \| undefined` | no |
 
 **Response:**
@@ -841,7 +836,6 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `executionId` | `string` | yes |
-| `frameId` | `string \| undefined` | no |
 
 ### <a id="workflow.rerun"></a>`workflow.rerun` (rpc)
 
@@ -892,7 +886,7 @@ Type: Request (RPC)
 | `contextMode` | `"fork" \| "fresh" \| undefined` | no |
 | `harnessId` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
-| `providerContext` | `{ providerConfigId: string; definitionId: string; credentialRefs: Record<string, string & $brand<"CredentialRef">>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; capabilities?: Record<string, unknown> \| undefined; } \| undefined` | no |
+| `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string & $brand<"CredentialRef">>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; } \| { state: "unresolved"; } \| undefined` | no |
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `systemPrompt` | `string \| undefined` | no |
 
@@ -919,7 +913,7 @@ Type: Request (RPC)
 | `contextMode` | `"fork" \| "fresh" \| undefined` | no |
 | `harnessId` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
-| `providerContext` | `{ providerConfigId: string; definitionId: string; credentialRefs: Record<string, string & $brand<"CredentialRef">>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; capabilities?: Record<string, unknown> \| undefined; } \| undefined` | no |
+| `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string & $brand<"CredentialRef">>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; } \| { state: "unresolved"; } \| undefined` | no |
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `systemPrompt` | `string \| undefined` | no |
 
@@ -1163,28 +1157,6 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `executionId` | `string` | yes |
-
-### <a id="workflow.worklog.frame.get"></a>`workflow.worklog.frame.get` (rpc)
-
-Retrieve one projected WorkLog frame entry by frame identifier (RPC).
-
-This narrow lookup lets repair and audit consumers verify durable frame
-state without loading the execution's runtime frame tree.
-
-Subject: `workflow.worklog.frame.get`
-Type: Request (RPC)
-
-**Request:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `frameId` | `string` | yes |
-
-**Response:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "station" \| "delegate-agent" \| "delegate-role" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "completed" \| "cancelled" \| "skipped" \| "failed" \| "pending" \| "running" \| "waiting"; attempt: number; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| null` | yes |
 
 ### <a id="workflow.worklog.get"></a>`workflow.worklog.get` (rpc)
 

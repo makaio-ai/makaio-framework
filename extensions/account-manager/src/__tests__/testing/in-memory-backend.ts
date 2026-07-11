@@ -15,6 +15,10 @@ export class InMemoryBackend implements ICredentialBackend {
     this.value = value;
   }
 
+  async clear(): Promise<void> {
+    this.value = null;
+  }
+
   /**
    * Set the stored value directly (test helper).
    * @param value - The value to store, or null to clear

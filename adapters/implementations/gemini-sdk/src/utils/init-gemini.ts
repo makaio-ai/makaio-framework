@@ -4,28 +4,13 @@ import type { GeminiRegistryToolDeclaration } from '../tool-handling.js';
 /**
  * Authentication options for the Gemini SDK.
  *
- * Presence of this object signals explicit API-key auth intent. {@link initGemini}
- * validates the `apiKey` value and throws if it is blank or whitespace-only.
- * OAuth login (`AuthType.LOGIN_WITH_GOOGLE`) is used only when `authOptions`
- * is omitted entirely (`undefined`), not when `apiKey` is absent within the object.
+ * Gemini sessions always receive an explicit API-key delivery from the trusted
+ * adapter-auth runtime. {@link initGemini} validates the key before passing it
+ * to the Gemini SDK.
  */
 export interface GeminiAuthOptions {
   /** Plaintext Gemini API key resolved from credential refs. */
-  apiKey?: string;
-}
-
-/**
- * Build Gemini auth options from resolved connector credentials.
- *
- * Explicit credential presence means "attempt API-key auth", even when the
- * value is blank. `initGemini()` owns validation of blank values so the
- * connector never silently falls back to OAuth when a configured credential is
- * present but malformed.
- * @param credentials - Resolved connector credentials keyed by field name
- * @returns Explicit auth options when `apiKey` was resolved, otherwise `undefined`
- */
-export function buildGeminiAuthOptions(credentials: Record<string, string>): GeminiAuthOptions | undefined {
-  return Object.hasOwn(credentials, 'apiKey') ? { apiKey: credentials['apiKey'] } : undefined;
+  readonly apiKey: string;
 }
 
 /** Result of initGemini, exposing the system instruction for runtime overrides. */
@@ -75,35 +60,22 @@ export function filterToolDeclarations(
  * @param geminiConfig - The Gemini configuration object
  * @param disabledNativeTools - SDK-native tool names to exclude from the tool registry.
  *   Sourced from the active harness's `nativeTools.disabled` list.
+ * @param authOptions - Explicit API-key authentication options delivered by Adapter Core.
  * @param registryToolDeclarations - Optional additional tool declarations from the central
  *   ToolRegistry. Merged after native declarations so registry tools appear last.
- * @param authOptions - Optional authentication options. When `apiKey` is provided,
- *   authenticates with `AuthType.USE_GEMINI`. An explicitly provided missing, non-string,
- *   empty, or whitespace-only `apiKey` fails fast. OAuth fallback is used only when
- *   `authOptions` is omitted entirely.
  * @returns The initialized GeminiChat and the base system instruction
  */
 export async function initGemini(
   geminiConfig: GeminiInitConfig,
   disabledNativeTools: readonly string[],
+  authOptions: GeminiAuthOptions,
   registryToolDeclarations?: readonly GeminiRegistryToolDeclaration[],
-  authOptions?: GeminiAuthOptions,
 ): Promise<GeminiInitResult> {
-  // Initialize auth first (creates ContentGenerator).
-  // Explicit auth options mean "use API-key auth"; OAuth fallback is reserved
-  // for the implicit path where no auth options were provided at all.
-  const apiKey = authOptions?.apiKey;
-  if (typeof apiKey === 'string') {
-    const trimmedApiKey = apiKey.trim();
-    if (trimmedApiKey.length === 0) {
-      throw new Error('Gemini API key was provided but is empty or whitespace-only.');
-    }
-    await geminiConfig.refreshAuth(AuthType.USE_GEMINI, trimmedApiKey);
-  } else if (authOptions !== undefined) {
-    throw new Error('Gemini authOptions were provided without a valid API key.');
-  } else {
-    await geminiConfig.refreshAuth(AuthType.LOGIN_WITH_GOOGLE);
+  const trimmedApiKey = authOptions.apiKey.trim();
+  if (trimmedApiKey.length === 0) {
+    throw new Error('Gemini API key was provided but is empty or whitespace-only.');
   }
+  await geminiConfig.refreshAuth(AuthType.USE_GEMINI, trimmedApiKey);
 
   // Then initialize config (creates GeminiClient, ToolRegistry, MessageBus, etc.)
   await geminiConfig.initialize();

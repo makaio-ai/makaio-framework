@@ -10,5 +10,4 @@ export const ClaudeCodeCliConfig = createAdapterConfigFactory<ClaudeCliAgentConf
   },
   schema: ClaudeCodeCliProviderConfigSchema,
   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
-  protocol: 'anthropic',
 }));

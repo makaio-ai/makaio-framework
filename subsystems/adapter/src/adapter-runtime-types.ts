@@ -6,6 +6,7 @@ import type {
   AdapterProviderRef,
 } from '@makaio/contracts';
 import type { HelpLink } from '@makaio/services-core/settings';
+import type { ClientDefinition } from '@makaio/contracts/client';
 import type { z } from 'zod';
 
 /**
@@ -64,6 +65,13 @@ export interface AdapterInitOptions {
    * downstream consumers where the runtime bus differs from the default singleton.
    */
   globalBus?: IMakaioBus;
+  /**
+   * Trusted host-layer auth preparer forwarded opaquely to the adapter factory.
+   *
+   * The core subsystem never invokes or serializes this value, avoiding a
+   * dependency on the host adapter runtime types.
+   */
+  prepareAuthRuntime?: unknown;
 }
 
 /**
@@ -135,8 +143,6 @@ export interface LoadedAdapter {
   providers: LoadedAdapterProvider[];
   /** Adapter-level provider config schema applied during delayed provider resolution. */
   providerConfigSchema?: z.ZodObject<z.ZodRawShape>;
-  /** Adapter-level provider credential schema applied during delayed provider resolution. */
-  providerCredentialSchema?: z.ZodObject<z.ZodRawShape>;
   /** Help links for documentation. */
   helpLinks?: readonly HelpLink[];
   /** Setup instructions in Markdown format. */
@@ -145,6 +151,8 @@ export interface LoadedAdapter {
   defaultPresetId?: string;
   /** Client extensions this adapter can delegate to, with compatible version ranges. */
   clients?: readonly AdapterClientRef[];
+  /** Authoritative definitions for every client this adapter may execute. */
+  clientDefinitions?: readonly ClientDefinition[];
   /** Wire protocol this adapter speaks (e.g., `'anthropic'`, `'openai'`). */
   protocol?: ProtocolId;
 }

@@ -39,17 +39,17 @@ export const AgentSelectionBaseSchema = z.looseObject({
   /**
    * Provider config UUID — "use these credentials."
    *
-   * Links to a user-created `ProviderConfigRecord` with endpoint overrides
-   * and credentials. Orthogonal to resolution strategy: resolution
+   * Links to a persisted ProviderConfig with endpoint overrides and a
+   * normalized authentication selection. Orthogonal to resolution strategy: resolution
    * produces an adapter + model, this field selects which
    * account/credentials to use for the API call.
    *
-   * When omitted, credentials resolve through a fallback chain:
+   * When omitted, provider selection resolves through this chain:
    * 1. Persona/profile/virtualModel resolution may produce a
    *    `providerConfigId` from the resolved entity
-   * 2. If still absent, the adapter receives a sentinel context and
-   *    falls back to environment variables or local tooling
-   *    (see `createSentinelProviderContext`)
+   * 2. If still absent, the adapter receives the closed unresolved
+   *    `ProviderContext` state. That state grants neither ambient environment
+   *    authentication nor native-client authentication.
    *
    * Renamed from the legacy wire name `providerId` for clarity — this
    * points to a ProviderConfig instance, not a ProviderDefinition.

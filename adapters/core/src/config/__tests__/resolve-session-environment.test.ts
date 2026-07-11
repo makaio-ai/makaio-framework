@@ -1,92 +1,108 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createChannelEndpoint, MakaioBus, type ChannelEndpoint } from '@makaio/bus-core';
-import { CredentialSubjects } from '@makaio/contracts';
-import { CredentialRefSchema } from '@makaio/contracts/config';
+import { createBusInstance } from '@makaio/bus-core';
+import { resolveClientBinary } from '@makaio/subsystem-client';
 import { resolveSessionEnvironment } from '../resolve-session-environment.js';
 
 vi.mock('@makaio/subsystem-client', () => ({
-  resolveClientBinary: vi.fn().mockResolvedValue(undefined),
+  resolveClientBinary: vi.fn(),
 }));
 
+const resolveClientBinaryMock = vi.mocked(resolveClientBinary);
+
 describe('resolveSessionEnvironment', () => {
-  const cleanups: Array<() => void> = [];
-
   afterEach(() => {
-    cleanups.splice(0).forEach((cleanup) => cleanup());
-    MakaioBus.__resetHandlers?.();
+    vi.resetAllMocks();
   });
 
-  /**
-   * Register a credential channel that resolves every ref to the supplied value.
-   * @param value - Plaintext credential value returned by the channel
-   */
-  function setupCredentialBus(value: string): void {
-    const token = 'resolve-session-environment-test-token';
-    cleanups.push(
-      MakaioBus.on(CredentialSubjects.getChannelToken, (ctx) => {
-        ctx.setResult({ token });
-      }),
-    );
-    const endpoint: ChannelEndpoint = createChannelEndpoint(
-      MakaioBus.getContext(),
-      'credentials',
-      (channel) => {
-        channel.on(CredentialSubjects.resolve, (ctx) => {
-          ctx.setResult({ value });
-        });
+  it('scrubs auth variables after every non-auth environment source is merged', async () => {
+    const globalBus = createBusInstance();
+    resolveClientBinaryMock.mockResolvedValue({
+      binaryPath: '/managed/bin/client',
+      env: {
+        BINARY_AUTH: 'binary-secret',
+        SHARED_AUTH: 'binary-shared',
+        PATH: '/managed/bin',
       },
-      { token },
-    );
-    cleanups.push(() => endpoint.close());
-  }
-
-  it('strips ambient provider credentials before adding explicitly resolved credentials', async () => {
-    setupCredentialBus('explicit-key');
+      configDir: null,
+      source: 'managed',
+      version: '1.0.0',
+    });
 
     const result = await resolveSessionEnvironment({
-      bus: MakaioBus,
-      clientId: 'claude-code',
+      globalBus,
+      clientId: 'test-client',
       baseEnv: {
-        ANTHROPIC_API_KEY: 'ambient-key',
-        OPENAI_API_KEY: 'ambient-openai-key',
-        PATH: '/usr/bin',
+        BASE_AUTH: 'base-secret',
+        SHARED_AUTH: 'base-shared',
+        CONFIG_HOME: '/canonical/credential-home',
+        PATH: '/base/bin',
       },
-      providerContext: {
-        providerConfigId: 'cfg-1',
-        definitionId: 'anthropic',
-        credentialRefs: {
-          apiKey: CredentialRefSchema.parse('env:EXPLICIT_ANTHROPIC_API_KEY'),
-        },
-        credentialEnvVars: {
-          apiKey: 'ANTHROPIC_API_KEY',
-        },
-        ambientCredentialEnvVars: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
+      sessionEnv: {
+        SESSION_AUTH: 'session-secret',
+        SHARED_AUTH: 'session-shared',
       },
+      leaseEnv: {
+        LEASE_AUTH: 'lease-secret',
+        SHARED_AUTH: 'lease-shared',
+        CONFIG_HOME: '/isolated/config',
+      },
+      scrubEnvVars: ['BASE_AUTH', 'SESSION_AUTH', 'BINARY_AUTH', 'LEASE_AUTH', 'SHARED_AUTH'],
+      selectedAuthEnv: { SELECTED_AUTH: 'selected-secret' },
     });
 
-    expect(result.spawnEnv).toMatchObject({
-      ANTHROPIC_API_KEY: 'explicit-key',
-      PATH: '/usr/bin',
+    expect(result.connectorEnv).toEqual({
+      PATH: '/managed/bin',
+      CONFIG_HOME: '/isolated/config',
+      SELECTED_AUTH: 'selected-secret',
     });
-    expect(result.spawnEnv['OPENAI_API_KEY']).toBeUndefined();
+    expect(result.contextEnv).toEqual({ PATH: '/managed/bin' });
+    expect(Object.isFrozen(result.connectorEnv)).toBe(true);
+    expect(Object.isFrozen(result.contextEnv)).toBe(true);
+    expect(resolveClientBinaryMock).toHaveBeenCalledWith(globalBus, 'test-client');
   });
 
-  it('does not forward ambient credentials when no credential refs are present', async () => {
+  it('applies selected auth after scrub even when a lease supplied the same target', async () => {
+    resolveClientBinaryMock.mockResolvedValue(undefined);
+
     const result = await resolveSessionEnvironment({
-      bus: MakaioBus,
-      clientId: 'claude-code',
-      baseEnv: {
-        ANTHROPIC_API_KEY: 'ambient-key',
-        PATH: '/usr/bin',
-      },
-      providerContext: {
-        providerConfigId: 'cfg-1',
-        definitionId: 'anthropic-oauth',
-        credentialRefs: {},
-        ambientCredentialEnvVars: ['ANTHROPIC_API_KEY'],
-      },
+      baseEnv: { CODEX_ACCESS_TOKEN: 'ambient-token' },
+      leaseEnv: { CODEX_ACCESS_TOKEN: 'lease-token', CODEX_HOME: '/isolated/codex' },
+      scrubEnvVars: ['CODEX_ACCESS_TOKEN'],
+      selectedAuthEnv: { CODEX_ACCESS_TOKEN: 'selected-token' },
     });
 
-    expect(result.spawnEnv).toEqual({ PATH: '/usr/bin' });
+    expect(result.connectorEnv).toEqual({
+      CODEX_HOME: '/isolated/codex',
+      CODEX_ACCESS_TOKEN: 'selected-token',
+    });
+    expect(result.contextEnv).toEqual({});
+  });
+
+  it('does not read process.env or resolve a binary when no client is selected', async () => {
+    const previous = process.env['AMBIENT_AUTH'];
+    process.env['AMBIENT_AUTH'] = 'ambient-secret';
+    try {
+      const result = await resolveSessionEnvironment({
+        baseEnv: { PATH: '/explicit/bin', NODE_OPTIONS: '--inspect' },
+        scrubEnvVars: ['AMBIENT_AUTH'],
+      });
+
+      expect(result.connectorEnv).toEqual({ PATH: '/explicit/bin' });
+      expect(result.contextEnv).toEqual({ PATH: '/explicit/bin' });
+      expect(resolveClientBinaryMock).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) {
+        delete process.env['AMBIENT_AUTH'];
+      } else {
+        process.env['AMBIENT_AUTH'] = previous;
+      }
+    }
+  });
+
+  it('rejects client resolution without the runtime-owned bus', async () => {
+    await expect(resolveSessionEnvironment({ clientId: 'test-client' })).rejects.toThrow(
+      'Client binary resolution requires the adapter runtime global bus',
+    );
+    expect(resolveClientBinaryMock).not.toHaveBeenCalled();
   });
 });

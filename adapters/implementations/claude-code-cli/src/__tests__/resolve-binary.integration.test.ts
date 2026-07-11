@@ -1,92 +1,66 @@
-/**
- * Integration tests for session config wiring in `ClaudeCliConnector`.
- *
- * Verifies that `initializeSession()` seeds resolved runtime values and static
- * connector options into the session before any CLI subprocess is spawned.
- *
- * Design invariants under test:
- * - When a managed binary context is returned, `binaryPath` and `env` flow into
- *   the session config.
- * - When a global context is returned (`binaryPath: null`), the session falls
- *   back to `undefined` (PATH lookup).
- * - When no `client.resolveBinary` handler is registered, the session uses the
- *   pre-existing behaviour (no managed override).
- * - An explicit `providerConfig.binaryPath` always wins over the resolved value.
- * - Adapter tool policy arrays are preserved for CLI argument generation.
- */
+/** Connector consumption tests for centrally prepared Claude CLI runtime config. */
 
 import os from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/contracts/client';
-import type { ClientExecutionContext } from '@makaio/contracts/client';
-import { CredentialRefSchema } from '@makaio/contracts/config';
-import { setupFixedCredentialBus } from '@makaio/ai-adapters-claude-shared/testing';
+import { ClientSubjects, type ClientExecutionContext } from '@makaio/contracts/client';
 import { ClaudeCodeCliConnectorNamespace, type ClaudeCodeCliConnectorBus } from '../namespace/index.js';
 import { ClaudeCliConnector } from '../connector.js';
+import { ClaudeCodeCliProviderConfigSchema } from '../schemas.js';
 
-// ---------------------------------------------------------------------------
-// Typed accessor for private session config
-// ---------------------------------------------------------------------------
-
-/**
- * Shape of the session config fields inspected by integration tests.
- * Matches the relevant subset of {@link ClaudeCliSessionConfig}.
- */
 interface TestSessionConfig {
   readonly binaryPath?: string;
   readonly env: Record<string, string>;
-  readonly resolveTurnExecutionContext?: () => Promise<unknown>;
   readonly allowedTools?: string[];
   readonly disallowedTools?: string[];
 }
 
+type TestProviderConfig = NonNullable<ConstructorParameters<typeof ClaudeCliConnector>[0]['providerConfig']> & {
+  baseUrl?: string;
+};
+
 /**
- * Reflectively read the private `session.config` from a connector instance
- * without casting to `any`.
- * @param connector - Connector instance under test.
- * @returns Session config, or `undefined` when no session has been created.
+ * Read the connector-owned session config after initialization.
+ * @param connector - Initialized Claude CLI connector
+ * @returns Connector-owned session config when initialization created one
  */
 function getSessionConfig(connector: ClaudeCliConnector): TestSessionConfig | undefined {
   const session = Reflect.get(connector, 'session') as { config?: TestSessionConfig } | undefined;
   return session?.config;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /**
- * Build a minimal managed execution context for `client.resolveBinary` tests.
- * @param binaryPath - Absolute path to the managed binary, or `null` for PATH lookup.
- * @param env - Optional environment overrides.
- * @returns A minimal ClientExecutionContext.
+ * Build one client execution context for binary-consumption assertions.
+ * @param binaryPath - Exact managed path, or null for global discovery
+ * @returns Central client execution selection
  */
-function makeManagedContext(binaryPath: string | null, env: Record<string, string> = {}): ClientExecutionContext {
+function execution(binaryPath: string | null): ClientExecutionContext {
   return {
     binaryPath,
-    env,
+    env: {},
     configDir: null,
-    source: binaryPath !== null ? 'managed' : 'global',
+    source: binaryPath === null ? 'global' : 'managed',
     version: null,
   };
 }
 
 /**
- * Create a `ClaudeCliConnector` wired to a fresh scoped bus.
- * @param opts - Optional connector overrides.
- * @returns Connector instance.
+ * Create a connector whose auth environment and binary were finalized centrally.
+ * @param options - Finalized runtime inputs supplied to the connector
+ * @returns Configured Claude CLI connector
  */
 async function makeConnector(
-  opts: {
-    binaryPath?: string;
+  options: {
     env?: Record<string, string>;
+    clientExecution?: ClientExecutionContext;
+    baseUrl?: string;
     allowedTools?: string[];
     disallowedTools?: string[];
-    providerContext?: ConstructorParameters<typeof ClaudeCliConnector>[0]['providerContext'];
   } = {},
 ): Promise<ClaudeCliConnector> {
   const bus = (await ClaudeCodeCliConnectorNamespace.scopedBus()) as ClaudeCodeCliConnectorBus;
+  const providerConfig: TestProviderConfig | undefined =
+    options.baseUrl === undefined ? undefined : { baseUrl: options.baseUrl };
   return new ClaudeCliConnector({
     bus,
     adapterId: 'test-adapter',
@@ -94,153 +68,106 @@ async function makeConnector(
     agentId: 'test-agent',
     cwd: os.tmpdir(),
     model: 'claude-sonnet',
-    env: opts.env ?? {},
-    allowedTools: opts.allowedTools,
-    disallowedTools: opts.disallowedTools,
-    providerContext: opts.providerContext,
-    providerConfig: opts.binaryPath !== undefined ? { binaryPath: opts.binaryPath } : undefined,
+    env: options.env ?? {},
+    clientExecution: options.clientExecution,
+    allowedTools: options.allowedTools,
+    disallowedTools: options.disallowedTools,
+    providerConfig,
   });
 }
 
-// ---------------------------------------------------------------------------
-// Test suite
-// ---------------------------------------------------------------------------
-
-describe('ClaudeCliConnector — session config integration', () => {
-  let cleanup: Array<() => void>;
+describe('ClaudeCliConnector — central runtime config', () => {
+  const connectors: ClaudeCliConnector[] = [];
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    cleanup = [];
   });
 
-  afterEach(() => {
-    for (const fn of cleanup) fn();
-    cleanup = [];
+  afterEach(async () => {
+    await Promise.all(connectors.splice(0).map((connector) => connector.close()));
+    MakaioBus.__resetHandlers?.();
   });
 
-  it('passes resolved managed binary path to the session config', async () => {
-    const managedPath = '/home/user/.makaio/bin/claude';
-    const resolvedEnv = { CLAUDE_CONFIG_DIR: '/home/user/.makaio/config' };
-
-    cleanup.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(makeManagedContext(managedPath, resolvedEnv));
-      }),
-    );
-
-    const connector = await makeConnector();
-    await connector.initialize();
-
-    const sessionConfig = getSessionConfig(connector);
-    expect(sessionConfig).toBeDefined();
-    expect(sessionConfig?.binaryPath).toBe(managedPath);
-    expect(sessionConfig?.env).toMatchObject(resolvedEnv);
-    expect(sessionConfig?.resolveTurnExecutionContext).toEqual(expect.any(Function));
-  });
-
-  it('falls back to PATH lookup when global context is returned (binaryPath: null)', async () => {
-    cleanup.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(makeManagedContext(null));
-      }),
-    );
-
-    const connector = await makeConnector();
-    await connector.initialize();
-
-    const sessionConfig = getSessionConfig(connector);
-    expect(sessionConfig).toBeDefined();
-    // null binaryPath signals PATH lookup — session must receive undefined
-    expect(sessionConfig?.binaryPath).toBeUndefined();
-  });
-
-  it('uses existing behaviour when no handler is registered', async () => {
-    // No handler registered — requestOptional returns handled: false.
-    const connector = await makeConnector();
-    await connector.initialize();
-
-    const sessionConfig = getSessionConfig(connector);
-    expect(sessionConfig).toBeDefined();
-    expect(sessionConfig?.binaryPath).toBeUndefined();
-    // env must not contain any binary-injected overrides
-    expect(Object.keys(sessionConfig?.env ?? {})).toHaveLength(0);
-  });
-
-  it('merges resolved env on top of connector defaults', async () => {
-    const resolvedEnv = { CLAUDE_CONFIG_DIR: '/managed/config', EXTRA_VAR: 'from-binary' };
-
-    cleanup.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(makeManagedContext('/managed/bin/claude', resolvedEnv));
-      }),
-    );
-
-    const connector = await makeConnector();
-    await connector.initialize();
-
-    const sessionConfig = getSessionConfig(connector);
-    expect(sessionConfig?.env).toMatchObject(resolvedEnv);
-  });
-
-  it('passes Anthropic-compatible provider overrides through Claude-native env names', async () => {
-    cleanup.push(setupFixedCredentialBus('opencode-secret'));
+  it('passes the centrally selected managed binary and lease environment once', async () => {
     const connector = await makeConnector({
-      env: {
-        ANTHROPIC_API_KEY: 'ambient-anthropic-secret',
-        OPENCODE_GO_API_KEY: 'ambient-opencode-secret',
-      },
-      providerContext: {
-        providerConfigId: 'test-provider-config-id',
-        definitionId: 'opencode-go-anthropic',
-        credentialRefs: { apiKey: CredentialRefSchema.parse('env:OPENCODE_GO_API_KEY') },
-        credentialEnvVars: { apiKey: 'OPENCODE_GO_API_KEY' },
-        ambientCredentialEnvVars: ['ANTHROPIC_API_KEY', 'OPENCODE_GO_API_KEY'],
-        endpointOverrides: { anthropic: 'https://opencode.example.test/anthropic' },
-      },
+      env: { CLAUDE_CONFIG_DIR: '/isolated/claude' },
+      clientExecution: execution('/managed/bin/claude'),
     });
+    connectors.push(connector);
+
     await connector.initialize();
 
-    const sessionConfig = getSessionConfig(connector);
-    expect(sessionConfig?.env).toMatchObject({
-      ANTHROPIC_API_KEY: 'opencode-secret',
-      ANTHROPIC_BASE_URL: 'https://opencode.example.test/anthropic',
+    expect(getSessionConfig(connector)).toMatchObject({
+      binaryPath: '/managed/bin/claude',
+      env: { CLAUDE_CONFIG_DIR: '/isolated/claude' },
     });
-    expect(sessionConfig?.env).not.toHaveProperty('OPENCODE_GO_API_KEY');
+    expect(getSessionConfig(connector)).not.toHaveProperty('resolveTurnExecutionContext');
   });
 
-  it('explicit providerConfig.binaryPath overrides the resolved binary', async () => {
-    const userOverridePath = '/opt/custom/claude';
-    const resolvedPath = '/home/user/.makaio/bin/claude';
+  it('uses PATH when the central binary selection is global', async () => {
+    const connector = await makeConnector({ clientExecution: execution(null) });
+    connectors.push(connector);
 
-    cleanup.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        ctx.setResult(makeManagedContext(resolvedPath));
-      }),
-    );
-
-    const connector = await makeConnector({ binaryPath: userOverridePath });
     await connector.initialize();
 
-    const sessionConfig = getSessionConfig(connector);
-    expect(sessionConfig?.binaryPath).toBe(userOverridePath);
+    expect(getSessionConfig(connector)?.binaryPath).toBeUndefined();
   });
 
-  it('sends client.resolveBinary request with clientId "claude-code"', async () => {
-    const capturedRequests: unknown[] = [];
+  it('rejects the removed provider-level binary override', () => {
+    expect(ClaudeCodeCliProviderConfigSchema.safeParse({ binaryPath: '/legacy/bin/claude' }).success).toBe(false);
+  });
 
-    cleanup.push(
-      MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
-        capturedRequests.push(ctx.payload);
-        ctx.setResult(makeManagedContext(null));
-      }),
-    );
+  it('uses only the selected API-key delivery and endpoint', async () => {
+    const connector = await makeConnector({
+      env: { ANTHROPIC_API_KEY: 'api-secret' },
+      baseUrl: 'https://gateway.example.test/anthropic',
+    });
+    connectors.push(connector);
 
-    const connector = await makeConnector();
     await connector.initialize();
 
-    expect(capturedRequests).toHaveLength(1);
-    expect(capturedRequests[0]).toMatchObject({ clientId: 'claude-code' });
+    expect(getSessionConfig(connector)?.env).toEqual({
+      ANTHROPIC_API_KEY: 'api-secret',
+      ANTHROPIC_BASE_URL: 'https://gateway.example.test/anthropic',
+    });
+    expect(getSessionConfig(connector)?.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('uses only the selected explicit OAuth-token delivery', async () => {
+    const connector = await makeConnector({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' } });
+    connectors.push(connector);
+
+    await connector.initialize();
+
+    expect(getSessionConfig(connector)?.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' });
+    expect(getSessionConfig(connector)?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+  });
+
+  it('preserves inferred native state without explicit auth variables', async () => {
+    const connector = await makeConnector({ env: { CLAUDE_CONFIG_DIR: '/native/claude' } });
+    connectors.push(connector);
+
+    await connector.initialize();
+
+    expect(getSessionConfig(connector)?.env).toEqual({ CLAUDE_CONFIG_DIR: '/native/claude' });
+    expect(getSessionConfig(connector)?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(getSessionConfig(connector)?.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('does not resolve the client binary again inside the connector', async () => {
+    const resolveBinary = vi.fn();
+    const cleanup = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
+      resolveBinary();
+      ctx.setResult(execution('/unexpected/bin/claude'));
+    });
+    const connector = await makeConnector({ clientExecution: execution('/selected/bin/claude') });
+    connectors.push(connector);
+
+    await connector.initialize();
+    cleanup();
+
+    expect(resolveBinary).not.toHaveBeenCalled();
+    expect(getSessionConfig(connector)?.binaryPath).toBe('/selected/bin/claude');
   });
 
   it('passes tool policy lists into the session config', async () => {
@@ -248,10 +175,11 @@ describe('ClaudeCliConnector — session config integration', () => {
       allowedTools: ['Bash(git status)', 'Edit'],
       disallowedTools: ['WebSearch'],
     });
+    connectors.push(connector);
+
     await connector.initialize();
 
-    const sessionConfig = getSessionConfig(connector);
-    expect(sessionConfig?.allowedTools).toEqual(['Bash(git status)', 'Edit']);
-    expect(sessionConfig?.disallowedTools).toEqual(['WebSearch']);
+    expect(getSessionConfig(connector)?.allowedTools).toEqual(['Bash(git status)', 'Edit']);
+    expect(getSessionConfig(connector)?.disallowedTools).toEqual(['WebSearch']);
   });
 });

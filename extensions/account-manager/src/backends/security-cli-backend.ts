@@ -1,4 +1,4 @@
-import { keychainRead, keychainWrite } from '../utils/security-cli.js';
+import { keychainDelete, keychainRead, keychainWrite } from '../utils/security-cli.js';
 import type { ICredentialBackend } from './credential-backend.js';
 
 /**
@@ -21,9 +21,9 @@ export class SecurityCliBackend implements ICredentialBackend {
   /**
    * Reads the credential value from the macOS keychain.
    *
-   * Returns null if the entry does not exist (exit code 44).
-   * Rethrows ENOENT if `/usr/bin/security` itself is missing (non-macOS platform),
-   * and rethrows all other errors (locked keychain, permission denied, etc.).
+   * Returns null if the entry does not exist (exit code 44). Every other
+   * process failure is normalized so command arguments and output cannot
+   * expose credential bytes through logs or bus errors.
    * @returns The stored credential string, or null if not found
    */
   public async read(): Promise<string | null> {
@@ -39,5 +39,10 @@ export class SecurityCliBackend implements ICredentialBackend {
    */
   public async write(value: string): Promise<void> {
     await keychainWrite(this.service, this.account, value);
+  }
+
+  /** Remove the configured keychain credential when it exists. */
+  public async clear(): Promise<void> {
+    await keychainDelete(this.service, this.account);
   }
 }

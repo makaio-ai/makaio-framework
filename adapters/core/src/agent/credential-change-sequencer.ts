@@ -1,9 +1,8 @@
 /**
- * Deduplicate credential-change requests per provider config and run
- * connector swaps through a single global exclusivity barrier.
+ * Deduplicate credential-change requests per provider config.
  *
- * Keeps ordering and single-flight ownership separate from the runtime
- * mutation manager's connector-swap logic.
+ * Connector exclusivity belongs to the agent-wide runtime mutation barrier;
+ * this collaborator owns only monotonic credential-change sequence state.
  */
 export class CredentialChangeSequencer {
   // The sequencer is scoped to one agent runtime; there is no provider-config
@@ -11,7 +10,6 @@ export class CredentialChangeSequencer {
   // actually delivered credential changes to this live agent.
   private readonly queuedSequences = new Map<string, number>();
   private readonly appliedSequences = new Map<string, number>();
-  private barrier: Promise<void> = Promise.resolve();
 
   /**
    * Queue a change sequence when it is newer than any queued/applied sequence
@@ -87,28 +85,5 @@ export class CredentialChangeSequencer {
   public clear(providerConfigId: string): void {
     this.queuedSequences.delete(providerConfigId);
     this.appliedSequences.delete(providerConfigId);
-  }
-
-  /**
-   * Run one credential-change action at a time across this runtime instance.
-   * @param action - Work item to execute after earlier changes finish.
-   * @returns Action result.
-   */
-  public async runExclusive<T>(action: () => Promise<T>): Promise<T> {
-    const previous = this.barrier;
-    let release: (() => void) | undefined;
-    this.barrier = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    await previous;
-
-    try {
-      return await action();
-    } finally {
-      // Do not add a local timeout here: a timed-out connector mutation would
-      // keep running while the next mutation starts, violating exclusivity.
-      release?.();
-    }
   }
 }

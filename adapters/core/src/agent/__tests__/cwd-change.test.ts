@@ -1,16 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
-import { createTestableAgent, createAgentTestLifecycle } from './helpers/mock-agent.js';
+import {
+  createTestableAgent,
+  createAgentTestLifecycle,
+  registerSuccessfulRuntimeMutationPersistence,
+} from './helpers/mock-agent.js';
 
 describe('AIAgent CWD change handler', () => {
   const ctx = createAgentTestLifecycle();
+  let persistenceCleanup: () => void;
 
   beforeEach(() => {
     ctx.reset();
+    persistenceCleanup = registerSuccessfulRuntimeMutationPersistence();
   });
 
   afterEach(async () => {
+    persistenceCleanup();
     await ctx.teardown();
   });
 
@@ -49,6 +56,30 @@ describe('AIAgent CWD change handler', () => {
     expect(ctx.agent.currentConnector.cwd).toBe('/test/cwd2');
     expect(changedEvents).toHaveLength(1);
     expect(changedEvents[0]).toEqual({ previousCwd: '/test/cwd1', newCwd: '/test/cwd2' });
+  });
+
+  it('reports an unhandled persistence RPC as committed runtime state', async () => {
+    ctx.agent = createTestableAgent({
+      agentId: 'test-agent-cwd',
+      mockConnectorFactory: ctx.mockFactory,
+      initialModel: 'test-model',
+      initialCwd: '/test/cwd1',
+    });
+    await ctx.agent.init();
+    persistenceCleanup();
+    persistenceCleanup = () => undefined;
+
+    const response = await MakaioBus.request(AgentSubjects.cwd.change, {
+      agentId: 'test-agent-cwd',
+      adapterId: 'test-adapter',
+      adapterName: 'test',
+      adapterSessionId: 'test-session-id',
+      newCwd: '/test/cwd2',
+    });
+
+    expect(response).toEqual({ success: false, reason: 'cwd_change_committed_persistence_failed' });
+    expect(ctx.agent.currentConnector.cwd).toBe('/test/cwd2');
+    expect(ctx.createdConnectors).toHaveLength(2);
   });
 
   it('cwd.change during active turn returns success: false, reason: turn_active', async () => {

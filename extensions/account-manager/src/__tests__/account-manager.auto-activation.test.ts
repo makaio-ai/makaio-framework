@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { AdapterSubjects } from '@makaio/contracts';
-import { buildAccountManagerCredentialRef } from '@makaio/contracts/config';
+import { AdapterSubjects, defineAdapterProviderAuth, type ResolvedProviderContext } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
-import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
+import {
+  AdapterSubsystemSubjects,
+  type AdapterRuntimeSnapshotResolution,
+  type ProviderConfigFileRecord,
+  type ProviderRuntimeSnapshot,
+} from '@makaio/services-core/adapter-subsystem';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { AccountManager } from '../account-manager.js';
 import { AccountManagerSubjects } from '../bus/namespace.js';
@@ -19,7 +23,6 @@ const DEFINITION_ID = 'openai';
 const ADAPTER_NAME = 'codex-app-server';
 const ADAPTER_ID = 'adapter-service-auto-activation';
 const MODEL = 'gpt-5.4-mini';
-const ACCOUNT_REF = buildAccountManagerCredentialRef(CLIENT_ID, ACCOUNT_ID);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -50,32 +53,79 @@ describe('AccountManager auto-activation wiring', () => {
       fingerprint: storedCredential.fingerprint,
     });
 
+    const providerContext: ResolvedProviderContext = {
+      state: 'resolved',
+      providerConfigId: PROVIDER_CONFIG_ID,
+      definitionId: DEFINITION_ID,
+      auth: {
+        mode: 'inferred',
+        method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+        definition: { id: 'native', mode: 'inferred', label: 'Native Codex' },
+        account: { managerId: 'account-manager', accountId: ACCOUNT_ID },
+      },
+    };
+    const providerConfig: ProviderConfigFileRecord = {
+      id: PROVIDER_CONFIG_ID,
+      definitionId: DEFINITION_ID,
+      name: 'Service Account',
+      modelFilterMode: 'show-all',
+      isDefault: false,
+      enabled: true,
+      auth: {
+        mode: 'inferred',
+        method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+        account: { managerId: 'account-manager', accountId: ACCOUNT_ID },
+        hasCredentials: false,
+      },
+    };
+    const providerDefinition: ProviderRuntimeSnapshot['definition'] = {
+      id: DEFINITION_ID,
+      packageName: '@makaio/provider-openai',
+      name: 'OpenAI',
+      defaultModel: MODEL,
+      availableModels: [],
+      authMethods: [],
+      defaultModelFilterMode: 'show-all' as const,
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const providerSnapshot: ProviderRuntimeSnapshot = {
+      config: providerConfig,
+      context: providerContext,
+      definition: providerDefinition,
+    };
+
     const cleanups = [
       bus.on(AdapterSubsystemSubjects.listProviderConfigs, (ctx) => {
-        ctx.setResult({
-          configs: [
-            {
-              id: PROVIDER_CONFIG_ID,
-              definitionId: DEFINITION_ID,
-              name: 'Service Account',
-              modelFilterMode: 'show-all' as const,
-              isDefault: false,
-              enabled: true,
-              isSentinel: false,
-              hasCredentials: true,
-              sourceRef: ACCOUNT_REF,
-            },
-          ],
-        });
+        ctx.setResult({ configs: [providerConfig] });
       }),
-      bus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: PROVIDER_CONFIG_ID,
-            definitionId: DEFINITION_ID,
-            credentialRefs: { token: ACCOUNT_REF },
+      bus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+        expect(ctx.payload).toEqual({ adapterName: ADAPTER_NAME, providerConfigId: PROVIDER_CONFIG_ID });
+        const resolution: AdapterRuntimeSnapshotResolution = {
+          status: 'resolved',
+          runtime: {
+            snapshot: providerSnapshot,
+            adapterName: ADAPTER_NAME,
+            adapterClientId: CLIENT_ID,
+            adapterProviderAuth: defineAdapterProviderAuth({
+              bindings: [
+                {
+                  method: { owner: 'client', clientId: CLIENT_ID, methodId: 'native' },
+                  deliveries: [{ kind: 'native-client', clientId: CLIENT_ID }],
+                },
+              ],
+              scrubEnvVars: ['OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN'],
+            }),
+            compatibleProviderAuths: [],
+            runtimePackages: {
+              adapter: { packageName: '@makaio/adapter-codex-app-server' },
+              provider: { packageName: '@makaio/provider-openai', definitionId: DEFINITION_ID },
+              client: { packageName: '@makaio/client-codex', clientId: CLIENT_ID },
+            },
           },
-        });
+        };
+        ctx.setResult(resolution);
       }),
       bus.on(AdapterSubsystemSubjects.listBindingsByConfig, (ctx) => {
         ctx.setResult({
@@ -86,19 +136,7 @@ describe('AccountManager auto-activation wiring', () => {
         ctx.setResult({ adapterId: ADAPTER_ID });
       }),
       bus.on(ProviderStorageSubjects.get, (ctx) => {
-        ctx.setResult({
-          provider: {
-            id: DEFINITION_ID,
-            packageName: '@makaio/provider-openai',
-            name: 'OpenAI',
-            defaultModel: MODEL,
-            availableModels: [],
-            defaultModelFilterMode: 'show-all' as const,
-            enabled: true,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        });
+        ctx.setResult({ provider: providerDefinition });
       }),
     ];
 

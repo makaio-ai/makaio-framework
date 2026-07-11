@@ -7,6 +7,31 @@ interface CredentialBusContextProvider {
   getContext(): MakaioBusContext;
 }
 
+/** Stable credential-resolution failure categories. */
+export type ConnectorCredentialResolutionErrorCode = 'credential-unavailable' | 'credential-request-failed';
+
+/** Trusted resolution policy for refs selected by a normalized auth method. */
+export interface ConnectorCredentialResolutionOptions {
+  /** Selected field names whose unavailable refs are intentionally omitted. */
+  readonly optionalFields?: readonly string[];
+}
+
+/**
+ * Typed credential-resolution failure that never retains a ref, secret, or provider error.
+ */
+export class ConnectorCredentialResolutionError extends Error {
+  /**
+   * Create a sanitized connector credential failure.
+   * @param code - Stable failure category
+   */
+  public constructor(public readonly code: ConnectorCredentialResolutionErrorCode) {
+    super(
+      code === 'credential-unavailable' ? 'A selected credential is unavailable.' : 'Credential resolution failed.',
+    );
+    this.name = 'ConnectorCredentialResolutionError';
+  }
+}
+
 /**
  * Resolve credential references to plaintext values at the connector layer.
  *
@@ -15,17 +40,20 @@ interface CredentialBusContextProvider {
  * or credential rotation — plaintext never leaves the connector.
  *
  * Returns an empty object immediately when `credentialRefs` is empty,
- * avoiding an unnecessary channel round-trip. Partial failures are
- * tolerated: refs that fail to resolve are omitted and logged. Callers
- * must still validate any required credential fields before using the
- * returned record to build env or client config.
+ * avoiding an unnecessary channel round-trip. Resolution is atomic for
+ * required refs: every required ref must produce a value or the whole
+ * operation fails with a sanitized typed error. Trusted normalized-auth
+ * callers may declare optional selected fields; unavailable optional refs are
+ * omitted rather than turning an explicit selection into an ambient fallback.
  * @param bus - Bus instance with context access for channel token retrieval
  * @param credentialRefs - Credential refs keyed by field name
+ * @param options - Trusted required/optional policy for selected fields
  * @returns Plaintext credential values keyed by field name
  */
 export async function resolveConnectorCredentials(
   bus: CredentialBusContextProvider,
   credentialRefs: Record<string, CredentialRef>,
+  options: ConnectorCredentialResolutionOptions = {},
 ): Promise<Record<string, string>> {
   const entries = Object.entries(credentialRefs);
   if (entries.length === 0) {
@@ -33,44 +61,33 @@ export async function resolveConnectorCredentials(
   }
 
   const resolved: Record<string, string> = {};
+  const optionalFields = new Set(options.optionalFields);
   const context = bus.getContext();
   const rootBus = createBusInstance({ context });
   const { token } = await rootBus.request(CredentialSubjects.getChannelToken, {});
   const channel = await openChannel(context, 'credentials', { token, transports: [] });
 
   try {
-    const results = await Promise.allSettled(
-      entries.map(([, ref]) => channel.request(CredentialSubjects.resolve, { ref })),
+    const values = await Promise.all(
+      entries.map(async ([field, ref]) => {
+        try {
+          const result = await channel.request(CredentialSubjects.resolve, { ref });
+          if (result.value === null) {
+            if (optionalFields.has(field)) return undefined;
+            throw new ConnectorCredentialResolutionError('credential-unavailable');
+          }
+          return [field, result.value] as const;
+        } catch (error) {
+          if (error instanceof ConnectorCredentialResolutionError) {
+            throw error;
+          }
+          throw new ConnectorCredentialResolutionError('credential-request-failed');
+        }
+      }),
     );
 
-    for (let i = 0; i < entries.length; i++) {
-      const [field, ref] = entries[i];
-      const result = results[i];
-      if (result.status === 'fulfilled') {
-        if (result.value.value !== null) {
-          resolved[field] = result.value.value;
-        } else if (result.value.error) {
-          // Credential refs are opaque objects; serialize them so warnings point to the failing field
-          // instead of logging "[object Object]" when resolution fails in connector startup/swap flows.
-          const refDescription = JSON.stringify(ref);
-          console.warn(
-            `[resolveConnectorCredentials] Failed to resolve field '${field}' (ref ${refDescription}):`,
-            result.value.error,
-          );
-        } else {
-          const refDescription = JSON.stringify(ref);
-          console.info(
-            `[resolveConnectorCredentials] Credential unavailable for field '${field}' (ref ${refDescription}); omitting it from the resolved connector credentials.`,
-          );
-        }
-      } else {
-        // Keep the same serialized ref shape for rejected requests so both failure paths are comparable.
-        const refDescription = JSON.stringify(ref);
-        console.warn(
-          `[resolveConnectorCredentials] Failed to resolve field '${field}' (ref ${refDescription}):`,
-          result.reason,
-        );
-      }
+    for (const [field, value] of values.filter((entry): entry is readonly [string, string] => entry !== undefined)) {
+      resolved[field] = value;
     }
   } finally {
     channel.close();

@@ -17,6 +17,17 @@ import type {
 } from '@makaio/contracts/client';
 import { isPathWithinBase as isPathWithinResolvedBase } from './client-binary-paths.js';
 
+/**
+ * Policy controlling which filesystem owns binary resolution.
+ *
+ * `managed-first` is the normal host behavior: resolve the active managed
+ * install from persisted state, then fall back to the current process PATH.
+ * `global-only` is for isolated runtimes whose filesystem cannot access the
+ * host's persisted managed-install paths; those runtimes resolve only binaries
+ * available on their own PATH.
+ */
+export type ClientBinaryResolutionPolicy = 'managed-first' | 'global-only';
+
 // ---------------------------------------------------------------------------
 // Manager configuration
 // ---------------------------------------------------------------------------
@@ -58,6 +69,12 @@ export interface ClientBinaryManagerConfig extends ClientBinaryJobRunnerConfig {
    * the definition declares `configIsolation`.
    */
   configBasePath: string;
+
+  /**
+   * Filesystem ownership policy for `client.resolveBinary`.
+   * @defaultValue 'managed-first'
+   */
+  resolutionPolicy?: ClientBinaryResolutionPolicy;
 }
 
 /**

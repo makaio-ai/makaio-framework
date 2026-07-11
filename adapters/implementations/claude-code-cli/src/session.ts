@@ -25,7 +25,6 @@ import { ClaudeConnectorTurn, type IQueryInterruptable } from './turn.js';
 import { ClaudeCodeCliConnectorSubjects } from './namespace/index.js';
 import type {
   ClaudeCliSessionConfig,
-  ClaudeCliTurnExecutionContext,
   EmitSdkEventCallback,
   OnTurnCompleteCallback,
   OnTurnStartCallback,
@@ -156,13 +155,11 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * Uses `requestOptional` for graceful degradation: when the bridge service is not
    * running, upstream servers are still provided if available.
    * @param sessionIdForMcp - Adapter session ID to route MCP approvals for this turn
-   * @param env - Fresh subprocess environment for this turn
    * @returns Config with serialized JSON and bridge availability flag, or `undefined`
    *   when neither the bridge nor upstream servers are available
    */
   private async registerMcpContextAndBuildConfig(
     sessionIdForMcp: string,
-    env: Record<string, string>,
   ): Promise<{ config: string; hasBridge: boolean } | undefined> {
     // MakaioBus (global singleton) is intentional here — MCP subjects live in
     // the `mcp` namespace, which is unreachable from the adapter's scoped bus.
@@ -178,7 +175,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       sessionId: this.config.makaioSessionId ?? sessionIdForMcp,
       contextOverrides: {
         cwd: this.config.cwd,
-        env,
+        env: this.config.contextEnv ?? {},
         sessionId: this.config.makaioSessionId ?? sessionIdForMcp,
         agentId: this.config.agentId,
         adapterSessionId: sessionIdForMcp,
@@ -330,7 +327,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     assertCliNativeForkSupported(nativeFork);
 
     const prompt = buildTextPrompt(handle, mergedContent);
-    const executionContext = await this.resolveAndPersistTurnExecutionContext();
+    const executionContext = { env: this.config.env, binaryPath: this.config.binaryPath };
     // Recheck: close() may have started during env resolution. The handle
     // is dequeued and unreachable by rejectQueuedHandles — complete it here
     // instead of spawning a subprocess on a closing session. Return false so
@@ -339,7 +336,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     // never arrive.
     if (this.completeHandleIfClosing(handle)) return false;
 
-    const mcpResult = await this.registerMcpContextAndBuildConfig(sessionIdForMcp, executionContext.env);
+    const mcpResult = await this.registerMcpContextAndBuildConfig(sessionIdForMcp);
     // Recheck: close() may have started during MCP registration.
     if (this.completeHandleIfClosing(handle)) return false;
     const mcpConfig = mcpResult?.config;
@@ -403,19 +400,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     });
 
     await this.currentTurn.start();
-  }
-
-  /**
-   * Resolve and persist the execution context for the next CLI turn.
-   * @returns Environment and binary path for the next subprocess
-   */
-  private async resolveAndPersistTurnExecutionContext(): Promise<ClaudeCliTurnExecutionContext> {
-    const context = this.config.resolveTurnExecutionContext
-      ? await this.config.resolveTurnExecutionContext()
-      : { env: this.config.env, binaryPath: this.config.binaryPath };
-    this.config.env = context.env;
-    this.config.binaryPath = context.binaryPath;
-    return context;
   }
 
   /**

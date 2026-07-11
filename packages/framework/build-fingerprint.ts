@@ -10,6 +10,8 @@ const PACKAGE_DIR = import.meta.dirname;
 const WORKSPACE_ROOT = resolve(PACKAGE_DIR, '..', '..');
 const DIST_DIR = join(PACKAGE_DIR, 'dist');
 const STAMP_VERSION = 1;
+/** Bound Git output while allowing large binary diffs in active feature branches. */
+const GIT_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 /** File written into `packages/framework/dist` after a successful build. */
 export const FRAMEWORK_DIST_BUILD_STAMP_FILE = '.makaio-build.json';
@@ -197,7 +199,7 @@ function readFrameworkDistBuildStamp(distDir: string): FrameworkDistBuildStamp |
  */
 function appendGitOutput(hash: Hash, cwd: string, args: readonly string[]): void {
   hash.update(`git ${args.join(' ')}\0`);
-  hash.update(execFileSync('git', args, { cwd }));
+  hash.update(execFileSync('git', args, { cwd, maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES }));
   hash.update('\0');
 }
 
@@ -220,6 +222,7 @@ function appendUntrackedInputFiles(hash: Hash, workspaceRoot: string): void {
     {
       cwd: workspaceRoot,
       encoding: 'utf8',
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     },
   );
 

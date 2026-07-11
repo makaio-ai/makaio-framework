@@ -12,6 +12,33 @@ export interface RawCredential {
   metadata: Record<string, unknown>;
 }
 
+/** Coordination state observed after a native credential mutation committed. */
+export type NativeCredentialCoordination = 'released' | 'uncertain';
+
+/** Result of a generation-checked rollback owned by the native credential source. */
+export interface NativeCredentialRollbackResult {
+  /** Whether the prepared generation was restored or a newer native value won. */
+  readonly status: 'restored' | 'superseded';
+  /** Whether the cross-process source lock released cleanly after the decision. */
+  readonly coordination: NativeCredentialCoordination;
+}
+
+/**
+ * Prepared native write whose rollback is compare-and-swap guarded by the source.
+ *
+ * The source retains the previous opaque credential bytes privately. Callers can
+ * request rollback without learning or reconstructing the native store format.
+ */
+export interface PreparedNativeCredentialMutation {
+  /** Whether the initial write's cross-process lock released cleanly. */
+  readonly coordination: NativeCredentialCoordination;
+  /**
+   * Restore the previous generation only while the prepared generation is still current.
+   * @returns Rollback outcome; a superseding native refresh always wins.
+   */
+  rollback(): Promise<NativeCredentialRollbackResult>;
+}
+
 /**
  * Result of asking a source to refresh a credential before activation.
  *
@@ -64,6 +91,19 @@ export interface ICredentialSource {
   read(): Promise<RawCredential | null>;
   /** Write a credential back to the client's native location */
   write(credential: RawCredential): Promise<void>;
+  /** Remove credentials from the client's native location. */
+  clear(): Promise<void>;
+  /**
+   * Atomically capture the current opaque native generation and write a target.
+   *
+   * Implementations own their canonical source lock and return a CAS rollback
+   * handle. This is the only write primitive suitable for a reversible account
+   * activation because a separate read followed by {@link write} can lose a
+   * refresh that lands between those calls.
+   * @param credential - Target credential to materialize.
+   * @returns Source-owned prepared mutation.
+   */
+  prepareNativeCredentialMutation(credential: RawCredential): Promise<PreparedNativeCredentialMutation>;
   /**
    * Optional configuration issue probe for the source's native installation.
    *

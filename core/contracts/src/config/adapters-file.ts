@@ -1,20 +1,20 @@
 import { z } from 'zod';
-import { CredentialRefSchema } from './credential-ref.js';
 import { ModelFilterModeSchema, ModelVisibilitySchema } from '../provider/visibility.js';
 
 /**
  * Configuration for a single provider entry inside `adapters.json`.
  */
-export const AdaptersFileProviderSchema = z.object({
-  name: z.string().optional(),
-  providerId: z.string().optional(),
-  credentials: z.record(z.string(), CredentialRefSchema).optional(),
-  baseUrl: z.string().url().optional(),
-  isDefault: z.boolean().optional(),
-  enabled: z.boolean().optional(),
-  modelFilterMode: ModelFilterModeSchema.optional(),
-  modelVisibility: z.record(z.string(), ModelVisibilitySchema).optional(),
-});
+export const AdaptersFileProviderSchema = z
+  .object({
+    name: z.string().optional(),
+    providerId: z.string().optional(),
+    baseUrl: z.string().url().optional(),
+    isDefault: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    modelFilterMode: ModelFilterModeSchema.optional(),
+    modelVisibility: z.record(z.string(), ModelVisibilitySchema).optional(),
+  })
+  .strict();
 
 /**
  * Configuration for one adapter entry inside `adapters.json`.

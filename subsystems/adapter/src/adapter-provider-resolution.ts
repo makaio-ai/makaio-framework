@@ -1,5 +1,17 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { AdapterProviderRef, ProviderAIModel, ProviderDefinitionInput } from '@makaio/contracts';
+import {
+  AdapterProviderAuthSchema,
+  assertAdapterAuthBindingMatchesMethod,
+  type AdapterAuthBindingMethodDefinition,
+  type AdapterProviderAuth,
+  type AdapterProviderRef,
+  type AuthMethodRef,
+  type ClientAuthMethodDefinition,
+  type ProviderAIModel,
+  type ProviderAuthMethodDefinition,
+  type ProviderDefinitionInput,
+} from '@makaio/contracts';
+import type { ClientDefinition } from '@makaio/contracts/client';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@makaio/services-core/model-registry';
 import type { z } from 'zod';
@@ -8,6 +20,16 @@ import type { LoadedAdapter, LoadedAdapterProvider } from './adapter-runtime-typ
 export interface ProviderDefinitionCacheEntry {
   readonly packageName: string;
   readonly definition: ProviderDefinitionInput;
+}
+
+/** Optional runtime metadata used while resolving adapter provider paths. */
+export interface ResolveProviderDefinitionsOptions {
+  /** Adapter-level default config schema. */
+  readonly adapterConfigSchema?: z.ZodObject<z.ZodRawShape>;
+  /** Definitions for every client this adapter may execute. */
+  readonly clientDefinitions?: readonly ClientDefinition[];
+  /** Optional pre-built provider definition map. */
+  readonly providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>;
 }
 
 /**
@@ -45,20 +67,16 @@ function isRegistryProviderMiss(error: unknown): boolean {
  * @param bus - Bus used to query the contributions catalog.
  * @param providerRefs - Adapter-declared provider references to resolve.
  * @param adapterName - Adapter name used for error messages.
- * @param adapterConfigSchema - Adapter-level default config schema.
- * @param adapterCredentialSchema - Adapter-level default credential schema.
- * @param providerDefinitionCache - Optional pre-built definition map.
+ * @param options - Adapter schema, runtime-client definitions, and optional provider cache.
  * @returns Resolved provider definitions with schemas applied.
  */
 export async function resolveProviderDefinitions(
   bus: IMakaioBus,
   providerRefs: readonly AdapterProviderRef[],
   adapterName: string,
-  adapterConfigSchema?: z.ZodObject<z.ZodRawShape>,
-  adapterCredentialSchema?: z.ZodObject<z.ZodRawShape>,
-  providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
+  options: ResolveProviderDefinitionsOptions = {},
 ): Promise<LoadedAdapterProvider[]> {
-  let definitionMap = providerDefinitionCache;
+  let definitionMap = options.providerDefinitionCache;
   if (!definitionMap) {
     definitionMap = new Map<string, ProviderDefinitionCacheEntry>();
     const catalog = await bus.request(ExtensionSubjects.contributions.catalog, {});
@@ -79,8 +97,11 @@ export async function resolveProviderDefinitions(
     resolved.push({
       definition: entry.definition,
       providerPackageName: entry.packageName,
-      configSchema: ref.configSchema ?? adapterConfigSchema,
-      credentialSchema: ref.credentialSchema ?? adapterCredentialSchema,
+      ...(ref.protocol !== undefined && { protocol: ref.protocol }),
+      configSchema: ref.configSchema ?? options.adapterConfigSchema,
+      ...(ref.auth !== undefined && {
+        auth: resolveAdapterProviderAuth(ref.auth, entry.definition, options.clientDefinitions ?? [], adapterName),
+      }),
     });
   }
 
@@ -92,6 +113,108 @@ export async function resolveProviderDefinitions(
   }
 
   return resolved;
+}
+
+/**
+ * Resolve one structurally valid declaration against authoritative method
+ * definitions and compile the complete adapter-path source-hint scrub union.
+ *
+ * Every client declared by the adapter contributes source hints because the
+ * selected runtime client may vary by auth method. This conservative union
+ * always contains the actually executed client and prevents competitor ambient
+ * credentials from re-entering through a client switch.
+ * @param declaration - Adapter-auth declaration attached to the provider ref.
+ * @param provider - Provider definition served by the ref.
+ * @param clientDefinitions - Definitions for clients executable by the adapter.
+ * @param adapterName - Adapter name used in declaration diagnostics.
+ * @returns Validated declaration with definition-derived scrub variables.
+ */
+function resolveAdapterProviderAuth(
+  declaration: AdapterProviderAuth,
+  provider: ProviderDefinitionInput,
+  clientDefinitions: readonly ClientDefinition[],
+  adapterName: string,
+): AdapterProviderAuth {
+  const auth = AdapterProviderAuthSchema.parse(declaration);
+  const scrubEnvVars = new Set(auth.scrubEnvVars);
+
+  collectSourceHintVariables(provider.authMethods ?? [], scrubEnvVars);
+  for (const client of clientDefinitions) {
+    collectSourceHintVariables(client.authMethods, scrubEnvVars);
+  }
+
+  for (const binding of auth.bindings) {
+    const method = resolveBindingMethod(binding.method, provider, clientDefinitions, adapterName);
+    assertAdapterAuthBindingMatchesMethod(binding, method);
+  }
+
+  return AdapterProviderAuthSchema.parse({
+    bindings: auth.bindings,
+    scrubEnvVars: [...scrubEnvVars],
+  });
+}
+
+/**
+ * Resolve one owner-qualified binding method from provider/client definitions.
+ * @param methodRef - Binding method reference.
+ * @param provider - Provider definition served by the adapter path.
+ * @param clientDefinitions - Client definitions declared by the adapter.
+ * @param adapterName - Adapter name used in declaration diagnostics.
+ * @returns Authoritative method definition.
+ */
+function resolveBindingMethod(
+  methodRef: AuthMethodRef,
+  provider: ProviderDefinitionInput,
+  clientDefinitions: readonly ClientDefinition[],
+  adapterName: string,
+): AdapterAuthBindingMethodDefinition {
+  if (methodRef.owner === 'provider') {
+    if (methodRef.providerDefinitionId !== provider.id) {
+      throw new Error(
+        `Adapter "${adapterName}" binds provider method "${methodRef.methodId}" to definition ` +
+          `"${methodRef.providerDefinitionId}" while serving "${provider.id}".`,
+      );
+    }
+    const method = (provider.authMethods ?? []).find(({ id }) => id === methodRef.methodId);
+    if (method === undefined) {
+      throw new Error(
+        `Adapter "${adapterName}" binds undeclared provider auth method "${provider.id}/${methodRef.methodId}".`,
+      );
+    }
+    return method;
+  }
+
+  const client = clientDefinitions.find(({ id }) => id === methodRef.clientId);
+  if (client === undefined) {
+    throw new Error(
+      `Adapter "${adapterName}" binds authentication method "${methodRef.clientId}/${methodRef.methodId}" ` +
+        'without declaring that client.',
+    );
+  }
+  const method = client.authMethods.find(({ id }) => id === methodRef.methodId);
+  if (method === undefined) {
+    throw new Error(
+      `Adapter "${adapterName}" binds undeclared client auth method "${methodRef.clientId}/${methodRef.methodId}".`,
+    );
+  }
+  return method;
+}
+
+/**
+ * Add environment source hints from explicit auth methods to one scrub set.
+ * @param methods - Provider- or client-owned method definitions.
+ * @param scrubEnvVars - Mutable declaration-local scrub union.
+ */
+function collectSourceHintVariables(
+  methods: readonly (ProviderAuthMethodDefinition | ClientAuthMethodDefinition)[],
+  scrubEnvVars: Set<string>,
+): void {
+  for (const method of methods) {
+    if (method.mode !== 'explicit') continue;
+    for (const field of method.fields) {
+      for (const hint of field.sourceHints) scrubEnvVars.add(hint.variable);
+    }
+  }
 }
 
 /**
@@ -158,13 +281,10 @@ export async function resolveLoadedAdapterProviders(
   providerModelCache: Map<string, ProviderAIModel[]>,
   providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
 ): Promise<LoadedAdapterProvider[]> {
-  const providers = await resolveProviderDefinitions(
-    bus,
-    adapter.providerRefs,
-    adapter.name,
-    adapter.providerConfigSchema,
-    adapter.providerCredentialSchema,
-    providerDefinitionCache,
-  );
+  const providers = await resolveProviderDefinitions(bus, adapter.providerRefs, adapter.name, {
+    ...(adapter.providerConfigSchema !== undefined && { adapterConfigSchema: adapter.providerConfigSchema }),
+    ...(adapter.clientDefinitions !== undefined && { clientDefinitions: adapter.clientDefinitions }),
+    ...(providerDefinitionCache !== undefined && { providerDefinitionCache }),
+  });
   return populateProviderModels(bus, adapter.name, providers, providerModelCache);
 }

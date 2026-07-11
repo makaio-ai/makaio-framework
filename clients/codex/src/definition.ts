@@ -56,7 +56,31 @@ export const clientDefinition = createClientDefinition({
     },
   ],
   defaultApprovalPolicy: 'full-access',
-  defaultProviderId: 'openai-codex',
+  authMethods: [
+    {
+      id: 'native',
+      mode: 'inferred',
+      label: 'Native account',
+    },
+    {
+      id: 'access-token',
+      mode: 'explicit',
+      label: 'Access token',
+      fields: [
+        {
+          id: 'accessToken',
+          label: 'Access token',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'CODEX_ACCESS_TOKEN' }],
+        },
+      ],
+    },
+  ],
+  defaultAuth: {
+    providerDefinitionId: 'openai-codex',
+    methodId: 'native',
+  },
   runtimeCapabilities: {
     supportsHooks: true,
     supportsStatusline: false,

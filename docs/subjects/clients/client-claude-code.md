@@ -335,6 +335,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `authMaterialized` | `boolean` | yes |
 | `env` | `Record<string, string> \| undefined` | no |
 
 ### <a id="client:claude-code.statusline.received"></a>`client:claude-code.statusline.received` (event)

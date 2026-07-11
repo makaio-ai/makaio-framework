@@ -7,20 +7,20 @@ next: false
 
 # services
 
-32 namespaces, 223 subjects (35 events, 188 RPCs).
+32 namespaces, 227 subjects (35 events, 192 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
 | [`adapterRuntime`](./adapterruntime.md) | bus | 3 | 0E / 3R |
-| [`adapterSubsystem`](./adaptersubsystem.md) | bus | 33 | 9E / 24R |
+| [`adapterSubsystem`](./adaptersubsystem.md) | bus | 35 | 9E / 26R |
 | [`agentRuntime`](./agentruntime.md) | bus | 6 | 2E / 4R |
 | [`cliDetection`](./clidetection.md) | bus | 1 | 0E / 1R |
 | [`codebase`](./codebase.md) | bus | 1 | 1E / 0R |
 | [`compression`](./compression.md) | bus | 2 | 0E / 2R |
 | [`contextRules`](./contextrules.md) | bus | 2 | 1E / 1R |
-| [`definition`](./definition.md) | bus | 2 | 0E / 2R |
+| [`definition`](./definition.md) | bus | 1 | 0E / 1R |
 | [`dialog`](./dialog.md) | bus | 2 | 0E / 2R |
-| [`docker`](./docker.md) | bus | 7 | 4E / 3R |
+| [`docker`](./docker.md) | bus | 9 | 4E / 5R |
 | [`execution-target`](./execution-target.md) | bus | 8 | 3E / 5R |
 | [`fs`](./fs.md) | bus | 10 | 2E / 8R |
 | [`git`](./git.md) | bus | 44 | 6E / 38R |
@@ -30,7 +30,7 @@ next: false
 | [`modelRegistry`](./modelregistry.md) | bus | 6 | 1E / 5R |
 | [`packages`](./packages.md) | bus | 8 | 2E / 6R |
 | [`preferences`](./preferences.md) | bus | 4 | 0E / 4R |
-| [`providerRuntime`](./providerruntime.md) | bus | 1 | 0E / 1R |
+| [`providerRuntime`](./providerruntime.md) | bus | 2 | 0E / 2R |
 | [`session-editor`](./session-editor.md) | bus | 1 | 0E / 1R |
 | [`settings`](./settings.md) | bus | 10 | 0E / 10R |
 | [`settings:subagentTemplate`](./settings-subagenttemplate.md) | bus | 5 | 0E / 5R |

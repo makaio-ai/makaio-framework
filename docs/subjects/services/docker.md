@@ -22,6 +22,8 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `bootstrap.getChannelToken` | [`docker.bootstrap.getChannelToken`](#docker.bootstrap.getChannelToken) | rpc | — |
+| `bootstrap.spawn` | [`docker.bootstrap.spawn`](#docker.bootstrap.spawn) | rpc | — |
 | `container.created` | [`docker.container.created`](#docker.container.created) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-schemas.ts) |
 | `container.destroyed` | [`docker.container.destroyed`](#docker.container.destroyed) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-schemas.ts) |
 | `container.spawn` | [`docker.container.spawn`](#docker.container.spawn) | rpc | — |
@@ -31,6 +33,46 @@ next: false
 | `container.stopped` | [`docker.container.stopped`](#docker.container.stopped) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-schemas.ts) |
 
 ## Subject Details
+
+### <a id="docker.bootstrap.getChannelToken"></a>`docker.bootstrap.getChannelToken` (rpc)
+
+Return the process-local bootstrap channel bearer capability.
+
+Subject: `docker.bootstrap.getChannelToken`
+Type: Request (RPC)
+
+**Request:**
+
+_Empty object._
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `token` | `string` | yes |
+
+### <a id="docker.bootstrap.spawn"></a>`docker.bootstrap.spawn` (rpc)
+
+Atomically spawn from a public descriptor plus encrypted bootstrap data.
+Channel-only because the request contains resolved plaintext secrets.
+
+Subject: `docker.bootstrap.spawn`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `bootstrapConfig` | `{ busAuthSecret?: string \| undefined; relayPeer?: { id: string; signingPublicKey: string; } \| undefined; relayIdentity?: { id: string; signingPublicKey: string; signingPrivateKeyPem: string; } \| undefined; gitToken?: string \| undefined; runtimeEnv?: Record<string, string> \| undefined; sessionRuntime?: Readonly<{ machineId: string; packageNames: readonly string[]; }> \| undefined; adapterAuth?: Readonly<{ selector: Readonly<{ sessionId: string; adapterName: string; providerConfigId: string; definitionId: string; runtime: Readonly<{ machineId: string; packageNames: readonly string[]; }>; auth: Readonly<{ mode: "none" \| "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; }>; }>; scrubEnvVars: readonly string[]; processEnv: Readonly<Record<string, string>>; connectorDeliveries: readonly Readonly<{ target: string; values: Readonly<Record<string, string \| number \| boolean \| null>>; }>[]; }> \| undefined; }` | yes |
+| `descriptor` | `{ sessionId: string; adapter: string; mode: "container-local"; repoPath: string; baseBranch: string; executionId?: string \| undefined; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; worktreeBranch?: string \| undefined; } \| { sessionId: string; adapter: string; mode: "container-isolated"; repoUrl: string; busMode: "relay" \| "host"; executionId?: string \| undefined; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; branch?: string \| undefined; relayUrl?: string \| undefined; }` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `containerId` | `string` | yes |
+| `worktreeBranch` | `string \| undefined` | no |
+| `worktreePath` | `string \| undefined` | no |
 
 ### <a id="docker.container.created"></a>`docker.container.created` (event)
 
@@ -67,8 +109,6 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapter` | `string` | yes |
-| `bootstrapConfig` | `{ busAuthSecret?: string \| undefined; relayPeer?: { id: string; signingPublicKey: string; } \| undefined; relayIdentity?: { id: string; signingPublicKey: string; signingPrivateKeyPem: string; } \| undefined; gitToken?: string \| undefined; credentialEnv?: Record<string, string> \| undefined; providerEnv?: Record<string, string> \| undefined; } \| undefined` | no |
-| `env` | `Record<string, string> \| undefined` | no |
 | `executionId` | `string \| undefined` | no |
 | `image` | `string \| undefined` | no |
 | `mode` | `"container-local" \| "container-isolated"` | yes |

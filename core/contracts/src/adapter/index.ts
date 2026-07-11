@@ -33,4 +33,11 @@ export {
   type AgentSelection,
   type AgentSelectionKindMap,
 } from './schemas/agent-resolution.js';
-export { ProviderContextSchema, type ProviderContext } from './schemas/provider-context.js';
+export {
+  ProviderContextSchema,
+  ResolvedProviderContextSchema,
+  UnresolvedProviderContextSchema,
+  type ProviderContext,
+  type ResolvedProviderContext,
+  type UnresolvedProviderContext,
+} from './schemas/provider-context.js';

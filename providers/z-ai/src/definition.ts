@@ -23,5 +23,20 @@ export const providerDefinition: ProviderDefinitionInput = {
   },
   defaultModel: 'glm-4.7',
   fastModel: 'glm-4.7',
-  credentialEnvVars: { apiKey: 'Z_AI_API_KEY' },
+  authMethods: [
+    {
+      id: 'api-key',
+      mode: 'explicit',
+      label: 'API key',
+      fields: [
+        {
+          id: 'apiKey',
+          label: 'API key',
+          required: true,
+          secret: true,
+          sourceHints: [{ kind: 'environment', variable: 'Z_AI_API_KEY' }],
+        },
+      ],
+    },
+  ],
 };

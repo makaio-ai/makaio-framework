@@ -27,12 +27,12 @@ export const ClientProfileNameSchema = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'Profile name must be a safe path component');
 
 /**
- * Filesystem-safe session config directory name.
+ * Filesystem-safe session config lease directory name.
  *
- * Session IDs flow into ephemeral config directory paths. They are restricted
- * to the same single-component form as profile names to prevent path escape.
+ * Lease IDs flow into ephemeral config directory paths. They are restricted to
+ * the same single-component form as profile names to prevent path escape.
  */
-export const SessionConfigIdSchema = ClientProfileNameSchema;
+export const SessionConfigLeaseIdSchema = ClientProfileNameSchema;
 
 /**
  * A named, persistent configuration profile for a client.
@@ -188,13 +188,13 @@ export const ClientProfileSchemas = {
 /**
  * Request and response schemas for `client.sessionConfig.*` operations.
  *
- * Manages per-session configuration isolation: creating a temporary working
- * directory seeded from a named profile, tearing it down after a session ends,
- * and bulk-cleaning stale session directories.
+ * Manages connector config leases: creating a temporary working directory
+ * seeded from a named profile, releasing it explicitly or with its optional
+ * owner session, and bulk-cleaning stale lease directories.
  */
 export const ClientSessionConfigSchemas = {
   /**
-   * Create an isolated configuration directory for a session.
+   * Create an isolated configuration directory for a connector lease.
    *
    * The service seeds the directory from the named profile (or the client
    * default when `profileName` is omitted) and returns the path together
@@ -204,8 +204,10 @@ export const ClientSessionConfigSchemas = {
     request: z.object({
       /** Stable client identifier. */
       clientId: NonEmptyStringSchema,
-      /** Framework session ID for which config isolation is requested. */
-      sessionId: SessionConfigIdSchema,
+      /** Connector-unique identity for this config lease. */
+      leaseId: SessionConfigLeaseIdSchema,
+      /** Optional framework session owner used only for bulk cleanup on close. */
+      ownerSessionId: NonEmptyStringSchema.optional(),
       /** Profile name to use as the config source; defaults to the client default. */
       profileName: ClientProfileNameSchema.optional(),
       /** Override for the base config directory used during setup. */
@@ -220,21 +222,23 @@ export const ClientSessionConfigSchemas = {
       sessionDir: AbsolutePathSchema,
       /** Environment variables the client process should inherit. */
       env: SessionConfigEnvSchema,
+      /** Whether the client setup handler materialized native authentication. */
+      authMaterialized: z.boolean(),
     }),
   },
 
   /**
-   * Destroy the isolated configuration directory for a session.
+   * Destroy the isolated configuration directory for a connector lease.
    */
   'sessionConfig.destroy': {
     request: z.object({
       /** Stable client identifier. */
       clientId: NonEmptyStringSchema,
-      /** Framework session ID whose config directory should be removed. */
-      sessionId: SessionConfigIdSchema,
+      /** Connector-unique identity of the config lease to release. */
+      leaseId: SessionConfigLeaseIdSchema,
     }),
     response: z.object({
-      /** `true` when the directory was found and removed successfully. */
+      /** `true` when release completed; an already-missing directory is successful. */
       success: z.boolean(),
     }),
   },
@@ -313,8 +317,10 @@ export type SessionConfigTeardownResponse = z.infer<typeof SessionConfigTeardown
  * environment variables are added beyond those already in the spawn environment.
  */
 export const SessionConfigSetupResponseSchema = z.object({
-  /** Environment variables the client process should inherit for this session. */
+  /** Environment variables the client process should inherit for this lease. */
   env: z.record(z.string(), z.string()).optional(),
+  /** Whether native authentication was materialized into the session config. */
+  authMaterialized: z.boolean(),
 });
 
 export type SessionConfigSetupResponse = z.infer<typeof SessionConfigSetupResponseSchema>;

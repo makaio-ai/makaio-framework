@@ -72,8 +72,8 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
   it('completes dequeued handle when close() begins during startTurn setup', async () => {
     const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
 
-    // Simulate close() interleaving during the awaited env resolution
-    // by using a custom resolveTurnExecutionContext that sets closing = true
+    // Simulate close() interleaving during the awaited MCP registration
+    // by spying on registerMcpContextAndBuildConfig and setting closing = true
     // before returning, mimicking a concurrent close() call during the await.
     let callCount = 0;
     const onTurnStart = vi.fn();
@@ -87,15 +87,17 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
       env: {},
       emitSdkEvent: vi.fn(async () => undefined),
       onTurnStart,
-      resolveTurnExecutionContext: async () => {
-        callCount++;
-        // On the second call (the racing turn), simulate close() interleaving
-        // by setting this.closing = true during the awaited env resolution.
-        if (callCount >= 2) {
-          Reflect.set(session, 'closing', true);
-        }
-        return { env: {}, binaryPath: undefined };
-      },
+    });
+    // Intercept the async MCP registration to simulate close() racing mid-await.
+    const originalRegister = Reflect.get(session, 'registerMcpContextAndBuildConfig').bind(session);
+    Reflect.set(session, 'registerMcpContextAndBuildConfig', async (...args: unknown[]) => {
+      callCount++;
+      // On the second call (the racing turn), simulate close() interleaving
+      // by setting this.closing = true during the awaited MCP registration.
+      if (callCount >= 2) {
+        Reflect.set(session, 'closing', true);
+      }
+      return originalRegister(...args);
     });
 
     // Start and complete a first turn so the session has a confirmed state

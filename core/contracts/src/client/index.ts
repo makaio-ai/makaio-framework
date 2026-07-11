@@ -160,7 +160,7 @@ export {
   ClientProfileSchemas,
   ClientSessionConfigSchemas,
   SessionConfigEnvSchema,
-  SessionConfigIdSchema,
+  SessionConfigLeaseIdSchema,
   SessionConfigInheritanceSchema,
   SessionConfigSetupRequestSchema,
   SessionConfigSetupResponseSchema,

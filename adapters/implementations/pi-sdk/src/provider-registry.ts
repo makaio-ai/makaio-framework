@@ -1,4 +1,4 @@
-import type { ProtocolEndpoints } from '@makaio/contracts';
+import type { ProtocolEndpoints, ProtocolId } from '@makaio/contracts';
 import type { ModelRegistry } from '@mariozechner/pi-coding-agent';
 import type { Api } from '@mariozechner/pi-ai';
 import type { PiThinkingLevel } from './types/index.js';
@@ -27,18 +27,17 @@ const PROTOCOL_TO_PI_API: Record<string, Api> = {
 
 /**
  * Resolve the Pi API type and base URL from Makaio's protocol endpoint map.
- * @param endpointOverrides - Protocol-to-URL mapping from providerContext
+ * @param protocol - Exact protocol declared by the selected adapter/provider ref
+ * @param endpoints - Effective protocol-to-URL mapping from providerContext
  * @returns Resolved `{ piApi, baseUrl }` or `undefined` when unrecognized
  */
 export function resolveProviderEndpoint(
-  endpointOverrides: ProtocolEndpoints | undefined,
+  protocol: ProtocolId,
+  endpoints: ProtocolEndpoints | undefined,
 ): { piApi: Api; baseUrl: string } | undefined {
-  if (!endpointOverrides) return undefined;
-  for (const [protocol, url] of Object.entries(endpointOverrides)) {
-    const piApi = PROTOCOL_TO_PI_API[protocol];
-    if (piApi && url) return { piApi, baseUrl: url };
-  }
-  return undefined;
+  const piApi = PROTOCOL_TO_PI_API[protocol];
+  const baseUrl = endpoints?.[protocol];
+  return piApi && baseUrl ? { piApi, baseUrl } : undefined;
 }
 
 /**
@@ -46,17 +45,19 @@ export function resolveProviderEndpoint(
  * @param modelRegistry - Pi's ModelRegistry to register the provider on
  * @param providerName - Makaio provider definition ID
  * @param modelId - Model identifier to register
+ * @param protocol - Exact protocol selected by the adapter/provider ref
  * @param endpointOverrides - Protocol-to-URL mapping from providerContext
- * @param apiKey - Resolved API key or env var name
+ * @param apiKey - Selected provider API key
  */
 export function registerMakaioProviderModel(
   modelRegistry: ModelRegistry,
   providerName: string,
   modelId: string,
+  protocol: ProtocolId,
   endpointOverrides: ProtocolEndpoints | undefined,
-  apiKey?: string,
+  apiKey: string,
 ): void {
-  const endpoint = resolveProviderEndpoint(endpointOverrides);
+  const endpoint = resolveProviderEndpoint(protocol, endpointOverrides);
   if (!endpoint) return;
 
   modelRegistry.registerProvider(providerName, {

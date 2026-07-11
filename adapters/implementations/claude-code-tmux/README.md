@@ -33,10 +33,10 @@ In-turn interruption is supported: immediate replacement sends Escape to the
 live tmux pane, waits for Stop or the interrupt settling window, clears any
 draft input, and then submits the replacement prompt.
 
-Hook wiring is session-isolated. `client.sessionConfig.create` must be handled;
-the returned session config directory is passed to Claude Code wiring with
-user scope so hooks are written to that directory instead of project
-`.claude/settings.json`.
+Hook wiring is session-isolated. The central adapter auth runtime owns the
+Claude Code client-config lease and passes its `CLAUDE_CONFIG_DIR` into the
+connector. The connector writes user-scope hooks there and never creates or
+releases a second lease.
 
 Provider support is limited to Claude Code-authenticated Anthropic providers:
 `anthropic` and `anthropic-oauth`.

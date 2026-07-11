@@ -106,7 +106,7 @@ const config = await createTestConfig();
 | `src/stream-bridge.ts` | Streaming event parsing bridge |
 | `src/provider.ts` | Provider presets and model configuration |
 | `src/config.ts` | Internal adapter config factory |
-| `src/schemas.ts` | `AnthropicSdkProviderConfigSchema` and credential schema |
+| `src/schemas.ts` | `AnthropicSdkProviderConfigSchema` for non-secret provider settings |
 | `src/tool-handling.ts` | Tool approval bridging and tool format conversion |
 | `src/definition.ts` | Internal adapter definition consumed by the package descriptor |
 | `src/package.ts` | `MakaioExtension` package descriptor with `adapters[]` contribution |

@@ -10,8 +10,16 @@ export type {
   AgentSelectionBase,
   AgentSelectionKindMap,
 } from './agent-resolution.js';
-export { ProviderContextSchema } from './provider-context.js';
-export type { ProviderContext } from './provider-context.js';
+export {
+  ProviderContextSchema,
+  ResolvedProviderContextSchema,
+  UnresolvedProviderContextSchema,
+} from './provider-context.js';
+export type {
+  ProviderContext,
+  ResolvedProviderContext,
+  UnresolvedProviderContext,
+} from './provider-context.js';
 
 // RPC schemas
 export { GetCapabilitiesSchema } from './get-capabilities.js';

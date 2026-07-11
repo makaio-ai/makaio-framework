@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus, createChannelEndpoint } from '@makaio/bus-core';
 import type { ChannelEndpoint } from '@makaio/bus-core';
 import { CredentialSubjects } from '@makaio/contracts';
 import { CredentialRefSchema } from '@makaio/contracts/config';
 import type { CredentialRef } from '@makaio/contracts/config';
-import { resolveConnectorCredentials } from '../resolve-connector-credentials.js';
+import { ConnectorCredentialResolutionError, resolveConnectorCredentials } from '../resolve-connector-credentials.js';
 
 /** Token that grants access to the credential channel in tests. */
 const TEST_CHANNEL_TOKEN = 'resolve-connector-credentials-test-token';
@@ -74,6 +74,7 @@ afterEach(() => {
   }
   cleanups = [];
   channelEndpoint = null;
+  vi.restoreAllMocks();
 });
 
 /**
@@ -116,36 +117,52 @@ describe('resolveConnectorCredentials', () => {
     expect(result).toEqual({ apiKey: 'sk-abc', baseUrl: 'https://api.example.com' });
   });
 
-  it('omits fields whose refs fail to resolve, and resolves the remaining fields', async () => {
+  it('fails atomically when any selected ref is unavailable', async () => {
     setupCredentialBus();
     resolveStore.set('env:GOOD_KEY', 'good-value');
     // 'env:BAD_KEY' is deliberately absent from resolveStore → triggers error path
 
-    const result = await resolveConnectorCredentials(MakaioBus, {
-      goodField: ref('env:GOOD_KEY'),
-      badField: ref('env:BAD_KEY'),
-    });
-
-    expect(result).toEqual({ goodField: 'good-value' });
-    expect('badField' in result).toBe(false);
+    await expect(
+      resolveConnectorCredentials(MakaioBus, {
+        goodField: ref('env:GOOD_KEY'),
+        badField: ref('env:BAD_KEY'),
+      }),
+    ).rejects.toMatchObject({
+      name: 'ConnectorCredentialResolutionError',
+      code: 'credential-unavailable',
+    } satisfies Partial<ConnectorCredentialResolutionError>);
   });
 
-  it('omits a field when the resolved value is null (credential not found)', async () => {
+  it('rejects a null resolved value instead of treating it as an optional field', async () => {
     setupCredentialBus();
     resolveStore.set('env:NULL_KEY', null);
 
-    const result = await resolveConnectorCredentials(MakaioBus, {
-      apiKey: ref('env:NULL_KEY'),
-    });
-
-    expect(result).toEqual({});
-    expect('apiKey' in result).toBe(false);
+    await expect(
+      resolveConnectorCredentials(MakaioBus, {
+        apiKey: ref('env:NULL_KEY'),
+      }),
+    ).rejects.toMatchObject({ code: 'credential-unavailable' });
   });
 
-  it('omits a field and completes without throwing when the channel handler rejects (finally block runs)', async () => {
+  it('omits an unavailable ref explicitly selected as optional while retaining resolved required fields', async () => {
+    setupCredentialBus();
+    resolveStore.set('env:REQUIRED_KEY', 'required-value');
+
+    await expect(
+      resolveConnectorCredentials(
+        MakaioBus,
+        {
+          requiredField: ref('env:REQUIRED_KEY'),
+          optionalField: ref('env:OPTIONAL_KEY'),
+        },
+        { optionalFields: ['optionalField'] },
+      ),
+    ).resolves.toEqual({ requiredField: 'required-value' });
+  });
+
+  it('sanitizes a rejected channel request while still closing the channel', async () => {
     // Set up a fresh endpoint whose resolve handler always throws, triggering the
-    // Promise.allSettled 'rejected' branch. The function must still return a clean
-    // result — the finally block's channel.close() is what makes this safe.
+    // request rejection path. The finally block still closes the channel.
     const throwingToken = 'throwing-token';
     cleanups.push(
       MakaioBus.on(CredentialSubjects.getChannelToken, (ctx) => {
@@ -165,11 +182,14 @@ describe('resolveConnectorCredentials', () => {
     );
     cleanups.push(() => throwingEndpoint.close());
 
-    // The function must not throw and must omit the failed field.
-    const result = await resolveConnectorCredentials(MakaioBus, {
-      field: ref('env:ANY_KEY'),
-    });
-
-    expect(result).toEqual({});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    await expect(
+      resolveConnectorCredentials(MakaioBus, {
+        field: ref('env:ANY_KEY'),
+      }),
+    ).rejects.toMatchObject({ code: 'credential-request-failed', message: 'Credential resolution failed.' });
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(infoSpy).not.toHaveBeenCalled();
   });
 });

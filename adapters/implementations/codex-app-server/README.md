@@ -302,7 +302,6 @@ src/
 ├── package.ts            # MakaioExtension package descriptor
 ├── server.ts             # Server entrypoint exporting the package descriptor
 ├── provider.ts           # Provider registration
-├── provider.fetcher.ts   # Codex model/list fetcher
 ├── schemas.ts            # Zod schemas
 ├── tool-handling.ts      # Tool approval utilities
 ├── dynamic-tool-handling.ts # Registry tool declaration and routing

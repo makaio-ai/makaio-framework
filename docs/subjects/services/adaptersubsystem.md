@@ -22,39 +22,41 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `adapter.registered` | [`adapterSubsystem.adapter.registered`](#adapterSubsystem.adapter.registered) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `bind` | [`adapterSubsystem.bind`](#adapterSubsystem.bind) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `binding.created` | [`adapterSubsystem.binding.created`](#adapterSubsystem.binding.created) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `binding.defaultChanged` | [`adapterSubsystem.binding.defaultChanged`](#adapterSubsystem.binding.defaultChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `binding.deleted` | [`adapterSubsystem.binding.deleted`](#adapterSubsystem.binding.deleted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `buildProviderContext` | [`adapterSubsystem.buildProviderContext`](#adapterSubsystem.buildProviderContext) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `createProviderConfig` | [`adapterSubsystem.createProviderConfig`](#adapterSubsystem.createProviderConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `deleteProviderConfig` | [`adapterSubsystem.deleteProviderConfig`](#adapterSubsystem.deleteProviderConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `ensureReady` | [`adapterSubsystem.ensureReady`](#adapterSubsystem.ensureReady) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `findConfigForDefinitionAndAdapter` | [`adapterSubsystem.findConfigForDefinitionAndAdapter`](#adapterSubsystem.findConfigForDefinitionAndAdapter) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `getAdapterConfig` | [`adapterSubsystem.getAdapterConfig`](#adapterSubsystem.getAdapterConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `getDefaultBinding` | [`adapterSubsystem.getDefaultBinding`](#adapterSubsystem.getDefaultBinding) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `getProviderConfig` | [`adapterSubsystem.getProviderConfig`](#adapterSubsystem.getProviderConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `getProviderDefinitionsByAdapter` | [`adapterSubsystem.getProviderDefinitionsByAdapter`](#adapterSubsystem.getProviderDefinitionsByAdapter) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `listAdapterConfigs` | [`adapterSubsystem.listAdapterConfigs`](#adapterSubsystem.listAdapterConfigs) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `listAdapters` | [`adapterSubsystem.listAdapters`](#adapterSubsystem.listAdapters) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `listBindings` | [`adapterSubsystem.listBindings`](#adapterSubsystem.listBindings) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `listBindingsByConfig` | [`adapterSubsystem.listBindingsByConfig`](#adapterSubsystem.listBindingsByConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `listProviderConfigs` | [`adapterSubsystem.listProviderConfigs`](#adapterSubsystem.listProviderConfigs) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `listProviderConfigsByDefinition` | [`adapterSubsystem.listProviderConfigsByDefinition`](#adapterSubsystem.listProviderConfigsByDefinition) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `providerConfig.created` | [`adapterSubsystem.providerConfig.created`](#adapterSubsystem.providerConfig.created) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `providerConfig.defaultChanged` | [`adapterSubsystem.providerConfig.defaultChanged`](#adapterSubsystem.providerConfig.defaultChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `providerConfig.deleted` | [`adapterSubsystem.providerConfig.deleted`](#adapterSubsystem.providerConfig.deleted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `providerConfig.updated` | [`adapterSubsystem.providerConfig.updated`](#adapterSubsystem.providerConfig.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `ready` | [`adapterSubsystem.ready`](#adapterSubsystem.ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `setAdapterConfig` | [`adapterSubsystem.setAdapterConfig`](#adapterSubsystem.setAdapterConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `setAdapterEnabled` | [`adapterSubsystem.setAdapterEnabled`](#adapterSubsystem.setAdapterEnabled) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `setDefaultBinding` | [`adapterSubsystem.setDefaultBinding`](#adapterSubsystem.setDefaultBinding) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `setDefaultProviderConfig` | [`adapterSubsystem.setDefaultProviderConfig`](#adapterSubsystem.setDefaultProviderConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `setModelFilterMode` | [`adapterSubsystem.setModelFilterMode`](#adapterSubsystem.setModelFilterMode) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `setProviderConfigCredentialRefs` | [`adapterSubsystem.setProviderConfigCredentialRefs`](#adapterSubsystem.setProviderConfigCredentialRefs) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `unbind` | [`adapterSubsystem.unbind`](#adapterSubsystem.unbind) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
-| `updateProviderConfig` | [`adapterSubsystem.updateProviderConfig`](#adapterSubsystem.updateProviderConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/schemas.ts) |
+| `adapter.registered` | [`adapterSubsystem.adapter.registered`](#adapterSubsystem.adapter.registered) | event | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `bind` | [`adapterSubsystem.bind`](#adapterSubsystem.bind) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `binding.created` | [`adapterSubsystem.binding.created`](#adapterSubsystem.binding.created) | event | [`runtime-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/runtime-schemas.ts) |
+| `binding.defaultChanged` | [`adapterSubsystem.binding.defaultChanged`](#adapterSubsystem.binding.defaultChanged) | event | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `binding.deleted` | [`adapterSubsystem.binding.deleted`](#adapterSubsystem.binding.deleted) | event | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `createProviderConfig` | [`adapterSubsystem.createProviderConfig`](#adapterSubsystem.createProviderConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `deleteProviderConfig` | [`adapterSubsystem.deleteProviderConfig`](#adapterSubsystem.deleteProviderConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `ensureReady` | [`adapterSubsystem.ensureReady`](#adapterSubsystem.ensureReady) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `findConfigForDefinitionAndAdapter` | [`adapterSubsystem.findConfigForDefinitionAndAdapter`](#adapterSubsystem.findConfigForDefinitionAndAdapter) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `getAdapterConfig` | [`adapterSubsystem.getAdapterConfig`](#adapterSubsystem.getAdapterConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `getDefaultBinding` | [`adapterSubsystem.getDefaultBinding`](#adapterSubsystem.getDefaultBinding) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `getProviderConfig` | [`adapterSubsystem.getProviderConfig`](#adapterSubsystem.getProviderConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `getProviderDefinitionsByAdapter` | [`adapterSubsystem.getProviderDefinitionsByAdapter`](#adapterSubsystem.getProviderDefinitionsByAdapter) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `listAdapterConfigs` | [`adapterSubsystem.listAdapterConfigs`](#adapterSubsystem.listAdapterConfigs) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `listAdapters` | [`adapterSubsystem.listAdapters`](#adapterSubsystem.listAdapters) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `listBindings` | [`adapterSubsystem.listBindings`](#adapterSubsystem.listBindings) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `listBindingsByConfig` | [`adapterSubsystem.listBindingsByConfig`](#adapterSubsystem.listBindingsByConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `listCompatibleAuthOptions` | [`adapterSubsystem.listCompatibleAuthOptions`](#adapterSubsystem.listCompatibleAuthOptions) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `listProviderConfigs` | [`adapterSubsystem.listProviderConfigs`](#adapterSubsystem.listProviderConfigs) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `listProviderConfigsByDefinition` | [`adapterSubsystem.listProviderConfigsByDefinition`](#adapterSubsystem.listProviderConfigsByDefinition) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `providerConfig.created` | [`adapterSubsystem.providerConfig.created`](#adapterSubsystem.providerConfig.created) | event | [`runtime-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/runtime-schemas.ts) |
+| `providerConfig.defaultChanged` | [`adapterSubsystem.providerConfig.defaultChanged`](#adapterSubsystem.providerConfig.defaultChanged) | event | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `providerConfig.deleted` | [`adapterSubsystem.providerConfig.deleted`](#adapterSubsystem.providerConfig.deleted) | event | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `providerConfig.updated` | [`adapterSubsystem.providerConfig.updated`](#adapterSubsystem.providerConfig.updated) | event | [`runtime-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/runtime-schemas.ts) |
+| `ready` | [`adapterSubsystem.ready`](#adapterSubsystem.ready) | event | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `resolveAdapterRuntimeSnapshot` | [`adapterSubsystem.resolveAdapterRuntimeSnapshot`](#adapterSubsystem.resolveAdapterRuntimeSnapshot) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `resolveProviderRuntimeSnapshot` | [`adapterSubsystem.resolveProviderRuntimeSnapshot`](#adapterSubsystem.resolveProviderRuntimeSnapshot) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `setAdapterConfig` | [`adapterSubsystem.setAdapterConfig`](#adapterSubsystem.setAdapterConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `setAdapterEnabled` | [`adapterSubsystem.setAdapterEnabled`](#adapterSubsystem.setAdapterEnabled) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `setDefaultBinding` | [`adapterSubsystem.setDefaultBinding`](#adapterSubsystem.setDefaultBinding) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `setDefaultProviderConfig` | [`adapterSubsystem.setDefaultProviderConfig`](#adapterSubsystem.setDefaultProviderConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `setModelFilterMode` | [`adapterSubsystem.setModelFilterMode`](#adapterSubsystem.setModelFilterMode) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `setProviderConfigAuth` | [`adapterSubsystem.setProviderConfigAuth`](#adapterSubsystem.setProviderConfigAuth) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `unbind` | [`adapterSubsystem.unbind`](#adapterSubsystem.unbind) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
+| `updateProviderConfig` | [`adapterSubsystem.updateProviderConfig`](#adapterSubsystem.updateProviderConfig) | rpc | [`namespace-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-subsystem/namespace-schemas.ts) |
 
 ## Subject Details
 
@@ -133,25 +135,6 @@ Type: Event
 | `adapterName` | `string` | yes |
 | `providerConfigId` | `string` | yes |
 
-### <a id="adapterSubsystem.buildProviderContext"></a>`adapterSubsystem.buildProviderContext` (rpc)
-
-Build a provider context from a provider config.
-
-Subject: `adapterSubsystem.buildProviderContext`
-Type: Request (RPC)
-
-**Request:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `providerConfigId` | `string` | yes |
-
-**Response:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `context` | `{ providerConfigId: string; definitionId: string; credentialRefs: Record<string, string & $brand<"CredentialRef">>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; capabilities?: Record<string, unknown> \| undefined; } \| null` | yes |
-
 ### <a id="adapterSubsystem.createProviderConfig"></a>`adapterSubsystem.createProviderConfig` (rpc)
 
 Create a provider config.
@@ -163,10 +146,11 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `credentialRefs` | `Record<string, string> \| undefined` | no |
+| `auth` | `{ mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; credentialRefs: Record<string, string>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; }` | yes |
 | `definitionId` | `string` | yes |
+| `enabled` | `boolean \| undefined` | no |
 | `endpointOverrides` | `{ anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined` | no |
-| `isSentinel` | `boolean \| undefined` | no |
+| `managedBy` | `{ kind: "client"; clientId: string; } \| undefined` | no |
 | `modelFilterMode` | `"allowlist" \| "show-all" \| undefined` | no |
 | `modelVisibility` | `Record<string, "enabled" \| "disabled" \| "visible"> \| undefined` | no |
 | `name` | `string \| undefined` | no |
@@ -175,7 +159,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; }` | yes |
+| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }` | yes |
 
 ### <a id="adapterSubsystem.deleteProviderConfig"></a>`adapterSubsystem.deleteProviderConfig` (rpc)
 
@@ -231,7 +215,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; } \| null` | yes |
+| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; } \| null` | yes |
 
 ### <a id="adapterSubsystem.getAdapterConfig"></a>`adapterSubsystem.getAdapterConfig` (rpc)
 
@@ -288,7 +272,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; } \| null` | yes |
+| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; } \| null` | yes |
 
 ### <a id="adapterSubsystem.getProviderDefinitionsByAdapter"></a>`adapterSubsystem.getProviderDefinitionsByAdapter` (rpc)
 
@@ -310,7 +294,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `definitions` | `{ id: string; name: string; availableModels: { name: string; contextWindowSize: number; labId: string; friendlyName?: string \| undefined; family?: string \| undefined; supportedReasoningLevels?: { none?: string \| number \| undefined; low?: string \| number \| undefined; medium?: string \| number \| undefined; high?: string \| number \| undefined; 'extra-high'?: string \| number \| undefined; } \| undefined; metadata?: { maxOutputTokens?: number \| undefined; capabilities?: { vision?: boolean \| undefined; toolCalling?: boolean \| undefined; parallelToolCalls?: boolean \| undefined; structuredOutput?: boolean \| undefined; pdfUpload?: boolean \| undefined; speechToText?: { modes: ("batch" \| "streaming")[]; vocabularyBiasing?: boolean \| undefined; } \| undefined; textToSpeech?: { modes: ("streaming" \| "buffered")[]; voiceSelection?: boolean \| undefined; voiceInstructions?: boolean \| undefined; outputFormats?: string[] \| undefined; } \| undefined; } \| undefined; pricing?: { token?: { inputPerMillion: number; outputPerMillion: number; inputCachedPerMillion?: number \| undefined; cacheWritePerMillion?: number \| undefined; } \| undefined; request?: { multiplier: number; } \| undefined; } \| undefined; includedInSubscription?: boolean \| undefined; description?: string \| undefined; } \| undefined; }[]; description?: string \| undefined; endpoints?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; defaultModel?: string \| undefined; fastModel?: string \| undefined; primaryTestModel?: string \| undefined; secondaryTestModel?: string \| undefined; defaultModelFilterMode?: "allowlist" \| "show-all" \| undefined; credentialEnvVars?: Record<string, string> \| undefined; capabilities?: Record<string, unknown> \| undefined; }[]` | yes |
+| `definitions` | `{ id: string; name: string; availableModels: { name: string; contextWindowSize: number; labId: string; friendlyName?: string \| undefined; family?: string \| undefined; supportedReasoningLevels?: { none?: string \| number \| undefined; low?: string \| number \| undefined; medium?: string \| number \| undefined; high?: string \| number \| undefined; 'extra-high'?: string \| number \| undefined; } \| undefined; metadata?: { maxOutputTokens?: number \| undefined; capabilities?: { vision?: boolean \| undefined; toolCalling?: boolean \| undefined; parallelToolCalls?: boolean \| undefined; structuredOutput?: boolean \| undefined; pdfUpload?: boolean \| undefined; speechToText?: { modes: ("batch" \| "streaming")[]; vocabularyBiasing?: boolean \| undefined; } \| undefined; textToSpeech?: { modes: ("streaming" \| "buffered")[]; voiceSelection?: boolean \| undefined; voiceInstructions?: boolean \| undefined; outputFormats?: string[] \| undefined; } \| undefined; } \| undefined; pricing?: { token?: { inputPerMillion: number; outputPerMillion: number; inputCachedPerMillion?: number \| undefined; cacheWritePerMillion?: number \| undefined; } \| undefined; request?: { multiplier: number; } \| undefined; } \| undefined; includedInSubscription?: boolean \| undefined; description?: string \| undefined; } \| undefined; }[]; authMethods: ({ id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; } \| { id: string; mode: "none"; label: string; description?: string \| undefined; })[]; description?: string \| undefined; endpoints?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; defaultModel?: string \| undefined; fastModel?: string \| undefined; primaryTestModel?: string \| undefined; secondaryTestModel?: string \| undefined; defaultModelFilterMode?: "allowlist" \| "show-all" \| undefined; capabilities?: Record<string, unknown> \| undefined; }[]` | yes |
 
 ### <a id="adapterSubsystem.listAdapterConfigs"></a>`adapterSubsystem.listAdapterConfigs` (rpc)
 
@@ -384,6 +368,26 @@ Type: Request (RPC)
 |-------|------|----------|
 | `bindings` | `{ adapterName: string; providerConfigId: string; isDefault: boolean; }[]` | yes |
 
+### <a id="adapterSubsystem.listCompatibleAuthOptions"></a>`adapterSubsystem.listCompatibleAuthOptions` (rpc)
+
+List normalized authentication methods deliverable by loaded adapters for
+one provider definition.
+
+Subject: `adapterSubsystem.listCompatibleAuthOptions`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `definitionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `options` | `({ definitionId: string; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; compatibleAdapterNames: string[]; portability: "portable"; description?: string \| undefined; } \| { definitionId: string; method: { owner: "client"; clientId: string; methodId: string; }; mode: "inferred"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; compatibleAdapterNames: string[]; portability: "local-only"; description?: string \| undefined; } \| { definitionId: string; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; mode: "none"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; compatibleAdapterNames: string[]; portability: "portable"; description?: string \| undefined; })[]` | yes |
+
 ### <a id="adapterSubsystem.listProviderConfigs"></a>`adapterSubsystem.listProviderConfigs` (rpc)
 
 List provider configs, optionally filtering by enabled state.
@@ -401,7 +405,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `configs` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; }[]` | yes |
+| `configs` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }[]` | yes |
 
 ### <a id="adapterSubsystem.listProviderConfigsByDefinition"></a>`adapterSubsystem.listProviderConfigsByDefinition` (rpc)
 
@@ -420,7 +424,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `configs` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; }[]` | yes |
+| `configs` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }[]` | yes |
 
 ### <a id="adapterSubsystem.providerConfig.created"></a>`adapterSubsystem.providerConfig.created` (event)
 
@@ -431,17 +435,16 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
+| `auth` | `{ mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }` | yes |
 | `definitionId` | `string` | yes |
 | `enabled` | `boolean` | yes |
-| `endpointOverrides` | `Record<string, string> \| undefined` | no |
-| `hasCredentials` | `boolean` | yes |
+| `endpointOverrides` | `{ anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined` | no |
 | `id` | `string` | yes |
 | `isDefault` | `boolean` | yes |
-| `isSentinel` | `boolean` | yes |
+| `managedBy` | `{ kind: "client"; clientId: string; } \| undefined` | no |
 | `modelFilterMode` | `"allowlist" \| "show-all"` | yes |
 | `modelVisibility` | `Record<string, "enabled" \| "disabled" \| "visible"> \| undefined` | no |
 | `name` | `string` | yes |
-| `sourceRef` | `string \| undefined` | no |
 
 ### <a id="adapterSubsystem.providerConfig.defaultChanged"></a>`adapterSubsystem.providerConfig.defaultChanged` (event)
 
@@ -464,27 +467,23 @@ Type: Event
 
 ### <a id="adapterSubsystem.providerConfig.updated"></a>`adapterSubsystem.providerConfig.updated` (event)
 
-Bus-safe provider config read model.
-
-Generic reads intentionally exclude credential refs. Runtime assembly goes
-through `buildProviderContext` instead.
+Bus-safe provider config read model that excludes credential references.
 
 Subject: `adapterSubsystem.providerConfig.updated`
 Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
+| `auth` | `{ mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }` | yes |
 | `definitionId` | `string` | yes |
 | `enabled` | `boolean` | yes |
-| `endpointOverrides` | `Record<string, string> \| undefined` | no |
-| `hasCredentials` | `boolean` | yes |
+| `endpointOverrides` | `{ anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined` | no |
 | `id` | `string` | yes |
 | `isDefault` | `boolean` | yes |
-| `isSentinel` | `boolean` | yes |
+| `managedBy` | `{ kind: "client"; clientId: string; } \| undefined` | no |
 | `modelFilterMode` | `"allowlist" \| "show-all"` | yes |
 | `modelVisibility` | `Record<string, "enabled" \| "disabled" \| "visible"> \| undefined` | no |
 | `name` | `string` | yes |
-| `sourceRef` | `string \| undefined` | no |
 
 ### <a id="adapterSubsystem.ready"></a>`adapterSubsystem.ready` (event)
 
@@ -497,6 +496,47 @@ Subject: `adapterSubsystem.ready`
 Type: Event
 
 _Empty object._
+
+### <a id="adapterSubsystem.resolveAdapterRuntimeSnapshot"></a>`adapterSubsystem.resolveAdapterRuntimeSnapshot` (rpc)
+
+Resolve provider state, exact adapter auth declarations, and runtime import
+paths from one adapter-subsystem read.
+
+Subject: `adapterSubsystem.resolveAdapterRuntimeSnapshot`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterName` | `string` | yes |
+| `providerConfigId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `status` | `"error" \| "resolved"` | yes |
+
+### <a id="adapterSubsystem.resolveProviderRuntimeSnapshot"></a>`adapterSubsystem.resolveProviderRuntimeSnapshot` (rpc)
+
+Resolve a safe config, refs-only context, and provider definition from one
+captured runtime snapshot.
+
+Subject: `adapterSubsystem.resolveProviderRuntimeSnapshot`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `providerConfigId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `snapshot` | `{ config: { id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }; context: { state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string & $brand<"CredentialRef">>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; }; definition: { id: string; packageName: string; name: string; availableModels: { name: string; contextWindowSize: number; labId: string; friendlyName?: string \| undefined; family?: string \| undefined; supportedReasoningLevels?: { none?: string \| number \| undefined; low?: string \| number \| undefined; medium?: string \| number \| undefined; high?: string \| number \| undefined; 'extra-high'?: string \| number \| undefined; } \| undefined; metadata?: { maxOutputTokens?: number \| undefined; capabilities?: { vision?: boolean \| undefined; toolCalling?: boolean \| undefined; parallelToolCalls?: boolean \| undefined; structuredOutput?: boolean \| undefined; pdfUpload?: boolean \| undefined; speechToText?: { modes: ("batch" \| "streaming")[]; vocabularyBiasing?: boolean \| undefined; } \| undefined; textToSpeech?: { modes: ("streaming" \| "buffered")[]; voiceSelection?: boolean \| undefined; voiceInstructions?: boolean \| undefined; outputFormats?: string[] \| undefined; } \| undefined; } \| undefined; pricing?: { token?: { inputPerMillion: number; outputPerMillion: number; inputCachedPerMillion?: number \| undefined; cacheWritePerMillion?: number \| undefined; } \| undefined; request?: { multiplier: number; } \| undefined; } \| undefined; includedInSubscription?: boolean \| undefined; description?: string \| undefined; } \| undefined; }[]; defaultModelFilterMode: "allowlist" \| "show-all"; authMethods: ({ id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; } \| { id: string; mode: "none"; label: string; description?: string \| undefined; })[]; enabled: boolean; createdAt: number; updatedAt: number; description?: string \| undefined; endpoints?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; defaultModel?: string \| undefined; fastModel?: string \| undefined; capabilities?: Record<string, unknown> \| undefined; }; } \| null` | yes |
 
 ### <a id="adapterSubsystem.setAdapterConfig"></a>`adapterSubsystem.setAdapterConfig` (rpc)
 
@@ -573,7 +613,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; }` | yes |
+| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }` | yes |
 
 ### <a id="adapterSubsystem.setModelFilterMode"></a>`adapterSubsystem.setModelFilterMode` (rpc)
 
@@ -594,27 +634,27 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; }` | yes |
+| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }` | yes |
 
-### <a id="adapterSubsystem.setProviderConfigCredentialRefs"></a>`adapterSubsystem.setProviderConfigCredentialRefs` (rpc)
+### <a id="adapterSubsystem.setProviderConfigAuth"></a>`adapterSubsystem.setProviderConfigAuth` (rpc)
 
-Replace the canonical credential refs for one provider config.
+Replace the complete authentication selection for one provider config.
 
-Subject: `adapterSubsystem.setProviderConfigCredentialRefs`
+Subject: `adapterSubsystem.setProviderConfigAuth`
 Type: Request (RPC)
 
 **Request:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `credentialRefs` | `Record<string, string>` | yes |
+| `auth` | `{ mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; credentialRefs: Record<string, string>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; }` | yes |
 | `id` | `string` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; }` | yes |
+| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }` | yes |
 
 ### <a id="adapterSubsystem.unbind"></a>`adapterSubsystem.unbind` (rpc)
 
@@ -652,7 +692,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; isSentinel: boolean; hasCredentials: boolean; endpointOverrides?: Record<string, string> \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; sourceRef?: string \| undefined; }` | yes |
+| `config` | `{ id: string; definitionId: string; name: string; modelFilterMode: "allowlist" \| "show-all"; isDefault: boolean; enabled: boolean; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: true; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; hasCredentials: false; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; modelVisibility?: Record<string, "enabled" \| "disabled" \| "visible"> \| undefined; managedBy?: { kind: "client"; clientId: string; } \| undefined; }` | yes |
 
 ---
 

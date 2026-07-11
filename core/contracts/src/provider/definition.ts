@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProviderAuthMethodsSchema } from '../auth/definitions.js';
 import { AIModelSchema } from '../model/schemas.js';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
 import { ModelFilterModeSchema } from './visibility.js';
@@ -64,7 +65,7 @@ export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;
  *
  * The canonical parsed provider contract. Defines the stable identity,
  * display metadata, protocol endpoints, runtime-populated model catalog, and
- * credential environment variables for a single inference provider.
+ * authentication methods for a single inference provider.
  *
  * Static provider packages should declare {@link ProviderDefinitionInput}:
  * they describe what a provider *is*, not how it is configured at runtime.
@@ -82,115 +83,126 @@ export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;
  *   endpoints: { anthropic: 'https://api.anthropic.com' },
  *   defaultModel: 'claude-sonnet-4-5',
  *   fastModel: 'claude-haiku-4-5',
- *   credentialEnvVars: { apiKey: 'ANTHROPIC_API_KEY' },
+ *   authMethods: [{
+ *     id: 'api-key',
+ *     mode: 'explicit',
+ *     label: 'API key',
+ *     fields: [{
+ *       id: 'apiKey',
+ *       label: 'API key',
+ *       required: true,
+ *       secret: true,
+ *       sourceHints: [{ kind: 'environment', variable: 'ANTHROPIC_API_KEY' }],
+ *     }],
+ *   }],
  * }
  * ```
  * `availableModels` is omitted — the registry service populates it from the
  * YAML lab registry at boot time and defaults to `[]` when absent.
  */
-export const ProviderDefinitionSchema = z.object({
-  /**
-   * Stable provider identifier used for persistence and matching (e.g., `'anthropic'`, `'z-ai'`).
-   *
-   * Acts as the primary key across all provider-related storage and bus messages.
-   * Must be unique across all registered provider packages.
-   */
-  id: z.string().min(1),
+export const ProviderDefinitionSchema = z
+  .object({
+    /**
+     * Stable provider identifier used for persistence and matching (e.g., `'anthropic'`, `'z-ai'`).
+     *
+     * Acts as the primary key across all provider-related storage and bus messages.
+     * Must be unique across all registered provider packages.
+     */
+    id: z.string().min(1),
 
-  /**
-   * Display name shown in the UI (e.g., `'Anthropic'`, `'Z.AI'`).
-   */
-  name: z.string().min(1),
+    /**
+     * Display name shown in the UI (e.g., `'Anthropic'`, `'Z.AI'`).
+     */
+    name: z.string().min(1),
 
-  /**
-   * Short human-readable description of the provider.
-   */
-  description: z.string().optional(),
+    /**
+     * Short human-readable description of the provider.
+     */
+    description: z.string().optional(),
 
-  /**
-   * Wire protocol endpoints for this provider.
-   *
-   * Maps each supported protocol to a base URL. Omit for SDK-only providers
-   * (e.g., GitHub Copilot) that communicate through a proprietary transport.
-   */
-  endpoints: ProtocolEndpointsSchema.optional(),
+    /**
+     * Wire protocol endpoints for this provider.
+     *
+     * Maps each supported protocol to a base URL. Omit for SDK-only providers
+     * (e.g., GitHub Copilot) that communicate through a proprietary transport.
+     */
+    endpoints: ProtocolEndpointsSchema.optional(),
 
-  /**
-   * Default model identifier for general-purpose tasks (e.g., `'claude-sonnet-4-5'`).
-   * Optional — providers with fully dynamic model discovery may omit this.
-   */
-  defaultModel: z.string().optional(),
+    /**
+     * Default model identifier for general-purpose tasks (e.g., `'claude-sonnet-4-5'`).
+     * Optional — providers with fully dynamic model discovery may omit this.
+     */
+    defaultModel: z.string().optional(),
 
-  /**
-   * Fast/cheap model for cost-sensitive operations (e.g., `'claude-haiku-4-5'`).
-   * Used for subagent exploration and background processing.
-   * Falls back to `defaultModel` when omitted.
-   */
-  fastModel: z.string().optional(),
+    /**
+     * Fast/cheap model for cost-sensitive operations (e.g., `'claude-haiku-4-5'`).
+     * Used for subagent exploration and background processing.
+     * Falls back to `defaultModel` when omitted.
+     */
+    fastModel: z.string().optional(),
 
-  /**
-   * Primary model used by conformance tests.
-   * Falls back to `fastModel ?? defaultModel` when omitted.
-   */
-  primaryTestModel: z.string().optional(),
+    /**
+     * Primary model used by conformance tests.
+     * Falls back to `fastModel ?? defaultModel` when omitted.
+     */
+    primaryTestModel: z.string().optional(),
 
-  /**
-   * Secondary model used by lifecycle mutation conformance tests.
-   * Falls back to `defaultModel` when omitted.
-   */
-  secondaryTestModel: z.string().optional(),
+    /**
+     * Secondary model used by lifecycle mutation conformance tests.
+     * Falls back to `defaultModel` when omitted.
+     */
+    secondaryTestModel: z.string().optional(),
 
-  /**
-   * Runtime-populated model catalog for this provider.
-   *
-   * At boot the registry service merges lab definitions with provider-specific
-   * overrides and injects the result here. Static provider packages and fixtures
-   * should omit this field from {@link ProviderDefinitionInput}; the registry
-   * service owns the content. Defaults to `[]` on parsed definitions so runtime
-   * callers never need to handle `undefined`.
-   */
-  availableModels: z.array(AIModelSchema).default([]),
+    /**
+     * Runtime-populated model catalog for this provider.
+     *
+     * At boot the registry service merges lab definitions with provider-specific
+     * overrides and injects the result here. Static provider packages and fixtures
+     * should omit this field from {@link ProviderDefinitionInput}; the registry
+     * service owns the content. Defaults to `[]` on parsed definitions so runtime
+     * callers never need to handle `undefined`.
+     */
+    availableModels: z.array(AIModelSchema).default([]),
 
-  /**
-   * Recommended default filter mode applied when a provider record is first created.
-   *
-   * - `'show-all'`  — all models visible by default (curated providers like Anthropic).
-   * - `'allowlist'` — all models hidden by default (firehose providers like OpenRouter).
-   *
-   * Defaults to `'show-all'` in the sync service when omitted.
-   */
-  defaultModelFilterMode: ModelFilterModeSchema.optional(),
+    /**
+     * Recommended default filter mode applied when a provider record is first created.
+     *
+     * - `'show-all'`  — all models visible by default (curated providers like Anthropic).
+     * - `'allowlist'` — all models hidden by default (firehose providers like OpenRouter).
+     *
+     * Defaults to `'show-all'` in the sync service when omitted.
+     */
+    defaultModelFilterMode: ModelFilterModeSchema.optional(),
 
-  /**
-   * Environment variable names for credential fields.
-   *
-   * Maps credential field names (matching the adapter's `credentialSchema` keys)
-   * to environment variable names. Used as last-resort fallback when credentials
-   * are not provided via saved config or runtime input.
-   * @example `{ apiKey: 'ANTHROPIC_API_KEY' }` or `{ token: 'COPILOT_TOKEN' }`
-   */
-  credentialEnvVars: z.record(z.string(), z.string()).optional(),
+    /**
+     * Authentication methods owned by this provider definition.
+     *
+     * Provider methods are explicit credential methods or deliberate no-auth
+     * declarations.
+     */
+    authMethods: ProviderAuthMethodsSchema,
 
-  /**
-   * Free-form bag of protocol-specific capability hints.
-   *
-   * Opaque to the framework — adapters narrow-cast to protocol-specific types
-   * at the connector layer. Provider packages declare capabilities that their
-   * endpoints natively support (e.g., structured output modes, tool-call
-   * features) so adapters can select the optimal code path without maintaining
-   * hardcoded provider ID sets.
-   * @example OpenAI structured output capabilities
-   * ```ts
-   * {
-   *   structuredOutput: {
-   *     responseFormatWithTools: true,
-   *     strict: true,
-   *   },
-   * }
-   * ```
-   */
-  capabilities: ProviderCapabilitiesSchema.optional(),
-});
+    /**
+     * Free-form bag of protocol-specific capability hints.
+     *
+     * Opaque to the framework — adapters narrow-cast to protocol-specific types
+     * at the connector layer. Provider packages declare capabilities that their
+     * endpoints natively support (e.g., structured output modes, tool-call
+     * features) so adapters can select the optimal code path without maintaining
+     * hardcoded provider ID sets.
+     * @example OpenAI structured output capabilities
+     * ```ts
+     * {
+     *   structuredOutput: {
+     *     responseFormatWithTools: true,
+     *     strict: true,
+     *   },
+     * }
+     * ```
+     */
+    capabilities: ProviderCapabilitiesSchema.optional(),
+  })
+  .strict();
 
 /**
  * Inferred output type for a fully-parsed provider definition.

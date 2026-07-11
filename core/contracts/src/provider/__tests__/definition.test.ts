@@ -25,6 +25,7 @@ describe('ProviderCapabilitiesSchema', () => {
       ProviderDefinitionSchema.safeParse({
         id: 'invalid-provider',
         name: 'Invalid Provider',
+        authMethods: [],
         capabilities: {
           nested: {
             invalid: undefined,
@@ -37,6 +38,7 @@ describe('ProviderCapabilitiesSchema', () => {
       ProviderDefinitionSchema.safeParse({
         id: 'invalid-provider',
         name: 'Invalid Provider',
+        authMethods: [],
         capabilities: {
           invalid: BigInt(1),
         },

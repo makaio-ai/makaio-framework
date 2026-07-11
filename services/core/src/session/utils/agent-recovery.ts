@@ -8,7 +8,7 @@ import {
   type SessionContext,
 } from '@makaio/contracts';
 import type { PipelineStep } from '../../session-editor/types.js';
-import { buildProviderContext } from '../../provider-context/index.js';
+import { resolveRuntimeProviderContext } from '../../provider-context/index.js';
 import { resolveAdapterId } from './resolution.js';
 import { getFullConversation } from '../context/get-full-conversation.js';
 import { convertSessionMessage } from '../context/convert-session-message.js';
@@ -106,7 +106,10 @@ export async function ensureAgentModel(
   }
 
   const providerContext = options?.providerConfigId
-    ? await buildProviderContext(bus, options.providerConfigId)
+    ? await resolveRuntimeProviderContext(bus, {
+        adapterName: agent.adapterName,
+        providerConfigId: options.providerConfigId,
+      })
     : undefined;
 
   const result = await bus.request(AgentSubjects.model.change, {

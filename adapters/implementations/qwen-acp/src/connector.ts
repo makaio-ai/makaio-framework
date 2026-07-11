@@ -35,7 +35,8 @@ import { buildCliArgs } from './utils/build-cli-args.js';
 import { buildPromptContent } from './utils/build-prompt.js';
 import { toAcpMcpServers } from './utils/mcp-servers.js';
 import type { QwenAcpConnectorConfig } from './types.js';
-import { resolveSessionEnvironment } from '@makaio/ai-adapters-core/config';
+import { assertQwenNativeAuth } from './native-auth.js';
+import { QWEN_ACP_AUTH_SCRUB_ENV_VARS } from './provider.js';
 
 /** Pending entry for a `getAdapterSessionId()` caller waiting for session establishment. */
 type SessionIdWaiter = {
@@ -69,13 +70,15 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
   private isTerminated = false;
   private initializingPromise?: Promise<void>;
   private systemPromptTempFile?: string;
-  private readonly terminalManager = new TerminalManager();
+  private readonly terminalManager: TerminalManager;
+  /** toolCallId from the most recent tool_call session update, used to correlate filesystem callbacks. */
   private lastToolCallId?: string;
   private readonly toolCallMessageIds = new Map<string, string>();
 
   /** Per-turn, last-wins usage totals; null when no active turn has reported usage. */
   private turnUsageAccumulator: TurnUsageAccumulator | null = null;
 
+  /** Pending `getAdapterSessionId()` waiters — cleared on termination to prevent interval leaks. */
   private sessionIdWaiters: SessionIdWaiter[] = [];
 
   /**
@@ -83,7 +86,13 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
    * @param config - Full connector configuration with adapterId from the config factory
    */
   public constructor(config: QwenAcpConnectorConfig) {
-    super(config);
+    const { adapterAuth, ...baseConfig } = config;
+    assertQwenNativeAuth(adapterAuth);
+    super({ ...baseConfig, env: baseConfig.env ?? {} });
+    this.terminalManager = new TerminalManager({
+      baseEnv: this.env,
+      scrubEnvVars: QWEN_ACP_AUTH_SCRUB_ENV_VARS,
+    });
   }
 
   /**
@@ -263,17 +272,8 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     // initialize() call that sets this.systemPrompt cannot race this initialization.
     const capturedSystemPrompt = this.systemPrompt;
 
-    // Resolve credentials, credential env, and binary in one call.
-    const { spawnEnv, resolvedBinary } = await resolveSessionEnvironment({
-      bus: this.config.bus,
-      providerContext: this.config.providerContext,
-      clientId: 'qwen',
-      baseEnv: this.env,
-    });
-    // providerConfig.binaryPath is an explicit user override and wins; resolved binary
-    // path applies only when no user override is present. Resolved env takes precedence
-    // over credential env so that config-isolation vars are honoured.
-    const command = providerConfig?.binaryPath ?? resolvedBinary?.binaryPath ?? 'qwen';
+    const spawnEnv = { ...this.env };
+    const command = this.config.clientExecution?.binaryPath ?? 'qwen';
     const tempPath = capturedSystemPrompt ? await this.createSystemPromptTempFile(capturedSystemPrompt) : undefined;
     if (tempPath) spawnEnv['QWEN_SYSTEM_MD'] = tempPath;
 

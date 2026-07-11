@@ -18,5 +18,4 @@ export const PiSdkConfig = createAdapterConfigFactory(() => ({
   adapterDefaults: { model: DefaultModel },
   schema: PiSdkProviderConfigSchema,
   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
-  protocol: 'anthropic',
 }));

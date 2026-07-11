@@ -17,5 +17,4 @@ export const AnthropicSdkConfig = createAdapterConfigFactory<AnthropicSdkAgentCo
   },
   schema: AnthropicSdkProviderConfigSchema,
   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
-  protocol: 'anthropic',
 }));

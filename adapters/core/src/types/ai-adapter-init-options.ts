@@ -1,5 +1,6 @@
 import type { LogImportConfig } from '../log-importer/registry-types.js';
 import type { AdapterProviderDefinition } from './provider-definition.js';
+import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 
 /**
  * Platform-provided defaults injected by the runtime.
@@ -18,7 +19,7 @@ export interface PlatformDefaults {
  * ```typescript
  * await adapter.init({
  *   defaultModel: "claude-3.5-sonnet",
- *   providerOptions: { apiKey: process.env.API_KEY }
+ *   providerOptions: { baseUrl: "https://api.example.com" }
  * });
  * ```
  * @see {@link AIAdapterPromptOptions} for per-message config
@@ -28,7 +29,7 @@ export interface AIAdapterInitOptions {
   /** Default model when not specified per-message. Provider-specific identifier. */
   defaultModel?: string;
 
-  /** Provider-specific config (API keys, base URLs, defaults, etc.). Type explicitly in adapter implementations. */
+  /** Provider-specific non-secret config (base URLs, defaults, etc.). Type explicitly in adapter implementations. */
   providerOptions?: unknown;
 
   adapterId?: string;
@@ -54,4 +55,6 @@ export interface AIAdapterInitOptions {
 
   /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'codex'). Omit for API-only adapters. */
   clientId?: string;
+  /** Trusted non-serializable normalized auth preparer injected by the host. */
+  prepareAuthRuntime?: AdapterAuthRuntimePreparer;
 }

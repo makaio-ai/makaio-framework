@@ -9,7 +9,30 @@
  * Supported providers:
  * - `cursor`: Cursor AI editor (CURSOR_API_KEY)
  */
+import { defineAdapterProviderAuth, type AdapterProviderAuth } from '@makaio/contracts';
+
 export const providerIds = ['cursor'] as const;
+
+type ProviderId = (typeof providerIds)[number];
+
+/** Validated authentication metadata keyed by supported provider definition ID. */
+export const providerAuthById = {
+  cursor: defineAdapterProviderAuth({
+    bindings: [
+      {
+        method: { owner: 'provider', providerDefinitionId: 'cursor', methodId: 'api-key' },
+        deliveries: [
+          {
+            kind: 'connector',
+            target: 'cursor-sdk.agent-create',
+            fields: { apiKey: 'apiKey' },
+          },
+        ],
+      },
+    ],
+    scrubEnvVars: ['CURSOR_API_KEY'],
+  }),
+} satisfies Record<ProviderId, AdapterProviderAuth>;
 
 /**
  * Default provider id to use when no provider is explicitly configured.

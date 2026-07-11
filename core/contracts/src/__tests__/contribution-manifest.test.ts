@@ -131,13 +131,13 @@ describe('AdapterManifestSchema', () => {
     }
   });
 
-  it('rejects an adapter with no protocols', () => {
+  it('parses an SDK-native adapter with no framework wire protocols', () => {
     const result = AdapterManifestSchema.safeParse({
       name: 'no-protocols',
       protocols: [],
     });
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('rejects an adapter with missing protocols field', () => {

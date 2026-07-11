@@ -8,6 +8,7 @@ await build({
       browser: './src/browser/index.ts',
       server: './src/server.ts',
       cli: './src/cli.ts',
+      constants: './src/account-manager-id.ts',
     },
     external: [/^ink($|\/)/, /^react($|\/)/],
   }),

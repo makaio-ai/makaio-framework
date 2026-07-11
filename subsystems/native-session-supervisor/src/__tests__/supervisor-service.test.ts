@@ -216,26 +216,32 @@ describe('SupervisorService', () => {
         ctx.setResult({
           sessionDir: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
           env: { CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile' },
+          authMaterialized: false,
         });
       });
 
+      let launchedSupervisorSessionId: string;
       try {
-        await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-          clientId: 'claude-code',
-          cwd: '/home/user',
-          command: '/bin/bash',
-          args: [],
-          env: { EXISTING: '1' },
-          sessionId: 'sess_profile',
-          clientProfileName: 'work',
-        });
+        ({ supervisorSessionId: launchedSupervisorSessionId } = await MakaioBus.request(
+          NativeSessionSupervisorSubjects.launch,
+          {
+            clientId: 'claude-code',
+            cwd: '/home/user',
+            command: '/bin/bash',
+            args: [],
+            env: { EXISTING: '1' },
+            sessionId: 'sess_profile',
+            clientProfileName: 'work',
+          },
+        ));
       } finally {
         unsubscribe();
       }
 
       expect(observedSessionConfigRequest).toEqual({
         clientId: 'claude-code',
-        sessionId: 'sess_profile',
+        leaseId: launchedSupervisorSessionId,
+        ownerSessionId: 'sess_profile',
         profileName: 'work',
       });
       expect(getLastSpawnOptions()?.env).toEqual({
@@ -245,12 +251,13 @@ describe('SupervisorService', () => {
     });
 
     it('destroys materialized session config when a launched runtime stops', async () => {
-      const destroyed: Array<{ clientId: string; sessionId: string }> = [];
+      const destroyed: Array<{ clientId: string; leaseId: string }> = [];
       const cleanups = [
         MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
           ctx.setResult({
             sessionDir: '/tmp/makaio/clients/claude-code/sessions/sess_profile_cleanup',
             env: {},
+            authMaterialized: false,
           });
         }),
         MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
@@ -275,7 +282,82 @@ describe('SupervisorService', () => {
         for (const cleanup of cleanups) cleanup();
       }
 
-      expect(destroyed).toContainEqual({ clientId: 'claude-code', sessionId: 'sess_profile_cleanup' });
+      expect(destroyed).toContainEqual({ clientId: 'claude-code', leaseId: supervisorSessionId });
+    });
+
+    it('destroys every materialized session config when the supervisor shuts down', async () => {
+      const destroyed: Array<{ clientId: string; leaseId: string }> = [];
+      const cleanups = [
+        MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+          ctx.setResult({
+            sessionDir: `/tmp/makaio/clients/${ctx.payload.clientId}/sessions/${ctx.payload.leaseId}`,
+            env: {},
+            authMaterialized: false,
+          });
+        }),
+        MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
+          destroyed.push(ctx.payload);
+          ctx.setResult({ success: true });
+        }),
+      ];
+
+      let supervisorSessionId: string;
+      try {
+        ({ supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'claude-code',
+          cwd: '/home/user',
+          command: '/bin/bash',
+          args: [],
+          clientProfileName: 'work',
+        }));
+
+        await service.destroy();
+      } finally {
+        for (const cleanup of cleanups) cleanup();
+      }
+
+      expect(destroyed).toEqual([{ clientId: 'claude-code', leaseId: supervisorSessionId }]);
+    });
+
+    it('retains a failed config release and retries it during supervisor shutdown', async () => {
+      let destroyAttempts = 0;
+      const cleanups = [
+        MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+          ctx.setResult({
+            sessionDir: `/tmp/makaio/clients/${ctx.payload.clientId}/sessions/${ctx.payload.leaseId}`,
+            env: {},
+            authMaterialized: false,
+          });
+        }),
+        MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
+          destroyAttempts += 1;
+          if (destroyAttempts === 1) {
+            throw new Error('credential reconciliation failed');
+          }
+          ctx.setResult({ success: true });
+        }),
+      ];
+
+      let supervisorSessionId: string;
+      try {
+        ({ supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'claude-code',
+          cwd: '/home/user',
+          command: '/bin/bash',
+          args: [],
+          clientProfileName: 'work',
+        }));
+
+        await expect(MakaioBus.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId })).rejects.toThrow(
+          `Failed to release config lease for supervised runtime '${supervisorSessionId}'`,
+        );
+        expect(destroyAttempts).toBe(1);
+
+        await service.destroy();
+        expect(destroyAttempts).toBe(2);
+      } finally {
+        for (const cleanup of cleanups) cleanup();
+      }
     });
 
     it('kills the spawned PTY and clears pendingExits when registry.register() throws', async () => {
@@ -634,6 +716,54 @@ describe('SupervisorService', () => {
       const runtime = service.getRegistry().getBySupervisorId(supervisorSessionId);
       expect(runtime?.pid).toBeNull();
       expect(runtime?.stoppedAt).toBeTypeOf('number');
+    });
+
+    it('reports a failed exit cleanup and retries the retained binding during shutdown', async () => {
+      let destroyAttempts = 0;
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const cleanups = [
+        MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+          ctx.setResult({
+            sessionDir: `/tmp/makaio/clients/${ctx.payload.clientId}/sessions/${ctx.payload.leaseId}`,
+            env: {},
+            authMaterialized: false,
+          });
+        }),
+        MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
+          destroyAttempts += 1;
+          if (destroyAttempts === 1) {
+            throw new Error('credential reconciliation failed');
+          }
+          ctx.setResult({ success: true });
+        }),
+      ];
+
+      try {
+        const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'claude-code',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+          clientProfileName: 'work',
+        });
+        const mockProcess = getLastProcess();
+        expect(mockProcess).not.toBeNull();
+
+        mockProcess!._fireExit(0);
+        await vi.waitFor(() => {
+          expect(consoleError).toHaveBeenCalledWith('[SupervisorService] PTY exit finalization failed', {
+            supervisorSessionId,
+            errorName: 'Error',
+          });
+        });
+        expect(destroyAttempts).toBe(1);
+
+        await service.destroy();
+        expect(destroyAttempts).toBe(2);
+      } finally {
+        for (const cleanup of cleanups) cleanup();
+        consoleError.mockRestore();
+      }
     });
 
     it('records an exit that arrives before launch registration finishes', async () => {

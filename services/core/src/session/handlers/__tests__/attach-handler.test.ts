@@ -1,9 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
-import { AdapterSubjects, AgentResolutionSubjects, CredentialSubjects, SessionSubjects } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  AgentResolutionSubjects,
+  CredentialSubjects,
+  SessionSubjects,
+  defineAdapterProviderAuth,
+  type ResolvedProviderContext,
+} from '@makaio/contracts';
+import type { AdapterProviderAuth } from '@makaio/contracts/auth';
 import { buildDeterministicAdapterId } from '../../../adapter-runtime/index.js';
 import { AdapterRuntimeSubjects } from '../../../adapter-runtime/namespace.js';
 import { AdapterSubsystemSubjects } from '../../../adapter-subsystem/namespace.js';
+import type {
+  AdapterRuntimeSnapshotResolution,
+  ProviderConfigAuthSummary,
+  ProviderRuntimeSnapshot,
+} from '../../../adapter-subsystem/schemas.js';
+import { RuntimeProviderContextResolutionError } from '../../../provider-context/index.js';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import {
   ATTACH_TEST_IDS,
@@ -12,6 +26,156 @@ import {
   type AttachHandlerTestContext,
 } from './shared.js';
 import { resetBusHandlers } from '../../__tests__/shared.js';
+
+const TEST_AUTH_METHOD = {
+  id: 'api-key',
+  mode: 'explicit' as const,
+  label: 'API key',
+  fields: [
+    {
+      id: 'apiKey',
+      label: 'API key',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment' as const, variable: 'TEST_API_KEY' }],
+    },
+  ],
+};
+
+/**
+ * Build a complete explicit provider context for attach-handler tests.
+ * @param providerConfigId - Provider config selected by the attach flow.
+ * @param definitionId - Provider definition selected by the attach flow.
+ * @returns Explicit provider context fixture.
+ */
+function makeProviderContext(providerConfigId: string, definitionId = 'provider-def-1'): ResolvedProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId,
+    definitionId,
+    auth: {
+      mode: 'explicit',
+      method: { owner: 'provider', providerDefinitionId: definitionId, methodId: 'api-key' },
+      definition: TEST_AUTH_METHOD,
+      credentialRefs: { apiKey: buildStoredCredentialRef(providerConfigId, 'apiKey') },
+    },
+  };
+}
+
+/**
+ * Build a managed inferred provider context for activation-order tests.
+ * @param providerConfigId - Provider config selected by the attach flow.
+ * @returns Inferred provider context fixture.
+ */
+function makeInferredProviderContext(providerConfigId: string): ResolvedProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId,
+    definitionId: 'provider-def-1',
+    auth: {
+      mode: 'inferred',
+      method: { owner: 'client', clientId: 'test-client', methodId: 'native' },
+      definition: { id: 'native', mode: 'inferred', label: 'Native account' },
+      account: { managerId: 'account-manager', accountId: 'account-1' },
+    },
+  };
+}
+
+/**
+ * Build the provider portion of one atomic adapter runtime snapshot.
+ * @param providerContext - Resolved context represented by the snapshot.
+ * @returns Complete provider runtime snapshot fixture.
+ */
+function makeProviderRuntimeSnapshot(providerContext: ResolvedProviderContext): ProviderRuntimeSnapshot {
+  const authSummary: ProviderConfigAuthSummary =
+    providerContext.auth.mode === 'explicit'
+      ? {
+          mode: providerContext.auth.mode,
+          method: providerContext.auth.method,
+          hasCredentials: true as const,
+        }
+      : providerContext.auth.mode === 'inferred'
+        ? {
+            mode: providerContext.auth.mode,
+            method: providerContext.auth.method,
+            ...(providerContext.auth.account ? { account: providerContext.auth.account } : {}),
+            hasCredentials: false as const,
+          }
+        : {
+            mode: providerContext.auth.mode,
+            method: providerContext.auth.method,
+            hasCredentials: false as const,
+          };
+  return {
+    config: {
+      id: providerContext.providerConfigId,
+      definitionId: providerContext.definitionId,
+      name: 'Test Provider',
+      modelFilterMode: 'show-all' as const,
+      isDefault: false,
+      enabled: true,
+      auth: authSummary,
+    },
+    context: providerContext,
+    definition: {
+      id: providerContext.definitionId,
+      packageName: '@makaio/provider-test',
+      name: 'Test Provider',
+      availableModels: [],
+      authMethods:
+        providerContext.auth.method.owner === 'provider' && providerContext.auth.mode !== 'inferred'
+          ? [providerContext.auth.definition]
+          : [],
+      defaultModelFilterMode: 'show-all' as const,
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  };
+}
+
+/**
+ * Build an adapter-qualified runtime resolution for attach execution.
+ * @param providerContext - Resolved context represented by the snapshot.
+ * @param adapterName - Adapter selected by the attach request.
+ * @returns Successful adapter runtime resolution fixture.
+ */
+function makeAdapterRuntimeResolution(
+  providerContext: ResolvedProviderContext,
+  adapterName: string,
+): AdapterRuntimeSnapshotResolution {
+  const method = providerContext.auth.method;
+  const clientId = method.owner === 'client' ? method.clientId : undefined;
+  const deliveries: AdapterProviderAuth['bindings'][number]['deliveries'] =
+    providerContext.auth.mode === 'inferred'
+      ? [{ kind: 'native-client', clientId: providerContext.auth.method.clientId }]
+      : providerContext.auth.mode === 'explicit'
+        ? [{ kind: 'connector', target: 'test', fields: { apiKey: 'apiKey' } }]
+        : [{ kind: 'none' }];
+  return {
+    status: 'resolved' as const,
+    runtime: {
+      snapshot: makeProviderRuntimeSnapshot(providerContext),
+      adapterName,
+      ...(clientId !== undefined ? { adapterClientId: clientId } : {}),
+      adapterProviderAuth: defineAdapterProviderAuth({
+        bindings: [
+          {
+            method,
+            deliveries,
+          },
+        ],
+        scrubEnvVars: ['TEST_API_KEY'],
+      }),
+      compatibleProviderAuths: [],
+      runtimePackages: {
+        adapter: { packageName: '@makaio/adapter-test' },
+        provider: { packageName: '@makaio/provider-test', definitionId: providerContext.definitionId },
+        ...(clientId !== undefined ? { client: { packageName: '@makaio/client-test', clientId } } : {}),
+      },
+    },
+  };
+}
 
 describe('registerAttachHandler', () => {
   const { sessionId, adapterName, agentId, adapterSessionId } = ATTACH_TEST_IDS;
@@ -48,34 +212,26 @@ describe('registerAttachHandler', () => {
       expect(result.adapterSessionId).toBe(adapterSessionId);
     });
 
-    it('uses resolved providerContext on local attachResolved without rebuilding it', async () => {
+    it('uses explicit providerContext on local attachResolved without rebuilding or native activation', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
-      const providerContext = {
-        providerConfigId: 'provider-config-resolved',
-        definitionId: 'provider-definition-resolved',
+      const providerContext: ResolvedProviderContext = {
+        ...makeProviderContext('provider-config-resolved', 'provider-definition-resolved'),
         endpointOverrides: { anthropic: 'https://provider.example/chat' },
-        credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-resolved', 'apiKey') },
       };
-      let buildProviderContextCalled = false;
+      let runtimeProviderContextResolutionCalled = false;
       let credentialActivated = false;
 
       ctx.trackUnsubscribe(
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (context) => {
-          buildProviderContextCalled = true;
-          context.setResult({
-            context: {
-              providerConfigId: context.payload.providerConfigId,
-              definitionId: 'unexpected-provider-definition',
-              credentialRefs: {},
-            },
-          });
+        MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (context) => {
+          runtimeProviderContextResolutionCalled = true;
+          context.setResult(makeAdapterRuntimeResolution(providerContext, adapterName));
         }),
       );
       ctx.trackUnsubscribe(
         MakaioBus.on(CredentialSubjects.activate, (context) => {
           credentialActivated = true;
-          expect(context.payload.providerConfigId).toBe(providerContext.providerConfigId);
-          context.setResult({});
+          expect(context.payload.providerContext).toEqual(providerContext);
+          context.setResult({ success: true });
         }),
       );
       const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
@@ -87,9 +243,30 @@ describe('registerAttachHandler', () => {
         agent: { kind: 'adapter', adapterName, providerContext },
       });
 
-      expect(buildProviderContextCalled).toBe(false);
-      expect(credentialActivated).toBe(true);
+      expect(runtimeProviderContextResolutionCalled).toBe(false);
+      expect(credentialActivated).toBe(false);
       expect(receivedRequests[0]).toMatchObject({ providerContext });
+    });
+
+    it('rejects an unresolved local context when a provider config was selected', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      const error = await MakaioBus.request(SessionSubjects.agent.attachResolved, {
+        sessionId,
+        agent: {
+          kind: 'adapter',
+          adapterName,
+          providerConfigId: 'provider-config-selected',
+          providerContext: { state: 'unresolved' },
+        },
+      }).catch((value: unknown) => value);
+
+      expect(error).toBeInstanceOf(RequestError);
+      expect((error as RequestError).cause).toBeInstanceOf(RuntimeProviderContextResolutionError);
+      expect(((error as RequestError).cause as RuntimeProviderContextResolutionError).code).toBe(
+        'provider-context-unresolved',
+      );
     });
 
     it('passes machineId to adapter resolution when provided', async () => {
@@ -194,29 +371,21 @@ describe('registerAttachHandler', () => {
       });
     });
 
-    it('awaits credential.activate before startAgent when providerConfigId is present', async () => {
+    it('delegates managed account activation to startAgent when providerConfigId is present', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
       ctx.trackUnsubscribe(
-        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (context) => {
-          context.setResult({
-            context: {
-              providerConfigId: 'provider-config-1',
-              definitionId: 'provider-def-1',
-              credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-1', 'apiKey') },
-            },
-          });
+        MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (context) => {
+          const providerContext = makeInferredProviderContext(context.payload.providerConfigId);
+          context.setResult(makeAdapterRuntimeResolution(providerContext, context.payload.adapterName));
         }),
       );
 
       const order: string[] = [];
+      let credentialActivated = false;
       ctx.trackUnsubscribe(
         MakaioBus.on(CredentialSubjects.activate, (context) => {
-          order.push('activate');
-          expect(context.payload).toMatchObject({
-            providerConfigId: 'provider-config-1',
-            definitionId: 'provider-def-1',
-          });
-          context.setResult({});
+          credentialActivated = true;
+          context.setResult({ success: true });
         }),
       );
       ctx.trackUnsubscribe(
@@ -233,8 +402,13 @@ describe('registerAttachHandler', () => {
         agent: { kind: 'adapter', adapterName, providerConfigId: 'provider-config-1' },
       });
 
-      expect(order).toEqual(['activate', 'start']);
+      expect(order).toEqual(['start']);
+      expect(credentialActivated).toBe(false);
       expect(receivedRequests).toHaveLength(1);
+      expect(receivedRequests[0]?.providerContext).toMatchObject({
+        providerConfigId: 'provider-config-1',
+        definitionId: 'provider-def-1',
+      });
     });
 
     it('throws when no adapterName can be resolved from request or persona/profile/virtualModel', async () => {

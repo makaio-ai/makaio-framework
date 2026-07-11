@@ -299,6 +299,7 @@ async function attachAgent(
 
   const { providerConfigId: mergedProviderConfigId, providerContext } = await resolveAttachProviderSelection(
     bus,
+    adapterName,
     agentSelection.providerConfigId,
     resolved,
     resolvedProviderContext,
@@ -325,7 +326,6 @@ async function attachAgent(
       resumeAdapterSessionId,
       harnessId: resolved?.harnessId,
       attachSessionContext,
-      providerContext,
     },
     identity: {
       adapterName,

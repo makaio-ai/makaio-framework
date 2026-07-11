@@ -9,7 +9,6 @@ import {
   type MessageHandle,
   UserMessageQueue,
 } from '@makaio/ai-adapters-core';
-import { resolveSessionEnvironment } from '@makaio/ai-adapters-core/config';
 import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
 import { type ClaudeCodeCliConnectorBus, ClaudeCodeCliConnectorSubjects } from './namespace/index.js';
 import { ClaudeCliSession } from './session.js';
@@ -77,34 +76,6 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
     });
   }
 
-  /**
-   * Resolve CLI subprocess environment and binary path for the next turn.
-   * @returns Environment and binary path to use for one CLI spawn
-   */
-  private async resolveTurnExecutionContext(): Promise<{ env: Record<string, string>; binaryPath?: string }> {
-    const cliConfig = this.config as ClaudeCliAgentConfig;
-
-    const { credentials, spawnEnv, resolvedBinary } = await resolveSessionEnvironment({
-      bus: this.config.bus,
-      providerContext: this.config.providerContext,
-      clientId: 'claude-code',
-      baseEnv: this.env,
-    });
-    const env = resolveClaudeProcessEnv({
-      spawnEnv,
-      credentials,
-      providerContext: this.config.providerContext,
-      baseUrl: readClaudeProviderBaseUrl(cliConfig.providerConfig),
-    });
-
-    return {
-      env,
-      binaryPath:
-        cliConfig.providerConfig?.binaryPath ??
-        (resolvedBinary?.binaryPath !== null ? resolvedBinary?.binaryPath : undefined),
-    };
-  }
-
   // ============================================================================
   // Session initialisation
   // ============================================================================
@@ -115,7 +86,11 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
    */
   private async initializeSession(): Promise<void> {
     const cliConfig = this.config as ClaudeCliAgentConfig;
-    const executionContext = await this.resolveTurnExecutionContext();
+    const env = resolveClaudeProcessEnv({
+      spawnEnv: this.env,
+      baseUrl: readClaudeProviderBaseUrl(cliConfig.providerConfig),
+    });
+    const binaryPath = cliConfig.clientExecution?.binaryPath ?? undefined;
 
     const sessionConfig: ClaudeCliSessionConfig = {
       bus: this.config.bus as ClaudeCodeCliConnectorBus,
@@ -124,13 +99,13 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
       agentId: this.agentId,
       cwd: this.cwd,
       model: this.model,
-      env: executionContext.env,
+      env,
+      contextEnv: cliConfig.contextEnv ?? {},
       providerConfig: cliConfig.providerConfig,
       reasoningEffort: this.currentReasoningEffort,
       allowedTools: cliConfig.allowedTools,
       disallowedTools: cliConfig.disallowedTools,
-      binaryPath: executionContext.binaryPath,
-      resolveTurnExecutionContext: () => this.resolveTurnExecutionContext(),
+      binaryPath,
       firstOutputTimeoutMs: this.timeouts.values.initialization,
       resumeAdapterSessionId: this.config.resumeAdapterSessionId,
       nativeFork: cliConfig.nativeFork,

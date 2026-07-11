@@ -1,30 +1,14 @@
 import { normalizeEnvValue } from '@makaio/ai-adapters-core';
 
-/** Claude process environment variable used for API-key authentication. */
-export const CLAUDE_API_KEY_ENV = 'ANTHROPIC_API_KEY';
-
 /** Claude process environment variable used for Anthropic-compatible endpoint overrides. */
 export const CLAUDE_BASE_URL_ENV = 'ANTHROPIC_BASE_URL';
 
-interface ClaudeProviderContextShape {
-  /** Provider definition ID, used only for debugging and future diagnostics. */
-  definitionId?: string;
-  /** Provider credential env vars keyed by credential field. */
-  credentialEnvVars?: Record<string, string>;
-  /** Protocol endpoint overrides resolved from the provider definition. */
-  endpointOverrides?: { anthropic?: string };
-}
-
 /**
- * Inputs for translating Makaio provider credentials into the Claude process env contract.
+ * Inputs for applying non-secret Claude process environment configuration.
  */
 export interface ResolveClaudeProcessEnvOptions {
-  /** Environment after generic subprocess cleanup and credential resolution. */
+  /** Final auth-selected environment produced by AdapterAuthRuntime. */
   spawnEnv: Record<string, string>;
-  /** Plaintext credentials resolved from providerContext credentialRefs. */
-  credentials: Record<string, string>;
-  /** Provider context that supplied the credential env mapping. */
-  providerContext?: ClaudeProviderContextShape;
   /** Anthropic-compatible endpoint selected by the adapter config factory. */
   baseUrl?: string;
 }
@@ -46,32 +30,19 @@ export function readClaudeProviderBaseUrl(providerConfig: unknown): string | und
 }
 
 /**
- * Translate Makaio provider credentials into the env names consumed by Claude Code.
+ * Apply the provider endpoint to an already-finalized Claude process environment.
  *
- * Claude SDK/CLI processes do not understand provider-specific env names such
- * as `OPENCODE_GO_API_KEY`; they consume Anthropic-compatible env names. This
- * keeps the generic provider context intact while adapting at the fixed-client
- * boundary where the native env contract is known.
- * @param options - Generic resolved env plus provider credentials/base URL
- * @returns Spawn environment ready for Claude SDK/CLI process execution
+ * Authentication is deliberately absent: AdapterAuthRuntime owns source
+ * resolution, competing-variable scrubbing, and selected process delivery.
+ * This helper may only add the non-secret endpoint override.
+ * @param options - Finalized process environment plus provider base URL
+ * @returns Spawn environment ready for Claude process execution
  */
 export function resolveClaudeProcessEnv(options: ResolveClaudeProcessEnvOptions): Record<string, string> {
   const env = { ...options.spawnEnv };
   delete env[CLAUDE_BASE_URL_ENV];
 
-  for (const envVar of Object.values(options.providerContext?.credentialEnvVars ?? {})) {
-    if (envVar !== CLAUDE_API_KEY_ENV) {
-      delete env[envVar];
-    }
-  }
-
-  const apiKey = normalizeEnvValue(options.credentials['apiKey']);
-  if (apiKey) {
-    env[CLAUDE_API_KEY_ENV] = apiKey;
-  }
-
-  const baseUrl =
-    normalizeEnvValue(options.baseUrl) ?? normalizeEnvValue(options.providerContext?.endpointOverrides?.anthropic);
+  const baseUrl = normalizeEnvValue(options.baseUrl);
   if (baseUrl) {
     env[CLAUDE_BASE_URL_ENV] = baseUrl;
   }

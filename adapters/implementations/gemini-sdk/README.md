@@ -124,11 +124,11 @@ amount and no provider call ID, so `cost` and `llmCallId` are never set. See
 Install the peer SDK packages provided by the framework workspace or your package manager. Runtime
 sessions require Google Gemini credentials. The adapter supports:
 
-- API-key auth via the canonical Google provider credential, mapped to `GEMINI_API_KEY`.
-- OAuth auth via the `google-oauth` provider path used by the Gemini CLI core.
+- API-key auth via the canonical Google provider credential. `GEMINI_API_KEY` is a supported
+  source hint; the trusted runtime delivers the resolved value directly to `Config.refreshAuth`.
 
-If an API-key credential ref is configured, the adapter uses API-key auth and fails fast when the
-resolved key is empty. OAuth fallback is used only when no API-key credential is supplied.
+The selected provider config determines the method. API-key auth fails fast when the resolved key
+is empty; it never falls back to ambient environment variables or native OAuth.
 
 ## File Structure
 
@@ -146,7 +146,6 @@ src/
 ├── models.ts             # Model catalog
 ├── package.ts            # MakaioExtension package descriptor
 ├── provider.ts           # Provider registration
-├── provider.fetcher.ts   # Model fetcher
 ├── rate-limiter.ts       # Rate limiting
 ├── server.ts             # Server entrypoint exporting the package descriptor
 ├── schemas.ts            # Zod schemas

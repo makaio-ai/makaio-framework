@@ -21,6 +21,7 @@ import { ClientRuntimeStorageNamespace } from './storage/runtime-storage-namespa
 import { ClientProfileStorageNamespace } from './storage/profile-storage-namespace.js';
 import type { StrategyDependencies } from './binary-strategies/index.js';
 import type { PostInstallHandler } from './client-binary-manager-types.js';
+import type { ClientBinaryResolutionPolicy } from './client-binary-manager-types.js';
 
 // ---------------------------------------------------------------------------
 // Composite service
@@ -146,6 +147,15 @@ export interface ClientsCorePackageOptions {
    * When omitted no post-install handlers are registered.
    */
   readonly postInstallHandlers?: ReadonlyMap<string, PostInstallHandler>;
+
+  /**
+   * Filesystem ownership policy used by `client.resolveBinary`.
+   *
+   * Isolated runtimes use `global-only` so persisted host install paths are
+   * never interpreted inside a different filesystem namespace.
+   * @defaultValue 'managed-first'
+   */
+  readonly binaryResolutionPolicy?: ClientBinaryResolutionPolicy;
 }
 
 /**
@@ -204,7 +214,7 @@ export function registerStorageHandlersWithRollback(registrations: ReadonlyArray
  * @returns Configured MakaioExtension manifest
  */
 export function createClientsCorePackage(options: ClientsCorePackageOptions = {}): MakaioNodeExtension<IMakaioBus> {
-  const { definitions = [], strategyDependencies, postInstallHandlers } = options;
+  const { definitions = [], strategyDependencies, postInstallHandlers, binaryResolutionPolicy } = options;
   const definitionSnapshot = [...definitions];
 
   return {
@@ -258,6 +268,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
           basePath: path.join(ctx.makaioHome, 'binaries'),
           configBasePath: clientsBasePath,
           postInstallHandlers,
+          ...(binaryResolutionPolicy !== undefined && { resolutionPolicy: binaryResolutionPolicy }),
         },
         registry,
         strategyDependencies,

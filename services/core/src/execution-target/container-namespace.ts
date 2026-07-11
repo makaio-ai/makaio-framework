@@ -1,6 +1,8 @@
-import { createBusNamespace } from '@makaio/core';
+import { z } from 'zod';
+import { channelSubject, createBusNamespace, localSubject } from '@makaio/core';
 import type { SchemaRecord } from '@makaio/core';
 import {
+  ContainerBootstrapSpawnRequestSchema,
   SpawnRequestSchema,
   SpawnResponseSchema,
   StopRequestSchema,
@@ -13,11 +15,27 @@ import {
   ContainerDestroyedSchema,
 } from './container-schemas.js';
 
+/** Process-local DirectChannel endpoint used for plaintext Docker bootstrap. */
+export const CONTAINER_BOOTSTRAP_CHANNEL_ENDPOINT = 'docker-bootstrap';
+
 const DockerSchemas = {
   'container.spawn': {
     request: SpawnRequestSchema,
     response: SpawnResponseSchema,
   },
+  /**
+   * Atomically spawn from a public descriptor plus encrypted bootstrap data.
+   * Channel-only because the request contains resolved plaintext secrets.
+   */
+  'bootstrap.spawn': channelSubject({
+    request: ContainerBootstrapSpawnRequestSchema,
+    response: SpawnResponseSchema,
+  }),
+  /** Return the process-local bootstrap channel bearer capability. */
+  'bootstrap.getChannelToken': localSubject({
+    request: z.object({}),
+    response: z.object({ token: z.string().min(1) }),
+  }),
   'container.stop': {
     request: StopRequestSchema,
     response: StopResponseSchema,

@@ -9,7 +9,7 @@ import { ClaudeCodeProviderConfigSchema } from './schemas.js';
 import type { ClaudeCodeConnectorBus } from './namespace/index.js';
 import type { ClaudeSdkConnector } from './connector.js';
 import type { ClaudeCodeAgent } from './agent.js';
-import { defaultPresetId, providerIds } from './provider.js';
+import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 
 /**
  * Adapter definition for Claude Code.
@@ -23,7 +23,11 @@ export const adapterDefinition: AIAdapterDefinition<ClaudeCodeConnectorBus, Clau
   displayName: 'Claude Code',
   defaultPresetId,
   description: 'Official Claude Code Agent SDK integration',
-  providers: providerIds.map((definitionId) => ({ definitionId })),
+  providers: providerIds.map((definitionId) => ({
+    definitionId,
+    protocol: 'anthropic',
+    auth: providerAuthById[definitionId],
+  })),
   providerConfigSchema: ClaudeCodeProviderConfigSchema,
   defaultTimeouts: DEFAULT_TIMEOUTS,
   helpLinks: [{ label: 'Claude Code Documentation', url: 'https://docs.anthropic.com/en/docs/claude-code' }],

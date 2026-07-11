@@ -10,12 +10,12 @@ import {
   type WireSessionSubjects,
   type MessageResult,
 } from '@makaio/ai-adapters-core';
-import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
 import { CursorSdkAdapterName } from './constants.js';
 import type { CursorSdkBus } from './namespaces/index.js';
 import { CursorSdkSubjects } from './namespaces/index.js';
 import type { CursorConnectorConfig } from './types/index.js';
 import { CursorSdkSession } from './session.js';
+import { resolveCursorAgentApiKey } from './agent-auth.js';
 
 /**
  * Cursor SDK Connector — wraps `Agent.create()` and `agent.send()`.
@@ -45,13 +45,17 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
 
   /** Terminal lifecycle guard set after `close()`. */
   private closed = false;
+  /** Selected connector-local API key passed only to `Agent.create`. */
+  private readonly apiKey: string;
 
   /**
    * Create a new `CursorSdkConnector` instance.
    * @param config - Fully-resolved connector configuration.
    */
   public constructor(config: CursorConnectorConfig) {
-    super({ ...config, adapterName: CursorSdkAdapterName });
+    const { adapterAuth, ...baseConfig } = config;
+    super({ ...baseConfig, env: baseConfig.env ?? {}, adapterName: CursorSdkAdapterName });
+    this.apiKey = resolveCursorAgentApiKey(adapterAuth);
   }
 
   /**
@@ -107,12 +111,10 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
   /**
    * Initialize the Cursor SDK session.
    *
-   * Resolves credentials, creates the `CursorSdkSession`, and wires turn
-   * lifecycle events. Called once via `ensureSession()`.
+   * Creates the `CursorSdkSession` with the centrally selected API key and
+   * wires turn lifecycle events. Called once via `ensureSession()`.
    */
   private async initializeSession(): Promise<void> {
-    const apiKey = await this.resolveApiKey();
-
     const resolvedSystemPrompt =
       this.systemPrompt == null
         ? undefined
@@ -126,9 +128,9 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
       adapterName: this.adapterName,
       makaioSessionId: this.sessionId,
       cwd: this.cwd,
-      env: this.env,
+      contextEnv: this.config.contextEnv ?? {},
       model: this.model,
-      apiKey,
+      apiKey: this.apiKey,
       systemPrompt: resolvedSystemPrompt,
       providerConfig: this.config.providerConfig,
       bus: this.config.bus,
@@ -150,28 +152,6 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
     }
     this.adapterSessionId = session.adapterSessionId;
     this.wireSessionEvents();
-  }
-
-  /**
-   * Resolve the Cursor API key from provider credentials or environment.
-   *
-   * Tries `resolveConnectorCredentials` when the provider context carries a
-   * credential ref for `apiKey`, then falls back to `CURSOR_API_KEY`.
-   * @returns The resolved API key string.
-   * @throws Error when no API key can be resolved.
-   */
-  private async resolveApiKey(): Promise<string> {
-    const credentialRefs = this.config.providerContext?.credentialRefs ?? {};
-    if (Object.keys(credentialRefs).length > 0) {
-      const credentials = await resolveConnectorCredentials(this.config.bus, credentialRefs);
-      if (credentials['apiKey']) return credentials['apiKey'];
-    }
-    const envKey = this.env['CURSOR_API_KEY'] ?? process.env['CURSOR_API_KEY'];
-    if (envKey) return envKey;
-    throw new Error(
-      '[CursorSdkConnector] No API key found. ' +
-        'Provide a credential ref for "apiKey" in providerContext, or set CURSOR_API_KEY.',
-    );
   }
 
   /**

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import OpenAI from 'openai';
 import type { Message } from '@makaio/contracts/shared';
 import type { AgentToolApproveResponse } from '@makaio/contracts';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OnceAbortError } from '@makaio/bus-core';
 import { MessageHandle, normalizeMessageInput } from '@makaio/ai-adapters-core';
 import { OpenAINodeConnector } from '../src/connector.js';
@@ -17,16 +17,6 @@ import {
 } from '../src/namespaces/index.js';
 import { OpenAIConnectorSession } from '../src/session.js';
 import type { OpenAISessionConfig } from '../src/types/index.js';
-
-const originalOpenAiApiKey = process.env['OPENAI_API_KEY'];
-
-afterEach(() => {
-  if (originalOpenAiApiKey === undefined) {
-    delete process.env['OPENAI_API_KEY'];
-  } else {
-    process.env['OPENAI_API_KEY'] = originalOpenAiApiKey;
-  }
-});
 
 /**
  * Create a connector session with shared defaults for session-focused tests.
@@ -174,7 +164,6 @@ describe('openai-node connector/session', () => {
   });
 
   it('captures systemPrompt from initialize options', async () => {
-    process.env['OPENAI_API_KEY'] = 'test-api-key';
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
     const connector = new OpenAINodeConnector({
       bus,
@@ -184,6 +173,16 @@ describe('openai-node connector/session', () => {
       model: 'gpt-4o-mini',
       cwd: os.tmpdir(),
       env: {},
+      adapterAuth: {
+        processEnv: {},
+        connectorDeliveries: [
+          {
+            target: 'openai-node.constructor',
+            values: { apiKey: 'test-api-key', adminAPIKey: null },
+          },
+        ],
+        configInheritance: 'empty',
+      },
       providerConfig: {},
     });
 

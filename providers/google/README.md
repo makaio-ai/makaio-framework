@@ -1,6 +1,9 @@
 # @makaio/provider-google
 
-Type-only package that declares the Google AI (Gemini) provider identity for the Makaio framework. It exports two `ProviderDefinitionInput` objects: `providerDefinition` for the API-key variant and `providerDefinitionOAuth` for the OAuth subscription variant. Both variants are SDK-only — they carry no `endpoints` field because Google Gemini communicates through the Google AI SDK rather than a standard HTTP endpoint. No runtime logic, network calls, or model catalog is included — the model catalog is populated from the YAML lab registry at boot time. The `googlePackage` descriptor wraps both definitions for unified package discovery.
+Type-only package that declares the Google AI (Gemini) API-key provider
+identity for the Makaio framework. It is SDK-only and therefore omits protocol
+endpoints. No runtime logic, network calls, or model catalog is included; the
+model registry populates the catalog at boot.
 
 ## Provider Identity
 
@@ -13,28 +16,25 @@ Type-only package that declares the Google AI (Gemini) provider identity for the
 | `defaultModel` | `gemini-2.5-pro` |
 | `fastModel` | `gemini-2.5-flash` |
 
-### OAuth subscription variant (`google-oauth`)
+The provider declares no protocol endpoints because the Gemini adapter uses
+the Google AI SDK directly.
 
-| Field | Value |
-|-------|-------|
-| `id` | `google-oauth` |
-| `name` | `Google AI (Subscription)` |
-| `defaultModel` | `gemini-2.5-pro` |
-| `fastModel` | `gemini-2.5-flash` |
+## Authentication
 
-Neither variant declares `endpoints`. The OAuth variant additionally carries no `credentialEnvVars` — credentials are managed by the account-manager or client binary.
+| Provider | Method | Mode | Fields and sources |
+|----------|--------|------|--------------------|
+| `google` | `api-key` | `explicit` | Required `apiKey`; `GEMINI_API_KEY` is an environment source hint |
 
-## Credential Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `GEMINI_API_KEY` | API key for the `google` variant |
+The source hint is offered only when authoring an explicit credential ref. The
+Gemini adapter owns API-key delivery through `Config.refreshAuth` and removes
+competing Google auth inputs before applying the selected method. Gemini has
+no native-account fallback or connector-owned credential lease.
 
 ## Served By
 
 | Adapter | Provider IDs covered |
 |---------|----------------------|
-| `@makaio/ai-adapters-gemini-sdk` | `google`, `google-oauth` |
+| `@makaio/ai-adapters-gemini-sdk` | `google` |
 
 ## Installation
 

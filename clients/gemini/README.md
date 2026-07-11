@@ -13,10 +13,16 @@ Static client definition for the Google Gemini CLI. This package declares the us
 | `binary.name` | `gemini` |
 | `binary.supportedVersions` | `*` |
 | `defaultApprovalPolicy` | `always-ask` |
-| `defaultProviderId` | `google-oauth` |
 | `configIsolation.envVar` | `GEMINI_CLI_SYSTEM_SETTINGS_PATH` |
 | `configIsolation.defaultPath` | `~/.gemini/settings.json` |
 | `configIsolation.pathKind` | `file` |
+
+## Authentication
+
+The Gemini client currently declares no native auth method because its runtime
+does not yet materialize an isolated Gemini credential lease. The Gemini SDK
+adapter supports the Google provider's explicit `api-key` method and delivers
+that value directly to the SDK auth operation without ambient fallback.
 
 ## Native Tools
 

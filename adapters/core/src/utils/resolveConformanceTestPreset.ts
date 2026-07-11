@@ -24,8 +24,8 @@ export type ConformanceEnvReader = (name: string) => string | undefined;
 export interface ResolveConformanceTestPresetOptions {
   /** Adapter name used in configuration error messages. */
   adapterName: string;
-  /** Provider ID used when no env override is supplied. */
-  defaultProviderId: string;
+  /** Test provider definition ID used when no environment override is supplied. */
+  testProviderDefinitionId: string;
   /** Provider IDs accepted by this adapter's conformance config. */
   providerIds: readonly string[];
   /** Full provider definitions supplied by the conformance harness. */
@@ -164,7 +164,7 @@ function requireModelName(
 /**
  * Resolve a conformance test provider preset from defaults plus MAKAIO_CONFORMANCE_* overrides.
  *
- * Provider, primary model, secondary model, credentials, and endpoint overrides
+ * Provider, primary model, secondary model, authentication, and endpoint overrides
  * are resolved together so CI can swap test economics without changing local
  * OAuth/default behavior.
  * @param options - Resolver inputs and optional env variable names
@@ -186,13 +186,13 @@ export function resolveConformanceTestPreset(
     envProviderDefinitions,
   );
   const providerOverride = normalizeEnvValue(readEnv(providerEnvVar));
-  const providerId = providerOverride ?? options.defaultProviderId;
+  const providerId = providerOverride ?? options.testProviderDefinitionId;
   const provider = providers.find((candidate) => candidate.id === providerId);
 
   if (!provider) {
     const available = providers.map((candidate) => candidate.id).join(', ');
     throw new Error(
-      `[${options.adapterName}] Unknown conformance provider '${providerId}' from ${providerOverride ? providerEnvVar : 'defaultProviderId'}. Available providers: ${available}`,
+      `[${options.adapterName}] Unknown conformance provider '${providerId}' from ${providerOverride ? providerEnvVar : 'testProviderDefinitionId'}. Available providers: ${available}`,
     );
   }
 
@@ -217,7 +217,7 @@ export function resolveConformanceTestPreset(
   return {
     provider,
     providers,
-    providerContext: createTestProviderContext(provider, providers),
+    providerContext: createTestProviderContext(provider),
     primaryModel: {
       definitionId: provider.id,
       modelName: primaryModelName,

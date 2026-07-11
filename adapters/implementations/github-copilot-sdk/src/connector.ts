@@ -24,6 +24,7 @@ import { CopilotConnectorSession } from './session.js';
 import { toSdkReasoningEffort } from './reasoning.js';
 import { buildPermissionHandler } from './permission.js';
 import { performSessionInit } from './session-init.js';
+import { resolveCopilotGithubToken } from './constructor-auth.js';
 
 // Re-export so external code (including tests) can import toSdkReasoningEffort
 // from the connector module without needing to know about the reasoning module.
@@ -38,9 +39,8 @@ const defaultBus = await GitHubCopilotConnectorNamespace.scopedBus();
  * Manages event consumption, sessionId, FIFO event buffer, and message queue lifecycle.
  * Note: Session closed events are handled by GitHubCopilotAgent (AIAgent layer).
  *
- * Credential resolution happens in `initializeSession()` via `resolveConnectorCredentials()`.
- * The resolved token is passed to the SDK client through its per-client `githubToken`
- * option, so it is never stored in the connector config or on the bus.
+ * Authentication and process inputs are resolved once by the central adapter
+ * runtime before connector construction.
  */
 export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopilotConnectorBus> {
   /** Copilot Session instance for message exchange (managed by CopilotConnectorSession). */
@@ -74,18 +74,23 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
   private initializingClient?: CopilotClient;
   /** Provisional session created during session initialization, before publication. */
   private initializingSession?: CopilotConnectorSession;
+  /** Selected connector-local token passed only to the Copilot SDK client. */
+  private readonly githubToken: string;
 
   /**
    * Create a new GitHubCopilotConnector instance.
    * @param config - Configuration including bus, auth, and session config
    */
   public constructor(config: CopilotSessionOptions & { adapterId?: string }) {
+    const { adapterAuth, ...baseConfig } = config;
     super({
-      ...config,
+      ...baseConfig,
+      env: baseConfig.env ?? {},
       bus: config?.bus ?? defaultBus,
       adapterId: config?.adapterId ?? defaultAdapterId,
       adapterName: config?.adapterName ?? GitHubCopilotSdkAdapterName,
     });
+    this.githubToken = resolveCopilotGithubToken(adapterAuth);
 
     // Generate our own adapterSessionId to pass to SDK
     // Base constructor may have already set this from config (swap case)
@@ -246,10 +251,8 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
   /**
    * Initialize CopilotConnectorSession for SDK lifecycle management.
    *
-   * Resolves credentials from `providerContext.credentialRefs` via the encrypted
-   * credential channel, then passes the token to the Copilot SDK client through
-   * its per-client `githubToken` option. Plaintext credentials are scoped to
-   * this method and the SDK client; they are never stored in connector config.
+   * Passes the central runtime's finalized token, environment, and binary
+   * selection to the Copilot SDK client.
    *
    * Uses single-flight deduplication — concurrent callers join the same promise
    * so the session is created exactly once.
@@ -280,7 +283,8 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
           model: this.model,
           defaultSessionConfig: this.defaultSessionConfig,
           systemPrompt: this.systemPrompt,
-          providerContext: this.config.providerContext,
+          githubToken: this.githubToken,
+          clientExecution: this.config.clientExecution,
           toolLedger: this.config.toolLedger,
           getCurrentTurnNumber: () => this.pendingTurnNumber ?? this.currentTurnNumber,
           allowedTools: this.config.allowedTools,

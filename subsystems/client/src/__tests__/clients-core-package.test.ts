@@ -31,6 +31,7 @@ const MANAGED_DEFINITION = createClientDefinition({
   id: 'claude-code',
   name: 'Claude Code',
   version: '0.1.0',
+  authMethods: [],
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
@@ -45,6 +46,7 @@ const UNMANAGED_DEFINITION = createClientDefinition({
   id: 'codex',
   name: 'Codex',
   version: '0.1.0',
+  authMethods: [],
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: false },
 });
@@ -175,6 +177,7 @@ describe('createClientsCorePackage (integration)', () => {
       id: 'gemini-code',
       name: 'Gemini Code',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {
@@ -201,6 +204,7 @@ describe('createClientsCorePackage (integration)', () => {
         id: 'late-added',
         name: 'Late Added',
         version: '0.1.0',
+        authMethods: [],
         defaultApprovalPolicy: 'always-ask',
         runtimeCapabilities: { supportsManagedBinary: true },
         managedInstall: {

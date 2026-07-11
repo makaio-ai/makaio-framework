@@ -95,6 +95,10 @@
       "types": "./dist/contracts/artifact/index.d.mts",
       "default": "./dist/contracts/artifact/index.mjs"
     },
+    "./contracts/auth": {
+      "types": "./dist/contracts/auth/index.d.mts",
+      "default": "./dist/contracts/auth/index.mjs"
+    },
     "./contracts/adapter/schemas/session-lineage": {
       "types": "./dist/contracts/adapter/schemas/session-lineage.d.mts",
       "default": "./dist/contracts/adapter/schemas/session-lineage.mjs"

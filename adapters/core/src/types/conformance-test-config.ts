@@ -36,9 +36,14 @@ export interface CreateConformanceTestConfigOptions {
  * Options for creating test agent instances.
  * Omits 'bus' (provided by test config) and makes 'adapterName'/'agentId' optional (factories provide defaults).
  */
-export type CreateTestAgentOptions = Omit<BaseAgentConnectorConfig, 'bus' | 'adapterName' | 'model'> & {
+export type CreateTestAgentOptions = Omit<
+  BaseAgentConnectorConfig,
+  'bus' | 'agentId' | 'adapterName' | 'model' | 'cwd' | 'providerContext'
+> & {
+  agentId?: string;
   adapterName?: string;
   model?: string;
+  cwd?: string;
   /** Override the default test provider context when testing endpoint/credential behavior. */
   providerContext?: ProviderContext;
 };
@@ -343,7 +348,7 @@ export interface ConformanceTestConfig<
    * Unresolved provider context for the test provider.
    *
    * Contains credential refs (e.g. `env:ANTHROPIC_API_KEY`) built from the test
-   * provider definition's `credentialEnvVars`. Used by orchestration tests that
+   * provider definition's explicit auth method source hints. Used by orchestration tests that
    * call `startAgent` directly (bypassing the conformance `createConnector` path
    * where `resolveTestConfig` handles credential ref building).
    *

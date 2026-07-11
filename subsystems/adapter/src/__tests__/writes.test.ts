@@ -4,7 +4,12 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { CredentialSubjects } from '@makaio/contracts';
-import { buildStoredCredentialRef, type AdapterFile, type ProviderConfigFile } from '@makaio/contracts/config';
+import {
+  buildStoredCredentialRef,
+  type AdapterFile,
+  type CredentialRef,
+  type ProviderConfigFile,
+} from '@makaio/contracts/config';
 import { AdapterSubsystemNamespace, AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { FileAdapterConfigRepository } from '../config-repository.js';
@@ -157,6 +162,71 @@ async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, 'utf-8')) as T;
 }
 
+const noAuthMethod = { id: 'none', mode: 'none' as const, label: 'No authentication' };
+const apiKeyMethod = {
+  id: 'api-key',
+  mode: 'explicit' as const,
+  label: 'API key',
+  fields: [
+    {
+      id: 'apiKey',
+      label: 'API key',
+      required: true,
+      secret: true,
+      sourceHints: [{ kind: 'environment' as const, variable: 'ANTHROPIC_API_KEY' }],
+    },
+  ],
+};
+
+/**
+ * Build a no-auth v2 fixture while retaining lifecycle/default overrides.
+ * @param definitionId - Provider definition selected by the config.
+ * @param name - Human-readable config name.
+ * @param options - Optional lifecycle/default overrides.
+ */
+function noAuthConfig(
+  definitionId: string,
+  name: string,
+  options: Omit<Partial<ProviderConfigFile>, '$schema' | 'definitionId' | 'name' | 'auth'> = {},
+): ProviderConfigFile {
+  return {
+    $schema: 'makaio/provider-config/v2',
+    definitionId,
+    name,
+    auth: {
+      mode: 'none',
+      method: { owner: 'provider', providerDefinitionId: definitionId, methodId: 'none' },
+    },
+    ...options,
+  };
+}
+
+/**
+ * Build an explicit API-key v2 fixture while retaining lifecycle/default overrides.
+ * @param definitionId - Provider definition selected by the config.
+ * @param name - Human-readable config name.
+ * @param credentialRef - Credential source reference stored by the config.
+ * @param options - Optional lifecycle/default overrides.
+ */
+function explicitConfig(
+  definitionId: string,
+  name: string,
+  credentialRef: CredentialRef,
+  options: Omit<Partial<ProviderConfigFile>, '$schema' | 'definitionId' | 'name' | 'auth'> = {},
+): ProviderConfigFile {
+  return {
+    $schema: 'makaio/provider-config/v2',
+    definitionId,
+    name,
+    auth: {
+      mode: 'explicit',
+      method: { owner: 'provider', providerDefinitionId: definitionId, methodId: 'api-key' },
+      credentialRefs: { apiKey: credentialRef },
+    },
+    ...options,
+  };
+}
+
 async function createHarness(
   seed: {
     readonly providerConfigs?: Record<string, ProviderConfigFile>;
@@ -231,6 +301,7 @@ describe('AdapterSubsystemService writes', () => {
             name: 'Anthropic',
             defaultModelFilterMode: 'show-all',
             availableModels: [],
+            authMethods: [apiKeyMethod, noAuthMethod],
             enabled: true,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -244,8 +315,10 @@ describe('AdapterSubsystemService writes', () => {
       const created = await MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
         definitionId: 'anthropic',
         name: 'Anthropic Work',
-        credentialRefs: {
-          apiKey: 'stored:providerConfig:anthropic-work:apiKey',
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic-work:apiKey' },
         },
         endpointOverrides: {
           anthropic: 'https://api.anthropic.com',
@@ -255,11 +328,13 @@ describe('AdapterSubsystemService writes', () => {
       const createdPath = path.join(harness.makaioDir, 'provider-configs', `${created.config.id}.json`);
       expect(created.config.id).toBe('anthropic-work');
       expect(await readJsonFile(createdPath)).toEqual({
-        $schema: 'makaio/provider-config/v1',
+        $schema: 'makaio/provider-config/v2',
         definitionId: 'anthropic',
         name: 'Anthropic Work',
-        credentials: {
-          apiKey: 'stored:providerConfig:anthropic-work:apiKey',
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic-work:apiKey' },
         },
         endpointOverrides: {
           anthropic: 'https://api.anthropic.com',
@@ -267,14 +342,13 @@ describe('AdapterSubsystemService writes', () => {
         modelFilterMode: 'show-all',
         isDefault: true,
         enabled: true,
-        isSentinel: false,
       });
       expect(createdEvents).toHaveLength(1);
       expect(createdEvents[0]).toMatchObject({
         id: created.config.id,
         definitionId: 'anthropic',
         name: 'Anthropic Work',
-        hasCredentials: true,
+        auth: { mode: 'explicit', hasCredentials: true },
       });
       expect(createdEvents[0]).not.toHaveProperty('credentials');
       expect(createdEvents[0]).not.toHaveProperty('credentialRefs');
@@ -289,6 +363,7 @@ describe('AdapterSubsystemService writes', () => {
               name: '  OpenAI / GPT  ',
               defaultModelFilterMode: 'show-all',
               availableModels: [],
+              authMethods: [noAuthMethod],
               enabled: true,
               createdAt: Date.now(),
               updatedAt: Date.now(),
@@ -301,6 +376,10 @@ describe('AdapterSubsystemService writes', () => {
       try {
         const fallbackCreated = await MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
           definitionId: 'openai',
+          auth: {
+            mode: 'none',
+            method: { owner: 'provider', providerDefinitionId: 'openai', methodId: 'none' },
+          },
         });
         expect(fallbackCreated.config.id).toBe('openai');
         expect(fallbackCreated.config.name).toBe('openai');
@@ -314,6 +393,10 @@ describe('AdapterSubsystemService writes', () => {
         MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
           definitionId: 'anthropic',
           name: 'anthropic  work',
+          auth: {
+            mode: 'none',
+            method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+          },
         }),
       ).rejects.toThrow(/conflicts with existing config/);
 
@@ -391,6 +474,7 @@ describe('AdapterSubsystemService writes', () => {
             name: 'Anthropic',
             defaultModelFilterMode: 'show-all',
             availableModels: [],
+            authMethods: [noAuthMethod],
             enabled: true,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -406,6 +490,10 @@ describe('AdapterSubsystemService writes', () => {
       const created = await MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
         definitionId: 'anthropic',
         name: 'Anthropic Mutable',
+        auth: {
+          mode: 'none',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+        },
         endpointOverrides,
         modelVisibility,
       });
@@ -460,6 +548,10 @@ describe('AdapterSubsystemService writes', () => {
         MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
           definitionId: 'missing-provider',
           name: 'Missing Provider',
+          auth: {
+            mode: 'none',
+            method: { owner: 'provider', providerDefinitionId: 'missing-provider', methodId: 'none' },
+          },
         }),
       ).rejects.toThrow('Provider definition not found: missing-provider');
     } finally {
@@ -487,9 +579,7 @@ describe('AdapterSubsystemService writes', () => {
             name: 'Anthropic',
             defaultModelFilterMode: 'show-all',
             availableModels: [],
-            credentialEnvVars: {
-              apiKey: 'ANTHROPIC_API_KEY',
-            },
+            authMethods: [apiKeyMethod],
             enabled: true,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -500,7 +590,7 @@ describe('AdapterSubsystemService writes', () => {
     );
     const offCredentialActivate = MakaioBus.on(CredentialSubjects.activate, (ctx) => {
       credentialBusCalls.activate += 1;
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
     const offCredentialChanged = MakaioBus.on(CredentialSubjects.changed, (ctx) => {
       credentialBusCalls.changed += 1;
@@ -531,29 +621,32 @@ describe('AdapterSubsystemService writes', () => {
       );
 
       await expect(MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, plaintextPayload)).rejects.toThrow(
-        /Validation failed|credentialRefs/,
+        /Validation failed|auth|credentials/,
       );
 
       const created = await MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
         definitionId: 'anthropic',
         name: 'Anthropic Secret',
-        credentialRefs: {
-          apiKey: buildStoredCredentialRef('anthropic-secret', 'apiKey'),
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+          credentialRefs: { apiKey: buildStoredCredentialRef('anthropic-secret', 'apiKey') },
         },
       });
 
       const createdPath = path.join(harness.makaioDir, 'provider-configs', `${created.config.id}.json`);
       expect(await readJsonFile<ProviderConfigFile>(createdPath)).toEqual({
-        $schema: 'makaio/provider-config/v1',
+        $schema: 'makaio/provider-config/v2',
         definitionId: 'anthropic',
         name: 'Anthropic Secret',
-        credentials: {
-          apiKey: 'stored:providerConfig:anthropic-secret:apiKey',
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic-secret:apiKey' },
         },
         modelFilterMode: 'show-all',
         isDefault: true,
         enabled: true,
-        isSentinel: false,
       });
       expect(credentialBusCalls).toEqual({
         activate: 0,
@@ -569,23 +662,21 @@ describe('AdapterSubsystemService writes', () => {
       expect(config).toMatchObject({
         id: created.config.id,
         definitionId: 'anthropic',
-        hasCredentials: true,
+        auth: { mode: 'explicit', hasCredentials: true },
       });
       expect(config).not.toHaveProperty('credentialRefs');
 
-      const { context } = await MakaioBus.request(AdapterSubsystemSubjects.buildProviderContext, {
+      const { snapshot } = await MakaioBus.request(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
         providerConfigId: created.config.id,
       });
-      expect(context).toEqual({
+      expect(snapshot?.context).toMatchObject({
+        state: 'resolved',
         providerConfigId: created.config.id,
         definitionId: 'anthropic',
-        credentialRefs: {
-          apiKey: 'stored:providerConfig:anthropic-secret:apiKey',
+        auth: {
+          mode: 'explicit',
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic-secret:apiKey' },
         },
-        credentialEnvVars: {
-          apiKey: 'ANTHROPIC_API_KEY',
-        },
-        ambientCredentialEnvVars: ['ANTHROPIC_API_KEY'],
       });
     } finally {
       offCredentialActivate();
@@ -597,16 +688,10 @@ describe('AdapterSubsystemService writes', () => {
     }
   });
 
-  it('replaces provider-config credential refs through a dedicated canonical write seam', async () => {
+  it('replaces provider-config auth through the dedicated canonical write seam', async () => {
     harness = await createHarness({
       providerConfigs: {
-        'anthropic.work': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Work',
-          isDefault: true,
-          enabled: true,
-        },
+        'anthropic.work': noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true }),
       },
     });
 
@@ -624,9 +709,7 @@ describe('AdapterSubsystemService writes', () => {
             name: 'Anthropic',
             defaultModelFilterMode: 'show-all',
             availableModels: [],
-            credentialEnvVars: {
-              apiKey: 'ANTHROPIC_API_KEY',
-            },
+            authMethods: [apiKeyMethod, noAuthMethod],
             enabled: true,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -637,51 +720,53 @@ describe('AdapterSubsystemService writes', () => {
     );
 
     try {
-      const result = await MakaioBus.request(AdapterSubsystemSubjects.setProviderConfigCredentialRefs, {
+      const result = await MakaioBus.request(AdapterSubsystemSubjects.setProviderConfigAuth, {
         id: 'anthropic.work',
-        credentialRefs: {
-          apiKey: buildStoredCredentialRef('anthropic.work', 'apiKey'),
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+          credentialRefs: { apiKey: buildStoredCredentialRef('anthropic.work', 'apiKey') },
         },
       });
 
       expect(result.config).toMatchObject({
         id: 'anthropic.work',
-        hasCredentials: true,
+        auth: { mode: 'explicit', hasCredentials: true },
       });
       expect(result.config).not.toHaveProperty('credentialRefs');
 
       expect(
         await readJsonFile<ProviderConfigFile>(path.join(harness.makaioDir, 'provider-configs', 'anthropic.work.json')),
       ).toEqual({
-        $schema: 'makaio/provider-config/v1',
+        $schema: 'makaio/provider-config/v2',
         definitionId: 'anthropic',
         name: 'Anthropic Work',
-        credentials: {
-          apiKey: 'stored:providerConfig:anthropic.work:apiKey',
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic.work:apiKey' },
         },
         isDefault: true,
         enabled: true,
       });
 
-      const { context } = await MakaioBus.request(AdapterSubsystemSubjects.buildProviderContext, {
+      const { snapshot } = await MakaioBus.request(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
         providerConfigId: 'anthropic.work',
       });
-      expect(context).toEqual({
+      expect(snapshot?.context).toMatchObject({
+        state: 'resolved',
         providerConfigId: 'anthropic.work',
         definitionId: 'anthropic',
-        credentialRefs: {
-          apiKey: 'stored:providerConfig:anthropic.work:apiKey',
+        auth: {
+          mode: 'explicit',
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic.work:apiKey' },
         },
-        credentialEnvVars: {
-          apiKey: 'ANTHROPIC_API_KEY',
-        },
-        ambientCredentialEnvVars: ['ANTHROPIC_API_KEY'],
       });
 
       expect(updatedEvents).toEqual([
         expect.objectContaining({
           id: 'anthropic.work',
-          hasCredentials: true,
+          auth: expect.objectContaining({ mode: 'explicit', hasCredentials: true }),
         }),
       ]);
       expect(updatedEvents[0]).not.toHaveProperty('credentialRefs');
@@ -691,30 +776,15 @@ describe('AdapterSubsystemService writes', () => {
     }
   });
 
-  it('promotes sibling defaults on delete and soft-deletes sentinels', async () => {
+  it('promotes sibling defaults on delete and soft-deletes managed configs', async () => {
     harness = await createHarness({
       providerConfigs: {
-        'anthropic.work': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Work',
-          isDefault: true,
+        'anthropic.work': noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true }),
+        'anthropic.personal': noAuthConfig('anthropic', 'Anthropic Personal', { enabled: true }),
+        'anthropic.zz-managed': noAuthConfig('anthropic', 'Anthropic Managed', {
           enabled: true,
-        },
-        'anthropic.personal': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Personal',
-          enabled: true,
-        },
-        'anthropic.sentinel': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Sentinel',
-          isDefault: true,
-          enabled: true,
-          isSentinel: true,
-        },
+          managedBy: { kind: 'client', clientId: 'claude-code' },
+        }),
       },
     });
 
@@ -740,16 +810,18 @@ describe('AdapterSubsystemService writes', () => {
       const promoted = await MakaioBus.request(AdapterSubsystemSubjects.listProviderConfigsByDefinition, {
         definitionId: 'anthropic',
       });
-      expect(promoted.configs).toEqual([
-        expect.objectContaining({
-          id: 'anthropic.personal',
-          isDefault: true,
-        }),
-        expect.objectContaining({
-          id: 'anthropic.sentinel',
-          isSentinel: true,
-        }),
-      ]);
+      expect(promoted.configs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'anthropic.personal',
+            isDefault: true,
+          }),
+          expect.objectContaining({
+            id: 'anthropic.zz-managed',
+            managedBy: { kind: 'client', clientId: 'claude-code' },
+          }),
+        ]),
+      );
 
       await expect(
         fs.access(path.join(harness.makaioDir, 'provider-configs', 'anthropic.work.json')),
@@ -770,31 +842,31 @@ describe('AdapterSubsystemService writes', () => {
       ]);
 
       const softDelete = await MakaioBus.request(AdapterSubsystemSubjects.deleteProviderConfig, {
-        id: 'anthropic.sentinel',
+        id: 'anthropic.zz-managed',
       });
       expect(softDelete.deleted).toBe(false);
       expect(updatedEvents).toHaveLength(1);
       expect(updatedEvents[0]).toMatchObject({
-        id: 'anthropic.sentinel',
+        id: 'anthropic.zz-managed',
         enabled: false,
-        isSentinel: true,
+        managedBy: { kind: 'client', clientId: 'claude-code' },
       });
 
-      const sentinel = await MakaioBus.request(AdapterSubsystemSubjects.getProviderConfig, {
-        id: 'anthropic.sentinel',
+      const managed = await MakaioBus.request(AdapterSubsystemSubjects.getProviderConfig, {
+        id: 'anthropic.zz-managed',
       });
-      expect(sentinel.config).toMatchObject({
-        id: 'anthropic.sentinel',
+      expect(managed.config).toMatchObject({
+        id: 'anthropic.zz-managed',
         enabled: false,
-        isSentinel: true,
+        managedBy: { kind: 'client', clientId: 'claude-code' },
       });
       expect(
         await readJsonFile<ProviderConfigFile>(
-          path.join(harness.makaioDir, 'provider-configs', 'anthropic.sentinel.json'),
+          path.join(harness.makaioDir, 'provider-configs', 'anthropic.zz-managed.json'),
         ),
       ).toMatchObject({
         enabled: false,
-        isSentinel: true,
+        managedBy: { kind: 'client', clientId: 'claude-code' },
       });
     } finally {
       offDeleted();
@@ -806,25 +878,9 @@ describe('AdapterSubsystemService writes', () => {
   it('promotes only enabled provider configs as definition defaults', async () => {
     harness = await createHarness({
       providerConfigs: {
-        'anthropic.work': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Work',
-          isDefault: true,
-          enabled: true,
-        },
-        'anthropic.disabled': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Disabled',
-          enabled: false,
-        },
-        'anthropic.team': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Team',
-          enabled: true,
-        },
+        'anthropic.work': noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true }),
+        'anthropic.disabled': noAuthConfig('anthropic', 'Anthropic Disabled', { enabled: false }),
+        'anthropic.team': noAuthConfig('anthropic', 'Anthropic Team', { enabled: true }),
       },
     });
 
@@ -850,16 +906,12 @@ describe('AdapterSubsystemService writes', () => {
   it('performs best-effort credential cleanup after deleting a canonical provider config', async () => {
     harness = await createHarness({
       providerConfigs: {
-        'anthropic.work': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Work',
-          credentials: {
-            apiKey: buildStoredCredentialRef('anthropic.work', 'apiKey'),
-          },
-          isDefault: true,
-          enabled: true,
-        },
+        'anthropic.work': explicitConfig(
+          'anthropic',
+          'Anthropic Work',
+          buildStoredCredentialRef('anthropic.work', 'apiKey'),
+          { isDefault: true, enabled: true },
+        ),
       },
     });
 
@@ -891,35 +943,9 @@ describe('AdapterSubsystemService writes', () => {
   it('persists only the affected provider definition slice when defaults change', async () => {
     const repository = new TrackingRepository(
       new Map<string, ProviderConfigFile>([
-        [
-          'anthropic.work',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Work',
-            isDefault: true,
-            enabled: true,
-          },
-        ],
-        [
-          'anthropic.personal',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Personal',
-            enabled: true,
-          },
-        ],
-        [
-          'openai.team',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'openai',
-            name: 'OpenAI Team',
-            isDefault: true,
-            enabled: true,
-          },
-        ],
+        ['anthropic.work', noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true })],
+        ['anthropic.personal', noAuthConfig('anthropic', 'Anthropic Personal', { enabled: true })],
+        ['openai.team', noAuthConfig('openai', 'OpenAI Team', { isDefault: true, enabled: true })],
       ]),
       new Map<string, AdapterFile>(),
     );
@@ -950,15 +976,7 @@ describe('AdapterSubsystemService writes', () => {
   it('serializes concurrent provider config snapshot mutations without losing either patch', async () => {
     const repository = new GatedTrackingRepository(
       new Map<string, ProviderConfigFile>([
-        [
-          'anthropic.work',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Work',
-            enabled: true,
-          },
-        ],
+        ['anthropic.work', noAuthConfig('anthropic', 'Anthropic Work', { enabled: true })],
       ]),
       new Map<string, AdapterFile>(),
     );
@@ -971,11 +989,33 @@ describe('AdapterSubsystemService writes', () => {
     });
     await localService.init();
 
+    const offAnthropicProvider = MakaioBus.on(
+      ProviderStorageSubjects.get,
+      (ctx) => {
+        ctx.setResult({
+          provider: {
+            id: 'anthropic',
+            packageName: '@makaio/provider-anthropic',
+            name: 'Anthropic',
+            defaultModelFilterMode: 'show-all',
+            availableModels: [],
+            authMethods: [apiKeyMethod, noAuthMethod],
+            enabled: true,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      },
+      { filter: { id: 'anthropic' } },
+    );
+
     try {
-      const credentialWrite = MakaioBus.request(AdapterSubsystemSubjects.setProviderConfigCredentialRefs, {
+      const authWrite = MakaioBus.request(AdapterSubsystemSubjects.setProviderConfigAuth, {
         id: 'anthropic.work',
-        credentialRefs: {
-          apiKey: 'stored:providerConfig:anthropic-work:apiKey',
+        auth: {
+          mode: 'explicit',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic-work:apiKey' },
         },
       });
       await repository.waitForFirstWrite();
@@ -985,13 +1025,14 @@ describe('AdapterSubsystemService writes', () => {
       });
 
       repository.unblockFirstWrite();
-      await Promise.all([credentialWrite, enabledWrite]);
+      await Promise.all([authWrite, enabledWrite]);
 
       const stored = repository.providerConfigs.get('anthropic.work');
       expect(stored).toMatchObject({
         enabled: false,
-        credentials: {
-          apiKey: 'stored:providerConfig:anthropic-work:apiKey',
+        auth: {
+          mode: 'explicit',
+          credentialRefs: { apiKey: 'stored:providerConfig:anthropic-work:apiKey' },
         },
       });
       await expect(
@@ -999,11 +1040,12 @@ describe('AdapterSubsystemService writes', () => {
       ).resolves.toMatchObject({
         config: {
           enabled: false,
-          hasCredentials: true,
+          auth: { mode: 'explicit', hasCredentials: true },
         },
       });
     } finally {
       repository.unblockFirstWrite();
+      offAnthropicProvider();
       await localService.destroy();
     }
   });
@@ -1011,25 +1053,8 @@ describe('AdapterSubsystemService writes', () => {
   it('rolls back provider-slice writes when setDefault fails mid-slice', async () => {
     const repository = new FailingTrackingRepository(
       new Map<string, ProviderConfigFile>([
-        [
-          'anthropic.work',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Work',
-            isDefault: true,
-            enabled: true,
-          },
-        ],
-        [
-          'anthropic.personal',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Personal',
-            enabled: true,
-          },
-        ],
+        ['anthropic.work', noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true })],
+        ['anthropic.personal', noAuthConfig('anthropic', 'Anthropic Personal', { enabled: true })],
       ]),
       new Map<string, AdapterFile>(),
       new Map([['anthropic.personal', 'before-write' satisfies FailureMode]]),
@@ -1074,25 +1099,8 @@ describe('AdapterSubsystemService writes', () => {
   it('rolls back provider-slice writes when setDefault fails after mutating disk', async () => {
     const repository = new FailingTrackingRepository(
       new Map<string, ProviderConfigFile>([
-        [
-          'anthropic.work',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Work',
-            isDefault: true,
-            enabled: true,
-          },
-        ],
-        [
-          'anthropic.personal',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Personal',
-            enabled: true,
-          },
-        ],
+        ['anthropic.work', noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true })],
+        ['anthropic.personal', noAuthConfig('anthropic', 'Anthropic Personal', { enabled: true })],
       ]),
       new Map<string, AdapterFile>(),
       new Map([['anthropic.personal', 'after-write' satisfies FailureMode]]),
@@ -1137,25 +1145,8 @@ describe('AdapterSubsystemService writes', () => {
   it('rolls back provider and binding writes when delete fails before adapter persistence', async () => {
     const repository = new FailingTrackingRepository(
       new Map<string, ProviderConfigFile>([
-        [
-          'anthropic.work',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Work',
-            isDefault: true,
-            enabled: true,
-          },
-        ],
-        [
-          'anthropic.personal',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Personal',
-            enabled: true,
-          },
-        ],
+        ['anthropic.work', noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true })],
+        ['anthropic.personal', noAuthConfig('anthropic', 'Anthropic Personal', { enabled: true })],
       ]),
       new Map<string, AdapterFile>([
         [
@@ -1228,25 +1219,8 @@ describe('AdapterSubsystemService writes', () => {
   it('rolls back provider and binding writes when delete fails at the final file removal step', async () => {
     const repository = new FailingTrackingRepository(
       new Map<string, ProviderConfigFile>([
-        [
-          'anthropic.work',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Work',
-            isDefault: true,
-            enabled: true,
-          },
-        ],
-        [
-          'anthropic.personal',
-          {
-            $schema: 'makaio/provider-config/v1',
-            definitionId: 'anthropic',
-            name: 'Anthropic Personal',
-            enabled: true,
-          },
-        ],
+        ['anthropic.work', noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true })],
+        ['anthropic.personal', noAuthConfig('anthropic', 'Anthropic Personal', { enabled: true })],
       ]),
       new Map<string, AdapterFile>([
         [
@@ -1323,19 +1297,8 @@ describe('AdapterSubsystemService writes', () => {
   it('binds, unbinds, and reorders defaults idempotently', async () => {
     harness = await createHarness({
       providerConfigs: {
-        'anthropic.work': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Work',
-          isDefault: true,
-          enabled: true,
-        },
-        'anthropic.personal': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Personal',
-          enabled: true,
-        },
+        'anthropic.work': noAuthConfig('anthropic', 'Anthropic Work', { isDefault: true, enabled: true }),
+        'anthropic.personal': noAuthConfig('anthropic', 'Anthropic Personal', { enabled: true }),
       },
       adapters: {
         'claude-code': {
@@ -1468,18 +1431,8 @@ describe('AdapterSubsystemService writes', () => {
   it('uses only enabled provider configs for binding defaults', async () => {
     harness = await createHarness({
       providerConfigs: {
-        'anthropic.disabled': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Disabled',
-          enabled: false,
-        },
-        'anthropic.enabled': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Enabled',
-          enabled: true,
-        },
+        'anthropic.disabled': noAuthConfig('anthropic', 'Anthropic Disabled', { enabled: false }),
+        'anthropic.enabled': noAuthConfig('anthropic', 'Anthropic Enabled', { enabled: true }),
       },
       adapters: {
         'claude-code': {
@@ -1611,12 +1564,7 @@ describe('AdapterSubsystemService writes', () => {
   it('keeps a keeper model visible when switching to allowlist mode', async () => {
     harness = await createHarness({
       providerConfigs: {
-        'anthropic.work': {
-          $schema: 'makaio/provider-config/v1',
-          definitionId: 'anthropic',
-          name: 'Anthropic Work',
-          enabled: true,
-        },
+        'anthropic.work': noAuthConfig('anthropic', 'Anthropic Work', { enabled: true }),
       },
     });
 
@@ -1631,6 +1579,7 @@ describe('AdapterSubsystemService writes', () => {
             { name: 'sonnet', friendlyName: 'Sonnet', contextWindowSize: 200000, labId: 'anthropic' },
             { name: 'haiku', friendlyName: 'Haiku', contextWindowSize: 200000, labId: 'anthropic' },
           ],
+          authMethods: [],
           defaultModelFilterMode: 'show-all',
           enabled: true,
           createdAt: Date.now(),

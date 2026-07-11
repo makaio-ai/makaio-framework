@@ -1,13 +1,23 @@
 import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
 import type { DiscoveredAIModel } from '@makaio/contracts';
 import { OpenAIAgent } from './agent.js';
 import { OpenAINodeConnector } from './connector.js';
 import { OpenAINodeConnectorNamespace, type OpenAINodeConnectorBus } from './namespaces/index.js';
 import { OpenAINodeConfig } from './config.js';
 import { MODEL_FETCH_TIMEOUT_MS, OpenAINodeAdapterName } from './constants.js';
+import { resolveOpenAIConstructorAuth } from './constructor-auth.js';
 import { normalizeOpenAIModels, type RawModelData } from './model-normalization.js';
 
 export { OpenAINodeAdapterName };
+
+/** Typed, credential-free failure when model discovery has no selected API key. */
+export class OpenAIModelFetchAuthError extends Error {
+  public constructor() {
+    super('OpenAI-compatible model discovery requires an explicit API-key selection.');
+    this.name = 'OpenAIModelFetchAuthError';
+  }
+}
 
 /**
  * OpenAI Adapter - Domain-level adapter using the three-layer architecture.
@@ -58,18 +68,16 @@ export class OpenAIAdapter extends AIAdapter<OpenAINodeConnectorBus, OpenAINodeC
    * Normalizes responses from various providers (OpenAI, NanoGPT, Z.AI, Kimi, etc.)
    * to a consistent AIModel[] format.
    * @param baseUrl - Optional base URL for the provider (defaults to OpenAI)
-   * @param credentials - Optional credentials object with apiKey
+   * @param auth - Final normalized auth delivery compiled by the trusted host
    * @returns Array of normalized model objects
    * @throws Error if the API request fails
    */
-  public async fetchModels(baseUrl?: string, credentials?: Record<string, string>): Promise<DiscoveredAIModel[]> {
+  public async fetchModels(baseUrl: string | undefined, auth: ResolvedAdapterAuth): Promise<DiscoveredAIModel[]> {
     const apiUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/models` : 'https://api.openai.com/v1/models';
-    const apiKey = credentials?.apiKey;
+    const { apiKey } = resolveOpenAIConstructorAuth(auth);
 
-    if (!apiKey) {
-      throw new Error(
-        'API key required for fetching models. Provide via provider configuration, credential storage, or the OPENAI_API_KEY environment variable.',
-      );
+    if (apiKey === null) {
+      throw new OpenAIModelFetchAuthError();
     }
 
     const controller = new AbortController();

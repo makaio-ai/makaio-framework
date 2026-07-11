@@ -57,8 +57,8 @@ export interface AdapterInfo {
   }>;
   /** Setup instructions in Markdown format. */
   instructions?: string;
-  /** Readiness signal describing required configuration work, if any. */
-  readiness?: 'ready' | 'missing-credentials' | 'needs-setup';
+  /** Readiness signal describing required configuration work. */
+  readiness: 'ready' | 'needs-setup';
   /** Stable client identifier this adapter belongs to. */
   clientId?: string;
   /** Wire protocol this adapter speaks (for provider matching). */

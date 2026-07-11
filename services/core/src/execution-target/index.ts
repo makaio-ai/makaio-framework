@@ -18,12 +18,21 @@ export type {
 } from './schemas.js';
 export { ExecutionTargetNamespace, ExecutionTargetSubjects } from './namespace.js';
 export {
+  CONTAINER_BOOTSTRAP_PRIVATE_ENV_VARS,
+  CredentialFreeGitRemoteSchema,
+  CredentialFreeRelayUrlSchema,
+  ContainerAdapterAuthEnvelopeSchema,
+  ContainerAdapterAuthSelectorSchema,
   ContainerBootstrapConfigSchema,
+  ContainerBootstrapSpawnRequestSchema,
+  ContainerConnectorAuthDeliverySchema,
+  ContainerConnectorAuthValueSchema,
   ContainerCreatedSchema,
   ContainerDestroyedSchema,
   ContainerIsolatedSpawnRequestSchema,
   ContainerLocalSpawnRequestSchema,
   ContainerRuntimeSchema,
+  ContainerSessionRuntimeBindingSchema,
   ContainerStartedSchema,
   ContainerStateSchema,
   ContainerStoppedSchema,
@@ -35,12 +44,18 @@ export {
   StopResponseSchema,
 } from './container-schemas.js';
 export type {
+  ContainerAdapterAuthEnvelope,
+  ContainerAdapterAuthSelector,
   ContainerBootstrapConfig,
+  ContainerBootstrapSpawnRequest,
+  ContainerConnectorAuthDelivery,
+  ContainerConnectorAuthValue,
   ContainerCreated,
   ContainerDestroyed,
   ContainerIsolatedSpawnRequest,
   ContainerLocalSpawnRequest,
   ContainerRuntime,
+  ContainerSessionRuntimeBinding,
   ContainerStarted,
   ContainerState,
   ContainerStopped,
@@ -51,5 +66,5 @@ export type {
   StopRequest,
   StopResponse,
 } from './container-schemas.js';
-export { DockerNamespace, DockerSubjects } from './container-namespace.js';
+export { CONTAINER_BOOTSTRAP_CHANNEL_ENDPOINT, DockerNamespace, DockerSubjects } from './container-namespace.js';
 export { ContainerSpawnNamespace, ContainerSpawnSubjects } from './container-spawn-namespace.js';

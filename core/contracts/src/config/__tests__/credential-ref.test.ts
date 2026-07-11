@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  CredentialRefSchema,
-  buildAccountManagerCredentialRef,
-  buildStoredCredentialRef,
-  isAccountManagerRef,
-  parseStoredCredentialRef,
-} from '../credential-ref.js';
+import { CredentialRefSchema, buildStoredCredentialRef, parseStoredCredentialRef } from '../credential-ref.js';
 
 describe('stored credential refs', () => {
   it('round-trips configId/key', () => {
@@ -36,7 +30,6 @@ describe('stored credential refs', () => {
   it('accepts the supported non-stored credential-ref formats', () => {
     expect(CredentialRefSchema.safeParse('file:/tmp/secret.txt').success).toBe(true);
     expect(CredentialRefSchema.safeParse('keychain:makaio:work-account').success).toBe(true);
-    expect(CredentialRefSchema.safeParse('account-manager:["claude-code","account-123"]').success).toBe(true);
   });
 
   it('rejects cleartext strings and malformed refs', () => {
@@ -45,16 +38,6 @@ describe('stored credential refs', () => {
     expect(CredentialRefSchema.safeParse('stored:providerConfig:config-only').success).toBe(false);
     expect(CredentialRefSchema.safeParse('account-manager:missing-account').success).toBe(false);
     expect(CredentialRefSchema.safeParse('account-manager:["missing-account"]').success).toBe(false);
-  });
-});
-
-describe('account-manager credential refs', () => {
-  it('preserves opaque client/account ids', () => {
-    const ref = buildAccountManagerCredentialRef('claude:desktop', 'account:tenant-1');
-    expect(ref).toBe('account-manager:["claude:desktop","account:tenant-1"]');
-  });
-
-  it('recognizes the JSON-tuple ref shape as account-manager owned', () => {
-    expect(isAccountManagerRef('account-manager:["claude-code","account-123"]')).toBe(true);
+    expect(CredentialRefSchema.safeParse('account-manager:["claude-code","account-123"]').success).toBe(false);
   });
 });

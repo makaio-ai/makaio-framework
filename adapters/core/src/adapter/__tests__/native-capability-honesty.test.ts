@@ -8,7 +8,12 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, type NativeForkDirective, type SessionContext } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  type NativeForkDirective,
+  type ProviderContext,
+  type SessionContext,
+} from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import type { ConformanceTestConfig } from '../../types/conformance-test-config.js';
 import type { AgentCreationOptions } from '../types.js';
@@ -22,6 +27,17 @@ const approvedNativeFork: NativeForkDirective = {
   forkPointMessageId: 'approved-message-checkpoint',
   targetWorkingDirectory: '/approved-workspace',
 };
+
+const NO_AUTH_PROVIDER_CONTEXT = {
+  state: 'resolved',
+  providerConfigId: 'provider-config',
+  definitionId: 'provider',
+  auth: {
+    mode: 'none',
+    method: { owner: 'provider', providerDefinitionId: 'provider', methodId: 'none' },
+    definition: { id: 'none', mode: 'none', label: 'No authentication' },
+  },
+} satisfies ProviderContext;
 
 /**
  * Build a fork-mode request with raw fork fields that intentionally differ from
@@ -223,7 +239,7 @@ describe('AIAdapter.createAgent forwards fork directive from startAgent fork mod
       },
       model: 'test-model',
       cwd: os.tmpdir(),
-      providerContext: { providerConfigId: 'provider-config', definitionId: 'provider', credentialRefs: {} },
+      providerContext: NO_AUTH_PROVIDER_CONTEXT,
     });
 
     expect(forkResult.success).toBe(true);

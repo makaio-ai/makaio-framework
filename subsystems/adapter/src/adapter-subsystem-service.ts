@@ -10,10 +10,14 @@ import { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
 import { AdapterProviderConfigService } from './adapter-provider-config-service.js';
 import { AdapterBindingService } from './adapter-binding-service.js';
 import { AdapterContributionProcessor } from './adapter-contribution-processor.js';
+import { buildCompatibleAuthOptions } from './compatible-auth-options.js';
 import { AdapterSubsystemSubjects } from './namespace.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 import type { LoadedAdapter, AdapterInstance } from './adapter-runtime-types.js';
 import { registerProviderStorageFallbackHandlers } from './provider-storage-fallback.js';
+import { registerClientStorageFallbackHandlers } from './client-storage-fallback.js';
+import { resolveAdapterRuntimeSnapshot } from './adapter-runtime-snapshot.js';
+import { ProviderRuntimeContextError } from './provider-runtime-view.js';
 
 /**
  * Constructor options for {@link AdapterSubsystemService}.
@@ -43,6 +47,8 @@ export interface AdapterSubsystemServiceOptions {
    * Platform-provided defaults forwarded to adapter factories.
    */
   readonly platformDefaults: PlatformDefaults;
+  /** Trusted host-layer auth preparer forwarded opaquely to adapter factories. */
+  readonly prepareAuthRuntime?: unknown;
 }
 
 /**
@@ -105,6 +111,7 @@ export class AdapterSubsystemService extends BaseService {
       coordinator: options.coordinator,
       machineId: options.machineId,
       platformDefaults: options.platformDefaults,
+      ...(options.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
     });
   }
 
@@ -125,11 +132,17 @@ export class AdapterSubsystemService extends BaseService {
 
   private registerBusHandlers(): void {
     this.addCleanup(registerProviderStorageFallbackHandlers(this.bus, () => this.registry.getLoadedAdapters()));
+    this.addCleanup(registerClientStorageFallbackHandlers(this.bus, () => this.registry.getLoadedAdapters()));
     this.registerReadHandlers();
     this.registerMutationHandlers();
   }
 
   private registerReadHandlers(): void {
+    this.registerConfigReadHandlers();
+    this.registerRuntimeReadHandlers();
+  }
+
+  private registerConfigReadHandlers(): void {
     this.registerHandler(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: this.configStore.getAdapterConfig(ctx.payload.name) });
     });
@@ -159,8 +172,36 @@ export class AdapterSubsystemService extends BaseService {
         config: this.configStore.findConfigForDefinitionAndAdapter(ctx.payload.definitionId, ctx.payload.adapterName),
       });
     });
-    this.registerHandler(AdapterSubsystemSubjects.buildProviderContext, async (ctx) => {
-      ctx.setResult({ context: await this.configStore.buildProviderContext(ctx.payload.providerConfigId) });
+  }
+
+  private registerRuntimeReadHandlers(): void {
+    this.registerHandler(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, async (ctx) => {
+      ctx.setResult({
+        snapshot: await this.configStore.resolveProviderRuntimeSnapshot(ctx.payload.providerConfigId),
+      });
+    });
+    this.registerHandler(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, async (ctx) => {
+      const adapter = this.registry.getLoadedAdapters().find((entry) => entry.name === ctx.payload.adapterName);
+      try {
+        const captured = await this.configStore.resolveBoundProviderRuntimeSnapshot(
+          ctx.payload.adapterName,
+          ctx.payload.providerConfigId,
+        );
+        ctx.setResult(
+          await resolveAdapterRuntimeSnapshot({
+            bus: this.bus,
+            adapter,
+            snapshot: captured.snapshot,
+            isBound: captured.isBound,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof ProviderRuntimeContextError && error.code === 'provider-config-disabled') {
+          ctx.setResult({ status: 'error', code: 'provider-config-disabled' });
+          return;
+        }
+        throw error;
+      }
     });
     this.registerHandler(AdapterSubsystemSubjects.listAdapters, async (ctx) => {
       ctx.setResult({ adapters: await this.configStore.buildEffectiveAdapters() });
@@ -183,6 +224,15 @@ export class AdapterSubsystemService extends BaseService {
       });
       ctx.setResult({ definitions });
     });
+    this.registerHandler(AdapterSubsystemSubjects.listCompatibleAuthOptions, async (ctx) => {
+      ctx.setResult({
+        options: await buildCompatibleAuthOptions(
+          this.bus,
+          this.registry.getLoadedAdapters(),
+          ctx.payload.definitionId,
+        ),
+      });
+    });
     this.registerHandler(AdapterSubsystemSubjects.ensureReady, (ctx) => {
       ctx.setResult({ ready: true });
     });
@@ -195,10 +245,8 @@ export class AdapterSubsystemService extends BaseService {
     this.registerHandler(AdapterSubsystemSubjects.updateProviderConfig, async (ctx) => {
       ctx.setResult(await this.providerConfigService.updateProviderConfig(ctx.payload.id, ctx.payload.patch));
     });
-    this.registerHandler(AdapterSubsystemSubjects.setProviderConfigCredentialRefs, async (ctx) => {
-      ctx.setResult(
-        await this.providerConfigService.setProviderConfigCredentialRefs(ctx.payload.id, ctx.payload.credentialRefs),
-      );
+    this.registerHandler(AdapterSubsystemSubjects.setProviderConfigAuth, async (ctx) => {
+      ctx.setResult(await this.providerConfigService.setProviderConfigAuth(ctx.payload.id, ctx.payload.auth));
     });
     this.registerHandler(AdapterSubsystemSubjects.deleteProviderConfig, async (ctx) => {
       ctx.setResult(await this.providerConfigService.deleteProviderConfig(ctx.payload.id));

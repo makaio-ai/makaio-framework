@@ -4171,6 +4171,7 @@ __metadata:
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
+    "@makaio/client-codex": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/subprocess": "workspace:*"
     "@makaio/subsystem-client": "workspace:*"
@@ -4396,6 +4397,7 @@ __metadata:
   dependencies:
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
     "@makaio/contracts": "workspace:*"
   languageName: unknown
@@ -4609,6 +4611,8 @@ __metadata:
     "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
+    "@types/proper-lockfile": "npm:^4.1.4"
+    proper-lockfile: "npm:^4.1.2"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.7"
@@ -4618,7 +4622,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/client-codex@workspace:clients/codex":
+"@makaio/client-codex@workspace:*, @makaio/client-codex@workspace:clients/codex":
   version: 0.0.0-use.local
   resolution: "@makaio/client-codex@workspace:clients/codex"
   dependencies:
@@ -4628,6 +4632,10 @@ __metadata:
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
     "@makaio/subsystem-client": "workspace:*"
+    "@napi-rs/keyring": "npm:^1.2.0"
+    "@types/proper-lockfile": "npm:^4.1.4"
+    proper-lockfile: "npm:^4.1.2"
+    smol-toml: "npm:^1.3.0"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     zod: "npm:4.4.3"
@@ -4825,6 +4833,7 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
+    "@makaio/client-codex": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/runtime-node": "workspace:*"
@@ -6665,7 +6674,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/keyring@npm:^1.0.0":
+"@napi-rs/keyring@npm:^1.0.0, @napi-rs/keyring@npm:^1.2.0":
   version: 1.3.0
   resolution: "@napi-rs/keyring@npm:1.3.0"
   dependencies:
@@ -10469,6 +10478,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/proper-lockfile@npm:^4.1.4":
+  version: 4.1.4
+  resolution: "@types/proper-lockfile@npm:4.1.4"
+  dependencies:
+    "@types/retry": "npm:*"
+  checksum: 10c0/d597846d6f7860da2470623d3f11b6e5b39864719c3c18b5a5e55f783c5e432fe49dcdcf6341b3903428fdf103f2bdc68eba263ce1ce3cbe8070cbcb54bbf230
+  languageName: node
+  linkType: hard
+
 "@types/react-dom@npm:^19.0.0":
   version: 19.2.3
   resolution: "@types/react-dom@npm:19.2.3"
@@ -10523,6 +10541,13 @@ __metadata:
   dependencies:
     "@types/node": "npm:*"
   checksum: 10c0/a58ba341cb9e7d74f71810a88862da7b2a6fa42e2a1fc0ce40498f6ea1d44382f0640117057da779f74c47039f7166bf48fad02dc876f94e005c7afa50f5e129
+  languageName: node
+  linkType: hard
+
+"@types/retry@npm:*":
+  version: 0.12.5
+  resolution: "@types/retry@npm:0.12.5"
+  checksum: 10c0/eaaca483cc62f2f02c0b8486847ee70986ca7f97afd7363037247dbe3e98df8bd56a5b50d58b1e96768a5a1be0307010d86e9991bd458d72e8df88be471bd720
   languageName: node
   linkType: hard
 

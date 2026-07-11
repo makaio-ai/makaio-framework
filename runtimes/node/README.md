@@ -89,6 +89,32 @@ export default defineMakaioConfig({
 | `MAKAIO_MODE` | ConfigProvider mode input; current Node boot still passes a local-mode host override |
 | `MAKAIO_RELAY_URL` | Relay endpoint override exposed through effective runtime config without being persisted by `ConfigSubjects.update` |
 
+### Normalized Provider Authentication
+
+A provider config selects one declared `explicit`, `inferred`, or `none` auth
+method. Runtime provider assembly validates that selection against the current
+provider/client definitions and the selected adapter binding before a connector
+starts.
+
+Explicit methods carry field-keyed credential refs. `env:`, `file:`,
+`keychain:`, and `stored:providerConfig:` identify sources only; they never
+select a method implicitly or prescribe delivery. Adapter Core resolves those
+refs once over the local credential boundary, scrubs every competing source and
+sink, and applies only the selected subprocess or connector delivery. A method
+may contain multiple fields and each field may have a different source.
+
+Inferred methods use persisted native client state through a connector-owned
+`auth-only` config lease. They do not inspect provider environment variables.
+The client must report that native auth was materialized or startup fails.
+`auth.account` selects an exact native account, while `managedBy` independently
+controls provider-config lifecycle ownership. An unauthenticated provider must
+select a declared `none` method.
+
+Live model discovery follows the same rule: callers provide a provider-config
+ID, the runtime builds one atomic normalized snapshot, and the adapter receives
+only its resolved auth delivery. Static model-registry generation never reads
+provider credentials.
+
 ### Database Backend
 
 SQLite is the default backend; a Postgres URL opts into PostgreSQL. The
@@ -155,8 +181,8 @@ regular dependency of `@makaio/storage-pg`).
 | `loadOrCreateMachineIdentity` | Load or generate persisted ECDH/ECDSA P-256 machine identity keys |
 | `machineKeysExist` | Check whether machine keys are present on disk |
 | `validateMachineKeys` | Validate an existing machine key set |
-| `NodeCredentialProvider` | Resolve `env:`, `file:`, and `keychain:` credential refs |
-| `StoredCredentialProvider` | Resolve `account-manager:` refs via the credential bus service |
+| `NodeCredentialProvider` | Resolve explicitly selected `env:`, `file:`, and `keychain:` credential refs |
+| `StoredCredentialProvider` | Resolve `stored:providerConfig:` refs through the encrypted credential channel and delegate other refs to `NodeCredentialProvider` |
 
 ### HTTP Utilities
 

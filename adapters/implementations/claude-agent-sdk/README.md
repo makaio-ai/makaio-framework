@@ -169,7 +169,6 @@ src/
 ├── definition.ts                  # Internal adapter definition
 ├── package.ts                     # MakaioExtension package descriptor
 ├── provider.ts                    # Provider registration
-├── provider.fetcher.ts            # Model fetcher
 ├── server.ts                      # Server entrypoint exporting the package descriptor
 ├── schemas.ts                     # Provider config schemas
 ├── mcp-integration.ts             # MCP tool integration

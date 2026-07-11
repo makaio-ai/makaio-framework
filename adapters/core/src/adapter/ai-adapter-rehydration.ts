@@ -14,9 +14,14 @@ import type { McpSessionContext, MakaioSessionAgent, NativeLocalityVerdict } fro
 import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import { AdapterSubjects, McpSubjects, SessionSubjects } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
-import { buildProviderContext } from '@makaio/services-core/provider-context';
-import { createSentinelProviderContext } from '../utils/index.js';
+import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
 import { restoreAgentUsageFromTurns } from './restore-agent-usage.js';
+import {
+  commitAdapterProviderContextActivation,
+  prepareAdapterProviderContextActivation,
+  rollbackAdapterProviderContextActivationAfterFailure,
+  type ProviderContextActivationLifecycle,
+} from './provider-context-activation-lifecycle.js';
 
 type RehydrateAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubjects.rehydrateAgent>;
 type RehydrateAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.rehydrateAgent>;
@@ -119,6 +124,9 @@ export class AgentRehydrationManager<
       }
       await this.rehydrateFromStorage(agentId, { adapterSessionId, rpcResumeId, cwd, model });
     })().catch((error) => {
+      if (error instanceof AggregateError) {
+        throw new AggregateError(error.errors, `Failed to recover agent ${agentId}: ${error.message}`);
+      }
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to recover agent ${agentId}: ${message}`);
     });
@@ -166,7 +174,10 @@ export class AgentRehydrationManager<
     const mcpSessionContext = await this.resolveMcpSessionContext(persisted.sessionId, persisted.profileId);
     const providerContext =
       persisted.providerConfigId !== undefined
-        ? await buildProviderContext(this.globalBus, persisted.providerConfigId).catch(createSentinelProviderContext)
+        ? await resolveRuntimeProviderContext(this.globalBus, {
+            adapterName: persisted.adapterName,
+            providerConfigId: persisted.providerConfigId,
+          })
         : undefined;
     // Determine whether to native-resume the provider session.
     //
@@ -197,23 +208,16 @@ export class AgentRehydrationManager<
       ...(mcpSessionContext !== undefined && { mcpSessionContext }),
     };
 
-    const newAgent = await this.claimAndCreateAgent(agentId, persisted, agentCreationRequest, effectiveResumeId);
-
-    if (cwd !== undefined || model !== undefined) {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId, cwd, model });
-    }
-    // Prefer the live connector session id. Persisted values can be stale after restart/swap.
-    const recoveredAdapterSessionId = (await newAgent.getAdapterSessionId()) || persisted.adapterSessionId;
-    if (!recoveredAdapterSessionId) {
-      if (effectiveResumeId !== undefined) {
-        this.registry.releaseAdapterSessionClaim(effectiveResumeId);
-      }
-      throw new Error(`Recovered agent ${agentId} has no adapterSessionId`);
-    }
     // Restore cumulative usage baseline from persisted turn history.
     // Without this, the adapter's in-memory totals would restart from zero
     // after every process restart, making session-level usage unreliable.
     const restoredUsage = await restoreAgentUsageFromTurns(this.globalBus, persisted.sessionId, agentId);
+    const { agent: newAgent, adapterSessionId: recoveredAdapterSessionId } = await this.claimAndCreateAgent(
+      agentId,
+      persisted,
+      agentCreationRequest,
+      effectiveResumeId,
+    );
 
     // registry.set() auto-clears the pending claim for effectiveResumeId.
     this.registry.set(agentId, {
@@ -222,6 +226,9 @@ export class AgentRehydrationManager<
       adapterSessionId: recoveredAdapterSessionId,
       usage: restoredUsage,
     });
+    if (cwd !== undefined || model !== undefined) {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId, cwd, model });
+    }
     await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
   }
 
@@ -244,14 +251,14 @@ export class AgentRehydrationManager<
    * @param persisted - Persisted agent record
    * @param creationRequest - Agent creation options (includes resumeAdapterSessionId when resuming)
    * @param effectiveResumeId - Provider session being claimed, or `undefined` for fresh-start
-   * @returns Newly created and initialized agent
+   * @returns Newly created ready agent and its provider-confirmed session ID
    */
   private async claimAndCreateAgent(
     agentId: string,
     persisted: MakaioSessionAgent,
     creationRequest: AgentCreationOptions,
     effectiveResumeId: string | undefined,
-  ): Promise<TAgent> {
+  ): Promise<{ agent: TAgent; adapterSessionId: string }> {
     if (effectiveResumeId !== undefined) {
       const claimed = this.registry.claimAdapterSession(effectiveResumeId);
       if (!claimed) {
@@ -261,8 +268,14 @@ export class AgentRehydrationManager<
       }
     }
 
+    let activation: ProviderContextActivationLifecycle | undefined;
+    let newAgent: TAgent | undefined;
     try {
-      const newAgent = await this.createAgentFn(agentId, persisted.sessionId, creationRequest);
+      activation = await prepareAdapterProviderContextActivation(
+        this.globalBus,
+        creationRequest.providerContext ?? { state: 'unresolved' },
+      );
+      newAgent = await this.createAgentFn(agentId, persisted.sessionId, creationRequest);
       // Re-resolve the system prompt via the host-tier RPC so the rehydrated
       // agent retains its identity after a process restart. Resolution is
       // best-effort: if the host handler is unavailable the agent still
@@ -273,12 +286,32 @@ export class AgentRehydrationManager<
         persisted.profileId,
       );
       await newAgent.initialize({ ...(systemPrompt !== undefined && { systemPrompt }) });
-      return newAgent;
-    } catch (error) {
-      if (effectiveResumeId !== undefined) {
-        this.registry.releaseAdapterSessionClaim(effectiveResumeId);
+      // Prefer the live connector session ID. Persisted values can be stale
+      // after restart or connector replacement.
+      const recoveredAdapterSessionId = (await newAgent.getAdapterSessionId()) || persisted.adapterSessionId;
+      if (!recoveredAdapterSessionId) {
+        throw new Error(`Recovered agent ${agentId} has no adapterSessionId`);
       }
-      throw error;
+      await commitAdapterProviderContextActivation(activation);
+      return { agent: newAgent, adapterSessionId: recoveredAdapterSessionId };
+    } catch (error) {
+      try {
+        if (activation === undefined) throw error;
+        const failedAgent = newAgent;
+        return await rollbackAdapterProviderContextActivationAfterFailure({
+          activation,
+          primaryError: error,
+          ...(failedAgent !== undefined && {
+            cleanup: () => failedAgent.close({ emitSessionClosed: false }),
+          }),
+          operation: `Cold rehydrate for agent ${agentId}`,
+          cleanupFailureMessage: `Cold rehydrate and connector cleanup both failed for agent ${agentId}.`,
+        });
+      } finally {
+        if (effectiveResumeId !== undefined) {
+          this.registry.releaseAdapterSessionClaim(effectiveResumeId);
+        }
+      }
     }
   }
 

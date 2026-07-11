@@ -5,8 +5,12 @@ import { ProviderConfigFileSchema } from '../provider-config-file.js';
 describe('ProviderConfigFileSchema', () => {
   it('accepts a minimal provider config file', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: 'anthropic',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
     });
 
     expect(result.success).toBe(true);
@@ -14,10 +18,15 @@ describe('ProviderConfigFileSchema', () => {
 
   it('accepts a full provider config file', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: 'anthropic',
       name: 'Anthropic Work',
-      credentials: { apiKey: 'env:ANTHROPIC_API_KEY' },
+      auth: {
+        mode: 'explicit',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: { apiKey: 'env:ANTHROPIC_API_KEY' },
+      },
+      managedBy: { kind: 'client', clientId: 'claude-code' },
       endpointOverrides: { anthropic: 'https://custom.api.com' },
       modelFilterMode: 'allowlist',
       modelVisibility: { 'claude-sonnet-4-6': 'enabled' },
@@ -42,8 +51,12 @@ describe('ProviderConfigFileSchema', () => {
 
   it('rejects blank provider config names', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: 'anthropic',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
       name: '   ',
     });
 
@@ -52,28 +65,40 @@ describe('ProviderConfigFileSchema', () => {
 
   it('rejects blank provider definition ids', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: '   ',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
     });
 
     expect(result.success).toBe(false);
   });
 
-  it('rejects cleartext credential strings on read', () => {
+  it('rejects cleartext credential strings inside explicit auth', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: 'anthropic',
-      credentials: { apiKey: 'fake-api-key-for-test' },
+      auth: {
+        mode: 'explicit',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: { apiKey: 'fake-api-key-for-test' },
+      },
     });
 
     expect(result.success).toBe(false);
   });
 
-  it('accepts stored credential refs on read', () => {
+  it('accepts stored credential refs inside explicit auth', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: 'anthropic',
-      credentials: { apiKey: 'stored:providerConfig:anthropic-work:apiKey' },
+      auth: {
+        mode: 'explicit',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
+        credentialRefs: { apiKey: 'stored:providerConfig:anthropic-work:apiKey' },
+      },
     });
 
     expect(result.success).toBe(true);
@@ -81,8 +106,12 @@ describe('ProviderConfigFileSchema', () => {
 
   it('rejects extra top-level provider config fields instead of stripping them', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: 'anthropic',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
       typo: 'should-fail',
     });
 
@@ -91,8 +120,12 @@ describe('ProviderConfigFileSchema', () => {
 
   it('rejects unknown endpoint override keys instead of stripping them', () => {
     const result = ProviderConfigFileSchema.safeParse({
-      $schema: 'makaio/provider-config/v1',
+      $schema: 'makaio/provider-config/v2',
       definitionId: 'anthropic',
+      auth: {
+        mode: 'none',
+        method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+      },
       endpointOverrides: {
         anthropic: 'https://custom.api.com',
         typo: 'https://should-fail.example.com',
@@ -100,6 +133,37 @@ describe('ProviderConfigFileSchema', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('requires auth and rejects legacy credentials and sentinel fields', () => {
+    expect(
+      ProviderConfigFileSchema.safeParse({
+        $schema: 'makaio/provider-config/v2',
+        definitionId: 'anthropic',
+      }).success,
+    ).toBe(false);
+    expect(
+      ProviderConfigFileSchema.safeParse({
+        $schema: 'makaio/provider-config/v2',
+        definitionId: 'anthropic',
+        auth: {
+          mode: 'none',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+        },
+        credentials: {},
+      }).success,
+    ).toBe(false);
+    expect(
+      ProviderConfigFileSchema.safeParse({
+        $schema: 'makaio/provider-config/v2',
+        definitionId: 'anthropic',
+        auth: {
+          mode: 'none',
+          method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'none' },
+        },
+        isSentinel: false,
+      }).success,
+    ).toBe(false);
   });
 });
 

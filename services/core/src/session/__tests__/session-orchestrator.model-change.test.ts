@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, type MakaioSessionAgent, type ProviderContext } from '@makaio/contracts';
+import {
+  AgentSubjects,
+  defineAdapterProviderAuth,
+  type MakaioSessionAgent,
+  type ResolvedProviderContext,
+} from '@makaio/contracts';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { ensureAgentModel } from '../session-orchestrator-helpers.js';
@@ -8,11 +13,16 @@ import { createMockAgent, resetBusHandlers, type UnsubscribeFunction } from '../
 
 type ModelChangePayload = ExtractSubjectPayload<typeof AgentSubjects.model.change>;
 
-/** Shared ProviderContext fields returned by buildProviderContext for the test stubs. */
+/** Shared normalized provider context returned by the atomic runtime fixture. */
 const EXPECTED_PROVIDER_CONTEXT_BASE = {
+  state: 'resolved' as const,
   definitionId: 'anthropic',
-  credentialRefs: {},
-} satisfies Partial<ProviderContext>;
+  auth: {
+    mode: 'none' as const,
+    method: { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'none' },
+    definition: { id: 'none', mode: 'none' as const, label: 'No authentication' },
+  },
+} satisfies Partial<ResolvedProviderContext>;
 
 describe('ensureAgentModel', () => {
   let unsubscribers: UnsubscribeFunction[];
@@ -21,25 +31,46 @@ describe('ensureAgentModel', () => {
     resetBusHandlers();
     unsubscribers = [];
     unsubscribers.push(
-      MakaioBus.on(AdapterSubsystemSubjects.getProviderConfig, (ctx) => {
+      MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+        const providerConfigId = ctx.payload.providerConfigId;
+        const method = { owner: 'provider' as const, providerDefinitionId: 'anthropic', methodId: 'none' };
+        const methodDefinition = { id: 'none', mode: 'none' as const, label: 'No authentication' };
         ctx.setResult({
-          config: {
-            id: ctx.payload.id,
-            definitionId: EXPECTED_PROVIDER_CONTEXT_BASE.definitionId,
-            name: 'Provider Config',
-            hasCredentials: false,
-            isDefault: true,
-            enabled: true,
-            isSentinel: false,
-            modelFilterMode: 'show-all',
-          },
-        });
-      }),
-      MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
-        ctx.setResult({
-          context: {
-            providerConfigId: ctx.payload.providerConfigId,
-            ...EXPECTED_PROVIDER_CONTEXT_BASE,
+          status: 'resolved',
+          runtime: {
+            snapshot: {
+              config: {
+                id: providerConfigId,
+                definitionId: 'anthropic',
+                name: 'Provider Config',
+                auth: { mode: 'none', method, hasCredentials: false },
+                isDefault: true,
+                enabled: true,
+                modelFilterMode: 'show-all',
+              },
+              context: { ...EXPECTED_PROVIDER_CONTEXT_BASE, providerConfigId },
+              definition: {
+                id: 'anthropic',
+                packageName: '@makaio/provider-anthropic',
+                name: 'Anthropic',
+                availableModels: [],
+                authMethods: [methodDefinition],
+                defaultModelFilterMode: 'show-all',
+                enabled: true,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            },
+            adapterName: ctx.payload.adapterName,
+            adapterProviderAuth: defineAdapterProviderAuth({
+              bindings: [{ method, deliveries: [{ kind: 'none' }] }],
+              scrubEnvVars: [],
+            }),
+            compatibleProviderAuths: [],
+            runtimePackages: {
+              adapter: { packageName: '@makaio/adapter-test' },
+              provider: { packageName: '@makaio/provider-anthropic', definitionId: 'anthropic' },
+            },
           },
         });
       }),

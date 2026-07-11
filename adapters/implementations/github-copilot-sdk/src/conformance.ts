@@ -1,5 +1,10 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
-import { resolveConformanceTestPreset, resolveTestConfig } from '@makaio/ai-adapters-core';
+import {
+  ConformanceConnectorRuntimeRegistry,
+  resolveConformanceTestPreset,
+  resolveTestConfig,
+} from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
 import { createGitHubCopilotSDKAdapter, GitHubCopilotSdkAdapterName } from './adapter.js';
 import { GitHubCopilotConnector } from './connector.js';
 import { GitHubCopilotConnectorNamespace } from './namespaces/index.js';
@@ -8,6 +13,7 @@ import type { GitHubCopilotAgent } from './agent.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { GitHubCopilotConfig } from './config.js';
 import { providerIds, testPresetId } from './provider.js';
+import { adapterDefinition } from './definition.js';
 
 /**
  * Creates test configuration for conformance testing.
@@ -22,20 +28,28 @@ export const createTestConfig = async (
   const bus = await GitHubCopilotConnectorNamespace.scopedBus();
   const testPreset = resolveConformanceTestPreset({
     adapterName: GitHubCopilotSdkAdapterName,
-    defaultProviderId: testPresetId,
+    testProviderDefinitionId: testPresetId,
     providerIds,
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<
+    GitHubCopilotConnectorBus,
+    GitHubCopilotConnector
+  >();
 
   return {
-    createConnector: async (options) =>
-      new GitHubCopilotConnector(
-        await GitHubCopilotConfig.getConfig({
-          ...resolveTestConfig(options, bus, testPreset.provider, testPreset.providers),
-          model: testPreset.primaryModel.modelName,
-        }),
-      ),
+    createConnector: async (options) => {
+      const config = await GitHubCopilotConfig.getConfig({
+        ...resolveTestConfig(options, bus, testPreset.provider, adapterDefinition.providers),
+        globalBus: MakaioBus,
+        model: testPreset.primaryModel.modelName,
+      });
+      return connectorRuntimes.create({
+        config,
+        connectorFactory: (runtimeConfig) => new GitHubCopilotConnector(runtimeConfig),
+      });
+    },
     bus,
     registerToolApprovalHandler,
     capabilities: {
@@ -52,5 +66,6 @@ export const createTestConfig = async (
     createAdapter: async (options) => createGitHubCopilotSDKAdapter(options),
     adapterName: GitHubCopilotSdkAdapterName,
     testProviderContext: testPreset.providerContext,
+    cleanup: () => connectorRuntimes.closeAll(),
   };
 };

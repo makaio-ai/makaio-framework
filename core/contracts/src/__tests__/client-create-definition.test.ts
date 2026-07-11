@@ -7,6 +7,7 @@ describe('createClientDefinition', () => {
       id: 'codex',
       name: 'Codex',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'full-access',
       nativeTools: [
         {
@@ -35,6 +36,7 @@ describe('createClientDefinition', () => {
       id: 'claude-code',
       name: 'Claude Code',
       version: '0.1.0',
+      authMethods: [],
       defaultApprovalPolicy: 'always-ask',
     });
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
+import { CredentialFreeGitRemoteSchema, CredentialFreeRelayUrlSchema } from './container-schemas.js';
 
 // ── Shared base (embedded into each variant, not used standalone) ──
 
@@ -52,7 +53,7 @@ export const ContainerIsolatedExecutionTargetSchema = ExecutionTargetBaseSchema.
    */
   busMode: z.enum(['host', 'relay']),
   /** Relay URL override for 'relay' mode. */
-  relayUrl: z.string().optional(),
+  relayUrl: CredentialFreeRelayUrlSchema.optional(),
   /**
    * Git credential mode for cloning inside the container.
    * - 'token': inject GITHUB_TOKEN (or equivalent) as env var
@@ -60,7 +61,7 @@ export const ContainerIsolatedExecutionTargetSchema = ExecutionTargetBaseSchema.
    */
   gitCredentialMode: z.enum(['token', 'ssh-agent']).default('token'),
   /** Git remote URL to clone. Defaults to origin of current project repo. */
-  repoUrl: z.string().optional(),
+  repoUrl: CredentialFreeGitRemoteSchema.optional(),
 });
 
 // ── Discriminated union ──

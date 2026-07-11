@@ -8,8 +8,8 @@
  * Coverage:
  * - managed resolution: active managed version → returns binaryPath, env,
  *   configDir, source:'managed', version
- * - global fallback: no active managed version → falls back to scan → returns
- *   binaryPath:null, empty env, configDir from defaultPath, source:'global'
+ * - global fallback: no active managed version → falls back to scan → preserves
+ *   the discovered path when available, with empty env and source:'global'
  * - no configIsolation: managed binary without configIsolation → empty env,
  *   null configDir
  * - not found: scan returns found:false → throws
@@ -30,6 +30,7 @@ import { registerDrizzleClientBinaryStorage } from '../storage/client-binary-dri
 import { ClientBinaryManager } from '../client-binary-manager.js';
 import { ClientBinaryStorageSubjects } from '../storage/client-binary-storage-namespace.js';
 import type { ClientDefinitionLookup } from '../client-binary-manager-types.js';
+import type { ClientBinaryResolutionPolicy } from '../client-binary-manager-types.js';
 import type { StrategyDependencies } from '../binary-strategies/index.js';
 import { createNoopStrategyDeps } from '../client-binary-noop-strategy-deps.js';
 import { CLIENT_BINARY_DDL } from './test-ddl.js';
@@ -42,6 +43,7 @@ const BASE_DEFINITION_INPUT = {
   id: 'claude-code',
   name: 'Claude Code',
   version: '0.1.0',
+  authMethods: [],
   defaultApprovalPolicy: 'always-ask' as const,
   binary: { name: 'claude', supportedVersions: '>=0.0.0' },
   runtimeCapabilities: { supportsManagedBinary: true },
@@ -74,6 +76,7 @@ const DEFINITION_NO_VERSION_COMMAND = createClientDefinition({
   id: 'global-only',
   name: 'Global Only',
   version: '0.1.0',
+  authMethods: [],
   defaultApprovalPolicy: 'always-ask' as const,
   binary: { name: 'global-only', supportedVersions: '>=0.0.0' },
   runtimeCapabilities: {},
@@ -87,6 +90,7 @@ const DEFINITION_NO_BINARY_NAME = createClientDefinition({
   id: 'no-binary-name',
   name: 'No Binary Name',
   version: '0.1.0',
+  authMethods: [],
   defaultApprovalPolicy: 'always-ask' as const,
   runtimeCapabilities: {},
 });
@@ -146,10 +150,17 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     await fsp.rm(testConfigBasePath, { recursive: true, force: true });
   });
 
-  async function initManager(definitions: ReturnType<typeof createClientDefinition>[]): Promise<void> {
+  async function initManager(
+    definitions: ReturnType<typeof createClientDefinition>[],
+    resolutionPolicy?: ClientBinaryResolutionPolicy,
+  ): Promise<void> {
     manager = new ClientBinaryManager(
       bus,
-      { basePath: testBasePath, configBasePath: testConfigBasePath },
+      {
+        basePath: testBasePath,
+        configBasePath: testConfigBasePath,
+        ...(resolutionPolicy !== undefined && { resolutionPolicy }),
+      },
       makeDefinitionLookup(definitions),
       makeNoopDeps(),
     );
@@ -253,13 +264,21 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
 
   it('falls back to global scan when no active managed version exists', async () => {
     await initManager([DEFINITION_WITH_ISOLATION]);
+    const globalBinaryPath = path.resolve(testConfigBasePath, 'global-bin', 'claude');
 
     // Register a mock scan handler that simulates finding the binary globally
     const scanCleanup = bus.on(
       ClientSubjects.scan,
       (ctx) => {
         ctx.setResult({
-          results: [{ clientId: 'claude-code', found: true, version: '1.9.0' }],
+          results: [
+            {
+              clientId: 'claude-code',
+              found: true,
+              binaryPath: globalBinaryPath,
+              version: '1.9.0',
+            },
+          ],
         });
       },
       { priority: 100 },
@@ -271,10 +290,45 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
       const expectedConfigDir = path.join(os.homedir(), '.claude');
 
       expect(result.source).toBe('global');
-      expect(result.binaryPath).toBeNull();
+      expect(result.binaryPath).toBe(globalBinaryPath);
       expect(result.version).toBe('1.9.0');
       expect(result.configDir).toBe(expectedConfigDir);
       expect(result.env).toEqual({});
+    } finally {
+      scanCleanup();
+    }
+  });
+
+  it('global-only resolution ignores persisted managed paths from another filesystem', async () => {
+    await initManager([DEFINITION_WITH_ISOLATION], 'global-only');
+
+    const hostOnlyPath = path.join(testConfigBasePath, 'host-managed-only');
+    await seedActiveVersion('claude-code', '1.9.0', hostOnlyPath);
+    const scanCleanup = bus.on(
+      ClientSubjects.scan,
+      (ctx) => {
+        ctx.setResult({
+          results: [
+            {
+              clientId: 'claude-code',
+              found: true,
+              binaryPath: '/opt/makaio/bin/claude',
+              version: '1.9.0',
+            },
+          ],
+        });
+      },
+      { priority: 100 },
+    );
+
+    try {
+      const result = await bus.request(ClientSubjects.resolveBinary, { clientId: 'claude-code' });
+
+      expect(result).toMatchObject({
+        binaryPath: '/opt/makaio/bin/claude',
+        source: 'global',
+        version: '1.9.0',
+      });
     } finally {
       scanCleanup();
     }

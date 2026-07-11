@@ -275,6 +275,28 @@ describe('CodexClientSessionService — config handler round-trips', () => {
       expect(configToml).toContain('model = "gpt-5"');
       expect(configToml).toContain('check_for_update_on_startup = false');
     });
+
+    it('round-trips sessionConfig.destroy and reconciles a refreshed file credential', async () => {
+      const baseConfigDir = path.join(tmpDir, 'base-auth');
+      const sessionDir = path.join(tmpDir, 'session-auth');
+      await fs.mkdir(baseConfigDir, { recursive: true });
+      await fs.writeFile(path.join(baseConfigDir, 'auth.json'), '{"token":"initial"}', 'utf-8');
+      await bus.request(CodexClientSubjects.sessionConfig.setup, {
+        sessionDir,
+        baseConfigDir,
+        platform: 'linux',
+        configInheritance: 'auth-only',
+      });
+      await fs.writeFile(path.join(sessionDir, 'auth.json'), '{"token":"refreshed"}', 'utf-8');
+
+      const result = await bus.request(CodexClientSubjects.sessionConfig.destroy, {
+        sessionDir,
+        platform: 'linux',
+      });
+
+      expect(result).toEqual({ success: true });
+      await expect(fs.readFile(path.join(baseConfigDir, 'auth.json'), 'utf-8')).resolves.toBe('{"token":"refreshed"}');
+    });
   });
 
   // ---------------------------------------------------------------------------

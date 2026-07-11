@@ -1,7 +1,21 @@
 {
   "name": "provider-cursor",
   "displayName": "Cursor Provider",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
   "entrypoints": {
     "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "cursor",
+        "name": "Cursor",
+        "description": "Cursor — SDK-based AI models",
+        "protocols": []
+      }
+    ]
   }
 }

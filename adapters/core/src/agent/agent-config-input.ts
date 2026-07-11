@@ -4,9 +4,10 @@ import type { AIReasoningLevel, ReasoningLevelMap, ProviderContext } from '@maka
 import { RateLimitError, AuthenticationError, ModelUnavailableError, QuotaExceededError } from '@makaio/core';
 import type { ConfigFactoryInput } from '../adapter/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
-import { createSentinelProviderContext } from '../utils/index.js';
+import { createUnresolvedProviderContext } from '../utils/index.js';
 import type { AIModel } from '../types/ai-model.js';
 import type { AgentConnectorConfigOverrides, AIAgentConfig } from './types.js';
+import { resolveAdapterProviderSelection } from '../adapter/ai-adapter-create-utils.js';
 
 /**
  * Extract typed error category from known Makaio error subclasses.
@@ -71,6 +72,25 @@ export interface BuildConfigFactoryInputDeps<
 }
 
 /**
+ * Resolve the canonical provider context for a connector generation.
+ * @param agentId - Agent identifier used in the unresolved-context diagnostic
+ * @param configured - Provider context retained on the agent
+ * @param override - Provider context requested for this connector generation
+ * @returns Override, configured context, or the deliberate provider-less state
+ */
+function resolveConfigProviderContext(
+  agentId: string,
+  configured: ProviderContext | undefined,
+  override: ProviderContext | undefined,
+): ProviderContext {
+  const pending = override ?? configured;
+  if (pending === undefined) {
+    console.warn(`[AIAgent] No providerContext available for agent "${agentId}" — using unresolved provider state.`);
+  }
+  return pending ?? createUnresolvedProviderContext();
+}
+
+/**
  * Build config factory input from agent config with optional overrides.
  *
  * Explicitly maps AIAgentConfig fields to ConfigFactoryInput — avoids
@@ -86,15 +106,12 @@ export function buildConfigFactoryInput<TBus extends ScopedBus<string>, TConnect
   // providerContext is required by ConfigFactoryInput. Priority:
   //   1. Explicit override (e.g. provider swap on model change)
   //   2. Agent config value (set by orchestrator at start time, or updated by setProviderContext)
-  //   3. Sentinel fallback for rehydration and tests that bypass orchestrator provider setup
-  const pendingProviderContext = overrides?.providerContext ?? cfg.providerContext;
-  if (pendingProviderContext === undefined) {
-    console.warn(
-      `[AIAgent] No providerContext available for agent "${cfg.agentId}" — falling back to sentinel. ` +
-        'This indicates the orchestrator did not populate a provider context before calling startAgent.',
-    );
-  }
-  const providerContext: ProviderContext = pendingProviderContext ?? createSentinelProviderContext();
+  //   3. Closed configless state for provider-less operations
+  const providerContext = resolveConfigProviderContext(cfg.agentId, cfg.providerContext, overrides?.providerContext);
+  const { adapterProviderAuth, providerProtocol, compatibleProviderAuths } = resolveAdapterProviderSelection(
+    cfg.definitionProviders,
+    providerContext,
+  );
   return {
     bus: cfg.adapterBus,
     globalBus: cfg.globalBus,
@@ -102,6 +119,10 @@ export function buildConfigFactoryInput<TBus extends ScopedBus<string>, TConnect
     adapterId: cfg.adapterId,
     adapterName: cfg.adapterName,
     providerContext,
+    ...(providerProtocol !== undefined && { providerProtocol }),
+    ...(adapterProviderAuth !== undefined && { adapterProviderAuth }),
+    compatibleProviderAuths,
+    providerContextRequired: (cfg.definitionProviders?.length ?? 0) > 0,
     model: overrides?.model ?? cfg.model,
     cwd: overrides?.cwd ?? cfg.cwd,
     env: cfg.env,
