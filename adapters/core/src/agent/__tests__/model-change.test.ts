@@ -860,6 +860,35 @@ describe('AIAgent Model change handler', () => {
     expect(response).toMatchObject({ success: true, swapped: true });
     expect(ctx.createdConnectors).toHaveLength(2);
     expect(ctx.createdConnectors[1]?.currentReasoningEffort).toBe('high');
+    // Adapters may consume reasoning only at construction/start — the
+    // replacement must be built with the target effort, not patched afterwards.
+    expect(ctx.createdConnectors[1]?.constructedReasoningEffort).toBe('high');
+  });
+
+  it('model swap constructs the replacement with the requested reasoning effort', async () => {
+    await createReasoningAgent(ctx, {
+      initialReasoningEffort: 'low',
+      availableModels: [
+        {
+          name: 'test-model-1',
+          contextWindowSize: 1_000,
+          labId: 'test-lab',
+          supportedReasoningLevels: { low: 1, medium: 2, high: 3 },
+        },
+        {
+          name: 'test-model-2',
+          contextWindowSize: 1_000,
+          labId: 'test-lab',
+          supportedReasoningLevels: { low: 1, medium: 2, high: 3 },
+        },
+      ],
+    });
+
+    const response = await sendModelChange({ newModel: 'test-model-2', reasoningEffort: 'high' });
+
+    expect(response).toMatchObject({ success: true, swapped: true, appliedReasoningEffort: 'high' });
+    expect(ctx.createdConnectors).toHaveLength(2);
+    expect(ctx.createdConnectors[1]?.constructedReasoningEffort).toBe('high');
   });
 
   it('resolveReasoningEffort falls back to medium when prior effort is unsupported by new model', async () => {

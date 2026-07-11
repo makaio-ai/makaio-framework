@@ -39,6 +39,8 @@ export class MockConnector implements Partial<AIAgentConnector> {
   public model: string;
   public cwd: string;
   public currentReasoningEffort?: AIReasoningLevel;
+  /** Effort received at construction, before any post-swap property mutation. */
+  public readonly constructedReasoningEffort?: AIReasoningLevel;
   public supportedReasoningLevels?: ReasoningLevelMap;
   public mcpSessionContext?: McpSessionContext | LedgerSessionContext;
   public startedMessages: NormalizedMessageInput[] = [];
@@ -75,6 +77,7 @@ export class MockConnector implements Partial<AIAgentConnector> {
     this.model = model;
     this.cwd = cwd;
     this.currentReasoningEffort = reasoningEffort;
+    this.constructedReasoningEffort = reasoningEffort;
     this.supportedReasoningLevels = supportedReasoningLevels;
     this.mcpSessionContext = mcpSessionContext;
   }

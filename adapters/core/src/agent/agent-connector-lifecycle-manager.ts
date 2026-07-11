@@ -157,6 +157,8 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       model: configOverrides?.model ?? currentConnector.model,
       ...(configOverrides?.providerContext && { providerContext: configOverrides.providerContext }),
       ...(configOverrides?.mcpSessionContext && { mcpSessionContext: configOverrides.mcpSessionContext }),
+      ...(configOverrides !== undefined &&
+        'reasoningEffort' in configOverrides && { reasoningEffort: configOverrides.reasoningEffort }),
       adapterSessionId: configOverrides?.adapterSessionId ?? crypto.randomUUID(),
       ...(configOverrides?.resumeAdapterSessionId !== undefined && {
         resumeAdapterSessionId: configOverrides.resumeAdapterSessionId,

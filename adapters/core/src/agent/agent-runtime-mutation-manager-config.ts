@@ -11,16 +11,7 @@ import {
 import type { AIAgentConnector } from '../connector/index.js';
 import type { LedgerSessionContext } from './session-tool-ledger.js';
 import type { ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
-
-/** Connector fields that can be overridden during runtime connector swaps. */
-export interface AgentRuntimeConnectorOverrides {
-  cwd: string;
-  model: string;
-  providerContext: ProviderContext;
-  adapterSessionId: string;
-  resumeAdapterSessionId: string;
-  mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-}
+import type { AgentConnectorConfigOverrides } from './types.js';
 
 /** Dependencies for runtime mutation handling. */
 export interface AgentRuntimeMutationManagerConfig {
@@ -36,7 +27,7 @@ export interface AgentRuntimeMutationManagerConfig {
   runExclusive: <T>(action: () => Promise<T>) => Promise<T>;
   /** Swap connector while the caller already owns the agent-wide runtime barrier. */
   swapConnectorUnlocked: (
-    configOverrides?: Partial<AgentRuntimeConnectorOverrides>,
+    configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
   ) => Promise<void>;
   /** Emit cwd.changed payload. */
