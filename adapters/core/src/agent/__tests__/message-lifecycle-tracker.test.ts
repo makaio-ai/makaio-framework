@@ -400,6 +400,68 @@ describe('MessageLifecycleTracker', () => {
     ]);
   });
 
+  it('resolves getCurrentTurnId from the executing handle, not the shared field overwritten by a queued sendMessage', async () => {
+    // Scenario: Turn A is streaming intermediate events when sendMessage(B)
+    // arrives — it overwrites the shared currentTurnId to turn-b before B is
+    // promoted. Event enrichment (agent.message/reasoning/tool) reads
+    // getCurrentTurnId(); if it returned the shared field, A's remaining
+    // events would carry turn-b and downstream consumers keyed on
+    // turnId+messageId (e.g. SessionBridge block accumulation) would drop
+    // them, losing the follow-up reply from persisted history.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
+
+    tracker.setCurrentTurnId('turn-a');
+    tracker.track(handleA);
+    expect(tracker.getCurrentTurnId()).toBe('turn-a');
+
+    // Concurrent sendMessage(B) while A is still executing.
+    tracker.setCurrentTurnId('turn-b');
+    tracker.track(handleB);
+
+    // A is still the active correlation source — its events must stay turn-a.
+    expect(tracker.getCurrentTurnId()).toBe('turn-a');
+
+    // Only A is acknowledged — acknowledging B here would promote it to the
+    // active slot immediately (acknowledge() is unconditional) and bypass the
+    // queued-promotion path this test exercises.
+    handleA.markAcknowledged();
+    await flushMicrotasks();
+    expect(tracker.getCurrentTurnId()).toBe('turn-a');
+
+    // A completes → B is promoted from the queue; enrichment must switch to
+    // B's captured turn-b before B is even acknowledged.
+    handleA.markCompleted({ outcome: 'completed', result: { message: 'A done' } });
+    await flushMicrotasks();
+    expect(tracker.getCurrentTurnId()).toBe('turn-b');
+
+    handleB.markAcknowledged();
+    await flushMicrotasks();
+    expect(tracker.getCurrentTurnId()).toBe('turn-b');
+
+    handleB.markCompleted({ outcome: 'completed', result: { message: 'B done' } });
+    await flushMicrotasks();
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
+
+  it('keeps events of a handle tracked without a turn turn-less when a queued sendMessage sets the shared field', () => {
+    // Scenario: a handle is intentionally tracked with turnId: undefined
+    // (agent.sendMessage.turnId is optional; start() tracks without a turn).
+    // While it is active, a queued sendMessage sets the shared currentTurnId.
+    // The active no-turn handle must NOT inherit that later turn's id via the
+    // shared-field fallback — map presence, not value, gates the fallback.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const noTurnHandle = makeHandle('message-a', 'A');
+
+    tracker.track(noTurnHandle, undefined, undefined, { turnId: undefined });
+    expect(tracker.getCurrentTurnId()).toBeUndefined();
+
+    // Queued follow-up announces its turn before its handle is promoted.
+    tracker.setCurrentTurnId('turn-b');
+    expect(tracker.getCurrentTurnId()).toBeUndefined();
+  });
+
   it('promotes pending handles in FIFO order when multiple are queued during an in-flight turn', async () => {
     // Scenario: Turn A is executing. Two follow-ups (B then C) are dispatched
     // while A is still active. On completion of A, B (the first queued) must be

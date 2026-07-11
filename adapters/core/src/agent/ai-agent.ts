@@ -677,10 +677,23 @@ export abstract class AIAgent<
    */
   private createOnMessageSent(): (handle: MessageHandle) => void {
     return (handle) => {
+      // user_message.sent describes the message being submitted, not the
+      // executing turn — and it fires before the handle is tracked. Neither
+      // enrichment's getCurrentTurnId() (resolves to the still-executing
+      // turn) nor any shared tracker field (mutable — overlapping sends
+      // overwrite it before a hook-delayed first send emits) is safe here.
+      // The handle carries its lifecycle turnId (threaded from
+      // agent.sendMessage.turnId at dispatch); requestCorrelation.turnId is
+      // deliberately NOT used — it is transport correlation and may exist
+      // when no lifecycle turn does, which would leave sent unpaired with
+      // acknowledged/completed. The key is set even when undefined so a
+      // no-turn submission stays turn-less instead of inheriting the
+      // executing turn's id via enrichment.
       void this.emitGlobal(AgentSubjects.user_message.sent, {
         messageId: handle.messageId,
         content: handle.message,
         deliveryMode: handle.deliveryMode,
+        turnId: handle.turnId,
       });
     };
   }

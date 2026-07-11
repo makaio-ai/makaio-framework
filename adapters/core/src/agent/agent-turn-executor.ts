@@ -207,6 +207,7 @@ export class AgentTurnExecutor {
     const handle = await connector.sendMessage(normalizedMessage, {
       deliveryMode: payload.deliveryMode,
       messageId: payload.messageId,
+      turnId: payload.turnId,
       messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
       cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
       turnContext: buildStructuredOutputTurnContext(

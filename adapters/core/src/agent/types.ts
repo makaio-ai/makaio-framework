@@ -360,6 +360,13 @@ export interface ConnectorSendMessageOptions extends AgentSendMessageOptions {
    */
   requestCorrelation?: RequestCorrelationContext;
   /**
+   * Lifecycle turnId from the session orchestrator (`agent.sendMessage.turnId`).
+   * Carried on the message handle so user_message lifecycle events pair by it.
+   * Distinct from `requestCorrelation.turnId`, which is transport correlation
+   * and may be present when no lifecycle turn exists.
+   */
+  turnId?: string;
+  /**
    * Turn-scoped context assembled by PreUserMessage hooks and the orchestrator.
    * Extracted from sessionContext.turnContext by AIAgent.
    * Adapters use this to prepend context blocks to the SDK message.

@@ -88,6 +88,42 @@ describe('AgentPayloadEmitter', () => {
     ]);
   });
 
+  it('keeps a payload with explicit turnId: undefined turn-less instead of falling back to live state', async () => {
+    // Key presence gates the fallback: user_message.sent for a no-turn
+    // submission passes turnId: undefined and must not inherit the
+    // still-executing turn's id from getCurrentTurnId().
+    const emittedPayloads: unknown[] = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async (_subject: unknown, payload: unknown) => {
+          emittedPayloads.push(payload);
+        },
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+      }),
+      getCurrentMessageId: () => 'current-message-id',
+      getCurrentTurnId: () => 'live-turn-id',
+      getConnectorAdapterSessionId: () => 'adapter-session-1',
+      getLastKnownAdapterSessionId: () => undefined,
+      setLastKnownAdapterSessionId: () => {},
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    await emitter.emitGlobal(AgentSubjects.user_message.sent, {
+      messageId: 'message-a',
+      content: { role: 'user', message: 'hello', blocks: [{ type: 'text', content: 'hello' }] },
+      deliveryMode: 'enqueue',
+      turnId: undefined,
+    });
+
+    expect(emittedPayloads).toHaveLength(1);
+    expect(emittedPayloads[0]).not.toHaveProperty('turnId');
+  });
+
   it('preserves caller-provided analytics metadata over live defaults', async () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({

@@ -83,6 +83,13 @@ export interface MessageHandleOptions {
    * `user_message.sent` event is emitted for the synthetic retry message.
    */
   internalRetry?: boolean;
+  /**
+   * Lifecycle turnId from the session orchestrator. Distinct from
+   * `requestCorrelation.turnId` (transport correlation, which may be present
+   * when no lifecycle turn exists): all user_message lifecycle events for the
+   * handle pair by this value.
+   */
+  turnId?: string;
 }
 
 /**
