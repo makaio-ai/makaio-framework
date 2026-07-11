@@ -36,6 +36,7 @@ import {
   FRAMEWORK_ADAPTER_DIRS as ADAPTER_DIRS,
   parseTestCategories,
 } from './scripts/lib/vitest-categories.js';
+import { BUN_TEST_FILE_GLOBS } from './scripts/lib/test-runner-contract.js';
 
 const root = import.meta.dirname;
 
@@ -45,6 +46,7 @@ const forksRequiredInclude = FORKS_REQUIRED_FILES.filter((file) =>
 );
 
 const exclude: string[] = [
+  ...BUN_TEST_FILE_GLOBS,
   '**/node_modules/**',
   '**/dist/**',
   '**/.tmp/**',
