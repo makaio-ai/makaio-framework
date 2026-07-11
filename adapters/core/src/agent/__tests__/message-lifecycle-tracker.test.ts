@@ -423,12 +423,20 @@ describe('MessageLifecycleTracker', () => {
     // A is still the active correlation source — its events must stay turn-a.
     expect(tracker.getCurrentTurnId()).toBe('turn-a');
 
+    // Only A is acknowledged — acknowledging B here would promote it to the
+    // active slot immediately (acknowledge() is unconditional) and bypass the
+    // queued-promotion path this test exercises.
     handleA.markAcknowledged();
-    handleB.markAcknowledged();
     await flushMicrotasks();
+    expect(tracker.getCurrentTurnId()).toBe('turn-a');
 
-    // A completes → B is promoted; enrichment must switch to turn-b.
+    // A completes → B is promoted from the queue; enrichment must switch to
+    // B's captured turn-b before B is even acknowledged.
     handleA.markCompleted({ outcome: 'completed', result: { message: 'A done' } });
+    await flushMicrotasks();
+    expect(tracker.getCurrentTurnId()).toBe('turn-b');
+
+    handleB.markAcknowledged();
     await flushMicrotasks();
     expect(tracker.getCurrentTurnId()).toBe('turn-b');
 
