@@ -9,10 +9,13 @@ import {
 import type { IMakaioSession, StartAgentResponse } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { Turn } from '../../entities/turn.js';
+import { SessionTurnManager } from '../../session-turn-manager.js';
 import { registerAttachHandler } from '../attach-handler.js';
 import { registerForkHandler } from '../fork-handler.js';
+import { routeToAgents, type RouteToAgentsOptions } from '../route-to-agents.js';
 import { MessageStorageSubjects } from '../../messages/namespace.js';
 import { AgentStorageSubjects } from '../../storage/agent-namespace.js';
+import { recordTurnPairCompletion, type TurnCompletionEventHooks } from '../../turn-completion-events.js';
 import { TurnStorageSubjects } from '../../turns/index.js';
 import { resetBusHandlers } from '../../__tests__/shared.js';
 import {
@@ -43,6 +46,38 @@ export function registerFailingSendHandler(failingAgentIds: Set<string>, errorMe
     }
     context.setResult({ messageId: context.payload.messageId ?? 'generated-id' });
   });
+}
+
+/** Payload accepted by the message append storage subject. */
+export type MessageAppendPayload = ExtractSubjectPayload<typeof MessageStorageSubjects.append>;
+
+/** Options for the successful message append test fixture. */
+export interface SuccessfulMessageAppendHandlerOptions {
+  priority?: number;
+  onAppend?: (payload: MessageAppendPayload) => void;
+}
+
+/**
+ * Registers a message append handler that persists the supplied message shape.
+ * @param options - Optional registration priority and append observer
+ * @returns Unsubscribe function to remove the handler
+ */
+export function registerSuccessfulMessageAppendHandler(
+  options: SuccessfulMessageAppendHandlerOptions = {},
+): () => void {
+  return MakaioBus.on(
+    MessageStorageSubjects.append,
+    (context) => {
+      options.onAppend?.(context.payload);
+      context.setResult({
+        message: {
+          ...context.payload.message,
+          messageId: context.payload.message.messageId ?? crypto.randomUUID(),
+        },
+      });
+    },
+    options.priority === undefined ? undefined : { priority: options.priority },
+  );
 }
 
 // =============================================================================
@@ -88,6 +123,48 @@ export interface RouteTestContext {
   readonly testMessage: string;
   trackUnsubscribe: (unsub: () => void) => void;
   destroy: () => void;
+}
+
+/**
+ * Routes a message with a ledger-backed completion fixture matching production sequencing.
+ * @param options - Route options with the real turn manager dependency omitted
+ * @returns Promise resolved after all agent deliveries and turn completion work settle
+ */
+export async function routeToAgentsWithTestLedger(options: Omit<RouteToAgentsOptions, 'turnManager'>): Promise<void> {
+  if (!options.turn.messageIds.includes(options.messageId)) {
+    options.turn.admitMessage(
+      options.messageId,
+      options.agents.map((agent) => agent.agentId),
+    );
+    options.turn.commitMessageAdmission(options.messageId);
+  }
+
+  const hooks: TurnCompletionEventHooks = {
+    resolveUsageTurn: () => undefined,
+    resolveCompletionTurn: (turnId) => (turnId === options.turn.turnId ? options.turn : undefined),
+    isCompletionInFlight: () => false,
+    addUsage: () => undefined,
+    bufferUsage: () => undefined,
+    canRetry: () => false,
+    retry: async () => undefined,
+    beginFinalization: () => undefined,
+  };
+
+  await routeToAgents({
+    ...options,
+    turnManager: {
+      recordAgentCompletion: async (agentId, messageId, outcome, error, onTurnComplete, turnId) => {
+        await recordTurnPairCompletion(options.bus, hooks, {
+          agentId,
+          messageId,
+          outcome,
+          ...(error === undefined ? {} : { error }),
+          turnId,
+          onTurnComplete,
+        });
+      },
+    },
+  });
 }
 
 // =============================================================================
@@ -157,14 +234,14 @@ export function registerDefaultConversationStubs(
 
 /**
  * Creates a test context for registerAttachHandler tests.
- * Encapsulates the repeated setup: resetBusHandlers, activeTurns, unsubscribers,
+ * Encapsulates the repeated setup: resetBusHandlers, turn manager, unsubscribers,
  * mock adapter resolver, and common mock registrations.
  * @param currentMachineId - Optional runtime-default machine for mock resolveId handling
- * @returns Context with activeTurns, helper functions, and lifecycle methods
+ * @returns Context with turn lifecycle helpers and cleanup methods
  */
 export function createAttachHandlerContext(currentMachineId?: string | null): AttachHandlerTestContext {
   resetBusHandlers();
-  const activeTurns = new Map<string, Turn>();
+  const turnManager = new SessionTurnManager(MakaioBus);
   const unsubscribers: Array<() => void> = [];
   const { registry: adapterIdentityRegistry, unsubscribe: unsubscribeAdapterIdentityRegistry } =
     registerMockAdapterIdentityHandlers(
@@ -236,7 +313,10 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
   const ids = ATTACH_TEST_IDS;
 
   return {
-    activeTurns,
+    turnManager,
+    getActiveTurn(sessionId: string): Turn | undefined {
+      return turnManager.getActiveTurn(sessionId);
+    },
 
     /**
      * Tracks a cleanup function to be called on destroy.
@@ -323,16 +403,16 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
     },
 
     /**
-     * Registers the attach handler under test with the current activeTurns.
+     * Registers the attach handler under test with the current turn manager.
      * @param machineId - Optional machine ID for scoped resolution
      * @returns Unsubscribe function
      */
     registerHandler(machineId?: string): () => void {
-      return registerAttachHandler(MakaioBus, activeTurns, machineId);
+      return registerAttachHandler(MakaioBus, turnManager, machineId);
     },
 
     /**
-     * Tears down all registered handlers and clears activeTurns.
+     * Tears down all registered handlers and turn lifecycle state.
      */
     destroy(): void {
       for (const unsub of unsubscribers) {
@@ -341,14 +421,15 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
       unsubscribers.length = 0;
       nextTurnNumberBySession.clear();
       defaultAdapterCapabilities = ['session:resume'];
-      activeTurns.clear();
+      turnManager.destroy();
     },
   };
 }
 
 /** Test context for attach handler tests. */
 export interface AttachHandlerTestContext {
-  activeTurns: Map<string, Turn>;
+  turnManager: SessionTurnManager;
+  getActiveTurn: (sessionId: string) => Turn | undefined;
   trackUnsubscribe: (unsub: () => void) => void;
   setDefaultAdapterCapabilities: (capabilities: string[]) => void;
   createMockSession: (overrides?: Partial<IMakaioSession>) => IMakaioSession;

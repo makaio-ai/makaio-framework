@@ -15,7 +15,6 @@ import { AgentSubjects, type SessionMessageBlock } from '@makaio/contracts';
 import { EventContext } from '@makaio/core';
 
 // Type aliases for specific event types using SessionEventOf helper
-type SessionErrorEvent = SessionEventOf<'session.error'>;
 type SessionTruncationEvent = SessionEventOf<'session.truncation'>;
 type AssistantReasoningDeltaEvent = SessionEventOf<'assistant.reasoning_delta'>;
 type ToolUserRequestedEvent = SessionEventOf<'tool.user_requested'>;
@@ -107,19 +106,6 @@ export class GitHubCopilotAgent extends AIAgent<GitHubCopilotConnectorBus, GitHu
       this.toolBlockIndexMap.clear();
       await this.emitStart();
     });
-
-    // session.error -> agent.error + agent.complete (maintains lifecycle invariant)
-    this.subscribeConnector(
-      connector,
-      GitHubCopilotConnectorSubjects.session.error,
-      async (ctx: EventContext<SessionErrorEvent>) => {
-        const data = ctx.payload.data;
-
-        return this.emitError({
-          error: data.message,
-        });
-      },
-    );
   }
 
   /**

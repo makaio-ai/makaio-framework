@@ -188,7 +188,11 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
           console.warn('[ClaudeSdkConnector] Dropping non-object SDK event payload', { payloadType: typeof msg });
           return;
         }
-        await this.emit(ClaudeCodeConnectorSubjects.sdk.event, sdkEventPayload);
+        const originatingMessageId = this.pendingMessageHandle?.messageId;
+        await this.emit(ClaudeCodeConnectorSubjects.sdk.event, {
+          ...sdkEventPayload,
+          ...(originatingMessageId !== undefined && { originatingMessageId }),
+        } as never);
       },
       // Track pending message for error handling (handleError needs this)
       onTurnStart: (handle) => {

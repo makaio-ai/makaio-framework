@@ -6,6 +6,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession } from '@makaio/contracts';
 import { MessageStorageSubjects } from '../messages/namespace.js';
+import { SessionBridge } from '../session-bridge.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR } from '../session-turn-manager.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
@@ -28,6 +29,7 @@ import {
 
 describe('SessionOrchestrator - Turns', () => {
   let orchestrator: SessionOrchestrator;
+  let bridge: SessionBridge;
   let unsubscribers: UnsubscribeFunction[];
   let sessions: Map<string, IMakaioSession>;
 
@@ -38,10 +40,12 @@ describe('SessionOrchestrator - Turns', () => {
     unsubscribers.push(registerGetSessionHandler(sessions));
     unsubscribers.push(registerGetAgentHandler(sessions));
     unsubscribers.push(registerMockStorageHandlers());
+    bridge = new SessionBridge(MakaioBus);
   });
 
   afterEach(() => {
     orchestrator?.destroy();
+    bridge?.destroy();
     unsubscribers.forEach((u) => u());
   });
 
@@ -60,7 +64,9 @@ describe('SessionOrchestrator - Turns', () => {
     });
 
     it('discards a newly created active turn when user-message append fails', async () => {
+      bridge.destroy();
       resetBusHandlers();
+      bridge = new SessionBridge(MakaioBus);
       unsubscribers = [];
       sessions = new Map();
       setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
@@ -156,7 +162,9 @@ describe('SessionOrchestrator - Turns', () => {
     });
 
     it('fails setup when user-message append storage is unhandled', async () => {
+      bridge.destroy();
       resetBusHandlers();
+      bridge = new SessionBridge(MakaioBus);
       unsubscribers = [];
       sessions = new Map();
       setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
@@ -210,8 +218,10 @@ describe('SessionOrchestrator - Turns', () => {
       });
     });
 
-    it('does not terminalize a setup turn claimed by another pending append', async () => {
+    it('makes a joiner reacquire only after failed first-message preparation settles', async () => {
+      bridge.destroy();
       resetBusHandlers();
+      bridge = new SessionBridge(MakaioBus);
       unsubscribers = [];
       sessions = new Map();
       setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
@@ -296,24 +306,26 @@ describe('SessionOrchestrator - Turns', () => {
       const firstSend = MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'First' });
       await firstAppendStarted;
       const secondSend = MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Second' });
-      await secondAppendStarted;
 
       failFirstAppend();
       await expect(firstSend).rejects.toThrow('first append unavailable');
-      expect(completeCalls).toHaveLength(0);
+      await secondAppendStarted;
+      expect(completeCalls).toHaveLength(1);
 
       resolveSecondAppend();
       const secondResult = await secondSend;
       await waitForAsync();
 
-      expect(createdTurnIds).toHaveLength(1);
-      expect(secondResult.turnId).toBe(createdTurnIds[0]);
+      expect(createdTurnIds).toHaveLength(2);
+      expect(secondResult.turnId).toBe(createdTurnIds[1]);
       expect(startedEvents.received).toHaveLength(1);
       expect(startedEvents.received[0].messageId).toBe(secondResult.messageId);
     });
 
     it('preserves the user-message append error when failed-turn cleanup also fails', async () => {
+      bridge.destroy();
       resetBusHandlers();
+      bridge = new SessionBridge(MakaioBus);
       unsubscribers = [];
       sessions = new Map();
       setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
@@ -398,7 +410,7 @@ describe('SessionOrchestrator - Turns', () => {
         source: 'extension',
         extensionId: 'routine:validation',
       });
-      await emitAgentComplete('a1', result.messageId);
+      await emitAgentComplete({ agentId: 'a1', messageId: result.messageId, turnId: result.turnId });
       await waitForAsync();
 
       expect(startedEvents.received).toHaveLength(1);
@@ -480,7 +492,7 @@ describe('SessionOrchestrator - Turns', () => {
       orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
       const r = await MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Hi' });
-      await emitAgentComplete('a1', r.messageId);
+      await emitAgentComplete({ agentId: 'a1', messageId: r.messageId, turnId: r.turnId });
       await waitForAsync();
 
       expect(events.received).toHaveLength(1);
@@ -501,11 +513,11 @@ describe('SessionOrchestrator - Turns', () => {
         agentIds: 'all',
       });
 
-      await emitAgentComplete('a1', r.messageId);
+      await emitAgentComplete({ agentId: 'a1', messageId: r.messageId, turnId: r.turnId });
       await waitForAsync();
       expect(events.received).toHaveLength(0);
 
-      await emitAgentComplete('a2', r.messageId);
+      await emitAgentComplete({ agentId: 'a2', messageId: r.messageId, turnId: r.turnId });
       await waitForAsync();
       expect(events.received).toHaveLength(1);
       expect(events.received[0].success).toBe(true);
@@ -524,9 +536,9 @@ describe('SessionOrchestrator - Turns', () => {
         message: 'Hi',
         agentIds: 'all',
       });
-      await emitAgentComplete('a1', r.messageId);
-      await emitAgentComplete('a2', r.messageId);
-      await emitAgentComplete('a3', r.messageId);
+      await emitAgentComplete({ agentId: 'a1', messageId: r.messageId, turnId: r.turnId });
+      await emitAgentComplete({ agentId: 'a2', messageId: r.messageId, turnId: r.turnId });
+      await emitAgentComplete({ agentId: 'a3', messageId: r.messageId, turnId: r.turnId });
       await waitForAsync();
 
       expect(events.received).toHaveLength(1);
@@ -547,8 +559,8 @@ describe('SessionOrchestrator - Turns', () => {
         message: 'Hi',
         agentIds: 'all',
       });
-      await emitAgentComplete('a1', r.messageId);
-      await emitAgentError('a2', 'Failure');
+      await emitAgentComplete({ agentId: 'a1', messageId: r.messageId, turnId: r.turnId });
+      await emitAgentError({ agentId: 'a2', error: 'Failure', messageId: r.messageId, turnId: r.turnId });
       await waitForAsync();
 
       expect(events.received).toHaveLength(1);
@@ -562,9 +574,13 @@ describe('SessionOrchestrator - Turns', () => {
       const events = collectTurnCompletedEvents(unsubscribers);
       orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-      await MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Hi', agentIds: 'all' });
-      await emitAgentError('a1', 'Err1');
-      await emitAgentError('a2', 'Err2');
+      const result = await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId: 's1',
+        message: 'Hi',
+        agentIds: 'all',
+      });
+      await emitAgentError({ agentId: 'a1', error: 'Err1', messageId: result.messageId, turnId: result.turnId });
+      await emitAgentError({ agentId: 'a2', error: 'Err2', messageId: result.messageId, turnId: result.turnId });
       await waitForAsync();
 
       expect(events.received[0].success).toBe(false);
@@ -586,12 +602,12 @@ describe('SessionOrchestrator - Turns', () => {
         agentIds: 'all',
       });
 
-      await emitAgentComplete('a1', r.messageId);
+      await emitAgentComplete({ agentId: 'a1', messageId: r.messageId, turnId: r.turnId });
       await waitForAsync();
       expect(events.received).toHaveLength(1);
       expect(events.received[0]).toMatchObject({ sessionId: 's1', agentId: 'a1', outcome: 'completed' });
 
-      await emitAgentComplete('a2', r.messageId);
+      await emitAgentComplete({ agentId: 'a2', messageId: r.messageId, turnId: r.turnId });
       await waitForAsync();
       expect(events.received).toHaveLength(2);
       expect(events.received[1].agentId).toBe('a2');
@@ -603,8 +619,8 @@ describe('SessionOrchestrator - Turns', () => {
       const events = collectUserMessageCompletedEvents(unsubscribers);
       orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-      await MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Hi' });
-      await emitAgentError('a1', 'Failed');
+      const result = await MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Hi' });
+      await emitAgentError({ agentId: 'a1', error: 'Failed', messageId: result.messageId, turnId: result.turnId });
       await waitForAsync();
 
       expect(events.received).toHaveLength(1);

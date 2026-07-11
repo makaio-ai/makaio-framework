@@ -108,7 +108,6 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
       toolCompleted: AnthropicSdkConnectorSubjects.tool_completed,
       agentStarted: AnthropicSdkConnectorSubjects.agent_started,
       agentComplete: AnthropicSdkConnectorSubjects.agent_complete,
-      error: AnthropicSdkConnectorSubjects.error,
     } as AnthropicSubjectSpec;
   }
 

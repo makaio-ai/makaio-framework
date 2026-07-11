@@ -8,34 +8,36 @@ describe('Turn (moved to entities)', () => {
     expect(turn.turnId).toBeDefined();
     expect(turn.sessionId).toBe('sess-1');
     expect(turn.agentIds).toEqual(['agent-1']);
+    expect(turn.isComplete()).toBe(false);
   });
 
-  it('tracks agent completion and returns state change', () => {
+  it('tracks admitted message-agent completion and returns state change', () => {
     const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1', 'agent-2'], turnNumber: 1 });
+    turn.addMessage('msg-1');
 
-    const change1 = turn.markAgentCompleted('agent-1');
+    const change1 = turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
     expect(change1.turnComplete).toBe(false);
 
-    const change2 = turn.markAgentCompleted('agent-2');
+    const change2 = turn.recordPairTerminal('msg-1', 'agent-2', 'completed');
     expect(change2.turnComplete).toBe(true);
     if (change2.turnComplete) {
       expect(change2.result.success).toBe(true);
     }
   });
 
-  it('does not count duplicate mixed terminal outcomes for one agent twice', () => {
+  it('does not count duplicate mixed terminal outcomes for one delivery pair twice', () => {
     const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1', 'agent-2'], turnNumber: 1 });
+    turn.addMessage('msg-1');
 
-    const completed = turn.markAgentCompleted('agent-1');
+    const completed = turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
     expect(completed.turnComplete).toBe(false);
 
-    const duplicateError = turn.markAgentErrored('agent-1', 'late failure');
+    const duplicateError = turn.recordPairTerminal('msg-1', 'agent-1', 'error', 'late failure');
+    expect(duplicateError.accepted).toBe(false);
     expect(duplicateError.turnComplete).toBe(false);
     expect(turn.isComplete()).toBe(false);
-    expect(turn.completedAgents.has('agent-1')).toBe(true);
-    expect(turn.erroredAgents.has('agent-1')).toBe(false);
 
-    const final = turn.markAgentCompleted('agent-2');
+    const final = turn.recordPairTerminal('msg-1', 'agent-2', 'completed');
     expect(final.turnComplete).toBe(true);
     if (final.turnComplete) {
       expect(final.result).toEqual({ success: true, errors: [] });

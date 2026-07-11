@@ -401,7 +401,7 @@ describe('AgentPayloadEmitter', () => {
       getUsageModel: () => 'test-model',
     });
 
-    await bridge.emitToolOutput('output', { toolName: 'test-tool' });
+    await bridge.emitToolOutput('message-1', 'output', { toolName: 'test-tool' });
 
     expect(emitCalls).toEqual([
       {
@@ -416,6 +416,7 @@ describe('AgentPayloadEmitter', () => {
       {
         subject: AgentSubjects.tool.output,
         payload: {
+          messageId: 'message-1',
           output: 'output',
           toolCallId: expect.any(String),
           toolName: 'test-tool',

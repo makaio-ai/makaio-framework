@@ -201,7 +201,6 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
    * - `agent_started` → `emitStart()` to emit `agent.started`; model comes from the
    *   connector (not the event payload) per the base-class contract
    * - `agent_complete` → emit `agent.message` for session persistence (turn end)
-   * - `error` → stash error metadata via `emitError()` for the next `emitCompletion`
    * @param connector - The CursorSdkConnector to subscribe on
    */
   private wireTurnLifecycleEvents(connector: CursorSdkConnector): void {
@@ -221,12 +220,6 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
       if (text) {
         await this.emitGlobal(AgentSubjects.message, { content: text });
       }
-    });
-
-    this.subscribeConnector(connector, CursorSdkSubjects.error, async (ctx) => {
-      const { error } = ctx.payload;
-      const message = error instanceof Error ? error.message : String(error ?? 'Unknown error');
-      this.emitError({ error: message });
     });
   }
 
@@ -278,26 +271,31 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
    */
   private wireToolEvents(connector: CursorSdkConnector): void {
     this.subscribeConnector(connector, CursorSdkSubjects.tool_started, async (ctx) => {
-      const { toolName, toolCallId, args } = ctx.payload;
+      const { messageId, toolName, toolCallId, args } = ctx.payload;
       const normalizedArgs = normalizeToolArgs(args);
-      await this.emitToolUse(toolName, normalizedArgs, toolCallId);
-      await this.emitGlobal(AgentSubjects.tool.started, { toolName, toolCallId });
-      await this.emitStepStarted('tool_use', { type: 'tool_use', toolName, toolCallId });
+      await this.emitToolUse(messageId, toolName, normalizedArgs, toolCallId);
+      await this.emitGlobal(AgentSubjects.tool.started, { messageId, toolName, toolCallId });
+      await this.eventBridge.emitStepStartedForMessage(messageId, 'tool_use', {
+        type: 'tool_use',
+        toolName,
+        toolCallId,
+      });
     });
 
     this.subscribeConnector(connector, CursorSdkSubjects.tool_completed, async (ctx) => {
-      const { toolName, toolCallId, result, isError } = ctx.payload;
+      const { messageId, toolName, toolCallId, result, isError } = ctx.payload;
       const output = normalizeToolOutput(result);
 
-      await this.emitStepFinished('tool_use', {
+      await this.eventBridge.emitStepFinishedForMessage(messageId, 'tool_use', {
         type: 'tool_output',
         toolCallId,
         output,
         isError,
       });
 
-      const resolved = await this.emitToolOutput(output, { nativeId: toolCallId, toolName });
+      const resolved = await this.emitToolOutput(messageId, output, { nativeId: toolCallId, toolName });
       await this.emitGlobal(AgentSubjects.tool.completed, {
+        messageId,
         toolName: resolved.toolName,
         args: resolved.args,
         result: normalizeToolCompletedResult(result, output),

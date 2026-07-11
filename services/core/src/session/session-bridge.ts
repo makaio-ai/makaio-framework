@@ -13,11 +13,13 @@ import { MessageRoutingSubjects } from './message-routing/namespace.js';
  * Note: Does NOT bridge events to session.agent.* namespace anymore.
  * Consumers should subscribe directly to AgentSubjects.* with sessionId filter.
  */
-/** Agent context for turn tracking */
-interface AgentContext {
+/** Turn-scoped assistant response owned by SessionBridge until matching completion. */
+interface PendingAssistantResponse {
   sessionId: string;
-  turnId?: string;
-  adapterSessionId?: string;
+  turnId: string;
+  messageId: string;
+  agentId: string;
+  blocks: SessionMessageBlock[];
 }
 
 /**
@@ -33,10 +35,8 @@ interface AssistantMessageOverride {
 
 export class SessionBridge {
   private readonly agentToSession = new Map<string, string>();
-  /** Extended mapping: agentId -\> \{ sessionId, turnId, adapterSessionId \} */
-  private readonly agentContext = new Map<string, AgentContext>();
-  /** Block accumulator: agentId -\> blocks (one agent = one response per turn) */
-  private readonly agentBlocks = new Map<string, SessionMessageBlock[]>();
+  /** Pending responses keyed by immutable turn/message/agent delivery identity. */
+  private readonly pendingAssistantResponses = new Map<string, PendingAssistantResponse>();
   private readonly cleanups: Array<() => void> = [];
 
   public constructor(private readonly bus: IMakaioBus = MakaioBus) {
@@ -66,9 +66,10 @@ export class SessionBridge {
         for (const [agentId, sessionId] of this.agentToSession) {
           if (sessionId === ctx.payload.sessionId) {
             this.agentToSession.delete(agentId);
-            this.agentContext.delete(agentId);
-            this.agentBlocks.delete(agentId);
           }
+        }
+        for (const [key, pending] of this.pendingAssistantResponses) {
+          if (pending.sessionId === ctx.payload.sessionId) this.pendingAssistantResponses.delete(key);
         }
       }),
     );
@@ -78,19 +79,33 @@ export class SessionBridge {
    * Track turn assignments for agents.
    */
   private registerTurnTrackingHandlers(): void {
-    // Track turn assignment from turn.started
+    // `turn.started` is the durable first-message lifecycle record. Seed its
+    // exact fanout as well; later `user_message.sent` records additional
+    // messages in the same turn without replacing this response.
     this.cleanups.push(
       this.bus.on(SessionSubjects.turn.started, (ctx) => {
-        const { sessionId, turnId, agentIds } = ctx.payload;
+        const { sessionId, turnId, messageId, agentIds } = ctx.payload;
         for (const agentId of agentIds) {
-          const existing = this.agentContext.get(agentId);
-          this.agentContext.set(agentId, {
-            ...existing,
+          const key = this.pendingKey(turnId, messageId, agentId);
+          if (!this.pendingAssistantResponses.has(key)) {
+            this.pendingAssistantResponses.set(key, { sessionId, turnId, messageId, agentId, blocks: [] });
+          }
+        }
+      }),
+    );
+    // Seed every admitted delivery before provider work starts.
+    this.cleanups.push(
+      this.bus.on(SessionSubjects.user_message.sent, (ctx) => {
+        const { sessionId, turnId, messageId, agentIds } = ctx.payload;
+        for (const agentId of agentIds) {
+          const key = this.pendingKey(turnId, messageId, agentId);
+          this.pendingAssistantResponses.set(key, {
             sessionId,
             turnId,
+            messageId,
+            agentId,
+            blocks: [],
           });
-          // Initialize block accumulator for this agent
-          this.agentBlocks.set(agentId, []);
         }
       }),
     );
@@ -98,14 +113,31 @@ export class SessionBridge {
     // Associate acknowledged fallback deliveries to the existing turn context.
     this.cleanups.push(
       this.bus.on(SessionSubjects.user_message.acknowledged, (ctx) => {
-        const existing = this.agentContext.get(ctx.payload.agentId);
-        this.agentContext.set(ctx.payload.agentId, {
-          ...existing,
-          sessionId: ctx.payload.sessionId,
-          turnId: ctx.payload.turnId,
-        });
-        if (!this.agentBlocks.has(ctx.payload.agentId)) {
-          this.agentBlocks.set(ctx.payload.agentId, []);
+        const key = this.pendingKey(ctx.payload.turnId, ctx.payload.messageId, ctx.payload.agentId);
+        if (!this.pendingAssistantResponses.has(key)) {
+          this.pendingAssistantResponses.set(key, {
+            sessionId: ctx.payload.sessionId,
+            turnId: ctx.payload.turnId,
+            messageId: ctx.payload.messageId,
+            agentId: ctx.payload.agentId,
+            blocks: [],
+          });
+        }
+      }),
+    );
+    this.cleanups.push(
+      this.bus.on(SessionSubjects.turn.assistantPersistenceSettled, (ctx) => {
+        const { turnId, messageId, agentId } = ctx.payload;
+        this.pendingAssistantResponses.delete(this.pendingKey(turnId, messageId, agentId));
+      }),
+    );
+    this.cleanups.push(
+      this.bus.on(SessionSubjects.turn.completed, (ctx) => {
+        const { sessionId, turnId } = ctx.payload;
+        for (const [key, pending] of this.pendingAssistantResponses) {
+          if (pending.sessionId === sessionId && pending.turnId === turnId) {
+            this.pendingAssistantResponses.delete(key);
+          }
         }
       }),
     );
@@ -118,9 +150,9 @@ export class SessionBridge {
     // Accumulate text blocks from agent.message
     this.cleanups.push(
       this.bus.on(AgentSubjects.message, (ctx) => {
-        const blocks = this.agentBlocks.get(ctx.payload.agentId);
-        if (blocks) {
-          blocks.push({ type: 'text', content: ctx.payload.content });
+        const pending = this.pendingForProviderEvent(ctx.payload);
+        if (pending) {
+          pending.blocks.push({ type: 'text', content: ctx.payload.content });
         }
       }),
     );
@@ -128,9 +160,9 @@ export class SessionBridge {
     // Accumulate reasoning blocks
     this.cleanups.push(
       this.bus.on(AgentSubjects.reasoning, (ctx) => {
-        const blocks = this.agentBlocks.get(ctx.payload.agentId);
-        if (blocks) {
-          blocks.push({ type: 'reasoning', content: ctx.payload.content });
+        const pending = this.pendingForProviderEvent(ctx.payload);
+        if (pending) {
+          pending.blocks.push({ type: 'reasoning', content: ctx.payload.content });
         }
       }),
     );
@@ -138,9 +170,9 @@ export class SessionBridge {
     // Accumulate tool_call blocks
     this.cleanups.push(
       this.bus.on(AgentSubjects.tool.use, (ctx) => {
-        const blocks = this.agentBlocks.get(ctx.payload.agentId);
-        if (blocks) {
-          blocks.push({
+        const pending = this.pendingForProviderEvent(ctx.payload);
+        if (pending) {
+          pending.blocks.push({
             type: 'tool_call',
             toolCallId: ctx.payload.toolCallId,
             name: ctx.payload.toolName,
@@ -153,11 +185,11 @@ export class SessionBridge {
     // Accumulate tool_output blocks
     this.cleanups.push(
       this.bus.on(AgentSubjects.tool.completed, (ctx) => {
-        const blocks = this.agentBlocks.get(ctx.payload.agentId);
-        if (blocks) {
+        const pending = this.pendingForProviderEvent(ctx.payload);
+        if (pending) {
           const result = ctx.payload.result;
           const output = typeof result === 'string' ? result : JSON.stringify(result);
-          blocks.push({
+          pending.blocks.push({
             type: 'tool_output',
             toolCallId: ctx.payload.toolCallId,
             output,
@@ -174,47 +206,64 @@ export class SessionBridge {
     // Error outcomes carry an `error` string for partial-block storage.
     this.cleanups.push(
       this.bus.on(AgentSubjects.complete, async (ctx) => {
-        // Guard: events from the import pipeline carry _import metadata.
-        // Storage is already handled by the importer — skip here to avoid duplicates.
+        // Imported storage is complete; discard its exact delivery before ignoring duplicate persistence.
         if ((ctx.payload as Record<string, unknown>)['_import']) {
-          this.agentBlocks.delete(ctx.payload.agentId);
+          const { turnId, messageId, agentId } = ctx.payload;
+          if (turnId) this.pendingAssistantResponses.delete(this.pendingKey(turnId, messageId, agentId));
           return;
         }
-        const { agentId, adapterSessionId, outcome, error, message, structuredOutputValidation } = ctx.payload;
-        await this.storeAssistantMessage(
-          agentId,
-          outcome === 'error' ? undefined : adapterSessionId,
-          outcome === 'error' ? error : undefined,
-          structuredOutputValidation !== undefined ? { content: message } : undefined,
-        );
+        const { agentId, adapterSessionId, outcome, error, message, structuredOutputValidation, turnId, messageId } =
+          ctx.payload;
+        if (!turnId) {
+          return;
+        }
+        const key = this.pendingKey(turnId, messageId, agentId);
+        const pending = this.pendingAssistantResponses.get(key);
+        if (!pending) return;
+
+        // Atomically transfer this turn's response out of live agent state.
+        // A subsequent turn may now install a fresh accumulator while the old
+        // snapshot persists, without old cleanup being able to erase it.
+        this.pendingAssistantResponses.delete(key);
+        try {
+          await this.storeAssistantMessage(
+            pending,
+            outcome === 'error' ? undefined : adapterSessionId,
+            outcome === 'error' ? error : undefined,
+            structuredOutputValidation !== undefined ? { content: message } : undefined,
+          );
+        } finally {
+          await this.bus.emit(SessionSubjects.turn.assistantPersistenceSettled, {
+            sessionId: pending.sessionId,
+            turnId: pending.turnId,
+            agentId,
+            messageId: pending.messageId,
+          });
+        }
       }),
     );
   }
 
   /**
    * Store accumulated blocks as an assistant message.
-   * @param agentId - ID of the agent that produced the message
+   * @param response - Detached turn-scoped response to persist
    * @param adapterSessionId - Optional adapter session ID
    * @param error - Optional error message if agent failed
    * @param messageOverride - Optional validated terminal message to store instead of accumulated provider blocks
    */
   private async storeAssistantMessage(
-    agentId: string,
+    response: PendingAssistantResponse & { agentId: string },
     adapterSessionId?: string,
     error?: string,
     messageOverride?: AssistantMessageOverride,
   ): Promise<void> {
-    const context = this.agentContext.get(agentId);
-    if (!context?.turnId) return;
-
     const blocks: SessionMessageBlock[] =
       messageOverride !== undefined
         ? messageOverride.content !== undefined
           ? [{ type: 'text', content: messageOverride.content }]
           : []
-        : (this.agentBlocks.get(agentId) ?? []);
+        : response.blocks;
     if (blocks.length === 0 && !error) {
-      this.agentBlocks.delete(agentId);
       return;
     }
 
@@ -231,34 +280,35 @@ export class SessionBridge {
       const appendResult = await this.bus.requestOptional(MessageStorageSubjects.append, {
         message: {
           messageId,
-          turnId: context.turnId,
-          sessionId: context.sessionId,
+          turnId: response.turnId,
+          sessionId: response.sessionId,
           role: 'assistant',
           contentText: contentText || (error ? `[Error: ${error}]` : ''),
           blocks,
-          agentId,
+          agentId: response.agentId,
           adapterSessionId,
           timestamp: Date.now(),
         },
       });
       if (!appendResult.handled) {
-        this.agentBlocks.delete(agentId);
         return;
       }
 
       // Update routing status to completed — also optional; skip if no routing handler registered
       const getResult = await this.bus.requestOptional(MessageStorageSubjects.getByTurn, {
-        turnId: context.turnId,
+        turnId: response.turnId,
       });
       if (getResult.handled) {
-        const userMessage = getResult.data.messages.find((m) => m.role === 'user');
+        const userMessage = getResult.data.messages.find(
+          (m) => m.role === 'user' && m.messageId === response.messageId,
+        );
         if (userMessage) {
           // Fire-and-forget: routing records are non-critical audit metadata.
           // The result is intentionally not checked — a missing routing handler
           // (e.g. in ephemeral mode) is silently ignored.
           await this.bus.requestOptional(MessageRoutingSubjects.record, {
             messageId: userMessage.messageId,
-            agentId,
+            agentId: response.agentId,
             status: 'completed',
             timestamp: Date.now(),
             error,
@@ -268,9 +318,6 @@ export class SessionBridge {
     } catch (err) {
       console.error('[SessionBridge] Failed to store assistant message:', err);
     }
-
-    // Clean up
-    this.agentBlocks.delete(agentId);
   }
 
   /**
@@ -282,7 +329,31 @@ export class SessionBridge {
     }
     this.cleanups.length = 0;
     this.agentToSession.clear();
-    this.agentContext.clear();
-    this.agentBlocks.clear();
+    this.pendingAssistantResponses.clear();
+  }
+
+  /**
+   * Find a response only when the provider event carries explicit delivery correlation.
+   * @param payload - Explicit provider event correlation.
+   * @returns Matching pending response, when every identity component is present.
+   */
+  private pendingForProviderEvent(payload: {
+    agentId: string;
+    turnId?: string;
+    messageId?: string;
+  }): PendingAssistantResponse | undefined {
+    if (!payload.turnId || !payload.messageId) return undefined;
+    return this.pendingAssistantResponses.get(this.pendingKey(payload.turnId, payload.messageId, payload.agentId));
+  }
+
+  /**
+   * Build an unambiguous in-memory identity for one assistant response.
+   * @param turnId - Managed turn identity.
+   * @param messageId - User-message identity.
+   * @param agentId - Agent identity.
+   * @returns Collision-free composite key.
+   */
+  private pendingKey(turnId: string, messageId: string, agentId: string): string {
+    return JSON.stringify([turnId, messageId, agentId]);
   }
 }

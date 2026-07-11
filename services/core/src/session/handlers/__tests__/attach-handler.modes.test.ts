@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, AgentResolutionSubjects } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '../../../adapter-runtime/index.js';
-import { ATTACH_TEST_IDS, createAttachHandlerContext, type AttachHandlerTestContext } from './shared.js';
+import {
+  ATTACH_TEST_IDS,
+  createAttachHandlerContext,
+  registerSuccessfulMessageAppendHandler,
+  registerSuccessfulSendHandler,
+  type AttachHandlerTestContext,
+} from './shared.js';
 
 describe('registerAttachHandler - runtime options', () => {
   const { sessionId, adapterName } = ATTACH_TEST_IDS;
@@ -11,6 +17,7 @@ describe('registerAttachHandler - runtime options', () => {
 
   beforeEach(() => {
     ctx = createAttachHandlerContext();
+    ctx.trackUnsubscribe(registerSuccessfulSendHandler());
   });
 
   afterEach(() => {
@@ -20,6 +27,7 @@ describe('registerAttachHandler - runtime options', () => {
   describe('should pass through runtime options', () => {
     it('passes initialMessage promptText into virtual model resolution context', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      ctx.trackUnsubscribe(registerSuccessfulMessageAppendHandler());
       ctx.trackUnsubscribe(
         MakaioBus.on(AgentResolutionSubjects.resolve, (context) => {
           expect(context.payload).toMatchObject({

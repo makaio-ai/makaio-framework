@@ -47,10 +47,18 @@ async function makeSession(
     onTurnComplete: vi.fn(),
     emitTurnCompleted: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     emitToolUseStarted: vi
-      .fn<(payload: { toolName: string; toolUseId: string; toolInput: unknown }) => Promise<void>>()
+      .fn<(payload: { messageId: string; toolName: string; toolUseId: string; toolInput: unknown }) => Promise<void>>()
       .mockResolvedValue(undefined),
     emitToolUseFinished: vi
-      .fn<(payload: { toolName: string; toolUseId: string; toolResult: unknown; isError?: boolean }) => Promise<void>>()
+      .fn<
+        (payload: {
+          messageId: string;
+          toolName: string;
+          toolUseId: string;
+          toolResult: unknown;
+          isError?: boolean;
+        }) => Promise<void>
+      >()
       .mockResolvedValue(undefined),
     interruptSettleMs: 1,
     ...overrides,
@@ -94,5 +102,29 @@ describe('TmuxConnectorSession', () => {
     await expect(session.processQueue(queue)).rejects.toThrow('start callback failed');
 
     expect(session.getCurrentTurn()).toBeUndefined();
+  });
+
+  it('drops a post-tool hook after the owning turn terminates with an error', async () => {
+    const emitToolUseFinished = vi
+      .fn<
+        (payload: {
+          messageId: string;
+          toolName: string;
+          toolUseId: string;
+          toolResult: unknown;
+          isError?: boolean;
+        }) => Promise<void>
+      >()
+      .mockResolvedValue(undefined);
+    const session = await makeSession({ emitToolUseFinished });
+    const queue = new UserMessageQueue();
+    queue.enqueue(makeHandle());
+    await session.processQueue(queue);
+
+    await session.handlePreToolUse('Read', 'tool-abandoned', { path: 'stale.txt' });
+    await session.handleTurnError(new Error('connector closed'));
+    await session.handlePostToolUse('Read', 'tool-abandoned', 'stale output');
+
+    expect(emitToolUseFinished).not.toHaveBeenCalled();
   });
 });

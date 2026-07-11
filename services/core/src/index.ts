@@ -120,12 +120,11 @@ export type {
   SessionContextWindowState,
   SessionPreviewMaps,
   StartTurnOptions,
-  TurnCompleteCallback,
-  TurnCompletionResult,
   TurnConfig,
   TurnContext,
+  TurnPairStateChange,
+  TurnPairTerminalOutcome,
   TurnResult,
-  TurnStateChange,
 } from './session/index.js';
 export {
   ArtifactSchemaRegistry,

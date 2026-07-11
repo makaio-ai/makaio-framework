@@ -224,14 +224,15 @@ export class GeminiConnectorSession extends BaseConnectorSession<GeminiSessionCo
         }
 
         console.error('[GeminiSession] Turn error:', error);
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
         const errorResult = {
           outcome: 'error' as const,
-          error: error instanceof Error ? error.message : String(error),
+          error: normalizedError,
         };
         if (!handle.isProcessed) {
           await markCompletedWithFinalResult(handle, errorResult, this.config.onTurnComplete);
         }
-        this.config.handleError(error instanceof Error ? error : new Error(String(error)), false);
+        this.config.handleError(normalizedError, false);
       } finally {
         // Guarantee turn finalization: emit turn_finished so the connector transitions
         // through processing_finished → idle (or processes the next queued message).

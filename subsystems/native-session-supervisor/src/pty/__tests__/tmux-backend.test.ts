@@ -120,7 +120,7 @@ describeWithTmux('TmuxBackend — real tmux integration', { timeout: REAL_TMUX_T
 
   beforeEach(() => {
     serverName = uniqueServerName();
-    backend = new TmuxBackend({ serverName, pollIntervalMs: 50 });
+    backend = new TmuxBackend({ serverName, pollIntervalMs: 50, exitPollIntervalMs: 50 });
     spawned = [];
   });
 

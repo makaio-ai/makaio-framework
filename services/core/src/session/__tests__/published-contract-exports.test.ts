@@ -11,8 +11,9 @@
  * - `@makaio/contracts` (root and the `./session` subpath share one barrel):
  *   ingestion marker, session-level turn events, import-upsert registration.
  * - `@makaio/contracts/client`: observed-session hook event contracts.
- * - `@makaio/services-core/session`: turn ingestion seam + lifecycle event
- *   persistence helpers (and the absence of the retired `SessionLogger`).
+ * - `@makaio/services-core` and `@makaio/services-core/session`: turn ingestion,
+ *   message-addressed mutation, and lifecycle event persistence seams (plus the
+ *   absence of the retired `SessionLogger`).
  * - `@makaio/services-log-import`: file-addressable import trigger.
  * - `@makaio/hooks`: PostTurn backfill filter option.
  * - `@makaio/ai-adapters-core`: importer registration and segment-tree types.
@@ -31,6 +32,7 @@ import type {
   ProcessLogFileResult,
 } from '@makaio/ai-adapters-core';
 import type { PostTurnHookOptions } from '@makaio/hooks';
+import type { TurnPairStateChange, TurnPairTerminalOutcome } from '@makaio/services-core';
 import * as sessionCore from '@makaio/services-core/session';
 import { LogImportSubjects, registerImportFileHandler } from '@makaio/services-log-import';
 
@@ -95,6 +97,11 @@ describe('published contract exports (session ingestion surface)', () => {
       expect(typeof sessionCore.registerSessionLifecycleEventWriters).toBe('function');
       expect(typeof sessionCore.emitSessionTurnStarted).toBe('function');
       expectTypeOf<sessionCore.EventTransform>().not.toBeNever();
+    });
+
+    it('exports the message-addressed turn mutation contract', () => {
+      expectTypeOf<TurnPairTerminalOutcome>().toEqualTypeOf<sessionCore.TurnPairTerminalOutcome>();
+      expectTypeOf<TurnPairStateChange>().toEqualTypeOf<sessionCore.TurnPairStateChange>();
     });
 
     it('no longer exposes the retired SessionLogger', () => {

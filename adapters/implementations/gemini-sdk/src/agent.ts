@@ -130,13 +130,12 @@ export class GeminiAgent extends AIAgent<GeminiConnectorBus, GeminiConnector> {
       await this.emitGlobal(AgentSubjects.message, { content: ctx.payload.message });
     });
 
-    // Error events -> flush in-flight steps + agent.error
+    // Error events flush in-flight steps before the terminal message result is emitted.
     // flushAccumulatedSteps maintains the lifecycle invariant that every step.started
     // has a matching step.finished — normally called from session.finished, but errors
     // skip that event so we must flush here too.
-    this.subscribeConnector(connector, GeminiConnectorSubjects.session.error, async (ctx) => {
+    this.subscribeConnector(connector, GeminiConnectorSubjects.session.error, async () => {
       await this.flushAccumulatedSteps();
-      await this.emitError({ error: ctx.payload.error });
     });
   }
 

@@ -122,6 +122,8 @@ export const UsageSchema = z.looseObject({
  */
 export const ToolStartedEventSchema = z.looseObject({
   eventType: z.literal('tool_started'),
+  /** Makaio message that owns this tool execution. */
+  messageId: z.string(),
   /** Name of the tool that started. */
   toolName: z.string(),
   /** Unique identifier for this tool call. */
@@ -141,6 +143,8 @@ export type ToolStartedEvent = z.infer<typeof ToolStartedEventSchema>;
  */
 export const ToolCompletedSchema = z.looseObject({
   eventType: z.literal('tool_completed'),
+  /** Makaio message that owns this tool execution. */
+  messageId: z.string(),
   /** Name of the tool that was executed. */
   toolName: z.string(),
   /** Unique identifier for this tool call. */

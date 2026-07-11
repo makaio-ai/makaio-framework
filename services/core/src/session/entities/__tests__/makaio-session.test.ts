@@ -154,7 +154,7 @@ describe('MakaioSession', () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
       const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
 
-      turn.markAgentCompleted('agent-1');
+      turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
       await session.completeTurn(turn);
 
       expect(session.getActiveTurn()).toBeUndefined();
@@ -187,7 +187,7 @@ describe('MakaioSession', () => {
         sequence.push('emitted');
       });
 
-      turn.markAgentCompleted('agent-1');
+      turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
       await session.completeTurn(turn);
 
       expect(sequence).toEqual(['stored', 'emitted']);
@@ -205,7 +205,7 @@ describe('MakaioSession', () => {
         received.push(ctx.payload);
       });
 
-      turn.markAgentCompleted('agent-1');
+      turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
       await session.completeTurn(turn);
 
       expect(received).toHaveLength(1);
@@ -227,7 +227,7 @@ describe('MakaioSession', () => {
         received.push(ctx.payload);
       });
 
-      turn.markAgentErrored('agent-1', 'Something went wrong');
+      turn.recordPairTerminal('msg-1', 'agent-1', 'error', 'Something went wrong');
       await session.completeTurn(turn);
 
       expect(received).toHaveLength(1);

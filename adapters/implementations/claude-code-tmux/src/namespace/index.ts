@@ -20,6 +20,8 @@ export const TurnCompletedSchema = z.object({
 
 /** Payload for `tool_use.started` — metadata from the PreToolUse hook. */
 export const TmuxToolUseStartedSchema = z.object({
+  /** Message handle that owned the active hook-driven turn. */
+  messageId: z.string(),
   /** Claude Code-native tool use identifier. */
   toolUseId: z.string(),
   /** Name of the tool being invoked. */
@@ -30,6 +32,8 @@ export const TmuxToolUseStartedSchema = z.object({
 
 /** Payload for `tool_use.finished` — metadata from the PostToolUse hook. */
 export const TmuxToolUseFinishedSchema = z.object({
+  /** Message handle that owned the active hook-driven turn. */
+  messageId: z.string(),
   /** Claude Code-native tool use identifier (correlates with tool_use.started). */
   toolUseId: z.string(),
   /** Name of the tool that completed. */

@@ -12,6 +12,7 @@ import {
   normalizeTerminalResultUsage,
   type TerminalResultUsage,
 } from './terminal-usage.js';
+import { routeClaudeToolResults } from './claude-tool-results.js';
 
 type ContentBlockStartPayload = {
   type: string;
@@ -176,6 +177,7 @@ export abstract class ClaudeCodeAgent<
     // wiring that existed before the shared extraction.
     this.subscribeClaudeConnector(connector, s.sdk.event, async (ctx) => {
       const msg = ctx.payload;
+      const messageId = msg.originatingMessageId;
       switch (msg.type) {
         case 'system':
           if (msg.subtype === 'init') {
@@ -187,8 +189,12 @@ export abstract class ClaudeCodeAgent<
           if (!content) break;
           await processDiscriminatedItems(content, CONTENT_BLOCK_HANDLERS, async (subject, payload) => {
             if (subject.subject === 'tool.use') {
+              if (messageId === undefined) return;
               const tp = payload as { toolName: string; args?: Record<string, unknown>; toolCallId: string };
-              await this.emitToolUse(tp.toolName, tp.args, tp.toolCallId);
+              await this.emitToolUse(messageId, tp.toolName, tp.args, tp.toolCallId);
+            } else if (subject.subject === 'tool.started' || subject.subject === 'tool.completed') {
+              if (messageId === undefined) return;
+              await this.emitGlobal(subject, { ...payload, messageId });
             } else {
               await this.emitGlobal(subject, payload);
             }
@@ -198,7 +204,7 @@ export abstract class ClaudeCodeAgent<
         case 'stream_event': {
           const event = msg.event;
           if (event.type === 'content_block_start') {
-            await this.handleContentBlockStart(event);
+            await this.handleContentBlockStart(event, messageId);
           } else if (event.type === 'content_block_stop') {
             await this.handleContentBlockStop(event);
           } else if (event.type === 'content_block_delta') {
@@ -210,7 +216,7 @@ export abstract class ClaudeCodeAgent<
           await this.handleResultEvent(msg);
           break;
         case 'user':
-          await this.handleUserEvent(msg);
+          await this.handleUserEvent(msg, messageId);
           break;
       }
     });
@@ -219,8 +225,9 @@ export abstract class ClaudeCodeAgent<
   /**
    * Handle content_block_start event - reset accumulators and emit step.started.
    * @param event - The content_block_start event
+   * @param messageId - Originating connector message identity
    */
-  private async handleContentBlockStart(event: ContentBlockStartEvent): Promise<void> {
+  private async handleContentBlockStart(event: ContentBlockStartEvent, messageId?: string): Promise<void> {
     const block = event.content_block;
     const toolUseMetadata = getToolUseMetadata(block);
     const stepType: StepType =
@@ -248,11 +255,24 @@ export abstract class ClaudeCodeAgent<
     if (block.type === 'tool_use' && !toolUseMetadata) {
       console.warn('[ClaudeCodeAdapter] Received tool_use block without id or name; skipping tool correlation setup');
     }
+    if (toolUseMetadata && messageId === undefined) {
+      console.warn(
+        '[ClaudeCodeAdapter] Received tool_use block without originating message identity; skipping tool events',
+      );
+      return;
+    }
 
-    await this.emitGlobal(AgentSubjects.step.started, { stepType, blockIndex: event.index, blockData, content });
+    await this.emitGlobal(AgentSubjects.step.started, {
+      ...(messageId !== undefined && { messageId }),
+      stepType,
+      blockIndex: event.index,
+      blockData,
+      content,
+    });
 
     if (toolUseMetadata) {
       await this.emitGlobal(AgentSubjects.tool.started, {
+        ...(messageId !== undefined && { messageId }),
         toolName: toolUseMetadata.toolName,
         toolCallId: toolUseMetadata.toolCallId,
       });
@@ -307,7 +327,7 @@ export abstract class ClaudeCodeAgent<
   }
 
   /**
-   * Handle result event - track usage and emit completion or error.
+   * Handle result event usage metadata.
    * @param payload - Result event payload
    */
   private async handleResultEvent(payload: {
@@ -325,74 +345,55 @@ export abstract class ClaudeCodeAgent<
         cachedTokens: usage.cache_read_input_tokens,
       });
     }
-
-    if (payload.subtype !== 'success' || payload.is_error) {
-      await this.emitError({ error: payload.subtype });
-    }
   }
 
   /**
    * Handle user event - emit tool.output, tool.completed, and step.finished.
    * @param payload - User event payload
+   * @param messageId - Originating connector message identity
    */
-  private async handleUserEvent(payload: {
-    message?: { content?: unknown };
-    tool_use_result?: { stdout?: string; stderr?: string } | string;
-  }): Promise<void> {
-    const content = payload.message?.content;
-    const contentBlocks = Array.isArray(content) ? content : content ? [content] : [];
+  private async handleUserEvent(
+    payload: {
+      message?: { content?: unknown };
+      tool_use_result?: { stdout?: string; stderr?: string } | string;
+    },
+    messageId?: string,
+  ): Promise<void> {
+    await routeClaudeToolResults({
+      messageId,
+      payload,
+      resolveToolOutput: async (ownerId, output, nativeId) => await this.emitToolOutput(ownerId, output, { nativeId }),
+      emitToolCompleted: async (result) => await this.emitGlobal(AgentSubjects.tool.completed, result),
+      emitToolStepFinished: async (result) =>
+        await this.emitGlobal(AgentSubjects.step.finished, {
+          stepType: 'tool_use' as StepType,
+          blockIndex: result.blockIndex,
+          content: {
+            type: 'tool_output',
+            toolCallId: result.toolCallId,
+            output: result.output,
+            isError: result.isError,
+          },
+        }),
+      consumeToolBlockIndex: (nativeId) => this.consumeToolBlockIndex(nativeId),
+    });
+  }
 
-    for (const block of contentBlocks) {
-      if (typeof block === 'object' && block !== null) {
-        const typedBlock = block as {
-          type?: string;
-          tool_use_id?: string;
-          content?: unknown;
-          is_error?: boolean;
-        };
-        if (typedBlock.type === 'tool_result') {
-          const nativeId = typedBlock.tool_use_id;
-          const toolResult = payload.tool_use_result;
-          let output: string | undefined;
-          if (typeof toolResult === 'string') {
-            output = toolResult;
-          } else if (toolResult?.stdout || toolResult?.stderr) {
-            output = [toolResult.stdout, toolResult.stderr].filter(Boolean).join('\n');
-          }
-          const resolved = await this.emitToolOutput(output ?? '', { nativeId });
-
-          await this.emitGlobal(AgentSubjects.tool.completed, {
-            toolName: resolved.toolName,
-            args: resolved.args,
-            result: { content: typedBlock.content ?? {} },
-            success: !typedBlock.is_error,
-            toolCallId: resolved.toolCallId,
-          });
-
-          let resolvedBlockIndex = -1;
-          if (nativeId) {
-            const blockIndex = this.toolBlockIndexMap.get(nativeId);
-            if (blockIndex === undefined) {
-              console.warn(
-                `[ClaudeCodeAdapter] toolCallId ${nativeId} not found in toolBlockIndexMap - possible state mismatch`,
-              );
-            }
-            resolvedBlockIndex = blockIndex ?? -1;
-            this.toolBlockIndexMap.delete(nativeId);
-          }
-          await this.emitGlobal(AgentSubjects.step.finished, {
-            stepType: 'tool_use' as StepType,
-            blockIndex: resolvedBlockIndex,
-            content: {
-              type: 'tool_output',
-              toolCallId: resolved.toolCallId,
-              output: output ?? '',
-              isError: typedBlock.is_error ?? false,
-            },
-          });
-        }
-      }
+  /**
+   * Return and clear the SDK block index retained for a tool result.
+   * @param nativeId - Provider-native tool call identifier.
+   * @returns Retained block index, or -1 when no index was recorded.
+   */
+  private consumeToolBlockIndex(nativeId: string | undefined): number {
+    if (nativeId === undefined) return -1;
+    const blockIndex = this.toolBlockIndexMap.get(nativeId);
+    this.toolBlockIndexMap.delete(nativeId);
+    if (blockIndex === undefined) {
+      console.warn(
+        `[ClaudeCodeAdapter] toolCallId ${nativeId} not found in toolBlockIndexMap - possible state mismatch`,
+      );
     }
+    return blockIndex ?? -1;
   }
 
   /**

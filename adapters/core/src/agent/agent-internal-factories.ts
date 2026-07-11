@@ -127,7 +127,7 @@ export function createAgentLifecycleEmitter(config: CreateLifecycleEmitterInput)
       await config.emitGlobal(AgentSubjects.session.closed, payload);
     },
     onBeforeEmitCompletion: config.onBeforeEmitCompletion,
-    clearToolCallTracker: config.clearToolCallTracker,
+    clearMessageToolCalls: config.clearMessageToolCalls,
   });
 }
 

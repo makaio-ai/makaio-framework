@@ -14,7 +14,7 @@ export { registerCoreSessionServiceHandlers } from './session-service-handlers-c
 // Session orchestrator (turn lifecycle, message routing)
 export { SessionOrchestrator } from './session-orchestrator.js';
 export { AdapterRegistry } from './adapter-registry.js';
-export { SessionTurnManager, type TurnCompletionResult, type TurnCompleteCallback } from './session-turn-manager.js';
+export { SessionTurnManager } from './session-turn-manager.js';
 export { TurnContextEnricher } from './turn-context-enricher.js';
 // Fallback coordination is host-owned and plugs in through orchestration seams.
 // Framework-internal turn helper used by SessionTurnManager and framework-layer orchestrators
@@ -115,10 +115,12 @@ export type { InsertSessionEvent, SelectSessionEvent } from './session-events/in
 export {
   appendSessionLifecycleEvent,
   emitSessionTurnStarted,
+  emitSessionUserMessageSent,
   registerSessionLifecycleEventWriters,
   type EventTransform,
   type SessionLifecycleEventArgs,
   type SessionTurnStartedPayload,
+  type SessionUserMessageSentPayload,
 } from './session-lifecycle-events.js';
 
 // Turn lifecycle ingestion seam (externally-completed turns → canonical session.turn.* events)
@@ -197,8 +199,9 @@ export type {
   StartTurnOptions,
   TurnConfig,
   TurnContext,
+  TurnPairStateChange,
+  TurnPairTerminalOutcome,
   TurnResult,
-  TurnStateChange,
 } from './entities/index.js';
 
 // Post-import lineage resolvers and session-discovery handler

@@ -15,6 +15,8 @@ import type { TmuxConnectorSessionConfig } from './types.js';
 export class TmuxConnectorSession {
   private readonly config: TmuxConnectorSessionConfig;
   private activeTurn: TmuxConnectorTurn | undefined;
+  /** Tool calls retain their originating turn across immediate supersession. */
+  private readonly toolCallTurns = new Map<string, TmuxConnectorTurn>();
   /**
    * Guards against late Stop hooks racing with a freshly started turn.
    *
@@ -143,6 +145,7 @@ export class TmuxConnectorSession {
     try {
       await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
     } finally {
+      this.clearAbandonedToolCalls(turn);
       await this.finishActiveTurn(turn);
     }
   }
@@ -160,14 +163,28 @@ export class TmuxConnectorSession {
   }
 
   /**
+   * Remove tool origins for a terminal error that cannot receive a post-tool hook.
+   * @param turn - Terminal turn whose outstanding tool calls are abandoned.
+   */
+  private clearAbandonedToolCalls(turn: TmuxConnectorTurn): void {
+    for (const [toolUseId, owner] of this.toolCallTurns) {
+      if (owner === turn) this.toolCallTurns.delete(toolUseId);
+    }
+  }
+
+  /**
    * Handle a PreToolUse hook event.
    * @param toolName - Name of the tool being invoked.
    * @param toolUseId - Claude Code-native tool use identifier.
    * @param toolInput - Raw tool input from Claude Code.
    */
   public async handlePreToolUse(toolName: string, toolUseId: string, toolInput: unknown): Promise<void> {
-    await this.activeTurn?.markStepStarted();
-    await this.config.emitToolUseStarted({ toolName, toolUseId, toolInput });
+    const activeTurn = this.activeTurn;
+    const messageId = activeTurn?.getMessageHandle()?.messageId;
+    if (activeTurn === undefined || messageId === undefined) return;
+    this.toolCallTurns.set(toolUseId, activeTurn);
+    await activeTurn.markStepStarted();
+    await this.config.emitToolUseStarted({ messageId, toolName, toolUseId, toolInput });
   }
 
   /**
@@ -183,7 +200,11 @@ export class TmuxConnectorSession {
     toolResult: unknown,
     isError?: boolean,
   ): Promise<void> {
-    await this.activeTurn?.markStepFinished();
-    await this.config.emitToolUseFinished({ toolName, toolUseId, toolResult, isError });
+    const originatingTurn = this.toolCallTurns.get(toolUseId);
+    const messageId = originatingTurn?.getMessageHandle()?.messageId;
+    if (originatingTurn === undefined || messageId === undefined) return;
+    this.toolCallTurns.delete(toolUseId);
+    await originatingTurn.markStepFinished();
+    await this.config.emitToolUseFinished({ messageId, toolName, toolUseId, toolResult, isError });
   }
 }

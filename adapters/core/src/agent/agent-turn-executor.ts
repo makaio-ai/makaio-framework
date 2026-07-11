@@ -221,6 +221,7 @@ export class AgentTurnExecutor {
       }),
       ...(payload.responseSchema !== undefined && { responseSchema: payload.responseSchema }),
     });
+    this.assertCanonicalMessageId(payload.messageId, handle, connector, 'sendMessage');
 
     this.firePostUserMessageHooks(handle.messageId);
     await this.onMessageHandle(handle, payload.turnId);
@@ -252,6 +253,7 @@ export class AgentTurnExecutor {
       message,
       sessionContext: parsedSessionContext,
       cwd: connector.cwd,
+      messageId: options?.messageId,
     });
 
     const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
@@ -260,6 +262,7 @@ export class AgentTurnExecutor {
 
     const connectorOptions: ConnectorStartOptions = {
       systemPrompt,
+      messageId: options?.messageId,
       messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
       cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
       turnContext: buildStructuredOutputTurnContext(
@@ -274,6 +277,7 @@ export class AgentTurnExecutor {
     };
 
     const startResult = await connector.start(normalizedMessage, connectorOptions);
+    this.assertCanonicalMessageId(options?.messageId, startResult.messageHandle, connector, 'start');
 
     this.firePostUserMessageHooks(startResult.messageHandle.messageId);
     await this.onMessageHandle(startResult.messageHandle, undefined);
@@ -324,5 +328,28 @@ export class AgentTurnExecutor {
     ).catch((err) => {
       console.error('[AIAgent] PostUserMessage hook error:', err);
     });
+  }
+
+  /**
+   * Enforce the connector contract for an orchestrator-assigned message identity.
+   * @param expectedMessageId - Canonical caller identity, when one was supplied.
+   * @param handle - Connector handle returned for the dispatched message.
+   * @param connector - Connector that owns fatal teardown for a violated dispatch contract.
+   * @param operation - Connector operation that produced the handle.
+   */
+  private assertCanonicalMessageId(
+    expectedMessageId: string | undefined,
+    handle: MessageHandle,
+    connector: AIAgentConnector,
+    operation: 'start' | 'sendMessage',
+  ): void {
+    if (expectedMessageId === undefined || handle.messageId === expectedMessageId) return;
+    const contractError = new Error(
+      `Adapter connector contract violation (${this.adapterId}, ${operation}): expected MessageHandle.messageId ` +
+        `${JSON.stringify(expectedMessageId)}, received ${JSON.stringify(handle.messageId)}`,
+    );
+    handle.markCompleted({ outcome: 'error', error: contractError });
+    connector.handleError(contractError, true);
+    throw contractError;
   }
 }

@@ -5,7 +5,6 @@ import type {
   AgentRole,
   AgentSelectionBase,
   AIReasoningLevel,
-  MessageInput,
   ProviderContext,
   ResolvedAgentConfig,
   SessionContext,
@@ -137,11 +136,14 @@ function omitUndefined<T extends object>(obj: T): Partial<T> {
  * For branching conversations, use session.fork to create a new session with
  * copied history, then attach agents to the new session.
  *
+ * Managed attach always starts the agent idle. The session layer creates the
+ * canonical turn and message identities before delivering any initial prompt
+ * through `agent.sendMessage`.
+ *
  * When `sessionContext` is provided (non-native resume paths), the locality
  * verdict is forwarded so adapters can act on it (e.g. inject history).
  * @param adapterId - Target adapter ID
  * @param sessionId - Target session ID
- * @param initialMessage - Initial message content
  * @param role - Agent role
  * @param runtimeOptions - Runtime configuration options (may include model, providerContext, reasoningEffort)
  * @param resumeAdapterSessionId - Adapter session ID to resume (enables resume mode)
@@ -152,7 +154,6 @@ function omitUndefined<T extends object>(obj: T): Partial<T> {
 export function buildStartAgentRequest(
   adapterId: string,
   sessionId: string,
-  initialMessage: MessageInput | undefined,
   role: AgentRole,
   runtimeOptions: ExtractableRuntimeOptions,
   resumeAdapterSessionId?: string,
@@ -167,7 +168,6 @@ export function buildStartAgentRequest(
       adapterSessionId: resumeAdapterSessionId,
       role,
       ...runtimeOptions,
-      ...(initialMessage !== undefined && { initialMessage }),
       ...(harnessId !== undefined && { harnessId }),
     };
   }
@@ -176,7 +176,6 @@ export function buildStartAgentRequest(
     sessionId,
     role,
     ...runtimeOptions,
-    ...(initialMessage !== undefined && { initialMessage }),
     ...(harnessId !== undefined && { harnessId }),
     ...(sessionContext !== undefined && { sessionContext }),
   };
@@ -186,7 +185,6 @@ export function buildStartAgentRequest(
 export interface LaunchAttachAgentInput {
   readonly adapterId: string;
   readonly sessionId: string;
-  readonly initialMessage: MessageInput | undefined;
   readonly role: AgentRole;
   readonly effectiveRuntimeOptions: ExtractableRuntimeOptions;
   readonly resumeAdapterSessionId: string | undefined;
@@ -208,7 +206,7 @@ export interface LaunchAttachAgentInput {
  * entering a degrade-and-retry path — that belongs to the coordinator layer.
  * @param bus - Bus instance for credential activation and adapter dispatch
  * @param input - All resolved attach parameters required to construct and send the request
- * @returns The successful startAgent response containing agentId, adapterId, and optional messageId
+ * @returns The successful idle startAgent response containing agentId and adapterId
  */
 export async function launchAttachAgent(
   bus: IMakaioBus,
@@ -217,7 +215,6 @@ export async function launchAttachAgent(
   const {
     adapterId,
     sessionId,
-    initialMessage,
     role,
     effectiveRuntimeOptions,
     resumeAdapterSessionId,
@@ -229,7 +226,6 @@ export async function launchAttachAgent(
   const startAgentRequest = buildStartAgentRequest(
     adapterId,
     sessionId,
-    initialMessage,
     role,
     effectiveRuntimeOptions,
     resumeAdapterSessionId,

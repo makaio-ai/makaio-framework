@@ -29,7 +29,8 @@ const PYTHON_REQUIREMENTS_PATH = path.resolve(PYTHON_SDK_ROOT, 'requirements.txt
 const PYTHON_DISCOVERY_TIMEOUT_MS = 5_000;
 const PYTHON_VENV_TIMEOUT_MS = 60_000;
 const PYTHON_SDK_INSTALL_TIMEOUT_MS = 120_000;
-const PYTHON_EXAMPLE_TIMEOUT_MS = 30_000;
+// The example owns two sequential 30-second protocol deadlines; this outer guard only bounds a runaway process.
+const PYTHON_EXAMPLE_TIMEOUT_MS = 70_000;
 const CLI_SDK_SMOKE_TEST_TIMEOUT_MS = 480_000;
 const PYTHON_SDK_MIN_MAJOR = 3;
 const PYTHON_SDK_MIN_MINOR = 10;
@@ -198,6 +199,7 @@ async function runPythonSdkExample(port: number, python: PythonRuntime): Promise
         env: {
           ...process.env,
           MAKAIO_BUS_URL: busUrl,
+          PYTHONUNBUFFERED: '1',
         },
         encoding: 'utf8',
         timeout: PYTHON_EXAMPLE_TIMEOUT_MS,

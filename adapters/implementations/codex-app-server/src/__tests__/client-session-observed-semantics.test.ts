@@ -10,11 +10,12 @@
  * agent event-wiring path is exercised without a live subprocess.
  */
 
-import { beforeEach, afterEach, describe, it, expect } from 'vitest';
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, ClientSubjects } from '@makaio/contracts';
 import { CodexAppServerAgent } from '../agent.js';
 import { CodexAppServerConfig } from '../config.js';
+import { CodexAppServerSubjects } from '../namespaces/index.js';
 import {
   createConnectorTestContext,
   cleanupConnectorTestContext,
@@ -235,6 +236,50 @@ describe('CodexAppServerAgent — client.session.* observed-semantics', () => {
         source: 'adapter-derived',
         observedAt: expect.any(Number),
       });
+    });
+
+    it('emits one authoritative completion when thread completion precedes the message handle', async () => {
+      await createAgentForContext(requireCtx());
+
+      const completionEvents: Array<{ messageId: string; turnId?: string }> = [];
+      const cleanup = MakaioBus.on(AgentSubjects.complete, (busCtx) => {
+        completionEvents.push({ messageId: busCtx.payload.messageId, turnId: busCtx.payload.turnId });
+      });
+
+      try {
+        const response = await MakaioBus.request(AgentSubjects.sendMessage, {
+          agentId: 'test-agent',
+          adapterId: 'test-adapter',
+          message: 'Hello',
+          messageId: 'input-message-id',
+          turnId: 'input-turn-id',
+        });
+        expect(response).toEqual({ messageId: 'input-message-id' });
+
+        await requireCtx().mockJsonRpcClient.receiveNotification('turn/started', {
+          threadId: 'thread-123',
+          turn: createMockTurn(),
+        });
+
+        // Thread lifecycle is internal state only. It must not race the tracked
+        // message handle to emit an agent-level completion with synthetic identity.
+        await requireCtx().mockBus.emit(CodexAppServerSubjects.thread_completed, {
+          agentId: 'test-agent',
+          threadId: 'thread-123',
+          timestamp: Date.now(),
+        });
+
+        await requireCtx().mockJsonRpcClient.receiveNotification('turn/completed', {
+          threadId: 'thread-123',
+          turn: createMockTurn({ status: 'completed' }),
+        });
+
+        await vi.waitFor(() => {
+          expect(completionEvents).toEqual([{ messageId: 'input-message-id', turnId: 'input-turn-id' }]);
+        });
+      } finally {
+        cleanup();
+      }
     });
   });
 

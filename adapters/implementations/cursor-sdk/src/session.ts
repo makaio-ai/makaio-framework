@@ -407,7 +407,12 @@ export class CursorSdkSession {
     }
 
     const state = createTurnEventState();
-    const eventConfig = { bus: this.config.bus, agentId: this.config.agentId, metadata: this.busMetadata };
+    const eventConfig = {
+      bus: this.config.bus,
+      agentId: this.config.agentId,
+      metadata: this.busMetadata,
+      messageId: handle.messageId,
+    };
     const deltaHandler = createDeltaHandler(eventConfig, turn, state);
     const stepHandler = createStepHandler(eventConfig, turn, state);
     let run: ActiveRun | undefined;

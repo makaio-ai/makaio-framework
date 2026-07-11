@@ -9,6 +9,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession, TurnUsage } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turns/index.js';
+import { SessionBridge } from '../session-bridge.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
 import {
@@ -59,6 +60,7 @@ const BASE_USAGE_EVENT = {
 
 describe('SessionOrchestrator - Usage Tracking', () => {
   let orchestrator: SessionOrchestrator;
+  let bridge: SessionBridge;
   let unsubscribers: UnsubscribeFunction[];
   let sessions: Map<string, IMakaioSession>;
 
@@ -70,10 +72,12 @@ describe('SessionOrchestrator - Usage Tracking', () => {
     unsubscribers.push(registerGetAgentHandler(sessions));
     // NOTE: mock storage must be registered AFTER capturing handlers so our
     // capturing handler runs first (bus middleware chain: first registered = first invoked)
+    bridge = new SessionBridge(MakaioBus);
   });
 
   afterEach(() => {
     orchestrator?.destroy();
+    bridge?.destroy();
     unsubscribers.forEach((u) => u());
   });
 
@@ -91,7 +95,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
 
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    const { turnId } = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const { turnId, messageId } = await MakaioBus.request(SessionSubjects.sendMessage, {
       sessionId: 's1',
       message: 'Hello',
     });
@@ -122,7 +126,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterName: 'test-adapter',
       adapterSessionId: 'adapter-session-a1',
       turnId,
-      messageId: 'msg-1',
+      messageId,
     });
 
     await waitForAsync();
@@ -145,7 +149,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
 
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    const { turnId } = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const { turnId, messageId } = await MakaioBus.request(SessionSubjects.sendMessage, {
       sessionId: 's2',
       message: 'Hello',
       agentIds: 'all',
@@ -172,7 +176,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterName: 'test-adapter',
       adapterSessionId: 'adapter-session',
       turnId,
-      messageId: 'msg-1',
+      messageId,
     });
     await MakaioBus.emit(AgentSubjects.complete, {
       agentId: 'a2',
@@ -180,7 +184,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterName: 'test-adapter',
       adapterSessionId: 'adapter-session',
       turnId,
-      messageId: 'msg-1',
+      messageId,
     });
 
     await waitForAsync();
@@ -202,7 +206,10 @@ describe('SessionOrchestrator - Usage Tracking', () => {
 
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    const { turnId } = await MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's3', message: 'Hello' });
+    const { turnId, messageId } = await MakaioBus.request(SessionSubjects.sendMessage, {
+      sessionId: 's3',
+      message: 'Hello',
+    });
 
     // No agent.usage events emitted
 
@@ -212,7 +219,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterName: 'test-adapter',
       adapterSessionId: 'adapter-session-a1',
       turnId,
-      messageId: 'msg-1',
+      messageId,
     });
 
     await waitForAsync();
@@ -232,11 +239,11 @@ describe('SessionOrchestrator - Usage Tracking', () => {
 
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    const { turnId: turnX } = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const { turnId: turnX, messageId: messageX } = await MakaioBus.request(SessionSubjects.sendMessage, {
       sessionId: 'sx',
       message: 'Hello',
     });
-    const { turnId: turnY } = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const { turnId: turnY, messageId: messageY } = await MakaioBus.request(SessionSubjects.sendMessage, {
       sessionId: 'sy',
       message: 'Hello',
     });
@@ -265,7 +272,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterName: 'test-adapter',
       adapterSessionId: 'session',
       turnId: turnX,
-      messageId: 'msg-x',
+      messageId: messageX,
     });
     await MakaioBus.emit(AgentSubjects.complete, {
       agentId: 'ay',
@@ -273,7 +280,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterName: 'test-adapter',
       adapterSessionId: 'session',
       turnId: turnY,
-      messageId: 'msg-y',
+      messageId: messageY,
     });
 
     await waitForAsync();
@@ -295,7 +302,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
 
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    const { turnId: firstTurnId } = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const { turnId: firstTurnId, messageId: firstMessageId } = await MakaioBus.request(SessionSubjects.sendMessage, {
       sessionId: 's-late',
       message: 'first',
     });
@@ -305,11 +312,11 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterId: 'adapter-a1',
       adapterName: 'test-adapter',
       adapterSessionId: 'adapter-session-a1',
-      messageId: 'msg-1',
+      messageId: firstMessageId,
       turnId: firstTurnId,
     });
 
-    const { turnId: secondTurnId } = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const { turnId: secondTurnId, messageId: secondMessageId } = await MakaioBus.request(SessionSubjects.sendMessage, {
       sessionId: 's-late',
       message: 'second',
     });
@@ -338,7 +345,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       adapterId: 'adapter-a1',
       adapterName: 'test-adapter',
       adapterSessionId: 'adapter-session-a1',
-      messageId: 'msg-2',
+      messageId: secondMessageId,
       turnId: secondTurnId,
     });
 

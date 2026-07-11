@@ -43,6 +43,7 @@ describe('cursor SDK event routing', () => {
         bus,
         agentId: 'agent-1',
         metadata: { agentId: 'agent-1', adapterId: 'adapter-1', adapterName: 'cursor-sdk' },
+        messageId: 'message-1',
       },
       turn,
       state,
@@ -73,6 +74,7 @@ describe('cursor SDK event routing', () => {
         bus,
         agentId: 'agent-1',
         metadata: { agentId: 'agent-1', adapterId: 'adapter-1', adapterName: 'cursor-sdk' },
+        messageId: 'message-1',
       },
       turn,
       state,
@@ -113,6 +115,7 @@ describe('cursor SDK event routing', () => {
       bus,
       agentId: 'agent-1',
       metadata: { agentId: 'agent-1', adapterId: 'adapter-1', adapterName: 'cursor-sdk' },
+      messageId: 'message-1',
     };
 
     createDeltaHandler(config, turn, state)({ update: { type: 'text-delta', text: 'hello' } });

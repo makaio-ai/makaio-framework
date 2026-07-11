@@ -17,6 +17,7 @@ import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import type { IMakaioSession } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '../../adapter-runtime/index.js';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
+import { SessionBridge } from '../session-bridge.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
@@ -43,6 +44,7 @@ import {
 
 describe('SessionOrchestrator - Auto-attach', () => {
   let orchestrator: SessionOrchestrator;
+  let bridge: SessionBridge;
   let unsubscribers: UnsubscribeFunction[];
   let sessions: Map<string, IMakaioSession>;
   let defaultCwdChangeUnsub: UnsubscribeFunction | undefined;
@@ -63,10 +65,12 @@ describe('SessionOrchestrator - Auto-attach', () => {
     unsubscribers.push(defaultCwdChangeUnsub);
     unsubscribers.push(defaultModelChangeUnsub);
     unsubscribers.push(registerMockStorageHandlers());
+    bridge = new SessionBridge(MakaioBus);
   });
 
   afterEach(() => {
     orchestrator?.destroy();
+    bridge?.destroy();
     unsubscribers.forEach((unsub) => unsub());
   });
 

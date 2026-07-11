@@ -95,6 +95,7 @@ const ThoughtChunkSchema = z.object({
  * Emitted when the model initiates a tool call.
  */
 const ToolCallSchema = z.object({
+  messageId: z.string(),
   toolCallId: z.string(),
   title: z.string(),
   kind: z.string().optional(),
@@ -106,6 +107,7 @@ const ToolCallSchema = z.object({
  * Emitted when a tool call completes or its status changes.
  */
 const ToolCallUpdateSchema = z.object({
+  messageId: z.string(),
   toolCallId: z.string(),
   status: z.string().optional(),
   rawOutput: z.unknown().optional(),

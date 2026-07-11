@@ -10,17 +10,19 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type {
-  IMakaioSession,
-  MessageInput,
-  MakaioSessionAgent,
-  ResponseSchemaDescriptor,
-  SessionContext,
-} from '@makaio/contracts';
+import { AgentSubjects } from '@makaio/contracts';
+import type { IMakaioSession, MessageInput, ResponseSchemaDescriptor, SessionContext } from '@makaio/contracts';
 import { getHookAbortError } from './hook-abort-error.js';
+import { emitRoutingAcknowledged, terminalizeRoutingAgent } from './routing-lifecycle.js';
 import type { Turn } from '../entities/turn.js';
-import type { TurnCompleteCallback } from '../session-turn-manager.js';
+import type { TurnCompleteCallback } from '../turn-completion.js';
+import type { TurnCompletionRecorder } from './routing-lifecycle.js';
+
+/** Durable result of one agent's core-routing dispatch attempt. */
+export type AgentDispatchOutcome =
+  | { readonly agentId: string; readonly kind: 'dispatched' }
+  | { readonly agentId: string; readonly kind: 'cancelled'; readonly error: unknown }
+  | { readonly agentId: string; readonly kind: 'failed'; readonly error: unknown };
 
 /**
  * Route a message to target agents using a single shared session context.
@@ -42,22 +44,30 @@ import type { TurnCompleteCallback } from '../session-turn-manager.js';
  * @param turn - Turn tracking object
  * @param deliveryMode - How to deliver the message to the agent
  * @param onTurnComplete - Callback invoked when the turn completes (all agents done)
+ * @param turnManager - Required ledger owner for direct terminal outcomes
  * @param sessionContext - Optional shared session context forwarded to all agents
  * @param responseSchema - Optional structured output descriptor for the turn
+ * @returns Durable dispatch outcomes after direct routing failures terminalize.
  */
 export async function routeToAgentsCore(
   bus: IMakaioBus,
   session: IMakaioSession,
-  agents: MakaioSessionAgent[],
+  agents: ReadonlyArray<{ agentId: string; adapterId: string }>,
   message: MessageInput,
   messageId: string,
   turn: Turn,
   deliveryMode: 'enqueue' | 'immediate' | undefined,
   onTurnComplete: TurnCompleteCallback,
+  turnManager: TurnCompletionRecorder,
   sessionContext?: SessionContext,
   responseSchema?: ResponseSchemaDescriptor,
-): Promise<void> {
-  const routingPromises = agents.map(async (agent) => {
+): Promise<readonly AgentDispatchOutcome[]> {
+  // The caller admitted this fanout before routing. Verify the whole set before
+  // the first provider await so a direct failure can never leave an untracked pair.
+  if (agents.some((agent) => !turn.hasAdmittedPair(messageId, agent.agentId))) {
+    throw new Error(`Turn ${turn.turnId} has no admitted fanout for message ${messageId}`);
+  }
+  const routingPromises: Array<Promise<AgentDispatchOutcome>> = agents.map(async (agent) => {
     try {
       await bus.request(AgentSubjects.sendMessage, {
         agentId: agent.agentId,
@@ -71,52 +81,43 @@ export async function routeToAgentsCore(
         ...(responseSchema !== undefined && { responseSchema }),
       });
 
-      await bus.emit(SessionSubjects.user_message.acknowledged, {
+      await emitRoutingAcknowledged(bus, {
         sessionId: turn.sessionId,
         turnId: turn.turnId,
         turnNumber: turn.turnNumber,
         messageId,
         agentId: agent.agentId,
       });
+      return { agentId: agent.agentId, kind: 'dispatched' } satisfies AgentDispatchOutcome;
     } catch (error) {
       if (getHookAbortError(error) !== undefined) {
-        await bus.emit(SessionSubjects.user_message.completed, {
-          sessionId: turn.sessionId,
-          turnId: turn.turnId,
-          turnNumber: turn.turnNumber,
+        await terminalizeRoutingAgent({
+          bus,
+          turn,
           messageId,
           agentId: agent.agentId,
           outcome: 'cancelled',
+          onTurnComplete,
+          turnManager,
         });
-
-        // Concurrent agent completions can each return turnComplete: true, but this
-        // is safe — SessionTurnManager.completeTurn has a completingSessions guard
-        // that makes all but the first call a no-op.
-        const stateChange = turn.markAgentCompleted(agent.agentId);
-        if (stateChange.turnComplete) {
-          await onTurnComplete(turn, stateChange.result);
-        }
-        return;
+        return { agentId: agent.agentId, kind: 'cancelled', error } satisfies AgentDispatchOutcome;
       }
 
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const stateChange = turn.markAgentErrored(agent.agentId, errorMessage);
 
-      await bus.emit(SessionSubjects.user_message.completed, {
-        sessionId: turn.sessionId,
-        turnId: turn.turnId,
-        turnNumber: turn.turnNumber,
+      await terminalizeRoutingAgent({
+        bus,
+        turn,
         messageId,
         agentId: agent.agentId,
         outcome: 'error',
         error: errorMessage,
+        onTurnComplete,
+        turnManager,
       });
-
-      if (stateChange.turnComplete) {
-        await onTurnComplete(turn, stateChange.result);
-      }
+      return { agentId: agent.agentId, kind: 'failed', error } satisfies AgentDispatchOutcome;
     }
   });
 
-  await Promise.all(routingPromises);
+  return await Promise.all(routingPromises);
 }

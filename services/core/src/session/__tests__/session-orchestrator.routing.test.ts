@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
+import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession, ResponseSchemaDescriptor } from '@makaio/contracts';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
@@ -19,6 +19,20 @@ import {
   collectUserMessageSentEvents,
   type UnsubscribeFunction,
 } from '../testing/orchestrator-shared.js';
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+/** Create a deterministic test gate. */
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 describe('SessionOrchestrator - Routing', () => {
   let orchestrator: SessionOrchestrator;
@@ -351,8 +365,8 @@ describe('SessionOrchestrator - Routing', () => {
     });
   });
 
-  describe('recovery lock scoping', () => {
-    it('isolates concurrent recovery by target agent set', async () => {
+  describe('immutable turn participants', () => {
+    it('admits a concurrent target subset into the turn created for a superset', async () => {
       const sessionId = 'session-recovery-lock-key';
       sessions.set(
         sessionId,
@@ -363,12 +377,8 @@ describe('SessionOrchestrator - Routing', () => {
         }),
       );
 
-      // Replace default fast getAgent handler so the first recovery attempt stays in-flight.
       unsubscribers[2]?.();
-      unsubscribers[2] = MakaioBus.on(AdapterSubjects.getAgent, async (ctx) => {
-        if (ctx.payload.agentId === 'agent-1') {
-          await waitForAsync(25);
-        }
+      unsubscribers[2] = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
         ctx.setResult({
           agent: {
             agentId: ctx.payload.agentId,
@@ -379,30 +389,49 @@ describe('SessionOrchestrator - Routing', () => {
       });
 
       const sent: Array<{ agentId: string; message: string }> = [];
+      const firstRouteStarted = createDeferred<void>();
+      const releaseFirstRoute = createDeferred<void>();
+      const secondRouteStarted = createDeferred<void>();
       unsubscribers.push(
-        registerSendMessageHandler((payload) => {
-          const message = typeof payload.message === 'string' ? payload.message : JSON.stringify(payload.message);
-          sent.push({ agentId: payload.agentId, message });
+        MakaioBus.on(AgentSubjects.sendMessage, async (ctx) => {
+          const message =
+            typeof ctx.payload.message === 'string' ? ctx.payload.message : JSON.stringify(ctx.payload.message);
+          sent.push({ agentId: ctx.payload.agentId, message });
+          if (message === 'to-both' && ctx.payload.agentId === 'agent-1') {
+            firstRouteStarted.resolve();
+            await releaseFirstRoute.promise;
+          }
+          if (message === 'to-agent-2-only') secondRouteStarted.resolve();
+          ctx.setResult({ messageId: ctx.payload.messageId ?? crypto.randomUUID() });
         }),
       );
       orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
       const first = MakaioBus.request(SessionSubjects.sendMessage, {
         sessionId,
-        message: 'to-agent-1',
-        agentIds: ['agent-1'],
+        message: 'to-both',
+        agentIds: ['agent-1', 'agent-2'],
       });
-      await waitForAsync(5);
+      await firstRouteStarted.promise;
       const second = MakaioBus.request(SessionSubjects.sendMessage, {
         sessionId,
-        message: 'to-agent-2',
+        message: 'to-agent-2-only',
         agentIds: ['agent-2'],
       });
 
-      await Promise.all([first, second]);
+      await secondRouteStarted.promise;
+      releaseFirstRoute.resolve();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
 
-      expect(sent).toContainEqual({ agentId: 'agent-1', message: 'to-agent-1' });
-      expect(sent).toContainEqual({ agentId: 'agent-2', message: 'to-agent-2' });
+      expect(firstResult.turnId).toBe(secondResult.turnId);
+      expect(sent).toEqual(
+        expect.arrayContaining([
+          { agentId: 'agent-1', message: 'to-both' },
+          { agentId: 'agent-2', message: 'to-both' },
+          { agentId: 'agent-2', message: 'to-agent-2-only' },
+        ]),
+      );
+      expect(sent).toHaveLength(3);
     });
   });
 });

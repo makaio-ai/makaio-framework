@@ -10,13 +10,20 @@ import { SessionBridge } from '../session-bridge.js';
  */
 describe('SessionBridge graceful degradation (no storage handlers)', () => {
   let bridge: SessionBridge;
+  let stopSettlementCollection: (() => void) | undefined;
+  let settlements: Array<{ sessionId: string; turnId: string; messageId: string; agentId: string }>;
 
   beforeEach(() => {
+    settlements = [];
+    stopSettlementCollection = MakaioBus.on(SessionSubjects.turn.assistantPersistenceSettled, (ctx) => {
+      settlements.push(ctx.payload);
+    });
     bridge = new SessionBridge(MakaioBus);
   });
 
   afterEach(() => {
     bridge.destroy();
+    stopSettlementCollection?.();
   });
 
   it('completes without error and cleans up agent blocks when no handlers are registered', async () => {
@@ -57,14 +64,22 @@ describe('SessionBridge graceful degradation (no storage handlers)', () => {
         adapterName: 'openai-node',
         adapterSessionId: 'native-1',
         sessionId: 'no-storage-session',
+        turnId: 'no-storage-turn',
         messageId: 'no-storage-user-msg',
       }),
     ).resolves.not.toThrow();
 
-    // Verify bridge cleaned up internal state — access via the private map is
-    // not possible without casting; instead validate indirectly: a second
-    // agent.complete for the same agent should not attempt storage (blocks are
-    // already gone) and must also not throw.
+    expect(settlements).toEqual([
+      {
+        sessionId: 'no-storage-session',
+        turnId: 'no-storage-turn',
+        messageId: 'no-storage-user-msg',
+        agentId: 'no-storage-agent',
+      },
+    ]);
+
+    // A duplicate terminal event must not claim or emit persistence settlement
+    // a second time for the same agent and turn.
     await expect(
       MakaioBus.emit(AgentSubjects.complete, {
         agentId: 'no-storage-agent',
@@ -72,8 +87,38 @@ describe('SessionBridge graceful degradation (no storage handlers)', () => {
         adapterName: 'openai-node',
         adapterSessionId: 'native-1',
         sessionId: 'no-storage-session',
+        turnId: 'no-storage-turn',
         messageId: 'no-storage-user-msg',
       }),
     ).resolves.not.toThrow();
+    expect(settlements).toHaveLength(1);
+  });
+
+  it('drops the exact pending response after direct routing settlement', async () => {
+    await MakaioBus.emit(SessionSubjects.turn.started, {
+      sessionId: 'session-direct',
+      turnId: 'turn-direct',
+      turnNumber: 1,
+      messageId: 'message-direct',
+      agentIds: ['agent-direct'],
+    });
+    await MakaioBus.emit(SessionSubjects.turn.assistantPersistenceSettled, {
+      sessionId: 'session-direct',
+      turnId: 'turn-direct',
+      messageId: 'message-direct',
+      agentId: 'agent-direct',
+    });
+    await MakaioBus.emit(AgentSubjects.complete, {
+      agentId: 'agent-direct',
+      adapterId: 'adapter-direct',
+      adapterName: 'openai-node',
+      sessionId: 'session-direct',
+      turnId: 'turn-direct',
+      messageId: 'message-direct',
+    });
+
+    expect(settlements).toEqual([
+      { sessionId: 'session-direct', turnId: 'turn-direct', messageId: 'message-direct', agentId: 'agent-direct' },
+    ]);
   });
 });

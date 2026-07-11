@@ -80,6 +80,7 @@ describe('SessionBridge fallback replay accumulation', () => {
       adapterName: 'gemini',
       adapterSessionId: 'native-1',
       sessionId: 'session-1',
+      turnId: 'turn-1',
       messageId: 'user-msg-1',
       content: 'fallback response',
     });
@@ -90,6 +91,7 @@ describe('SessionBridge fallback replay accumulation', () => {
       adapterName: 'gemini',
       adapterSessionId: 'native-1',
       sessionId: 'session-1',
+      turnId: 'turn-1',
       messageId: 'user-msg-1',
     });
 
@@ -149,6 +151,7 @@ describe('SessionBridge fallback replay accumulation', () => {
       adapterName: 'openai-node',
       adapterSessionId: 'native-structured',
       sessionId: 'session-structured',
+      turnId: 'turn-structured',
       messageId: 'user-msg-structured',
       content: '{"answer":7}',
     });
@@ -159,6 +162,7 @@ describe('SessionBridge fallback replay accumulation', () => {
       adapterName: 'openai-node',
       adapterSessionId: 'native-structured',
       sessionId: 'session-structured',
+      turnId: 'turn-structured',
       messageId: 'user-msg-structured',
       content: 'retrying schema mismatch',
     });
@@ -179,6 +183,7 @@ describe('SessionBridge fallback replay accumulation', () => {
       adapterName: 'openai-node',
       adapterSessionId: 'native-structured',
       sessionId: 'session-structured',
+      turnId: 'turn-structured',
       messageId: 'user-msg-structured',
       message: '{"answer":"fixed"}',
       outcome: 'completed',
@@ -197,5 +202,99 @@ describe('SessionBridge fallback replay accumulation', () => {
         }),
       }),
     );
+  });
+
+  it('persists and updates routing for each explicitly completed user-message pair', async () => {
+    const appendSpy = vi.fn();
+    const routingSpy = vi.fn();
+    cleanups.push(
+      MakaioBus.on(MessageStorageSubjects.append, (ctx) => {
+        appendSpy(ctx.payload.message);
+        ctx.setResult({
+          message: {
+            ...ctx.payload.message,
+            messageId: ctx.payload.message.messageId ?? crypto.randomUUID(),
+            blocks: ctx.payload.message.blocks ?? [],
+          },
+        });
+      }),
+      MakaioBus.on(MessageStorageSubjects.getByTurn, (ctx) => {
+        ctx.setResult({
+          messages: [
+            {
+              messageId: 'm1',
+              turnId: 'turn-pairs',
+              sessionId: 'session-pairs',
+              role: 'user',
+              contentText: 'one',
+              blocks: [],
+              timestamp: 1,
+            },
+            {
+              messageId: 'm2',
+              turnId: 'turn-pairs',
+              sessionId: 'session-pairs',
+              role: 'user',
+              contentText: 'two',
+              blocks: [],
+              timestamp: 2,
+            },
+          ],
+        });
+      }),
+      MakaioBus.on(MessageRoutingSubjects.record, (ctx) => {
+        routingSpy(ctx.payload);
+        ctx.setResult({ success: true });
+      }),
+    );
+
+    await MakaioBus.emit(SessionSubjects.turn.started, {
+      sessionId: 'session-pairs',
+      turnId: 'turn-pairs',
+      turnNumber: 1,
+      messageId: 'm1',
+      agentIds: ['agent-1'],
+    });
+    await MakaioBus.emit(SessionSubjects.user_message.sent, {
+      sessionId: 'session-pairs',
+      turnId: 'turn-pairs',
+      turnNumber: 1,
+      messageId: 'm2',
+      content: 'two',
+      agentIds: ['agent-1'],
+    });
+    for (const [messageId, content] of [
+      ['m1', 'first'],
+      ['m2', 'second'],
+    ] as const) {
+      await MakaioBus.emit(AgentSubjects.message, {
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'gemini',
+        adapterSessionId: 'native-1',
+        sessionId: 'session-pairs',
+        turnId: 'turn-pairs',
+        messageId,
+        content,
+      });
+    }
+    // Deliberately complete the later message first.
+    for (const messageId of ['m2', 'm1']) {
+      await MakaioBus.emit(AgentSubjects.complete, {
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'gemini',
+        adapterSessionId: 'native-1',
+        sessionId: 'session-pairs',
+        turnId: 'turn-pairs',
+        messageId,
+      });
+    }
+
+    expect(appendSpy).toHaveBeenCalledTimes(2);
+    expect(appendSpy.mock.calls.map(([message]) => message.contentText)).toEqual(
+      expect.arrayContaining(['first', 'second']),
+    );
+    expect(routingSpy.mock.calls.map(([entry]) => entry.messageId)).toEqual(expect.arrayContaining(['m1', 'm2']));
   });
 });

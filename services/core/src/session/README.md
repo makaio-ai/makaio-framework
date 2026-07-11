@@ -47,7 +47,7 @@ Framework-level `session.sendMessage` handler. Resolves or starts agents, manage
 
 ### SessionTurnManager
 
-Composable turn lifecycle manager. Tracks active turns per session, accumulates usage, guards against concurrent completion writes, and emits `session.turn.completed`.
+Composable turn lifecycle manager. Tracks active turns per session, accumulates usage, guards against concurrent completion writes, and emits `session.turn.completed`. Managed completion consumes only live `agent.complete` events with an explicit matching `turnId`; imported or uncorrelated terminal events cannot mutate an active turn. Before the terminal session event, it waits until every participating agent has reached a terminal assistant-persistence decision. A bounded timeout remains only as a fallback when the in-process settlement signal is unavailable.
 
 ### AdapterRegistry
 
@@ -55,7 +55,7 @@ Resolves `adapterName` to `adapterId` via bus requests and `adapter.initialized`
 
 ### SessionBridge
 
-Persists agent responses. Maintains `agentId` to `sessionId`/`turnId` mapping, accumulates message blocks from `agent.*` events, and stores them as assistant messages on `agent.complete`.
+Persists agent responses. Maintains a turn-scoped response accumulator per agent and stores it only for a live `agent.complete` event carrying the explicitly matching `turnId`. The matching completion atomically detaches its `{ sessionId, turnId, blocks }` snapshot before persistence begins, so a subsequent turn can accumulate independently while the prior write is in flight. After each claimed completion it emits the local `session.turn.assistantPersistenceSettled` signal exactly once, including when there were no blocks to store or persistence degraded.
 
 ### Session lifecycle event helpers (`session-lifecycle-events.ts`)
 
