@@ -141,17 +141,21 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
    */
   private wireToolUseEvents(connector: ClaudeCodeTmuxConnector): void {
     this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.tool_use.started, async (ctx) => {
-      const { toolName, toolUseId, toolInput } = ctx.payload;
+      const { messageId, toolName, toolUseId, toolInput } = ctx.payload;
       const args = normalizeToolInput(toolInput);
-      await this.emitToolUse(toolName, args, toolUseId);
-      await this.emitStepStarted('tool_use', { type: 'tool_use', toolName, toolCallId: toolUseId });
+      await this.emitToolUse(messageId, toolName, args, toolUseId);
+      await this.eventBridge.emitStepStartedForMessage(messageId, 'tool_use', {
+        type: 'tool_use',
+        toolName,
+        toolCallId: toolUseId,
+      });
     });
 
     this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.tool_use.finished, async (ctx) => {
-      const { toolName, toolUseId, toolResult, isError } = ctx.payload;
+      const { messageId, toolName, toolUseId, toolResult, isError } = ctx.payload;
       const output = normalizeToolOutput(toolResult);
-      const resolved = await this.emitToolOutput(output, { nativeId: toolUseId, toolName });
-      await this.emitStepFinished('tool_use', {
+      const resolved = await this.emitToolOutput(messageId, output, { nativeId: toolUseId, toolName });
+      await this.eventBridge.emitStepFinishedForMessage(messageId, 'tool_use', {
         type: 'tool_output',
         toolCallId: resolved.toolCallId,
         output,

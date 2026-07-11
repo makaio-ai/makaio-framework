@@ -63,7 +63,11 @@ import { AIAgentConnector } from '../connector/index.js';
 import { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import { ToolCallTracker, type ResolveHints } from './tool-call-tracker.js';
 import type { ToolOutputResult } from './agent-event-bridge.js';
-import { buildConfigFactoryInput, resolveSupportedReasoningLevels } from './agent-config-input.js';
+import {
+  buildConfigFactoryInput,
+  extractErrorCategory,
+  resolveSupportedReasoningLevels,
+} from './agent-config-input.js';
 import type { AgentConnectorConfigOverrides } from './types.js';
 import { createStructuredOutputTerminalTransform } from './agent-structured-output-retry.js';
 import type { AIModel } from '../types/ai-model.js';
@@ -115,7 +119,7 @@ export abstract class AIAgent<
   /** Tracks tool.use → tool.output correlation across adapters. */
   protected readonly toolCallTracker = new ToolCallTracker();
   /** Event-focused helper for usage/tool/step emissions. */
-  private readonly eventBridge: AgentEventBridge;
+  protected readonly eventBridge: AgentEventBridge;
   /** Shared turn pipeline for start/sendMessage paths. */
   private readonly turnExecutor: AgentTurnExecutor;
   /** Runtime mutation helper for cwd/model change handlers. */
@@ -222,7 +226,7 @@ export abstract class AIAgent<
       globalBus: this.globalBus,
       emitGlobal,
       onBeforeEmitCompletion: this.onBeforeEmitCompletion.bind(this),
-      clearToolCallTracker: () => this.toolCallTracker.clear(),
+      clearMessageToolCalls: (messageId) => this.toolCallTracker.clearMessage(messageId),
     });
     this.structuredOutputManager = new AgentStructuredOutputManager({
       bus: this.globalBus,
@@ -421,20 +425,6 @@ export abstract class AIAgent<
   }
 
   /**
-   * Stash error metadata for the next emitCompletion call.
-   *
-   * The lifecycle tracker emits `agent.complete` with `outcome: 'error'` when the
-   * message handle completes. This method runs first (from the connector's errorHandler)
-   * and stashes `errorCategory` so emitCompletion can include it in the complete payload.
-   *
-   * No longer emits `agent.error` — all terminal events flow through `agent.complete`.
-   * @param result - Error payload from the connector
-   */
-  protected emitError(result: Pick<z.infer<typeof AgentSchemas.complete>, 'error' | 'errorCategory'>): void {
-    this.lifecycleEmitter.emitError(result);
-  }
-
-  /**
    * Emit agent session closed event. Emits only once per session.
    * AIAdapter listens to cleanup agent and re-emit as AdapterSubjects.session.closed.
    * @param reason - Reason for session closure (e.g., 'aborted', 'closed')
@@ -500,27 +490,30 @@ export abstract class AIAgent<
   }
 
   /**
-   * Emit tool.use event with automatic correlation tracking.
-   * Registers the tool call with ToolCallTracker and emits to global bus.
-   * Use this instead of directly emitting to AgentSubjects.tool.use.
+   * Emit a tool.use event for an explicitly identified originating message.
+   * @param messageId - Message that owns the tool call
    * @param toolName - Name of the tool being invoked
    * @param args - Tool arguments
-   * @param nativeId - Native provider ID if available (e.g., toolu_*, call_*)
-   * @returns The correlation ID used (nativeId if provided, else generated UUID)
+   * @param nativeId - Provider-native tool call identifier
+   * @returns Correlation identifier used for the call
    */
-  protected async emitToolUse(toolName: string, args?: Record<string, unknown>, nativeId?: string): Promise<string> {
-    return this.eventBridge.emitToolUse(toolName, args, nativeId);
+  protected async emitToolUse(
+    messageId: string,
+    toolName: string,
+    args?: Record<string, unknown>,
+    nativeId?: string,
+  ): Promise<string> {
+    return this.eventBridge.emitToolUse(messageId, toolName, args, nativeId);
   }
   /**
-   * Emit tool.output event with automatic correlation resolution.
-   * Resolves the correlation ID from ToolCallTracker using provided hints.
-   * Use this instead of directly emitting to AgentSubjects.tool.output.
+   * Emit a tool.output event for an explicitly identified originating message.
+   * @param messageId - Message that owns the tool call
    * @param output - Tool output content
-   * @param hints - Hints for correlation (nativeId and/or toolName)
-   * @returns Resolved toolCallId, toolName (falls back to 'unknown'), and args from the matched tool.use call
+   * @param hints - Provider correlation hints
+   * @returns Resolved tool-call metadata
    */
-  protected async emitToolOutput(output: string, hints: ResolveHints): Promise<ToolOutputResult> {
-    return this.eventBridge.emitToolOutput(output, hints);
+  protected async emitToolOutput(messageId: string, output: string, hints: ResolveHints): Promise<ToolOutputResult> {
+    return this.eventBridge.emitToolOutput(messageId, output, hints);
   }
 
   /**
@@ -671,7 +664,7 @@ export abstract class AIAgent<
       config: this.config,
       availableModels: this.availableModels,
       currentReasoningEffort: this.connector?.currentReasoningEffort ?? this.config.reasoningEffort,
-      emitError: this.emitError.bind(this),
+      clearAllToolCalls: this.toolCallTracker.clearAll.bind(this.toolCallTracker),
       overrides,
     });
   }
@@ -852,8 +845,6 @@ export abstract class AIAgent<
 
   protected async onBeforeEmitCompletion() {}
   protected async onMessageHandle(messageHandle: MessageHandle, turnId?: string) {
-    // Reset per-turn dedup so adapters without per-turn agent.started (codex emits thread_started once) still fire agent.complete.
-    this.lifecycleEmitter.resetTurnState();
     this.latestMessageCompletion = messageHandle.waitForCompletion();
     const responseSchema = messageHandle.responseSchema;
     const transformTerminal =
@@ -870,13 +861,16 @@ export abstract class AIAgent<
     this.lifecycleTracker.track(
       messageHandle,
       (messageId, result, turnId) => {
-        const errorStr = result.error instanceof Error ? result.error.message : result.error;
+        const error = result.error;
+        const errorStr = error instanceof Error ? error.message : error;
+        const errorCategory = error instanceof Error ? extractErrorCategory(error) : undefined;
         void this.emitCompletion({
           message: result.result?.message,
           messageId,
           ...(turnId !== undefined && { turnId }),
           outcome: result.outcome,
           ...(errorStr && { error: errorStr }),
+          ...(errorCategory && { errorCategory }),
           ...(result.structuredOutputValidation !== undefined
             ? { structuredOutputValidation: result.structuredOutputValidation }
             : {}),

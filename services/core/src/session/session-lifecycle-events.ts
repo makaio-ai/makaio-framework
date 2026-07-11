@@ -6,7 +6,8 @@
  * {@link appendSessionLifecycleEvent} inline so the row is durable before
  * the corresponding `session.*` bus event reaches consumers
  * (persist-before-emit). {@link emitSessionTurnStarted} bundles that
- * append with the canonical `session.turn.started` emission, and
+ * append with the canonical `session.turn.started` emission. Post-persistence
+ * bus observation is best-effort, as is {@link emitSessionUserMessageSent}, and
  * {@link registerSessionLifecycleEventWriters} covers the lifecycle
  * subjects that have no single emit site (agent.added, branch.created).
  * @packageDocumentation
@@ -96,6 +97,9 @@ export async function appendSessionLifecycleEvent(
  */
 export type SessionTurnStartedPayload = ExtractSubjectPayload<typeof SessionSubjects.turn.started>;
 
+/** Payload of the canonical `session.user_message.sent` event. */
+export type SessionUserMessageSentPayload = ExtractSubjectPayload<typeof SessionSubjects.user_message.sent>;
+
 /**
  * Persist the `turn.started` lifecycle row, then emit `session.turn.started`.
  *
@@ -111,8 +115,36 @@ export type SessionTurnStartedPayload = ExtractSubjectPayload<typeof SessionSubj
  * @param payload - The exact `session.turn.started` payload to persist and emit
  */
 export async function emitSessionTurnStarted(bus: IMakaioBus, payload: SessionTurnStartedPayload): Promise<void> {
-  await appendSessionLifecycleEvent(bus, { type: 'turn.started', sessionId: payload.sessionId, payload });
-  await bus.emit(SessionSubjects.turn.started, payload);
+  await appendSessionLifecycleEvent(bus, {
+    type: 'turn.started',
+    sessionId: payload.sessionId,
+    eventId: `turn.started:${payload.turnId}`,
+    payload,
+  });
+  try {
+    await bus.emit(SessionSubjects.turn.started, payload);
+  } catch (error) {
+    console.error(`[SessionLifecycle] Failed to emit turn.started for turn ${payload.turnId}:`, error);
+  }
+}
+
+/**
+ * Emit user-message observation after durable turn setup without unwinding it.
+ *
+ * User-message consumers are observers of the already durable turn start. A
+ * rejection cannot make the turn pre-start again or prevent provider routing.
+ * @param bus - Bus used for event emission.
+ * @param payload - Exact user-message payload to observe.
+ */
+export async function emitSessionUserMessageSent(
+  bus: IMakaioBus,
+  payload: SessionUserMessageSentPayload,
+): Promise<void> {
+  try {
+    await bus.emit(SessionSubjects.user_message.sent, payload);
+  } catch (error) {
+    console.error(`[SessionLifecycle] Failed to emit user_message.sent for turn ${payload.turnId}:`, error);
+  }
 }
 
 /**

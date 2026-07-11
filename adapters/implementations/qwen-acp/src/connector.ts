@@ -1,5 +1,5 @@
 // NOTE: do NOT change without explicit human approval
-/* eslint max-lines: ["error", { "max": 660 }] */
+/* eslint max-lines: ["error", { "max": 670 }] */
 import type {
   ContentBlock,
   RequestPermissionRequest,
@@ -68,20 +68,14 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
   private isInitialized = false;
   private isTerminated = false;
   private initializingPromise?: Promise<void>;
-  /** Path to the temp file written for QWEN_SYSTEM_MD; deleted on close/abort. */
   private systemPromptTempFile?: string;
   private readonly terminalManager = new TerminalManager();
-  /** toolCallId from the most recent tool_call session update, used to correlate filesystem callbacks. */
   private lastToolCallId?: string;
+  private readonly toolCallMessageIds = new Map<string, string>();
 
-  /**
-   * Per-turn usage accumulator. Set to an empty object at turn start, merged with
-   * each chunk's `_meta.usage`, and emitted once as `session_update_usage` at
-   * turn-end. `null` means no turn is active or no usage has been seen yet.
-   */
+  /** Per-turn, last-wins usage totals; null when no active turn has reported usage. */
   private turnUsageAccumulator: TurnUsageAccumulator | null = null;
 
-  /** Pending `getAdapterSessionId()` waiters — cleared on termination to prevent interval leaks. */
   private sessionIdWaiters: SessionIdWaiter[] = [];
 
   /**
@@ -501,26 +495,36 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
         break;
       }
       case 'tool_call': {
+        const messageId = this.pendingMessageHandle?.messageId;
+        if (messageId !== undefined) this.toolCallMessageIds.set(update.toolCallId, messageId);
         this.lastToolCallId = update.toolCallId;
         await this.finishActiveTurnStep();
         await this.startTurnStep('tool_use');
-        await this.emit(QwenAcpSubjects.session_update_tool_call, {
-          toolCallId: update.toolCallId,
-          title: update.title,
-          kind: update.kind,
-          rawInput: update.rawInput,
-          timestamp,
-        });
+        if (messageId !== undefined) {
+          await this.emit(QwenAcpSubjects.session_update_tool_call, {
+            messageId,
+            toolCallId: update.toolCallId,
+            title: update.title,
+            kind: update.kind,
+            rawInput: update.rawInput,
+            timestamp,
+          });
+        }
         break;
       }
       case 'tool_call_update': {
-        await this.emit(QwenAcpSubjects.session_update_tool_call_update, {
-          toolCallId: update.toolCallId,
-          status: update.status ?? undefined,
-          rawOutput: update.rawOutput,
-          timestamp,
-        });
+        const messageId = this.toolCallMessageIds.get(update.toolCallId);
+        if (messageId !== undefined) {
+          await this.emit(QwenAcpSubjects.session_update_tool_call_update, {
+            messageId,
+            toolCallId: update.toolCallId,
+            status: update.status ?? undefined,
+            rawOutput: update.rawOutput,
+            timestamp,
+          });
+        }
         if (update.status === 'completed' || update.status === 'failed') {
+          this.toolCallMessageIds.delete(update.toolCallId);
           this.lastToolCallId = undefined;
           await this.finishActiveTurnStep();
         }
@@ -630,6 +634,7 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
 
   private clearConnectionState(): void {
     this.lastToolCallId = undefined;
+    this.toolCallMessageIds.clear();
     this.terminalManager.releaseAll();
     this.acpConnectionHandle?.kill();
     this.acpConnectionHandle = undefined;

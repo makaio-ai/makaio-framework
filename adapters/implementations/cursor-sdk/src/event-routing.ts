@@ -28,6 +28,8 @@ export interface EventRoutingConfig {
   agentId: string;
   /** Identity metadata merged into every emission. */
   metadata: BusMetadata;
+  /** Makaio message that owns the current SDK run. */
+  messageId: string;
 }
 
 /** State tracked across a single turn's delta events. */
@@ -171,6 +173,7 @@ function isFailedToolCompletion(update: CursorUpdate, toolCall: Record<string, u
  * @param turn - Active turn for state transitions.
  * @param state - Mutable turn event state.
  * @param update - Raw update from Cursor SDK's onDelta callback.
+ * @param messageId - Makaio message that owns the SDK update.
  */
 function routeUpdate(
   bus: CursorSdkBus,
@@ -178,6 +181,7 @@ function routeUpdate(
   turn: StepLifecycleTurn,
   state: TurnEventState,
   update: CursorUpdate,
+  messageId: string,
 ): void {
   switch (update.type) {
     case 'text-delta': {
@@ -222,6 +226,7 @@ function routeUpdate(
       const toolCall = update.toolCall as { type: string; args?: unknown } | undefined;
       emitWithMetadata(bus, metadata, CursorSdkSubjects.tool_started, {
         eventType: 'tool_started',
+        messageId,
         toolName: toolCall?.type ?? 'unknown',
         toolCallId: (update.callId as string) ?? '',
         args: toolCall?.args,
@@ -233,6 +238,7 @@ function routeUpdate(
       const completedCall = isRecord(update.toolCall) ? update.toolCall : undefined;
       emitWithMetadata(bus, metadata, CursorSdkSubjects.tool_completed, {
         eventType: 'tool_completed',
+        messageId,
         toolName: typeof completedCall?.['type'] === 'string' ? completedCall['type'] : 'unknown',
         toolCallId: (update.callId as string) ?? '',
         result: completedCall?.['result'],
@@ -301,12 +307,12 @@ export function createDeltaHandler(
   turn: StepLifecycleTurn,
   state: TurnEventState,
 ): (event: { update: CursorUpdate }) => void {
-  const { bus, metadata } = config;
+  const { bus, messageId, metadata } = config;
 
   return ({ update }) => {
     // Always emit raw event first for observability
     emitWithMetadata(bus, metadata, CursorSdkSubjects.sdk.event, update);
-    routeUpdate(bus, metadata, turn, state, update);
+    routeUpdate(bus, metadata, turn, state, update, messageId);
   };
 }
 

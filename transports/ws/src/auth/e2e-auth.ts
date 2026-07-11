@@ -238,6 +238,11 @@ export class E2EAuth implements TransportAuth {
     }
 
     if (msg.type === 'e2e-auth-result') {
+      if (!msg.success && this.pendingKeyExchange) {
+        clearTimeout(this.pendingKeyExchange.timeoutHandle);
+        this.pendingKeyExchange.reject(new Error(`E2E authentication failed: ${msg.error ?? 'Unknown error'}`));
+        this.pendingKeyExchange = undefined;
+      }
       if (this.pendingResult) {
         clearTimeout(this.pendingResult.timeoutHandle);
         this.pendingResult.resolve({ success: msg.success, error: msg.error });

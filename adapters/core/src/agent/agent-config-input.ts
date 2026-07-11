@@ -1,7 +1,6 @@
 import type { ScopedBus } from '@makaio/bus-core';
 import type { SetRequired } from 'type-fest';
-import type { z } from 'zod';
-import type { AgentSchemas, AIReasoningLevel, ReasoningLevelMap, ProviderContext } from '@makaio/contracts';
+import type { AIReasoningLevel, ReasoningLevelMap, ProviderContext } from '@makaio/contracts';
 import { RateLimitError, AuthenticationError, ModelUnavailableError, QuotaExceededError } from '@makaio/core';
 import type { ConfigFactoryInput } from '../adapter/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
@@ -14,7 +13,7 @@ import type { AgentConnectorConfigOverrides, AIAgentConfig } from './types.js';
  * @param error - Error emitted by connector/runtime code
  * @returns Structured error category when available
  */
-function extractErrorCategory(
+export function extractErrorCategory(
   error: Error,
 ):
   | RateLimitError['code']
@@ -65,8 +64,8 @@ export interface BuildConfigFactoryInputDeps<
   availableModels: AIModel[] | undefined;
   /** Effective reasoning effort (live connector value preferred over config). */
   currentReasoningEffort: AIReasoningLevel | undefined;
-  /** Emit stashed error metadata for the next `agent.complete` (see `AIAgent.emitError`). */
-  emitError: (result: Pick<z.infer<typeof AgentSchemas.complete>, 'error' | 'errorCategory'>) => void;
+  /** Clear all pending tool-call correlation after an agent-fatal connector failure. */
+  clearAllToolCalls: () => void;
   /** Optional field overrides (e.g., cwd, model, adapterSessionId). */
   overrides?: AgentConnectorConfigOverrides;
 }
@@ -77,7 +76,7 @@ export interface BuildConfigFactoryInputDeps<
  * Explicitly maps AIAgentConfig fields to ConfigFactoryInput — avoids
  * accidentally forwarding adapter-only fields (capabilities, nativeTools, etc.)
  * into the factory.
- * @param deps - Config sources, lookup context, and error sink
+ * @param deps - Config sources, lookup context, and terminal cleanup callback
  * @returns ConfigFactoryInput ready for config factory
  */
 export function buildConfigFactoryInput<TBus extends ScopedBus<string>, TConnector extends AIAgentConnector<TBus>>(
@@ -122,9 +121,8 @@ export function buildConfigFactoryInput<TBus extends ScopedBus<string>, TConnect
     clientId: cfg.clientId,
     clientProfileName: cfg.clientProfileName,
     harnessId: cfg.harnessId,
-    errorHandler: (error: Error, _terminate: boolean) => {
-      const errorCategory = extractErrorCategory(error);
-      deps.emitError({ error: error.message, ...(errorCategory && { errorCategory }) });
+    errorHandler: (_error: Error, terminate: boolean) => {
+      if (terminate) deps.clearAllToolCalls();
     },
   };
 }

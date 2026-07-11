@@ -227,7 +227,8 @@ export function ingestCompletedTurn(
   bus: IMakaioBus,
   params: IngestCompletedTurnParams,
 ): Promise<IngestCompletedTurnResult> {
-  return chainOnAnchor(`${params.sessionId} ${params.turnAnchorId}`, () => executeIngestCompletedTurn(bus, params));
+  const anchorKey = JSON.stringify([params.sessionId, params.turnAnchorId]);
+  return chainOnAnchor(anchorKey, () => executeIngestCompletedTurn(bus, params));
 }
 
 /**

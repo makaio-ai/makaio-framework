@@ -14,9 +14,13 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession } from '@makaio/contracts';
 import { HookAbortError } from '@makaio/hooks';
-import { routeToAgents } from '../route-to-agents.js';
 import { Turn } from '../../entities/turn.js';
-import { createRouteTestContext, ROUTE_TEST_IDS, type RouteTestContext } from './shared.js';
+import {
+  createRouteTestContext,
+  ROUTE_TEST_IDS,
+  routeToAgentsWithTestLedger as routeToAgents,
+  type RouteTestContext,
+} from './shared.js';
 import { createTestAgent, createTestSession } from '../../__tests__/shared.js';
 import {
   mockGetSession,
@@ -45,6 +49,7 @@ describe('routeToAgents - native attempt degrade', () => {
   afterEach(() => {
     ctx.destroy();
     storageCleanup.runAll();
+    vi.restoreAllMocks();
   });
 
   it('retries with history injection when native attempt fails', async () => {
@@ -200,7 +205,7 @@ describe('routeToAgents - native attempt degrade', () => {
 
     expect(sendCount).toBe(1);
     expect(completedOutcomes).toEqual(['cancelled']);
-    expect(turn.erroredAgents.has(agent.agentId)).toBe(false);
+    expect(turn.getResult().success).toBe(true);
     expect(onTurnComplete).toHaveBeenCalledWith(turn, expect.objectContaining({ success: true }));
   });
 
@@ -227,7 +232,7 @@ describe('routeToAgents - native attempt degrade', () => {
       sessionContext: { nativeLocality: { kind: 'native' as const } },
     });
 
-    expect(turn.erroredAgents.has('agent-1')).toBe(true);
+    expect(turn.getResult().success).toBe(false);
     expect(onTurnComplete).toHaveBeenCalledWith(turn, expect.objectContaining({ success: false }));
   });
 
@@ -261,10 +266,11 @@ describe('routeToAgents - native attempt degrade', () => {
 
     // Only one attempt — no retry for non-native context.
     expect(sendCount).toBe(1);
-    expect(turn.erroredAgents.has('agent-1')).toBe(true);
+    expect(turn.getResult().success).toBe(false);
   });
 
   it('does not fallback when ack listener rejects after successful native send', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     let sendMessageCount = 0;
     const unsub = MakaioBus.on(AgentSubjects.sendMessage, (context) => {
       sendMessageCount += 1;
@@ -298,10 +304,13 @@ describe('routeToAgents - native attempt degrade', () => {
     // The message must be sent exactly once — the ack failure must NOT
     // trigger a fallback resend.
     expect(sendMessageCount).toBe(1);
-    // The ack error propagates to the outer error handler, marking the
-    // agent as errored (same as the standard dispatch path).
-    expect(turn.erroredAgents.has('agent-1')).toBe(true);
-    expect(onTurnComplete).toHaveBeenCalledWith(turn, expect.objectContaining({ success: false }));
+    // Observation failure cannot roll back an accepted provider turn.
+    expect(turn.isComplete()).toBe(false);
+    expect(onTurnComplete).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[SessionRouting] Failed to emit user-message acknowledgement:',
+      expect.any(Error),
+    );
   });
 
   it('still falls back exactly once on a genuine send failure', async () => {
@@ -342,7 +351,7 @@ describe('routeToAgents - native attempt degrade', () => {
       kind: 'degrade',
       reason: 'native-attempt-failed',
     });
-    expect(turn.erroredAgents.has('agent-1')).toBe(false);
+    expect(turn.isComplete()).toBe(false);
   });
 
   it('emits user_message.acknowledged after successful retry', async () => {
@@ -379,7 +388,7 @@ describe('routeToAgents - native attempt degrade', () => {
     });
 
     expect(acknowledgedAgentIds).toContain('agent-1');
-    expect(turn.erroredAgents.has('agent-1')).toBe(false);
+    expect(turn.isComplete()).toBe(false);
   });
 });
 

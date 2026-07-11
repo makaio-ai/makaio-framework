@@ -1,4 +1,4 @@
-import type { TurnInitiator } from '@makaio/contracts';
+import type { MessageOutcome, TurnInitiator } from '@makaio/contracts';
 
 /**
  * Creates an immutable copy of turn initiator metadata.
@@ -22,14 +22,14 @@ export interface TurnResult {
   errors: string[];
 }
 
-/** Terminal outcome stored for one agent in a turn. */
-type AgentTerminalOutcome = 'completed' | 'errored';
+/** Terminal outcome stored for one admitted message/agent delivery. */
+export type TurnPairTerminalOutcome = MessageOutcome;
 
-/**
- * State change returned by Turn mutation methods.
- * Orchestrator uses this to decide whether to emit turn.completed.
- */
-export type TurnStateChange = { turnComplete: false } | { turnComplete: true; result: TurnResult };
+/** Result of atomically recording one message/agent terminal transition. */
+export type TurnPairStateChange =
+  | { accepted: false; turnComplete: false }
+  | { accepted: true; turnComplete: false }
+  | { accepted: true; turnComplete: true; result: TurnResult };
 
 /**
  * Context for dispatching messages to agents.
@@ -74,13 +74,13 @@ export interface TurnConfig {
  * - No bus dependency (testable in isolation)
  * @example
  * ```typescript
- * const turn = new Turn({ sessionId: 'sess1', agentIds: ['agent1', 'agent2'] });
+ * const turn = new Turn({ sessionId: 'sess1', agentIds: ['agent1', 'agent2'], turnNumber: 1 });
  * turn.addMessage('msg1');
  *
- * const change = turn.markAgentCompleted('agent1');
+ * const change = turn.recordPairTerminal('msg1', 'agent1', 'completed');
  * // change.turnComplete === false (agent2 still pending)
  *
- * const change2 = turn.markAgentCompleted('agent2');
+ * const change2 = turn.recordPairTerminal('msg1', 'agent2', 'completed');
  * // change2.turnComplete === true, change2.result.success === true
  * ```
  */
@@ -103,17 +103,17 @@ export class Turn {
   /** Agents participating in this turn (immutable after creation) */
   private readonly _agentIds: readonly string[];
 
-  /** Messages sent during this turn */
+  /** Messages durably admitted during this turn. */
   private readonly _messageIds: string[] = [];
 
-  /** Message IDs currently claiming this turn while their storage append is in-flight. */
-  private readonly _pendingMessageAppends = new Set<string>();
+  /** Targeted agents for each admitted message.  This is the authoritative turn ledger. */
+  private readonly admittedTargetsByMessageId = new Map<string, ReadonlySet<string>>();
 
-  /** Agents that have completed successfully */
-  private readonly _completedAgents = new Set<string>();
+  /** Terminal outcome for each admitted `{messageId, agentId}` pair. */
+  private readonly terminalPairs = new Map<string, { outcome: TurnPairTerminalOutcome; error?: string }>();
 
-  /** Agents that errored (agentId → error message) */
-  private readonly _erroredAgents = new Map<string, string>();
+  /** Message admissions whose append/lifecycle setup has not committed yet. */
+  private readonly pendingMessageAdmissions = new Set<string>();
 
   public constructor(config: TurnConfig) {
     if (!Number.isInteger(config.turnNumber) || config.turnNumber < 1) {
@@ -161,23 +161,7 @@ export class Turn {
    * @returns True when at least one message append is in-flight
    */
   public get hasPendingMessageAppends(): boolean {
-    return this._pendingMessageAppends.size > 0;
-  }
-
-  /**
-   * Agents that have completed successfully.
-   * @returns Read-only set of completed agent IDs
-   */
-  public get completedAgents(): ReadonlySet<string> {
-    return this._completedAgents;
-  }
-
-  /**
-   * Agents that errored.
-   * @returns Read-only map of agent ID to error message
-   */
-  public get erroredAgents(): ReadonlyMap<string, string> {
-    return this._erroredAgents;
+    return this.pendingMessageAdmissions.size > 0;
   }
 
   // ============================================================================
@@ -189,8 +173,8 @@ export class Turn {
    * @param messageId - The message ID to add
    */
   public addMessage(messageId: string): void {
-    this._pendingMessageAppends.delete(messageId);
-    this._messageIds.push(messageId);
+    this.admitMessage(messageId, this._agentIds);
+    this.commitMessageAdmission(messageId);
   }
 
   /**
@@ -198,7 +182,7 @@ export class Turn {
    * @param messageId - Message ID whose append is in-flight
    */
   public claimMessageAppend(messageId: string): void {
-    this._pendingMessageAppends.add(messageId);
+    this.admitMessage(messageId, this._agentIds);
   }
 
   /**
@@ -206,34 +190,94 @@ export class Turn {
    * @param messageId - Message ID whose append failed
    */
   public releaseMessageAppend(messageId: string): void {
-    this._pendingMessageAppends.delete(messageId);
+    this.rollbackMessageAdmission(messageId);
   }
 
   /**
-   * Mark an agent as completed successfully.
-   * @param agentId - The agent that completed
-   * @returns State change indicating if turn is now complete
+   * Admit a message and its complete fanout into this turn's immutable ledger.
+   * Completion may only terminalize pairs admitted through this method.
+   * @param messageId - Stable user-message identity.
+   * @param agentIds - Immutable participant subset targeted by this delivery.
    */
-  public markAgentCompleted(agentId: string): TurnStateChange {
-    if (this.getAgentTerminalOutcome(agentId) !== undefined) {
-      return { turnComplete: false };
+  public admitMessage(messageId: string, agentIds: readonly string[]): void {
+    if (this.admittedTargetsByMessageId.has(messageId)) {
+      throw new Error(`Turn ${this.turnId} already admitted message ${messageId}`);
     }
-    this._completedAgents.add(agentId);
-    return this.checkCompletion();
+    if (agentIds.length === 0 || new Set(agentIds).size !== agentIds.length) {
+      throw new Error(`Turn ${this.turnId} requires a non-empty unique target set for message ${messageId}`);
+    }
+    if (agentIds.some((agentId) => !this.hasAgent(agentId))) {
+      throw new Error(`Turn ${this.turnId} cannot admit targets outside its immutable participant set`);
+    }
+    this._messageIds.push(messageId);
+    this.admittedTargetsByMessageId.set(messageId, new Set(agentIds));
+    this.pendingMessageAdmissions.add(messageId);
   }
 
   /**
-   * Mark an agent as errored.
-   * @param agentId - The agent that errored
-   * @param error - Error message
-   * @returns State change indicating if turn is now complete
+   * Commit a durable pre-dispatch message admission.
+   * @param messageId - Admitted message whose setup became durable.
    */
-  public markAgentErrored(agentId: string, error: string): TurnStateChange {
-    if (this.getAgentTerminalOutcome(agentId) !== undefined) {
-      return { turnComplete: false };
+  public commitMessageAdmission(messageId: string): void {
+    if (!this.admittedTargetsByMessageId.has(messageId)) {
+      throw new Error(`Turn ${this.turnId} cannot commit unknown message ${messageId}`);
     }
-    this._erroredAgents.set(agentId, error);
-    return this.checkCompletion();
+    this.pendingMessageAdmissions.delete(messageId);
+  }
+
+  /**
+   * Roll back an admission whose append or lifecycle setup failed before dispatch.
+   * @param messageId - Unrouted message admission to remove.
+   */
+  public rollbackMessageAdmission(messageId: string): void {
+    const targets = this.admittedTargetsByMessageId.get(messageId);
+    if (!targets) return;
+    if ([...targets].some((agentId) => this.terminalPairs.has(this.pairKey(messageId, agentId)))) {
+      throw new Error(`Turn ${this.turnId} cannot roll back terminal message ${messageId}`);
+    }
+    this.admittedTargetsByMessageId.delete(messageId);
+    this.pendingMessageAdmissions.delete(messageId);
+    const index = this._messageIds.indexOf(messageId);
+    if (index >= 0) this._messageIds.splice(index, 1);
+  }
+
+  /**
+   * Record one terminal outcome for an admitted delivery pair.
+   * @param messageId - Exact admitted message identity.
+   * @param agentId - Exact targeted agent identity.
+   * @param outcome - Canonical terminal delivery outcome.
+   * @param error - Optional provider or routing error.
+   * @returns Whether the pair was accepted and completed the turn.
+   */
+  public recordPairTerminal(
+    messageId: string,
+    agentId: string,
+    outcome: TurnPairTerminalOutcome,
+    error?: string,
+  ): TurnPairStateChange {
+    if (!this.admittedTargetsByMessageId.get(messageId)?.has(agentId)) return { accepted: false, turnComplete: false };
+    const key = this.pairKey(messageId, agentId);
+    if (this.terminalPairs.has(key)) return { accepted: false, turnComplete: false };
+    this.terminalPairs.set(key, { outcome, ...(error !== undefined && { error }) });
+    if (!this.isComplete()) return { accepted: true, turnComplete: false };
+    return { accepted: true, turnComplete: true, result: this.getResult() };
+  }
+
+  /**
+   * Whether a concrete admitted delivery pair exists.
+   * @param messageId - Message identity to inspect.
+   * @param agentId - Agent identity to inspect.
+   * @returns Whether the exact delivery pair was admitted.
+   */
+  public hasAdmittedPair(messageId: string, agentId: string): boolean {
+    return this.admittedTargetsByMessageId.get(messageId)?.has(agentId) ?? false;
+  }
+
+  /** @returns Snapshot of every admitted delivery pair for barriers and diagnostics. */
+  public get admittedPairs(): readonly { messageId: string; agentId: string }[] {
+    return [...this.admittedTargetsByMessageId].flatMap(([messageId, targets]) =>
+      [...targets].map((agentId) => ({ messageId, agentId })),
+    );
   }
 
   // ============================================================================
@@ -250,12 +294,18 @@ export class Turn {
   }
 
   /**
-   * Check if the turn is complete (all agents finished).
-   * @returns True if all agents have completed or errored
+   * Check whether every admitted delivery pair reached a terminal outcome.
+   * @returns True when the turn has at least one committed admission and all of its pairs are terminal
    */
   public isComplete(): boolean {
-    const completedCount = new Set([...this._completedAgents, ...this._erroredAgents.keys()]).size;
-    return completedCount >= this._agentIds.length;
+    if (this.admittedTargetsByMessageId.size === 0) return false;
+    if (this.pendingMessageAdmissions.size > 0) return false;
+    for (const [messageId, targets] of this.admittedTargetsByMessageId) {
+      for (const agentId of targets) {
+        if (!this.terminalPairs.has(this.pairKey(messageId, agentId))) return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -263,9 +313,12 @@ export class Turn {
    * @returns Turn result with success status and any errors
    */
   public getResult(): TurnResult {
+    const errors = [...this.terminalPairs.values()]
+      .filter((entry) => entry.outcome === 'error')
+      .map((entry) => entry.error ?? 'Unknown error');
     return {
-      success: this._erroredAgents.size === 0,
-      errors: Array.from(this._erroredAgents.values()),
+      success: errors.length === 0,
+      errors,
     };
   }
 
@@ -302,24 +355,12 @@ export class Turn {
   // ============================================================================
 
   /**
-   * Return the recorded terminal outcome for an agent, if any.
-   * @param agentId - Agent ID to inspect.
-   * @returns Terminal outcome already recorded for the agent.
+   * Return a collision-free in-memory key for a ledger pair.
+   * @param messageId - Message component of the pair.
+   * @param agentId - Agent component of the pair.
+   * @returns Collision-free composite key.
    */
-  private getAgentTerminalOutcome(agentId: string): AgentTerminalOutcome | undefined {
-    if (this._completedAgents.has(agentId)) return 'completed';
-    if (this._erroredAgents.has(agentId)) return 'errored';
-    return undefined;
-  }
-
-  /**
-   * Check if turn should complete and return appropriate state change.
-   * @returns State change indicating completion status and result if complete
-   */
-  private checkCompletion(): TurnStateChange {
-    if (this.isComplete()) {
-      return { turnComplete: true, result: this.getResult() };
-    }
-    return { turnComplete: false };
+  private pairKey(messageId: string, agentId: string): string {
+    return JSON.stringify([messageId, agentId]);
   }
 }

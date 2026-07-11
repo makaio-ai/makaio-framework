@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { runPreUserMessageHooks } from '@makaio/hooks';
+import { runPostUserMessageHooks, runPreUserMessageHooks } from '@makaio/hooks';
 import { AgentTurnExecutor } from '../agent-turn-executor.js';
 import type { AIAgentConnector } from '../../connector/index.js';
 import type { SendMessageRequestPayload } from '../types.js';
@@ -173,7 +173,7 @@ describe('AgentTurnExecutor', () => {
     const sendMessage = vi.fn(
       async () =>
         new MessageHandle(
-          'm-ephemeral',
+          'message-explicit',
           {
             role: 'user',
             blocks: [{ type: 'text', content: 'hello' }],
@@ -271,7 +271,7 @@ describe('AgentTurnExecutor', () => {
 
   it('passes each request turnId to onMessageHandle when connector dispatch overlaps', async () => {
     const firstHandle = new MessageHandle(
-      'm-overlap-1',
+      'request-1',
       {
         role: 'user',
         blocks: [{ type: 'text', content: 'first' }],
@@ -279,7 +279,7 @@ describe('AgentTurnExecutor', () => {
       'enqueue',
     );
     const secondHandle = new MessageHandle(
-      'm-overlap-2',
+      'request-2',
       {
         role: 'user',
         blocks: [{ type: 'text', content: 'second' }],
@@ -326,13 +326,122 @@ describe('AgentTurnExecutor', () => {
       turnId: 'turn-2',
     });
 
-    await expect(second).resolves.toEqual({ messageId: 'm-overlap-2' });
+    await expect(second).resolves.toEqual({ messageId: 'request-2' });
     firstDispatch.resolve(firstHandle);
-    await expect(first).resolves.toEqual({ messageId: 'm-overlap-1' });
+    await expect(first).resolves.toEqual({ messageId: 'request-1' });
 
     expect(handled).toEqual([
-      { messageId: 'm-overlap-2', turnId: 'turn-2' },
-      { messageId: 'm-overlap-1', turnId: 'turn-1' },
+      { messageId: 'request-2', turnId: 'turn-2' },
+      { messageId: 'request-1', turnId: 'turn-1' },
     ]);
+  });
+
+  it('rejects a send connector that replaces an explicit canonical messageId before lifecycle tracking', async () => {
+    const onMessageHandle = vi.fn();
+    const handleError = vi.fn();
+    const mismatchedHandle = new MessageHandle('connector-generated', { role: 'user', blocks: [] }, 'enqueue');
+    const connector: Partial<AIAgentConnector> = {
+      cwd: '/tmp',
+      sendMessage: vi.fn(async () => mismatchedHandle) as AIAgentConnector['sendMessage'],
+      handleError,
+    };
+    const executor = new AgentTurnExecutor({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      globalBus: {} as IMakaioBus,
+      getConnector: () => connector as AIAgentConnector,
+      shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
+      onMessageHandle,
+    });
+
+    await expect(
+      executor.executeSendMessage({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        message: 'hello',
+        messageId: 'canonical-message',
+      }),
+    ).rejects.toThrow(
+      'Adapter connector contract violation (adapter-1, sendMessage): expected MessageHandle.messageId "canonical-message", received "connector-generated"',
+    );
+    const completion = await mismatchedHandle.waitForCompletion();
+    expect(completion).toMatchObject({ outcome: 'error' });
+    expect(handleError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('contract violation') }),
+      true,
+    );
+    expect(completion.error).toBe(handleError.mock.calls[0]?.[0]);
+    expect(runPostUserMessageHooks).not.toHaveBeenCalled();
+    expect(onMessageHandle).not.toHaveBeenCalled();
+  });
+
+  it('forwards and enforces an explicit canonical messageId on connector start', async () => {
+    const onMessageHandle = vi.fn();
+    const handleError = vi.fn();
+    const mismatchedHandle = new MessageHandle('connector-generated', { role: 'user', blocks: [] }, 'enqueue');
+    const start = vi.fn(async () => ({
+      adapterSessionId: 'adapter-session-1',
+      agentId: 'agent-1',
+      messageHandle: mismatchedHandle,
+    }));
+    const connector: Partial<AIAgentConnector> = {
+      cwd: '/tmp',
+      start: start as AIAgentConnector['start'],
+      handleError,
+    };
+    const executor = new AgentTurnExecutor({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      globalBus: {} as IMakaioBus,
+      getConnector: () => connector as AIAgentConnector,
+      shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
+      onMessageHandle,
+    });
+
+    await expect(executor.executeStart('hello', { messageId: 'canonical-start' }, undefined)).rejects.toThrow(
+      'Adapter connector contract violation (adapter-1, start): expected MessageHandle.messageId "canonical-start", received "connector-generated"',
+    );
+    const completion = await mismatchedHandle.waitForCompletion();
+    expect(completion).toMatchObject({ outcome: 'error' });
+    expect(handleError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('contract violation') }),
+      true,
+    );
+    expect(completion.error).toBe(handleError.mock.calls[0]?.[0]);
+    expect(runPostUserMessageHooks).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ messageId: 'canonical-start' }));
+    expect(onMessageHandle).not.toHaveBeenCalled();
+  });
+
+  it('allows a connector-generated messageId when start has no canonical identity', async () => {
+    const handle = new MessageHandle('connector-generated', { role: 'user', blocks: [] }, 'enqueue');
+    const onMessageHandle = vi.fn(async () => {});
+    const connector: Partial<AIAgentConnector> = {
+      cwd: '/tmp',
+      start: vi.fn(async () => ({
+        adapterSessionId: 'adapter-session-1',
+        agentId: 'agent-1',
+        messageHandle: handle,
+      })) as AIAgentConnector['start'],
+    };
+    const executor = new AgentTurnExecutor({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      globalBus: {} as IMakaioBus,
+      getConnector: () => connector as AIAgentConnector,
+      shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
+      onMessageHandle,
+    });
+
+    await expect(executor.executeStart('hello', undefined, undefined)).resolves.toMatchObject({
+      messageHandle: handle,
+    });
+    expect(onMessageHandle).toHaveBeenCalledWith(handle, undefined);
   });
 });

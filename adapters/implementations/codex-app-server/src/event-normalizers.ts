@@ -1,8 +1,8 @@
 /**
- * Pure functions to normalize Codex app-server events to AgentSubjects.
+ * Pure functions to normalize non-terminal Codex app-server events to AgentSubjects.
  *
- * Used by:
- * - CodexAppServerAgent for live event routing
+ * Completion is deliberately excluded: the active MessageHandle owns the
+ * canonical messageId/turnId correlation for `agent.complete`.
  * @packageDocumentation
  */
 
@@ -16,7 +16,6 @@ import type {
   ItemStartedNotification,
   ReasoningTextDeltaNotification,
   ThreadTokenUsageUpdatedNotification,
-  TurnCompletedNotification,
 } from './protocol/generated/v2/index.js';
 
 /** Context needed for event normalization */
@@ -31,7 +30,10 @@ export interface NormalizationContext {
 /**
  * Normalize app-server event to canonical AgentSubjects.
  *
- * Transforms app-server protocol notifications to global agent events.
+ * Transforms app-server protocol notifications to global agent events that do
+ * not require a message-handle correlation. `turn/completed` is intentionally
+ * excluded: the active MessageHandle is the sole completion producer and
+ * carries the canonical messageId and turnId.
  * Returns array of normalized events (some notifications may map to multiple).
  * @param notification - The server notification from app-server
  * @param context - Normalization context with session/adapter info
@@ -59,10 +61,6 @@ export function normalizeAppServerEvent(
   if (method === 'thread/tokenUsage/updated') {
     return [normalizeTokenUsage(params, context)];
   }
-  if (method === 'turn/completed') {
-    return [normalizeTurnCompleted(params, context)];
-  }
-
   // All other notifications are unhandled - return empty array
   return [];
 }
@@ -229,21 +227,6 @@ function normalizeTokenUsage(params: ThreadTokenUsageUpdatedNotification, ctx: N
       totalTokens: last.totalTokens,
       costUnits: last.totalTokens,
       costUnitType: 'tokens',
-    },
-  };
-}
-
-/**
- * Normalize turn completed to agent.complete subject.
- * @param params - The turn completed notification
- * @param ctx - Normalization context
- * @returns Normalized event for completion
- */
-function normalizeTurnCompleted(params: TurnCompletedNotification, ctx: NormalizationContext): NormalizedEvent {
-  return {
-    subject: AgentSubjects.complete,
-    payload: {
-      ...ctx,
     },
   };
 }

@@ -346,6 +346,29 @@ export const OrchestratorSchemas = {
   }),
 
   /**
+   * An agent's assistant-message persistence decision has settled.
+   *
+   * Subject: `session.turn.assistantPersistenceSettled`
+   * Type: Local event (fire-and-forget)
+   *
+   * Emitted by the in-process session bridge after it has either persisted the
+   * agent's assistant message or determined that no persistence will occur.
+   * This is coordination metadata, not a durable session lifecycle event.
+   */
+  'turn.assistantPersistenceSettled': localSubject(
+    z.object({
+      /** Session whose turn is settling. */
+      sessionId: z.string(),
+      /** Turn whose assistant persistence is settling. */
+      turnId: z.string(),
+      /** Exact user message whose assistant response settled. */
+      messageId: z.string(),
+      /** Agent whose persistence decision reached a terminal state. */
+      agentId: z.string(),
+    }),
+  ),
+
+  /**
    * Turn completed.
    *
    * Subject: `session.turn.completed`

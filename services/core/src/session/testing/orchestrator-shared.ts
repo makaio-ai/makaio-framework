@@ -258,35 +258,40 @@ export function registerFailingSendMessageHandler(
 
 /**
  * Emit an agent.complete event to simulate a successful agent turn completion.
- * @param agentId - The agent that completed
- * @param messageId - The message ID associated with the completion
+ * @param input - Exact agent, message, and turn correlation.
  * @returns Promise that resolves when the event has been emitted
  */
-export async function emitAgentComplete(agentId: string, messageId: string): Promise<void> {
+export async function emitAgentComplete(input: { agentId: string; messageId: string; turnId: string }): Promise<void> {
   await MakaioBus.emit(AgentSubjects.complete, {
-    agentId,
-    adapterId: `adapter-${agentId}`,
+    agentId: input.agentId,
+    adapterId: `adapter-${input.agentId}`,
     adapterName: 'test-adapter',
-    adapterSessionId: `adapter-session-${agentId}`,
-    messageId,
+    adapterSessionId: `adapter-session-${input.agentId}`,
+    messageId: input.messageId,
+    turnId: input.turnId,
   });
 }
 
 /**
  * Emit an agent.complete event with error outcome to simulate agent failure.
- * @param agentId - The agent that encountered an error
- * @param error - Error message to include in the completion payload
+ * @param input - Exact agent, message, turn, and error correlation.
  * @returns Promise that resolves when the event has been emitted
  */
-export async function emitAgentError(agentId: string, error: string): Promise<void> {
+export async function emitAgentError(input: {
+  agentId: string;
+  messageId: string;
+  turnId: string;
+  error: string;
+}): Promise<void> {
   await MakaioBus.emit(AgentSubjects.complete, {
-    agentId,
-    adapterId: `adapter-${agentId}`,
+    agentId: input.agentId,
+    adapterId: `adapter-${input.agentId}`,
     adapterName: 'test-adapter',
-    adapterSessionId: `adapter-session-${agentId}`,
-    messageId: `msg-error-${agentId}`,
+    adapterSessionId: `adapter-session-${input.agentId}`,
+    messageId: input.messageId,
+    turnId: input.turnId,
     outcome: 'error',
-    error,
+    error: input.error,
   });
 }
 

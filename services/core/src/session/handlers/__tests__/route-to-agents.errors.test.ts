@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import { routeToAgents } from '../route-to-agents.js';
+import { HookAbortError } from '@makaio/hooks';
 import { Turn, type TurnResult } from '../../entities/turn.js';
-import { registerFailingSendHandler, createRouteTestContext, ROUTE_TEST_IDS, type RouteTestContext } from './shared.js';
+import {
+  registerFailingSendHandler,
+  registerSuccessfulSendHandler,
+  createRouteTestContext,
+  ROUTE_TEST_IDS,
+  routeToAgentsWithTestLedger as routeToAgents,
+  type RouteTestContext,
+} from './shared.js';
 import { createTestAgent, createTestSession, waitForAsync } from '../../__tests__/shared.js';
 
 /** Type for the onTurnComplete callback */
@@ -19,6 +26,7 @@ describe('routeToAgents - error handling', () => {
 
   afterEach(() => {
     ctx.destroy();
+    vi.restoreAllMocks();
   });
 
   /**
@@ -28,6 +36,144 @@ describe('routeToAgents - error handling', () => {
   const trackUnsubscribe = (unsub: () => void) => ctx.trackUnsubscribe(unsub);
 
   describe('should mark agent as errored on routing failure', () => {
+    it('settles every directly terminalized agent before completing a mixed-failure turn', async () => {
+      const settlements: Array<{ sessionId: string; turnId: string; messageId: string; agentId: string }> = [];
+      trackUnsubscribe(
+        MakaioBus.on(AgentSubjects.sendMessage, (context) => {
+          if (context.payload.agentId === 'agent-1') {
+            throw new Error('Agent unreachable');
+          }
+          throw new HookAbortError('policy-check', 'cancel requested');
+        }),
+      );
+      trackUnsubscribe(
+        MakaioBus.on(SessionSubjects.turn.assistantPersistenceSettled, ({ payload }) => {
+          settlements.push(payload);
+        }),
+      );
+
+      const agents = [createTestAgent('agent-1'), createTestAgent('agent-2')];
+      const session = createTestSession(sessionId, { agents });
+      const turn = new Turn({
+        sessionId,
+        agentIds: agents.map((agent) => agent.agentId),
+        turnId,
+        turnNumber: 1,
+      });
+      const onTurnComplete = vi.fn(async () => {
+        expect(settlements).toHaveLength(2);
+      });
+
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
+
+      expect(settlements).toEqual(
+        expect.arrayContaining([
+          { sessionId, turnId, messageId, agentId: 'agent-1' },
+          { sessionId, turnId, messageId, agentId: 'agent-2' },
+        ]),
+      );
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      'user-message completion',
+      'assistant-persistence settlement',
+    ] as const)('terminalizes a cancelled agent when the %s observer rejects', async (failedObserver) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      let observerCalls = 0;
+      if (failedObserver === 'user-message completion') {
+        trackUnsubscribe(
+          MakaioBus.on(SessionSubjects.user_message.completed, () => {
+            observerCalls += 1;
+            throw new Error('user-message observer failed');
+          }),
+        );
+      } else {
+        trackUnsubscribe(
+          MakaioBus.on(SessionSubjects.turn.assistantPersistenceSettled, () => {
+            observerCalls += 1;
+            throw new Error('persistence observer failed');
+          }),
+        );
+      }
+      trackUnsubscribe(
+        MakaioBus.on(AgentSubjects.sendMessage, () => {
+          throw new HookAbortError('policy-check', 'cancel requested');
+        }),
+      );
+
+      const agent = createTestAgent('agent-1');
+      const session = createTestSession(sessionId, { agents: [agent] });
+      const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
+      const onTurnComplete = vi.fn<OnTurnCompleteCallback>().mockResolvedValue(undefined);
+
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
+
+      expect(observerCalls).toBe(1);
+      expect(turn.isComplete()).toBe(true);
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(onTurnComplete).toHaveBeenCalledWith(turn, expect.objectContaining({ success: true }));
+    });
+
+    it('keeps the accepted agent active when acknowledgement observation fails', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      trackUnsubscribe(registerSuccessfulSendHandler());
+      trackUnsubscribe(
+        MakaioBus.on(SessionSubjects.user_message.acknowledged, () => {
+          throw new Error('Acknowledgement persistence failed');
+        }),
+      );
+
+      const settlements: Array<{ sessionId: string; turnId: string; agentId: string }> = [];
+      trackUnsubscribe(
+        MakaioBus.on(SessionSubjects.turn.assistantPersistenceSettled, ({ payload }) => {
+          settlements.push(payload);
+        }),
+      );
+
+      const agent = createTestAgent('agent-1');
+      const session = createTestSession(sessionId, { agents: [agent] });
+      const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
+      const onTurnComplete = vi.fn<OnTurnCompleteCallback>();
+
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
+
+      expect(settlements).toEqual([]);
+      expect(turn.isComplete()).toBe(false);
+      expect(onTurnComplete).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[SessionRouting] Failed to emit user-message acknowledgement:',
+        expect.any(Error),
+      );
+    });
+
     it('marks agent as errored in Turn when sendMessage fails', async () => {
       const errorMessage = 'Agent unreachable';
       trackUnsubscribe(registerFailingSendHandler(new Set(['agent-1']), errorMessage));
@@ -48,9 +194,9 @@ describe('routeToAgents - error handling', () => {
         onTurnComplete,
       });
 
-      expect(turn.erroredAgents.has('agent-1')).toBe(true);
+      expect(turn.isComplete()).toBe(true);
       // Bus wraps request errors with prefix, so we check the message contains our error
-      expect(turn.erroredAgents.get('agent-1')).toContain(errorMessage);
+      expect(turn.getResult().errors.some((error) => error.includes(errorMessage))).toBe(true);
     });
 
     it('emits user_message.completed with error on failure', async () => {
@@ -167,11 +313,9 @@ describe('routeToAgents - error handling', () => {
       });
 
       // agent-1 and agent-3 should be errored
-      expect(turn.erroredAgents.has('agent-1')).toBe(true);
-      expect(turn.erroredAgents.has('agent-3')).toBe(true);
+      expect(turn.getResult().errors).toHaveLength(2);
 
       // agent-2 should not be errored (it succeeded)
-      expect(turn.erroredAgents.has('agent-2')).toBe(false);
     });
   });
 
@@ -230,8 +374,9 @@ describe('routeToAgents - error handling', () => {
         turnNumber: 1,
       });
 
-      // Pre-mark agent-1 as completed (simulating it completed its turn)
-      turn.markAgentCompleted('agent-1');
+      // This message targets only the still-pending agent.
+      turn.admitMessage(messageId, [agents[1].agentId]);
+      turn.commitMessageAdmission(messageId);
 
       const onTurnComplete = vi.fn<OnTurnCompleteCallback>().mockResolvedValue(undefined);
 

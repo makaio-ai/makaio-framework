@@ -4,6 +4,7 @@
  */
 import { MakaioBus } from '@makaio/bus-core';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
+import type { SessionMessage } from '@makaio/contracts';
 import { ProviderStorageSubjects } from '../../settings/storage/providers-namespace.js';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
 import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
@@ -132,30 +133,38 @@ function registerTurnHandlers(unsubs: Array<() => void>): void {
  * @param unsubs - Array to collect cleanup functions
  */
 function registerMessageHandlers(unsubs: Array<() => void>): void {
+  const messagesByTurn = new Map<string | null, SessionMessage[]>();
+
   unsubs.push(
     MakaioBus.on(MessageStorageSubjects.append, (ctx) => {
       const { message } = ctx.payload;
-      ctx.setResult({
-        message: {
-          messageId: message.messageId ?? `msg-${crypto.randomUUID().slice(0, 8)}`,
-          turnId: message.turnId,
-          sessionId: message.sessionId,
-          role: message.role,
-          contentText: message.contentText,
-          blocks: message.blocks,
-          agentId: message.agentId,
-          adapterSessionId: message.adapterSessionId,
-          adapterMessageId: message.adapterMessageId,
-          timestamp: message.timestamp,
-          editOf: message.editOf,
-        },
-      });
+      const storedMessage: SessionMessage = {
+        messageId: message.messageId ?? `msg-${crypto.randomUUID().slice(0, 8)}`,
+        turnId: message.turnId,
+        sessionId: message.sessionId,
+        role: message.role,
+        contentText: message.contentText,
+        blocks: message.blocks,
+        agentId: message.agentId,
+        adapterSessionId: message.adapterSessionId,
+        adapterMessageId: message.adapterMessageId,
+        timestamp: message.timestamp,
+        editOf: message.editOf,
+        origin: message.origin,
+      };
+      const turnMessages = messagesByTurn.get(storedMessage.turnId) ?? [];
+      turnMessages.push(storedMessage);
+      messagesByTurn.set(storedMessage.turnId, turnMessages);
+      ctx.setResult({ message: storedMessage });
+      if (ctx.payload.emitEvent ?? true) {
+        void MakaioBus.emit(MessageStorageSubjects.stored, { message: structuredClone(storedMessage) });
+      }
     }),
   );
 
   unsubs.push(
     MakaioBus.on(MessageStorageSubjects.getByTurn, (ctx) => {
-      ctx.setResult({ messages: [] });
+      ctx.setResult({ messages: structuredClone(messagesByTurn.get(ctx.payload.turnId) ?? []) });
     }),
   );
 

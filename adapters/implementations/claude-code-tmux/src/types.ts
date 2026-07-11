@@ -122,9 +122,15 @@ export interface TmuxConnectorSessionConfig {
   /** Emits assistant completion text. */
   emitTurnCompleted: (payload: { message: string }) => Promise<void>;
   /** Emits tool-start metadata. */
-  emitToolUseStarted: (payload: { toolName: string; toolUseId: string; toolInput: unknown }) => Promise<void>;
+  emitToolUseStarted: (payload: {
+    messageId: string;
+    toolName: string;
+    toolUseId: string;
+    toolInput: unknown;
+  }) => Promise<void>;
   /** Emits tool-finish metadata. */
   emitToolUseFinished: (payload: {
+    messageId: string;
     toolName: string;
     toolUseId: string;
     toolResult: unknown;

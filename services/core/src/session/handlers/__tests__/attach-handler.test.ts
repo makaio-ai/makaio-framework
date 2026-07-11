@@ -12,7 +12,6 @@ import {
   type AttachHandlerTestContext,
 } from './shared.js';
 import { resetBusHandlers } from '../../__tests__/shared.js';
-import { Turn } from '../../entities/turn.js';
 
 describe('registerAttachHandler', () => {
   const { sessionId, adapterName, agentId, adapterSessionId } = ATTACH_TEST_IDS;
@@ -95,7 +94,6 @@ describe('registerAttachHandler', () => {
 
     it('passes machineId to adapter resolution when provided', async () => {
       resetBusHandlers();
-      const activeTurns = new Map<string, Turn>();
 
       // Conversation storage stubs: resetBusHandlers() cleared the defaults
       // registered by createAttachHandlerContext. Non-native attach paths now
@@ -116,7 +114,7 @@ describe('registerAttachHandler', () => {
       ctx.trackUnsubscribe(unsubscribe);
 
       const { registerAttachHandler } = await import('../attach-handler.js');
-      ctx.trackUnsubscribe(registerAttachHandler(MakaioBus, activeTurns, 'node-local'));
+      ctx.trackUnsubscribe(registerAttachHandler(MakaioBus, ctx.turnManager, 'node-local'));
 
       await MakaioBus.request(SessionSubjects.agent.attach, {
         sessionId,

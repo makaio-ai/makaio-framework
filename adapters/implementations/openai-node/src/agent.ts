@@ -88,7 +88,6 @@ export class OpenAIAgent extends BaseStreamAgent<OpenAINodeConnectorBus, OpenAIN
       toolCompleted: OpenAINodeConnectorSubjects.tool_completed,
       agentStarted: OpenAINodeConnectorSubjects.agent_started,
       agentComplete: OpenAINodeConnectorSubjects.agent_complete,
-      error: OpenAINodeConnectorSubjects.error,
     } as OpenAISubjectSpec;
   }
 

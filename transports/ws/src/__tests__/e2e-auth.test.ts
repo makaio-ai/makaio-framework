@@ -11,6 +11,22 @@ import type { WebSocketLike } from '../types.js';
 import { encryptMessage, decryptMessage } from '../e2e-message-crypto.js';
 
 describe('E2EAuth', () => {
+  it('terminates key exchange immediately when the peer rejects authentication', async () => {
+    const clientAuth = new E2EAuth({
+      signingKeyPair: await generateSigningKeyPair(),
+      identityId: 'unknown-device',
+      peerId: 'machine-1',
+      getPeerSigningKey: async () => null,
+      timeout: 30_000,
+    });
+
+    const authentication = clientAuth.authenticateClient(() => {
+      clientAuth.handleAuthMessage({ type: 'e2e-auth-result', success: false, error: 'Unknown device' });
+    });
+
+    await expect(authentication).rejects.toThrow('E2E authentication failed: Unknown device');
+  });
+
   it('derives the same session key on client and server', async () => {
     const deviceId = 'device-1';
     const machineId = 'machine-1';

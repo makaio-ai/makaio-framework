@@ -235,12 +235,6 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
           });
       }
     });
-
-    // thread.completed -> agent.complete (session finished)
-    this.subscribeConnector(connector, CodexAppServerSubjects.thread_completed, async () => {
-      const messageId = crypto.randomUUID();
-      return this.emitCompletion({ messageId });
-    });
   }
 
   /**

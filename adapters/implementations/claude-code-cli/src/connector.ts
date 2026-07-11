@@ -153,10 +153,10 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
           console.warn('[ClaudeCliConnector] Dropping non-object SDK event payload', { payloadType: typeof msg });
           return;
         }
-        await this.emit(
-          ClaudeCodeCliConnectorSubjects.sdk.event,
-          sdkEventPayload as Parameters<typeof this.emit<typeof ClaudeCodeCliConnectorSubjects.sdk.event>>[1],
-        );
+        await this.emit(ClaudeCodeCliConnectorSubjects.sdk.event, {
+          ...sdkEventPayload,
+          ...(this.pendingMessageHandle !== undefined && { originatingMessageId: this.pendingMessageHandle.messageId }),
+        } as Parameters<typeof this.emit<typeof ClaudeCodeCliConnectorSubjects.sdk.event>>[1]);
       },
       onTurnStart: (handle) => {
         this.pendingMessageHandle = handle;

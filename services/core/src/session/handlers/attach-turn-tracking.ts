@@ -6,18 +6,27 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
-import type { MessageInput, StartAgentResponse } from '@makaio/contracts';
+import { AdapterSubjects } from '@makaio/contracts';
+import type { IMakaioSession, MessageInput, SessionContext, StartAgentResponse } from '@makaio/contracts';
 import { Turn } from '../entities/turn.js';
 import { MessageStorageSubjects } from '../messages/namespace.js';
-import { emitSessionTurnStarted } from '../session-lifecycle-events.js';
+import { emitSessionTurnStarted, emitSessionUserMessageSent } from '../session-lifecycle-events.js';
 import { extractTextContent, normalizeToBlocks } from '../session-orchestrator-helpers.js';
-import { TurnStorageSubjects } from '../turns/index.js';
+import type { SessionTurnManager } from '../session-turn-manager.js';
+import type { TurnReservation } from '../session-turn-manager.js';
+import { routeToAgentsCore } from './route-to-agents-core.js';
+
+/** Prepared initial attach turn and its canonical user-message identity. */
+interface PreparedInitialAttachTurn {
+  readonly messageId: string;
+  readonly turn: Turn;
+}
 
 /**
  * Set up initial-message turn tracking and stop the started agent if setup fails.
  * @param bus - Bus instance for storage and adapter rollback
- * @param activeTurns - Shared turn state map
+ * @param turnManager - Shared owner of attach turn lifecycle state
+ * @param reservation - Exclusive session turn slot reserved before agent startup
  * @param startResult - Successful adapter startup result
  * @param sessionId - Target session ID
  * @param agentId - Agent processing the message
@@ -25,17 +34,18 @@ import { TurnStorageSubjects } from '../turns/index.js';
  * @param content - Message content
  * @returns Turn tracking info
  */
-export async function setupTurnTrackingOrRollbackAgent(
+async function setupInitialAttachTurnOrRollbackAgent(
   bus: IMakaioBus,
-  activeTurns: Map<string, Turn>,
+  turnManager: SessionTurnManager,
+  reservation: TurnReservation,
   startResult: Extract<StartAgentResponse, { success: true }>,
   sessionId: string,
   agentId: string,
   messageId: string,
   content: MessageInput,
-): Promise<{ messageId: string; turnId: string }> {
+): Promise<PreparedInitialAttachTurn> {
   try {
-    return await setupTurnTracking(bus, activeTurns, sessionId, agentId, messageId, content);
+    return await setupInitialAttachTurn(bus, turnManager, reservation, sessionId, agentId, messageId, content);
   } catch (error) {
     console.error('[attach-handler] Failed to set up initial-message turn, rolling back started agent', {
       sessionId,
@@ -46,6 +56,76 @@ export async function setupTurnTrackingOrRollbackAgent(
     await stopStartedAgentAfterFailure(bus, startResult, sessionId, 'initial-message turn setup failure');
     throw error;
   }
+}
+
+/**
+ * Create and persist the initial attach turn before delivering it to the idle agent.
+ *
+ * The message identity is created before provider dispatch and is forwarded
+ * unchanged through the ordinary agent routing pipeline.
+ * @param bus - Bus for turn persistence and agent routing
+ * @param turnManager - Shared owner of the session turn lifecycle
+ * @param reservation - Exclusive session turn slot reserved before agent startup
+ * @param startResult - Registered idle agent identity
+ * @param session - Session receiving the initial turn
+ * @param initialMessage - User message to deliver after persistence
+ * @param sessionContext - Attach locality and history context for delivery
+ * @returns Canonical identifiers for the newly created turn and message
+ */
+export async function dispatchInitialAttachMessage(
+  bus: IMakaioBus,
+  turnManager: SessionTurnManager,
+  reservation: TurnReservation,
+  startResult: Extract<StartAgentResponse, { success: true }>,
+  session: IMakaioSession,
+  initialMessage: MessageInput,
+  sessionContext: SessionContext | undefined,
+): Promise<{ messageId: string; turnId: string }> {
+  const prepared = await setupInitialAttachTurnOrRollbackAgent(
+    bus,
+    turnManager,
+    reservation,
+    startResult,
+    session.sessionId,
+    startResult.agentId,
+    crypto.randomUUID(),
+    initialMessage,
+  );
+  let outcomes;
+  try {
+    outcomes = await routeToAgentsCore(
+      bus,
+      session,
+      [{ agentId: startResult.agentId, adapterId: startResult.adapterId }],
+      initialMessage,
+      prepared.messageId,
+      prepared.turn,
+      undefined,
+      turnManager.completeTurn.bind(turnManager),
+      turnManager,
+      sessionContext,
+      undefined,
+    );
+  } catch (error) {
+    try {
+      await turnManager.retryTurnCompletion(prepared.turn.turnId);
+    } catch (retryError) {
+      console.error('[attach-handler] Failed to retry initial-message completion after routing failure', {
+        sessionId: session.sessionId,
+        turnId: prepared.turn.turnId,
+        error: retryError,
+      });
+    }
+    await stopStartedAgentAfterFailure(bus, startResult, session.sessionId, 'initial-message routing failure');
+    throw error;
+  }
+  const outcome = outcomes[0];
+  if (!outcome || outcome.kind === 'dispatched') {
+    return { messageId: prepared.messageId, turnId: prepared.turn.turnId };
+  }
+
+  await stopStartedAgentAfterFailure(bus, startResult, session.sessionId, 'initial-message routing failure');
+  throw outcome.error;
 }
 
 /**
@@ -77,36 +157,33 @@ export async function stopStartedAgentAfterFailure(
 }
 
 /**
- * Sets up turn tracking and emits turn/message events.
+ * Sets up an initial attach turn and emits turn/message events before dispatch.
  *
  * Persists the turn via storage to obtain a monotonic `turnNumber` before
  * emitting lifecycle events (which include `turnNumber` in their schema).
  * @param bus - Bus instance for event emission and storage
- * @param activeTurns - Shared turn state map
+ * @param turnManager - Shared owner of attach turn lifecycle state
+ * @param reservation - Exclusive session turn slot reserved before agent startup
  * @param sessionId - Target session ID
  * @param agentId - Agent processing the message
  * @param messageId - User message ID
  * @param content - Message content
  * @returns Turn tracking info
  */
-async function setupTurnTracking(
+async function setupInitialAttachTurn(
   bus: IMakaioBus,
-  activeTurns: Map<string, Turn>,
+  turnManager: SessionTurnManager,
+  reservation: TurnReservation,
   sessionId: string,
   agentId: string,
   messageId: string,
   content: MessageInput,
-): Promise<{ messageId: string; turnId: string }> {
-  const { turn: storedTurn } = await bus.request(TurnStorageSubjects.create, { sessionId });
-  const turn = new Turn({
-    sessionId,
-    agentIds: [agentId],
-    turnId: storedTurn.turnId,
-    turnNumber: storedTurn.turnNumber,
-  });
+): Promise<PreparedInitialAttachTurn> {
+  const turn = await turnManager.createReservedTurn(reservation, [agentId]);
+  const admission = turnManager.admitReservedMessage(turn, messageId, [agentId]);
 
   try {
-    await bus.requestOptional(MessageStorageSubjects.append, {
+    const append = await bus.requestOptional(MessageStorageSubjects.append, {
       message: {
         messageId,
         turnId: turn.turnId,
@@ -117,6 +194,7 @@ async function setupTurnTracking(
         timestamp: Date.now(),
       },
     });
+    if (!append.handled) throw new Error('Message storage append handler is not registered');
   } catch (error: unknown) {
     console.warn('[attach-handler] Failed to store initial user message', {
       sessionId,
@@ -124,35 +202,27 @@ async function setupTurnTracking(
       error: error instanceof Error ? error.message : String(error),
     });
     try {
-      await bus.requestOptional(TurnStorageSubjects.complete, {
-        turnId: turn.turnId,
-        status: 'error',
-        expectedStatus: 'active',
-        error: 'initial-message-persistence-failed',
-      });
-    } catch (completionError) {
-      console.error('[attach-handler] Failed to rollback initial-message turn after message persistence failure', {
-        sessionId,
-        turnId: turn.turnId,
-        error: completionError,
-      });
+      await admission.rollback('initial-message-persistence-failed');
+    } catch (cleanupError) {
+      console.error('[attach-handler] Failed to finalize rejected initial-message persistence:', cleanupError);
     }
     throw error;
   }
-
-  turn.addMessage(messageId);
-  activeTurns.set(sessionId, turn);
 
   try {
-    await emitInitialMessageEvents(bus, sessionId, turn, agentId, messageId, content);
+    await emitInitialMessageEvents(bus, sessionId, turn, messageId, content);
   } catch (error) {
-    if (activeTurns.get(sessionId)?.turnId === turn.turnId) {
-      activeTurns.delete(sessionId);
+    try {
+      await admission.rollback('initial-message-lifecycle-failed');
+    } catch (cleanupError) {
+      console.error('[attach-handler] Failed to finalize rejected initial-message lifecycle:', cleanupError);
     }
     throw error;
   }
 
-  return { messageId, turnId: turn.turnId };
+  admission.commit();
+
+  return { messageId, turn };
 }
 
 /**
@@ -160,7 +230,6 @@ async function setupTurnTracking(
  * @param bus - Bus instance for event emission
  * @param sessionId - Target session ID
  * @param turn - Active turn
- * @param agentId - Agent processing the message
  * @param messageId - User message ID
  * @param content - Message content
  */
@@ -168,7 +237,6 @@ async function emitInitialMessageEvents(
   bus: IMakaioBus,
   sessionId: string,
   turn: Turn,
-  agentId: string,
   messageId: string,
   content: MessageInput,
 ): Promise<void> {
@@ -180,19 +248,12 @@ async function emitInitialMessageEvents(
     agentIds: [...turn.agentIds],
     ingestionMarker: 'live',
   });
-  await bus.emit(SessionSubjects.user_message.sent, {
+  await emitSessionUserMessageSent(bus, {
     sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,
     messageId,
     content,
     agentIds: [...turn.agentIds],
-  });
-  await bus.emit(SessionSubjects.user_message.acknowledged, {
-    sessionId,
-    turnId: turn.turnId,
-    turnNumber: turn.turnNumber,
-    messageId,
-    agentId,
   });
 }

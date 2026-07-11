@@ -103,7 +103,7 @@ export {
   type CodexToolApprovalResponse,
 } from './tool-handling.js';
 
-// Export event normalizers
+// Export protocol normalizers for non-terminal events. MessageHandle owns completion correlation.
 export { normalizeAppServerEvent } from './event-normalizers.js';
 export type { NormalizationContext } from './event-normalizers.js';
 

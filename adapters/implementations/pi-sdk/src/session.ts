@@ -22,6 +22,18 @@ import type { RequestToolApprovalFn } from './tool-handling.js';
 import { createPiBeforeToolCallHook } from './tool-handling.js';
 import type { PiThinkingLevel } from './types/index.js';
 
+/** Public Pi session surface required by the connector and injectable in tests. */
+export interface PiSession {
+  readonly agent: AgentSession['agent'];
+  readonly sessionId: string;
+  subscribe: AgentSession['subscribe'];
+  prompt: AgentSession['prompt'];
+  abort: AgentSession['abort'];
+  dispose: AgentSession['dispose'];
+  setModel: AgentSession['setModel'];
+  setThinkingLevel: AgentSession['setThinkingLevel'];
+}
+
 /**
  * Configuration for PiConnectorSession.
  *
@@ -70,9 +82,9 @@ export interface PiConnectorSessionConfig {
    * Factory to create the Pi AgentSession on first use.
    * Injected by the connector so the session class remains testable
    * without bootstrapping the full Pi SDK infrastructure.
-   * @returns Promise resolving to the initialized AgentSession
+   * @returns Promise resolving to the initialized Pi session surface.
    */
-  createPiSession: () => Promise<AgentSession>;
+  createPiSession: () => Promise<PiSession>;
   /**
    * Names of custom tools passed to `createAgentSession({ customTools })`.
    * Used to seed the custom tool tracking set so the first `updateCustomTools()`
@@ -101,7 +113,7 @@ export interface PiConnectorSessionConfig {
  */
 export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionConfig> {
   /** The underlying Pi SDK session instance, set after initialize(). */
-  private piSession?: AgentSession;
+  private piSession?: PiSession;
 
   /** Unsubscribe function returned by piSession.subscribe(). */
   private piUnsubscribe?: () => void;
@@ -151,6 +163,9 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
 
   /** Approval-rewritten inputs for custom registry tools, keyed by Pi tool call ID. */
   private readonly approvedToolInputs = new Map<string, Record<string, unknown>>();
+
+  /** Originating Makaio message for each in-flight Pi tool call. */
+  private readonly toolMessageIds = new Map<string, string>();
 
   /** Metadata injected into every bus emission so the filtered bus matches by agentId. */
   private readonly busMetadata: { agentId: string; adapterId: string; adapterName: string };
@@ -269,21 +284,18 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
         await this.handleMessageEnd(event, turnSnapshot);
         break;
       case 'tool_execution_start':
+        if (!handleSnapshot) return;
+        this.toolMessageIds.set(event.toolCallId, handleSnapshot.messageId);
         await this.emitEvent(PiSdkSubjects.tool_started, {
           eventType: 'tool_started',
+          messageId: handleSnapshot.messageId,
           toolName: event.toolName,
           toolCallId: event.toolCallId,
           args: this.normalizeToolArgs(event.args),
         });
         break;
       case 'tool_execution_end':
-        await this.emitEvent(PiSdkSubjects.tool_completed, {
-          eventType: 'tool_completed',
-          toolName: event.toolName,
-          toolCallId: event.toolCallId,
-          result: event.result,
-          isError: event.isError,
-        });
+        await this.emitToolCompletedEvent(event);
         break;
       case 'agent_start':
         await this.emitEvent(PiSdkSubjects.agent_started, { eventType: 'agent_started' });
@@ -440,6 +452,32 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
     return typeof value === 'object' && value !== null && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : undefined;
+  }
+
+  /**
+   * Emit a Pi tool completion against the message that started the tool call.
+   *
+   * Pi can deliver a completion after immediate delivery has replaced the active
+   * turn. The call ID is the provider's stable ownership key across that gap.
+   * @param event - Pi SDK tool execution completion event
+   */
+  private async emitToolCompletedEvent(
+    event: Extract<AgentSessionEvent, { type: 'tool_execution_end' }>,
+  ): Promise<void> {
+    const messageId = this.toolMessageIds.get(event.toolCallId);
+    if (!messageId) return;
+    try {
+      await this.emitEvent(PiSdkSubjects.tool_completed, {
+        eventType: 'tool_completed',
+        messageId,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        result: event.result,
+        isError: event.isError,
+      });
+    } finally {
+      this.toolMessageIds.delete(event.toolCallId);
+    }
   }
 
   /**
@@ -694,6 +732,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
       console.warn('[PiConnectorSession] Pi abort failed during close:', error);
     }
     this.piSession?.dispose();
+    this.toolMessageIds.clear();
   }
 
   /**

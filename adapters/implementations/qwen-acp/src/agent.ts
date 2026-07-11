@@ -112,20 +112,29 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
    */
   private wireToolEvents(connector: QwenAcpConnector): void {
     this.subscribeConnector(connector, QwenAcpSubjects.session_update_tool_call, async (ctx) => {
-      const { toolCallId, title, rawInput } = ctx.payload;
+      const { messageId, toolCallId, title, rawInput } = ctx.payload;
       const args =
         typeof rawInput === 'object' && rawInput !== null ? (rawInput as Record<string, unknown>) : undefined;
-      await this.emitToolUse(title, args, toolCallId);
-      await this.emitStepStarted('tool_use', { type: 'tool_use', toolName: title, toolCallId });
+      await this.emitToolUse(messageId, title, args, toolCallId);
+      await this.eventBridge.emitStepStartedForMessage(messageId, 'tool_use', {
+        type: 'tool_use',
+        toolName: title,
+        toolCallId,
+      });
     });
 
     this.subscribeConnector(connector, QwenAcpSubjects.session_update_tool_call_update, async (ctx) => {
-      const { toolCallId, status, rawOutput } = ctx.payload;
+      const { messageId, toolCallId, status, rawOutput } = ctx.payload;
       if (status !== 'completed' && status !== 'failed') return;
 
       const isError = status === 'failed';
       const output = normalizeToolOutput(rawOutput);
-      await this.emitStepFinished('tool_use', { type: 'tool_output', toolCallId, output, isError });
+      await this.eventBridge.emitStepFinishedForMessage(messageId, 'tool_use', {
+        type: 'tool_output',
+        toolCallId,
+        output,
+        isError,
+      });
     });
   }
 

@@ -1,6 +1,6 @@
 import { type Reporter, type TestCase, type TestModule, TestRunEndReason } from 'vitest/node';
 import type { TestError } from 'vitest';
-import { SerializedError } from '@vitest/utils';
+import type { SerializedError } from '@vitest/utils';
 
 /**
  * Token-efficient test reporter for AI consumption.
@@ -51,16 +51,50 @@ interface FailedTest {
   errors: readonly TestError[];
 }
 
+interface TimedTest {
+  name: string;
+  duration: number;
+}
+
+/** Timing phases reported independently by Vitest for one test module. */
+interface ModuleTimingDiagnostic {
+  duration?: number;
+  environmentSetupDuration?: number;
+  prepareDuration?: number;
+  collectDuration?: number;
+  setupDuration?: number;
+}
+
+const TIMING_PROFILE_LIMIT = 10;
+const NATIVE_STACK_FRAME_LIMIT = 6;
+
 interface PrintErrorOptions {
   /** Print the complete multi-line error message instead of the first line only. */
   fullMessage?: boolean;
+}
+
+/**
+ * Extract bounded V8 stack frames without repeating the error's message header.
+ * @param stack - Native serialized stack string.
+ * @param limit - Maximum number of frames to return.
+ * @returns At most `limit` normalized stack frames.
+ */
+function extractNativeStackFrames(stack: string | undefined, limit: number): string[] {
+  if (stack === undefined) return [];
+  return stack
+    .split(/\r?\n/u)
+    .filter((line) => /^\s*at\s+/u.test(line))
+    .slice(0, limit)
+    .map((line) => line.trimStart());
 }
 
 export default class TokenEfficientReporter implements Reporter {
   private lastColor: string | null = null;
   private counts = { passed: 0, failed: 0, skipped: 0 };
   private failedTests: FailedTest[] = [];
+  private slowestTests: TimedTest[] = [];
   private cleanRunOwnsExitCode = false;
+  private readonly timingProfileEnabled = 'MAKAIO_TEST_PROFILE' in process.env;
 
   public onInit(): void {
     process.once('exit', () => {
@@ -88,6 +122,13 @@ export default class TokenEfficientReporter implements Reporter {
     const result = testCase.result();
     const state = result.state as TestState;
     if (!(state in stateConfig)) return;
+
+    if (this.timingProfileEnabled) {
+      const duration = testCase.diagnostic()?.duration;
+      if (duration !== undefined) {
+        this.recordSlowTest({ name: testCase.fullName, duration });
+      }
+    }
 
     const config = stateConfig[state];
     this.counts[state]++;
@@ -165,6 +206,8 @@ export default class TokenEfficientReporter implements Reporter {
 
     process.stdout.write(`${parts.join(' | ')} (${total} total)\n`);
 
+    this.printTimingProfile(testModules);
+
     // CLI-oriented tests intentionally assert non-zero process.exitCode values.
     // A clean Vitest result must own the final process status instead of
     // inheriting a stale command-under-test exit code from the worker lifecycle.
@@ -210,13 +253,13 @@ export default class TokenEfficientReporter implements Reporter {
    * @param error - The test error to print.
    * @param options - Formatting options for diagnostics with multi-line payloads.
    */
-  private printError(error: TestError, options: PrintErrorOptions = {}): void {
+  private printError(error: SerializedError, options: PrintErrorOptions = {}): void {
     const rawMessage = error.message ?? 'Unknown error';
     const message = options.fullMessage ? rawMessage.trimEnd() : (rawMessage.split('\n')[0] ?? 'Unknown error');
     this.printIndented(message);
 
     // Print cause chain if present (e.g., import errors have nested causes)
-    const cause = (error as TestError & { cause?: { message?: string } }).cause;
+    const cause = error.cause;
     if (cause?.message) {
       const causeMessage = options.fullMessage ? cause.message.trimEnd() : cause.message.split('\n')[0];
       this.printIndented(`Caused by: ${causeMessage}`);
@@ -225,6 +268,17 @@ export default class TokenEfficientReporter implements Reporter {
     const stack = error.stacks?.[0];
     if (stack) {
       process.stderr.write(`  at ${stack.file}:${stack.line}\n`);
+      for (const frame of extractNativeStackFrames(cause?.stack, NATIVE_STACK_FRAME_LIMIT - 1)) {
+        process.stderr.write(`  ${frame}\n`);
+      }
+      return;
+    }
+
+    const errorFrameLimit = cause?.stack === undefined ? NATIVE_STACK_FRAME_LIMIT : NATIVE_STACK_FRAME_LIMIT / 2;
+    const errorFrames = extractNativeStackFrames(error.stack, errorFrameLimit);
+    const causeFrames = extractNativeStackFrames(cause?.stack, NATIVE_STACK_FRAME_LIMIT - errorFrames.length);
+    for (const frame of [...errorFrames, ...causeFrames]) {
+      process.stderr.write(`  ${frame}\n`);
     }
   }
 
@@ -243,5 +297,61 @@ export default class TokenEfficientReporter implements Reporter {
     const header = typed.type ? `${typed.type}: ${typed.name ?? 'Error'}` : (typed.name ?? 'Error');
     const message = typed.message ?? String(error);
     process.stderr.write(`${colors.red}UNHANDLED${colors.reset} ${header} - ${message}\n`);
+  }
+
+  /**
+   * Retains only the slowest tests needed for the opt-in timing report.
+   * @param test - Completed test timing.
+   */
+  private recordSlowTest(test: TimedTest): void {
+    this.slowestTests.push(test);
+    this.slowestTests.sort((left, right) => right.duration - left.duration);
+    if (this.slowestTests.length > TIMING_PROFILE_LIMIT) {
+      this.slowestTests.length = TIMING_PROFILE_LIMIT;
+    }
+  }
+
+  /**
+   * Prints the slowest modules and test cases without changing normal output.
+   * @param testModules - Completed Vitest modules with timing diagnostics.
+   */
+  private printTimingProfile(testModules: ReadonlyArray<TestModule>): void {
+    if (!this.timingProfileEnabled) return;
+
+    const slowestModules = testModules
+      .map((testModule) => ({
+        name: testModule.relativeModuleId,
+        duration: this.totalModuleDuration(testModule.diagnostic()),
+      }))
+      .filter((module): module is TimedTest => module.duration !== undefined)
+      .sort((left, right) => right.duration - left.duration)
+      .slice(0, TIMING_PROFILE_LIMIT);
+
+    process.stdout.write('\nSlowest test modules:\n');
+    for (const module of slowestModules) {
+      process.stdout.write(`  ${module.duration.toFixed(0)}ms  ${module.name}\n`);
+    }
+    process.stdout.write('Slowest test cases:\n');
+    for (const test of this.slowestTests) {
+      process.stdout.write(`  ${test.duration.toFixed(0)}ms  ${test.name}\n`);
+    }
+  }
+
+  /**
+   * Sum Vitest's non-overlapping module phases into one profiling cost.
+   * @param diagnostic - Vitest module timing diagnostic.
+   * @returns Total measured module cost, or undefined when no phase was measured.
+   */
+  private totalModuleDuration(diagnostic: ModuleTimingDiagnostic | undefined): number | undefined {
+    if (!diagnostic) return undefined;
+    const phases = [
+      diagnostic.environmentSetupDuration,
+      diagnostic.prepareDuration,
+      diagnostic.collectDuration,
+      diagnostic.setupDuration,
+      diagnostic.duration,
+    ];
+    const measuredPhases = phases.filter((duration): duration is number => duration !== undefined);
+    return measuredPhases.length > 0 ? measuredPhases.reduce((total, duration) => total + duration, 0) : undefined;
   }
 }

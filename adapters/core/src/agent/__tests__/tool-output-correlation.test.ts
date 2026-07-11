@@ -30,15 +30,20 @@ class TestAgent extends AIAgent {
     super(config);
   }
 
-  public registerPending(toolName: string, nativeId?: string): string {
-    return this.toolCallTracker.register(toolName, undefined, nativeId);
+  public registerPending(messageId: string, toolName: string, nativeId?: string): string {
+    return this.toolCallTracker.register(messageId, toolName, undefined, nativeId);
+  }
+
+  public clearMessageToolCalls(messageId: string): void {
+    this.toolCallTracker.clearMessage(messageId);
   }
 
   public async emitOutput(
+    messageId: string,
     output: string,
     hints: ResolveHints,
   ): Promise<{ toolCallId: string; toolName: string; args?: Record<string, unknown> }> {
-    return this.emitToolOutput(output, hints);
+    return this.emitToolOutput(messageId, output, hints);
   }
 
   public override async getAdapterSessionId(): Promise<string> {
@@ -60,7 +65,7 @@ describe('AIAgent.emitToolOutput', () => {
   });
 
   it('logs warning and generates fallback id when no pending tool calls', async () => {
-    const result = await agent.emitOutput('output', { toolName: 'Read' });
+    const result = await agent.emitOutput('message-1', 'output', { toolName: 'Read' });
 
     const emitCalls = mockGlobalBusResult.emit.mock.calls;
     const logCall = emitCalls.find(([subject]) => subject === AdapterSubjects.log);
@@ -74,10 +79,10 @@ describe('AIAgent.emitToolOutput', () => {
   });
 
   it('logs warning when fallback to oldest pending tool call', async () => {
-    const first = agent.registerPending('Bash', 'toolu-1');
-    agent.registerPending('Read', 'toolu-2');
+    const first = agent.registerPending('message-1', 'Bash', 'toolu-1');
+    agent.registerPending('message-1', 'Read', 'toolu-2');
 
-    const result = await agent.emitOutput('output', {});
+    const result = await agent.emitOutput('message-1', 'output', {});
 
     expect(result.toolCallId).toBe(first);
 
@@ -90,9 +95,9 @@ describe('AIAgent.emitToolOutput', () => {
   });
 
   it('does not log warning when nativeId matches', async () => {
-    agent.registerPending('Bash', 'toolu-1');
+    agent.registerPending('message-1', 'Bash', 'toolu-1');
 
-    const result = await agent.emitOutput('output', { nativeId: 'toolu-1' });
+    const result = await agent.emitOutput('message-1', 'output', { nativeId: 'toolu-1' });
 
     expect(result.toolCallId).toBe('toolu-1');
     expect(result.toolName).toBe('Bash');
@@ -103,5 +108,15 @@ describe('AIAgent.emitToolOutput', () => {
 
     expect(logCall).toBeUndefined();
     expect(outputCall?.[1]).toMatchObject({ toolCallId: 'toolu-1' });
+  });
+
+  it('isolates same-named pending calls by their originating message', async () => {
+    agent.registerPending('superseded-message', 'Bash', 'toolu-old');
+    agent.registerPending('immediate-message', 'Bash', 'toolu-new');
+
+    agent.clearMessageToolCalls('superseded-message');
+
+    const result = await agent.emitOutput('immediate-message', 'output', { toolName: 'Bash' });
+    expect(result).toMatchObject({ toolCallId: 'toolu-new', toolName: 'Bash' });
   });
 });

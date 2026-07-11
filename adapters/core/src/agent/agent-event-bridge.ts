@@ -10,6 +10,8 @@ import type { AgentContext, ContextWindowInput, NormalizedCallUsage } from './ty
 import type { MessageHandle } from '../message-handle/index.js';
 import type { ToolCallTracker, ResolveHints } from './tool-call-tracker.js';
 
+type MessageOwnedPayload<T> = Omit<T, keyof AgentContext> & { messageId: string };
+
 /**
  * Dependencies for AgentEventBridge.
  */
@@ -21,12 +23,10 @@ export interface AgentEventBridgeConfig {
     payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.contextWindow.updated>, keyof AgentContext>,
   ) => Promise<void>;
   /** Emit tool.use payload. */
-  emitToolUse: (
-    payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.tool.use>, keyof AgentContext>,
-  ) => Promise<void>;
+  emitToolUse: (payload: MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.tool.use>>) => Promise<void>;
   /** Emit tool.output payload. */
   emitToolOutput: (
-    payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.tool.output>, keyof AgentContext>,
+    payload: MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.tool.output>>,
   ) => Promise<void>;
   /** Emit adapter log payload. */
   emitAdapterLog: (
@@ -34,11 +34,15 @@ export interface AgentEventBridgeConfig {
   ) => Promise<void>;
   /** Emit step.started payload. */
   emitStepStarted: (
-    payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.step.started>, keyof AgentContext>,
+    payload:
+      | Omit<ExtractSubjectPayload<typeof AgentSubjects.step.started>, keyof AgentContext>
+      | MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.step.started>>,
   ) => Promise<void>;
   /** Emit step.finished payload. */
   emitStepFinished: (
-    payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.step.finished>, keyof AgentContext>,
+    payload:
+      | Omit<ExtractSubjectPayload<typeof AgentSubjects.step.finished>, keyof AgentContext>
+      | MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.step.finished>>,
   ) => Promise<void>;
   /** Correlation tracker for tool.use -\> tool.output. */
   toolCallTracker: ToolCallTracker;
@@ -146,14 +150,21 @@ export class AgentEventBridge {
 
   /**
    * Emit tool.use event with correlation tracking.
+   * @param messageId - Message that owns the tool call
    * @param toolName - Tool identifier
    * @param args - Tool arguments
    * @param nativeId - Provider-native call ID
    * @returns Correlation ID for the call
    */
-  public async emitToolUse(toolName: string, args?: Record<string, unknown>, nativeId?: string): Promise<string> {
-    const toolCallId = this.toolCallTracker.register(toolName, args, nativeId);
+  public async emitToolUse(
+    messageId: string,
+    toolName: string,
+    args?: Record<string, unknown>,
+    nativeId?: string,
+  ): Promise<string> {
+    const toolCallId = this.toolCallTracker.register(messageId, toolName, args, nativeId);
     await this.emitToolUsePayload({
+      messageId,
       toolName,
       args,
       toolCallId,
@@ -163,12 +174,13 @@ export class AgentEventBridge {
 
   /**
    * Emit tool.output event with best-effort correlation resolution.
+   * @param messageId - Message that owns the tool output
    * @param output - Tool output text
    * @param hints - Correlation hints from adapter events
    * @returns Resolved toolCallId, toolName (falls back to 'unknown'), and args from the matched tool.use call
    */
-  public async emitToolOutput(output: string, hints: ResolveHints): Promise<ToolOutputResult> {
-    const { correlationId, strategy, toolName, args } = this.toolCallTracker.resolve(hints);
+  public async emitToolOutput(messageId: string, output: string, hints: ResolveHints): Promise<ToolOutputResult> {
+    const { correlationId, strategy, toolName, args } = this.toolCallTracker.resolve(messageId, hints);
     if (!correlationId) {
       await this.emitAdapterLogPayload({
         level: 'warn',
@@ -176,7 +188,12 @@ export class AgentEventBridge {
         timestamp: Date.now(),
       });
       const fallbackId = crypto.randomUUID();
-      await this.emitToolOutputPayload({ output, toolCallId: fallbackId, toolName: hints.toolName ?? toolName });
+      await this.emitToolOutputPayload({
+        messageId,
+        output,
+        toolCallId: fallbackId,
+        toolName: hints.toolName ?? toolName,
+      });
       return { toolCallId: fallbackId, toolName: hints.toolName ?? toolName ?? 'unknown' };
     }
 
@@ -188,7 +205,7 @@ export class AgentEventBridge {
       });
     }
 
-    await this.emitToolOutputPayload({ output, toolCallId: correlationId, toolName, args });
+    await this.emitToolOutputPayload({ messageId, output, toolCallId: correlationId, toolName, args });
     return { toolCallId: correlationId, toolName: toolName ?? 'unknown', args };
   }
 
@@ -203,7 +220,40 @@ export class AgentEventBridge {
     blockData?: BlockData,
     content?: SessionMessageBlock,
   ): Promise<void> {
+    await this.emitOwnedStepStarted(undefined, stepType, blockData, content);
+  }
+
+  /**
+   * Emit step.started with an explicit originating message identity.
+   * @param messageId - Message that owns the step
+   * @param stepType - Block step type
+   * @param blockData - Optional step metadata
+   * @param content - Optional immediate block content
+   */
+  public async emitStepStartedForMessage(
+    messageId: string,
+    stepType: StepType,
+    blockData?: BlockData,
+    content?: SessionMessageBlock,
+  ): Promise<void> {
+    await this.emitOwnedStepStarted(messageId, stepType, blockData, content);
+  }
+
+  /**
+   * Emit step.started with optional explicit message ownership.
+   * @param messageId - Optional message that owns the step.
+   * @param stepType - Semantic step kind.
+   * @param blockData - Optional block metadata.
+   * @param content - Optional initial block content.
+   */
+  private async emitOwnedStepStarted(
+    messageId: string | undefined,
+    stepType: StepType,
+    blockData?: BlockData,
+    content?: SessionMessageBlock,
+  ): Promise<void> {
     await this.emitStepStartedPayload({
+      ...(messageId !== undefined && { messageId }),
       stepType,
       blockIndex: this.getBlockIndex(),
       blockData,
@@ -217,7 +267,36 @@ export class AgentEventBridge {
    * @param content - Final block content
    */
   public async emitStepFinished(stepType: StepType, content: SessionMessageBlock): Promise<void> {
+    await this.emitOwnedStepFinished(undefined, stepType, content);
+  }
+
+  /**
+   * Emit step.finished with an explicit originating message identity and advance the block index.
+   * @param messageId - Message that owns the step
+   * @param stepType - Completed step type
+   * @param content - Final block content
+   */
+  public async emitStepFinishedForMessage(
+    messageId: string,
+    stepType: StepType,
+    content: SessionMessageBlock,
+  ): Promise<void> {
+    await this.emitOwnedStepFinished(messageId, stepType, content);
+  }
+
+  /**
+   * Emit step.finished with optional explicit message ownership and advance the block index.
+   * @param messageId - Optional message that owns the step.
+   * @param stepType - Semantic step kind.
+   * @param content - Completed block content.
+   */
+  private async emitOwnedStepFinished(
+    messageId: string | undefined,
+    stepType: StepType,
+    content: SessionMessageBlock,
+  ): Promise<void> {
     await this.emitStepFinishedPayload({
+      ...(messageId !== undefined && { messageId }),
       stepType,
       blockIndex: this.getBlockIndex(),
       content,

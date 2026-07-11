@@ -2,9 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
 import { PreferencesSubjects } from '../../../preferences/storage-namespace.js';
-import { routeToAgents } from '../route-to-agents.js';
 import { Turn } from '../../entities/turn.js';
-import { createRouteTestContext, ROUTE_TEST_IDS, type RouteTestContext } from './shared.js';
+import {
+  createRouteTestContext,
+  ROUTE_TEST_IDS,
+  routeToAgentsWithTestLedger as routeToAgents,
+  type RouteTestContext,
+} from './shared.js';
 import { createTestAgent, createTestSession } from '../../__tests__/shared.js';
 
 /**

@@ -321,7 +321,7 @@ describe('event-normalizers', () => {
     });
 
     describe('turn completed', () => {
-      it('should normalize turn/completed to complete', () => {
+      it('leaves turn/completed to the correlated MessageHandle completion path', () => {
         const notification: ServerNotification = {
           method: 'turn/completed',
           params: {
@@ -337,13 +337,7 @@ describe('event-normalizers', () => {
 
         const result = normalizeAppServerEvent(notification, mockContext);
 
-        expect(result).toHaveLength(1);
-        expect(result[0]).toMatchObject({
-          subject: AgentSubjects.complete,
-          payload: {
-            ...mockContext,
-          },
-        });
+        expect(result).toEqual([]);
       });
     });
 

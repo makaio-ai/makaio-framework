@@ -9,7 +9,9 @@ import {
   type AgentStartResult,
   type BaseAgentConnectorConfig,
   type ConfigFactoryInput,
-  MessageHandle,
+  type ConnectorSendMessageOptions,
+  type ConnectorStartOptions,
+  type MessageHandle,
   type NormalizedMessageInput,
   type AIAdapterDefinition,
   type AIAdapterInitOptions,
@@ -53,9 +55,12 @@ class DevexSmokeConnector extends AIAgentConnector<DevexSmokeBus> {
     this.adapterSessionId ??= `${DEVEX_SMOKE_ADAPTER_NAME}-session`;
   }
 
-  public async start(message: NormalizedMessageInput): Promise<AgentStartResult> {
+  public async start(
+    message: NormalizedMessageInput,
+    options?: ConnectorStartOptions,
+  ): Promise<AgentStartResult> {
     await this.initialize();
-    const messageHandle = this.createCompletedHandle(message);
+    const messageHandle = this.createCompletedHandle(message, options);
     return {
       adapterSessionId: await this.getAdapterSessionId(),
       agentId: this.getAgentId(),
@@ -63,9 +68,12 @@ class DevexSmokeConnector extends AIAgentConnector<DevexSmokeBus> {
     };
   }
 
-  public async sendMessage(message: NormalizedMessageInput): Promise<MessageHandle> {
+  public async sendMessage(
+    message: NormalizedMessageInput,
+    options?: ConnectorSendMessageOptions,
+  ): Promise<MessageHandle> {
     await this.initialize();
-    return this.createCompletedHandle(message);
+    return this.createCompletedHandle(message, options);
   }
 
   public abort(): void {}
@@ -86,12 +94,14 @@ class DevexSmokeConnector extends AIAgentConnector<DevexSmokeBus> {
   /**
    * Build a message handle that completes in the next microtask.
    * @param message - Normalized message to acknowledge and complete.
+   * @param options - Caller-assigned message identity and turn context.
    * @returns Pre-wired message handle.
    */
-  private createCompletedHandle(message: NormalizedMessageInput): MessageHandle {
-    const handle = new MessageHandle(crypto.randomUUID(), message, 'enqueue');
-    handle.adapterSessionId = this.adapterSessionId;
-    this.config.onMessageSent?.(handle);
+  private createCompletedHandle(
+    message: NormalizedMessageInput,
+    options?: ConnectorSendMessageOptions,
+  ): MessageHandle {
+    const handle = this.createMessageHandle(message, options);
 
     queueMicrotask(() => {
       handle.markAcknowledged();

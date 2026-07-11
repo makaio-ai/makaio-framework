@@ -11,9 +11,16 @@ import {
 import { createAdapterNamespace, ScopedToolApprovalSchema } from '@makaio/ai-adapters-core';
 import type { ScopedBusFor } from '@makaio/bus-core';
 import type { NamespaceRegistrationOptions, SchemaViolationReport } from '@makaio/core';
+import { z } from 'zod';
 
 export type { SDKMessage };
 export { SDKMessageSchema };
+
+/** Raw SDK event plus exact Makaio message ownership captured by the connector. */
+const OriginatedSDKMessageSchema = z.intersection(
+  SDKMessageSchema,
+  z.object({ originatingMessageId: z.string().optional() }),
+);
 
 type ZodIssueWithNestedErrors = {
   path?: PropertyKey[];
@@ -127,7 +134,7 @@ export function createClaudeConnectorNamespace<N extends string>(
     namespaceName,
     {
       // Raw SDK event catch-all (for observability/debugging)
-      'sdk.event': SDKMessageSchema,
+      'sdk.event': OriginatedSDKMessageSchema,
 
       // Tool approval RPC — sessionId optional at connector layer; enriched by agent before global forwarding
       can_use_tool: ScopedToolApprovalSchema,

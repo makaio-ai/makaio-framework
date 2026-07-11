@@ -376,7 +376,8 @@ describe('observed-session ingestion end-to-end (integration)', () => {
       adapterId: 'adapter-agent-1',
       adapterName: 'test-adapter',
       adapterSessionId: 'native-agent-1',
-      messageId: 'msg-agent-1',
+      turnId: turn.turnId,
+      messageId: 'msg-user-1',
       content: 'hello from the managed agent',
     });
     await MakaioBus.emit(AgentSubjects.complete, {
@@ -385,7 +386,7 @@ describe('observed-session ingestion end-to-end (integration)', () => {
       adapterName: 'test-adapter',
       adapterSessionId: 'native-agent-1',
       turnId: turn.turnId,
-      messageId: 'msg-agent-1',
+      messageId: 'msg-user-1',
     });
     await waitForAsync();
 

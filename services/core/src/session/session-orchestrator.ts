@@ -16,12 +16,9 @@ import { AdapterRegistry } from './adapter-registry.js';
 import { MessageStorageSubjects } from './messages/index.js';
 import { MessageRoutingSubjects } from './message-routing/index.js';
 import { AgentStorageSubjects } from './storage/agent-namespace.js';
-import {
-  SessionTurnManager,
-  USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR,
-  type TurnCompletionResult,
-} from './session-turn-manager.js';
-import { emitSessionTurnStarted } from './session-lifecycle-events.js';
+import { SessionTurnManager, USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR } from './session-turn-manager.js';
+import type { TurnCompletionResult } from './turn-completion.js';
+import { emitSessionTurnStarted, emitSessionUserMessageSent } from './session-lifecycle-events.js';
 import { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
 
 /**
@@ -113,7 +110,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
     this.machineId = machineId;
     this.turnManager = new SessionTurnManager(bus);
     this.adapterRegistry = new AdapterRegistry(bus);
-    this.cleanups.push(registerAttachHandler(this.bus, this.turnManager.getActiveTurnsMap(), machineId));
+    this.cleanups.push(registerAttachHandler(this.bus, this.turnManager, machineId));
     this.registerSendMessageHandler();
     this.turnManager.registerCompletionHandlers(this.completeTurn.bind(this));
   }
@@ -280,18 +277,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           }
         }
 
-        // 5. Get or create turn
-        let turn = this.turnManager.getActiveTurn(resolvedSessionId);
-        if (!turn) {
-          turn = await this.turnManager.createTurn(
-            resolvedSessionId,
-            targetAgents.map((a) => a.agentId),
-            initiator,
-            ctx.payload.turnId,
-          );
-        }
-
-        // 6. Generate message ID and store user message (persist-before-route).
+        // 5. Generate one stable message identity before acquiring/preparing.
         // The append is awaited so the user message row is durable before the
         // turn events fire and before routing starts: `session.turn.completed`
         // promises the full turn is queryable via `storage:message.getByTurn`
@@ -302,8 +288,14 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         const messageId = crypto.randomUUID();
 
         const normalizedBlocks = normalizeToBlocks(message);
-        turn.claimMessageAppend(messageId);
-
+        const admission = await this.turnManager.acquireMessageAdmission(
+          resolvedSessionId,
+          targetAgents.map((agent) => agent.agentId),
+          messageId,
+          initiator,
+          ctx.payload.turnId,
+        );
+        const turn = admission.turn;
         try {
           const appendResult = await this.bus.requestOptional(MessageStorageSubjects.append, {
             message: {
@@ -317,24 +309,37 @@ export class SessionOrchestrator implements ISessionOrchestrator {
               ...(origin !== undefined && { origin }),
             },
           });
-          if (!appendResult.handled) {
-            throw new Error('Message storage append handler is not registered');
+          if (!appendResult.handled) throw new Error('Message storage append handler is not registered');
+          if (admission.isPreparationOwner) {
+            await emitSessionTurnStarted(this.bus, {
+              sessionId: resolvedSessionId,
+              turnId: turn.turnId,
+              turnNumber: turn.turnNumber,
+              messageId,
+              agentIds: [...turn.agentIds],
+              initiator: turn.initiator,
+              ingestionMarker: 'live',
+            });
           }
-        } catch (error: unknown) {
-          console.warn('[SessionOrchestrator] Failed to store user message', {
+          await emitSessionUserMessageSent(this.bus, {
             sessionId: resolvedSessionId,
+            turnId: turn.turnId,
+            turnNumber: turn.turnNumber,
             messageId,
-            error: error instanceof Error ? error.message : String(error),
+            content: message,
+            agentIds: targetAgents.map((agent) => agent.agentId),
+            ...(source !== undefined && { source }),
+            ...(origin !== undefined && { origin }),
           });
-          turn.releaseMessageAppend(messageId);
-          // failActiveTurnSetup terminalizes only a still-unclaimed setup turn.
-          // Concurrent sends that already claimed or appended a message keep the
-          // live turn active; this branch still preserves the append error.
-          await this.turnManager.failActiveTurnSetup(turn, USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR);
+          admission.commit();
+        } catch (error: unknown) {
+          try {
+            await admission.rollback(USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR);
+          } catch (cleanupError) {
+            console.error('[SessionOrchestrator] Failed to finalize rejected message setup:', cleanupError);
+          }
           throw error;
         }
-        const shouldEmitTurnStarted = turn.messageIds.length === 0;
-        turn.addMessage(messageId);
 
         for (const agent of targetAgents) {
           void this.bus
@@ -354,31 +359,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             });
         }
 
-        // 7. Emit turn.started for the first durably appended message, then user_message.sent.
-        if (shouldEmitTurnStarted) {
-          await emitSessionTurnStarted(this.bus, {
-            sessionId: resolvedSessionId,
-            turnId: turn.turnId,
-            turnNumber: turn.turnNumber,
-            messageId,
-            agentIds: [...turn.agentIds],
-            initiator: turn.initiator,
-            ingestionMarker: 'live',
-          });
-        }
-
-        await this.bus.emit(SessionSubjects.user_message.sent, {
-          sessionId: resolvedSessionId,
-          turnId: turn.turnId,
-          turnNumber: turn.turnNumber,
-          messageId,
-          content: message,
-          agentIds: targetAgents.map((a) => a.agentId),
-          ...(source !== undefined && { source }),
-          ...(origin !== undefined && { origin }),
-        });
-
-        // 8. Route to agents with shared session context
+        // 7. Route to agents with shared session context
         // Merge recovery fields (messageHistory, isFirstTurn) over the caller's
         // context so that turnContext and other session context fields are preserved.
         const routingContext = recoveryContext ? { ...sessionContext, ...recoveryContext } : sessionContext;
@@ -391,6 +372,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           turn,
           deliveryMode,
           this.completeTurn.bind(this),
+          this.turnManager,
           routingContext,
           ctx.payload.responseSchema,
         );

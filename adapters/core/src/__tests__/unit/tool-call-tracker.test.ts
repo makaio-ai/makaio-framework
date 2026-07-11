@@ -1,10 +1,23 @@
 import { describe, test, expect } from 'vitest';
 import { ToolCallTracker } from '../../agent/tool-call-tracker.js';
 
+const MESSAGE_ID = 'message-1';
+
+/** Create the real tracker with one explicit message owner for legacy unit scenarios. */
+function createTracker() {
+  const tracker = new ToolCallTracker();
+  return {
+    register: (toolName: string, args?: Record<string, unknown>, nativeId?: string) =>
+      tracker.register(MESSAGE_ID, toolName, args, nativeId),
+    resolve: (hints: { nativeId?: string; toolName?: string }) => tracker.resolve(MESSAGE_ID, hints),
+    clear: () => tracker.clearAll(),
+  };
+}
+
 describe('ToolCallTracker', () => {
   describe('register()', () => {
     test('returns nativeId as correlationId when provided', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
 
       const correlationId = tracker.register('Read', { path: '/foo' }, 'toolu_123');
 
@@ -12,7 +25,7 @@ describe('ToolCallTracker', () => {
     });
 
     test('generates UUID when nativeId not provided', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
 
       const correlationId = tracker.register('Bash', { command: 'ls' });
 
@@ -23,7 +36,7 @@ describe('ToolCallTracker', () => {
 
   describe('resolve()', () => {
     test('matches by nativeId and removes from pending', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
       tracker.register('Read', { path: '/foo' }, 'toolu_123');
       tracker.register('Bash', { command: 'ls' }, 'toolu_456');
 
@@ -40,7 +53,7 @@ describe('ToolCallTracker', () => {
     });
 
     test('returns none when nativeId does not match pending entries', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
       const first = tracker.register('Read', { path: '/foo' }, 'toolu_123');
 
       const result = tracker.resolve({ nativeId: 'toolu_nonexistent' });
@@ -54,7 +67,7 @@ describe('ToolCallTracker', () => {
     });
 
     test('falls back to FIFO by toolName when no nativeId in hints', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
       // Register without nativeId (simulating adapter without native correlation)
       const first = tracker.register('Bash', { command: 'ls' });
       const second = tracker.register('Bash', { command: 'pwd' });
@@ -78,7 +91,7 @@ describe('ToolCallTracker', () => {
     });
 
     test('FIFO fallback only matches same tool name', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
       const bashId = tracker.register('Bash', { command: 'ls' });
       const readId = tracker.register('Read', { path: '/foo' });
 
@@ -97,7 +110,7 @@ describe('ToolCallTracker', () => {
     });
 
     test('falls back to oldest pending when no hints match', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
       const first = tracker.register('Bash', { command: 'ls' });
       const second = tracker.register('Read', { path: '/foo' });
 
@@ -107,7 +120,7 @@ describe('ToolCallTracker', () => {
     });
 
     test('does not consume oldest when toolName is provided but no match exists', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
       const first = tracker.register('Bash', { command: 'ls' });
 
       expect(tracker.resolve({ toolName: 'Read' })).toMatchObject({ correlationId: null, strategy: 'none' });
@@ -117,7 +130,7 @@ describe('ToolCallTracker', () => {
 
   describe('clear()', () => {
     test('removes all pending tool calls', () => {
-      const tracker = new ToolCallTracker();
+      const tracker = createTracker();
       tracker.register('Bash', { command: 'ls' }, 'toolu_123');
       tracker.register('Read', { path: '/foo' }, 'toolu_456');
 

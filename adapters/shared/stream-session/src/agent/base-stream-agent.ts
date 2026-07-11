@@ -6,7 +6,6 @@ import type {
   ToolCompletedEvent,
   AgentStartedEvent,
   AgentCompleteEvent,
-  ErrorEvent,
 } from '@makaio/ai-adapters-core';
 import type { ScopedBus } from '@makaio/bus-core';
 import type { EventMessagePayload } from '@makaio/core';
@@ -99,8 +98,6 @@ export interface StreamAdapterSubjectSpec<TNamespace extends string> {
   readonly agentStarted: EventSubjectDef<TNamespace>;
   /** Agent turn completed lifecycle event — payload is shared across adapters. */
   readonly agentComplete: EventSubjectDef<TNamespace>;
-  /** Connector-level error event — payload is shared across adapters. */
-  readonly error: EventSubjectDef<TNamespace>;
 }
 
 /**
@@ -523,12 +520,10 @@ export abstract class BaseStreamAgent<
   }
 
   /**
-   * Wire agent lifecycle events (agent_started, agent_complete, error).
+   * Wire agent lifecycle events.
    *
    * - `agent_started` → clears per-turn tool tracking and calls `emitStart()`
    * - `agent_complete` → clears per-turn tool tracking
-   * - `error` → calls `emitError()` to stash error metadata for next `emitCompletion`
-   *
    * Note: `agent_complete` emission is handled by `AIAgent` via `onMessageHandle()`
    * when the connector calls `markCompleted()`. We subscribe only for state reset.
    * @param connector - The adapter connector to subscribe on
@@ -546,12 +541,6 @@ export abstract class BaseStreamAgent<
     this.subscribeConnector(connector, subjects.agentComplete, async (ctx) => {
       const _agentComplete = ctx.payload as AgentCompleteEvent;
       this.resetPerTurnToolTracking();
-    });
-
-    // error -> stash error for next emitCompletion() call
-    this.subscribeConnector(connector, subjects.error, async (ctx) => {
-      const { message } = ctx.payload as ErrorEvent;
-      this.emitError({ error: message });
     });
   }
 }

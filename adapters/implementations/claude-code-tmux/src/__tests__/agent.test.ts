@@ -20,10 +20,7 @@ class TestTmuxConnector extends ClaudeCodeTmuxConnector {
   public override async close(): Promise<void> {}
 
   public async emitToolStarted(payload: { toolName: string; toolUseId: string; toolInput: unknown }): Promise<void> {
-    await this.emit(
-      ClaudeCodeTmuxConnectorSubjects.tool_use.started,
-      payload as { toolName: string; toolUseId: string },
-    );
+    await this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.started, { ...payload, messageId: 'message-tmux-test' });
   }
 
   public async emitToolFinished(payload: {
@@ -32,10 +29,7 @@ class TestTmuxConnector extends ClaudeCodeTmuxConnector {
     toolResult: unknown;
     isError: boolean;
   }): Promise<void> {
-    await this.emit(
-      ClaudeCodeTmuxConnectorSubjects.tool_use.finished,
-      payload as { toolName: string; toolUseId: string },
-    );
+    await this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.finished, { ...payload, messageId: 'message-tmux-test' });
   }
 }
 

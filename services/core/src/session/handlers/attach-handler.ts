@@ -16,21 +16,47 @@ import type {
   ResolvedAgentConfig,
   SessionContext,
 } from '@makaio/contracts';
-import { Turn } from '../entities/turn.js';
 import { extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
 import { normalizeSelectionString, resolveAdapterNameById } from '../selection-utils.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { resolveAttachProviderSelection } from './attach-provider-selection.js';
-import { setupTurnTrackingOrRollbackAgent, stopStartedAgentAfterFailure } from './attach-turn-tracking.js';
+import { dispatchInitialAttachMessage, stopStartedAgentAfterFailure } from './attach-turn-tracking.js';
 import {
   extractRuntimeOptions,
   launchAttachAgent,
   mergeRuntimeOptions,
   resolveEffectiveAttachCwd,
+  type LaunchAttachAgentInput,
 } from './attach-runtime-options.js';
 import { evaluateNativeLocality } from '../native-locality.js';
 import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
+import type { SessionTurnManager } from '../session-turn-manager.js';
+import type { TurnReservation } from '../session-turn-manager.js';
+
+/** Identity metadata persisted after an attach agent starts. */
+interface AttachIdentity {
+  adapterName: string;
+  sessionId: string;
+  role: AgentRole;
+  timestamp: number;
+  personaId?: string;
+  profileId?: string;
+  harnessId?: string;
+  providerConfigId?: string;
+  compressionMode?: CompressionMode;
+  model?: string;
+  cwd?: string;
+}
+
+/** Fully resolved inputs for starting and optionally dispatching an attach turn. */
+interface ResolvedAttachExecution {
+  launch: LaunchAttachAgentInput;
+  identity: AttachIdentity;
+  session: IMakaioSession;
+  initialMessage: MessageInput | undefined;
+  sessionContext: SessionContext | undefined;
+}
 
 /**
  * Registers the session.agent.attach RPC handler.
@@ -42,20 +68,24 @@ import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
  * For branching conversations (fork), use session.fork to create a new session
  * with copied history, then attach agents to the new session.
  * @param bus - Bus instance for communication
- * @param activeTurns - Shared turn state map
+ * @param turnManager - Shared owner of session turn lifecycle state
  * @param machineId - Optional machine ID for deterministic adapter resolution
  * @returns Cleanup function to unsubscribe
  */
-export function registerAttachHandler(bus: IMakaioBus, activeTurns: Map<string, Turn>, machineId?: string): () => void {
+export function registerAttachHandler(
+  bus: IMakaioBus,
+  turnManager: SessionTurnManager,
+  machineId?: string,
+): () => void {
   const attachCleanup = bus.on(SessionSubjects.agent.attach, async (ctx) => {
-    ctx.setResult(await attachAgent(bus, activeTurns, machineId, ctx.payload));
+    ctx.setResult(await attachAgent(bus, turnManager, machineId, ctx.payload));
   });
   const attachResolvedCleanup = bus.on(SessionSubjects.agent.attachResolved, async (ctx) => {
     if (!ctx.origin.local) {
       throw new Error('[attach-handler] session.agent.attachResolved requires a local-origin request');
     }
     ctx.setResult(
-      await attachAgent(bus, activeTurns, machineId, {
+      await attachAgent(bus, turnManager, machineId, {
         ...ctx.payload,
         resolvedProviderContext:
           ctx.payload.agent.providerContext === undefined
@@ -244,23 +274,21 @@ async function resolveAttachLocality(input: {
 /**
  * Attach an agent to a session.
  * @param bus - Bus instance for storage, resolution, and adapter startup
- * @param activeTurns - Shared active-turn state for initial-message tracking
+ * @param turnManager - Shared owner of the initial-message turn lifecycle
  * @param machineId - Optional machine ID for deterministic adapter resolution
  * @param params - Attach request fields plus optional resolved provider context
  * @returns Attach response payload
  */
 async function attachAgent(
   bus: IMakaioBus,
-  activeTurns: Map<string, Turn>,
+  turnManager: SessionTurnManager,
   machineId: string | undefined,
   params: AttachAgentParams,
 ) {
   const { sessionId, agent: agentSelection, initialMessage, role: requestedRole, resolvedProviderContext } = params;
   const explicitRuntime = extractRuntimeOptions(agentSelection);
   const session = await validateSession(bus, sessionId);
-
   const resolved = await resolveAttachSelection(bus, sessionId, initialMessage, agentSelection);
-
   const adapterCandidate = resolveAdapterCandidate(agentSelection, resolved);
   const { adapterName, adapterId } = await resolveAdapterTarget(
     bus,
@@ -288,53 +316,72 @@ async function attachAgent(
   const attachSessionContext = locality.attachSessionContext
     ? await seedAttachContextWithHistory(bus, sessionId, locality.attachSessionContext)
     : undefined;
-
-  const startResult = await launchAttachAgent(bus, {
-    adapterId,
-    sessionId,
+  return executeResolvedAttach(bus, turnManager, {
+    launch: {
+      adapterId,
+      sessionId,
+      role,
+      effectiveRuntimeOptions,
+      resumeAdapterSessionId,
+      harnessId: resolved?.harnessId,
+      attachSessionContext,
+      providerContext,
+    },
+    identity: {
+      adapterName,
+      sessionId,
+      role,
+      timestamp: Date.now(),
+      personaId: getPersonaId(agentSelection),
+      profileId: resolved?.profileId,
+      harnessId: resolved?.harnessId,
+      providerConfigId: mergedProviderConfigId,
+      compressionMode: resolved?.compressionMode,
+      model: mergedModel,
+      cwd: effectiveCwd,
+    },
+    session,
     initialMessage,
-    role,
-    effectiveRuntimeOptions,
-    resumeAdapterSessionId,
-    harnessId: resolved?.harnessId,
-    attachSessionContext,
-    providerContext,
+    sessionContext: attachSessionContext,
   });
+}
 
-  const now = Date.now();
-  await persistIdentityOrRollback(bus, startResult, {
-    adapterName,
-    sessionId,
-    role,
-    timestamp: now,
-    personaId: getPersonaId(agentSelection),
-    profileId: resolved?.profileId,
-    harnessId: resolved?.harnessId,
-    providerConfigId: mergedProviderConfigId,
-    compressionMode: resolved?.compressionMode,
-    model: mergedModel,
-    cwd: effectiveCwd,
-  });
-
-  const turnInfo =
-    initialMessage && startResult.messageId
-      ? await setupTurnTrackingOrRollbackAgent(
-          bus,
-          activeTurns,
-          startResult,
-          sessionId,
-          startResult.agentId,
-          startResult.messageId,
-          initialMessage,
-        )
-      : undefined;
-
-  return {
-    agentId: startResult.agentId,
-    adapterSessionId: startResult.adapterSessionId,
-    role,
-    ...(turnInfo && { messageId: turnInfo.messageId, turnId: turnInfo.turnId }),
-  };
+/**
+ * Start the resolved agent and dispatch an initial message through an exclusive turn reservation.
+ * @param bus - Bus used for adapter lifecycle, persistence, and routing.
+ * @param turnManager - Owner of session turn slots and completion state.
+ * @param input - Fully resolved attach launch, identity, and message inputs.
+ * @returns Attach response containing canonical turn identity when a message was dispatched.
+ */
+async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnManager, input: ResolvedAttachExecution) {
+  // Idle-only attach does not consume a turn slot. Initial-message attach must
+  // reserve before provider startup so it cannot race an active or pending turn.
+  const reservation: TurnReservation | undefined =
+    input.initialMessage === undefined ? undefined : await turnManager.reserveTurn(input.session.sessionId);
+  try {
+    const startResult = await launchAttachAgent(bus, input.launch);
+    await persistIdentityOrRollback(bus, startResult, input.identity);
+    const turnInfo =
+      reservation === undefined || input.initialMessage === undefined
+        ? undefined
+        : await dispatchInitialAttachMessage(
+            bus,
+            turnManager,
+            reservation,
+            startResult,
+            input.session,
+            input.initialMessage,
+            input.sessionContext,
+          );
+    return {
+      agentId: startResult.agentId,
+      adapterSessionId: startResult.adapterSessionId,
+      role: input.identity.role,
+      ...(turnInfo && { messageId: turnInfo.messageId, turnId: turnInfo.turnId }),
+    };
+  } finally {
+    if (reservation !== undefined) turnManager.releaseTurnReservation(reservation);
+  }
 }
 
 /**
@@ -494,21 +541,7 @@ function determineRole(session: { agents: unknown[] }, requestedRole?: AgentRole
  */
 async function persistAgentIdentity(
   bus: IMakaioBus,
-  params: {
-    agentId: string;
-    adapterId: string;
-    adapterName: string;
-    sessionId: string;
-    role: AgentRole;
-    timestamp: number;
-    personaId?: string;
-    profileId?: string;
-    harnessId?: string;
-    providerConfigId?: string;
-    compressionMode?: CompressionMode;
-    model?: string;
-    cwd?: string;
-  },
+  params: AttachIdentity & { agentId: string; adapterId: string },
 ): Promise<void> {
   if (!params.personaId && !params.profileId && !params.harnessId && !params.providerConfigId) return;
   await bus.request(AgentStorageSubjects.set, {
@@ -542,19 +575,7 @@ async function persistAgentIdentity(
 async function persistIdentityOrRollback(
   bus: IMakaioBus,
   startResult: { agentId: string; adapterId: string },
-  identity: {
-    adapterName: string;
-    sessionId: string;
-    role: AgentRole;
-    timestamp: number;
-    personaId?: string;
-    profileId?: string;
-    harnessId?: string;
-    providerConfigId?: string;
-    compressionMode?: CompressionMode;
-    model?: string;
-    cwd?: string;
-  },
+  identity: AttachIdentity,
 ): Promise<void> {
   try {
     await persistAgentIdentity(bus, {

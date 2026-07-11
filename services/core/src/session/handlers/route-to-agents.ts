@@ -5,7 +5,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import { AdapterSubjects, AgentSubjects } from '@makaio/contracts';
 import {
   applyCwdChangeTemplate,
   DEFAULT_CWD_CHANGE_NOTIFICATION,
@@ -20,12 +20,14 @@ import type {
   SessionContext,
 } from '@makaio/contracts';
 import { getHookAbortError } from './hook-abort-error.js';
+import { emitRoutingAcknowledged, terminalizeRoutingAgent } from './routing-lifecycle.js';
 import type { Turn } from '../entities/turn.js';
 import { assembleForkContext } from '../context/assemble-fork-context.js';
 import type { AssembleForkContextCapabilities } from '../context/assemble-fork-context.js';
 import { convertSessionMessage } from '../context/convert-session-message.js';
 import { getFullConversation } from '../context/get-full-conversation.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
+import type { TurnCompletionRecorder } from './routing-lifecycle.js';
 
 /**
  * Interface for turn context enrichment.
@@ -70,6 +72,7 @@ interface RouteToSingleAgentInput {
   agent: MakaioSessionAgent;
   agentContext?: SessionContext;
   responseSchema?: ResponseSchemaDescriptor;
+  turnManager: TurnCompletionRecorder;
 }
 
 /**
@@ -202,7 +205,7 @@ async function sendAndAcknowledge(bus: IMakaioBus, payload: SendAndAcknowledgePa
     sessionContext,
     ...(responseSchema !== undefined && { responseSchema }),
   });
-  await bus.emit(SessionSubjects.user_message.acknowledged, {
+  await emitRoutingAcknowledged(bus, {
     sessionId: turn.sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,
@@ -248,9 +251,9 @@ async function buildNativeFallbackContext(
  * retry once on the standard path.
  *
  * Only the `AgentSubjects.sendMessage` call is covered by the degrade
- * catch. An acknowledgement listener failure after a successful send is NOT
- * treated as a native delivery failure — it propagates to the caller so that
- * a successfully delivered message is never re-sent on the fallback path.
+ * catch. An acknowledgement listener failure after a successful send is
+ * reported without changing delivery state, so an accepted provider turn is
+ * neither retried nor terminalized prematurely.
  * @param bus - Bus instance
  * @param session - Session for history building on degrade
  * @param payload - Shared request fields for the bus call
@@ -276,11 +279,8 @@ async function attemptNativeSendOrDegrade(
 ): Promise<SessionContext | null> {
   const { agentId, adapterId, message, deliveryMode, messageId, turnId, sessionId, responseSchema, turn } = payload;
 
-  // The degrade catch must only cover the actual send — an acknowledgement
-  // failure after a successful delivery must NOT trigger a fallback resend
-  // (that would duplicate the turn in the provider session). Ack errors
-  // propagate to the caller's outer catch, matching the standard-dispatch
-  // path's semantics where ack failures surface as agent errors.
+  // The degrade catch covers only the actual send so fallback cannot duplicate
+  // an already accepted provider turn.
   try {
     await bus.request(AgentSubjects.sendMessage, {
       agentId,
@@ -316,8 +316,8 @@ async function attemptNativeSendOrDegrade(
     };
   }
 
-  // Send succeeded — emit acknowledgement outside the degrade try/catch.
-  await bus.emit(SessionSubjects.user_message.acknowledged, {
+  // Send succeeded — acknowledgement cannot roll delivery back.
+  await emitRoutingAcknowledged(bus, {
     sessionId: turn.sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,
@@ -339,7 +339,8 @@ async function attemptNativeSendOrDegrade(
  * @param input - Routing payload and lifecycle dependencies for one agent
  */
 async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void> {
-  const { bus, session, turn, message, messageId, deliveryMode, onTurnComplete, agent, responseSchema } = input;
+  const { bus, session, turn, message, messageId, deliveryMode, onTurnComplete, agent, responseSchema, turnManager } =
+    input;
   let { agentContext } = input;
 
   const basePayload = {
@@ -376,37 +377,29 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
     });
   } catch (error) {
     if (getHookAbortError(error)) {
-      await bus.emit(SessionSubjects.user_message.completed, {
-        sessionId: turn.sessionId,
-        turnId: turn.turnId,
-        turnNumber: turn.turnNumber,
+      await terminalizeRoutingAgent({
+        bus,
+        turn,
         messageId,
         agentId: agent.agentId,
         outcome: 'cancelled',
+        onTurnComplete,
+        turnManager,
       });
-
-      const stateChange = turn.markAgentCompleted(agent.agentId);
-      if (stateChange.turnComplete) {
-        await onTurnComplete(turn, stateChange.result);
-      }
       return;
     }
 
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const stateChange = turn.markAgentErrored(agent.agentId, errorMessage);
-    await bus.emit(SessionSubjects.user_message.completed, {
-      sessionId: turn.sessionId,
-      turnId: turn.turnId,
-      turnNumber: turn.turnNumber,
+    await terminalizeRoutingAgent({
+      bus,
+      turn,
       messageId,
       agentId: agent.agentId,
       outcome: 'error',
       error: errorMessage,
+      onTurnComplete,
+      turnManager,
     });
-
-    if (stateChange.turnComplete) {
-      await onTurnComplete(turn, stateChange.result);
-    }
   }
 }
 
@@ -430,6 +423,8 @@ export interface RouteToAgentsOptions {
   readonly deliveryMode: 'enqueue' | 'immediate' | undefined;
   /** Callback when turn completes (all agents done). */
   readonly onTurnComplete: (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
+  /** Shared turn ledger owner. */
+  readonly turnManager: TurnCompletionRecorder;
   /** Session context with curated messageHistory and decision signals. */
   readonly sessionContext?: SessionContext;
   /** Optional enricher for immediate message context. */
@@ -496,6 +491,7 @@ export async function routeToAgents(options: RouteToAgentsOptions): Promise<void
     turn,
     deliveryMode,
     onTurnComplete,
+    turnManager,
     sessionContext,
     turnContextEnricher,
     isNewTurn,
@@ -561,6 +557,7 @@ export async function routeToAgents(options: RouteToAgentsOptions): Promise<void
       messageId,
       deliveryMode,
       onTurnComplete,
+      turnManager,
       agent,
       agentContext,
       responseSchema,
