@@ -677,10 +677,17 @@ export abstract class AIAgent<
    */
   private createOnMessageSent(): (handle: MessageHandle) => void {
     return (handle) => {
+      // user_message.sent describes the message being submitted right now,
+      // not the executing turn. Carry the submitted turnId explicitly:
+      // enrichment's getCurrentTurnId() resolves to the active handle's
+      // captured turnId, which in the pre-track window of a queued send is
+      // still the previous turn's.
+      const turnId = this.lifecycleTracker.getSubmittedTurnId();
       void this.emitGlobal(AgentSubjects.user_message.sent, {
         messageId: handle.messageId,
         content: handle.message,
         deliveryMode: handle.deliveryMode,
+        ...(turnId !== undefined && { turnId }),
       });
     };
   }

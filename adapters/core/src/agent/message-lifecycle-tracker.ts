@@ -172,6 +172,22 @@ export class MessageLifecycleTracker {
   }
 
   /**
+   * Get the turnId of the sendMessage currently being submitted — the raw
+   * shared field written by {@link setCurrentTurnId}, independent of which
+   * turn is executing.
+   *
+   * In the pre-track window of a queued send (after `setCurrentTurnId`, before
+   * the new handle is tracked), events that describe the submitted message
+   * itself — e.g. `user_message.sent` emitted from the connector's handle
+   * creation — must use this value: {@link getCurrentTurnId} would resolve to
+   * the still-executing turn's captured turnId and mislabel them.
+   * @returns The submitted turn's turnId or undefined if not set
+   */
+  public getSubmittedTurnId(): string | undefined {
+    return this.currentTurnId;
+  }
+
+  /**
    * Acknowledge a message - marks turn start.
    *
    * This should only be called for handles whose acknowledgment was

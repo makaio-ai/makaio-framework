@@ -462,6 +462,22 @@ describe('MessageLifecycleTracker', () => {
     expect(tracker.getCurrentTurnId()).toBeUndefined();
   });
 
+  it('exposes the submitted turnId independently of the executing turn for pre-track events', () => {
+    // Scenario: sendMessage(B) announces turn-b while A is still executing.
+    // Events describing the submitted message itself (user_message.sent,
+    // emitted before B is tracked) must carry turn-b, while executing-turn
+    // enrichment stays on A's captured turn-a.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = makeHandle('message-a', 'A');
+
+    tracker.setCurrentTurnId('turn-a');
+    tracker.track(handleA);
+
+    tracker.setCurrentTurnId('turn-b');
+    expect(tracker.getCurrentTurnId()).toBe('turn-a');
+    expect(tracker.getSubmittedTurnId()).toBe('turn-b');
+  });
+
   it('promotes pending handles in FIFO order when multiple are queued during an in-flight turn', async () => {
     // Scenario: Turn A is executing. Two follow-ups (B then C) are dispatched
     // while A is still active. On completion of A, B (the first queued) must be
