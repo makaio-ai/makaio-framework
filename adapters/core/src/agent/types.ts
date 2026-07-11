@@ -501,4 +501,12 @@ export type AgentConnectorConfigOverrides = Partial<{
   adapterSessionId: string;
   resumeAdapterSessionId: string;
   mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
+  /**
+   * Target reasoning effort for the replacement generation. Key presence (not
+   * value) selects this over the live connector's current effort, so an
+   * explicit `undefined` builds a reasoning-less connector. Adapters may
+   * consume reasoning only at construction/start, so the replacement must be
+   * built with its target effort rather than mutated afterwards.
+   */
+  reasoningEffort: AIReasoningLevel | undefined;
 }>;

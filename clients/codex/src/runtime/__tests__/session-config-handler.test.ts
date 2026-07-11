@@ -243,6 +243,14 @@ describe('CodexSessionConfigHandler', () => {
     await expect(fs.access(path.join(sessionDir, 'auth.json'))).rejects.toThrow();
   });
 
+  it('creates an isolated unauthenticated config when the native CODEX_HOME does not exist yet', async () => {
+    // First run: no profile source and the native CODEX_HOME was never created.
+    const result = await handler.setup(makeSetupRequest(sessionDir, sessionDir, 'full'));
+
+    expect(result).toEqual({ env: { CODEX_HOME: sessionDir }, authMaterialized: false });
+    await expect(fs.access(path.join(sessionDir, 'auth.json'))).rejects.toThrow();
+  });
+
   it('uses the native CODEX_HOME when no profile source is configured', async () => {
     const nativeDir = path.join(rootDir, 'native');
     await fs.mkdir(nativeDir, { recursive: true });

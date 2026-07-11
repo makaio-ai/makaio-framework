@@ -152,24 +152,25 @@ export class AgentModelMutationManager {
     if (connector.getProcessingState() !== 'idle') {
       return { success: false, reason: 'turn_active' };
     }
+    // Resolve before the swap so a replacement generation is constructed with
+    // its target effort; adapters may consume reasoning only at start.
+    const resolvedEffort = this.resolveReasoningEffort(
+      reasoningEffort,
+      previousReasoningEffort,
+      connector.supportedReasoningLevels,
+    );
     let changedInPlace: boolean;
     try {
       changedInPlace = await connector.changeReasoningInPlace(reasoningEffort).catch(() => false);
       if (!changedInPlace) {
-        await this.config.swapConnectorUnlocked({ model: connector.model });
+        await this.config.swapConnectorUnlocked({ model: connector.model, reasoningEffort: resolvedEffort });
       }
     } catch {
       return { success: false, reason: 'reasoning_change_failed: connector_mutation_failed' };
     }
 
     const newConnector = this.config.getConnector();
-    let resolvedEffort: AIReasoningLevel | undefined;
     try {
-      resolvedEffort = this.resolveReasoningEffort(
-        reasoningEffort,
-        previousReasoningEffort,
-        newConnector.supportedReasoningLevels,
-      );
       newConnector.currentReasoningEffort = resolvedEffort;
       this.config.setReasoningEffort(resolvedEffort);
     } catch {
@@ -222,7 +223,17 @@ export class AgentModelMutationManager {
           activation = await AgentProviderContextActivation.prepare(this.config.globalBus, providerContext);
         }
         await this.config.swapConnectorUnlocked(
-          { model: newModel, ...(providerContext && { providerContext }) },
+          {
+            model: newModel,
+            // Construct the replacement with the effort finalizeModelSwap will
+            // commit, so construction-time reasoning consumers see it too.
+            reasoningEffort: this.resolveReasoningEffort(
+              options.reasoningEffort,
+              options.previousReasoningEffort,
+              this.config.resolveSupportedReasoningLevels(newModel),
+            ),
+            ...(providerContext && { providerContext }),
+          },
           async () => activation?.commit(),
         );
       } catch (error) {

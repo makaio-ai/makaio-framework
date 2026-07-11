@@ -91,6 +91,23 @@ function resolveConfigProviderContext(
 }
 
 /**
+ * Select the reasoning effort for one connector generation.
+ *
+ * Key presence gates the override: an explicit `undefined` deliberately builds
+ * a reasoning-less connector instead of inheriting the live effort.
+ * @param overrides - Per-generation override surface, when provided
+ * @param currentReasoningEffort - Live connector effort used without an override
+ * @returns Effort the replacement connector must be constructed with
+ */
+function resolveConfigReasoningEffort(
+  overrides: AgentConnectorConfigOverrides | undefined,
+  currentReasoningEffort: AIReasoningLevel | undefined,
+): AIReasoningLevel | undefined {
+  if (overrides !== undefined && 'reasoningEffort' in overrides) return overrides.reasoningEffort;
+  return currentReasoningEffort;
+}
+
+/**
  * Build config factory input from agent config with optional overrides.
  *
  * Explicitly maps AIAgentConfig fields to ConfigFactoryInput — avoids
@@ -129,7 +146,7 @@ export function buildConfigFactoryInput<TBus extends ScopedBus<string>, TConnect
     adapterSessionId: overrides?.adapterSessionId ?? cfg.adapterSessionId,
     sessionId: cfg.sessionId,
     resumeAdapterSessionId: overrides?.resumeAdapterSessionId ?? cfg.resumeAdapterSessionId,
-    reasoningEffort: deps.currentReasoningEffort,
+    reasoningEffort: resolveConfigReasoningEffort(overrides, deps.currentReasoningEffort),
     supportedReasoningLevels: resolveSupportedReasoningLevels(deps.availableModels, overrides?.model ?? cfg.model),
     allowedTools: cfg.allowedTools,
     disallowedTools: cfg.disallowedTools,

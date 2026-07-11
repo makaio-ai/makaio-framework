@@ -1,6 +1,10 @@
-import type { McpRuntimeSessionContext, McpSessionContext, ProviderContext } from '@makaio/contracts';
+import type { McpRuntimeSessionContext, McpSessionContext } from '@makaio/contracts';
 import type { AIAgentConnector } from '../connector/index.js';
-import type { AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload } from './types.js';
+import type {
+  AgentConnectorConfigOverrides,
+  AgentMcpServersSetRequestPayload,
+  AgentMcpServersSetResponsePayload,
+} from './types.js';
 import type { LedgerSessionContext } from './session-tool-ledger.js';
 
 /** Dependencies for runtime MCP server replacement handling. */
@@ -8,14 +12,7 @@ export interface AgentMcpServersMutationManagerConfig {
   /** Read current connector. */
   getConnector: () => AIAgentConnector;
   /** Swap connector with runtime overrides. */
-  swapConnectorUnlocked: (
-    configOverrides?: Partial<{
-      cwd: string;
-      model: string;
-      providerContext: ProviderContext;
-      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
-    }>,
-  ) => Promise<void>;
+  swapConnectorUnlocked: (configOverrides?: AgentConnectorConfigOverrides) => Promise<void>;
   /** Persist MCP session context changes on agent config for sequential swaps. */
   setMcpSessionContext: (
     mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext | undefined,
