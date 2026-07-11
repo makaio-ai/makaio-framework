@@ -16,7 +16,7 @@
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/contracts": "workspace:*",
-    "tsdown": "0.22.0",
+    "tsdown": "0.22.4",
     "typescript": "^6.0.3"
   },
   "files": [

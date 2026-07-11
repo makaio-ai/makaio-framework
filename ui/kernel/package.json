@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "tsdown": "0.22.0"
+    "tsdown": "0.22.4"
   },
   "inlinedDependencies": {
     "type-fest": "5.3.1"

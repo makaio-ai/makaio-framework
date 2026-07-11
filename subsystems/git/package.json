@@ -15,8 +15,8 @@
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
-    "@types/picomatch": "^3.0.2",
-    "tsdown": "0.22.0",
+    "@types/picomatch": "^4.0.3",
+    "tsdown": "0.22.4",
     "tsx": "^4.22.4"
   },
   "dependencies": {
@@ -24,7 +24,7 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/tools-core": "workspace:*",
-    "picomatch": "^4.0.3",
+    "picomatch": "^4.0.5",
     "simple-git": "^3.28.0"
   },
   "publishConfig": {

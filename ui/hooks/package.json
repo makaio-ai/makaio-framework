@@ -28,7 +28,7 @@
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@types/react": "^19.2.17",
-    "tsdown": "0.22.0"
+    "tsdown": "0.22.4"
   },
   "inlinedDependencies": {
     "zod": "4.3.5"

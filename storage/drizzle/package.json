@@ -16,10 +16,10 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/storage-migrations": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.22.0"
+    "tsdown": "0.22.4"
   },
   "dependencies": {
-    "@libsql/client": "^0.17.3",
+    "@libsql/client": "^0.17.4",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/storage-core": "workspace:*",
