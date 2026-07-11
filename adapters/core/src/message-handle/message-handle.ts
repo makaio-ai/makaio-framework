@@ -66,6 +66,14 @@ export class MessageHandle {
     cacheStrategy?: CacheStrategy,
     /** Content-free transport correlation for provider requests. */
     public readonly requestCorrelation?: RequestCorrelationContext,
+    /**
+     * Lifecycle turnId from the session orchestrator (`agent.sendMessage.turnId`).
+     * Distinct from `requestCorrelation.turnId`, which is transport correlation
+     * and may be present when no lifecycle turn exists. All user_message
+     * lifecycle events for this handle (sent/acknowledged/completed) pair by
+     * this value.
+     */
+    public readonly turnId?: string,
   ) {
     this.deferredCompletion = new DeferredPromise<MessageResult>();
     this.deferredAcknowledgement = new DeferredPromise<boolean>();
