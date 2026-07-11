@@ -98,6 +98,15 @@ export class MessageLifecycleTracker {
   /** Current turnId from the session orchestrator (set at sendMessage entry, cleared on completion) */
   private currentTurnId?: string;
 
+  /**
+   * Per-handle turnIds captured at {@link track} time. `currentTurnId` is a
+   * shared field that a concurrent `sendMessage` overwrites while an earlier
+   * turn is still streaming, so enrichment resolves the turnId from the
+   * active handle; the shared field only covers the window between
+   * `setCurrentTurnId` and `track`.
+   */
+  private readonly handleTurnIds = new WeakMap<MessageHandle, string>();
+
   /** Emit function injected from AIAgent */
   private readonly emitGlobal: EmitGlobalFn;
 
@@ -140,11 +149,21 @@ export class MessageLifecycleTracker {
   }
 
   /**
-   * Get the current turnId being processed.
+   * Get the turnId of the turn that is actually executing.
    * Used by enrichPayload() to add turnId to intermediate events.
-   * @returns The current turnId or undefined if not set
+   *
+   * Resolves from the active handle's captured turnId so that a concurrent
+   * `sendMessage` (which overwrites the shared `currentTurnId` before its
+   * handle is promoted) cannot mislabel — or, downstream, drop — events of
+   * the still-streaming turn. Falls back to the shared field for the window
+   * between `setCurrentTurnId` and `track`, when no handle is active yet.
+   * @returns The executing turn's turnId or undefined if not set
    */
   public getCurrentTurnId(): string | undefined {
+    if (this.currentMessageHandle !== undefined) {
+      const captured = this.handleTurnIds.get(this.currentMessageHandle);
+      if (captured !== undefined) return captured;
+    }
     return this.currentTurnId;
   }
 
@@ -305,6 +324,9 @@ export class MessageLifecycleTracker {
     options?: MessageLifecycleTrackOptions,
   ): void {
     const trackedTurnId = options ? options.turnId : this.currentTurnId;
+    if (trackedTurnId !== undefined) {
+      this.handleTurnIds.set(handle, trackedTurnId);
+    }
 
     // Already-processed guard: when shutdown gates (e.g. rejectQueuedHandles)
     // complete the handle before the agent calls track(), the handle's

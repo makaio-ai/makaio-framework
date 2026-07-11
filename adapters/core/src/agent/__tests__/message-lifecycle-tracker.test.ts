@@ -400,6 +400,43 @@ describe('MessageLifecycleTracker', () => {
     ]);
   });
 
+  it('resolves getCurrentTurnId from the executing handle, not the shared field overwritten by a queued sendMessage', async () => {
+    // Scenario: Turn A is streaming intermediate events when sendMessage(B)
+    // arrives — it overwrites the shared currentTurnId to turn-b before B is
+    // promoted. Event enrichment (agent.message/reasoning/tool) reads
+    // getCurrentTurnId(); if it returned the shared field, A's remaining
+    // events would carry turn-b and downstream consumers keyed on
+    // turnId+messageId (e.g. SessionBridge block accumulation) would drop
+    // them, losing the follow-up reply from persisted history.
+    const tracker = new MessageLifecycleTracker({ emitGlobal: async () => {} });
+    const handleA = makeHandle('message-a', 'A');
+    const handleB = makeHandle('message-b', 'B');
+
+    tracker.setCurrentTurnId('turn-a');
+    tracker.track(handleA);
+    expect(tracker.getCurrentTurnId()).toBe('turn-a');
+
+    // Concurrent sendMessage(B) while A is still executing.
+    tracker.setCurrentTurnId('turn-b');
+    tracker.track(handleB);
+
+    // A is still the active correlation source — its events must stay turn-a.
+    expect(tracker.getCurrentTurnId()).toBe('turn-a');
+
+    handleA.markAcknowledged();
+    handleB.markAcknowledged();
+    await flushMicrotasks();
+
+    // A completes → B is promoted; enrichment must switch to turn-b.
+    handleA.markCompleted({ outcome: 'completed', result: { message: 'A done' } });
+    await flushMicrotasks();
+    expect(tracker.getCurrentTurnId()).toBe('turn-b');
+
+    handleB.markCompleted({ outcome: 'completed', result: { message: 'B done' } });
+    await flushMicrotasks();
+    expect(tracker.getCurrentMessageHandle()).toBeUndefined();
+  });
+
   it('promotes pending handles in FIFO order when multiple are queued during an in-flight turn', async () => {
     // Scenario: Turn A is executing. Two follow-ups (B then C) are dispatched
     // while A is still active. On completion of A, B (the first queued) must be
