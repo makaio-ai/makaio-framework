@@ -13,6 +13,7 @@ import {
   workflowExecutionStateDual,
   workflowExecutionStateEventsDual,
 } from './schema.js';
+import { workflowFinalizationsDual } from './finalization-schema.js';
 
 /** Postgres face of the `workflow_definitions` table. */
 export const workflowDefinitions = workflowDefinitionsDual.postgres;
@@ -40,3 +41,5 @@ export const worklogGateEvents = worklogGateEventsDual.postgres;
 export const workflowExecutionState = workflowExecutionStateDual.postgres;
 /** Postgres face of the `workflow_execution_state_events` table. */
 export const workflowExecutionStateEvents = workflowExecutionStateEventsDual.postgres;
+/** Postgres face of the `workflow_finalizations` table. */
+export const workflowFinalizations = workflowFinalizationsDual.postgres;

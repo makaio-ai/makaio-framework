@@ -1,0 +1,1 @@
+ALTER TABLE "workflow_definitions" ADD COLUMN "success_finalizer_id" text;

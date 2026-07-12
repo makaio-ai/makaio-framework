@@ -1,0 +1,1 @@
+ALTER TABLE "workflow_finalizations" ADD COLUMN "published_at" bigint;

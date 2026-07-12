@@ -29,7 +29,7 @@ export const WorkLogExecutionSummarySchema = z.object({
    * Current execution status.
    * Mirrors `WorkflowExecution.status` — kept in sync via event projection.
    */
-  status: z.enum(['pending', 'running', 'paused', 'completed', 'failed', 'cancelled']),
+  status: z.enum(['pending', 'running', 'paused', 'finalizing', 'completed', 'failed', 'cancelled']),
   /** Epoch milliseconds when the execution started. */
   startedAt: z.number(),
   /** Epoch milliseconds when the execution reached a terminal status. */
@@ -226,6 +226,7 @@ export const WorkLogStatsSchema = z.object({
     pending: z.number().int().nonnegative(),
     running: z.number().int().nonnegative(),
     paused: z.number().int().nonnegative(),
+    finalizing: z.number().int().nonnegative(),
     completed: z.number().int().nonnegative(),
     failed: z.number().int().nonnegative(),
     cancelled: z.number().int().nonnegative(),
