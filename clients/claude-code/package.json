@@ -36,7 +36,7 @@
     "@types/proper-lockfile": "^4.1.4",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",
-    "vitest": "4.1.7"
+    "vitest": "4.1.10"
   },
   "files": [
     "dist",
