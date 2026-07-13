@@ -19,16 +19,16 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@langfuse/otel": "^5.4.1",
+    "@langfuse/otel": "^5.9.1",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/extension-telemetry-otel": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/core": "2.8.0",
-    "@opentelemetry/exporter-trace-otlp-http": "0.217.0",
-    "@opentelemetry/sdk-trace-base": "2.7.1",
+    "@opentelemetry/core": "2.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.220.0",
+    "@opentelemetry/sdk-trace-base": "2.9.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

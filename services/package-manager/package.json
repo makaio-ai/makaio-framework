@@ -19,10 +19,10 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/service-base": "workspace:*",
-    "@yarnpkg/cli": "^4.16.0",
-    "@yarnpkg/core": "^4.8.0",
+    "@yarnpkg/cli": "^4.17.1",
+    "@yarnpkg/core": "^4.9.0",
     "@yarnpkg/fslib": "^3.1.4",
-    "semver": "^7.8.0",
+    "semver": "^7.8.5",
     "zod": "4.4.3"
   },
   "devDependencies": {
