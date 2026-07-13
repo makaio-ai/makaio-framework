@@ -3,7 +3,7 @@ export {
   SubagentService,
   type SubagentFailureFinalizationErrorCode,
 } from './subagent-service.js';
-export { subagentServicePackage, SubagentServiceToken } from './package.js';
+export { createSubagentServicePackage, subagentServicePackage, SubagentServiceToken } from './package.js';
 export { SubagentManager, type TrackOptions } from './manager/index.js';
 export type {
   AwaitResult,

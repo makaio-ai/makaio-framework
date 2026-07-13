@@ -83,6 +83,8 @@ export interface ExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> {
  * host-agnostic extensions can type themselves against {@link ExtensionContext}.
  */
 export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> extends ExtensionContext<TBus> {
+  /** Working directory selected by the Node host for relative filesystem operations. */
+  readonly cwd?: string;
   /** Current platform identifier (e.g., `'darwin'`, `'linux'`, `'win32'`). */
   readonly platform: NodeJS.Platform;
   /** User's home directory path. */

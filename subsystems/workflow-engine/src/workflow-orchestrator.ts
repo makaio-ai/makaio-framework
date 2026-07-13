@@ -1,7 +1,8 @@
+/* eslint max-lines: ["error", { "max": 430, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 100, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
-import { WORKFLOW_CANCELLED_REASON } from '@makaio/contracts';
-import type {
-  ArtifactRevision,
+import {
+  WORKFLOW_CANCELLED_REASON,
+  type ArtifactRevision,
   LoopGateHandler,
   StationHandler,
   WorkflowZodSchemas,
@@ -12,8 +13,7 @@ import type {
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
-import type { ActiveExecution, ActiveRunnerStep } from './types.js';
-import { DEFAULT_EXECUTOR_CONFIG } from './types.js';
+import { DEFAULT_EXECUTOR_CONFIG, type ActiveExecution, type ActiveRunnerStep } from './types.js';
 import { WorkflowSubjects } from './namespace.js';
 import { cancelExecution } from './workflow-execution-finalizer.js';
 import { RuntimeContext } from './runtime/runtime-context.js';
@@ -22,6 +22,7 @@ import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-bind
 import { buildResumeFrameIndex } from './runtime/resume-frames.js';
 import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
 import { persistLoadedExecutionStart } from './workflow-execution-start.js';
+import { persistAuthorityLoadedState } from './authority-state-bootstrap.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types
@@ -164,6 +165,9 @@ interface SignalCancellationBindingParams {
   readonly activeExecutions: Map<string, ActiveExecution>;
   readonly shellAbortControllers: Map<string, AbortController>;
   readonly activeRunnerSteps: Map<string, ActiveRunnerStep>;
+  readonly durableLifecycleTransitions: Map<string, Promise<void>>;
+  readonly lifecyclePublications: Map<string, Promise<void>>;
+  readonly publishingLifecycleExecutions: Set<string>;
 }
 
 /**
@@ -184,6 +188,9 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
         activeExecutions: params.activeExecutions,
         shellAbortControllers: params.shellAbortControllers,
         activeRunnerSteps: params.activeRunnerSteps,
+        durableLifecycleTransitions: params.durableLifecycleTransitions,
+        lifecyclePublications: params.lifecyclePublications,
+        publishingLifecycleExecutions: params.publishingLifecycleExecutions,
         cancelTimeoutMs: DEFAULT_EXECUTOR_CONFIG.cancelTimeoutMs,
       },
       params.executionId,
@@ -430,6 +437,7 @@ function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: Workflo
     env: config.env,
     createdAt: Date.now(),
     suspensionStrategy: config.suspensionStrategy,
+    ...(config.terminalAuthority !== undefined ? { terminalAuthority: config.terminalAuthority } : {}),
   };
 }
 
@@ -536,18 +544,31 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   const { definition } = loaded;
 
   if (signal.aborted) {
+    if (config.terminalAuthority === 'authority') {
+      return {
+        executionId: config.executionId,
+        workflowId: config.workflowId,
+        status: 'cancelled',
+        reason: WORKFLOW_CANCELLED_REASON,
+      };
+    }
     return persistPreRuntimeTerminalExecution(bus, config, 'cancelled', WORKFLOW_CANCELLED_REASON);
   }
 
   const liveExecution = await buildRunningExecution(bus, config);
   const runContext = buildWorkerRunContext(config, definition);
-  await persistLoadedExecutionStart(bus, liveExecution, runContext, definition);
+  if (config.terminalAuthority !== 'authority')
+    await persistLoadedExecutionStart(bus, liveExecution, runContext, definition);
+  else await persistAuthorityLoadedState(bus, runContext, definition);
 
   const runtimeHandlers = new Map<string, StationHandler>(loaded.runtimeHandlers);
   const runtimeLoopGates = loaded.runtimeLoopGates ?? new Map<string, LoopGateHandler>();
   const activeExecutions = new Map<string, ActiveExecution>();
   const shellAbortControllers = new Map<string, AbortController>();
   const activeRunnerSteps = new Map<string, ActiveRunnerStep>();
+  const durableLifecycleTransitions = new Map<string, Promise<void>>();
+  const lifecyclePublications = new Map<string, Promise<void>>();
+  const publishingLifecycleExecutions = new Set<string>();
 
   activeExecutions.set(config.executionId, {
     execution: liveExecution,
@@ -557,14 +578,20 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     runtimeLoopGates: new Map(runtimeLoopGates),
   });
 
-  const releaseSignalCancellation = bindSignalCancellation({
-    signal,
-    executionId: config.executionId,
-    bus,
-    activeExecutions,
-    shellAbortControllers,
-    activeRunnerSteps,
-  });
+  const releaseSignalCancellation =
+    config.terminalAuthority === 'authority'
+      ? async (): Promise<boolean> => false
+      : bindSignalCancellation({
+          signal,
+          executionId: config.executionId,
+          bus,
+          activeExecutions,
+          shellAbortControllers,
+          activeRunnerSteps,
+          durableLifecycleTransitions,
+          lifecyclePublications,
+          publishingLifecycleExecutions,
+        });
 
   let result: RuntimeSequenceResult = { status: 'completed' };
 
@@ -605,7 +632,13 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   // Paused executions are not terminal: they have no completedAt and emit a
   // distinct lifecycle event so host runners can checkpoint state and exit.
   if (result.status === 'paused') {
-    await persistPausedExecution(bus, config, liveExecution, result.pausedAtGateId, result.pausedAtFrameId);
+    if (config.terminalAuthority !== 'authority') {
+      await persistPausedExecution(bus, config, liveExecution, result.pausedAtGateId, result.pausedAtFrameId);
+    }
+    return buildWorkflowRunResult(config, result);
+  }
+
+  if (config.terminalAuthority === 'authority') {
     return buildWorkflowRunResult(config, result);
   }
 

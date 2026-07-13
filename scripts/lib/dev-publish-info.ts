@@ -64,6 +64,7 @@ interface WorkspacePackageManifest {
   readonly dependencies?: Record<string, string>;
   readonly peerDependencies?: Record<string, string>;
   readonly optionalDependencies?: Record<string, string>;
+  readonly publishWorkspaceDependencies?: readonly string[];
 }
 
 /** Workspace package root used for framework build-input mapping. */
@@ -140,6 +141,7 @@ function readWorkspacePackageManifestsAtRef(ref: string): WorkspacePackageManife
       dependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
       optionalDependencies?: Record<string, string>;
+      publishWorkspaceDependencies?: string[];
     };
 
     if (!packageJson.name?.startsWith('@makaio/')) {
@@ -154,6 +156,7 @@ function readWorkspacePackageManifestsAtRef(ref: string): WorkspacePackageManife
       dependencies: packageJson.dependencies,
       peerDependencies: packageJson.peerDependencies,
       optionalDependencies: packageJson.optionalDependencies,
+      publishWorkspaceDependencies: packageJson.publishWorkspaceDependencies,
     });
   }
 
@@ -167,12 +170,18 @@ function readWorkspacePackageManifestsAtRef(ref: string): WorkspacePackageManife
  * @returns Publishable package metadata at the requested ref.
  */
 export function discoverWorkspacePackagesAtRef(ref: string): WorkspacePackage[] {
+  const manifests = readWorkspacePackageManifestsAtRef(ref);
+  const publicPackageNames = new Set(
+    manifests
+      .filter((manifest) => !manifest.private && manifest.name && manifest.version)
+      .map((manifest) => manifest.name as string),
+  );
   const packages: WorkspacePackage[] = [];
-  for (const packageJson of readWorkspacePackageManifestsAtRef(ref)) {
+  for (const packageJson of manifests) {
     if (packageJson.private || !packageJson.name || !packageJson.version) {
       continue;
     }
-    if (checkSourceManifestMakaioReferences(packageJson).length > 0) {
+    if (checkSourceManifestMakaioReferences(packageJson, publicPackageNames).length > 0) {
       continue;
     }
 
@@ -181,6 +190,7 @@ export function discoverWorkspacePackagesAtRef(ref: string): WorkspacePackage[] 
       location: packageJson.location,
       version: packageJson.version,
       dependencies: Object.assign({}, ...DEPENDENCY_FIELDS.map((field) => packageJson[field] ?? {})),
+      publishWorkspaceDependencies: packageJson.publishWorkspaceDependencies,
     });
   }
 

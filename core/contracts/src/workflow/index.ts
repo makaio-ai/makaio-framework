@@ -44,6 +44,20 @@ export {
   WorkflowStationNodeSchema,
   WorkflowTriggerSchema,
 } from './schemas.js';
+export {
+  WorkflowDelegateResultFinalizerIdSchema,
+  WorkflowDelegateResultFinalizationRequestSchema,
+  WorkflowDelegateEconomicsSchema,
+  WorkflowDelegateResultFinalizationResponseSchema,
+  WorkflowDelegateToolObservationSchema,
+  createWorkflowDelegateResultFinalizerNamespace,
+} from './finalization.js';
+export type {
+  WorkflowDelegateResultFinalizationRequest,
+  WorkflowDelegateEconomics,
+  WorkflowDelegateResultFinalizationResponse,
+  WorkflowDelegateToolObservation,
+} from './finalization.js';
 export type {
   BusEventTrigger,
   ExecutionListCursor,
@@ -167,9 +181,17 @@ export type { WorkflowRunContext } from './run-context.js';
 export {
   WorkflowTerminalStatusSchema,
   WorkflowFinalizationIntentSchema,
+  WorkflowFinalizationClaimSchema,
+  WorkflowFinalizationDeliveryResultSchema,
   WorkflowFinalizerIdSchema,
+  createWorkflowFinalizerNamespace,
 } from './finalization.js';
-export type { WorkflowTerminalStatus, WorkflowFinalizationIntent } from './finalization.js';
+export type {
+  WorkflowFinalizerId,
+  WorkflowTerminalStatus,
+  WorkflowFinalizationIntent,
+  WorkflowFinalizationClaim,
+} from './finalization.js';
 export { walkWorkflowDefinition } from './walk.js';
 export type { WalkContext, WalkRelationship, WorkflowNodeVisitor } from './walk.js';
 export { projectWorkflowGraph } from './projection.js';
@@ -234,7 +256,6 @@ export type {
 export {
   BusEventWorkflowTrigger,
   CronWorkflowTrigger,
-  defineWorkflow,
   delegateToAgent,
   delegateToRole,
   ExtensionWorkflowTrigger,
@@ -245,7 +266,8 @@ export {
   ManualWorkflowTrigger,
   station,
   WebhookWorkflowTrigger,
-} from './authoring.js';
+} from './authoring-exports.js';
+export { defineWorkflow } from './authoring.js';
 export { zodSchemaToJsonRecord } from './authoring-node-factories.js';
 export type {
   AgentConfig,
@@ -279,7 +301,7 @@ export type {
   WorkflowStateContext,
   WorkflowTriggerDef,
   WorkflowZodSchemas,
-} from './authoring.js';
+} from './authoring-exports.js';
 export { defineWorkflowBundle } from './bundle.js';
 export type { WorkflowBundle } from './bundle.js';
 export { ExecutionHintsSchema, ExecutionSourceHintSchema } from './execution-hints.js';

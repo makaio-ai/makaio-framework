@@ -102,6 +102,18 @@ describe('defineWorkflow', () => {
     expect(workflow.definition.scope).toEqual({ type: 'global' });
   });
 
+  it('serializes a definition-owned success finalizer selector when configured', () => {
+    const workflow = defineWorkflow('finalized-flow', { successFinalizerId: 'factory.workflow-success' });
+
+    expect(workflow.definition.successFinalizerId).toBe('factory.workflow-success');
+  });
+
+  it('omits the success finalizer selector when it is not configured', () => {
+    const workflow = defineWorkflow('unfinalized-flow');
+
+    expect(workflow.definition).not.toHaveProperty('successFinalizerId');
+  });
+
   it('station appends station nodes to the root sequence', () => {
     const workflow = defineWorkflow('fn-flow');
     workflow.station('compute', () => ({ value: 42 }));
@@ -438,12 +450,14 @@ describe('fluent builder — delegateToAgent nodes', () => {
   it('appends a delegate-agent node to the root sequence', () => {
     const workflow = defineWorkflow('delegate-agent-flow').delegateToAgent('sub-task', {
       agentId: 'code-writer',
+      completion: 'turn',
     });
 
     const node = workflow.definition.root.nodes[0];
     expect(node?.type).toBe('delegate-agent');
     expect(node?.id).toBe('sub-task');
     expect((node as { agentId?: string }).agentId).toBe('code-writer');
+    expect((node as { completion?: string }).completion).toBe('turn');
   });
 
   it('does not add to runtimeHandlers for delegate-agent nodes', () => {
@@ -488,6 +502,8 @@ describe('fluent builder — delegateToRole nodes', () => {
       outputSchema,
       timeoutMs: 120_000,
       completion: 'turn',
+      allowedTools: ['artifact.read'],
+      resultFinalizerId: 'artifact.read-wrap',
     });
 
     expect(workflow.definition.root.nodes[0]).toMatchObject({
@@ -495,6 +511,8 @@ describe('fluent builder — delegateToRole nodes', () => {
       outputSchema,
       timeoutMs: 120_000,
       completion: 'turn',
+      allowedTools: ['artifact.read'],
+      resultFinalizerId: 'artifact.read-wrap',
     });
   });
 });
@@ -951,11 +969,15 @@ describe('standalone factory — delegateToRole()', () => {
       outputSchema,
       timeoutMs: 45_000,
       completion: 'turn',
+      allowedTools: ['artifact.read'],
+      resultFinalizerId: 'artifact.read-wrap',
     });
 
     expect(node.outputSchema).toBe(outputSchema);
     expect(node.timeoutMs).toBe(45_000);
     expect(node.completion).toBe('turn');
+    expect(node.allowedTools).toEqual(['artifact.read']);
+    expect(node.resultFinalizerId).toBe('artifact.read-wrap');
   });
 });
 

@@ -53,6 +53,8 @@ export const SubagentSchemas = {
     task: z.string(),
     config: SubagentConfigSchema,
     depth: z.number(),
+    /** Identifies the SubagentService instance that won the spawn RPC and owns execution. */
+    executionOwnerId: z.string().optional(),
     /** Tool call ID of the spawn_subagent invocation. Forwarded to the child session as spawningToolCallId. */
     spawningToolCallId: z.string().optional(),
   }),

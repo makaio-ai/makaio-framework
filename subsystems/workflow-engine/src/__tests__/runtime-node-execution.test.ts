@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createBusInstance, ValidationError } from '@makaio/bus-core';
 import {
   AgentSubjects,
+  createWorkflowDelegateResultFinalizerNamespace,
   SessionSubjects,
   SubagentSubjects,
   WorkflowNamespace,
@@ -25,7 +26,7 @@ import { RuntimeContext } from '../runtime/runtime-context.js';
 import { executeStationNode } from '../runtime/station-node.js';
 import { createWorkflowStateContext } from '../runtime/workflow-state-context.js';
 import { executeDelegateAgentNode, executeDelegateRoleNode } from '../runtime/delegate-node.js';
-import { executeRoleSubagentNode } from '../runtime/role-subagent-node.js';
+import { elapsedDelegateDuration, executeRoleSubagentNode } from '../runtime/role-subagent-node.js';
 import { executeParallelNode, type ParallelOutput } from '../runtime/parallel-node.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -1165,7 +1166,27 @@ describe('executeStationNode', () => {
 });
 
 describe('executeDelegateNode', () => {
-  it('runs delegate-role nodes through a session turn', async () => {
+  it('normalizes monotonic delegate duration to safe integer milliseconds', () => {
+    const now = vi
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(10.6)
+      .mockReturnValueOnce(9)
+      .mockReturnValueOnce(Number.POSITIVE_INFINITY)
+      .mockReturnValueOnce(Number.MAX_SAFE_INTEGER + 1_000);
+    try {
+      expect(elapsedDelegateDuration(0)).toBe(11);
+      expect(elapsedDelegateDuration(10)).toBe(0);
+      expect(elapsedDelegateDuration(0)).toBe(0);
+      expect(elapsedDelegateDuration(0)).toBe(Number.MAX_SAFE_INTEGER);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([
+    { description: 'inherits the parent working directory', parentWorkingDirectory: '/workspace/parent' },
+    { description: 'omits a missing parent working directory', parentWorkingDirectory: undefined },
+  ])('runs delegate-role nodes through a session turn and $description', async ({ parentWorkingDirectory }) => {
     const node: WorkflowDelegateRoleNode = {
       id: 'review-delegate',
       type: 'delegate-role',
@@ -1174,6 +1195,7 @@ describe('executeDelegateNode', () => {
       outputSchema: { type: 'object' },
       timeoutMs: 1_000,
       completion: 'turn',
+      resultFinalizerId: 'artifact.read-wrap',
     };
     const ctx = makeCtx({});
     const createdSessions: unknown[] = [];
@@ -1181,6 +1203,14 @@ describe('executeDelegateNode', () => {
     const sentMessages: unknown[] = [];
     const awaitedTurns: unknown[] = [];
     const closedSessions: unknown[] = [];
+    const finalizedResults: unknown[] = [];
+    let parentSessionReads = 0;
+    const resultFinalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
+    ctx.bus.registerNamespace(resultFinalizer.namespace);
+    const unsubscribeFinalizer = ctx.bus.on(resultFinalizer.subjects.finalize, (requestCtx) => {
+      finalizedResults.push(requestCtx.payload);
+      requestCtx.setResult({ output: requestCtx.payload.rawResult as JsonValue });
+    });
 
     const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       expect(requestCtx.payload.roleId).toBe('reviewer');
@@ -1195,6 +1225,20 @@ describe('executeDelegateNode', () => {
     const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
       createdSessions.push(requestCtx.payload);
       requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'workflow-session-review-delegate' });
+    });
+    const unsubscribeParentSession = ctx.bus.on(SessionSubjects.get, (requestCtx) => {
+      parentSessionReads++;
+      expect(requestCtx.payload).toEqual({ sessionId: 'exec-test' });
+      requestCtx.setResult({
+        session: {
+          sessionId: 'exec-test',
+          createdAt: 0,
+          lastActivityAt: 0,
+          status: 'active',
+          agents: [],
+          ...(parentWorkingDirectory !== undefined && { targetWorkingDirectory: parentWorkingDirectory }),
+        },
+      });
     });
     const unsubscribeAttach = ctx.bus.on(SessionSubjects.agent.attachResolved, (requestCtx) => {
       attachedAgents.push(requestCtx.payload);
@@ -1255,8 +1299,12 @@ describe('executeDelegateNode', () => {
           parentSessionId: 'exec-test',
           branchKind: 'subagent',
           title: "Workflow delegate-role 'review-delegate'",
+          ...(parentWorkingDirectory !== undefined && { targetWorkingDirectory: parentWorkingDirectory }),
         }),
       ]);
+      expect((createdSessions[0] as { targetWorkingDirectory?: string }).targetWorkingDirectory).toBe(
+        parentWorkingDirectory,
+      );
       expect(attachedAgents).toEqual([
         expect.objectContaining({
           sessionId: expect.any(String),
@@ -1281,6 +1329,8 @@ describe('executeDelegateNode', () => {
         }),
       ]);
       expect(sentMessages[0]).not.toHaveProperty('agent');
+      expect((attachedAgents[0] as { agent: { cwd?: string } }).agent.cwd).toBe(parentWorkingDirectory);
+      expect(parentSessionReads).toBe(1);
       expect(awaitedTurns).toEqual([
         {
           sessionId: expect.any(String),
@@ -1289,13 +1339,35 @@ describe('executeDelegateNode', () => {
         },
       ]);
       expect(closedSessions).toEqual([{ sessionId: expect.any(String) }]);
+      expect(finalizedResults).toEqual([
+        expect.objectContaining({
+          frameId: 'frame-review-delegate',
+          nodeId: 'review-delegate',
+          economics: {
+            durationMs: expect.any(Number),
+            binding: {
+              adapterName: 'claude-code',
+              providerConfigId: 'provider-config-review',
+              providerDefinitionId: REVIEW_PROVIDER_CONTEXT.definitionId,
+              model: 'sonnet',
+              auth: {
+                mode: REVIEW_PROVIDER_CONTEXT.auth.mode,
+                owner: REVIEW_PROVIDER_CONTEXT.auth.method.owner,
+                methodId: REVIEW_PROVIDER_CONTEXT.auth.method.methodId,
+              },
+            },
+          },
+        }),
+      ]);
     } finally {
       unsubscribeRole();
       unsubscribeCreate();
+      unsubscribeParentSession();
       unsubscribeAttach();
       unsubscribeSendMessage();
       unsubscribeTurnAwait();
       unsubscribeClose();
+      unsubscribeFinalizer();
     }
   });
 
@@ -1359,6 +1431,7 @@ describe('executeDelegateNode', () => {
       prompt: 'Review {{ ctx.inputs.title }}',
       outputSchema: { type: 'object' },
       timeoutMs: 1_000,
+      allowedTools: ['artifact.read'],
     };
     const ctx = makeCtx({});
     const spawned: unknown[] = [];
@@ -1373,6 +1446,11 @@ describe('executeDelegateNode', () => {
         harnessId: 'review-harness',
         systemPrompt: 'Review carefully.',
         contextMode: 'fresh',
+        providerConfigId: 'provider-config-review',
+        adapterConfig: {},
+        tools: ['filesystem.write'],
+        disallowedTools: ['artifact.read'],
+        allowedDirectories: [],
         providerContext: REVIEW_PROVIDER_CONTEXT_WITHOUT_CAPABILITIES,
       });
     });
@@ -1414,11 +1492,16 @@ describe('executeDelegateNode', () => {
             harnessId: 'review-harness',
             systemPrompt: 'Review carefully.',
             contextMode: 'fresh',
+            providerConfigId: 'provider-config-review',
+            adapterConfig: {},
+            tools: ['artifact.read'],
+            allowedDirectories: [],
             providerContext: REVIEW_PROVIDER_CONTEXT_WITHOUT_CAPABILITIES,
             responseSchema: { schema: { type: 'object' } },
           }),
         }),
       ]);
+      expect((spawned[0] as { config: Record<string, unknown> }).config).not.toHaveProperty('disallowedTools');
     } finally {
       unsubscribeRole();
       unsubscribeSpawn();
@@ -1451,6 +1534,7 @@ describe('executeDelegateNode', () => {
       agentId: 'claude-code-implementer',
       inputExpression: '{ task: ctx.inputs.task, branch: ctx.inputs.branch }',
       outputSchema: { type: 'object' },
+      completion: 'turn',
     };
     const ctx = makeCtx({});
     const spawned: unknown[] = [];
@@ -1482,6 +1566,7 @@ describe('executeDelegateNode', () => {
           task: JSON.stringify({ task: 'Add tests', branch: 'workflow-api' }, null, 2),
           adapterName: 'claude-code',
           harnessId: 'implementation-harness',
+          completion: 'turn',
           responseSchema: { schema: { type: 'object' } },
         },
       });
@@ -1489,6 +1574,233 @@ describe('executeDelegateNode', () => {
       unsubscribeAgent();
       unsubscribeSpawn();
       unsubscribeAwait();
+    }
+  });
+
+  it('applies exact node tools and authority finalization before returning a delegate result', async () => {
+    const node: WorkflowDelegateAgentNode = {
+      id: 'read-artifact',
+      type: 'delegate-agent',
+      agentId: 'artifact-reader',
+      allowedTools: ['artifact.read'],
+      resultFinalizerId: 'artifact.read-wrap',
+    };
+    const ctx = makeCtx({});
+    const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
+    ctx.bus.registerNamespace(finalizer.namespace);
+    const unsubscribeAgent = ctx.bus.on(WorkflowSubjects.resolveAgent, (requestCtx) => {
+      requestCtx.setResult({
+        adapterName: 'claude-code',
+        tools: ['filesystem.write'],
+        disallowedTools: ['artifact.read'],
+      });
+    });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      expect(requestCtx.payload.config.tools).toEqual(['artifact.read']);
+      expect(requestCtx.payload.config.disallowedTools).toBeUndefined();
+      expect(requestCtx.payload.config.completion).toBe('tool');
+      requestCtx.setResult({ subagentId: 'subagent-read', status: 'spawning' });
+    });
+    const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({
+        status: 'completed',
+        result: 'model summary',
+        toolObservations: [
+          {
+            toolName: 'artifact.read',
+            outcome: 'success',
+            artifact: { kind: 'solution-design', id: 'design-1', revision: '3' },
+          },
+        ],
+      });
+    });
+    const unsubscribeFinalizer = ctx.bus.on(finalizer.subjects.finalize, (requestCtx) => {
+      expect(requestCtx.payload).toEqual({
+        executionId: 'exec-test',
+        workflowId: 'workflow-test',
+        frameId: 'frame-read',
+        nodeId: 'read-artifact',
+        nodeType: 'delegate-agent',
+        rawResult: 'model summary',
+        toolObservations: [
+          {
+            toolName: 'artifact.read',
+            outcome: 'success',
+            artifact: { kind: 'solution-design', id: 'design-1', revision: '3' },
+          },
+        ],
+        economics: {
+          durationMs: expect.any(Number),
+          binding: { adapterName: 'claude-code' },
+        },
+      });
+      requestCtx.setResult({ output: { artifact: { id: 'artifact-1' }, summary: 'model summary' } });
+    });
+
+    try {
+      await expect(executeDelegateAgentNode(node, ctx, emptyExpressionCtx, 'frame-read')).resolves.toEqual({
+        status: 'completed',
+        output: { artifact: { id: 'artifact-1' }, summary: 'model summary' },
+      });
+    } finally {
+      unsubscribeAgent();
+      unsubscribeSpawn();
+      unsubscribeAwait();
+      unsubscribeFinalizer();
+    }
+  });
+
+  it('fails a delegate when its selected authority finalizer rejects', async () => {
+    const node: WorkflowDelegateAgentNode = {
+      id: 'read-artifact',
+      type: 'delegate-agent',
+      agentId: 'artifact-reader',
+      resultFinalizerId: 'artifact.read-wrap',
+    };
+    const ctx = makeCtx({});
+    const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
+    ctx.bus.registerNamespace(finalizer.namespace);
+    const unsubscribeAgent = ctx.bus.on(WorkflowSubjects.resolveAgent, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'claude-code' });
+    });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-read', status: 'spawning' });
+    });
+    const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'model summary' });
+    });
+    const unsubscribeFinalizer = ctx.bus.on(finalizer.subjects.finalize, () => {
+      throw new Error('authority unavailable');
+    });
+
+    try {
+      await expect(executeDelegateAgentNode(node, ctx, emptyExpressionCtx, 'frame-read')).rejects.toThrow(
+        'authority unavailable',
+      );
+    } finally {
+      unsubscribeAgent();
+      unsubscribeSpawn();
+      unsubscribeAwait();
+      unsubscribeFinalizer();
+    }
+  });
+
+  it('cancels a spawned delegate while its authority finalizer is pending', async () => {
+    const controller = new AbortController();
+    const node: WorkflowDelegateAgentNode = {
+      id: 'read-artifact',
+      type: 'delegate-agent',
+      agentId: 'artifact-reader',
+      resultFinalizerId: 'artifact.read-wrap',
+    };
+    const ctx = makeCtx({}, controller.signal);
+    const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
+    ctx.bus.registerNamespace(finalizer.namespace);
+    let markFinalizerStarted: () => void = () => undefined;
+    const finalizerStarted = new Promise<void>((resolve) => {
+      markFinalizerStarted = resolve;
+    });
+    const unsubscribeAgent = ctx.bus.on(WorkflowSubjects.resolveAgent, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'claude-code' });
+    });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-read', status: 'spawning' });
+    });
+    const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'model summary' });
+    });
+    const unsubscribeFinalizer = ctx.bus.on(finalizer.subjects.finalize, async () => {
+      markFinalizerStarted();
+      await new Promise<void>(() => undefined);
+    });
+
+    try {
+      const outcome = executeDelegateAgentNode(node, ctx, emptyExpressionCtx, 'frame-read');
+      await finalizerStarted;
+      controller.abort();
+      await expect(outcome).resolves.toEqual({ status: 'cancelled' });
+    } finally {
+      unsubscribeAgent();
+      unsubscribeSpawn();
+      unsubscribeAwait();
+      unsubscribeFinalizer();
+    }
+  });
+
+  it('cancels a session-turn delegate while its authority finalizer is pending', async () => {
+    const controller = new AbortController();
+    const node: WorkflowDelegateRoleNode = {
+      id: 'review-delegate',
+      type: 'delegate-role',
+      role: 'reviewer',
+      prompt: 'Review',
+      completion: 'turn',
+      resultFinalizerId: 'artifact.read-wrap',
+    };
+    const ctx = makeCtx({}, controller.signal);
+    const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
+    ctx.bus.registerNamespace(finalizer.namespace);
+    let markFinalizerStarted: () => void = () => undefined;
+    const finalizerStarted = new Promise<void>((resolve) => {
+      markFinalizerStarted = resolve;
+    });
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'claude-code' });
+    });
+    const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
+      requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'delegate-session' });
+    });
+    const unsubscribeAttach = ctx.bus.on(SessionSubjects.agent.attachResolved, (requestCtx) => {
+      requestCtx.setResult({ agentId: 'agent-review', adapterSessionId: 'adapter-session-review', role: 'lead' });
+    });
+    const unsubscribeSend = ctx.bus.on(SessionSubjects.sendMessage, async (requestCtx) => {
+      await ctx.bus.emit(AgentSubjects.complete, {
+        agentId: 'agent-review',
+        adapterId: 'adapter-review',
+        adapterName: 'claude-code',
+        adapterSessionId: 'adapter-session-review',
+        sessionId: requestCtx.payload.sessionId,
+        messageId: 'message-review',
+        turnId: 'turn-review',
+        message: 'model summary',
+      });
+      requestCtx.setResult({
+        sessionId: requestCtx.payload.sessionId,
+        messageId: 'message-review',
+        turnId: 'turn-review',
+      });
+    });
+    const unsubscribeAwait = ctx.bus.on(SessionSubjects.turn.await, (requestCtx) => {
+      requestCtx.setResult({
+        completion: {
+          sessionId: requestCtx.payload.sessionId,
+          turnId: requestCtx.payload.turnId,
+          turnNumber: 1,
+          success: true,
+        },
+      });
+    });
+    const unsubscribeClose = ctx.bus.on(SessionSubjects.close, (requestCtx) => {
+      requestCtx.setResult({ success: true });
+    });
+    const unsubscribeFinalizer = ctx.bus.on(finalizer.subjects.finalize, async () => {
+      markFinalizerStarted();
+      await new Promise<void>(() => undefined);
+    });
+
+    try {
+      const outcome = executeDelegateRoleNode(node, ctx, emptyExpressionCtx, 'frame-review');
+      await finalizerStarted;
+      controller.abort();
+      await expect(outcome).resolves.toEqual({ status: 'cancelled' });
+    } finally {
+      unsubscribeRole();
+      unsubscribeCreate();
+      unsubscribeAttach();
+      unsubscribeSend();
+      unsubscribeAwait();
+      unsubscribeClose();
+      unsubscribeFinalizer();
     }
   });
 

@@ -20,7 +20,20 @@ const FRAMEWORK_ROOT = join(import.meta.dirname, '..');
 const packages = findPublicPackageDirs(FRAMEWORK_ROOT)
   .map((dir) => ({ dir, pkg: readPackageJson(dir) }))
   .sort((a, b) => (a.pkg.name ?? a.dir).localeCompare(b.pkg.name ?? b.dir));
-const frameworkVersion = readPackageJson(FRAMEWORK_ROOT).version;
+const frameworkPackage = readPackageJson(join(FRAMEWORK_ROOT, 'packages/framework'));
+if (frameworkPackage.name !== '@makaio/framework' || !frameworkPackage.version) {
+  throw new Error('Public framework package is missing name or version');
+}
+const publishVersions = Object.fromEntries(
+  packages.map(({ dir, pkg }) => {
+    if (!pkg.name || !pkg.version) {
+      throw new Error(`Publishable package is missing name or version: ${dir}`);
+    }
+    return [pkg.name, pkg.version];
+  }),
+);
+publishVersions[frameworkPackage.name] = frameworkPackage.version;
+const frameworkVersion = publishVersions['@makaio/framework'];
 
 if (!frameworkVersion) {
   throw new Error('Framework package is missing package version');
@@ -40,6 +53,6 @@ for (const { dir, pkg } of packages) {
     stdio: 'inherit',
   });
 
-  const publishDir = stagePackageForNpmPublish(dir, frameworkVersion);
+  const publishDir = stagePackageForNpmPublish(dir, frameworkVersion, publishVersions);
   console.info(`[build-public] staged ${pkg.name} at ${publishDir}`);
 }

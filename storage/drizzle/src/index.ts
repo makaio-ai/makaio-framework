@@ -92,7 +92,7 @@ export { sqliteStorageEngine } from './engine/sqlite/engine';
 // build their own classifiers from. Consumers go through StorageEngine.errors.
 export { isSqliteDuplicateObjectError, isSqliteUniqueViolationError, readErrorCode, someInCauseChain } from './errors';
 
-export { executeTransaction, type TransactionCallback } from './transaction';
+export { executeTransaction, serializeDatabaseOperation, type TransactionCallback } from './transaction';
 
 // FTS5 query utilities
 export { sanitizeFtsQuery } from './fts/sanitize';

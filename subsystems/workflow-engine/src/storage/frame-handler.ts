@@ -1,7 +1,7 @@
 import { asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowFrameState } from '@makaio/contracts';
-import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowExecutionFrame } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
@@ -74,10 +74,12 @@ export function registerFrameHandlers(bus: IMakaioBus, db: MakaioDatabase): () =
   const unsubSetFrame = bus.on(WorkflowStorageSubjects.setFrame, async (ctx) => {
     const { executionId, frame } = ctx.payload as { executionId: string; frame: WorkflowFrameState };
     const dbValues = toFrameDbValues(executionId, frame);
-    await db.insert(workflowExecutionFrames).values(dbValues).onConflictDoUpdate({
-      target: workflowExecutionFrames.frameId,
-      set: dbValues,
-    });
+    await serializeDatabaseOperation(db, () =>
+      db.insert(workflowExecutionFrames).values(dbValues).onConflictDoUpdate({
+        target: workflowExecutionFrames.frameId,
+        set: dbValues,
+      }),
+    );
     ctx.setResult({ frameId: frame.frameId });
   });
 

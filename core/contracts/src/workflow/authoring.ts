@@ -2,8 +2,6 @@ import { z } from 'zod';
 import type { JsonValue } from '../shared/json-value.js';
 import type {
   WorkflowDefinition,
-  WorkflowDelegateAgentNode,
-  WorkflowDelegateRoleNode,
   WorkflowGateNode,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
@@ -17,6 +15,7 @@ import type {
 import type { IterateHandler, StationHandler } from './authoring-context.js';
 import type { LoopGateHandler } from './loop.js';
 import { validateNoNestedLoops } from './loop.js';
+import { WorkflowFinalizerIdSchema } from './finalization.js';
 import type {
   AgentConfig,
   ArtifactBindingOptions,
@@ -34,6 +33,8 @@ import type {
 import type { TriggerPayloadFromTriggers, WorkflowTriggerDef } from './authoring-triggers.js';
 import {
   buildSerializableLoopGate,
+  delegateToAgent as buildDelegateAgentNode,
+  delegateToRole as buildDelegateRoleNode,
   extractStandaloneHandlers,
   zodSchemaToJsonRecord,
 } from './authoring-node-factories.js';
@@ -385,31 +386,12 @@ function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | un
   };
   builder.delegateToAgent = (nodeId: string, agentConfig: AgentConfig, nodeOptions?: NodeOptions) => {
     claimStepId(registeredIds, nodeId);
-    const n: WorkflowDelegateAgentNode = {
-      id: nodeId,
-      type: 'delegate-agent',
-      agentId: agentConfig.agentId,
-      ...(agentConfig.inputExpression !== undefined && { inputExpression: agentConfig.inputExpression }),
-      ...(agentConfig.outputSchema !== undefined && { outputSchema: agentConfig.outputSchema }),
-      ...(nodeOptions?.when !== undefined && { when: nodeOptions.when }),
-      ...(nodeOptions?.skip !== undefined && { skip: nodeOptions.skip }),
-    };
-    rootNodes.push(n);
+    rootNodes.push(buildDelegateAgentNode(nodeId, agentConfig, nodeOptions));
     return builder;
   };
   builder.delegateToRole = (nodeId: string, role: string, nodeOptions?: DelegateToRoleOptions) => {
     claimStepId(registeredIds, nodeId);
-    rootNodes.push({
-      id: nodeId,
-      type: 'delegate-role',
-      role,
-      prompt: nodeOptions?.prompt ?? nodeId,
-      ...(nodeOptions?.when !== undefined && { when: nodeOptions.when }),
-      ...(nodeOptions?.skip !== undefined && { skip: nodeOptions.skip }),
-      ...(nodeOptions?.outputSchema !== undefined && { outputSchema: nodeOptions.outputSchema }),
-      ...(nodeOptions?.timeoutMs !== undefined && { timeoutMs: nodeOptions.timeoutMs }),
-      ...(nodeOptions?.completion !== undefined && { completion: nodeOptions.completion }),
-    } as WorkflowDelegateRoleNode);
+    rootNodes.push(buildDelegateRoleNode(nodeId, role, nodeOptions));
     return builder;
   };
   builder.parallel = (nodeId: string, nodeOptions: ParallelOptions, branches: WorkflowNode[]) => {
@@ -543,6 +525,9 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
     id,
     ...(options?.name !== undefined && { name: options.name }),
     ...(options?.description !== undefined && { description: options.description }),
+    ...(options?.successFinalizerId !== undefined && {
+      successFinalizerId: WorkflowFinalizerIdSchema.parse(options.successFinalizerId),
+    }),
     root: { id: `${id}__root`, type: 'sequence', nodes: rootNodes },
     triggers,
     scope: { type: 'global' },
@@ -562,7 +547,17 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
   return createWorkflowBuilder<TriggerPayloadFromTriggers<TTriggers>, undefined>(state);
 }
 
-// biome-ignore format: compact explicit re-exports keep this implementation file under the max-lines limit.
-export { BusEventWorkflowTrigger, CronWorkflowTrigger, ExtensionWorkflowTrigger, ManualWorkflowTrigger, WebhookWorkflowTrigger, delegateToAgent, delegateToRole, gate, iterate, iterateChain, loop, station } from './authoring-exports.js';
-// biome-ignore format: compact explicit re-exports keep this implementation file under the max-lines limit.
-export { type AgentConfig, type ArtifactBindingOptions, type ArtifactContext, type ArtifactPatch, type ArtifactUpdateOperation, type ArtifactUpdater, type BuiltWorkflow, type CronTriggerPayload, type DefineWorkflowOptions, type ExtractTriggerPayload, type GateOptions, type IterateHandler, type IterateOptions, type LoopGateRegistration, type LoopOptions, type NodeOptions, type ParallelMode, type ParallelOptions, type PreviousStepOutput, type StationHandler, type StationStepContext, type StepContext, type TriggerPayloadFromTriggers, type WebhookTriggerPayload, type WorkflowBuilder, type WorkflowContext, type WorkflowContextBase, type WorkflowProgressUpdate, type WorkflowStateAuthoringDefinition, type WorkflowStateContext, type WorkflowTriggerDef, type WorkflowZodSchemas } from './authoring-exports.js';
+export {
+  BusEventWorkflowTrigger,
+  CronWorkflowTrigger,
+  ExtensionWorkflowTrigger,
+  ManualWorkflowTrigger,
+  WebhookWorkflowTrigger,
+  delegateToAgent,
+  delegateToRole,
+  gate,
+  iterate,
+  iterateChain,
+  loop,
+  station,
+} from './authoring-exports.js';

@@ -46,6 +46,10 @@ export interface PrepareAdapterRuntimeInput {
   readonly platformDefaults: PlatformDefaults;
   /** Trusted non-serializable auth preparer forwarded to every loaded adapter. */
   readonly prepareAuthRuntime?: unknown;
+  /** Priority for runtime snapshot handlers relative to connected control-plane peers. */
+  readonly runtimeSnapshotHandlerPriority?: number;
+  /** Priority for provider/client definition reads backing local runtime snapshots. */
+  readonly runtimeDefinitionHandlerPriority?: number;
 }
 
 /** Result of {@link prepareAdapterRuntime}. */
@@ -90,13 +94,22 @@ export interface ActivatedAdapterRuntimeIdentity {
  * @returns The adapter-subsystem package to add to the coordinator load set.
  */
 export function prepareAdapterRuntime(input: PrepareAdapterRuntimeInput): PreparedAdapterRuntime {
-  const { coordinator, configRepository, platformDefaults, prepareAuthRuntime } = input;
+  const {
+    coordinator,
+    configRepository,
+    platformDefaults,
+    prepareAuthRuntime,
+    runtimeSnapshotHandlerPriority,
+    runtimeDefinitionHandlerPriority,
+  } = input;
 
   const adapterSubsystemPackage = createAdapterSubsystemPackage({
     configRepository,
     coordinator,
     platformDefaults,
     ...(prepareAuthRuntime !== undefined && { prepareAuthRuntime }),
+    ...(runtimeSnapshotHandlerPriority !== undefined && { runtimeSnapshotHandlerPriority }),
+    ...(runtimeDefinitionHandlerPriority !== undefined && { runtimeDefinitionHandlerPriority }),
   });
 
   coordinator.registerContributionProcessor(

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
 import { JsonSchemaRecordSchema } from '../shared/json-value.js';
+import { WorkflowDelegateResultFinalizerIdSchema } from '../workflow/finalization.js';
 
 /**
  * Shared metadata schema for registered workflow blocks (trigger or step).
@@ -64,6 +65,8 @@ const DelegateAgentNodeBlockRunSchema = z.object({
    * Validated as a JSON-safe record when present.
    */
   outputSchema: JsonSchemaRecordSchema.optional(),
+  allowedTools: z.array(z.string()).optional(),
+  resultFinalizerId: WorkflowDelegateResultFinalizerIdSchema.optional(),
 });
 
 /**
@@ -82,6 +85,8 @@ const DelegateRoleNodeBlockRunSchema = z.object({
    * Validated as a JSON-safe record when present.
    */
   outputSchema: JsonSchemaRecordSchema.optional(),
+  allowedTools: z.array(z.string()).optional(),
+  resultFinalizerId: WorkflowDelegateResultFinalizerIdSchema.optional(),
   /** Timeout in milliseconds forwarded to the delegate-role node. */
   timeoutMs: z.number().int().positive().optional(),
 });

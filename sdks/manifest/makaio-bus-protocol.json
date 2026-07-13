@@ -5188,6 +5188,25 @@
             },
             "type": "object"
           },
+          "artifactResult": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["kind", "id", "revision"],
+            "type": "object"
+          },
           "clientId": {
             "makaio.observability": {
               "attributeName": "makaio.client.id",

@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createDatabaseClient, type DatabaseClient } from '../client';
 import { brandDatabase, getRawSqlExecutor } from '../raw-sql';
-import { executeTransaction } from '../transaction';
+import { executeTransaction, serializeDatabaseOperation } from '../transaction';
 
 describe('executeTransaction', () => {
   let openClients: DatabaseClient[] = [];
@@ -79,11 +79,16 @@ describe('executeTransaction', () => {
       events.push('second:end');
     });
 
-    await Promise.resolve();
-    expect(events).toEqual(['first:start']);
+    try {
+      await Promise.resolve();
+      expect(events).toEqual(['first:start']);
 
-    releaseFirst();
-    await Promise.all([first, second]);
+      releaseFirst();
+      await Promise.all([first, second]);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled([first, second]);
+    }
 
     const rows = await getRawSqlExecutor(db).all<{ id: string }>(
       sql`SELECT id FROM transaction_queue_test ORDER BY id`,
@@ -124,15 +129,50 @@ describe('executeTransaction', () => {
 
       // Give a hypothetical bypass ample time to start the second callback
       // while the first transaction is still open — the queue must hold it.
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-      expect(events).toEqual(['first:start']);
+      try {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        expect(events).toEqual(['first:start']);
 
-      releaseFirst();
-      await Promise.all([first, second]);
-      expect(events).toEqual(['first:start', 'first:end', 'second:done']);
+        releaseFirst();
+        await Promise.all([first, second]);
+        expect(events).toEqual(['first:start', 'first:end', 'second:done']);
+      } finally {
+        releaseFirst();
+        await Promise.allSettled([first, second]);
+      }
     } finally {
       rawDb.$client.close();
     }
+  });
+
+  it('serializes lifecycle-style writes with transactions on the same handle', async () => {
+    const dbFilePath = trackDbFile(path.join(os.tmpdir(), `makaio-operation-test-${crypto.randomUUID()}.db`));
+    const { db } = track(await createDatabaseClient({ url: `file:${dbFilePath}` }));
+    await getRawSqlExecutor(db).run(sql`CREATE TABLE operation_queue_test (id TEXT PRIMARY KEY)`);
+
+    const events: string[] = [];
+    const release = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const transaction = executeTransaction(db, async (tx) => {
+      events.push('transaction:start');
+      started.resolve();
+      await release.promise;
+      await tx.run(sql`INSERT INTO operation_queue_test (id) VALUES ('transaction')`);
+      events.push('transaction:end');
+    });
+    await started.promise;
+
+    const projection = serializeDatabaseOperation(db, async () => {
+      events.push('projection:start');
+      await getRawSqlExecutor(db).run(sql`INSERT INTO operation_queue_test (id) VALUES ('projection')`);
+      events.push('projection:end');
+    });
+    await Promise.resolve();
+    expect(events).toEqual(['transaction:start']);
+
+    release.resolve();
+    await Promise.all([transaction, projection]);
+    expect(events).toEqual(['transaction:start', 'transaction:end', 'projection:start', 'projection:end']);
   });
 });
 

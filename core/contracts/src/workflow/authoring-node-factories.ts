@@ -162,6 +162,9 @@ export function delegateToAgent(id: string, config: AgentConfig, options?: NodeO
     agentId: config.agentId,
     ...(config.inputExpression !== undefined && { inputExpression: config.inputExpression }),
     ...(config.outputSchema !== undefined && { outputSchema: config.outputSchema }),
+    ...(config.allowedTools !== undefined && { allowedTools: config.allowedTools }),
+    ...(config.completion !== undefined && { completion: config.completion }),
+    ...(config.resultFinalizerId !== undefined && { resultFinalizerId: config.resultFinalizerId }),
     ...(options?.when !== undefined && { when: options.when }),
     ...(options?.skip !== undefined && { skip: options.skip }),
   };
@@ -186,6 +189,8 @@ export function delegateToRole(id: string, role: string, options?: DelegateToRol
     ...(options?.outputSchema !== undefined && { outputSchema: options.outputSchema }),
     ...(options?.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
     ...(options?.completion !== undefined && { completion: options.completion }),
+    ...(options?.allowedTools !== undefined && { allowedTools: options.allowedTools }),
+    ...(options?.resultFinalizerId !== undefined && { resultFinalizerId: options.resultFinalizerId }),
   };
 }
 

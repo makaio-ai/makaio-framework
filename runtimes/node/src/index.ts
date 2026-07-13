@@ -123,6 +123,7 @@ export {
   ThinWorkflowPiscinaRunner,
   resolveWorkflowWorkerEntry,
   InProcessWorkflowRunner,
+  createIsolatedWorkflowRuntime,
 } from './workflow-worker/index.js';
 export type {
   IWorkflowRunner,
@@ -131,4 +132,9 @@ export type {
   WorkflowWorkerEntryMode,
   WorkflowWorkerEntryResolverOptions,
   InProcessWorkflowRunnerOptions,
+  CreateIsolatedWorkflowRuntimeOptions,
+  IsolatedWorkflowRuntimeContext,
+  IsolatedWorkflowRuntime,
+  WorkflowRuntimeAuthorityConnector,
+  WorkflowRuntimeContributionLoader,
 } from './workflow-worker/index.js';

@@ -259,6 +259,7 @@ export {
   SubagentManager,
   SubagentService,
   subagentServicePackage,
+  createSubagentServicePackage,
   type AwaitResult,
   type InputResolver,
   type InternalPendingRequest,

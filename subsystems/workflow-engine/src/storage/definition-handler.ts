@@ -1,7 +1,7 @@
 import { eq, and, getTableColumns, sql } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowDefinition } from '@makaio/contracts';
-import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects, type WorkflowListQuery } from './namespace.js';
 import type { InsertWorkflowDefinition } from './schema.js';
@@ -31,6 +31,7 @@ function mapDefinition(row: DbDefinitionRow): WorkflowDefinition {
     scope: fromScopeColumns(row),
     canvasLayout: (row.canvasLayout as WorkflowDefinition['canvasLayout']) ?? undefined,
     source: (row.source as WorkflowDefinition['source']) ?? undefined,
+    successFinalizerId: row.successFinalizerId ?? undefined,
     executionHints: (row.executionHints as WorkflowDefinition['executionHints']) ?? undefined,
   };
 }
@@ -56,6 +57,7 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
     triggers: workflow.triggers ?? null,
     canvasLayout: (workflow.canvasLayout as Record<string, JsonValue> | undefined) ?? null,
     source: workflow.source ?? null,
+    successFinalizerId: workflow.successFinalizerId ?? null,
     executionHints: workflow.executionHints ?? null,
     createdAt: now,
     updatedAt: now,
@@ -84,58 +86,54 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
     const now = Date.now();
     const values = toDefinitionDbValues(workflow, now);
 
-    // Attempt insert; on PK conflict check if this is a create or update.
-    const insertedRows = await db
-      .insert(workflowDefinitions)
-      .values(values)
-      .onConflictDoNothing({ target: workflowDefinitions.id })
-      .returning();
+    const event = await serializeDatabaseOperation(db, async () => {
+      const insertedRows = await db
+        .insert(workflowDefinitions)
+        .values(values)
+        .onConflictDoNothing({ target: workflowDefinitions.id })
+        .returning();
+      if (insertedRows.length > 0) return { kind: 'created' as const, row: insertedRows[0] };
 
-    if (insertedRows.length > 0) {
-      await bus.emit(WorkflowSubjects.definition.created, mapDefinition(insertedRows[0]));
-      ctx.setResult({ id: workflow.id });
-      return;
-    }
+      const [updatedRow] = await db
+        .update(workflowDefinitions)
+        .set({
+          name: values.name,
+          root: values.root,
+          updatedAt: now,
+          // Preserve the original createdAt — do not overwrite with `now`.
+          createdAt: sql`COALESCE(${columns.createdAt}, ${now})`,
+          // Optional fields: keep existing DB value when incoming value is null.
+          description: values.description !== null ? values.description : sql`${columns.description}`,
+          inputSchema: values.inputSchema !== null ? values.inputSchema : sql`${columns.inputSchema}`,
+          configSchema: values.configSchema !== null ? values.configSchema : sql`${columns.configSchema}`,
+          outputSchema: values.outputSchema !== null ? values.outputSchema : sql`${columns.outputSchema}`,
+          state: values.state,
+          artifact: values.artifact !== null ? values.artifact : sql`${columns.artifact}`,
+          triggers: values.triggers !== null ? values.triggers : sql`${columns.triggers}`,
+          canvasLayout: values.canvasLayout !== null ? values.canvasLayout : sql`${columns.canvasLayout}`,
+          source: values.source !== null ? values.source : sql`${columns.source}`,
+          successFinalizerId: values.successFinalizerId,
+          executionHints: values.executionHints !== null ? values.executionHints : sql`${columns.executionHints}`,
+          ...toScopeColumns(workflow.scope),
+        })
+        .where(eq(workflowDefinitions.id, workflow.id))
+        .returning();
+      return updatedRow ? { kind: 'updated' as const, row: updatedRow } : undefined;
+    });
 
-    // Build the update set: always-present fields are overwritten. Most
-    // optional metadata fields preserve existing values when omitted; `state`
-    // is a full contract and must clear when omitted from the replacement
-    // definition.
-    const [updatedRow] = await db
-      .update(workflowDefinitions)
-      .set({
-        name: values.name,
-        root: values.root,
-        updatedAt: now,
-        // Preserve the original createdAt — do not overwrite with `now`.
-        createdAt: sql`COALESCE(${columns.createdAt}, ${now})`,
-        // Optional fields: keep existing DB value when incoming value is null.
-        description: values.description !== null ? values.description : sql`${columns.description}`,
-        inputSchema: values.inputSchema !== null ? values.inputSchema : sql`${columns.inputSchema}`,
-        configSchema: values.configSchema !== null ? values.configSchema : sql`${columns.configSchema}`,
-        outputSchema: values.outputSchema !== null ? values.outputSchema : sql`${columns.outputSchema}`,
-        state: values.state,
-        artifact: values.artifact !== null ? values.artifact : sql`${columns.artifact}`,
-        triggers: values.triggers !== null ? values.triggers : sql`${columns.triggers}`,
-        canvasLayout: values.canvasLayout !== null ? values.canvasLayout : sql`${columns.canvasLayout}`,
-        source: values.source !== null ? values.source : sql`${columns.source}`,
-        executionHints: values.executionHints !== null ? values.executionHints : sql`${columns.executionHints}`,
-        ...toScopeColumns(workflow.scope),
-      })
-      .where(eq(workflowDefinitions.id, workflow.id))
-      .returning();
-
-    if (updatedRow) {
-      await bus.emit(WorkflowSubjects.definition.updated, mapDefinition(updatedRow));
+    if (event) {
+      await bus.emit(
+        event.kind === 'created' ? WorkflowSubjects.definition.created : WorkflowSubjects.definition.updated,
+        mapDefinition(event.row),
+      );
     }
     ctx.setResult({ id: workflow.id });
   });
 
   const unsubDelete = bus.on(WorkflowStorageSubjects.delete, async (ctx) => {
-    const deletedRows = await db
-      .delete(workflowDefinitions)
-      .where(eq(workflowDefinitions.id, ctx.payload.id))
-      .returning();
+    const deletedRows = await serializeDatabaseOperation(db, () =>
+      db.delete(workflowDefinitions).where(eq(workflowDefinitions.id, ctx.payload.id)).returning(),
+    );
     const deleted = deletedRows.length > 0;
     if (deleted) {
       await bus.emit(WorkflowSubjects.definition.deleted, { id: ctx.payload.id });

@@ -9,6 +9,9 @@ import {
   type IWorkflowTriggerTypeRegistry,
   type JsonValue,
   type WorkflowDefinition,
+  type WorkflowExecution,
+  type WorkflowRunResult,
+  createWorkflowFinalizerNamespace,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { WorkflowSubjects } from './namespace.js';
@@ -24,9 +27,16 @@ import {
   cancelExecution,
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
+  isAcceptedRunnerResultStatus,
+  recoverSuccessFinalizations,
   type FinalizerDeps,
+  type WorkflowSuccessFinalizer,
 } from './workflow-execution-finalizer.js';
-import { buildDefinitionRunnerParamsFromRunContext, type RunnerTaskDeps } from './workflow-runner-tasks.js';
+import {
+  buildDefinitionRunnerParamsFromRunContext,
+  finalizeResolvedRunnerResult,
+  type RunnerTaskDeps,
+} from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
 import { rerunExecution } from './workflow-execution-rerun.js';
 import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
@@ -50,6 +60,7 @@ import {
   restorePausedGateAfterResumeFailure,
   toGateTimeoutPayload,
 } from './workflow-resume-state.js';
+import { registerAuthorityStateBootstrapHandler } from './authority-state-bootstrap.js';
 
 /**
  * Core workflow executor service.
@@ -77,6 +88,10 @@ export class WorkflowExecutor extends BaseService {
    * Keyed by execution ID; only populated when a {@link IWorkflowRunner} is used.
    */
   private readonly workflowAbortControllers = new Map<string, AbortController>();
+  private readonly successFinalizers = new Map<string, WorkflowSuccessFinalizer>();
+  private readonly durableLifecycleTransitions = new Map<string, Promise<void>>();
+  private readonly lifecyclePublications = new Map<string, Promise<void>>();
+  private readonly publishingLifecycleExecutions = new Set<string>();
   private readonly workflowRunner?: IWorkflowRunner;
   private triggerTypeRegistry?: IWorkflowTriggerTypeRegistry;
 
@@ -115,11 +130,172 @@ export class WorkflowExecutor extends BaseService {
   }
 
   /**
+   * Register one named finalizer eligible for compiled workflow success transitions.
+   *
+   * A workflow selects this registration through its immutable
+   * `successFinalizerId` definition field. Disposing the returned registration
+   * leaves already-claimed work recoverable only when the same ID is registered
+   * again on a later executor instance.
+   * @param finalizerId - Stable finalizer identity used by the durable claim.
+   * @returns Idempotent cleanup after any recoverable claims have been drained.
+   * @throws When another active registration already owns `finalizerId`.
+   */
+  public async registerSuccessFinalizer(finalizerId: string): Promise<() => void> {
+    if (!this.initialized) {
+      throw new Error('[WorkflowExecutor] Initialize the executor before registering success finalizers');
+    }
+    if (this.successFinalizers.has(finalizerId)) {
+      throw new Error(`[WorkflowExecutor] Success finalizer already registered: ${finalizerId}`);
+    }
+    const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
+    this.bus.registerNamespace(namespace);
+    const registration: WorkflowSuccessFinalizer = { finalizerId, finalizeSubject: subjects.finalize };
+    this.successFinalizers.set(finalizerId, registration);
+    try {
+      await recoverSuccessFinalizations(this.buildFinalizerDeps());
+    } catch (error) {
+      if (this.successFinalizers.get(finalizerId) === registration) this.successFinalizers.delete(finalizerId);
+      throw error;
+    }
+
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      if (this.successFinalizers.get(finalizerId) === registration) {
+        this.successFinalizers.delete(finalizerId);
+      }
+    };
+  }
+
+  /**
+   * Accept a terminal result from an authority-dispatched runner that was not
+   * launched through this executor's in-memory task registry.
+   *
+   * Durable execution and run-context rows remain the source of truth. The
+   * executor temporarily adopts a missing active entry and delegates to the
+   * same runner-result finalization path used by executor-owned tasks.
+   * @param executionId - Durable authority-owned execution identity.
+   * @param result - Correlated terminal runner result.
+   * @returns The durable status after acceptance, including pending success finalization.
+   */
+  public async acceptAuthorityRunnerResult(
+    executionId: string,
+    result: WorkflowRunResult,
+  ): Promise<{ accepted: boolean; status: WorkflowExecution['status'] }> {
+    if (result.status === 'paused') throw new Error('authority runner result must be terminal');
+    if (result.executionId !== executionId) throw new Error('authority runner result execution identity mismatch');
+    const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    if (!execution) throw new Error(`Authority runner execution not found: ${executionId}`);
+    if (execution.workflowId !== result.workflowId)
+      throw new Error('authority runner result workflow identity mismatch');
+
+    let replayCleanup: (() => void) | undefined;
+    if (execution.status === 'finalizing') {
+      const { workflow } = await this.loadAuthorityRunnerContext(executionId, result.workflowId);
+      replayCleanup = await this.registerAuthorityResultFinalizer(workflow);
+    }
+    const replayStatus = await this.resolveAuthorityRunnerReplay(execution, result).finally(() => replayCleanup?.());
+    if (replayStatus !== undefined) return { accepted: true, status: replayStatus };
+    if (execution.status !== 'running') throw new Error(`Authority runner execution is ${execution.status}`);
+
+    const { runContext, workflow } = await this.loadAuthorityRunnerContext(executionId, result.workflowId);
+    const unregisterFinalizer = await this.registerAuthorityResultFinalizer(workflow);
+
+    const existing = this.activeExecutions.get(executionId);
+    let adopted = false;
+    if (!existing) {
+      this.activeExecutions.set(executionId, {
+        execution,
+        workflow,
+        runContext,
+        runtimeHandlers: new Map(),
+        runtimeLoopGates: new Map(),
+      });
+      adopted = true;
+    } else if (existing.execution.workflowId !== result.workflowId) {
+      throw new Error('authority runner active execution identity mismatch');
+    }
+    try {
+      await finalizeResolvedRunnerResult(
+        {
+          activeExecutions: this.activeExecutions,
+          buildFinalizerDeps: () => this.buildFinalizerDeps(),
+        },
+        result,
+      );
+    } finally {
+      if (adopted) this.activeExecutions.delete(executionId);
+      unregisterFinalizer?.();
+    }
+    const settled = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    if (!settled.execution || !isAcceptedRunnerResultStatus(settled.execution.status, result.status)) {
+      throw new Error(`Authority runner result did not settle compatibly with ${result.status}`);
+    }
+    return { accepted: true, status: settled.execution.status };
+  }
+
+  private async resolveAuthorityRunnerReplay(
+    execution: WorkflowExecution,
+    result: WorkflowRunResult,
+  ): Promise<WorkflowExecution['status'] | undefined> {
+    if (execution.status === 'finalizing') {
+      if (result.status !== 'completed') {
+        throw new Error('authority runner result conflicts with terminal execution');
+      }
+      await recoverSuccessFinalizations(this.buildFinalizerDeps());
+      const replayed = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id });
+      if (!replayed.execution) throw new Error('Authority runner success finalization execution is missing');
+      if (!isAcceptedRunnerResultStatus(replayed.execution.status, result.status)) {
+        throw new Error('authority runner result conflicts with terminal execution');
+      }
+      return replayed.execution.status;
+    }
+    if (execution.status !== 'completed' && execution.status !== 'failed' && execution.status !== 'cancelled') {
+      return undefined;
+    }
+    if (!isAcceptedRunnerResultStatus(execution.status, result.status))
+      throw new Error('authority runner result conflicts with terminal execution');
+    return execution.status;
+  }
+
+  private async loadAuthorityRunnerContext(executionId: string, workflowId: string) {
+    const { runContext } = await this.bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    if (!runContext) throw new Error(`Authority runner run context not found: ${executionId}`);
+    if (runContext.executionId !== executionId || runContext.workflowId !== workflowId) {
+      throw new Error('authority runner run context identity mismatch');
+    }
+    if (runContext.terminalAuthority !== 'authority') {
+      throw new Error('authority runner result requires terminalAuthority=authority');
+    }
+    const workflow =
+      runContext.definitionSnapshot ??
+      (await this.bus.request(WorkflowStorageSubjects.get, { id: runContext.workflowId })).workflow;
+    if (!workflow || workflow.id !== workflowId) {
+      throw new Error('authority runner workflow definition is unavailable or mismatched');
+    }
+    return { runContext, workflow };
+  }
+
+  private registerAuthorityResultFinalizer(workflow: WorkflowDefinition): Promise<(() => void) | undefined> {
+    if (!workflow.successFinalizerId || this.successFinalizers.has(workflow.successFinalizerId)) {
+      return Promise.resolve(undefined);
+    }
+    return this.registerSuccessFinalizer(workflow.successFinalizerId);
+  }
+
+  /**
    * Register all bus handlers via BaseService lifecycle.
    * Called once by `init()` — idempotency is handled by BaseService.
    */
   protected async onInit(): Promise<void> {
     this.registerExecutionHandlers();
+    this.addCleanup(
+      registerAuthorityStateBootstrapHandler(this.bus, (executionId, definition) => {
+        const active = this.activeExecutions.get(executionId);
+        if (active !== undefined) active.workflow = definition;
+      }),
+    );
     for (const cleanup of registerWorkflowStorageDelegationHandlers(this.bus)) {
       this.addCleanup(cleanup);
     }
@@ -155,6 +331,8 @@ export class WorkflowExecutor extends BaseService {
     this.workflowAbortControllers.clear();
     // 3. Await all execution tasks to settle (runners terminate via abort or forceKill).
     await Promise.allSettled(this.executionTasks.values());
+    await Promise.allSettled(this.durableLifecycleTransitions.values());
+    await Promise.allSettled(this.lifecyclePublications.values());
     // 4. Clean up remaining timers and maps after all tasks have settled.
     for (const controller of this.shellAbortControllers.values()) {
       controller.abort();
@@ -183,6 +361,11 @@ export class WorkflowExecutor extends BaseService {
       shellAbortControllers: this.shellAbortControllers,
       activeRunnerSteps: this.activeRunnerSteps,
       cancelTimeoutMs: this.config.cancelTimeoutMs,
+      successFinalizers: this.successFinalizers,
+      resolveSuccessFinalizerId: (executionId) => this.activeExecutions.get(executionId)?.workflow.successFinalizerId,
+      durableLifecycleTransitions: this.durableLifecycleTransitions,
+      lifecyclePublications: this.lifecyclePublications,
+      publishingLifecycleExecutions: this.publishingLifecycleExecutions,
     };
   }
 
@@ -251,6 +434,13 @@ export class WorkflowExecutor extends BaseService {
 
   /** Register execution control handlers (start, cancel). */
   private registerExecutionHandlers(): void {
+    this.registerHandler(WorkflowSubjects.acceptAuthorityRunnerResult, async (ctx) => {
+      if (!ctx.origin.local) throw new Error('authority runner result acceptance is local-authority only');
+      const { executionId, result } = ctx.payload;
+      // Runtime parsing has already established the worker-result contract.
+      // Its inferred artifact shape is wider than the hand-authored interface.
+      ctx.setResult(await this.acceptAuthorityRunnerResult(executionId, result as WorkflowRunResult));
+    });
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
       const { workflowId, input, config, parentSessionId, triggerPayload, artifactRef, scope, executionHints } =
         ctx.payload;

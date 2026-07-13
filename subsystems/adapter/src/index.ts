@@ -58,6 +58,10 @@ export interface CreateAdapterSubsystemPackageOptions {
   readonly platformDefaults: PlatformDefaults;
   /** Trusted host-layer auth preparer forwarded opaquely to adapter factories. */
   readonly prepareAuthRuntime?: unknown;
+  /** Priority for runtime snapshot handlers that must win before remote control-plane peers. */
+  readonly runtimeSnapshotHandlerPriority?: number;
+  /** Priority for provider/client definition reads backing local runtime snapshots. */
+  readonly runtimeDefinitionHandlerPriority?: number;
 }
 
 /**
@@ -88,6 +92,12 @@ export function createAdapterSubsystemPackage(
         machineId: ctx.machineId,
         platformDefaults: options.platformDefaults,
         ...(options.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
+        ...(options.runtimeSnapshotHandlerPriority !== undefined && {
+          runtimeSnapshotHandlerPriority: options.runtimeSnapshotHandlerPriority,
+        }),
+        ...(options.runtimeDefinitionHandlerPriority !== undefined && {
+          runtimeDefinitionHandlerPriority: options.runtimeDefinitionHandlerPriority,
+        }),
       }),
   };
 }

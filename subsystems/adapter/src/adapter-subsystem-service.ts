@@ -49,6 +49,10 @@ export interface AdapterSubsystemServiceOptions {
   readonly platformDefaults: PlatformDefaults;
   /** Trusted host-layer auth preparer forwarded opaquely to adapter factories. */
   readonly prepareAuthRuntime?: unknown;
+  /** Priority for runtime snapshot handlers that must win before remote control-plane peers. */
+  readonly runtimeSnapshotHandlerPriority?: number;
+  /** Priority for provider/client definition reads backing local runtime snapshots. */
+  readonly runtimeDefinitionHandlerPriority?: number;
 }
 
 /**
@@ -77,6 +81,8 @@ export class AdapterSubsystemService extends BaseService {
   private readonly providerConfigService: AdapterProviderConfigService;
   private readonly bindingService: AdapterBindingService;
   private readonly contributionProcessor: AdapterContributionProcessor;
+  private readonly runtimeSnapshotHandlerPriority: number;
+  private readonly runtimeDefinitionHandlerPriority: number;
 
   /**
    * Create a new adapter subsystem service.
@@ -113,6 +119,8 @@ export class AdapterSubsystemService extends BaseService {
       platformDefaults: options.platformDefaults,
       ...(options.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
     });
+    this.runtimeSnapshotHandlerPriority = options.runtimeSnapshotHandlerPriority ?? 0;
+    this.runtimeDefinitionHandlerPriority = options.runtimeDefinitionHandlerPriority ?? -100;
   }
 
   /**
@@ -131,8 +139,20 @@ export class AdapterSubsystemService extends BaseService {
   }
 
   private registerBusHandlers(): void {
-    this.addCleanup(registerProviderStorageFallbackHandlers(this.bus, () => this.registry.getLoadedAdapters()));
-    this.addCleanup(registerClientStorageFallbackHandlers(this.bus, () => this.registry.getLoadedAdapters()));
+    this.addCleanup(
+      registerProviderStorageFallbackHandlers(
+        this.bus,
+        () => this.registry.getLoadedAdapters(),
+        this.runtimeDefinitionHandlerPriority,
+      ),
+    );
+    this.addCleanup(
+      registerClientStorageFallbackHandlers(
+        this.bus,
+        () => this.registry.getLoadedAdapters(),
+        this.runtimeDefinitionHandlerPriority,
+      ),
+    );
     this.registerReadHandlers();
     this.registerMutationHandlers();
   }
@@ -175,34 +195,42 @@ export class AdapterSubsystemService extends BaseService {
   }
 
   private registerRuntimeReadHandlers(): void {
-    this.registerHandler(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, async (ctx) => {
-      ctx.setResult({
-        snapshot: await this.configStore.resolveProviderRuntimeSnapshot(ctx.payload.providerConfigId),
-      });
-    });
-    this.registerHandler(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, async (ctx) => {
-      const adapter = this.registry.getLoadedAdapters().find((entry) => entry.name === ctx.payload.adapterName);
-      try {
-        const captured = await this.configStore.resolveBoundProviderRuntimeSnapshot(
-          ctx.payload.adapterName,
-          ctx.payload.providerConfigId,
-        );
-        ctx.setResult(
-          await resolveAdapterRuntimeSnapshot({
-            bus: this.bus,
-            adapter,
-            snapshot: captured.snapshot,
-            isBound: captured.isBound,
-          }),
-        );
-      } catch (error) {
-        if (error instanceof ProviderRuntimeContextError && error.code === 'provider-config-disabled') {
-          ctx.setResult({ status: 'error', code: 'provider-config-disabled' });
-          return;
+    this.registerHandler(
+      AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot,
+      async (ctx) => {
+        ctx.setResult({
+          snapshot: await this.configStore.resolveProviderRuntimeSnapshot(ctx.payload.providerConfigId),
+        });
+      },
+      { priority: this.runtimeSnapshotHandlerPriority },
+    );
+    this.registerHandler(
+      AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot,
+      async (ctx) => {
+        const adapter = this.registry.getLoadedAdapters().find((entry) => entry.name === ctx.payload.adapterName);
+        try {
+          const captured = await this.configStore.resolveBoundProviderRuntimeSnapshot(
+            ctx.payload.adapterName,
+            ctx.payload.providerConfigId,
+          );
+          ctx.setResult(
+            await resolveAdapterRuntimeSnapshot({
+              bus: this.bus,
+              adapter,
+              snapshot: captured.snapshot,
+              isBound: captured.isBound,
+            }),
+          );
+        } catch (error) {
+          if (error instanceof ProviderRuntimeContextError && error.code === 'provider-config-disabled') {
+            ctx.setResult({ status: 'error', code: 'provider-config-disabled' });
+            return;
+          }
+          throw error;
         }
-        throw error;
-      }
-    });
+      },
+      { priority: this.runtimeSnapshotHandlerPriority },
+    );
     this.registerHandler(AdapterSubsystemSubjects.listAdapters, async (ctx) => {
       ctx.setResult({ adapters: await this.configStore.buildEffectiveAdapters() });
     });

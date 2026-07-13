@@ -79,6 +79,65 @@ describe('portable package helper', () => {
     expect(result.devDependencies).toEqual({ '@vendor/framework-runtime': 'workspace:*' });
   });
 
+  it('preserves allowlisted published workspace dependencies at the release version', () => {
+    const result = createPortablePackageJson(
+      {
+        name: '@makaio/adapter-test',
+        version: '0.1.0',
+        dependencies: {
+          '@makaio/client-claude-code': 'workspace:*',
+          '@makaio/bus-core': 'workspace:*',
+        },
+        publishWorkspaceDependencies: ['@makaio/client-claude-code'],
+      },
+      {
+        frameworkVersion: '0.2.0',
+        publishVersions: { '@makaio/client-claude-code': '3.4.5' },
+      },
+    );
+
+    expect(result.dependencies).toEqual({ '@makaio/client-claude-code': '3.4.5' });
+    expect(result.devDependencies).toEqual({ '@makaio/bus-core': 'workspace:*' });
+    expect(result.publishWorkspaceDependencies).toBeUndefined();
+  });
+
+  it('fails closed when an allowlisted workspace dependency is not public', () => {
+    expect(() =>
+      createPortablePackageJson(
+        {
+          name: '@makaio/adapter-test',
+          version: '0.1.0',
+          dependencies: { '@makaio/private-runtime': 'workspace:*' },
+          publishWorkspaceDependencies: ['@makaio/private-runtime'],
+        },
+        { frameworkVersion: '0.2.0', publishVersions: {} },
+      ),
+    ).toThrow(/missing from the public release set/u);
+  });
+
+  it('fails closed for optional and non-framework peer workspace protocols', () => {
+    expect(() =>
+      createPortablePackageJson(
+        {
+          name: '@makaio/adapter-test',
+          version: '1.0.0',
+          optionalDependencies: { '@makaio/client-test': 'workspace:*' },
+        },
+        { frameworkVersion: '1.0.0' },
+      ),
+    ).toThrow(/Optional workspace dependency/u);
+    expect(() =>
+      createPortablePackageJson(
+        {
+          name: '@makaio/adapter-test',
+          version: '1.0.0',
+          peerDependencies: { '@makaio/client-test': 'workspace:^' },
+        },
+        { frameworkVersion: '1.0.0' },
+      ),
+    ).toThrow(/Peer workspace dependency/u);
+  });
+
   it('removes private for publishable package output', () => {
     const result = createPortablePackageJson(
       { name: '@makaio/adapter-test', version: '0.1.0', private: true },

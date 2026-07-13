@@ -27,6 +27,7 @@ import {
   CompleteExternalExecutionRequestSchema,
   RegisterExternalExecutionRequestSchema,
 } from './external-execution.js';
+import { WorkflowRunResultSchema } from './worker.js';
 
 /**
  * Structured progress signal emitted by a station handler via `ctx.updateProgress()`.
@@ -205,6 +206,36 @@ export const WorkflowSchemas = {
   cancel: {
     request: z.object({ executionId: z.string(), reason: z.string().optional() }),
     response: z.object({ cancelled: z.boolean() }),
+  },
+  bootstrapAuthorityState: {
+    request: z
+      .object({
+        executionId: z.string().min(1),
+        terminalAuthority: z.literal('authority'),
+        definition: WorkflowDefinitionSchema,
+      })
+      .strict(),
+    response: z.object({ persisted: z.boolean() }),
+  },
+  acceptAuthorityRunnerResult: {
+    request: z
+      .object({
+        executionId: z.string().min(1),
+        result: WorkflowRunResultSchema.refine((result) => result.status !== 'paused', {
+          message: 'Authority runner results must be terminal',
+        }),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.result.executionId !== value.executionId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['result', 'executionId'],
+            message: 'result.executionId must match executionId',
+          });
+        }
+      }),
+    response: z.object({ accepted: z.boolean(), status: ExecutionStatusSchema }),
   },
   getExecution: {
     request: z.object({ executionId: z.string() }),
@@ -433,6 +464,8 @@ export const WorkflowSchemas = {
     workflowId: z.string(),
     totalDuration: z.number(),
     completedAt: z.number().nonnegative().optional(),
+    /** Durable terminal transition identity; permits idempotent replay after a crash. */
+    transitionKey: z.string().min(1).optional(),
   }),
   'execution.failed': z.object({
     executionId: z.string(),
@@ -440,12 +473,16 @@ export const WorkflowSchemas = {
     error: z.string(),
     failedStepId: z.string().optional(),
     completedAt: z.number().nonnegative().optional(),
+    /** Durable terminal transition identity; permits idempotent replay after a crash. */
+    transitionKey: z.string().min(1).optional(),
   }),
   'execution.cancelled': z.object({
     executionId: z.string(),
     workflowId: z.string(),
     reason: z.string().optional(),
     completedAt: z.number().nonnegative().optional(),
+    /** Durable terminal transition identity; permits idempotent replay after a crash. */
+    transitionKey: z.string().min(1).optional(),
   }),
 
   /**

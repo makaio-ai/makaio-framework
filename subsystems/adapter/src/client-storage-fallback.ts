@@ -18,11 +18,13 @@ type LoadedAdapterClientRefs = Pick<LoadedAdapter, 'clients'>;
  * normalized client-owned auth still requires definition-backed validation.
  * @param bus - Bus used for storage handlers and catalog reads.
  * @param getLoadedAdapters - Lazy accessor for loaded adapter client refs.
+ * @param priority - Dispatch priority for these definition-backed handlers.
  * @returns Cleanup function unregistering all fallback handlers.
  */
 export function registerClientStorageFallbackHandlers(
   bus: IMakaioBus,
   getLoadedAdapters: () => readonly LoadedAdapterClientRefs[],
+  priority = FALLBACK_HANDLER_PRIORITY,
 ): () => void {
   const getCleanup = bus.on(
     ClientStorageSubjects.get,
@@ -30,14 +32,14 @@ export function registerClientStorageFallbackHandlers(
       const client = (await buildClientRecordMap(bus, getLoadedAdapters())).get(ctx.payload.id) ?? null;
       ctx.setResult({ client });
     },
-    { priority: FALLBACK_HANDLER_PRIORITY },
+    { priority },
   );
   const listCleanup = bus.on(
     ClientStorageSubjects.list,
     async (ctx) => {
       ctx.setResult({ clients: [...(await buildClientRecordMap(bus, getLoadedAdapters())).values()] });
     },
-    { priority: FALLBACK_HANDLER_PRIORITY },
+    { priority },
   );
   const listByBinaryNameCleanup = bus.on(
     ClientStorageSubjects.listByBinaryName,
@@ -47,7 +49,7 @@ export function registerClientStorageFallbackHandlers(
       );
       ctx.setResult({ clients });
     },
-    { priority: FALLBACK_HANDLER_PRIORITY },
+    { priority },
   );
 
   return () => {

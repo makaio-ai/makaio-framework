@@ -381,6 +381,7 @@ export async function bootMakaioRuntimeCore(
       surface: options.surface ?? 'headless',
       db,
       extensionContextBase: {
+        cwd: process.cwd(),
         platform: process.platform,
         homedir: os.homedir(),
         makaioHome,

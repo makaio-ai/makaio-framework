@@ -286,9 +286,12 @@ export interface WorkflowExecutorWithSubagentServiceTestSetup extends WorkflowEx
  * {@link SubagentSubjects.completeTask} RPC. Subagent IDs are tracked by
  * observing {@link SubagentSubjects.spawned} and matched FIFO to adapter
  * start calls.
+ * @param options - Optional test-handler registration controls.
  * @returns Test setup including the real subagent service and captured calls.
  */
-export async function setupWorkflowExecutorWithSubagentServiceTest(): Promise<WorkflowExecutorWithSubagentServiceTestSetup> {
+export async function setupWorkflowExecutorWithSubagentServiceTest(
+  options: { readonly registerAdapterHandler?: boolean } = {},
+): Promise<WorkflowExecutorWithSubagentServiceTestSetup> {
   MakaioBus.__resetHandlers?.();
 
   const cleanupFns: Array<() => void> = [];
@@ -329,31 +332,32 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(): Promise<Wo
     }),
   );
 
-  cleanupFns.push(
-    MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
-      adapterStartCalls.push(ctx.payload);
-      const subagentId = pendingSubagentIds.shift();
-      ctx.setResult({
-        success: true,
-        agentId: `agent-${Math.random().toString(36).slice(2)}`,
-        adapterId: ctx.payload.adapterId,
-        adapterSessionId: `adapter-session-${Math.random().toString(36).slice(2)}`,
-        sessionId: ctx.payload.sessionId ?? 'session-missing',
-        messageId: `message-${Math.random().toString(36).slice(2)}`,
-      });
-      if (subagentId === undefined) {
-        return;
-      }
-      // Complete the subagent on the next tick so SubagentSubjects.await can
-      // register its pending resolver before the completion fires.
-      setTimeout(() => {
-        void MakaioBus.request(SubagentSubjects.completeTask, {
-          subagentId,
-          result: `completed:${String(ctx.payload.initialMessage ?? '')}`,
-        }).catch(() => {});
-      }, 0);
-    }),
-  );
+  if (options.registerAdapterHandler !== false)
+    cleanupFns.push(
+      MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
+        adapterStartCalls.push(ctx.payload);
+        const subagentId = pendingSubagentIds.shift();
+        ctx.setResult({
+          success: true,
+          agentId: `agent-${Math.random().toString(36).slice(2)}`,
+          adapterId: ctx.payload.adapterId,
+          adapterSessionId: `adapter-session-${Math.random().toString(36).slice(2)}`,
+          sessionId: ctx.payload.sessionId ?? 'session-missing',
+          messageId: `message-${Math.random().toString(36).slice(2)}`,
+        });
+        if (subagentId === undefined) {
+          return;
+        }
+        // Complete the subagent on the next tick so SubagentSubjects.await can
+        // register its pending resolver before the completion fires.
+        setTimeout(() => {
+          void MakaioBus.request(SubagentSubjects.completeTask, {
+            subagentId,
+            result: `completed:${String(ctx.payload.initialMessage ?? '')}`,
+          }).catch(() => {});
+        }, 0);
+      }),
+    );
 
   registerCommonMockHandlers(cleanupFns);
   cleanupFns.push(registerAgentSendMessageHandler());

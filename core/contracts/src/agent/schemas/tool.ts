@@ -56,6 +56,11 @@ export const ToolCompletedSchema = BaseAgentEventSchema.extend({
     .or(z.string())
     .or(z.array(z.record(z.string(), z.unknown()))),
   success: z.boolean().optional(),
+  /** Typed identity returned by an Artifact tool after a successful read. */
+  artifactResult: z
+    .object({ kind: z.string().min(1), id: z.string().min(1), revision: z.string().min(1) })
+    .strict()
+    .optional(),
   toolCallId: z.string(),
 });
 

@@ -7,7 +7,7 @@ import {
   type JsonValue,
   type WorkflowGateInstance,
 } from '@makaio/contracts';
-import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowGateInstance } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
@@ -118,21 +118,25 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
   const unsubSetGate = bus.on(WorkflowStorageSubjects.setGateInstance, async (ctx) => {
     const gate = ctx.payload.gate as WorkflowGateInstance;
     const dbValues = toGateDbValues(gate);
-    await db.insert(workflowGateInstances).values(dbValues).onConflictDoUpdate({
-      target: workflowGateInstances.id,
-      set: dbValues,
-    });
+    await serializeDatabaseOperation(db, () =>
+      db.insert(workflowGateInstances).values(dbValues).onConflictDoUpdate({
+        target: workflowGateInstances.id,
+        set: dbValues,
+      }),
+    );
     ctx.setResult({ id: dbValues.id });
   });
 
   const unsubResolveWaitingGate = bus.on(WorkflowStorageSubjects.resolveWaitingGateInstance, async (ctx) => {
     const gate = ctx.payload.gate as WorkflowGateInstance;
     const dbValues = toGateDbValues(gate);
-    const resolvedRows = await db
-      .update(workflowGateInstances)
-      .set(dbValues)
-      .where(and(eq(workflowGateInstances.id, dbValues.id), eq(workflowGateInstances.status, 'waiting')))
-      .returning({ id: workflowGateInstances.id });
+    const resolvedRows = await serializeDatabaseOperation(db, () =>
+      db
+        .update(workflowGateInstances)
+        .set(dbValues)
+        .where(and(eq(workflowGateInstances.id, dbValues.id), eq(workflowGateInstances.status, 'waiting')))
+        .returning({ id: workflowGateInstances.id }),
+    );
 
     ctx.setResult({ accepted: resolvedRows.length === 1 });
   });

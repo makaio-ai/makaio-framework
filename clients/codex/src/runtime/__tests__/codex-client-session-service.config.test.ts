@@ -314,7 +314,7 @@ describe('CodexClientSessionService — config handler round-trips', () => {
           env: { CODEX_HOME: managedConfigDir },
           configDir: managedConfigDir,
           source: 'managed',
-          version: '0.130.0',
+          version: '0.144.1',
         });
       });
       const svc = new CodexClientSessionService(bus);
@@ -342,7 +342,7 @@ describe('CodexClientSessionService — config handler round-trips', () => {
           env: { CODEX_HOME: managedConfigDir },
           configDir: managedConfigDir,
           source: 'managed',
-          version: '0.130.0',
+          version: '0.144.1',
         });
       });
       const svc = new CodexClientSessionService(bus);

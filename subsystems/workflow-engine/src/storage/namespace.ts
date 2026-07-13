@@ -18,6 +18,8 @@ import {
   WorkLogFrameEntrySchema,
   JsonPatchOperationSchema,
   JsonValueSchema,
+  WorkflowFinalizationClaimSchema,
+  WorkflowFinalizerIdSchema,
 } from '@makaio/contracts';
 import {
   workflowDefinitions,
@@ -34,6 +36,7 @@ import {
   workflowExecutionState,
   workflowExecutionStateEvents,
 } from './schema.js';
+import { workflowFinalizations } from './finalization-schema.js';
 
 const ExecutionUpdateSchema = z.object({
   executionId: z.string().min(1),
@@ -154,6 +157,57 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       request: ExecutionUpdateSchema,
       response: z.object({ success: z.boolean() }),
     },
+
+    /** Atomically park an execution only while it remains running. */
+    pauseRunningExecution: localSubject({
+      request: z.object({ executionId: z.string().min(1) }),
+      response: z.object({ paused: z.boolean() }),
+    }),
+
+    /** Atomically claim the sole terminal transition for a running execution. */
+    claimFinalization: localSubject({
+      request: z.object({ claim: WorkflowFinalizationClaimSchema }),
+      response: z.object({ claimed: z.boolean() }),
+    }),
+
+    /** Recover unsettled claims owned by one finalizer after restart. */
+    listClaimedFinalizations: localSubject({
+      request: z.object({ finalizerId: WorkflowFinalizerIdSchema }),
+      response: z.object({ claims: z.array(WorkflowFinalizationClaimSchema) }),
+    }),
+
+    /** Recover settled terminal transitions whose lifecycle event was not durably marked published. */
+    listUnpublishedFinalizations: localSubject({
+      request: z.object({ finalizerId: WorkflowFinalizerIdSchema }),
+      response: z.object({ claims: z.array(WorkflowFinalizationClaimSchema) }),
+    }),
+
+    /** Replay a settled terminal lifecycle event until its publication is durably recorded. */
+    publishFinalization: localSubject({
+      request: z.object({ claim: WorkflowFinalizationClaimSchema }),
+      response: z.object({}),
+    }),
+
+    /** Commit the claimed intended terminal state exactly once. */
+    acknowledgeFinalization: localSubject({
+      request: z.object({
+        executionId: z.string().min(1),
+        claimToken: z.string().min(1),
+        settledAt: z.number().int().nonnegative(),
+      }),
+      response: z.object({ acknowledged: z.boolean() }),
+    }),
+
+    /** Permanently fail a claimed transition and terminalize the execution as failed. */
+    failFinalization: localSubject({
+      request: z.object({
+        executionId: z.string().min(1),
+        claimToken: z.string().min(1),
+        error: z.string().min(1),
+        settledAt: z.number().int().nonnegative(),
+      }),
+      response: z.object({ failed: z.boolean() }),
+    }),
 
     /**
      * Cancel a paused execution and all of its still-waiting gate instances in
@@ -329,7 +383,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
      * Called by the executor after creating the execution row, before worker boot.
      */
     setRunContext: localSubject({
-      request: z.object({ runContext: WorkflowRunContextSchema }),
+      request: z.object({ runContext: WorkflowRunContextSchema, initialState: JsonValueSchema.optional() }),
       response: z.object({ executionId: z.string() }),
     }),
 
@@ -399,6 +453,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       worklogGateEvents,
       workflowExecutionState,
       workflowExecutionStateEvents,
+      workflowFinalizations,
     },
   },
 });

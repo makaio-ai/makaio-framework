@@ -44,6 +44,32 @@ describe('WorkLog projection service', () => {
     }
   });
 
+  it('releases mutation serialization before awaiting worklog.changed subscribers', async () => {
+    const events: string[] = [];
+    const cleanup = MakaioBus.on(WorkflowSubjects.worklog.changed, async () => {
+      events.push('subscriber:start');
+      await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+        execution: createWorkflowExecution({ id: 'exec-from-subscriber', workflowId: 'wf-subscriber' }),
+      });
+      events.push('subscriber:end');
+    });
+
+    try {
+      await MakaioBus.emit(WorkflowSubjects.execution.started, {
+        executionId: 'exec-worklog',
+        workflowId: 'wf-worklog',
+        startedAt: 1_000,
+      });
+      expect(events).toEqual(['subscriber:start', 'subscriber:end']);
+      const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+        executionId: 'exec-from-subscriber',
+      });
+      expect(stored.execution?.workflowId).toBe('wf-subscriber');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('serves a projected frame through worklog.frame.get', async () => {
     await MakaioBus.emit(WorkflowSubjects.frame.started, {
       executionId: 'exec-worklog',

@@ -47,6 +47,7 @@ interface NotificationHandlerOptions {
   dynamicToolCallByItemId: Map<string, DynamicToolCallCacheEntry>;
   updateProcessingState: (state: ProcessingState) => Promise<void>;
   appendAgentMessageDelta: (delta: string) => void;
+  setAgentMessageContent: (content: string) => void;
   onTurnCompleted: (params: TurnCompletedNotification) => Promise<void>;
   getThread: () => CodexAppServerThread | undefined;
   handleAsyncError: (error: unknown) => void;
@@ -82,6 +83,7 @@ export function registerNotificationHandlers(options: NotificationHandlerOptions
     dynamicToolCallByItemId,
     updateProcessingState,
     appendAgentMessageDelta,
+    setAgentMessageContent,
     onTurnCompleted,
     getThread,
     handleAsyncError,
@@ -122,6 +124,7 @@ export function registerNotificationHandlers(options: NotificationHandlerOptions
         commandExecutionByItemId,
         dynamicToolCallByItemId,
         updateProcessingState,
+        setAgentMessageContent,
       ),
     );
   });

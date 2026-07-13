@@ -20,5 +20,13 @@ export { PiscinaThinWorkflowProvider } from './piscina-thin-workflow-provider.js
 export type { PiscinaThinWorkflowProviderOptions } from './piscina-thin-workflow-provider.js';
 export { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
 export type { InProcessWorkflowRunnerOptions } from './in-process-workflow-runner.js';
+export {
+  createIsolatedWorkflowRuntime,
+  type CreateIsolatedWorkflowRuntimeOptions,
+  type IsolatedWorkflowRuntimeContext,
+  type IsolatedWorkflowRuntime,
+  type WorkflowRuntimeAuthorityConnector,
+  type WorkflowRuntimeContributionLoader,
+} from './isolated-workflow-runtime.js';
 export { loadWorkflowFromConfig } from './workflow-loader.js';
 export { loadWorkflowModule, loadWorkflowModules } from './workflow-file-loader.js';

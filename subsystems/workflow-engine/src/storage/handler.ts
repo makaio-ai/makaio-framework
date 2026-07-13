@@ -1,5 +1,11 @@
+/* eslint max-lines: ["error", { "max": 420, "skipBlankLines": true, "skipComments": true }] */
 import { eq, and, desc, lt, or } from 'drizzle-orm';
-import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import {
+  executeTransaction,
+  resolveSchema,
+  serializeDatabaseOperation,
+  type MakaioDatabase,
+} from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   EXECUTION_LIST_DEFAULT_LIMIT,
@@ -29,6 +35,7 @@ import { toWorkflowStateJsonColumnValue } from './state-json-column.js';
 import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
 import { registerWorklogProjection } from '../worklog/worklog-projection-service.js';
 import { registerExternalExecutionStorageHandlers } from './external-execution-handler.js';
+import { registerFinalizationHandlers } from './finalization-handler.js';
 
 // The `.sqlite` face is the canonical static type for BOTH dialects:
 // `DialectSchema` presents the Postgres twins through the same SQLite-typed
@@ -36,14 +43,13 @@ import { registerExternalExecutionStorageHandlers } from './external-execution-h
 // compile time, so this alias is exactly the type `resolveSchema()` returns at
 // runtime regardless of the active dialect.
 type WorkflowExecutionsTable = typeof workflowEngineSchema.sqlite.workflowExecutions;
-type DbExecutionRow = WorkflowExecutionsTable['$inferSelect'];
 
 /**
  * Maps a database row to the `WorkflowExecution` API type.
  * @param row - Database row from `workflow_executions`
  * @returns Mapped `WorkflowExecution` with optional fields normalised
  */
-function mapExecution(row: DbExecutionRow): WorkflowExecution {
+function mapExecution(row: WorkflowExecutionsTable['$inferSelect']): WorkflowExecution {
   return {
     id: row.id,
     workflowId: row.workflowId,
@@ -358,10 +364,12 @@ function registerExecutionCrudHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
   const unsubSetExecution = bus.on(WorkflowStorageSubjects.setExecution, async (ctx) => {
     const execution = ctx.payload.execution as WorkflowExecution;
     const dbValues = toExecutionDbValues(execution);
-    await db.insert(workflowExecutions).values(dbValues).onConflictDoUpdate({
-      target: workflowExecutions.id,
-      set: dbValues,
-    });
+    await serializeDatabaseOperation(db, () =>
+      db.insert(workflowExecutions).values(dbValues).onConflictDoUpdate({
+        target: workflowExecutions.id,
+        set: dbValues,
+      }),
+    );
     ctx.setResult({ id: execution.id });
   });
 
@@ -397,6 +405,18 @@ function registerExecutionCrudHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
     ctx.setResult({ success });
   });
 
+  const unsubPauseRunningExecution = bus.on(WorkflowStorageSubjects.pauseRunningExecution, async (ctx) => {
+    const { workflowExecutions } = resolveSchema(db, workflowEngineSchema);
+    const updated = await serializeDatabaseOperation(db, () =>
+      db
+        .update(workflowExecutions)
+        .set({ status: 'paused' })
+        .where(and(eq(workflowExecutions.id, ctx.payload.executionId), eq(workflowExecutions.status, 'running')))
+        .returning({ id: workflowExecutions.id }),
+    );
+    ctx.setResult({ paused: updated.length === 1 });
+  });
+
   const unsubCancelPausedExecution = bus.on(WorkflowStorageSubjects.cancelPausedExecution, async (ctx) => {
     const { executionId, completedAt, reason } = ctx.payload;
     ctx.setResult(await cancelPausedExecution(db, executionId, completedAt, reason));
@@ -408,6 +428,7 @@ function registerExecutionCrudHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
     unsubSetExecutionStart();
     unsubRestorePausedGateResumeState();
     unsubUpdateExecution();
+    unsubPauseRunningExecution();
     unsubCancelPausedExecution();
   };
 }
@@ -515,6 +536,7 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
   const stateCleanup = registerStateHandlers(bus, db);
   const worklogCleanup = registerWorklogProjection(bus, db);
   const externalExecutionCleanup = registerExternalExecutionStorageHandlers(bus, db, toExecutionDbValues);
+  const finalizationCleanup = registerFinalizationHandlers(bus, db);
 
   return () => {
     definitionCleanup();
@@ -527,5 +549,6 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
     stateCleanup();
     worklogCleanup();
     externalExecutionCleanup();
+    finalizationCleanup();
   };
 }

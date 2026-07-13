@@ -64,6 +64,7 @@ export class SubagentManager {
       config: options.config,
       depth: options.depth,
       progressUpdates: new RingBuffer<string>(PROGRESS_BUFFER_SIZE),
+      toolObservations: [],
       startTime: now,
       lastActivityAt: now,
     };
@@ -94,6 +95,18 @@ export class SubagentManager {
    */
   public get(subagentId: string): TrackedSubagent | undefined {
     return this.subagents.get(subagentId);
+  }
+
+  /**
+   * Record one authoritative child-session tool outcome for terminal handoff.
+   * @param childSessionId - Child session whose runtime emitted the outcome.
+   * @param observation - Validated outcome and optional authoritative Artifact identity.
+   */
+  public recordToolObservation(childSessionId: string, observation: TrackedSubagent['toolObservations'][number]): void {
+    const subagent = [...this.subagents.values()].find((candidate) => candidate.childSessionId === childSessionId);
+    if (subagent === undefined) return;
+    subagent.toolObservations.push(observation);
+    subagent.lastActivityAt = Date.now();
   }
 
   /**
@@ -339,6 +352,7 @@ export class SubagentManager {
       result: subagent.result,
       error: subagent.error,
       completionSource: subagent.completionSource,
+      toolObservations: [...subagent.toolObservations],
     };
 
     for (const callback of awaiters) {

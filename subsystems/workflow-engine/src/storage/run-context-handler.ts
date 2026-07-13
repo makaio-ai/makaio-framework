@@ -1,11 +1,17 @@
 import { eq } from 'drizzle-orm';
-import { resolveSchema, type MakaioDatabase, type TransactionCallback } from '@makaio/storage-drizzle';
+import {
+  executeTransaction,
+  resolveSchema,
+  type MakaioDatabase,
+  type TransactionCallback,
+} from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { JsonValue, WorkflowRunContext, WorkflowWorkerSource } from '@makaio/contracts';
+import type { JsonPatchOperation, JsonValue, WorkflowRunContext, WorkflowWorkerSource } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowRunContext } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { toScopeColumns, fromScopeColumns } from './scope-helpers.js';
+import { toWorkflowStateJsonColumnValue } from './state-json-column.js';
 
 type WorkflowRunContextsTable = typeof workflowEngineSchema.sqlite.workflowRunContexts;
 
@@ -93,6 +99,7 @@ function mapRunContext(row: DbRunContextRow): WorkflowRunContext {
     // Fall back to 'wait-in-process' for rows persisted before the suspension_strategy
     // column was introduced (value will be null for those rows).
     suspensionStrategy: row.suspensionStrategy ?? 'wait-in-process',
+    ...(row.terminalAuthority !== null ? { terminalAuthority: row.terminalAuthority } : {}),
   };
 }
 
@@ -123,6 +130,7 @@ function toRunContextDbValues(runContext: WorkflowRunContext): InsertWorkflowRun
     env: runContext.env,
     createdAt: runContext.createdAt,
     suspensionStrategy: runContext.suspensionStrategy,
+    terminalAuthority: runContext.terminalAuthority ?? null,
   };
 }
 
@@ -157,11 +165,34 @@ export async function upsertWorkflowRunContext(
  * @returns Cleanup function that unsubscribes all registered handlers.
  */
 export function registerRunContextHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
-  const { workflowRunContexts } = resolveSchema(db, workflowEngineSchema);
+  const { workflowRunContexts, workflowExecutionState, workflowExecutionStateEvents } = resolveSchema(
+    db,
+    workflowEngineSchema,
+  );
 
   const unsubSet = bus.on(WorkflowStorageSubjects.setRunContext, async (ctx) => {
     const runContext = ctx.payload.runContext as WorkflowRunContext;
-    await upsertWorkflowRunContext(db, runContext, workflowRunContexts);
+    const initialState = ctx.payload.initialState as JsonValue | undefined;
+    await executeTransaction(db, async (tx) => {
+      await upsertWorkflowRunContext(tx, runContext, workflowRunContexts);
+      if (initialState === undefined) return;
+      const now = Date.now();
+      const initialColumnValue = toWorkflowStateJsonColumnValue(db, initialState);
+      await tx
+        .insert(workflowExecutionState)
+        .values({ executionId: runContext.executionId, sequence: 0, value: initialColumnValue, updatedAt: now })
+        .onConflictDoNothing();
+      await tx
+        .insert(workflowExecutionStateEvents)
+        .values({
+          executionId: runContext.executionId,
+          sequence: 0,
+          patch: [] as JsonPatchOperation[],
+          value: initialColumnValue,
+          createdAt: now,
+        })
+        .onConflictDoNothing();
+    });
     ctx.setResult({ executionId: runContext.executionId });
   });
 

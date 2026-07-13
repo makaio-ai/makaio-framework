@@ -27,6 +27,8 @@ export interface PortablePackageOptions {
    * Defaults to {@link FRAMEWORK_BUILD_PACKAGE_NAMES}.
    */
   readonly frameworkOwnedPackages?: readonly string[];
+  /** Exact versions for public workspace packages participating in this publish set. */
+  readonly publishVersions?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -44,8 +46,11 @@ export interface PackageJsonLike {
   readonly exports?: unknown;
   readonly scripts?: Readonly<Record<string, string>>;
   readonly dependencies?: Readonly<Record<string, string>>;
+  readonly optionalDependencies?: Readonly<Record<string, string>>;
   readonly devDependencies?: Readonly<Record<string, string>>;
   readonly peerDependencies?: Readonly<Record<string, string>>;
+  /** Workspace packages intentionally installed with the published package. */
+  readonly publishWorkspaceDependencies?: readonly string[];
   readonly publishConfig?: {
     readonly main?: string;
     readonly types?: string;
@@ -188,17 +193,29 @@ function resolvePortableRootEntrypoints(packageJson: PackageJsonLike): PublishRo
  * @param dependencies - Mutable runtime dependency map for the portable manifest.
  * @param devDependencies - Mutable development dependency map for the portable manifest.
  * @param frameworkOwnedPackages - Explicit package set owned by the framework distribution.
+ * @param publishedWorkspaceDependencies - Workspace packages intentionally retained for consumers.
+ * @param publishVersions - Exact release versions for retained workspace packages.
  */
 function moveBundledWorkspaceDependencies(
   dependencies: Record<string, string>,
   devDependencies: Record<string, string>,
   frameworkOwnedPackages: ReadonlySet<string>,
+  publishedWorkspaceDependencies: ReadonlySet<string>,
+  publishVersions: Readonly<Record<string, string>>,
 ): void {
   for (const packageName of new Set([...frameworkOwnedPackages, ...Object.keys(dependencies)])) {
     const version = dependencies[packageName];
     if (isBundledWorkspaceDependency(packageName, version, frameworkOwnedPackages)) {
-      delete dependencies[packageName];
-      devDependencies[packageName] = version;
+      if (publishedWorkspaceDependencies.has(packageName)) {
+        const publishVersion = publishVersions[packageName];
+        if (!publishVersion) {
+          throw new Error(`Published workspace dependency is missing from the public release set: ${packageName}`);
+        }
+        dependencies[packageName] = publishVersion;
+      } else {
+        delete dependencies[packageName];
+        devDependencies[packageName] = version;
+      }
     }
   }
 }
@@ -262,17 +279,35 @@ export function createPortablePackageJson(
   packageJson: PackageJsonLike,
   options: PortablePackageOptions,
 ): PackageJsonLike {
+  for (const [name, version] of Object.entries(packageJson.optionalDependencies ?? {})) {
+    if (version.startsWith('workspace:')) {
+      throw new Error(`Optional workspace dependency cannot be published portably: ${name}`);
+    }
+  }
+  for (const [name, version] of Object.entries(packageJson.peerDependencies ?? {})) {
+    if (name !== '@makaio/framework' && version.startsWith('workspace:')) {
+      throw new Error(`Peer workspace dependency cannot be published portably: ${name}`);
+    }
+  }
   const frameworkOwnedPackages = new Set(options.frameworkOwnedPackages ?? FRAMEWORK_BUILD_PACKAGE_NAMES);
   const dependencies = { ...(packageJson.dependencies ?? {}) };
   const devDependencies = { ...(packageJson.devDependencies ?? {}) };
   const peerDependencies = { ...(packageJson.peerDependencies ?? {}) };
+  const publishedWorkspaceDependencies = new Set(packageJson.publishWorkspaceDependencies ?? []);
   const { main, types } = resolvePortableRootEntrypoints(packageJson);
 
-  moveBundledWorkspaceDependencies(dependencies, devDependencies, frameworkOwnedPackages);
+  moveBundledWorkspaceDependencies(
+    dependencies,
+    devDependencies,
+    frameworkOwnedPackages,
+    publishedWorkspaceDependencies,
+    options.publishVersions ?? {},
+  );
   peerDependencies['@makaio/framework'] = options.frameworkPeerRange ?? `^${options.frameworkVersion}`;
 
+  const { publishWorkspaceDependencies: _publishWorkspaceDependencies, ...sourceManifest } = packageJson;
   return {
-    ...packageJson,
+    ...sourceManifest,
     private: false,
     ...(main ? { main } : {}),
     ...(types ? { types } : {}),

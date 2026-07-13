@@ -29,6 +29,7 @@ export interface PackedPackageManifest {
   readonly publishConfig?: {
     readonly exports?: unknown;
   };
+  readonly publishWorkspaceDependencies?: readonly string[];
 }
 
 /** Minimal extension descriptor shape used by npm artifact validation. */
@@ -40,19 +41,33 @@ export interface PackedExtensionDescriptor {
   };
 }
 
-const FORBIDDEN_PATTERNS = [
-  /(^|\/)src\//,
-  /(^|\/)__tests__\//,
-  /(^|\/)(test|tests|fixtures|coverage)\//,
-  /\.(test|spec)\.[cm]?[jt]sx?$/,
+const FORBIDDEN_BUILD_ARTIFACT_PATTERNS = [
+  /(^|\/)(src|__tests__|test|tests|fixtures|coverage)(?:\/|$)/,
+  /\.(test|spec)(?:\.d)?\.[cm]?[jt]sx?$/,
   /\.snap$/,
   /\.map$/,
+];
+
+const FORBIDDEN_PATTERNS = [
+  ...FORBIDDEN_BUILD_ARTIFACT_PATTERNS,
   /\.tsbuildinfo$/,
   /(^|\/)\.env/,
   /(^|\/)(build|vite|tsdown|vitest|tsconfig|eslint|prettier)(\.config)?\.[cm]?[jt]s(on)?$/,
   /(^|\/)(pnpm-lock\.yaml|yarn\.lock|package-lock\.json)$/,
   /(^|\/)(npm-debug|yarn-error)\.log$/,
 ];
+
+/**
+ * Return whether emitted build output is a non-runtime artifact.
+ *
+ * This is the subset of packlist policy used while copying a package's build
+ * output. Manifest, lockfile, and build-config rules remain packlist-only.
+ * @param file - Package-relative path using slash separators.
+ * @returns Whether staging should omit the build artifact.
+ */
+export function isForbiddenPublishBuildArtifact(file: string): boolean {
+  return FORBIDDEN_BUILD_ARTIFACT_PATTERNS.some((pattern) => pattern.test(file));
+}
 
 const MIGRATION_CHAIN_DIR_PATTERN = /^drizzle(?:-[^/]+)?$/u;
 
@@ -193,45 +208,68 @@ export function checkRuntimeWorkspaceDependencies(
 
 /**
  * Validate that a manifest published WITHOUT portable staging references
- * `@makaio/*` packages only where publishing allows it. Internal workspace
- * packages are never published: their code is bundled or import-rewritten to
- * `@makaio/framework/*` subpaths at build time, so they may appear in
- * `devDependencies` only, and runtime framework coupling is expressed
- * exclusively through the `@makaio/framework` peer dependency. Anything else
- * ships a manifest whose install fails on a nonexistent registry package.
- *
- * The release lane reshapes manifests through the portable-package staging
- * step, so source manifests checked there may still carry workspace
- * dependencies. The dev publish lane packs workspace manifests as-is and
- * must gate on this check before publishing.
- * @param manifest - Manifest content that will be packed without staging.
+ * Validate source workspace dependency publication metadata.
+ * @param manifest - Source workspace manifest.
+ * @param publicPackageNames - Public packages available to the coordinated publish set.
  * @returns Human-readable issues.
  */
-export function checkSourceManifestMakaioReferences(manifest: PackedPackageManifest): string[] {
+export function checkSourceManifestMakaioReferences(
+  manifest: PackedPackageManifest,
+  publicPackageNames: ReadonlySet<string> = new Set(),
+): string[] {
   const packageName = manifest.name ?? '<unknown>';
   const issues: string[] = [];
+  const declared = new Set(manifest.publishWorkspaceDependencies ?? []);
+  const runtimeWorkspaceDependencies = Object.entries(manifest.dependencies ?? {})
+    .filter(([name, version]) => name.startsWith('@makaio/') && version.startsWith('workspace:'))
+    .map(([name]) => name);
 
-  const runtimeFields = {
-    dependencies: manifest.dependencies,
-    optionalDependencies: manifest.optionalDependencies,
-  };
-  for (const [fieldName, dependencies] of Object.entries(runtimeFields)) {
-    for (const dependencyName of Object.keys(dependencies ?? {})) {
-      if (dependencyName.startsWith('@makaio/')) {
-        issues.push(
-          `${packageName}: unpublishable @makaio package in ${fieldName}: ${dependencyName} (bundled workspace packages belong in devDependencies; runtime framework coupling goes through the @makaio/framework peer dependency)`,
-        );
-      }
+  for (const [dependencyName, version] of Object.entries(manifest.optionalDependencies ?? {})) {
+    if (version.startsWith('workspace:')) {
+      issues.push(`${packageName}: optional workspace dependency cannot be published: ${dependencyName}`);
+    }
+  }
+  for (const [dependencyName, version] of Object.entries(manifest.peerDependencies ?? {})) {
+    if (isUnpublishableMakaioPeer(dependencyName, version, publicPackageNames)) {
+      issues.push(`${packageName}: peer dependency is not publishable: ${dependencyName}`);
     }
   }
 
-  for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
-    if (dependencyName.startsWith('@makaio/') && dependencyName !== '@makaio/framework') {
-      issues.push(`${packageName}: @makaio peer dependency other than @makaio/framework: ${dependencyName}`);
+  for (const dependencyName of runtimeWorkspaceDependencies) {
+    if (publicPackageNames.has(dependencyName) && !declared.has(dependencyName)) {
+      issues.push(`${packageName}: runtime workspace dependency is missing publish metadata: ${dependencyName}`);
+    }
+  }
+  for (const dependencyName of declared) {
+    if (!runtimeWorkspaceDependencies.includes(dependencyName)) {
+      issues.push(
+        `${packageName}: publishWorkspaceDependencies entry is not a runtime workspace dependency: ${dependencyName}`,
+      );
+    }
+    if (publicPackageNames.size > 0 && !publicPackageNames.has(dependencyName)) {
+      issues.push(`${packageName}: publishWorkspaceDependencies entry is not public: ${dependencyName}`);
     }
   }
 
   return issues;
+}
+
+/**
+ * Return whether a Makaio peer cannot be satisfied by the published package set.
+ * @param dependencyName
+ * @param version
+ * @param publicPackageNames
+ */
+function isUnpublishableMakaioPeer(
+  dependencyName: string,
+  version: string,
+  publicPackageNames: ReadonlySet<string>,
+): boolean {
+  return (
+    dependencyName.startsWith('@makaio/') &&
+    dependencyName !== '@makaio/framework' &&
+    (version.startsWith('workspace:') || (publicPackageNames.size > 0 && !publicPackageNames.has(dependencyName)))
+  );
 }
 
 /**

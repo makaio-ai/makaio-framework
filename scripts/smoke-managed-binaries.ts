@@ -16,6 +16,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { clientDefinition as codexClientDefinition } from '../clients/codex/src/definition.js';
 
 const exec = promisify(execFile);
 const NPM_INSTALL_TIMEOUT_MS = 120_000;
@@ -29,19 +30,44 @@ const FETCH_TIMEOUT_MS = 30_000;
  */
 async function assertCodexNpmLayout(): Promise<void> {
   console.log('[smoke] Verifying Codex npm install layout...');
+  const { managedInstall, versionCommand } = codexClientDefinition;
+  if (managedInstall?.type !== 'npm') {
+    throw new Error('Codex smoke requires an npm managed-install descriptor');
+  }
+  if (!versionCommand) {
+    throw new Error('Codex smoke requires a version command');
+  }
+
   const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-codex-smoke-'));
   try {
-    await exec('npm', ['install', '@openai/codex@0.130.0', '--prefix', targetDir, '--no-save', '--ignore-scripts'], {
-      timeout: NPM_INSTALL_TIMEOUT_MS,
-    });
-    const executable =
-      process.platform === 'win32'
-        ? path.join(targetDir, 'node_modules', '.bin', 'codex.cmd')
-        : path.join(targetDir, 'node_modules', '.bin', 'codex');
+    const expectedVersion = managedInstall.version;
+    await exec(
+      'npm',
+      [
+        'install',
+        `${managedInstall.package}@${expectedVersion}`,
+        '--prefix',
+        targetDir,
+        '--no-save',
+        '--ignore-scripts',
+      ],
+      { timeout: NPM_INSTALL_TIMEOUT_MS },
+    );
+    const executablePath =
+      typeof versionCommand.executable === 'string'
+        ? versionCommand.executable
+        : ((process.platform === 'win32'
+            ? versionCommand.executable.win32
+            : process.platform === 'darwin'
+              ? versionCommand.executable.darwin
+              : process.platform === 'linux'
+                ? versionCommand.executable.linux
+                : undefined) ?? versionCommand.executable.default);
+    const executable = path.join(targetDir, executablePath);
     await fs.access(executable);
-    const { stdout } = await exec(executable, ['--version'], { timeout: VERSION_COMMAND_TIMEOUT_MS });
-    if (!stdout.includes('0.130.0')) {
-      throw new Error(`Codex smoke expected version 0.130.0, got: ${stdout.trim()}`);
+    const { stdout } = await exec(executable, [...versionCommand.args], { timeout: VERSION_COMMAND_TIMEOUT_MS });
+    if (!stdout.includes(expectedVersion)) {
+      throw new Error(`Codex smoke expected version ${expectedVersion}, got: ${stdout.trim()}`);
     }
     console.log('[smoke] ✓ Codex npm install layout verified');
   } finally {

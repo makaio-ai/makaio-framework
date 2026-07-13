@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ResponseSchemaDescriptorSchema } from '../shared/index.js';
+import { JsonObjectContractSchema } from '../shared/json-value.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 import { AIReasoningLevelSchema } from '../model/index.js';
 
@@ -60,6 +61,8 @@ export const SubagentConfigSchema = z.object({
   adapterName: z.string().optional(),
   /** Provider configuration identifier */
   providerConfigId: z.string().optional(),
+  /** Per-call adapter-specific configuration. */
+  adapterConfig: JsonObjectContractSchema.optional(),
   /**
    * Resolved provider context for callers that already performed provider selection.
    *
@@ -255,6 +258,20 @@ export const AwaitSubagentResponseSchema = z.object({
    * - `'turn'` — first completed agent turn was treated as the result (`completion: 'turn'` mode).
    */
   completionSource: CompletionModeSchema.optional(),
+  toolObservations: z
+    .array(
+      z
+        .object({
+          toolName: z.string().min(1),
+          outcome: z.enum(['success', 'failure']),
+          artifact: z
+            .object({ kind: z.string().min(1), id: z.string().min(1), revision: z.string().min(1) })
+            .strict()
+            .optional(),
+        })
+        .strict(),
+    )
+    .optional(),
 });
 export type AwaitSubagentResponse = z.infer<typeof AwaitSubagentResponseSchema>;
 

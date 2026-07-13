@@ -1,7 +1,14 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
-import { createStepCancelSubject, type IStepRunner, type WorkflowExecution } from '@makaio/contracts';
+import {
+  createStepCancelSubject,
+  createWorkflowFinalizerNamespace,
+  type IStepRunner,
+  type WorkflowExecution,
+  type WorkflowFinalizationClaim,
+  type WorkflowRunResult,
+} from '@makaio/contracts';
 import type { ActiveExecution, ActiveRunnerStep } from './types.js';
 import { persistExecutionUpdate } from './workflow-execution-persistence.js';
 
@@ -24,6 +31,169 @@ export interface FinalizerDeps {
   stepRunner?: IStepRunner;
   /** Grace period in ms before forceKill is issued after cooperative abort. */
   cancelTimeoutMs?: number;
+  /** Registered success-finalizer subjects keyed by their stable identity. */
+  successFinalizers?: ReadonlyMap<string, WorkflowSuccessFinalizer>;
+  /** Resolve the immutable workflow-selected success finalizer for one execution. */
+  resolveSuccessFinalizerId?(executionId: string): string | undefined;
+  /** Per-execution tails serializing durable lifecycle transitions. */
+  durableLifecycleTransitions: Map<string, Promise<void>>;
+  /** Per-execution tails preserving lifecycle event publication order. */
+  lifecyclePublications: Map<string, Promise<void>>;
+  /** Executions currently invoking externally extensible lifecycle handlers. */
+  publishingLifecycleExecutions: Set<string>;
+}
+
+/**
+ * Determine whether durable state is compatible with an accepted runner result.
+ * @param durableStatus - Current durable execution status.
+ * @param resultStatus - Terminal status delivered by the runner.
+ * @returns Whether the result has been durably accepted.
+ */
+export function isAcceptedRunnerResultStatus(
+  durableStatus: WorkflowExecution['status'],
+  resultStatus: WorkflowRunResult['status'],
+): boolean {
+  return durableStatus === resultStatus || (resultStatus === 'completed' && durableStatus === 'finalizing');
+}
+
+/**
+ * Serialize a lifecycle transition with other transitions for the same execution.
+ * @param deps - Dependencies containing the transition registry.
+ * @param executionId - Execution whose lifecycle transition is serialized.
+ * @param transition - Transition to run after the prior transition settles.
+ * @returns The transition result.
+ */
+export async function withExecutionDurableTransition<T>(
+  deps: Pick<FinalizerDeps, 'durableLifecycleTransitions'>,
+  executionId: string,
+  transition: () => Promise<T>,
+): Promise<T> {
+  const previous = deps.durableLifecycleTransitions.get(executionId) ?? Promise.resolve();
+  const release = Promise.withResolvers<void>();
+  const tail = previous.catch(() => undefined).then(() => release.promise);
+  deps.durableLifecycleTransitions.set(executionId, tail);
+  await previous.catch(() => undefined);
+  try {
+    return await transition();
+  } finally {
+    release.resolve();
+    if (deps.durableLifecycleTransitions.get(executionId) === tail)
+      deps.durableLifecycleTransitions.delete(executionId);
+  }
+}
+
+/**
+ * Commit durable lifecycle state and reserve its ordered publication before
+ * releasing the durable queue.
+ * @param deps - Lifecycle coordination dependencies.
+ * @param executionId - Execution being transitioned.
+ * @param transition - Durable storage transition.
+ * @param publish - Publication derived from the committed transition result.
+ * @returns The durable transition result.
+ */
+export async function commitExecutionLifecycleTransition<T>(
+  deps: Pick<FinalizerDeps, 'durableLifecycleTransitions' | 'lifecyclePublications' | 'publishingLifecycleExecutions'>,
+  executionId: string,
+  transition: () => Promise<T>,
+  publish: (result: T) => Promise<void>,
+): Promise<T> {
+  let startPublication: (() => void) | undefined;
+  let publication: Promise<void> | undefined;
+  let awaitPublication = true;
+  const result = await withExecutionDurableTransition(deps, executionId, async () => {
+    const committed = await transition();
+    const start = Promise.withResolvers<void>();
+    const previous = deps.lifecyclePublications.get(executionId) ?? Promise.resolve();
+    awaitPublication = !deps.publishingLifecycleExecutions.has(executionId);
+    publication = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await start.promise;
+        deps.publishingLifecycleExecutions.add(executionId);
+        try {
+          await publish(committed);
+        } finally {
+          deps.publishingLifecycleExecutions.delete(executionId);
+        }
+      });
+    deps.lifecyclePublications.set(executionId, publication);
+    startPublication = start.resolve;
+    return committed;
+  });
+  startPublication?.();
+  if (publication !== undefined) {
+    const currentPublication = publication;
+    void currentPublication.then(
+      () => {
+        if (deps.lifecyclePublications.get(executionId) === currentPublication)
+          deps.lifecyclePublications.delete(executionId);
+      },
+      () => {
+        if (deps.lifecyclePublications.get(executionId) === currentPublication)
+          deps.lifecyclePublications.delete(executionId);
+      },
+    );
+    if (awaitPublication) await currentPublication;
+  }
+  return result;
+}
+
+/** Runtime registration for one durable workflow success finalizer. */
+export interface WorkflowSuccessFinalizer {
+  /** Stable identity shared with durable finalization claims. */
+  readonly finalizerId: string;
+  /** Typed request subject receiving finalization claims. */
+  readonly finalizeSubject: ReturnType<typeof createWorkflowFinalizerNamespace>['subjects']['finalize'];
+}
+
+/**
+ * Deliver a claimed success transition to its selected finalizer.
+ *
+ * A transport or handler failure intentionally leaves the durable claim
+ * unsettled. The owning finalizer is replayed during executor initialization.
+ * @param deps - Finalizer dependencies.
+ * @param finalizer - Registered finalizer receiving the claim.
+ * @param claim - Durable transition claim to deliver.
+ */
+async function deliverSuccessFinalization(
+  deps: FinalizerDeps,
+  finalizer: WorkflowSuccessFinalizer,
+  claim: WorkflowFinalizationClaim,
+): Promise<void> {
+  const delivery = await deps.bus.request(finalizer.finalizeSubject, claim);
+  if (!delivery.accepted) {
+    const error = `Workflow success finalizer "${finalizer.finalizerId}" rejected transition ${claim.transitionKey}`;
+    const completedAt = Date.now();
+    const { failed } = await deps.bus.request(WorkflowStorageSubjects.failFinalization, {
+      executionId: claim.executionId,
+      claimToken: claim.claimToken,
+      error,
+      settledAt: completedAt,
+    });
+    if (!failed) return;
+    return;
+  }
+}
+
+/**
+ * Recover unsettled claims for all currently registered success finalizers.
+ * @param deps - Finalizer dependencies.
+ */
+export async function recoverSuccessFinalizations(deps: FinalizerDeps): Promise<void> {
+  for (const finalizer of deps.successFinalizers?.values() ?? []) {
+    const { claims } = await deps.bus.request(WorkflowStorageSubjects.listClaimedFinalizations, {
+      finalizerId: finalizer.finalizerId,
+    });
+    for (const claim of claims) {
+      await deliverSuccessFinalization(deps, finalizer, claim);
+    }
+    const { claims: unpublished } = await deps.bus.request(WorkflowStorageSubjects.listUnpublishedFinalizations, {
+      finalizerId: finalizer.finalizerId,
+    });
+    for (const claim of unpublished) {
+      await deps.bus.request(WorkflowStorageSubjects.publishFinalization, { claim });
+    }
+  }
 }
 
 /**
@@ -39,22 +209,72 @@ export async function completeExecutionWithSuccess(
   executionId: string,
   startTime: number,
 ): Promise<void> {
-  execution.status = 'completed';
-  execution.completedAt = Date.now();
-  try {
-    await persistExecutionUpdate(deps.bus, execution, {
-      status: execution.status,
-      completedAt: execution.completedAt,
-    });
-    await deps.bus.emit(WorkflowSubjects.execution.completed, {
+  const finalizerId = deps.resolveSuccessFinalizerId?.(executionId);
+  const finalizer = finalizerId === undefined ? undefined : deps.successFinalizers?.get(finalizerId);
+  if (finalizerId !== undefined && finalizer === undefined) {
+    await completeExecutionWithFailure(
+      deps,
+      execution,
+      executionId,
+      `Workflow success finalizer "${finalizerId}" is unavailable`,
+    );
+    return;
+  }
+  if (finalizer !== undefined) {
+    const completedAt = Date.now();
+    const claim: WorkflowFinalizationClaim = {
       executionId,
       workflowId: execution.workflowId,
-      totalDuration: execution.completedAt - startTime,
-      completedAt: execution.completedAt,
-    });
-  } finally {
-    deps.activeExecutions.delete(executionId);
+      finalizerId: finalizer.finalizerId,
+      transitionKey: `${executionId}:terminal`,
+      claimToken: crypto.randomUUID(),
+      intent: { status: 'completed', completedAt },
+      claimedAt: completedAt,
+    };
+    const claimed = await commitExecutionLifecycleTransition(
+      deps,
+      executionId,
+      async () => {
+        const stored = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+        if (stored.execution?.status !== 'running') return false;
+        const result = await deps.bus.request(WorkflowStorageSubjects.claimFinalization, { claim });
+        if (!result.claimed) return false;
+        execution.status = 'finalizing';
+        deps.activeExecutions.delete(executionId);
+        return true;
+      },
+      async (committed) => {
+        if (committed) await deliverSuccessFinalization(deps, finalizer, claim);
+      },
+    );
+    if (!claimed) return;
+    return;
   }
+
+  const completedAt = Date.now();
+  const completed = await commitExecutionLifecycleTransition(
+    deps,
+    executionId,
+    async () => {
+      const stored = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      if (stored.execution?.status !== 'running') return false;
+      execution.status = 'completed';
+      execution.completedAt = completedAt;
+      await persistExecutionUpdate(deps.bus, execution, { status: execution.status, completedAt });
+      deps.activeExecutions.delete(executionId);
+      return true;
+    },
+    async (committed) => {
+      if (!committed) return;
+      await deps.bus.emit(WorkflowSubjects.execution.completed, {
+        executionId,
+        workflowId: execution.workflowId,
+        totalDuration: completedAt - startTime,
+        completedAt,
+      });
+    },
+  );
+  if (!completed) return;
 }
 
 /**
@@ -73,29 +293,36 @@ export async function completeExecutionWithFailure(
   error: string,
   beforeExecutionFailed?: () => Promise<void>,
 ): Promise<void> {
-  execution.status = 'failed';
-  execution.error = error;
-  execution.completedAt = Date.now();
-  try {
-    await persistExecutionUpdate(deps.bus, execution, {
-      status: execution.status,
-      error: execution.error,
-      completedAt: execution.completedAt,
-    });
-    try {
-      await beforeExecutionFailed?.();
-    } catch (hookError) {
-      console.error('[WorkflowFinalizer] Failed to run failure pre-emit hook:', hookError);
-    }
-    await deps.bus.emit(WorkflowSubjects.execution.failed, {
-      executionId,
-      workflowId: execution.workflowId,
-      error,
-      completedAt: execution.completedAt,
-    });
-  } finally {
-    deps.activeExecutions.delete(executionId);
-  }
+  const completedAt = Date.now();
+  const failed = await commitExecutionLifecycleTransition(
+    deps,
+    executionId,
+    async () => {
+      const stored = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      if (stored.execution?.status !== 'running') return false;
+      execution.status = 'failed';
+      execution.error = error;
+      execution.completedAt = completedAt;
+      await persistExecutionUpdate(deps.bus, execution, { status: execution.status, error, completedAt });
+      deps.activeExecutions.delete(executionId);
+      return true;
+    },
+    async (committed) => {
+      if (!committed) return;
+      try {
+        await beforeExecutionFailed?.();
+      } catch (hookError) {
+        console.error('[WorkflowFinalizer] Failed to run failure pre-emit hook:', hookError);
+      }
+      await deps.bus.emit(WorkflowSubjects.execution.failed, {
+        executionId,
+        workflowId: execution.workflowId,
+        error,
+        completedAt,
+      });
+    },
+  );
+  if (!failed) return;
 }
 
 /**
@@ -136,9 +363,13 @@ export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string
  * @param reason - Optional human-readable cancellation reason.
  * @returns True when a paused execution was cancelled.
  */
-async function cancelPausedExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
+async function cancelPausedExecution(
+  deps: FinalizerDeps,
+  executionId: string,
+  reason?: string,
+): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
   const existing = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
-  if (existing.execution == null) return false;
+  if (existing.execution == null) return undefined;
 
   const workflowId = existing.execution.workflowId;
   if (workflowId === undefined) {
@@ -151,30 +382,9 @@ async function cancelPausedExecution(deps: FinalizerDeps, executionId: string, r
     completedAt,
     reason,
   });
-  if (!cancelled) return false;
-
-  for (const gate of gates) {
-    await deps.bus
-      .emit(WorkflowSubjects.gate.resolved, {
-        executionId,
-        stepId: gate.nodeId,
-        stepType: 'gate',
-        frameId: gate.frameId,
-        source: 'cancelled',
-      })
-      .catch((error: unknown) => {
-        console.error(`[WorkflowFinalizer] Failed to emit cancelled gate resolution for ${gate.frameId}:`, error);
-      });
-  }
-
-  await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
-    executionId,
-    workflowId,
-    reason,
-    completedAt,
-  });
+  if (!cancelled) return undefined;
   deps.activeExecutions.delete(executionId);
-  return true;
+  return { workflowId, completedAt, gates };
 }
 
 /**
@@ -193,7 +403,11 @@ async function cancelPausedExecution(deps: FinalizerDeps, executionId: string, r
  * @param reason - Optional human-readable cancellation reason.
  * @returns True when a running or parked execution was cancelled.
  */
-export async function cancelExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
+async function cancelExecutionDurably(
+  deps: FinalizerDeps,
+  executionId: string,
+  reason?: string,
+): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
   const active = deps.activeExecutions.get(executionId);
 
   if (!active || active.execution.status !== 'running') {
@@ -221,16 +435,48 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
       reason,
       completedAt: execution.completedAt,
     });
-
-    await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
-      executionId,
-      workflowId: execution.workflowId,
-      reason,
-      completedAt: execution.completedAt,
-    });
   } finally {
     deps.activeExecutions.delete(executionId);
   }
 
+  return { workflowId: execution.workflowId, completedAt: execution.completedAt, gates: [] };
+}
+
+/**
+ * Cancel one execution while excluding concurrent pause projection.
+ * @param deps - Finalizer dependencies.
+ * @param executionId - Execution to cancel.
+ * @param reason - Optional cancellation reason.
+ * @returns Whether cancellation changed the execution state.
+ */
+export async function cancelExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
+  const transition = await commitExecutionLifecycleTransition(
+    deps,
+    executionId,
+    () => cancelExecutionDurably(deps, executionId, reason),
+    async (committed) => {
+      if (committed === undefined) return;
+      for (const gate of committed.gates) {
+        await deps.bus
+          .emit(WorkflowSubjects.gate.resolved, {
+            executionId,
+            stepId: gate.nodeId,
+            stepType: 'gate',
+            frameId: gate.frameId,
+            source: 'cancelled',
+          })
+          .catch((error: unknown) => {
+            console.error(`[WorkflowFinalizer] Failed to emit cancelled gate resolution for ${gate.frameId}:`, error);
+          });
+      }
+      await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
+        executionId,
+        workflowId: committed.workflowId,
+        reason,
+        completedAt: committed.completedAt,
+      });
+    },
+  );
+  if (transition === undefined) return false;
   return true;
 }

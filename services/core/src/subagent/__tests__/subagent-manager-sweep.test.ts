@@ -165,6 +165,21 @@ describe('SubagentManager — sweepHung and lastActivityAt', () => {
       expect(manager.get('sub-1')!.lastActivityAt).toBeGreaterThan(initial);
     });
 
+    it('is bumped on authoritative tool observation and prevents a stale hung sweep', () => {
+      trackSub('sub-1');
+      manager.setChildSessionId('sub-1', 'child-session-1');
+
+      vi.advanceTimersByTime(9);
+      manager.recordToolObservation('child-session-1', {
+        toolName: 'artifacts_get',
+        outcome: 'success',
+      });
+
+      vi.advanceTimersByTime(9);
+      expect(manager.sweepHung(10)).toBe(0);
+      expect(manager.get('sub-1')?.status).toBe('running');
+    });
+
     it('is bumped on sweepHung transition', () => {
       trackSub('sub-1');
 

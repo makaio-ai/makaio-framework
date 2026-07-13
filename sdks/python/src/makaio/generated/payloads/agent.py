@@ -1056,6 +1056,13 @@ class AgentStructuredOutputRetryPolicyResponse:
 
 
 @dataclass(frozen=True)
+class AgentToolCompletedPayloadArtifactResult:
+    id: str
+    kind: str
+    revision: str
+
+
+@dataclass(frozen=True)
 class AgentToolCompletedPayload:
     adapter_id: str
     adapter_name: str
@@ -1065,6 +1072,7 @@ class AgentToolCompletedPayload:
     tool_name: str
     adapter_session_id: str | None = None
     args: dict[str, Any] | None = None
+    artifact_result: AgentToolCompletedPayloadArtifactResult | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None

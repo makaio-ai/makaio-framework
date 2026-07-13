@@ -1,12 +1,13 @@
 # @makaio/ai-adapters-claude-shared
 
-Internal shared infrastructure for Claude protocol AI adapter implementations. Provides the
+Published shared infrastructure for Claude protocol AI adapter implementations. Provides the
 agent layer, turn state machine, content block handlers, and tool approval utilities
 used by both `@makaio/adapter-claude-agent-sdk` and
 `@makaio/adapter-claude-code-cli`.
 
-This workspace package is not a standalone public adapter API. Application code should use the
-Claude adapter packages or their `./server` runtime contributions instead.
+This package is a supported dependency of the Claude adapter packages. Most applications should
+use those adapters directly; the shared package is public because their exported classes and
+types form part of the adapters' declaration contracts.
 
 ## Purpose
 

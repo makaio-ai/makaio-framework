@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus, OnOptions } from '@makaio/bus-core';
 import type { SubjectDefinition, HandlerForSubjectDefinition } from '@makaio/core';
 
 /**
@@ -122,16 +122,21 @@ export abstract class BaseService {
   /**
    * Register a bus handler and enqueue its unsubscribe function for teardown.
    *
-   * Equivalent to `this._cleanups.push(this.bus.on(subject, handler))`.
+   * Equivalent to `this._cleanups.push(this.bus.on(subject, handler, options))`.
    * @param subject - The subject definition to listen on
    * @param handler - Handler function for the subject
+   * @param options - Optional handler filter and dispatch priority
    */
-  protected registerHandler<S extends SubjectDefinition>(subject: S, handler: HandlerForSubjectDefinition<S>): void {
+  protected registerHandler<S extends SubjectDefinition>(
+    subject: S,
+    handler: HandlerForSubjectDefinition<S>,
+    options?: OnOptions,
+  ): void {
     // Both casts are required: TypeScript cannot narrow IsChannel or
     // IsRequest on unresolved generic Subject. Channel-only guards are
     // enforced at the public bus API boundary where concrete subject
     // types are known; BaseService delegates through the typed interface.
-    this._cleanups.push(this.bus.on(subject as never, handler as never));
+    this._cleanups.push(this.bus.on(subject as never, handler as never, options));
   }
 
   /**

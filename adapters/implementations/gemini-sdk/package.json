@@ -40,6 +40,7 @@
     "lint": "echo 'ERROR: Run `yarn validate path/to/package` from repository root instead!' && exit 1"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "0.21.0",
     "p-queue": "^9.3.0",
     "zod": "4.4.3"
   },
@@ -49,7 +50,6 @@
     "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "0.21.0",
     "@google/gemini-cli": "0.43.0",
     "@google/gemini-cli-core": "0.43.0",
     "@google/genai": "1.48.0",

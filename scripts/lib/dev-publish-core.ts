@@ -14,6 +14,7 @@ export interface WorkspacePackage {
   readonly location: string;
   readonly version: string;
   readonly dependencies: Readonly<Record<string, string>>;
+  readonly publishWorkspaceDependencies?: readonly string[];
 }
 
 /** A selected package after dev snapshot versioning. */
@@ -154,10 +155,21 @@ export function resolveDevPublishPlan(
     }
 
     visiting.add(name);
+    if (
+      name !== '@makaio/framework' &&
+      workspace.dependencies['@makaio/framework'] &&
+      byName.has('@makaio/framework')
+    ) {
+      visit('@makaio/framework');
+    }
     for (const dependencyName of Object.keys(workspace.dependencies).sort()) {
-      if (requested.has(dependencyName)) {
-        visit(dependencyName);
+      if (requested.has(dependencyName)) visit(dependencyName);
+    }
+    for (const dependencyName of [...(workspace.publishWorkspaceDependencies ?? [])].sort()) {
+      if (!byName.has(dependencyName)) {
+        throw new Error(`${name} retains unknown or non-publishable workspace dependency ${dependencyName}`);
       }
+      visit(dependencyName);
     }
     visiting.delete(name);
     visited.add(name);
@@ -227,12 +239,12 @@ export function renderSummary(
 }
 
 /**
- * Builds the Yarn publish command arguments for a dev package.
- * @param packageName - Workspace package to publish.
- * @returns Arguments passed to `yarn`.
+ * Builds the npm publish command arguments for a staged dev package.
+ * @param publishDir - Portable staging directory to publish.
+ * @returns Arguments passed to `npm`.
  */
-export function buildPublishArgs(packageName: string): string[] {
-  return ['workspace', packageName, 'npm', 'publish', '--tag', 'dev', '--access', 'public', '--provenance'];
+export function buildPublishArgs(publishDir: string): string[] {
+  return ['publish', publishDir, '--tag', 'dev', '--access', 'public', '--provenance'];
 }
 
 /**

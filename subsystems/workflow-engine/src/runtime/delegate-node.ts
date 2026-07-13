@@ -1,14 +1,14 @@
+/* eslint max-lines: ["error", { "max": 430, "skipBlankLines": true, "skipComments": true }] */
 import { evaluateSync, resolveTemplate } from '@makaio/expression';
 import {
   AgentSubjects,
   SessionSubjects,
-  type AdapterSelection,
-  type ProviderContext,
   type ResponseSchemaDescriptor,
   type WorkflowDelegateAgentNode,
   type WorkflowDelegateRoleNode,
   type WorkflowResolvedRole,
 } from '@makaio/contracts';
+import type { AgentAttachResolvedRequest } from '@makaio/contracts/session';
 import { WorkflowSubjects } from '../namespace.js';
 import {
   buildRuntimeExpressionScope,
@@ -16,7 +16,12 @@ import {
   type RuntimeContext,
 } from './runtime-context.js';
 import type { NodeOutcome } from './node-execution.js';
-import { executeResolvedSubagentNode } from './role-subagent-node.js';
+import { elapsedDelegateDuration, executeResolvedSubagentNode, finalizeDelegateResult } from './role-subagent-node.js';
+import {
+  resolveDelegateAgentConfig,
+  resolveDelegateRoleConfig,
+  shouldUseSessionTurnForDelegateRole,
+} from './delegate-execution-policy.js';
 
 const DEFAULT_ROLE_SESSION_TIMEOUT_MS = 300_000;
 
@@ -63,17 +68,20 @@ export async function executeDelegateAgentNode(
 
   const outputSchema: ResponseSchemaDescriptor | undefined =
     node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
+  const resolvedConfig = resolveDelegateAgentConfig(node, agentResult.data);
   return executeResolvedSubagentNode(
     {
       nodeId: node.id,
       nodeLabel: 'Delegate-agent node',
       task: taskResult.task,
-      resolvedConfig: agentResult.data,
+      resolvedConfig,
       ...(outputSchema !== undefined ? { outputSchema } : {}),
       unavailableRuntimeError: `Subagent runtime is not available for delegate-agent node '${node.id}'`,
       unavailableAwaitError: `Subagent runtime cannot await delegate-agent node '${node.id}'`,
       cancellationLabel: 'delegate-agent',
       ...(frameId !== undefined ? { frameId } : {}),
+      ...(node.resultFinalizerId !== undefined ? { resultFinalizerId: node.resultFinalizerId } : {}),
+      delegateNodeType: 'delegate-agent',
     },
     ctx,
   );
@@ -140,6 +148,8 @@ export async function executeDelegateRoleNode(
       unavailableAwaitError: `Subagent runtime cannot await delegate-role node '${node.id}'`,
       cancellationLabel: 'delegate-role',
       ...(frameId !== undefined ? { frameId } : {}),
+      ...(node.resultFinalizerId !== undefined ? { resultFinalizerId: node.resultFinalizerId } : {}),
+      delegateNodeType: 'delegate-role',
     },
     ctx,
   );
@@ -163,6 +173,11 @@ interface DelegateRoleSessionStart {
   readonly sessionId: string;
 }
 
+interface DelegateRoleParentSession {
+  readonly sessionId: string;
+  readonly targetWorkingDirectory: string | undefined;
+}
+
 interface LinkedAbortSignal {
   readonly controller: AbortController;
   readonly cleanup: () => void;
@@ -184,7 +199,8 @@ async function executeDelegateRoleSessionTurn(
   const abortLink = linkAbortSignal(ctx.signal);
 
   try {
-    const start = await startDelegateRoleSession(params, ctx);
+    const parentSession = await resolveDelegateRoleParentSession(ctx);
+    const start = await startDelegateRoleSession(params, ctx, parentSession);
     if ('status' in start) return start;
     childSessionId = start.sessionId;
 
@@ -221,17 +237,22 @@ type DelegateRoleSessionStartResult = DelegateRoleSessionStart | NodeOutcome;
  * Create the child session for a delegate-role node and emit the frame link.
  * @param params - Delegate-role session execution parameters.
  * @param ctx - Execution-wide runtime context.
+ * @param parentSession - Parent session identity and inherited working directory.
  * @returns Created session identity or a failed node outcome.
  */
 async function startDelegateRoleSession(
   params: DelegateRoleSessionTurnParams,
   ctx: RuntimeContext,
+  parentSession: DelegateRoleParentSession,
 ): Promise<DelegateRoleSessionStartResult> {
   const createResult = await ctx.bus.requestOptional(SessionSubjects.create, {
     sessionId: buildDelegateRoleSessionId(ctx, params),
-    parentSessionId: ctx.execution.coordinatorSessionId ?? ctx.executionId,
+    parentSessionId: parentSession.sessionId,
     branchKind: 'subagent',
     title: `Workflow delegate-role '${params.node.id}'`,
+    ...(parentSession.targetWorkingDirectory !== undefined && {
+      targetWorkingDirectory: parentSession.targetWorkingDirectory,
+    }),
   });
   if (!createResult.handled) {
     return {
@@ -247,7 +268,7 @@ async function startDelegateRoleSession(
       SessionSubjects.agent.attachResolved,
       {
         sessionId,
-        agent: buildDelegateRoleAgentSelection(params.resolvedRole),
+        agent: buildDelegateRoleAgentSelection(params.resolvedRole, parentSession.targetWorkingDirectory),
         role: 'lead',
       },
       { signal: ctx.signal },
@@ -264,6 +285,21 @@ async function startDelegateRoleSession(
     };
   }
   return { sessionId };
+}
+
+/**
+ * Resolve the workflow parent session once for both child-session stamping and
+ * adapter launch options.
+ * @param ctx - Execution-wide runtime context.
+ * @returns Parent session identity and optional inherited working directory.
+ */
+async function resolveDelegateRoleParentSession(ctx: RuntimeContext): Promise<DelegateRoleParentSession> {
+  const sessionId = ctx.execution.coordinatorSessionId ?? ctx.executionId;
+  const result = await ctx.bus.requestOptional(SessionSubjects.get, { sessionId });
+  return {
+    sessionId,
+    targetWorkingDirectory: result.handled ? result.data.session?.targetWorkingDirectory : undefined,
+  };
 }
 
 interface DelegateRoleSessionTurnRuntime {
@@ -284,6 +320,7 @@ async function runDelegateRoleSessionTurn(
   ctx: RuntimeContext,
   runtime: DelegateRoleSessionTurnRuntime,
 ): Promise<NodeOutcome> {
+  const delegateStartedAt = performance.now();
   const agentCompletion = ctx.bus.once(AgentSubjects.complete, {
     timeoutMs: runtime.timeoutMs,
     filter: { sessionId: runtime.childSessionId },
@@ -305,7 +342,20 @@ async function runDelegateRoleSessionTurn(
       error: `Delegate-role node '${params.node.id}' agent error: ${completionEvent.payload.error ?? 'no result'}`,
     };
   }
-  return { status: 'completed', output: completionEvent.payload.message ?? null };
+  const rawResult = completionEvent.payload.message ?? null;
+  const output = await finalizeDelegateResult(
+    {
+      nodeId: params.node.id,
+      ...(params.frameId !== undefined ? { frameId: params.frameId } : {}),
+      ...(params.node.resultFinalizerId !== undefined ? { resultFinalizerId: params.node.resultFinalizerId } : {}),
+      delegateNodeType: 'delegate-role',
+      resolvedConfig: params.resolvedRole,
+    },
+    ctx,
+    rawResult,
+    elapsedDelegateDuration(delegateStartedAt),
+  );
+  return { status: 'completed', output };
 }
 
 interface DelegateRoleSendResult {
@@ -400,52 +450,33 @@ function buildDelegateRoleSessionId(ctx: RuntimeContext, params: DelegateRoleSes
 /**
  * Convert the resolved workflow role to the adapter selection accepted by
  * `session.agent.attachResolved`.
- *
- * The full `providerContext` is forwarded via the local-only `attachResolved`
- * seam so the session orchestrator can short-circuit the config-store lookup.
- * This avoids unnecessary round-trips through the Adapter Subsystem config
- * store, which may not have the provider config registered in headless or
- * embedded deployments. The `providerConfigId` is still set on the selection
- * for storage and tracking purposes.
  * @param role - Workflow role resolution result.
+ * @param targetWorkingDirectory - Parent working directory inherited by the child session.
  * @returns Adapter selection with optional normalized provider context for the
  *   `attachResolved` local seam.
  */
 function buildDelegateRoleAgentSelection(
   role: WorkflowResolvedRole,
-): AdapterSelection & { providerContext?: ProviderContext } {
+  targetWorkingDirectory: string | undefined,
+): AgentAttachResolvedRequest['agent'] {
   return {
     kind: 'adapter',
     adapterName: role.adapterName,
     ...(role.model !== undefined ? { model: role.model } : {}),
     ...(role.reasoningEffort !== undefined ? { reasoningEffort: role.reasoningEffort } : {}),
     ...(role.systemPrompt !== undefined ? { systemPrompt: role.systemPrompt } : {}),
-    ...(role.providerContext?.state === 'resolved' ? { providerConfigId: role.providerContext.providerConfigId } : {}),
+    ...(role.providerConfigId !== undefined
+      ? { providerConfigId: role.providerConfigId }
+      : role.providerContext?.state === 'resolved'
+        ? { providerConfigId: role.providerContext.providerConfigId }
+        : {}),
     ...(role.providerContext !== undefined ? { providerContext: role.providerContext } : {}),
+    ...(role.adapterConfig !== undefined ? { adapterConfig: role.adapterConfig } : {}),
+    ...(role.tools !== undefined ? { allowedTools: role.tools } : {}),
+    ...(role.disallowedTools !== undefined ? { disallowedTools: role.disallowedTools } : {}),
+    ...(role.allowedDirectories !== undefined ? { allowedDirectories: role.allowedDirectories } : {}),
+    ...(targetWorkingDirectory !== undefined ? { cwd: targetWorkingDirectory } : {}),
   };
-}
-
-/**
- * Merge node-owned execution options into the resolved role config.
- * @param node - Delegate-role node definition.
- * @param role - Resolved role configuration.
- * @returns Effective role execution configuration.
- */
-function resolveDelegateRoleConfig(node: WorkflowDelegateRoleNode, role: WorkflowResolvedRole): WorkflowResolvedRole {
-  return node.completion !== undefined ? { ...role, completion: node.completion } : role;
-}
-
-/**
- * Decide whether a delegate-role can use the session-turn primitive.
- *
- * The session path only preserves roles that are explicit one-shot turn
- * delegates and do not carry subagent-only governance fields. Default `tool`
- * completion and harness/context roles must keep the subagent runtime contract.
- * @param role - Effective resolved role configuration.
- * @returns True when session.sendMessage preserves the role's semantics.
- */
-function shouldUseSessionTurnForDelegateRole(role: WorkflowResolvedRole): boolean {
-  return role.completion === 'turn' && role.harnessId === undefined && role.contextMode === undefined;
 }
 
 /**

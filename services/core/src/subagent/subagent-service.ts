@@ -57,6 +57,15 @@ const SUBAGENT_DEFAULT_LOCAL_TARGET: ExecutionTarget = {
   updatedAt: Date.now(),
 };
 
+/**
+ * Remove `undefined` values so optional adapter runtime fields remain absent on the bus payload.
+ * @param obj - Object potentially containing undefined values.
+ * @returns Object with undefined-valued keys omitted.
+ */
+function omitUndefined<T extends object>(obj: T): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
 /** Spawned event payload type inferred from schema */
 type SpawnedPayload = ExtractSubjectPayload<typeof SubagentSubjects.spawned>;
 type ExecuteSubagentPayload = ExtractSubjectPayload<typeof SubagentSubjects.execute>;
@@ -91,6 +100,7 @@ export class SubagentService extends BaseService {
   /** Manager is now private - tools use RPCs to interact with state */
   private readonly manager: SubagentManager;
   private readonly pendingChildSessionClose = new Set<string>();
+  private readonly spawningExecutions = new Set<string>();
 
   /**
    * Creates a new SubagentService instance.
@@ -101,12 +111,16 @@ export class SubagentService extends BaseService {
    *   spawn or execute on this node from a remote origin. Authenticated
    *   `workflow-execution` peers are allowed by identity; this set is for
    *   additional delegated peer kinds.
+   * @param requestHandlerPriority - Priority for runtime-owned subagent lifecycle RPCs.
+   * @param executionOwnerId - Stable identity used to bind spawned execution to this service instance.
    */
   public constructor(
     bus: IMakaioBus = MakaioBus,
     constraints: SubagentConstraints = DEFAULT_CONSTRAINTS,
     private readonly machineId?: string,
     private readonly delegationAllowSet: SpawnDelegationAllowSet = new Set(),
+    private readonly requestHandlerPriority = 0,
+    private readonly executionOwnerId: string = crypto.randomUUID(),
   ) {
     super(bus);
     this.manager = new SubagentManager(constraints);
@@ -142,6 +156,9 @@ export class SubagentService extends BaseService {
   protected onInit(): void {
     // Listen for spawned events to trigger execution
     this.registerHandler(SubagentSubjects.spawned, async (ctx) => {
+      if (ctx.payload.executionOwnerId !== undefined && ctx.payload.executionOwnerId !== this.executionOwnerId) {
+        return;
+      }
       // Fire-and-forget: don't block the spawner
       this.handleSpawned(ctx.payload).catch((err) => {
         console.error('[SubagentService] handleSpawned error:', err);
@@ -182,6 +199,17 @@ export class SubagentService extends BaseService {
       await this.handleAgentComplete(ctx.payload);
     });
 
+    this.registerHandler(AgentSubjects.tool.completed, (ctx) => {
+      if (ctx.payload.sessionId === undefined || ctx.payload.success === undefined) return;
+      this.manager.recordToolObservation(ctx.payload.sessionId, {
+        toolName: ctx.payload.toolName,
+        outcome: ctx.payload.success ? 'success' : 'failure',
+        ...(ctx.payload.success === true && ctx.payload.artifactResult !== undefined
+          ? { artifact: ctx.payload.artifactResult }
+          : {}),
+      });
+    });
+
     // Register state operation RPCs
     this.registerRpcHandlers();
 
@@ -216,29 +244,42 @@ export class SubagentService extends BaseService {
     const ctx: RpcHandlerContext = {
       manager: this.manager,
       bus: this.bus,
+      executionOwnerId: this.executionOwnerId,
     };
 
     // getStatus RPC - query subagent state
-    this.registerHandler(SubagentSubjects.getStatus, (busCtx) => {
-      const result = handleGetStatusRpc(ctx, busCtx.payload);
-      busCtx.setResult(result);
-    });
+    this.registerHandler(
+      SubagentSubjects.getStatus,
+      (busCtx) => {
+        const result = handleGetStatusRpc(ctx, busCtx.payload);
+        busCtx.setResult(result);
+      },
+      { priority: this.requestHandlerPriority },
+    );
 
     // spawn RPC - validates constraints, tracks, emits spawned
-    this.registerHandler(SubagentSubjects.spawn, async (busCtx) => {
-      if (!this.isRemoteDelegationAllowed(busCtx)) {
-        return;
-      }
-      const payload = SpawnSubagentRpcRequestSchema.parse(busCtx.payload);
-      const result = await handleSpawnRpc(ctx, payload);
-      busCtx.setResult(result);
-    });
+    this.registerHandler(
+      SubagentSubjects.spawn,
+      async (busCtx) => {
+        if (!this.isRemoteDelegationAllowed(busCtx)) {
+          return;
+        }
+        const payload = SpawnSubagentRpcRequestSchema.parse(busCtx.payload);
+        const result = await handleSpawnRpc(ctx, payload);
+        busCtx.setResult(result);
+      },
+      { priority: this.requestHandlerPriority },
+    );
 
     // await RPC - waits for terminal state or timeout
-    this.registerHandler(SubagentSubjects.await, async (busCtx) => {
-      const result = await handleAwaitRpc(ctx, busCtx.payload);
-      busCtx.setResult(result);
-    });
+    this.registerHandler(
+      SubagentSubjects.await,
+      async (busCtx) => {
+        const result = await handleAwaitRpc(ctx, busCtx.payload);
+        busCtx.setResult(result);
+      },
+      { priority: this.requestHandlerPriority },
+    );
 
     // send RPC - send message to subagent, optionally resolve pending
     this.registerHandler(SubagentSubjects.send, async (busCtx) => {
@@ -247,10 +288,14 @@ export class SubagentService extends BaseService {
     });
 
     // kill RPC - terminate subagent
-    this.registerHandler(SubagentSubjects.kill, async (busCtx) => {
-      const result = await handleKillRpc(ctx, busCtx.payload);
-      busCtx.setResult(result);
-    });
+    this.registerHandler(
+      SubagentSubjects.kill,
+      async (busCtx) => {
+        const result = await handleKillRpc(ctx, busCtx.payload);
+        busCtx.setResult(result);
+      },
+      { priority: this.requestHandlerPriority },
+    );
 
     // reportProgress RPC - child reports progress
     this.registerHandler(SubagentSubjects.reportProgress, async (busCtx) => {
@@ -280,6 +325,7 @@ export class SubagentService extends BaseService {
   /** Clear deferred close state when the service lifecycle shuts down. */
   protected onDestroy(): void {
     this.pendingChildSessionClose.clear();
+    this.spawningExecutions.clear();
   }
 
   /**
@@ -289,6 +335,37 @@ export class SubagentService extends BaseService {
    */
   private async handleSpawned(payload: SpawnedPayload): Promise<string | undefined> {
     const { subagentId, parentSessionId, task, spawningToolCallId } = payload;
+    const existing = this.manager.get(subagentId);
+    if (existing && existing.status !== 'spawning') {
+      return undefined;
+    }
+    if (this.spawningExecutions.has(subagentId)) {
+      return undefined;
+    }
+    this.spawningExecutions.add(subagentId);
+
+    try {
+      return await this.executeSpawned(payload, parentSessionId, task, spawningToolCallId);
+    } finally {
+      this.spawningExecutions.delete(subagentId);
+    }
+  }
+
+  /**
+   * Execute the single claimed spawn event for one subagent.
+   * @param payload - Spawned event payload.
+   * @param parentSessionId - Parent session that requested the subagent.
+   * @param task - Task sent to the child agent.
+   * @param spawningToolCallId - Tool call that initiated the spawn, if available.
+   * @returns Error message on failure, otherwise undefined.
+   */
+  private async executeSpawned(
+    payload: SpawnedPayload,
+    parentSessionId: string,
+    task: string,
+    spawningToolCallId: string | undefined,
+  ): Promise<string | undefined> {
+    const { subagentId } = payload;
     const config = SubagentConfigSchema.parse({ ...payload.config, task });
     const adapterName = config.adapterName?.trim();
 
@@ -366,7 +443,7 @@ export class SubagentService extends BaseService {
     }
 
     try {
-      await this.startAdapterForSubagent(adapterName, config, sessionId, task);
+      await this.startAdapterForSubagent(adapterName, config, sessionId, task, resolutionParams.targetWorkingDirectory);
     } catch (err) {
       return this.failSpawn(subagentId, parentSessionId, 'adapter_start', err);
     }
@@ -380,7 +457,7 @@ export class SubagentService extends BaseService {
    * @param parentSessionId - Parent session identifier
    * @param config - Parsed subagent config
    * @param executionTargetId - Resolved execution target ID
-   * @param resolutionParams - Framework execution-target fallback fields
+   * @param resolutionParams - Parent-derived execution target and working-directory fields
    * @param spawningToolCallId - Tool call ID that triggered the spawn, if available
    * @returns Created child session ID
    */
@@ -394,7 +471,13 @@ export class SubagentService extends BaseService {
   ): Promise<string> {
     const { sessionId } = await this.bus.request(
       SessionSubjects.create,
-      this.buildChildSessionCreatePayload(parentSessionId, config, executionTargetId, spawningToolCallId),
+      this.buildChildSessionCreatePayload(
+        parentSessionId,
+        config,
+        executionTargetId,
+        resolutionParams.targetWorkingDirectory,
+        spawningToolCallId,
+      ),
     );
     this.manager.setChildSessionId(subagentId, sessionId);
     if (this.pendingChildSessionClose.has(subagentId)) {
@@ -409,6 +492,7 @@ export class SubagentService extends BaseService {
    * @param config - Parsed subagent config
    * @param sessionId - Child session ID
    * @param task - Initial task message
+   * @param targetWorkingDirectory - Parent-derived adapter working directory, when present.
    * @returns Resolves when adapter start succeeds
    * @throws Error when adapter startup fails
    */
@@ -417,6 +501,7 @@ export class SubagentService extends BaseService {
     config: SubagentConfig,
     sessionId: string,
     task: string,
+    targetWorkingDirectory: string | undefined,
   ): Promise<void> {
     // Resolve to persisted UUID adapterId before routing startAgent.
     // adapterName is user-facing type ID and may not match runtime instance identity.
@@ -449,6 +534,13 @@ export class SubagentService extends BaseService {
             providerConfigId: config.providerConfigId,
           })
         : undefined);
+    const runtimeOptions = omitUndefined({
+      adapterConfig: config.adapterConfig,
+      cwd: targetWorkingDirectory,
+      allowedTools: config.tools,
+      disallowedTools: config.disallowedTools,
+      allowedDirectories: config.allowedDirectories,
+    });
     const result = await this.bus.request(AdapterSubjects.startAgent, {
       adapterId,
       role: 'lead',
@@ -459,9 +551,7 @@ export class SubagentService extends BaseService {
       reasoningEffort: config.reasoningEffort,
       systemPrompt: config.systemPrompt,
       responseSchema: config.responseSchema,
-      allowedTools: config.tools,
-      disallowedTools: config.disallowedTools,
-      allowedDirectories: config.allowedDirectories,
+      ...runtimeOptions,
       ...(config.harnessId !== undefined && { harnessId: config.harnessId }),
     });
 
@@ -516,7 +606,7 @@ export class SubagentService extends BaseService {
    *
    * Priority:
    * 1. Explicit subagent `executionTargetId`
-   * 2. Parent session stamped target + context
+   * 2. Parent session stamped target + working directory
    * @param parentSessionId - Parent session used as fallback context.
    * @param executionTargetId - Optional explicit target override from subagent config.
    * @returns Resolution parameters for `ExecutionTargetSubjects.resolve`.
@@ -526,11 +616,9 @@ export class SubagentService extends BaseService {
     executionTargetId?: string,
   ): Promise<{
     executionTargetId?: string;
+    targetWorkingDirectory?: string;
   }> {
-    if (executionTargetId !== undefined) {
-      return { executionTargetId };
-    }
-
+    if (executionTargetId !== undefined) return { executionTargetId };
     const { session: parentSession } = await this.bus.request(SessionStorageSubjects.get, {
       sessionId: parentSessionId,
     });
@@ -539,7 +627,10 @@ export class SubagentService extends BaseService {
     }
 
     return {
-      executionTargetId: parentSession.executionTargetId,
+      ...(parentSession.executionTargetId !== undefined && { executionTargetId: parentSession.executionTargetId }),
+      ...(parentSession.targetWorkingDirectory !== undefined && {
+        targetWorkingDirectory: parentSession.targetWorkingDirectory,
+      }),
     };
   }
 
@@ -552,6 +643,7 @@ export class SubagentService extends BaseService {
    * @param parentSessionId - Parent session identifier from the spawn request
    * @param config - Parsed subagent config
    * @param executionTargetId - Resolved execution target to stamp on child session
+   * @param targetWorkingDirectory - Parent working directory inherited by the child session
    * @param spawningToolCallId - Tool call ID that triggered the spawn, if available
    * @returns Session.create payload for the child session
    */
@@ -559,6 +651,7 @@ export class SubagentService extends BaseService {
     parentSessionId: string,
     config: SubagentConfig,
     executionTargetId: string | undefined,
+    targetWorkingDirectory: string | undefined,
     spawningToolCallId: string | undefined,
   ): ChildSessionCreatePayload {
     return {
@@ -566,6 +659,7 @@ export class SubagentService extends BaseService {
       parentSessionId,
       contextInheritance: config.contextMode === 'fork' ? 'parent-history' : 'none',
       ...(executionTargetId !== undefined && { executionTargetId }),
+      ...(targetWorkingDirectory !== undefined && { targetWorkingDirectory }),
       ...(spawningToolCallId !== undefined && { spawningToolCallId }),
     };
   }

@@ -155,9 +155,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
         this.thread = thread;
       },
       getAgentMessageContent: () => this.agentMessageContent,
-      setAgentMessageContent: (content) => {
-        this.agentMessageContent = content;
-      },
+      setAgentMessageContent: (content) => (this.agentMessageContent = content),
       getPendingMessageHandle: () => this.pendingMessageHandle,
       setPendingMessageHandle: (handle) => {
         this.pendingMessageHandle = handle;
@@ -279,6 +277,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       appendAgentMessageDelta: (delta) => {
         this.agentMessageContent += delta;
       },
+      setAgentMessageContent: tfCtx.setAgentMessageContent,
       onTurnCompleted: (n: TurnCompletedNotification) => onTurnCompleted(tfCtx, n),
       getThread: () => this.thread,
       handleAsyncError: (error) => this.handleError(error),

@@ -1,7 +1,7 @@
 import { and, asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExecutionLink, SpanRecord, WorkflowStepType } from '@makaio/contracts';
-import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
 import { workflowEngineSchema } from './schema.variants.js';
 
@@ -63,13 +63,15 @@ export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () =>
 
   const unsubSetSpan = bus.on(WorkflowStorageSubjects.setSpan, async (ctx) => {
     const { span } = ctx.payload;
-    await db
-      .insert(workflowStepSpans)
-      .values(span)
-      .onConflictDoUpdate({
-        target: [workflowStepSpans.executionId, workflowStepSpans.frameId],
-        set: span,
-      });
+    await serializeDatabaseOperation(db, () =>
+      db
+        .insert(workflowStepSpans)
+        .values(span)
+        .onConflictDoUpdate({
+          target: [workflowStepSpans.executionId, workflowStepSpans.frameId],
+          set: span,
+        }),
+    );
     ctx.setResult({ id: `${span.executionId}:${span.frameId}` });
   });
 
@@ -84,13 +86,15 @@ export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () =>
 
   const unsubSetExecutionLink = bus.on(WorkflowStorageSubjects.setExecutionLink, async (ctx) => {
     const { link } = ctx.payload;
-    await db
-      .insert(workflowExecutionLinks)
-      .values(link)
-      .onConflictDoUpdate({
-        target: [workflowExecutionLinks.sourceExecutionId, workflowExecutionLinks.targetExecutionId],
-        set: link,
-      });
+    await serializeDatabaseOperation(db, () =>
+      db
+        .insert(workflowExecutionLinks)
+        .values(link)
+        .onConflictDoUpdate({
+          target: [workflowExecutionLinks.sourceExecutionId, workflowExecutionLinks.targetExecutionId],
+          set: link,
+        }),
+    );
     ctx.setResult({ id: `${link.sourceExecutionId}:${link.targetExecutionId}` });
   });
 
