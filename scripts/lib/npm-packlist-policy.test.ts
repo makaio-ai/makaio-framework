@@ -68,6 +68,7 @@ describe('npm packlist policy', () => {
       'README.md',
       'LICENSE',
       '__tests__/foo.test.ts',
+      'dist/helpers.spec.d.ts',
       'fixtures/data.json',
       'build.ts',
       'vite.config.ts',
@@ -77,6 +78,7 @@ describe('npm packlist policy', () => {
       'npm-debug.log',
     ]);
     expect(result.forbidden).toContain('__tests__/foo.test.ts');
+    expect(result.forbidden).toContain('dist/helpers.spec.d.ts');
     expect(result.forbidden).toContain('fixtures/data.json');
     expect(result.forbidden).toContain('build.ts');
     expect(result.forbidden).toContain('vite.config.ts');
@@ -209,42 +211,85 @@ describe('npm packlist policy', () => {
     expect(issues).toEqual([]);
   });
 
-  it('rejects @makaio packages in the runtime dependencies of unstaged manifests', () => {
-    const issues = checkSourceManifestMakaioReferences({
-      name: '@makaio/storage-pg',
-      dependencies: {
-        '@makaio/storage-drizzle': 'workspace:*',
-        pg: '^8.21.0',
+  it('allows bundled private workspace dependencies without publish metadata', () => {
+    const issues = checkSourceManifestMakaioReferences(
+      {
+        name: '@makaio/storage-pg',
+        dependencies: {
+          '@makaio/storage-drizzle': 'workspace:*',
+          pg: '^8.21.0',
+        },
+        devDependencies: {
+          '@makaio/build-tooling': 'workspace:*',
+        },
+        peerDependencies: {
+          '@makaio/framework': '^1.0.0',
+        },
       },
-      devDependencies: {
-        '@makaio/build-tooling': 'workspace:*',
-      },
-      peerDependencies: {
-        '@makaio/framework': '^1.0.0',
-      },
-    });
+      new Set(['@makaio/storage-pg']),
+    );
 
-    expect(issues).toEqual([
-      '@makaio/storage-pg: unpublishable @makaio package in dependencies: @makaio/storage-drizzle (bundled workspace packages belong in devDependencies; runtime framework coupling goes through the @makaio/framework peer dependency)',
-    ]);
+    expect(issues).toEqual([]);
   });
 
-  it('accepts dev-only @makaio references plus the framework peer, rejects other @makaio peers', () => {
+  it('requires publish metadata to exactly identify public runtime workspace dependencies', () => {
+    const publicPackages = new Set(['@makaio/adapter-test', '@makaio/client-test']);
     expect(
-      checkSourceManifestMakaioReferences({
-        name: '@makaio/storage-pg',
-        dependencies: { pg: '^8.21.0' },
-        devDependencies: { '@makaio/storage-drizzle': 'workspace:*' },
-        peerDependencies: { '@makaio/framework': '^1.0.0' },
-      }),
+      checkSourceManifestMakaioReferences(
+        {
+          name: '@makaio/adapter-test',
+          dependencies: { '@makaio/client-test': 'workspace:*' },
+        },
+        publicPackages,
+      ),
+    ).toEqual(['@makaio/adapter-test: runtime workspace dependency is missing publish metadata: @makaio/client-test']);
+
+    expect(
+      checkSourceManifestMakaioReferences(
+        {
+          name: '@makaio/adapter-test',
+          dependencies: { '@makaio/client-test': 'workspace:*' },
+          publishWorkspaceDependencies: ['@makaio/client-test'],
+        },
+        publicPackages,
+      ),
     ).toEqual([]);
 
     expect(
+      checkSourceManifestMakaioReferences(
+        {
+          name: '@makaio/adapter-test',
+          dependencies: { '@makaio/private-test': 'workspace:*' },
+          publishWorkspaceDependencies: ['@makaio/private-test'],
+        },
+        publicPackages,
+      ),
+    ).toContain('@makaio/adapter-test: publishWorkspaceDependencies entry is not public: @makaio/private-test');
+  });
+
+  it('rejects unsupported optional and peer workspace protocols in source manifests', () => {
+    expect(
       checkSourceManifestMakaioReferences({
-        name: '@makaio/storage-pg',
-        peerDependencies: { '@makaio/storage-drizzle': '^1.0.0' },
+        name: '@makaio/adapter-test',
+        optionalDependencies: { '@makaio/client-optional': 'workspace:*' },
+        peerDependencies: { '@makaio/client-peer': 'workspace:^' },
       }),
-    ).toEqual(['@makaio/storage-pg: @makaio peer dependency other than @makaio/framework: @makaio/storage-drizzle']);
+    ).toEqual([
+      '@makaio/adapter-test: optional workspace dependency cannot be published: @makaio/client-optional',
+      '@makaio/adapter-test: peer dependency is not publishable: @makaio/client-peer',
+    ]);
+  });
+
+  it('rejects private Makaio peer dependencies even without a workspace protocol', () => {
+    expect(
+      checkSourceManifestMakaioReferences(
+        {
+          name: '@makaio/adapter-test',
+          peerDependencies: { '@makaio/bus-core': '*' },
+        },
+        new Set(['@makaio/adapter-test']),
+      ),
+    ).toEqual(['@makaio/adapter-test: peer dependency is not publishable: @makaio/bus-core']);
   });
 
   it('keeps public adapter and client source manifests publishable without runtime @makaio workspace deps', () => {

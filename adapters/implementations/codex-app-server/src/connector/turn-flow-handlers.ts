@@ -377,6 +377,22 @@ export async function onThreadStarted(ctx: TurnFlowContext, notification: Thread
   await registerThreadStarted(ctx, threadId);
 }
 
+/** Map the provider terminal status and final message to the canonical connector result.
+ * @param notification - Terminal Codex turn notification
+ * @param content - Final agent message accumulated from item events or the terminal snapshot
+ * @returns Canonical completed or error result
+ */
+function createTerminalMessageResult(notification: TurnCompletedNotification, content: string): MessageResult {
+  if (notification.turn.status === 'completed') {
+    return { outcome: 'completed', result: { message: content || '(Empty response)' } };
+  }
+  if (notification.turn.status === 'interrupted') return { outcome: 'cancelled' };
+  return {
+    outcome: 'error',
+    error: new Error(notification.turn.error?.message ?? `Codex turn ${notification.turn.status}`),
+  };
+}
+
 /**
  * Handle the `turn/completed` notification from the Codex server.
  *
@@ -384,9 +400,9 @@ export async function onThreadStarted(ctx: TurnFlowContext, notification: Thread
  * message is waiting), then settles the pending handle with its outcome. Drains
  * the queue or transitions to idle when no further messages are queued.
  * @param ctx - Turn flow context
- * @param _notification - Parsed notification payload (currently unused)
+ * @param notification - Parsed notification carrying the terminal item snapshot when available
  */
-export async function onTurnCompleted(ctx: TurnFlowContext, _notification: TurnCompletedNotification): Promise<void> {
+export async function onTurnCompleted(ctx: TurnFlowContext, notification: TurnCompletedNotification): Promise<void> {
   if (!ctx.getCurrentTurn()) return;
 
   await ctx.getCurrentTurn()!.handleTurnCompleted();
@@ -427,7 +443,8 @@ export async function onTurnCompleted(ctx: TurnFlowContext, _notification: TurnC
     // accumulates blocks before agent.complete fires.
     const turnId = ctx.getCurrentTurn()?.getTurnId();
     const threadId = ctx.getThread()?.threadId;
-    const agentMessageContent = ctx.getAgentMessageContent();
+    const completedItemContent = notification.turn.items?.findLast((item) => item.type === 'agentMessage')?.text;
+    const agentMessageContent = completedItemContent ?? ctx.getAgentMessageContent();
     if (agentMessageContent && threadId && turnId) {
       await ctx.emit(CodexAppServerSubjects.agent_message, {
         threadId,
@@ -436,10 +453,7 @@ export async function onTurnCompleted(ctx: TurnFlowContext, _notification: TurnC
         timestamp: Date.now(),
       });
     }
-    const result: MessageResult = {
-      outcome: 'completed',
-      result: { message: agentMessageContent || '(Empty response)' },
-    };
+    const result = createTerminalMessageResult(notification, agentMessageContent);
     await markCompletedWithFinalResult(pendingHandle, result, (_handle, finalResult) => {
       ctx.setLastResult(finalResult);
     });

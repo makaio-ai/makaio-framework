@@ -65,6 +65,68 @@ describe('SubagentService', () => {
   }
 
   describe('execution flow', () => {
+    it('executes only spawned events owned by this service while preserving observability', async () => {
+      await service.destroy();
+      service = new SubagentService(MakaioBus, DEFAULT_CONSTRAINTS, undefined, new Set(), 0, 'owner-local');
+      await service.init();
+
+      const observedOwners: Array<string | undefined> = [];
+      const sessionCreateCalls: unknown[] = [];
+      MakaioBus.on(SubagentSubjects.spawned, (ctx) => {
+        observedOwners.push(ctx.payload.executionOwnerId);
+      });
+      MakaioBus.on(SessionSubjects.create, (ctx) => {
+        sessionCreateCalls.push(ctx.payload);
+        ctx.setResult({ sessionId: 'child-1' });
+      });
+      setMockStartAgentSuccess();
+
+      await MakaioBus.emit(SubagentSubjects.spawned, { ...SUB1_SPAWN, executionOwnerId: 'owner-remote' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(sessionCreateCalls).toHaveLength(0);
+      expect(observedOwners).toEqual(['owner-remote']);
+
+      await MakaioBus.emit(SubagentSubjects.spawned, { ...SUB1_SPAWN, executionOwnerId: 'owner-local' });
+      await vi.waitFor(() => expect(sessionCreateCalls).toHaveLength(1));
+      expect(observedOwners).toEqual(['owner-remote', 'owner-local']);
+    });
+
+    it('single-flights concurrent matching-owner spawned event echoes', async () => {
+      await service.destroy();
+      service = new SubagentService(MakaioBus, DEFAULT_CONSTRAINTS, undefined, new Set(), 0, 'owner-local');
+      await service.init();
+
+      const sessionCreateCalls: unknown[] = [];
+      const adapterStartCalls: unknown[] = [];
+      let releaseSessionCreate: (() => void) | undefined;
+      const sessionCreateGate = new Promise<void>((resolve) => {
+        releaseSessionCreate = resolve;
+      });
+      MakaioBus.on(SessionSubjects.create, async (ctx) => {
+        sessionCreateCalls.push(ctx.payload);
+        await sessionCreateGate;
+        ctx.setResult({ sessionId: 'child-1' });
+      });
+      setMockStartAgentSuccess((ctx) => {
+        adapterStartCalls.push(ctx.payload);
+        return {};
+      });
+
+      const echo = { ...SUB1_SPAWN, executionOwnerId: 'owner-local' };
+      await Promise.all([
+        MakaioBus.emit(SubagentSubjects.spawned, echo),
+        MakaioBus.emit(SubagentSubjects.spawned, echo),
+      ]);
+      await vi.waitFor(() => expect(sessionCreateCalls).toHaveLength(1));
+      releaseSessionCreate?.();
+      await vi.waitFor(() => expect(adapterStartCalls).toHaveLength(1));
+
+      await MakaioBus.emit(SubagentSubjects.spawned, echo);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(sessionCreateCalls).toHaveLength(1);
+      expect(adapterStartCalls).toHaveLength(1);
+    });
+
     it('creates child session when spawned event received', async () => {
       await service.init();
 

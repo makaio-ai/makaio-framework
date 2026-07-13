@@ -20,6 +20,7 @@ import {
   stripPrerelease,
   type DevStampManifest,
 } from './dev-publish.js';
+import { discoverWorkspacePackagesAtRef } from './lib/dev-publish-info.js';
 
 const REPOSITORY_URL = 'git+https://github.com/makaio-ai/makaio-framework.git';
 const SKIPPED_DIRS = new Set(['.git', '.yarn', 'build', 'dist', 'lib', 'node_modules', 'release', '__tests__']);
@@ -130,6 +131,38 @@ describe('resolveDevPublishPlan', () => {
       '@makaio/framework@1.0.0-dev-1780000000000',
     ]);
   });
+
+  it('adds retained public workspace dependencies in dependency-first order', () => {
+    const plan = resolveDevPublishPlan(
+      [
+        { name: '@makaio/framework', location: 'packages/framework', version: '1.0.0', dependencies: {} },
+        { name: '@makaio/client-claude-code', location: 'clients/claude-code', version: '1.1.0', dependencies: {} },
+        {
+          name: '@makaio/ai-adapters-claude-shared',
+          location: 'adapters/shared/claude-shared',
+          version: '1.2.0',
+          dependencies: { '@makaio/framework': '^1.0.0' },
+          publishWorkspaceDependencies: ['@makaio/client-claude-code'],
+        },
+        {
+          name: '@makaio/adapter-claude-code-cli',
+          location: 'adapters/implementations/claude-code-cli',
+          version: '1.3.0',
+          dependencies: { '@makaio/framework': '^1.0.0' },
+          publishWorkspaceDependencies: ['@makaio/ai-adapters-claude-shared', '@makaio/client-claude-code'],
+        },
+      ],
+      ['@makaio/adapter-claude-code-cli'],
+      '1780000000000',
+    );
+
+    expect(plan.map((pkg) => pkg.name)).toEqual([
+      '@makaio/framework',
+      '@makaio/client-claude-code',
+      '@makaio/ai-adapters-claude-shared',
+      '@makaio/adapter-claude-code-cli',
+    ]);
+  });
 });
 
 describe('buildAnnotatedTag', () => {
@@ -167,6 +200,16 @@ describe('selectLatestDevTag', () => {
 });
 
 describe('dev publish info file mapping', () => {
+  it('retains public workspace dependency metadata during at-ref discovery', { timeout: 20_000 }, () => {
+    const packages = discoverWorkspacePackagesAtRef('HEAD');
+    const claudeCli = packages.find((pkg) => pkg.name === '@makaio/adapter-claude-code-cli');
+
+    expect(claudeCli?.publishWorkspaceDependencies).toEqual([
+      '@makaio/ai-adapters-claude-shared',
+      '@makaio/client-claude-code',
+    ]);
+  });
+
   it('groups publish-relevant files by package and ignores tests', () => {
     const grouped = groupDevPublishFilesByPackage(
       [
@@ -317,11 +360,9 @@ describe('buildRemoteTagCheckArgs', () => {
 
 describe('buildPublishArgs', () => {
   it('publishes dev packages with provenance', () => {
-    expect(buildPublishArgs('@makaio/contracts')).toEqual([
-      'workspace',
-      '@makaio/contracts',
-      'npm',
+    expect(buildPublishArgs('/tmp/contracts-publish')).toEqual([
       'publish',
+      '/tmp/contracts-publish',
       '--tag',
       'dev',
       '--access',

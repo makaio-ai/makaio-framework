@@ -6,7 +6,7 @@ import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js'
 import { AIReasoningLevelSchema } from '../model/index.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { WorkflowFinalizerIdSchema } from './finalization.js';
+import { WorkflowDelegateResultFinalizerIdSchema, WorkflowFinalizerIdSchema } from './finalization.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -463,6 +463,12 @@ export const WorkflowDelegateAgentNodeSchema = WorkflowNodeBaseSchema.extend({
    * Used for structured output requests and UI contract display.
    */
   outputSchema: JsonSchemaRecordSchema.optional(),
+  /** Exact tool allowlist selected by the workflow authority for this delegate. */
+  allowedTools: z.array(z.string()).optional(),
+  /** Completion contract for the spawned subagent. Defaults to tool completion. */
+  completion: CompletionModeSchema.optional(),
+  /** Authority-owned finalizer applied to a successful result before frame persistence. */
+  resultFinalizerId: WorkflowDelegateResultFinalizerIdSchema.optional(),
 });
 
 export type WorkflowDelegateAgentNode = z.infer<typeof WorkflowDelegateAgentNodeSchema>;
@@ -494,6 +500,10 @@ export const WorkflowDelegateRoleNodeSchema = WorkflowNodeBaseSchema.extend({
    * JSON Schema for the expected output of this delegation.
    */
   outputSchema: JsonSchemaRecordSchema.optional(),
+  /** Exact tool allowlist selected by the workflow authority for this delegate. */
+  allowedTools: z.array(z.string()).optional(),
+  /** Authority-owned finalizer applied to a successful result before frame persistence. */
+  resultFinalizerId: WorkflowDelegateResultFinalizerIdSchema.optional(),
   /**
    * Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) when omitted.
    */
@@ -947,7 +957,11 @@ export const WorkflowDefinitionSchema = z.object({
    * Absent on locally-authored definitions.
    */
   source: WorkflowDefinitionProvenanceSchema.optional(),
-  /** Definition-owned finalizer selected after successful execution. */
+  /**
+   * Framework finalizer selected by the compiled workflow definition after a
+   * successful execution. This immutable definition-owned selector cannot be
+   * overridden by execution callers or dispatch metadata.
+   */
   successFinalizerId: WorkflowFinalizerIdSchema.optional(),
   /**
    * Advisory execution hints that constrain worker provisioning and routing.
@@ -1150,6 +1164,8 @@ export type WorkflowGateInstance = z.infer<typeof WorkflowGateInstanceSchema>;
 export const WorkflowResolvedRoleSchema = z.object({
   /** Adapter name to use for execution (e.g., 'claudeCode', 'openai'). */
   adapterName: z.string().min(1),
+  /** Provider configuration selected for this role's execution. */
+  providerConfigId: z.string().min(1).optional(),
   /** Model override for the resolved role. */
   model: z.string().optional(),
   /** Reasoning effort override for supporting adapters. */
@@ -1162,6 +1178,14 @@ export const WorkflowResolvedRoleSchema = z.object({
   contextMode: ContextModeSchema.optional(),
   /** Provider context for credential and endpoint resolution. */
   providerContext: ProviderContextSchema.optional(),
+  /** Per-call adapter-specific configuration. */
+  adapterConfig: JsonObjectContractSchema.optional(),
+  /** Tool allowlist for the resolved role. */
+  tools: z.array(z.string()).optional(),
+  /** Additional tools to block for the resolved role. */
+  disallowedTools: z.array(z.string()).optional(),
+  /** Directory allowlist for adapters that enforce filesystem boundaries. */
+  allowedDirectories: z.array(z.string()).optional(),
   /**
    * Subagent completion mode forwarded from the workflow node.
    * `'tool'` (default) waits for `completeTask`; `'turn'` completes on

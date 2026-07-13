@@ -30,7 +30,7 @@ import {
   type DevStampManifest,
   type WorkspacePackage,
 } from './lib/dev-publish-core.js';
-import { checkSourceManifestMakaioReferences, type PackedPackageManifest } from './lib/npm-packlist-policy.js';
+import { stagePackageForNpmPublish } from './lib/npm-publish-staging.js';
 export {
   buildChangedFilesArgs,
   buildChangedSinceTagArgs,
@@ -76,6 +76,7 @@ function discoverWorkspacePackages(): WorkspacePackage[] {
       dependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
       optionalDependencies?: Record<string, string>;
+      publishWorkspaceDependencies?: string[];
     };
 
     if (packageJson.private || !packageJson.name?.startsWith('@makaio/') || !packageJson.version) {
@@ -87,34 +88,11 @@ function discoverWorkspacePackages(): WorkspacePackage[] {
       location: workspace.location,
       version: packageJson.version,
       dependencies: Object.assign({}, ...DEPENDENCY_FIELDS.map((field) => packageJson[field] ?? {})),
+      publishWorkspaceDependencies: packageJson.publishWorkspaceDependencies,
     });
   }
 
   return packages;
-}
-
-/**
- * Fails the prepare step when a selected package's workspace manifest cannot
- * be published as-is. The dev lane packs workspace manifests without the
- * portable-package staging of the release lane, so `@makaio/*` references
- * must already be publish-shaped (bundled packages dev-only, framework
- * coupling as the `@makaio/framework` peer).
- * @param packages - Selected packages with workspace locations.
- */
-function assertManifestsPublishableWithoutStaging(packages: readonly DevPublishPackage[]): void {
-  const issues = packages.flatMap((pkg) =>
-    checkSourceManifestMakaioReferences(
-      JSON.parse(readFileSync(join(pkg.location, 'package.json'), 'utf8')) as PackedPackageManifest,
-    ),
-  );
-  if (issues.length > 0) {
-    throw new Error(
-      [
-        'Dev publishes pack workspace manifests as-is; fix the manifests before publishing:',
-        ...issues.map((issue) => `  ${issue}`),
-      ].join('\n'),
-    );
-  }
 }
 
 /**
@@ -146,6 +124,19 @@ function writePackageVersions(packages: readonly DevPublishPackage[], frameworkV
 }
 
 /**
+ * Stage a dependency-coordinated dev publish plan using the release transform.
+ * @param packages - Dependency-first dev package plan.
+ * @param frameworkVersion - Exact dev version of the public framework package.
+ * @returns Publish staging directory keyed by package name.
+ */
+function stageDevPackages(packages: readonly DevPublishPackage[], frameworkVersion: string): Map<string, string> {
+  const publishVersions = Object.fromEntries(packages.map((pkg) => [pkg.name, pkg.version]));
+  return new Map(
+    packages.map((pkg) => [pkg.name, stagePackageForNpmPublish(pkg.location, frameworkVersion, publishVersions)]),
+  );
+}
+
+/**
  * Executes a command and fails with context when it exits non-zero.
  * @param command - Executable name.
  * @param args - Command arguments.
@@ -168,6 +159,23 @@ function run(command: string, args: readonly string[], cwd?: string): void {
  */
 function readManifest(manifestPath: string): DevPublishPackage[] {
   return JSON.parse(readFileSync(manifestPath, 'utf8')) as DevPublishPackage[];
+}
+
+interface StagedDevPublishPlan {
+  readonly packages: DevPublishPackage[];
+  readonly staged: Map<string, string>;
+}
+
+/**
+ * Loads a dev-publish plan and stages all selected packages for npm.
+ * @param manifestPath - Path to the prepared dev-publish manifest.
+ * @returns The dependency-ordered package plan and its staging directories.
+ */
+function loadStagedDevPublishPlan(manifestPath: string): StagedDevPublishPlan {
+  const packages = readManifest(manifestPath);
+  const framework = packages.find((pkg) => pkg.name === '@makaio/framework');
+  if (!framework) throw new Error('Dev publish plan must include @makaio/framework.');
+  return { packages, staged: stageDevPackages(packages, framework.version) };
 }
 
 /**
@@ -252,7 +260,6 @@ function main(argv: readonly string[]): void {
     const timestamp = flags.get('timestamp') ?? Date.now().toString();
     const workspaces = discoverWorkspacePackages();
     const packages = resolveDevPublishPlan(workspaces, parsePackageNames(requireFlag(flags, 'packages')), timestamp);
-    assertManifestsPublishableWithoutStaging(packages);
     writePackageVersions(packages, resolveFrameworkDevVersion(workspaces, timestamp));
     writeFileSync(requireFlag(flags, 'out'), `${JSON.stringify(packages, null, 2)}\n`);
     console.log(`Prepared ${packages.length} dev package(s):`);
@@ -263,15 +270,17 @@ function main(argv: readonly string[]): void {
   }
 
   if (command === 'pack') {
-    for (const pkg of readManifest(requireFlag(flags, 'manifest'))) {
+    const { packages, staged } = loadStagedDevPublishPlan(requireFlag(flags, 'manifest'));
+    for (const pkg of packages) {
       console.log(`Packing ${pkg.name}@${pkg.version}`);
-      run('yarn', ['workspace', pkg.name, 'npm', 'publish', '--dry-run', '--tag', 'dev', '--access', 'public']);
+      run('npm', ['publish', staged.get(pkg.name)!, '--dry-run', '--tag', 'dev', '--access', 'public']);
     }
     return;
   }
 
   if (command === 'publish') {
-    for (const pkg of readManifest(requireFlag(flags, 'manifest'))) {
+    const { packages, staged } = loadStagedDevPublishPlan(requireFlag(flags, 'manifest'));
+    for (const pkg of packages) {
       console.log(`Publishing ${pkg.name}@${pkg.version}`);
       const check = spawnSync('npm', ['view', `${pkg.name}@${pkg.version}`, 'version'], {
         encoding: 'utf8',
@@ -281,7 +290,7 @@ function main(argv: readonly string[]): void {
         console.log(`${pkg.name}@${pkg.version} already exists on npm; skipping publish.`);
         continue;
       }
-      run('yarn', buildPublishArgs(pkg.name));
+      run('npm', buildPublishArgs(staged.get(pkg.name)!));
     }
     return;
   }

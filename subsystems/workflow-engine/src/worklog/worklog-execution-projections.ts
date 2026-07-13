@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { serializeDatabaseOperation } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import {
   insertRunningWorklogSummaryIfAbsent,
@@ -20,15 +21,14 @@ function isTerminalWorklogStatus(status: string): boolean {
 }
 
 /**
- * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
  * @param payload - Source execution start event payload.
+ * @returns Whether the projection changed durable WorkLog state.
  */
 async function projectExecutionStarted(
-  bus: IMakaioBus,
   db: MakaioDatabase,
   payload: { readonly executionId: string; readonly workflowId: string; readonly startedAt?: number },
-): Promise<void> {
+): Promise<boolean> {
   await insertRunningWorklogSummaryIfAbsent(db, {
     executionId: payload.executionId,
     workflowId: payload.workflowId,
@@ -43,22 +43,21 @@ async function projectExecutionStarted(
     error: null,
     failedNodeId: null,
   });
-  await emitWorklogChanged(bus, payload.executionId);
+  return true;
 }
 
 /**
- * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
  * @param payload - Source execution completion event payload.
+ * @returns Whether the projection changed durable WorkLog state.
  */
 async function projectExecutionCompleted(
-  bus: IMakaioBus,
   db: MakaioDatabase,
   payload: { readonly executionId: string; readonly totalDuration: number; readonly completedAt?: number },
-): Promise<void> {
+): Promise<boolean> {
   const completedAt = payload.completedAt ?? Date.now();
   const existing = await getWorklogSummary(db, payload.executionId);
-  if (existing !== null && isTerminalWorklogStatus(existing.status)) return;
+  if (existing !== null && isTerminalWorklogStatus(existing.status)) return false;
   await upsertAdvisoryWorklogSummary(db, {
     executionId: payload.executionId,
     workflowId: existing?.workflowId ?? payload.executionId,
@@ -73,29 +72,28 @@ async function projectExecutionCompleted(
     error: null,
     failedNodeId: null,
   });
-  await emitWorklogChanged(bus, payload.executionId);
+  return true;
 }
 
 /**
- * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
  * @param executionId - Execution identifier.
  * @param status - Terminal status (`'failed'` or `'cancelled'`).
  * @param error - Error message for failed executions.
  * @param failedNodeId - Failed node ID for failed executions.
  * @param completedAt - Source execution completion timestamp.
+ * @returns Whether the projection changed durable WorkLog state.
  */
 async function projectExecutionTerminated(
-  bus: IMakaioBus,
   db: MakaioDatabase,
   executionId: string,
   status: 'failed' | 'cancelled',
   error: string | null,
   failedNodeId: string | null,
   completedAt: number,
-): Promise<void> {
+): Promise<boolean> {
   const existing = await getWorklogSummary(db, executionId);
-  if (existing !== null && isTerminalWorklogStatus(existing.status)) return;
+  if (existing !== null && isTerminalWorklogStatus(existing.status)) return false;
   const startedAt = existing?.startedAt ?? completedAt;
   await upsertAdvisoryWorklogSummary(db, {
     executionId,
@@ -111,7 +109,7 @@ async function projectExecutionTerminated(
     error,
     failedNodeId,
   });
-  await emitWorklogChanged(bus, executionId);
+  return true;
 }
 
 /**
@@ -124,25 +122,37 @@ export function registerExecutionProjections(bus: IMakaioBus, db: MakaioDatabase
   return [
     bus.on(WorkflowSubjects.execution.started, async (ctx) => {
       const { executionId } = ctx.payload;
-      await safeProject(`execution.started[${executionId}]`, () => projectExecutionStarted(bus, db, ctx.payload));
+      await safeProject(`execution.started[${executionId}]`, async () => {
+        const changed = await serializeDatabaseOperation(db, () => projectExecutionStarted(db, ctx.payload));
+        if (changed) await emitWorklogChanged(bus, executionId);
+      });
     }),
     bus.on(WorkflowSubjects.execution.completed, async (ctx) => {
       const { executionId } = ctx.payload;
-      await safeProject(`execution.completed[${executionId}]`, () => projectExecutionCompleted(bus, db, ctx.payload));
+      await safeProject(`execution.completed[${executionId}]`, async () => {
+        const changed = await serializeDatabaseOperation(db, () => projectExecutionCompleted(db, ctx.payload));
+        if (changed) await emitWorklogChanged(bus, executionId);
+      });
     }),
     bus.on(WorkflowSubjects.execution.failed, async (ctx) => {
       const { executionId, error, failedStepId } = ctx.payload;
       const completedAt = ctx.payload.completedAt ?? Date.now();
-      await safeProject(`execution.failed[${executionId}]`, () =>
-        projectExecutionTerminated(bus, db, executionId, 'failed', error, failedStepId ?? null, completedAt),
-      );
+      await safeProject(`execution.failed[${executionId}]`, async () => {
+        const changed = await serializeDatabaseOperation(db, () =>
+          projectExecutionTerminated(db, executionId, 'failed', error, failedStepId ?? null, completedAt),
+        );
+        if (changed) await emitWorklogChanged(bus, executionId);
+      });
     }),
     bus.on(WorkflowSubjects.execution.cancelled, async (ctx) => {
       const { executionId } = ctx.payload;
       const completedAt = ctx.payload.completedAt ?? Date.now();
-      await safeProject(`execution.cancelled[${executionId}]`, () =>
-        projectExecutionTerminated(bus, db, executionId, 'cancelled', null, null, completedAt),
-      );
+      await safeProject(`execution.cancelled[${executionId}]`, async () => {
+        const changed = await serializeDatabaseOperation(db, () =>
+          projectExecutionTerminated(db, executionId, 'cancelled', null, null, completedAt),
+        );
+        if (changed) await emitWorklogChanged(bus, executionId);
+      });
     }),
   ];
 }

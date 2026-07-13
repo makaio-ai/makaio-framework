@@ -312,6 +312,21 @@ describe('WorkflowDelegateAgentNodeSchema', () => {
     expect(node.inputExpression).toBe('ctx.frames["build"].output');
     expect(node.outputSchema).toBeDefined();
   });
+
+  it('serializes turn completion with exact tools and an authority result finalizer', () => {
+    const node = WorkflowDelegateAgentNodeSchema.parse({
+      id: 'delegate-1',
+      type: 'delegate-agent',
+      agentId: 'code-review-agent',
+      allowedTools: ['artifact.read'],
+      completion: 'turn',
+      resultFinalizerId: 'artifact.read-wrap',
+    });
+
+    expect(node.allowedTools).toEqual(['artifact.read']);
+    expect(node.completion).toBe('turn');
+    expect(node.resultFinalizerId).toBe('artifact.read-wrap');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -329,6 +344,20 @@ describe('WorkflowDelegateRoleNodeSchema', () => {
     expect(node.type).toBe('delegate-role');
     expect(node.role).toBe('senior-reviewer');
     expect(node.prompt).toBe('Review the PR and provide feedback');
+  });
+
+  it('accepts exact allowed tools and an authority result finalizer', () => {
+    const node = WorkflowDelegateRoleNodeSchema.parse({
+      id: 'role-delegate',
+      type: 'delegate-role',
+      role: 'senior-reviewer',
+      prompt: 'Review the PR and provide feedback',
+      allowedTools: ['artifact.read'],
+      resultFinalizerId: 'artifact.read-wrap',
+    });
+
+    expect(node.allowedTools).toEqual(['artifact.read']);
+    expect(node.resultFinalizerId).toBe('artifact.read-wrap');
   });
 });
 
@@ -683,6 +712,7 @@ describe('WorkflowDefinitionSchema', () => {
           file: '.makaio/workflows/intake.ts',
         },
       },
+      successFinalizerId: 'factory.success-finalizer',
       executionHints: {
         requirements: {
           capabilities: ['makaio.factory.github-actions'],
@@ -700,6 +730,7 @@ describe('WorkflowDefinitionSchema', () => {
     });
 
     expect(def.source?.kind).toBe('extension');
+    expect(def.successFinalizerId).toBe('factory.success-finalizer');
     expect(def.executionHints?.requirements?.capabilities).toEqual(['makaio.factory.github-actions']);
   });
 
@@ -947,6 +978,11 @@ describe('WorkflowResolvedRoleSchema', () => {
       harnessId: 'harness-reviewer',
       systemPrompt: 'You are a code reviewer',
       contextMode: 'fresh',
+      providerConfigId: 'pc-1',
+      adapterConfig: {},
+      tools: [],
+      disallowedTools: [],
+      allowedDirectories: [],
       providerContext: {
         state: 'resolved',
         providerConfigId: 'pc-1',
@@ -970,6 +1006,11 @@ describe('WorkflowResolvedRoleSchema', () => {
     expect(role.harnessId).toBe('harness-reviewer');
     expect(role.systemPrompt).toBe('You are a code reviewer');
     expect(role.contextMode).toBe('fresh');
+    expect(role.providerConfigId).toBe('pc-1');
+    expect(role.adapterConfig).toEqual({});
+    expect(role.tools).toEqual([]);
+    expect(role.disallowedTools).toEqual([]);
+    expect(role.allowedDirectories).toEqual([]);
     expect(role.providerContext?.state).toBe('resolved');
     if (role.providerContext?.state !== 'resolved') throw new Error('Expected resolved provider context.');
     expect(role.providerContext.providerConfigId).toBe('pc-1');

@@ -15,6 +15,7 @@ import {
   cancelExecution,
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
+  commitExecutionLifecycleTransition,
 } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
@@ -140,29 +141,36 @@ async function parkExecution(deps: RunnerTaskDeps, result: WorkflowRunResult): P
   if (result.pausedAtGateId === undefined || result.pausedAtFrameId === undefined) {
     throw new Error(`Paused runner result for '${result.executionId}' is missing gate identity`);
   }
-  const { bus } = deps.buildFinalizerDeps();
-  const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: result.executionId });
-  if (execution?.status !== 'running') {
-    const active = deps.activeExecutions.get(result.executionId);
-    if (active !== undefined && execution?.status === 'paused') {
-      active.execution.status = 'paused';
+  const finalizerDeps = deps.buildFinalizerDeps();
+  const paused = await commitExecutionLifecycleTransition(
+    finalizerDeps,
+    result.executionId,
+    async () => {
+      const { paused: transitioned } = await finalizerDeps.bus.request(WorkflowStorageSubjects.pauseRunningExecution, {
+        executionId: result.executionId,
+      });
+      if (!transitioned) {
+        const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, {
+          executionId: result.executionId,
+        });
+        if (execution?.status !== 'paused') return false;
+      }
+      const active = deps.activeExecutions.get(result.executionId);
+      if (active !== undefined) active.execution.status = 'paused';
       deps.activeExecutions.delete(result.executionId);
-    }
-    return;
-  }
-  const pausedExecution = { ...execution, status: 'paused' as const };
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution: pausedExecution });
-  const active = deps.activeExecutions.get(result.executionId);
-  if (active !== undefined) {
-    active.execution = pausedExecution;
-  }
-  await bus.emit(WorkflowSubjects.execution.paused, {
-    executionId: result.executionId,
-    workflowId: result.workflowId,
-    pausedAtGateId: result.pausedAtGateId,
-    pausedAtFrameId: result.pausedAtFrameId,
-  });
-  deps.activeExecutions.delete(result.executionId);
+      return transitioned;
+    },
+    async (committed) => {
+      if (!committed) return;
+      await finalizerDeps.bus.emit(WorkflowSubjects.execution.paused, {
+        executionId: result.executionId,
+        workflowId: result.workflowId,
+        pausedAtGateId: result.pausedAtGateId,
+        pausedAtFrameId: result.pausedAtFrameId,
+      });
+    },
+  );
+  if (!paused) return;
 }
 
 /**
@@ -176,7 +184,10 @@ async function parkExecution(deps: RunnerTaskDeps, result: WorkflowRunResult): P
  * @param deps - Runner task dependencies.
  * @param result - Terminal result returned by the workflow runner.
  */
-async function finalizeResolvedRunnerResult(deps: RunnerTaskDeps, result: WorkflowRunResult): Promise<void> {
+export async function finalizeResolvedRunnerResult(
+  deps: Pick<RunnerTaskDeps, 'activeExecutions' | 'buildFinalizerDeps'>,
+  result: WorkflowRunResult,
+): Promise<void> {
   const active = deps.activeExecutions.get(result.executionId);
   if (!active || active.execution.status !== 'running') return;
 
@@ -257,6 +268,8 @@ export interface DefinitionRunnerTaskParams {
    * was introduced).
    */
   readonly suspensionStrategy?: SuspensionStrategy;
+  /** Component that owns the execution's durable terminal transition. */
+  readonly terminalAuthority?: WorkflowWorkerConfig['terminalAuthority'];
   /**
    * Opaque metadata forwarded to the WorkerNode dispatch request.
    *
@@ -305,6 +318,7 @@ function buildFileWorkerConfig(deps: RunnerTaskDeps, params: FileRunnerTaskParam
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
     suspensionStrategy: 'wait-in-process',
+    terminalAuthority: 'authority',
   };
 }
 
@@ -398,6 +412,7 @@ function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRun
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
     suspensionStrategy: params.suspensionStrategy ?? 'wait-in-process',
+    terminalAuthority: params.terminalAuthority ?? 'authority',
   };
 }
 
@@ -507,6 +522,7 @@ export function buildDefinitionRunnerParamsFromRunContext(
     scope: runContext.scope,
     workspaceRoot: runContext.context.repoPath,
     suspensionStrategy: runContext.suspensionStrategy,
+    terminalAuthority: runContext.terminalAuthority ?? 'authority',
     ...(dispatchMetadata !== undefined ? { dispatchMetadata } : {}),
   };
 }

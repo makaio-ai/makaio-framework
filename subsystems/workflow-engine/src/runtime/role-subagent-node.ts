@@ -1,8 +1,11 @@
 import { resolveTemplate } from '@makaio/expression';
 import {
   SubagentSubjects,
+  createWorkflowDelegateResultFinalizerNamespace,
   type AwaitSubagentResponse,
+  type JsonValue,
   type ResponseSchemaDescriptor,
+  type WorkflowDelegateToolObservation,
   type WorkflowResolvedRole,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
@@ -25,12 +28,17 @@ const SESSION_LINK_POLL_TIMEOUT_MS = 25;
 interface ResolvedSubagentConfigInput {
   readonly task: string;
   readonly adapterName: string;
+  readonly providerConfigId?: string;
   readonly model?: string;
   readonly reasoningEffort?: WorkflowResolvedRole['reasoningEffort'];
   readonly harnessId?: string;
   readonly systemPrompt?: string;
   readonly contextMode?: WorkflowResolvedRole['contextMode'];
   readonly providerContext?: WorkflowResolvedRole['providerContext'];
+  readonly adapterConfig?: WorkflowResolvedRole['adapterConfig'];
+  readonly tools?: WorkflowResolvedRole['tools'];
+  readonly disallowedTools?: WorkflowResolvedRole['disallowedTools'];
+  readonly allowedDirectories?: WorkflowResolvedRole['allowedDirectories'];
   readonly responseSchema?: ResponseSchemaDescriptor;
   readonly completion?: WorkflowResolvedRole['completion'];
 }
@@ -83,6 +91,26 @@ export interface ExecuteResolvedSubagentNodeParams {
   readonly cancellationLabel: string;
   /** Runtime frame that owns the spawned child session. */
   readonly frameId?: string;
+  /** Authority-owned finalizer selected by the serialized delegate node. */
+  readonly resultFinalizerId?: string;
+  /** Delegate node type used by the authority finalizer contract. */
+  readonly delegateNodeType?: 'delegate-agent' | 'delegate-role';
+}
+
+/** Identity and authority policy for one delegate result finalization. */
+export interface DelegateResultFinalizationParams {
+  /** Delegate node identifier. */
+  readonly nodeId: string;
+  /** Runtime frame that owns the delegate. */
+  readonly frameId?: string;
+  /** Authority-owned finalizer selected by the serialized delegate node. */
+  readonly resultFinalizerId?: string;
+  /** Delegate node type used by the authority finalizer contract. */
+  readonly delegateNodeType?: 'delegate-agent' | 'delegate-role';
+  /** Actual resolved runtime binding used for this delegate execution. */
+  readonly resolvedConfig?: WorkflowResolvedRole;
+  /** Authoritative child-runtime tool outcomes carried by the await contract. */
+  readonly toolObservations?: readonly WorkflowDelegateToolObservation[];
 }
 
 /**
@@ -149,6 +177,7 @@ export async function executeResolvedSubagentNode(
     return { status: 'cancelled' };
   }
 
+  const delegateStartedAt = performance.now();
   const spawnResult = await ctx.bus.requestOptional(SubagentSubjects.spawn, {
     parentSessionId: ctx.execution.coordinatorSessionId ?? ctx.executionId,
     depth: 1,
@@ -183,7 +212,19 @@ export async function executeResolvedSubagentNode(
     return { status: 'cancelled' };
   }
   if (awaitResult.data.status === 'completed') {
-    return { status: 'completed', output: awaitResult.data.result ?? null };
+    const rawResult = awaitResult.data.result ?? null;
+    try {
+      const finalOutput = await finalizeDelegateResult(
+        { ...params, toolObservations: awaitResult.data.toolObservations },
+        ctx,
+        rawResult,
+        elapsedDelegateDuration(delegateStartedAt),
+      );
+      return { status: 'completed', output: finalOutput };
+    } catch (error) {
+      if (ctx.signal.aborted) return { status: 'cancelled' };
+      throw error;
+    }
   }
   return {
     status: 'failed',
@@ -191,6 +232,92 @@ export async function executeResolvedSubagentNode(
       awaitResult.data.error ?? 'no result'
     }`,
   };
+}
+
+/**
+ * Request authority-owned finalization of a successful delegate result.
+ *
+ * The subagent contract exposes only its terminal result today, so successful
+ * tool observations are explicitly empty instead of inferred from unrelated
+ * session events. Finalizer failures deliberately propagate: callers selected
+ * the finalizer as part of the execution contract and retrying could duplicate
+ * authority-side effects.
+ * @param params - Delegate identity and optional finalizer selector.
+ * @param ctx - Execution-wide runtime context.
+ * @param rawResult - Successful raw subagent result.
+ * @param durationMs - Measured delegate runtime duration available at completion.
+ * @returns Raw result when no finalizer is selected, otherwise authority output.
+ */
+export async function finalizeDelegateResult(
+  params: DelegateResultFinalizationParams,
+  ctx: RuntimeContext,
+  rawResult: JsonValue,
+  durationMs = 0,
+): Promise<JsonValue> {
+  if (params.resultFinalizerId === undefined) return rawResult;
+  if (params.frameId === undefined || params.delegateNodeType === undefined) {
+    throw new Error(
+      `Delegate result finalizer '${params.resultFinalizerId}' requires frame and delegate node identity`,
+    );
+  }
+  const { subjects } = createWorkflowDelegateResultFinalizerNamespace(params.resultFinalizerId);
+  const result = await ctx.bus.request(
+    subjects.finalize,
+    {
+      executionId: ctx.executionId,
+      workflowId: ctx.workflowId,
+      frameId: params.frameId,
+      nodeId: params.nodeId,
+      nodeType: params.delegateNodeType,
+      rawResult,
+      toolObservations: [...(params.toolObservations ?? [])],
+      ...(params.resolvedConfig === undefined
+        ? {}
+        : { economics: buildDelegateEconomics(params.resolvedConfig, durationMs) }),
+    },
+    { signal: ctx.signal },
+  );
+  return result.output;
+}
+
+/**
+ * Build a secret-free snapshot from the exact role binding used for execution.
+ * @param resolved - Resolved role passed to the spawned subagent.
+ * @param durationMs - Measured delegate runtime duration.
+ * @returns Truthful runtime economics without unavailable token estimates.
+ */
+function buildDelegateEconomics(resolved: WorkflowResolvedRole, durationMs: number) {
+  const providerContext = resolved.providerContext?.state === 'resolved' ? resolved.providerContext : undefined;
+  const providerConfigId = resolved.providerConfigId ?? providerContext?.providerConfigId;
+  return {
+    durationMs,
+    binding: {
+      adapterName: resolved.adapterName,
+      ...(providerConfigId !== undefined ? { providerConfigId } : {}),
+      ...(providerContext !== undefined ? { providerDefinitionId: providerContext.definitionId } : {}),
+      ...(resolved.model !== undefined ? { model: resolved.model } : {}),
+      ...(providerContext !== undefined
+        ? {
+            auth: {
+              mode: providerContext.auth.mode,
+              owner: providerContext.auth.method.owner,
+              methodId: providerContext.auth.method.methodId,
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+/**
+ * Convert a monotonic high-resolution start timestamp into a contract-safe duration.
+ * @param startedAt - Timestamp previously returned by `performance.now()`.
+ * @returns Rounded, clamped, non-negative safe-integer milliseconds.
+ */
+export function elapsedDelegateDuration(startedAt: number): number {
+  const elapsed = performance.now() - startedAt;
+  if (!Number.isFinite(elapsed) || elapsed <= 0) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.round(elapsed));
 }
 
 /**
@@ -349,12 +476,17 @@ function buildSubagentConfig(
   return {
     task,
     adapterName: role.adapterName,
+    ...(role.providerConfigId !== undefined ? { providerConfigId: role.providerConfigId } : {}),
     ...(role.model !== undefined ? { model: role.model } : {}),
     ...(role.reasoningEffort !== undefined ? { reasoningEffort: role.reasoningEffort } : {}),
     ...(role.harnessId !== undefined ? { harnessId: role.harnessId } : {}),
     ...(role.systemPrompt !== undefined ? { systemPrompt: role.systemPrompt } : {}),
     ...(role.contextMode !== undefined ? { contextMode: role.contextMode } : {}),
     ...(role.providerContext !== undefined ? { providerContext: role.providerContext } : {}),
+    ...(role.adapterConfig !== undefined ? { adapterConfig: role.adapterConfig } : {}),
+    ...(role.tools !== undefined ? { tools: role.tools } : {}),
+    ...(role.disallowedTools !== undefined ? { disallowedTools: role.disallowedTools } : {}),
+    ...(role.allowedDirectories !== undefined ? { allowedDirectories: role.allowedDirectories } : {}),
     ...(role.completion !== undefined ? { completion: role.completion } : {}),
     ...(outputSchema !== undefined ? { responseSchema: outputSchema } : {}),
   };

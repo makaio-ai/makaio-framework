@@ -216,6 +216,7 @@ describe('SubagentService - execution target inheritance', () => {
   });
 
   it('throws when explicit executionTargetId is provided but no resolver is registered', async () => {
+    await createParentSession();
     const failedEvents: unknown[] = [];
     MakaioBus.on(SubagentSubjects.executionFailed, (ctx) => {
       failedEvents.push(ctx.payload);

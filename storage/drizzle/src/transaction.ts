@@ -28,6 +28,27 @@ export type TransactionCallback<T> = Parameters<LibSQLTransactionExecutor>[0] ex
   : never;
 
 /**
+ * Serialize one database operation with transactions using the same handle.
+ * @param db - Makaio database instance.
+ * @param operation - Async database work that must not overlap a transaction.
+ * @returns Result returned by the operation.
+ */
+export async function serializeDatabaseOperation<T>(db: MakaioDatabase, operation: () => Promise<T>): Promise<T> {
+  const previousTail = operationTails.get(db) ?? Promise.resolve();
+  const release = Promise.withResolvers<void>();
+  const nextTail = previousTail.catch(() => undefined).then(() => release.promise);
+  operationTails.set(db, nextTail);
+
+  await previousTail.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release.resolve();
+    if (operationTails.get(db) === nextTail) operationTails.delete(db);
+  }
+}
+
+/**
  * Execute a database transaction through a shared transaction seam.
  *
  * **Serialization contract:** transaction callbacks are serialized per
@@ -54,26 +75,7 @@ export type TransactionCallback<T> = Parameters<LibSQLTransactionExecutor>[0] ex
  * @returns Result returned by the callback
  */
 export async function executeTransaction<T>(db: MakaioDatabase, callback: TransactionCallback<T>): Promise<T> {
-  // Per-handle promise queue implementing the serialization contract above.
-  // Deliberately dialect-independent: Postgres handles are queued too, so
-  // read-modify-write callbacks never interleave within this process.
-  const previousTail = transactionTails.get(db) ?? Promise.resolve();
-  let releaseCurrent = (): void => {};
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const nextTail = previousTail.catch(() => undefined).then(() => current);
-  transactionTails.set(db, nextTail);
-
-  await previousTail.catch(() => undefined);
-  try {
-    return await db.transaction(callback);
-  } finally {
-    releaseCurrent();
-    if (transactionTails.get(db) === nextTail) {
-      transactionTails.delete(db);
-    }
-  }
+  return serializeDatabaseOperation(db, () => db.transaction(callback));
 }
 
-const transactionTails = new WeakMap<MakaioDatabase, Promise<void>>();
+const operationTails = new WeakMap<MakaioDatabase, Promise<void>>();

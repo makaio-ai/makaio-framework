@@ -8,8 +8,9 @@
  */
 
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { createPortablePackageJson, type PackageJsonLike } from '@makaio/build-tooling/portable-package';
+import { isForbiddenPublishBuildArtifact } from './npm-packlist-policy.js';
 import { copyRuntimeMigrationChain, isMigrationChainDirectory } from './runtime-migration-assets.js';
 
 /** Directory, relative to each package root, used as the npm publish root. */
@@ -80,17 +81,38 @@ export function resolveNpmPublishDirectory(packageDir: string, packageJson: Publ
  * would otherwise survive into the tarball.
  * @param packageJson - Source workspace package manifest.
  * @param frameworkVersion - Version of the public `@makaio/framework` package.
+ * @param publishVersions - Exact versions for public workspace dependencies.
  * @returns Publish manifest with dist exports, devDependencies, and
  *   staging-only config removed.
  */
 export function createStagedPackageJson(
   packageJson: PublishablePackageJson,
   frameworkVersion: string,
+  publishVersions: Readonly<Record<string, string>> = {},
 ): PublishablePackageJson {
+  if (packageJson.name === '@makaio/framework') {
+    const {
+      devDependencies: _devDependencies,
+      publishWorkspaceDependencies: _publishWorkspaceDependencies,
+      peerDependencies,
+      ...manifest
+    } = packageJson;
+    const frameworkPeers = Object.fromEntries(
+      Object.entries(peerDependencies ?? {}).filter(([name]) => name !== '@makaio/framework'),
+    );
+    return {
+      ...manifest,
+      version: frameworkVersion,
+      private: false,
+      ...(Object.keys(frameworkPeers).length > 0 ? { peerDependencies: frameworkPeers } : {}),
+    };
+  }
+
   const frameworkPeerRange = buildFrameworkPeerRange(frameworkVersion);
   const portablePackageJson = createPortablePackageJson(packageJson, {
     frameworkVersion,
     frameworkPeerRange,
+    publishVersions,
   }) as PublishablePackageJson;
   // devDependencies have no meaning in a published package and may contain
   // raw workspace: specifiers that cannot resolve outside this repository.
@@ -116,11 +138,13 @@ function stripPackageRelativePrefix(target: string): string {
 
 /**
  * Return whether a copied source should be staged into the publish directory.
+ * @param packageRoot - Absolute package root used to derive a policy path.
  * @param source - Absolute source path currently being copied.
  * @returns Whether the file should be included in the staged package.
  */
-function shouldStagePublishFile(source: string): boolean {
-  return !source.endsWith('.map');
+function shouldStagePublishFile(packageRoot: string, source: string): boolean {
+  const packageRelativePath = relative(packageRoot, source).split(sep).join('/');
+  return !isForbiddenPublishBuildArtifact(packageRelativePath);
 }
 
 /**
@@ -171,9 +195,14 @@ function normalizeStagedDeclarationTargets(publishDir: string, value: unknown): 
  * Stage one package for npm publishing.
  * @param packageDir - Absolute package root.
  * @param frameworkVersion - Version of the public `@makaio/framework` package.
+ * @param publishVersions - Exact versions for public workspace dependencies.
  * @returns Absolute path to the staged publish directory.
  */
-export function stagePackageForNpmPublish(packageDir: string, frameworkVersion: string): string {
+export function stagePackageForNpmPublish(
+  packageDir: string,
+  frameworkVersion: string,
+  publishVersions: Readonly<Record<string, string>> = {},
+): string {
   const packageRoot = resolve(packageDir);
   const packageRootPrefix = `${packageRoot}${sep}`;
   const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as PublishablePackageJson;
@@ -200,13 +229,16 @@ export function stagePackageForNpmPublish(packageDir: string, frameworkVersion: 
     if (isMigrationChainDirectory(source)) {
       copyRuntimeMigrationChain(source, join(publishDir, file));
     } else {
-      cpSync(source, join(publishDir, file), { recursive: true, filter: shouldStagePublishFile });
+      cpSync(source, join(publishDir, file), {
+        recursive: true,
+        filter: (copiedSource) => shouldStagePublishFile(packageRoot, copiedSource),
+      });
     }
   }
 
   const stagedPackageJson = normalizeStagedDeclarationTargets(
     publishDir,
-    createStagedPackageJson(packageJson, frameworkVersion),
+    createStagedPackageJson(packageJson, frameworkVersion, publishVersions),
   );
 
   writeFileSync(join(publishDir, 'package.json'), `${JSON.stringify(stagedPackageJson, null, 2)}\n`, 'utf8');

@@ -24,12 +24,12 @@ export const clientDefinition = createClientDefinition({
   description: 'OpenAI Codex CLI — an agentic coding assistant',
   binary: {
     name: 'codex',
-    supportedVersions: '0.130.0',
+    supportedVersions: '0.144.1',
   },
   managedInstall: {
     type: 'npm',
     package: '@openai/codex',
-    version: '0.130.0',
+    version: '0.144.1',
   },
   versionCommand: {
     executable: {

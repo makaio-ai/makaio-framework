@@ -128,6 +128,7 @@ export type { BranchBehavior } from './utils/index.js';
 
 // Orchestrator types (session-level, distinct from agent-level)
 export type {
+  AgentAttachResolvedRequest,
   SendMessageRequest as SessionSendMessageRequest,
   SendMessageResponse as SessionSendMessageResponse,
   TurnCompleted,

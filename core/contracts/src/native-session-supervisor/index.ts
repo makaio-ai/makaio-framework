@@ -1,5 +1,6 @@
 export { NativeSessionSupervisorSubjects, NativeSessionSupervisorNamespace } from './namespace.js';
 export { NativeSessionSupervisorSchemas } from './schemas.js';
+export type { IPtyProcess } from './pty.js';
 export {
   SupervisorSessionStatusSchema,
   NativeSupervisorLaunchSchema,

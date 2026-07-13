@@ -254,6 +254,140 @@ describe('WorkflowExecutor — paused gate integration', () => {
     }
   });
 
+  it('serializes cancellation after a pause CAS before paused projection', async () => {
+    const workflowId = `wf-pause-cancel-race-${Math.random().toString(36).slice(2)}`;
+    const definition = createWorkflowDefinition({ id: workflowId });
+    const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+    const pauseRequestReached = Promise.withResolvers<void>();
+    const releasePauseRequest = Promise.withResolvers<void>();
+    const pauseRequestFinished = Promise.withResolvers<void>();
+    const stubRunner: IWorkflowRunner = {
+      run: vi.fn(() => releaseRunner.promise),
+    };
+
+    setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+
+    const pausedEvents: string[] = [];
+    const lifecycleEvents: string[] = [];
+    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, (ctx) => {
+      pausedEvents.push(ctx.payload.executionId);
+      lifecycleEvents.push('paused');
+    });
+    const offCancelled = MakaioBus.on(WorkflowSubjects.execution.cancelled, () => {
+      lifecycleEvents.push('cancelled');
+    });
+    const delayPauseTransition = MakaioBus.on(
+      WorkflowStorageSubjects.pauseRunningExecution,
+      async (ctx) => {
+        await ctx.next();
+        pauseRequestReached.resolve();
+        await releasePauseRequest.promise;
+        pauseRequestFinished.resolve();
+      },
+      { priority: 100 },
+    );
+
+    try {
+      const executionId = await startWorkflowThroughExecutor(workflowId);
+      releaseRunner.resolve(makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'));
+      await pauseRequestReached.promise;
+
+      const cancellation = MakaioBus.request(WorkflowSubjects.cancel, {
+        executionId,
+        reason: 'cancel follows pause projection',
+      });
+      await expect(MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).resolves.toEqual(
+        expect.objectContaining({ execution: expect.objectContaining({ status: 'paused' }) }),
+      );
+
+      releasePauseRequest.resolve();
+      await pauseRequestFinished.promise;
+      await expect(cancellation).resolves.toEqual({ cancelled: true });
+
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution?.status).toBe('cancelled');
+      expect(pausedEvents).toEqual([executionId]);
+      expect(lifecycleEvents).toEqual(['paused', 'cancelled']);
+    } finally {
+      delayPauseTransition();
+      offPaused();
+      offCancelled();
+    }
+  });
+
+  it('allows a paused lifecycle handler to await reentrant cancellation', async () => {
+    const workflowId = `wf-pause-reentrant-cancel-${Math.random().toString(36).slice(2)}`;
+    const definition = createWorkflowDefinition({ id: workflowId });
+    const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+    const stubRunner: IWorkflowRunner = { run: vi.fn(() => releaseRunner.promise) };
+
+    setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+
+    const cancellationFinished = Promise.withResolvers<void>();
+    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, async (ctx) => {
+      await expect(
+        MakaioBus.request(WorkflowSubjects.cancel, {
+          executionId: ctx.payload.executionId,
+          reason: 'cancelled by paused handler',
+        }),
+      ).resolves.toEqual({ cancelled: true });
+      cancellationFinished.resolve();
+    });
+
+    try {
+      const executionId = await startWorkflowThroughExecutor(workflowId);
+      releaseRunner.resolve(makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'));
+      await cancellationFinished.promise;
+      await vi.waitFor(async () => {
+        const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+        expect(execution?.status).toBe('cancelled');
+      });
+    } finally {
+      offPaused();
+    }
+  });
+
+  it.each([
+    'completed',
+    'failed',
+  ] as const)('does not let a resolved %s runner overwrite concurrent cancellation', async (terminalStatus) => {
+    const workflowId = `wf-cancel-${terminalStatus}-race-${Math.random().toString(36).slice(2)}`;
+    const definition = createWorkflowDefinition({ id: workflowId });
+    const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+    const cancellationPersisted = Promise.withResolvers<void>();
+    const releaseCancellationPublication = Promise.withResolvers<void>();
+    const stubRunner: IWorkflowRunner = { run: vi.fn(() => releaseRunner.promise) };
+
+    setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+    const holdCancelledEvent = MakaioBus.on(WorkflowSubjects.execution.cancelled, async () => {
+      cancellationPersisted.resolve();
+      await releaseCancellationPublication.promise;
+    });
+
+    try {
+      const executionId = await startWorkflowThroughExecutor(workflowId);
+      const cancellation = MakaioBus.request(WorkflowSubjects.cancel, { executionId, reason: 'race winner' });
+      await cancellationPersisted.promise;
+      releaseRunner.resolve(
+        terminalStatus === 'completed'
+          ? { executionId, workflowId, status: 'completed' }
+          : { executionId, workflowId, status: 'failed', error: 'late runner failure' },
+      );
+      releaseCancellationPublication.resolve();
+      await expect(cancellation).resolves.toEqual({ cancelled: true });
+      await waitForExecutionTaskToSettle(executionId);
+
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution?.status).toBe('cancelled');
+    } finally {
+      releaseCancellationPublication.resolve();
+      holdCancelledEvent();
+    }
+  });
+
   it('cancels a parked paused gate execution without active runtime ownership', async () => {
     const workflowId = `wf-paused-cancel-${Math.random().toString(36).slice(2)}`;
     const executionId = `wfx-paused-cancel-${Math.random().toString(36).slice(2)}`;

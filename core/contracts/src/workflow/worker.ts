@@ -131,6 +131,8 @@ export const WorkflowWorkerConfigSchema = z.object({
   cancelSubject: z.string().min(1),
   /** Selected provider suspension behavior for this execution. */
   suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
+  /** Process that owns durable terminal state and lifecycle publication. */
+  terminalAuthority: z.enum(['worker', 'authority']).optional(),
 });
 
 export type WorkflowWorkerConfig = z.infer<typeof WorkflowWorkerConfigSchema>;

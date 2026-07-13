@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -219,7 +219,7 @@ describe('workflow storage handlers', () => {
     });
   });
 
-  it('round-trips source provenance and executionHints through storage', async () => {
+  it('round-trips definition-owned metadata through storage', async () => {
     const workflow = {
       ...createWorkflowDefinition({ id: 'workflow-provenance' }),
       source: {
@@ -232,12 +232,14 @@ describe('workflow storage handlers', () => {
       executionHints: {
         requirements: { capabilities: ['makaio.factory.github-actions'] },
       },
+      successFinalizerId: 'factory.success-finalizer',
     };
 
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const { workflow: fetched } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
 
     expect(fetched?.source).toEqual(workflow.source);
+    expect(fetched?.successFinalizerId).toBe(workflow.successFinalizerId);
     expect(fetched?.executionHints).toEqual(workflow.executionHints);
   });
 
@@ -261,7 +263,7 @@ describe('workflow storage handlers', () => {
     expect(fetched?.state).toEqual(workflow.state);
   });
 
-  it('clears definition state when an update payload omits the state contract', async () => {
+  it('removes definition state when an update payload omits the state contract', async () => {
     const workflow = {
       ...createWorkflowDefinition({ id: 'workflow-state-clear' }),
       state: {
@@ -287,6 +289,20 @@ describe('workflow storage handlers', () => {
 
     const { workflow: fetched } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
     expect(fetched?.state).toBeUndefined();
+  });
+
+  it('removes a success finalizer when an update payload omits it', async () => {
+    const workflow = {
+      ...createWorkflowDefinition({ id: 'workflow-finalizer-clear' }),
+      successFinalizerId: 'factory.success-finalizer',
+    } satisfies WorkflowDefinition;
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    await MakaioBus.request(WorkflowStorageSubjects.set, {
+      workflow: { id: workflow.id, name: workflow.name, root: workflow.root, scope: workflow.scope },
+    });
+
+    const { workflow: fetched } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
+    expect(fetched?.successFinalizerId).toBeUndefined();
   });
 
   it('preserves optional definition fields when omitted from an update payload', async () => {
@@ -798,6 +814,80 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
     });
     expect(fetched?.suspensionStrategy).toBe('exit-and-redispatch');
+  });
+
+  it('round-trips terminal authority through run context storage', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-terminal-authority' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-terminal-authority', workflowId: workflow.id });
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: workflow,
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-terminal-authority',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'linux', arch: 'arm64' },
+      env: {},
+      createdAt: Date.now(),
+      terminalAuthority: 'authority',
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+
+    const stored = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id });
+    expect(stored.runContext?.terminalAuthority).toBe('authority');
+  });
+
+  it('atomically retries a run-context snapshot and initial state write', async () => {
+    const oldDefinition = createWorkflowDefinition({ id: 'workflow-authority-bootstrap', description: 'old' });
+    const loadedDefinition = { ...oldDefinition, description: 'loaded' };
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: oldDefinition });
+    const execution = createWorkflowExecution({ id: 'execution-authority-bootstrap', workflowId: oldDefinition.id });
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: oldDefinition.id,
+      source: { kind: 'definition', workflowId: oldDefinition.id },
+      definitionSnapshot: oldDefinition,
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-authority-bootstrap',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'linux', arch: 'arm64' },
+      env: {},
+      createdAt: Date.now(),
+      terminalAuthority: 'authority',
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+    await dbContext.exec(
+      sql.raw(`CREATE TRIGGER fail_authority_state_event BEFORE INSERT ON workflow_execution_state_events
+      WHEN NEW.execution_id = '${execution.id}' BEGIN SELECT RAISE(ABORT, 'injected state failure'); END`),
+    );
+
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.setRunContext, {
+        runContext: { ...runContext, definitionSnapshot: loadedDefinition },
+        initialState: { ready: true },
+      }),
+    ).rejects.toThrow();
+    const afterFailure = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id });
+    const stateAfterFailure = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId: execution.id });
+    expect(afterFailure.runContext?.definitionSnapshot?.description).toBe('old');
+    expect(stateAfterFailure.state).toBeNull();
+
+    await dbContext.exec(sql.raw('DROP TRIGGER fail_authority_state_event'));
+    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, {
+      runContext: { ...runContext, definitionSnapshot: loadedDefinition },
+      initialState: { ready: true },
+    });
+    const afterRetry = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id });
+    const stateAfterRetry = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId: execution.id });
+    expect(afterRetry.runContext?.definitionSnapshot?.description).toBe('loaded');
+    expect(stateAfterRetry.state?.value).toEqual({ ready: true });
   });
 
   it('rejects execution start snapshots whose ids do not match', async () => {

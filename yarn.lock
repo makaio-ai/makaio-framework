@@ -4415,6 +4415,8 @@ __metadata:
     "@makaio/services-log-import": "workspace:*"
     "@makaio/utils": "workspace:*"
     zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 

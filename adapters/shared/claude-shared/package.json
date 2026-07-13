@@ -1,11 +1,20 @@
 {
   "name": "@makaio/ai-adapters-claude-shared",
-  "description": "Internal shared infrastructure for Claude protocol AI adapter implementations.",
+  "description": "Shared infrastructure and public types for Claude protocol AI adapter implementations.",
   "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "adapters/shared/claude-shared"
+  },
   "main": "src/index.ts",
   "types": "src/index.ts",
   "type": "module",
-  "private": true,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "source": "./src/index.ts",
@@ -26,8 +35,26 @@
     "@makaio/utils": "workspace:*",
     "zod": "4.4.3"
   },
+  "publishWorkspaceDependencies": [
+    "@makaio/client-claude-code"
+  ],
+  "peerDependencies": {
+    "@makaio/framework": "^1.0.0"
+  },
   "license": "MIT",
   "scripts": {
+    "build": "bun build.ts",
     "test": "vitest run"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "node_modules/.makaio-publish",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./package.json": "./package.json"
+    }
   }
 }

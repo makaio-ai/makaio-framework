@@ -16,11 +16,13 @@ const RUNTIME_RECORD_TIMESTAMP = 0;
  * storage.
  * @param bus - Bus used to register provider-storage handlers.
  * @param getLoadedAdapters - Lazy accessor for the live loaded-adapter registry.
+ * @param priority - Dispatch priority for these definition-backed handlers.
  * @returns Cleanup function unregistering all handlers.
  */
 export function registerProviderStorageFallbackHandlers(
   bus: IMakaioBus,
   getLoadedAdapters: () => readonly LoadedAdapter[],
+  priority = FALLBACK_HANDLER_PRIORITY,
 ): () => void {
   const getCleanup = bus.on(
     ProviderStorageSubjects.get,
@@ -28,14 +30,14 @@ export function registerProviderStorageFallbackHandlers(
       const provider = (await buildProviderRecordMap(bus, getLoadedAdapters())).get(ctx.payload.id) ?? null;
       ctx.setResult({ provider });
     },
-    { priority: FALLBACK_HANDLER_PRIORITY },
+    { priority },
   );
   const listCleanup = bus.on(
     ProviderStorageSubjects.list,
     async (ctx) => {
       ctx.setResult({ providers: [...(await buildProviderRecordMap(bus, getLoadedAdapters())).values()] });
     },
-    { priority: FALLBACK_HANDLER_PRIORITY },
+    { priority },
   );
   const listByProtocolCleanup = bus.on(
     ProviderStorageSubjects.listByProtocol,
@@ -45,7 +47,7 @@ export function registerProviderStorageFallbackHandlers(
       );
       ctx.setResult({ providers });
     },
-    { priority: FALLBACK_HANDLER_PRIORITY },
+    { priority },
   );
 
   return () => {

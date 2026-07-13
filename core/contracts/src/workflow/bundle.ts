@@ -1,4 +1,4 @@
-import type { BuiltWorkflow } from './authoring.js';
+import type { BuiltWorkflow } from './authoring-builder.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Bundle

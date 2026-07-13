@@ -171,6 +171,22 @@ describe('rpc-handlers spawn/await', () => {
           }),
         );
       });
+
+      it('publishes the winning service identity for execution ownership', async () => {
+        const emitSpy = vi.fn();
+        MakaioBus.on(SubagentSubjects.spawned, (busCtx) => emitSpy(busCtx.payload));
+
+        await handleSpawnRpc(
+          { ...ctx, executionOwnerId: 'isolated-runtime-service' },
+          {
+            parentSessionId: 'parent-1',
+            config: config('Owned task'),
+            depth: 1,
+          },
+        );
+
+        expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ executionOwnerId: 'isolated-runtime-service' }));
+      });
     });
   });
 
@@ -181,11 +197,24 @@ describe('rpc-handlers spawn/await', () => {
 
     it('returns immediately if subagent already completed', async () => {
       manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('Test'), depth: 1 });
+      manager.setChildSessionId('sub-1', 'child-1');
+      manager.recordToolObservation('child-1', {
+        toolName: 'artifacts_get',
+        outcome: 'success',
+        artifact: { kind: 'solution-design', id: 'design-1', revision: '3' },
+      });
       manager.markCompleted('sub-1', 'Task done');
 
       const result = await handleAwaitRpc(ctx, { subagentId: 'sub-1' });
       expect(result.status).toBe('completed');
       expect(result.result).toBe('Task done');
+      expect(result.toolObservations).toEqual([
+        {
+          toolName: 'artifacts_get',
+          outcome: 'success',
+          artifact: { kind: 'solution-design', id: 'design-1', revision: '3' },
+        },
+      ]);
     });
 
     it('returns immediately if subagent already failed', async () => {

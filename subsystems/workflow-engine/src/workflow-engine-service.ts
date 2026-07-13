@@ -57,6 +57,32 @@ export class WorkflowEngineService extends BaseService {
   }
 
   /**
+   * Register a named workflow success finalizer with the owned executor.
+   *
+   * Compiled workflow definitions opt into this registration through their
+   * immutable `successFinalizerId`; registration alone never changes ordinary
+   * workflow completion behavior.
+   * @param finalizerId - Stable lifecycle-finalizer identity.
+   * @returns Idempotent cleanup that unregisters this exact registration.
+   */
+  public registerSuccessFinalizer(finalizerId: string): Promise<() => void> {
+    return this.workflowExecutor.registerSuccessFinalizer(finalizerId);
+  }
+
+  /**
+   * Accept a terminal result for a durable authority-owned runner execution.
+   * @param executionId - Durable authority-owned execution identity.
+   * @param result - Correlated terminal result returned by the runner.
+   * @returns The current durable status after acceptance.
+   */
+  public acceptAuthorityRunnerResult(
+    executionId: string,
+    result: Parameters<WorkflowExecutor['acceptAuthorityRunnerResult']>[1],
+  ): ReturnType<WorkflowExecutor['acceptAuthorityRunnerResult']> {
+    return this.workflowExecutor.acceptAuthorityRunnerResult(executionId, result);
+  }
+
+  /**
    * Cron evaluator owned by this package service.
    * @returns Cron trigger evaluator instance.
    */

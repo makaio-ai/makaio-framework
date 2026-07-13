@@ -22,6 +22,7 @@ import {
   type ListSubagentsBySessionResponse,
 } from '@makaio/contracts';
 import type { SubagentManager } from './manager/index.js';
+import type { AwaitResult } from './manager/types.js';
 import { resolveInheritedAdapterName } from './resolve-inherited-adapter.js';
 
 /**
@@ -30,6 +31,7 @@ import { resolveInheritedAdapterName } from './resolve-inherited-adapter.js';
 export interface RpcHandlerContext {
   manager: SubagentManager;
   bus: IMakaioBus;
+  executionOwnerId?: string;
 }
 
 interface GetStatusResponse {
@@ -140,6 +142,7 @@ export async function handleSpawnRpc(
     task: normalizedConfig.task,
     config: normalizedConfig,
     depth,
+    ...(ctx.executionOwnerId !== undefined && { executionOwnerId: ctx.executionOwnerId }),
     ...(spawningToolCallId !== undefined && { spawningToolCallId }),
   });
 
@@ -173,6 +176,7 @@ export async function handleAwaitRpc(
       result: subagent.result,
       error: subagent.error,
       completionSource: subagent.completionSource,
+      toolObservations: [...subagent.toolObservations],
     };
   }
 
@@ -193,13 +197,7 @@ export async function handleAwaitRpc(
     let resolved = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    const awaiterCallback = (result: {
-      status: 'completed' | 'failed' | 'waiting_input' | 'timeout' | 'cancelled';
-      result?: string;
-      error?: string;
-      pendingRequest?: { messageId: string; question: string; context?: string };
-      completionSource?: AwaitSubagentResponse['completionSource'];
-    }) => {
+    const awaiterCallback = (result: AwaitResult) => {
       if (resolved) return;
       resolved = true;
       if (timeoutId) clearTimeout(timeoutId);
@@ -209,6 +207,7 @@ export async function handleAwaitRpc(
         error: result.error,
         pendingRequest: result.pendingRequest,
         completionSource: result.completionSource,
+        toolObservations: result.toolObservations,
       });
     };
 

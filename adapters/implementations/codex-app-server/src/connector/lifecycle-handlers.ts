@@ -132,6 +132,7 @@ export async function handleItemStarted(
  * @param commandCache - Cache for command execution metadata
  * @param dynamicToolCallCache - Cache for dynamic tool call metadata and results
  * @param updateProcessingState - State update callback
+ * @param setAgentMessageContent - Replaces the accumulator with the completed agent message text
  */
 export async function handleItemCompleted(
   notification: ItemCompletedNotification,
@@ -140,6 +141,7 @@ export async function handleItemCompleted(
   commandCache: Map<string, { command: string; cwd: string }>,
   dynamicToolCallCache: Map<string, DynamicToolCallCacheEntry>,
   updateProcessingState: (state: ProcessingState) => Promise<void>,
+  setAgentMessageContent: (content: string) => void,
 ): Promise<void> {
   if (!turn) return;
 
@@ -149,6 +151,10 @@ export async function handleItemCompleted(
   const itemType = item.type as ItemType;
   await turn.handleItemCompleted(itemId);
   await updateProcessingState('step_finished');
+
+  if (item.type === 'agentMessage') {
+    setAgentMessageContent(item.text);
+  }
 
   // Emit exec_command_end for command execution items
   if (item.type === 'commandExecution') {

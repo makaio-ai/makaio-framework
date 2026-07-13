@@ -8,58 +8,9 @@
  * @packageDocumentation
  */
 
-/**
- * A running pseudoterminal process.
- *
- * Mirrors the subset of `node-pty`'s `IPty` that the PTY runtime actually
- * uses, keeping the interface minimal and backend-agnostic.
- */
-export interface IPtyProcess {
-  /** The OS process ID of the spawned child. */
-  readonly pid: number;
+import type { IPtyProcess } from '@makaio/contracts/native-session-supervisor';
 
-  /** The name of the running process (e.g. `/bin/bash`). */
-  readonly process: string;
-
-  /** Current column width of the terminal. */
-  readonly cols: number;
-
-  /** Current row height of the terminal. */
-  readonly rows: number;
-
-  /**
-   * Write raw input data to the PTY.
-   * @param data - The string to write.
-   */
-  write(data: string): void;
-
-  /**
-   * Resize the terminal dimensions.
-   * @param cols - New column width.
-   * @param rows - New row height.
-   */
-  resize(cols: number, rows: number): void;
-
-  /**
-   * Kill the PTY process.
-   * @param signal - Optional signal name (e.g. `'SIGHUP'`). Defaults to `SIGHUP`.
-   */
-  kill(signal?: string): void;
-
-  /**
-   * Register a listener for output data emitted by the PTY.
-   * @param listener - Callback invoked with each data chunk.
-   * @returns A disposable that removes the listener when `.dispose()` is called.
-   */
-  onData: (listener: (data: string) => void) => { dispose(): void };
-
-  /**
-   * Register a listener for the PTY exit event.
-   * @param listener - Callback invoked with exit code and optional signal number.
-   * @returns A disposable that removes the listener when `.dispose()` is called.
-   */
-  onExit: (listener: (e: { exitCode: number; signal?: number }) => void) => { dispose(): void };
-}
+export type { IPtyProcess } from '@makaio/contracts/native-session-supervisor';
 
 /**
  * Options forwarded to the backend when spawning a new PTY process.

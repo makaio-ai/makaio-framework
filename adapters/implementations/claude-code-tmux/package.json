@@ -38,8 +38,12 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@makaio/client-claude-code": "workspace:*",
     "zod": "4.4.3"
   },
+  "publishWorkspaceDependencies": [
+    "@makaio/client-claude-code"
+  ],
   "peerDependencies": {
     "@makaio/framework": "^1.0.0"
   },
@@ -49,7 +53,6 @@
     "@makaio/ai-adapters-stream-session": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
-    "@makaio/client-claude-code": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/subsystem-native-session-supervisor": "workspace:*",

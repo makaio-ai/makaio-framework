@@ -5,7 +5,7 @@ import type {
   MessageResult,
 } from '@makaio/ai-adapters-core';
 import type { McpResolvedServer, McpSessionContext, SystemPrompt } from '@makaio/contracts';
-import type { IPtyProcess } from '@makaio/subsystem-native-session-supervisor';
+import type { IPtyProcess } from '@makaio/contracts/native-session-supervisor';
 import type { ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import type { ClaudeCodeTmuxProviderConfig } from './schemas.js';
 import type { TmuxSession } from './session.js';

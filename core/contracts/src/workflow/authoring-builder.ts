@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { JsonValue } from '../shared/json-value.js';
 import type { WorkflowArtifactBinding, WorkflowDefinition, WorkflowNode, WorkflowSourceLocation } from './schemas.js';
+import type { WorkflowFinalizerId } from './finalization.js';
 import type { CompletionMode } from '../subagent/schemas.js';
 import type { IterateHandler, PreviousStepOutput, StationHandler, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
@@ -40,6 +41,10 @@ export type DelegateToRoleOptions = NodeOptions & {
   readonly timeoutMs?: number;
   /** Completion behavior requested from the spawned role subagent. */
   readonly completion?: CompletionMode;
+  /** Exact tool allowlist selected for this delegation. */
+  readonly allowedTools?: string[];
+  /** Authority-owned finalizer applied to the successful delegate result. */
+  readonly resultFinalizerId?: string;
 };
 
 /**
@@ -57,6 +62,12 @@ export interface AgentConfig {
    * JSON Schema for the expected agent output.
    */
   readonly outputSchema?: Record<string, JsonValue>;
+  /** Exact tool allowlist selected for this delegation. */
+  readonly allowedTools?: string[];
+  /** Completion contract for the spawned subagent. Defaults to tool completion. */
+  readonly completion?: CompletionMode;
+  /** Authority-owned finalizer applied to the successful delegate result. */
+  readonly resultFinalizerId?: string;
 }
 
 /**
@@ -323,6 +334,8 @@ export interface DefineWorkflowOptions<
   readonly description?: string;
   /** Initial trigger set. Additional triggers can be added via `addTrigger`. */
   readonly triggers?: TTriggers;
+  /** Definition-owned finalizer selected after a successful workflow execution. */
+  readonly successFinalizerId?: WorkflowFinalizerId;
 }
 
 // ─────────────────────────────────────────────────────────────

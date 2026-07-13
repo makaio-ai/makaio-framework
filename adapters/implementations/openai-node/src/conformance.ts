@@ -36,6 +36,11 @@ export const createTestConfig = async (
     reasoningEffort: 'low',
   });
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<OpenAINodeConnectorBus, OpenAINodeConnector>();
+  const definitionProviders = testPreset.providers.map((definition) => {
+    const declared = adapterDefinition.providers.find((provider) => provider.definitionId === definition.id);
+    if (!declared) throw new Error(`OpenAI conformance provider '${definition.id}' is not declared by the adapter`);
+    return { definition, protocol: declared.protocol, auth: declared.auth };
+  });
 
   return {
     createConnector: async (options) => {
@@ -61,7 +66,7 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (options) => createOpenAINodeAdapter({ adapterId: options?.adapterId }),
+    createAdapter: async (adapterOptions) => createOpenAINodeAdapter({ ...adapterOptions, definitionProviders }),
     adapterName: OpenAINodeAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: () => connectorRuntimes.closeAll(),

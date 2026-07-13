@@ -14,7 +14,7 @@
  *   3. react  — 3 UI packages that additionally externalize React + handle SCSS
  */
 
-import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { build, type UserConfig } from 'tsdown';
 import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '@makaio/build-tooling/framework-public-surface';
@@ -32,6 +32,7 @@ import {
 import { verifyFrameworkDist } from '../../scripts/lib/framework-dist-verifier.js';
 import { copyRuntimeMigrationChain } from '../../scripts/lib/runtime-migration-assets.js';
 import { writeFrameworkDistBuildStamp } from './build-fingerprint.js';
+import { mergeFrameworkBuildStages } from './build-staging.js';
 
 /** This package's root (`packages/framework/`). Build output lands in `./dist/` here. */
 const PACKAGE_DIR = import.meta.dirname;
@@ -155,6 +156,8 @@ const configs: Array<UserConfig & { name: string }> = [
 
 const totalStart = performance.now();
 const previousCwd = process.cwd();
+const stageRoot = mkdtempSync(join(PACKAGE_DIR, '.build-stages-'));
+const completedStages: Array<{ name: string; path: string }> = [];
 
 process.chdir(FRAMEWORK_ROOT);
 
@@ -165,17 +168,22 @@ try {
 
   for (const config of configs) {
     const { name, ...tsdownConfig } = config;
+    const stageDir = join(stageRoot, name);
     const entryCount = Object.keys(tsdownConfig.entry as Record<string, string>).length;
     const start = performance.now();
     console.info(`\n[build] ${name} — ${entryCount} entries`);
 
-    await build({ ...tsdownConfig, clean: false });
+    await build({ ...tsdownConfig, outDir: stageDir });
+    completedStages.push({ name, path: stageDir });
 
     const elapsed = ((performance.now() - start) / 1000).toFixed(1);
     console.info(`[build] ${name} done in ${elapsed}s`);
   }
+
+  mergeFrameworkBuildStages(completedStages, DIST);
 } finally {
   process.chdir(previousCwd);
+  rmSync(stageRoot, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------

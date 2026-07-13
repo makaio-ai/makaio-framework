@@ -71,6 +71,10 @@ export interface DelegateAgentNodeBlockRun {
    * Forwarded verbatim to the compiled node's `outputSchema` field.
    */
   readonly outputSchema?: JsonSchemaRecord;
+  /** Exact tool allowlist selected for this delegation. */
+  readonly allowedTools?: string[];
+  /** Authority-owned finalizer applied to the successful delegate result. */
+  readonly resultFinalizerId?: string;
 }
 
 /**
@@ -96,6 +100,10 @@ export interface DelegateRoleNodeBlockRun {
    * Forwarded verbatim to the compiled node's `outputSchema` field.
    */
   readonly outputSchema?: JsonSchemaRecord;
+  /** Exact tool allowlist selected for this delegation. */
+  readonly allowedTools?: string[];
+  /** Authority-owned finalizer applied to the successful delegate result. */
+  readonly resultFinalizerId?: string;
   /**
    * Positive timeout in milliseconds forwarded to the compiled node.
    * Defaults to 300 000 ms at execution time when omitted.

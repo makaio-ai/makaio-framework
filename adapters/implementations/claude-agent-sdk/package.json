@@ -39,10 +39,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@makaio/ai-adapters-claude-shared": "workspace:*",
+    "@makaio/client-claude-code": "workspace:*",
     "p-defer": "^4.0.1",
     "p-queue": "^9.3.0",
     "zod": "4.4.3"
   },
+  "publishWorkspaceDependencies": [
+    "@makaio/ai-adapters-claude-shared",
+    "@makaio/client-claude-code"
+  ],
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.50",
     "@makaio/framework": "^1.0.0"
@@ -50,11 +56,9 @@
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.131",
     "@makaio/ai-adapters-claude-process-shared": "workspace:*",
-    "@makaio/ai-adapters-claude-shared": "workspace:*",
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
-    "@makaio/client-claude-code": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
