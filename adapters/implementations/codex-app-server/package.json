@@ -57,7 +57,7 @@
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
-    "vitest": "4.1.7"
+    "vitest": "4.1.10"
   },
   "publishConfig": {
     "access": "public",
