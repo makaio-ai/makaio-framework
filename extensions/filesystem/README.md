@@ -141,6 +141,9 @@ const context = createMakaioContext({ cwd: '/home/user/project' });
 
 Use `context.constraints.allowedDirectories` to restrict access:
 
+`undefined` applies no directory restriction, an empty array denies all filesystem paths, and a non-empty array allows
+only those directory trees.
+
 ```typescript
 const contextOverrides = createMakaioContext({
   cwd: '/home/user/project',
@@ -151,6 +154,12 @@ const contextOverrides = createMakaioContext({
 
 // Paths outside allowed directories return PERMISSION_DENIED error
 ```
+
+Path validation assumes the filesystem namespace between each configured root and target remains stable for the
+duration of an operation. A same-user process that can concurrently replace directories or symlinks may race pathname
+validation; use OS-level isolation such as separate users, containers, mount namespaces, or restrictive directory
+permissions when concurrent mutation is hostile. File opens use `O_NOFOLLOW` where available as defense-in-depth for
+the final path component, not as an atomic containment guarantee for the full path.
 
 ## Direct Tool Access
 

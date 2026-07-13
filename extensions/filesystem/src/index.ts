@@ -24,7 +24,7 @@ export const filesystemPackage: MakaioNodeExtension<IMakaioBus> = {
 
 export default filesystemPackage;
 
-export { filesystemToolset } from './toolset.js';
+export { filesystemToolset, readOnlyFilesystemToolset } from './toolset.js';
 export { type FileAccessRules, type FileAccessRuleProvider, FILE_ACCESS_RULES_KEY } from './types.js';
 export { DEFAULT_DENIED_PATTERNS, createMakaioIgnoreProvider } from './ignore/index.js';
 export { extractToolFilePath } from './tool-path-extractor.js';

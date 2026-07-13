@@ -61,3 +61,13 @@ export const filesystemToolset = defineToolset({
     widenTool(grepFilesTool),
   ],
 });
+
+/**
+ * Read-only filesystem toolset for agents that must not modify the workspace.
+ */
+export const readOnlyFilesystemToolset = defineToolset({
+  name: 'filesystem-read-only',
+  description: 'Cross-platform read-only file system operations for reading, listing, and searching files.',
+  version: '0.1.0',
+  tools: [widenTool(readFileTool), widenTool(listDirectoryTool), widenTool(globFilesTool), widenTool(grepFilesTool)],
+});

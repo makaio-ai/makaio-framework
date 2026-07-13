@@ -65,6 +65,26 @@ async function startServerWithStubs(): Promise<{
 }
 
 describe('startMcpServer stdio onclose lifecycle', () => {
+  it('cleans up stdin listeners and preserves startup plus cleanup failures', async () => {
+    const stdin = stubStdin();
+    const startupError = new Error('stdio startup failed');
+    const cleanupError = new Error('stdio cleanup failed');
+    const onclose = vi.fn();
+    vi.spyOn(StdioServerTransport.prototype, 'start').mockRejectedValue(startupError);
+    vi.spyOn(StdioServerTransport.prototype, 'close').mockRejectedValue(cleanupError);
+
+    await expect(
+      startMcpServer(createBusInstance(), 'test-session', { transport: 'stdio', onclose }),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof AggregateError && error.errors[0] === startupError && error.errors[1] === cleanupError,
+    );
+
+    expect(stdin.listenerCount('end')).toBe(0);
+    expect(stdin.listenerCount('close')).toBe(0);
+    expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
   it('fires onclose exactly once when stdin emits end', async () => {
     const { stdin, closeCalls } = await startServerWithStubs();
 

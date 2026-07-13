@@ -4,10 +4,12 @@ import { ToolListChangedNotificationSchema, type CallToolResult } from '@modelco
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import { McpContextRegistry } from './context-registry.js';
 import {
+  createHttpMcpHandler,
   createMcpRequestHandler,
   createMcpServer,
   handleApproveToolCall,
@@ -300,6 +302,79 @@ describe('startMcpServer (stdio)', () => {
 
     await handle.close();
   });
+
+  it('removes stdin listeners when transport startup fails', async () => {
+    const bus = createBusInstance();
+    vi.spyOn(StdioServerTransport.prototype, 'start').mockRejectedValue(new Error('stdio startup failed'));
+    const endListenersBefore = process.stdin.listenerCount('end');
+    const closeListenersBefore = process.stdin.listenerCount('close');
+
+    await expect(startMcpServer(bus, 'failed-stdio-session', { transport: 'stdio' })).rejects.toThrow(
+      'stdio startup failed',
+    );
+
+    expect(process.stdin.listenerCount('end')).toBe(endListenersBefore);
+    expect(process.stdin.listenerCount('close')).toBe(closeListenersBefore);
+  });
+
+  it('resolves current context overrides independently for every stdio tool call', async () => {
+    const bus = createBusInstance();
+    const capturedContexts: unknown[] = [];
+    let currentCwd = '/workspace/first-session';
+    const resolveContextOverrides = vi.fn(() => ({ cwd: currentCwd, sessionId: currentCwd }));
+    const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [{ name: 'echo', description: 'Echo', toolsetName: 'test-tools', inputSchema: { type: 'object' } }],
+        toolsets: [],
+      });
+    });
+    const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+      capturedContexts.push(ctx.payload.contextOverrides);
+      ctx.setResult({ success: true, data: ctx.payload.input });
+    });
+    const startTransport = vi.spyOn(StdioServerTransport.prototype, 'start').mockResolvedValue();
+    vi.spyOn(StdioServerTransport.prototype, 'send').mockResolvedValue();
+
+    const handle = await startMcpServer(bus, 'stdio-fallback-session', {
+      transport: 'stdio',
+      resolveContextOverrides,
+    });
+    const transport = startTransport.mock.contexts[0] as StdioServerTransport | undefined;
+
+    try {
+      await transport?.onmessage?.({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'echo', arguments: { value: 'first' } },
+      });
+      await vi.waitFor(() => expect(capturedContexts).toHaveLength(1));
+
+      currentCwd = '/workspace/reconnected-session';
+      await transport?.onmessage?.({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'echo', arguments: { value: 'second' } },
+      });
+      await vi.waitFor(() => expect(capturedContexts).toHaveLength(2));
+
+      expect(resolveContextOverrides).toHaveBeenCalledTimes(2);
+      expect(resolveContextOverrides).toHaveBeenNthCalledWith(1, undefined);
+      expect(resolveContextOverrides).toHaveBeenNthCalledWith(2, undefined);
+      expect(capturedContexts).toEqual([
+        expect.objectContaining({ cwd: '/workspace/first-session', sessionId: '/workspace/first-session' }),
+        expect.objectContaining({
+          cwd: '/workspace/reconnected-session',
+          sessionId: '/workspace/reconnected-session',
+        }),
+      ]);
+    } finally {
+      cleanupList();
+      cleanupExecute();
+      await handle.close();
+    }
+  });
 });
 
 describe('startHttpMcpServer', () => {
@@ -313,9 +388,95 @@ describe('startHttpMcpServer', () => {
 
     expect(onclose).toHaveBeenCalledTimes(1);
   });
+
+  it('closes standalone HTTP resources idempotently', async () => {
+    const handle = await startHttpMcpServer(createBusInstance());
+
+    await expect(Promise.all([handle.close(), handle.close()])).resolves.toEqual([undefined, undefined]);
+    await expect(handle.close()).resolves.toBeUndefined();
+  });
+
+  it('cleans up MCP resources when http.Server.listen throws synchronously', async () => {
+    const bus = createBusInstance();
+    const sendToolListChanged = vi.spyOn(Server.prototype, 'sendToolListChanged').mockResolvedValue();
+
+    await expect(startHttpMcpServer(bus, { port: -1 })).rejects.toThrow(/port/i);
+    await bus.emit(ToolSubjects.registryChanged, {
+      revision: 5,
+      reason: 'toolset-registered',
+      toolsetName: 'after-invalid-port',
+    });
+
+    expect(sendToolListChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe('createHttpMcpHandler startup', () => {
+  it('releases registry subscriptions when transport startup fails', async () => {
+    const bus = createBusInstance();
+    vi.spyOn(StreamableHTTPServerTransport.prototype, 'start').mockRejectedValue(new Error('http startup failed'));
+    const sendToolListChanged = vi.spyOn(Server.prototype, 'sendToolListChanged').mockResolvedValue();
+
+    await expect(createHttpMcpHandler(bus)).rejects.toThrow('http startup failed');
+    await bus.emit(ToolSubjects.registryChanged, {
+      revision: 4,
+      reason: 'toolset-registered',
+      toolsetName: 'after-failed-start',
+    });
+
+    expect(sendToolListChanged).not.toHaveBeenCalled();
+  });
 });
 
 describe('createMcpServer', () => {
+  async function callEchoTool(options?: Parameters<typeof createMcpServer>[2]): Promise<ReturnType<typeof vi.spyOn>> {
+    const bus = createBusInstance();
+    const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [{ name: 'echo', description: 'Echo', toolsetName: 'test', inputSchema: { type: 'object' } }],
+        toolsets: [],
+      });
+    });
+    const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+      ctx.setResult({ success: true, data: ctx.payload.input });
+    });
+    const requestOptional = vi.spyOn(bus, 'requestOptional');
+    const server = await createMcpServer(bus, 'timeout-session', options);
+    const client = new Client({ name: 'timeout-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      await client.callTool({ name: 'echo', arguments: { value: 'ok' } });
+      return requestOptional;
+    } finally {
+      await client.close();
+      await server.close();
+      cleanupExecute();
+      cleanupList();
+    }
+  }
+
+  it('forwards a configured timeout beyond the bus default to tool execution', async () => {
+    const requestOptional = await callEchoTool({ toolExecutionTimeoutMs: 180_000 });
+
+    expect(requestOptional).toHaveBeenCalledWith(ToolSubjects.execute, expect.objectContaining({ toolName: 'echo' }), {
+      timeout: 180_000,
+    });
+  });
+
+  it('retains the bus default when no tool execution timeout is configured', async () => {
+    const requestOptional = await callEchoTool();
+
+    expect(requestOptional.mock.lastCall).toHaveLength(2);
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER])('rejects unsafe tool execution timeout %s', async (timeout) => {
+    await expect(
+      createMcpServer(createBusInstance(), 'invalid-timeout', { toolExecutionTimeoutMs: timeout }),
+    ).rejects.toThrow('toolExecutionTimeoutMs must be a positive safe integer');
+  });
+
   describe('tool registry change notifications', () => {
     it('sends tools/list_changed to connected MCP clients when tool.registryChanged fires', async () => {
       const bus = createBusInstance();

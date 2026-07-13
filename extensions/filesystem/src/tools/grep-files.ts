@@ -1,11 +1,12 @@
 import * as fs from 'node:fs/promises';
 import * as readline from 'node:readline';
-import { createReadStream } from 'node:fs';
+import { constants as fsConstants } from 'node:fs';
 import { glob } from 'glob';
 import safeRegex from 'safe-regex2';
 import { z } from 'zod';
 import { defineTool, toolSuccess, toolError, ToolErrorCodes, errorToToolResult } from '@makaio/tools-core';
-import { resolveAndValidatePath, validateRelativeGlobPattern } from '../utils/index.js';
+import { createPathValidator, resolveAndValidatePath, validateRelativeGlobPattern } from '../utils/index.js';
+import type { PathValidator } from '../utils/index.js';
 
 /**
  * Input schema for the grep_files tool.
@@ -46,32 +47,59 @@ export type GrepMatch = z.infer<typeof GrepMatchSchema>;
  * @param filePath - Absolute path to file.
  * @param regex - Compiled regex pattern.
  * @param budget - Maximum matches to collect (0 = stop immediately).
+ * @param validate - Path validator compiled for this tool invocation.
  * @returns Array of matches (at most `budget` entries) and whether more remain.
  */
-async function searchFile(
+export async function searchFile(
   filePath: string,
   regex: RegExp,
   budget: number,
+  validate: PathValidator,
 ): Promise<{ matches: GrepMatch[]; hasMore: boolean }> {
   const matches: GrepMatch[] = [];
   let lineNum = 0;
   let hasMore = false;
 
-  const rl = readline.createInterface({
-    input: createReadStream(filePath, 'utf-8'),
-    crlfDelay: Number.POSITIVE_INFINITY,
-  });
+  // Resolve and validate the canonical target, then search through one handle.
+  // O_NOFOLLOW is defense-in-depth against a final-component symlink
+  // replacement; it does not make pathname resolution atomic when another
+  // process can mutate ancestor directories.
+  const targetPath = await fs.realpath(filePath);
+  const validation = validate(targetPath);
+  if (!validation.valid) {
+    throw new Error(validation.error);
+  }
 
-  for await (const line of rl) {
-    lineNum++;
-    if (regex.test(line)) {
-      if (matches.length >= budget) {
-        hasMore = true;
-        rl.close();
-        break;
+  // Opening a FIFO for reading can block until a writer connects. Reject
+  // special files before open; the handle stat below still verifies the type
+  // used for reading under the documented stable-namespace boundary.
+  const targetStats = await fs.stat(targetPath);
+  if (!targetStats.isFile()) throw new Error(`Path is not a regular file: ${targetPath}`);
+
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const nonBlocking = fsConstants.O_NONBLOCK ?? 0;
+  const fileHandle = await fs.open(targetPath, fsConstants.O_RDONLY | noFollow | nonBlocking);
+  const stream = fileHandle.createReadStream({ encoding: 'utf-8', autoClose: false });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+
+  try {
+    const stat = await fileHandle.stat();
+    if (!stat.isFile()) throw new Error(`Path is not a regular file: ${targetPath}`);
+
+    for await (const line of rl) {
+      lineNum++;
+      if (regex.test(line)) {
+        if (matches.length >= budget) {
+          hasMore = true;
+          break;
+        }
+        matches.push({ file: filePath, line: lineNum, text: line });
       }
-      matches.push({ file: filePath, line: lineNum, text: line });
     }
+  } finally {
+    rl.close();
+    stream.destroy();
+    await fileHandle.close();
   }
 
   return { matches, hasMore };
@@ -92,7 +120,8 @@ export const grepFilesTool = defineTool({
 
   execute: async (input, context) => {
     const searchDir = input.path ?? context.cwd;
-    const dirResult = resolveAndValidatePath(searchDir, context);
+    const validate = createPathValidator(context);
+    const dirResult = resolveAndValidatePath(searchDir, context, validate);
     if (!dirResult.valid) {
       return toolError(ToolErrorCodes.PERMISSION_DENIED, dirResult.error);
     }
@@ -109,12 +138,14 @@ export const grepFilesTool = defineTool({
         return toolError(ToolErrorCodes.PERMISSION_DENIED, patternResult.error);
       }
 
-      const files = await glob(filePattern, {
-        cwd: dirResult.path,
-        absolute: true,
-        nodir: true,
-        dot: false,
-      });
+      const files = (
+        await glob(filePattern, {
+          cwd: dirResult.path,
+          absolute: true,
+          nodir: true,
+          dot: false,
+        })
+      ).filter((filePath) => validate(filePath).valid);
 
       const flags = input.case_insensitive ? 'i' : '';
       let regex: RegExp;
@@ -141,7 +172,7 @@ export const grepFilesTool = defineTool({
 
         try {
           const remaining = needed - collected.length;
-          const { matches, hasMore } = await searchFile(file, regex, remaining);
+          const { matches, hasMore } = await searchFile(file, regex, remaining, validate);
           collected.push(...matches);
           if (hasMore) {
             truncated = true;

@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { FILE_ACCESS_RULES_KEY } from '../../types.js';
 import { globFilesTool } from '../glob-files.js';
 import { useTempDir } from './test-helpers.js';
 
@@ -108,5 +109,25 @@ describe('glob_files tool', () => {
       expect(result.error.code).toBe('PERMISSION_DENIED');
       expect(result.error.message).toContain('parent directories');
     }
+  });
+
+  it('excludes file symlink matches that resolve outside an allowed directory', async () => {
+    const tempDir = await createTempDir();
+    const allowedDir = path.join(tempDir, 'allowed');
+    const insidePath = path.join(allowedDir, 'inside.txt');
+    const outsidePath = path.join(tempDir, 'outside.txt');
+    const escapedPath = path.join(allowedDir, 'outside-link.txt');
+    await fs.mkdir(allowedDir);
+    await fs.writeFile(insidePath, 'inside');
+    await fs.writeFile(outsidePath, 'outside secret');
+    await fs.symlink(outsidePath, escapedPath);
+    const context = createMakaioContext({
+      cwd: allowedDir,
+      constraints: { [FILE_ACCESS_RULES_KEY]: { allowedDirectories: [allowedDir], isDenied: () => false } },
+    });
+
+    const result = await globFilesTool.execute({ pattern: '*.txt' }, context);
+
+    expect(result).toMatchObject({ success: true, data: { paths: [insidePath], totalMatches: 1 } });
   });
 });
