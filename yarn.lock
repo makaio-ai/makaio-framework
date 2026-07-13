@@ -4436,7 +4436,7 @@ __metadata:
     "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     ajv: "npm:^8.17.1"
-    emittery: "npm:^1.2.0"
+    emittery: "npm:^2.0.0"
     tsdown: "npm:0.22.0"
     type-fest: "npm:^5.2.0"
     zod: "npm:4.4.3"
@@ -5203,7 +5203,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    emittery: "npm:^1.2.0"
+    emittery: "npm:^2.0.0"
     globby: "npm:^14.1.0"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
@@ -5238,7 +5238,7 @@ __metadata:
     "@vitest/coverage-v8": "npm:^4.1.7"
     chalk: "npm:^5.6.2"
     drizzle-orm: "npm:0.45.2"
-    emittery: "npm:^1.2.0"
+    emittery: "npm:^2.0.0"
     eslint: "npm:^9.33.0"
     eslint-plugin-import: "npm:^2.32.0"
     eslint-plugin-jsdoc: "npm:^63.0.0"
@@ -14946,10 +14946,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"emittery@npm:^1.2.0":
-  version: 1.2.1
-  resolution: "emittery@npm:1.2.1"
-  checksum: 10c0/188f6ee8725589df6d49a8ed18b216709dfda3574547860c122bc0223570d839bb2c8ca5cd95483a6b064636af195d7c6ab99a35a317f9734d8bc455f644c785
+"emittery@npm:^2.0.0":
+  version: 2.0.0
+  resolution: "emittery@npm:2.0.0"
+  checksum: 10c0/b8b5836e9fd368670e1ce5cb948feef30351ecebfbf589ac807c1f6b38c90d6556b2d48883f9b3c371fad59c92519b333dc3919a8ff5e351aea0f8b424203826
   languageName: node
   linkType: hard
 
