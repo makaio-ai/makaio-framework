@@ -7,7 +7,7 @@ Filesystem toolset for Makaio Framework. Cross-platform file operations with pat
 ```typescript
 import { ToolRegistry } from '@makaio/services-core/tools';
 import { filesystemToolset } from '@makaio/extension-filesystem';
-import { createMakaioContext } from '@makaio/core';
+import { createMakaioContext } from '@makaio/framework/core';
 
 const registry = new ToolRegistry();
 await registry.register(filesystemToolset);
@@ -129,7 +129,7 @@ Deletes a regular file. Directories and symlinks are rejected.
 All paths are resolved relative to `context.cwd`:
 
 ```typescript
-import { createMakaioContext } from '@makaio/core';
+import { createMakaioContext } from '@makaio/framework/core';
 
 const context = createMakaioContext({ cwd: '/home/user/project' });
 
@@ -164,7 +164,7 @@ the final path component, not as an atomic containment guarantee for the full pa
 ## Direct Tool Access
 
 ```typescript
-import { createMakaioContext } from '@makaio/core';
+import { createMakaioContext } from '@makaio/framework/core';
 import { filesystemToolset } from '@makaio/extension-filesystem';
 
 const readFileTool = filesystemToolset.tools.read_file;

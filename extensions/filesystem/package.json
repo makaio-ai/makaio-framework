@@ -14,6 +14,9 @@
     "./server": "./src/server.ts",
     "./package.json": "./package.json"
   },
+  "peerDependencies": {
+    "@makaio/framework": "^1.0.0"
+  },
   "dependencies": {
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
@@ -34,7 +37,15 @@
     "build": "bun build.ts",
     "test": "vitest run"
   },
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "README.md"
+  ],
   "publishConfig": {
+    "access": "public",
+    "directory": "node_modules/.makaio-publish",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
