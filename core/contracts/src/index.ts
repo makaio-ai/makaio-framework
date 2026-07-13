@@ -898,6 +898,12 @@ export type { WorkflowErrorCode as WorkflowErrorCodeType } from './workflow/erro
 export { WorkflowArtifactRefSchema, serializeArtifactRef, parseArtifactRef } from './workflow/index.js';
 export type { WorkflowArtifactRef } from './workflow/index.js';
 export type { WorkflowRunContext } from './workflow/index.js';
+export type { WorkflowTerminalStatus, WorkflowFinalizationIntent } from './workflow/index.js';
+export {
+  WorkflowTerminalStatusSchema,
+  WorkflowFinalizationIntentSchema,
+  WorkflowFinalizerIdSchema,
+} from './workflow/index.js';
 export { walkWorkflowDefinition } from './workflow/index.js';
 export type { WalkContext, WalkRelationship, WorkflowNodeVisitor } from './workflow/index.js';
 export { projectWorkflowGraph } from './workflow/index.js';

@@ -82,6 +82,8 @@ export const workflowDefinitionsDual = defineDualTable(
      * Absent on locally-authored definitions.
      */
     source: c.jsonCol<WorkflowDefinitionProvenance>('source'),
+    /** Definition-owned finalizer selected after successful execution. */
+    successFinalizerId: c.text('success_finalizer_id'),
     /**
      * Advisory execution hints for worker provisioning (JSON).
      * Merged with per-call hints at execution start.
@@ -123,7 +125,9 @@ export const workflowExecutionsDual = defineDualTable(
     coordinatorSessionId: c.text('coordinator_session_id'),
     /** Current execution status. */
     status: c
-      .textEnum('status', { enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'] as const })
+      .textEnum('status', {
+        enum: ['pending', 'running', 'paused', 'finalizing', 'completed', 'failed', 'cancelled'] as const,
+      })
       .notNull(),
     /** Bound workflow input value (JSON). */
     inputs: c.jsonCol<JsonValue>('inputs'),
@@ -507,6 +511,8 @@ export const workflowRunContextsDual = defineDualTable(
      * this column was introduced — callers should fall back to `'wait-in-process'`.
      */
     suspensionStrategy: c.text('suspension_strategy').$type<WorkflowRunContext['suspensionStrategy']>(),
+    /** Component that exclusively owns durable terminalization. */
+    terminalAuthority: c.text('terminal_authority').$type<WorkflowRunContext['terminalAuthority']>(),
   }),
   {
     sqlite: (t) => [index('idx_run_contexts_workflow').on(t.workflowId)],
@@ -552,7 +558,9 @@ export const worklogSummariesDual = defineDualTable(
      * Current execution status. Kept in sync via event projection.
      */
     status: c
-      .textEnum('status', { enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'] as const })
+      .textEnum('status', {
+        enum: ['pending', 'running', 'paused', 'finalizing', 'completed', 'failed', 'cancelled'] as const,
+      })
       .notNull(),
     /** Epoch milliseconds when the execution started. */
     startedAt: c.epochMs('started_at').notNull(),
@@ -847,3 +855,7 @@ export const workflowExecutionStateEvents = workflowExecutionStateEventsDual.sql
 
 export type InsertWorkflowExecutionStateEvent = typeof workflowExecutionStateEvents.$inferInsert;
 export type SelectWorkflowExecutionStateEvent = typeof workflowExecutionStateEvents.$inferSelect;
+
+// Kept as a separate module so finalization persistence remains an explicit
+// lifecycle seam while the central schema discovery entrypoint still sees it.
+export { workflowFinalizationsDual, workflowFinalizations } from './finalization-schema.js';

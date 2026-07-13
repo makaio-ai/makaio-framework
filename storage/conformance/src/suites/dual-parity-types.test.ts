@@ -55,6 +55,7 @@ import { clientRuntimesDual } from '@makaio/subsystem-client';
 import {
   workflowDefinitionsDual,
   workflowExecutionsDual,
+  workflowFinalizationsDual,
   workflowStepSpansDual,
   worklogSummariesDual,
   worklogFrameEntriesDual,
@@ -197,17 +198,36 @@ type _WorkflowExecutionCongruent = Expect<Equal<WorkflowExecutionSqliteSelect, W
 type _ExecutionStatusSqlite = Expect<
   Equal<
     WorkflowExecutionSqliteSelect['status'],
-    'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
+    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
   >
 >;
 type _ExecutionStatusPg = Expect<
-  Equal<WorkflowExecutionPgSelect['status'], 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'>
+  Equal<
+    WorkflowExecutionPgSelect['status'],
+    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+  >
 >;
 // Negative: scopeType must be the narrowed WorkflowExecutionScope union on BOTH dialects.
 type _ExecutionScopeTypeSqlite = Expect<
   Equal<WorkflowExecutionSqliteSelect['scopeType'], WorkflowExecutionScope['type']>
 >;
 type _ExecutionScopeTypePg = Expect<Equal<WorkflowExecutionPgSelect['scopeType'], WorkflowExecutionScope['type']>>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// workflow_finalizations — durable claim state must remain narrowed on both
+// dialects while the complete select rows stay congruent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type WorkflowFinalizationSqliteSelect = typeof workflowFinalizationsDual.sqlite.$inferSelect;
+type WorkflowFinalizationPgSelect = typeof workflowFinalizationsDual.postgres.$inferSelect;
+
+type _WorkflowFinalizationCongruent = Expect<Equal<WorkflowFinalizationSqliteSelect, WorkflowFinalizationPgSelect>>;
+type _WorkflowFinalizationStateSqlite = Expect<
+  Equal<WorkflowFinalizationSqliteSelect['state'], 'claimed' | 'acknowledged' | 'failed'>
+>;
+type _WorkflowFinalizationStatePg = Expect<
+  Equal<WorkflowFinalizationPgSelect['state'], 'claimed' | 'acknowledged' | 'failed'>
+>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // workflow_step_spans — float8 estimatedCost + int4 durationMs (number | null
@@ -248,10 +268,16 @@ type _TotalEstimatedCostPg = Expect<Equal<WorklogSummaryPgSelect['totalEstimated
 
 // Negative: status enum union must stay narrowed on both dialects.
 type _WorklogSummaryStatusSqlite = Expect<
-  Equal<WorklogSummarySqliteSelect['status'], 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'>
+  Equal<
+    WorklogSummarySqliteSelect['status'],
+    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+  >
 >;
 type _WorklogSummaryStatusPg = Expect<
-  Equal<WorklogSummaryPgSelect['status'], 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'>
+  Equal<
+    WorklogSummaryPgSelect['status'],
+    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+  >
 >;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -360,6 +386,7 @@ const PINNED_DUAL_TABLES: ReadonlySet<string> = new Set([
   'agents',
   'workflow_definitions',
   'workflow_executions',
+  'workflow_finalizations',
   'workflow_step_spans',
   'worklog_summaries',
   'worklog_frame_entries',

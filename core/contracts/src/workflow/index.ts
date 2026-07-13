@@ -164,6 +164,12 @@ export { WorkflowArtifactRefSchema, serializeArtifactRef, parseArtifactRef } fro
 export type { WorkflowArtifactRef } from './artifact-ref.js';
 export { WorkflowRunContextSchema } from './run-context.js';
 export type { WorkflowRunContext } from './run-context.js';
+export {
+  WorkflowTerminalStatusSchema,
+  WorkflowFinalizationIntentSchema,
+  WorkflowFinalizerIdSchema,
+} from './finalization.js';
+export type { WorkflowTerminalStatus, WorkflowFinalizationIntent } from './finalization.js';
 export { walkWorkflowDefinition } from './walk.js';
 export type { WalkContext, WalkRelationship, WorkflowNodeVisitor } from './walk.js';
 export { projectWorkflowGraph } from './projection.js';

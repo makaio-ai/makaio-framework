@@ -20,6 +20,7 @@ export { buildWorkflowExpressionContextFromResolvedInputs } from './workflow-exp
 export {
   workflowDefinitionsDual,
   workflowExecutionsDual,
+  workflowFinalizationsDual,
   workflowStepSpansDual,
   worklogSummariesDual,
   worklogFrameEntriesDual,

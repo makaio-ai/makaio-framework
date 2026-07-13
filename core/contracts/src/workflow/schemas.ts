@@ -6,6 +6,7 @@ import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js'
 import { AIReasoningLevelSchema } from '../model/index.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
+import { WorkflowFinalizerIdSchema } from './finalization.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -946,6 +947,8 @@ export const WorkflowDefinitionSchema = z.object({
    * Absent on locally-authored definitions.
    */
   source: WorkflowDefinitionProvenanceSchema.optional(),
+  /** Definition-owned finalizer selected after successful execution. */
+  successFinalizerId: WorkflowFinalizerIdSchema.optional(),
   /**
    * Advisory execution hints that constrain worker provisioning and routing.
    *
@@ -970,7 +973,15 @@ export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 /**
  * Execution status of a workflow.
  */
-export const ExecutionStatusSchema = z.enum(['pending', 'running', 'paused', 'completed', 'failed', 'cancelled']);
+export const ExecutionStatusSchema = z.enum([
+  'pending',
+  'running',
+  'paused',
+  'finalizing',
+  'completed',
+  'failed',
+  'cancelled',
+]);
 
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
 

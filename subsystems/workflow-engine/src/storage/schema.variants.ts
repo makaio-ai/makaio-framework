@@ -14,6 +14,7 @@ import {
   workflowExecutionState,
   workflowExecutionStateEvents,
 } from './schema.js';
+import { workflowFinalizations } from './finalization-schema.js';
 import {
   workflowDefinitions as workflowDefinitionsPg,
   workflowExecutions as workflowExecutionsPg,
@@ -28,6 +29,7 @@ import {
   worklogGateEvents as worklogGateEventsPg,
   workflowExecutionState as workflowExecutionStatePg,
   workflowExecutionStateEvents as workflowExecutionStateEventsPg,
+  workflowFinalizations as workflowFinalizationsPg,
 } from './schema.postgres.js';
 
 /** Dialect variants for the workflow engine storage tables. */
@@ -46,6 +48,7 @@ export const workflowEngineSchema = defineDialectSchema(
     worklogGateEvents,
     workflowExecutionState,
     workflowExecutionStateEvents,
+    workflowFinalizations,
   },
   {
     workflowDefinitions: workflowDefinitionsPg,
@@ -61,5 +64,6 @@ export const workflowEngineSchema = defineDialectSchema(
     worklogGateEvents: worklogGateEventsPg,
     workflowExecutionState: workflowExecutionStatePg,
     workflowExecutionStateEvents: workflowExecutionStateEventsPg,
+    workflowFinalizations: workflowFinalizationsPg,
   },
 );

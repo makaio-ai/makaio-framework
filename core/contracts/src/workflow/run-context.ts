@@ -89,6 +89,8 @@ export const WorkflowRunContextSchema = z
      * field was introduced.
      */
     suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
+    /** Component that exclusively owns durable terminalization for this execution. */
+    terminalAuthority: z.enum(['worker', 'authority']).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.source.kind === 'definition' && value.definitionSnapshot === undefined) {
