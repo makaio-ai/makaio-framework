@@ -22,7 +22,7 @@ export interface FileAccessRules {
 /**
  * Provides filesystem access rules for a given working directory.
  * @param cwd - Absolute working directory
- * @param allowedDirectories - Directory allow-list from the active execution policy
+ * @param allowedDirectories - Directory allow-list from the active execution policy (`[]` denies all paths)
  */
 export type FileAccessRuleProvider = (cwd: string, allowedDirectories?: readonly string[]) => Promise<FileAccessRules>;
 

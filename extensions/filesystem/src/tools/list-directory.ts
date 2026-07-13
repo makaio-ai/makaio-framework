@@ -2,10 +2,9 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { defineTool, toolSuccess, toolError, ToolErrorCodes } from '@makaio/tools-core';
-import { getFileAccessRules, handleFsError, resolveAndValidatePath } from '../utils/index.js';
+import { createPathValidator, handleFsError, resolveAndValidatePath, type PathValidator } from '../utils/index.js';
 import { isHiddenName } from '../utils/platform.js';
 import type { MakaioContext } from '@makaio/core';
-import type { FileAccessRules } from '../types.js';
 
 /**
  * Entry type enumeration for directory listing.
@@ -116,7 +115,7 @@ function matchGlob(pattern: string, name: string): boolean {
  * @param context - Makaio context
  * @param includeHidden - Include hidden entries
  * @param pattern - Optional glob pattern
- * @param rules - Optional compiled file access rules for .makaioignore filtering
+ * @param validate - Path validator compiled for this tool invocation
  * @returns Array of directory entries
  */
 async function readDirectory(
@@ -124,7 +123,7 @@ async function readDirectory(
   context: MakaioContext,
   includeHidden: boolean,
   pattern: string | undefined,
-  rules?: FileAccessRules,
+  validate: PathValidator,
 ): Promise<DirectoryEntry[]> {
   const entries: DirectoryEntry[] = [];
   const dirents = await fs.readdir(dirPath, { withFileTypes: true });
@@ -137,8 +136,7 @@ async function readDirectory(
 
     const entryPath = path.join(dirPath, dirent.name);
 
-    // Skip entries denied by .makaioignore rules
-    if (rules?.isDenied(entryPath)) {
+    if (!validate(entryPath).valid) {
       continue;
     }
 
@@ -159,8 +157,8 @@ async function readDirectory(
  * @param context - Makaio context
  * @param includeHidden - Include hidden entries
  * @param pattern - Optional glob pattern (only applied to files, not directories)
+ * @param validate - Path validator compiled for this tool invocation
  * @param signal - Optional abort signal
- * @param rules - Optional compiled file access rules for .makaioignore filtering
  * @returns Array of all entries recursively
  */
 async function readDirectoryRecursive(
@@ -168,8 +166,8 @@ async function readDirectoryRecursive(
   context: MakaioContext,
   includeHidden: boolean,
   pattern: string | undefined,
+  validate: PathValidator,
   signal?: AbortSignal,
-  rules?: FileAccessRules,
 ): Promise<DirectoryEntry[]> {
   const allEntries: DirectoryEntry[] = [];
 
@@ -180,6 +178,13 @@ async function readDirectoryRecursive(
   async function processDir(currentPath: string): Promise<void> {
     // Check for cancellation
     if (signal?.aborted) {
+      return;
+    }
+
+    // Revalidate at the traversal boundary as defense-in-depth. This narrows
+    // the window after parent enumeration but is not an atomic guarantee
+    // against a hostile process concurrently mutating the filesystem namespace.
+    if (!validate(currentPath).valid) {
       return;
     }
 
@@ -198,8 +203,7 @@ async function readDirectoryRecursive(
 
       const entryPath = path.join(currentPath, dirent.name);
 
-      // Skip entries denied by .makaioignore rules — also prunes directory recursion
-      if (rules?.isDenied(entryPath)) {
+      if (!validate(entryPath).valid) {
         continue;
       }
 
@@ -242,8 +246,9 @@ export const listDirectoryTool = defineTool({
   outputSchema: ListDirectoryOutputSchema,
 
   execute: async (input, context) => {
+    const validate = createPathValidator(context);
     // Resolve and validate path
-    const pathResult = resolveAndValidatePath(input.path, context);
+    const pathResult = resolveAndValidatePath(input.path, context, validate);
     if (!pathResult.valid) {
       return toolError(ToolErrorCodes.PERMISSION_DENIED, pathResult.error);
     }
@@ -258,14 +263,12 @@ export const listDirectoryTool = defineTool({
 
       const includeHidden = input.includeHidden ?? false;
       const pattern = input.pattern;
-      const rules = getFileAccessRules(context);
-
       let entries: DirectoryEntry[];
 
       if (input.recursive) {
-        entries = await readDirectoryRecursive(resolvedPath, context, includeHidden, pattern, context.signal, rules);
+        entries = await readDirectoryRecursive(resolvedPath, context, includeHidden, pattern, validate, context.signal);
       } else {
-        entries = await readDirectory(resolvedPath, context, includeHidden, pattern, rules);
+        entries = await readDirectory(resolvedPath, context, includeHidden, pattern, validate);
       }
 
       // Sort entries: directories first, then alphabetically

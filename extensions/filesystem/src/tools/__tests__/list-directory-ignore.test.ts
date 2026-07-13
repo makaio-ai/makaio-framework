@@ -133,6 +133,28 @@ describe('list_directory .makaioignore filtering', () => {
       }
     });
 
+    it('revalidates a directory immediately before recursive traversal', async () => {
+      const tmpDir = await createTempDir();
+      const childDir = path.join(tmpDir, 'child');
+      await fs.mkdir(childDir);
+      await fs.writeFile(path.join(childDir, 'secret.txt'), 'secret');
+      let childValidations = 0;
+      const context = buildContext(tmpDir, (candidate) => {
+        if (candidate !== childDir) return false;
+        childValidations++;
+        return childValidations >= 2;
+      });
+
+      const result = await listDirectoryTool.execute({ path: tmpDir, recursive: true }, context);
+
+      expect(result.success).toBe(true);
+      expect(childValidations).toBe(2);
+      if (result.success) {
+        expect(result.data.entries.map((entry) => entry.name)).toEqual(['child']);
+        expect(JSON.stringify(result)).not.toContain('secret.txt');
+      }
+    });
+
     it('file allowed by negated isDenied (returns false) appears in listing', async () => {
       const tmpDir = await createTempDir();
       const notesDir = path.join(tmpDir, 'notes');
@@ -155,5 +177,29 @@ describe('list_directory .makaioignore filtering', () => {
         expect(names).not.toContain('debug.log');
       }
     });
+  });
+
+  it('excludes directory symlinks that resolve outside an allowed directory', async () => {
+    const tempDir = await createTempDir();
+    const allowedDir = path.join(tempDir, 'allowed');
+    const outsideDir = path.join(tempDir, 'outside');
+    await fs.mkdir(allowedDir);
+    await fs.mkdir(outsideDir);
+    await fs.writeFile(path.join(allowedDir, 'inside.txt'), 'inside');
+    await fs.writeFile(path.join(outsideDir, 'secret.txt'), 'outside secret');
+    await fs.symlink(outsideDir, path.join(allowedDir, 'outside-link'));
+    const rules: FileAccessRules = { allowedDirectories: [allowedDir], isDenied: () => false };
+    const context = createMakaioContext({
+      cwd: allowedDir,
+      constraints: { [FILE_ACCESS_RULES_KEY]: rules },
+    });
+
+    const result = await listDirectoryTool.execute({ path: allowedDir, recursive: true }, context);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.entries.map((entry) => entry.name)).toEqual(['inside.txt']);
+      expect(JSON.stringify(result)).not.toContain('secret.txt');
+    }
   });
 });

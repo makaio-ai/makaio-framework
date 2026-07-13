@@ -1,7 +1,7 @@
 import { glob } from 'glob';
 import { z } from 'zod';
 import { defineTool, toolSuccess, toolError, ToolErrorCodes, errorToToolResult } from '@makaio/tools-core';
-import { resolveAndValidatePath, validateRelativeGlobPattern } from '../utils/index.js';
+import { createPathValidator, resolveAndValidatePath, validateRelativeGlobPattern } from '../utils/index.js';
 
 /**
  * Input schema for the glob_files tool.
@@ -44,19 +44,22 @@ export const globFilesTool = defineTool({
       return toolError(ToolErrorCodes.PERMISSION_DENIED, patternResult.error);
     }
 
+    const validate = createPathValidator(context);
     const baseCwd = input.cwd ?? context.cwd;
-    const cwdResult = resolveAndValidatePath(baseCwd, context);
+    const cwdResult = resolveAndValidatePath(baseCwd, context, validate);
     if (!cwdResult.valid) {
       return toolError(ToolErrorCodes.PERMISSION_DENIED, cwdResult.error);
     }
 
     try {
-      const allMatches = await glob(input.pattern, {
-        cwd: cwdResult.path,
-        absolute: true,
-        nodir: true,
-        dot: false,
-      });
+      const allMatches = (
+        await glob(input.pattern, {
+          cwd: cwdResult.path,
+          absolute: true,
+          nodir: true,
+          dot: false,
+        })
+      ).filter((matchedPath) => validate(matchedPath).valid);
 
       allMatches.sort();
       const offset = input.offset ?? 0;

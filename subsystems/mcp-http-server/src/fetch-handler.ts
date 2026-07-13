@@ -18,6 +18,7 @@ import {
   createMcpServer,
   type HttpMcpHandlerOptions,
 } from './server.js';
+import { connectMcpServerWithCleanup } from './mcp-server-lifecycle.js';
 
 /**
  * Result returned by {@link createFetchMcpHandler}.
@@ -120,6 +121,7 @@ export async function createFetchMcpHandler(
     contextRegistry,
     toolDiscovery: options.toolDiscovery,
     resolveContextOverrides: options.resolveContextOverrides,
+    toolExecutionTimeoutMs: options.toolExecutionTimeoutMs,
   });
 
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -128,7 +130,7 @@ export async function createFetchMcpHandler(
   if (options.onclose) {
     transport.onclose = options.onclose;
   }
-  await mcpServer.connect(transport);
+  await connectMcpServerWithCleanup(mcpServer, transport, () => mcpServer.close(), 'fetch MCP handler');
 
   const handler = async (request: Request): Promise<Response> => {
     try {

@@ -21,6 +21,8 @@
 
 import * as http from 'node:http';
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import type { ToolExecutionContextOverrides } from '@makaio/contracts';
@@ -197,6 +199,80 @@ describe('createFetchMcpHandler', () => {
     await handle.close();
 
     expect(onclose).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards a configured tool execution timeout to tool execution', async () => {
+    const bus = createBusInstance();
+    const requestOptional = vi.spyOn(bus, 'requestOptional');
+    const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [{ name: 'echo', description: 'Echo', toolsetName: 'test', inputSchema: { type: 'object' } }],
+        toolsets: [],
+      });
+    });
+    const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+      ctx.setResult({ success: true, data: ctx.payload.input });
+    });
+    const handle = await createFetchMcpHandler(bus, { toolExecutionTimeoutMs: 180_000 });
+    const { port, stop } = await mountFetchHandler(handle.handler);
+
+    cleanups.push(async () => {
+      await handle.close();
+      await stop();
+      cleanupExecute();
+      cleanupList();
+    });
+
+    const { client, transport } = await createClient(port);
+    try {
+      await client.callTool({ name: 'echo', arguments: { value: 'ok' } });
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+
+    expect(requestOptional).toHaveBeenCalledWith(ToolSubjects.execute, expect.objectContaining({ toolName: 'echo' }), {
+      timeout: 180_000,
+    });
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER])('rejects invalid tool execution timeout %s', async (timeout) => {
+    await expect(createFetchMcpHandler(createBusInstance(), { toolExecutionTimeoutMs: timeout })).rejects.toThrow(
+      'toolExecutionTimeoutMs must be a positive safe integer',
+    );
+  });
+
+  it('releases registry subscriptions when transport startup fails', async () => {
+    const bus = createBusInstance();
+    vi.spyOn(WebStandardStreamableHTTPServerTransport.prototype, 'start').mockRejectedValue(
+      new Error('fetch startup failed'),
+    );
+    const sendToolListChanged = vi.spyOn(Server.prototype, 'sendToolListChanged').mockResolvedValue();
+
+    await expect(createFetchMcpHandler(bus)).rejects.toThrow('fetch startup failed');
+    await bus.emit(ToolSubjects.registryChanged, {
+      revision: 1,
+      reason: 'toolset-registered',
+      toolsetName: 'after-failed-fetch-start',
+    });
+
+    expect(sendToolListChanged).not.toHaveBeenCalled();
+  });
+
+  it('preserves startup and cleanup failures as an AggregateError', async () => {
+    const startupError = new Error('fetch startup failed');
+    const cleanupError = new Error('fetch cleanup failed');
+    vi.spyOn(WebStandardStreamableHTTPServerTransport.prototype, 'start').mockRejectedValue(startupError);
+    vi.spyOn(Server.prototype, 'close').mockRejectedValue(cleanupError);
+
+    await expect(createFetchMcpHandler(createBusInstance())).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof AggregateError &&
+        error.errors[0] === startupError &&
+        error.errors[1] === cleanupError &&
+        error.message === 'Failed to start and clean up fetch MCP handler'
+      );
+    });
   });
 
   // -------------------------------------------------------------------------

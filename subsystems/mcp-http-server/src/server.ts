@@ -12,12 +12,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ToolResult } from '@makaio/tools-core';
-import {
-  AgentSubjects,
-  ToolSubjects,
-  type McpAgentContext,
-  type ToolExecutionContextOverrides,
-} from '@makaio/contracts';
+import { AgentSubjects, ToolSubjects, type ToolExecutionContextOverrides } from '@makaio/contracts';
 import { McpContextRegistry, type IMcpContextRegistry } from './context-registry.js';
 import {
   APPROVE_TOOL_NAME,
@@ -33,6 +28,26 @@ import {
   type McpToolDiscoveryOptions,
   type McpToolEntry,
 } from './tool-discovery.js';
+import { validateToolExecutionTimeout } from './tool-execution-timeout.js';
+import { closeHttpServerSafely, listenForHttpPort } from './http-server-lifecycle.js';
+import { connectMcpServerWithCleanup } from './mcp-server-lifecycle.js';
+import type {
+  CreateMcpServerOptions,
+  HttpMcpHandlerOptions,
+  HttpMcpServerHandle,
+  HttpMcpServerOptions,
+  McpServerOptions,
+  StdioMcpServerHandle,
+} from './server-options.js';
+export type {
+  CreateMcpServerOptions,
+  HttpMcpHandlerOptions,
+  HttpMcpServerHandle,
+  HttpMcpServerOptions,
+  McpServerOptions,
+  ResolveContextOverrides,
+  StdioMcpServerHandle,
+} from './server-options.js';
 
 export { handleApproveToolCall };
 export type {
@@ -49,120 +64,6 @@ export const ADAPTER_SESSION_ID_PARAM = 'adapterSessionId';
 
 /** HTTP header name that carries the adapter session ID after query-param promotion. */
 export const ADAPTER_SESSION_ID_HEADER = 'x-adapter-session-id';
-
-/**
- * Options for configuring MCP server startup.
- */
-export interface McpServerOptions {
-  /** Required. Defaults to `'stdio'` when using {@link startMcpServer}. */
-  transport: 'stdio' | 'http';
-  /** Port for HTTP transport. When omitted or 0, OS assigns an available port. */
-  port?: number;
-  /** Agent context for HTTP transport routing. */
-  agentContext?: McpAgentContext;
-  /** Optional MCP tool discovery customization. */
-  toolDiscovery?: McpToolDiscoveryOptions;
-  /**
-   * Optional callback invoked exactly once when the stdio transport closes.
-   *
-   * Fired on whichever of these happens first: the client detaches (stdin EOF),
-   * the SDK transport fires its own `onclose` hook, or an explicit
-   * {@link StdioMcpServerHandle.close} call completes. Subsequent triggers are
-   * suppressed so the callback is guaranteed to fire at most once.
-   *
-   * Only consulted for `transport: 'stdio'`; ignored for HTTP.
-   */
-  onclose?: () => void;
-}
-
-/**
- * Result returned by {@link startMcpServer} for the stdio transport.
- */
-export interface StdioMcpServerHandle {
-  /** Gracefully close the MCP server and stdio transport. */
-  close: () => Promise<void>;
-}
-
-/**
- * Result returned by {@link startHttpMcpServer}.
- */
-export interface HttpMcpServerHandle {
-  /** OS-assigned port the HTTP server is listening on. */
-  port: number;
-  /** Context registry for registering/unregistering agent sessions. */
-  contextRegistry: IMcpContextRegistry;
-  /** Gracefully close the HTTP server and MCP transport. */
-  close: () => Promise<void>;
-}
-
-/**
- * Callback that resolves session-stable context overrides for a given
- * adapter session ID.
- *
- * Invoked on every tool-call request. When the session is found, its
- * return value overrides the default fallback context
- * `{ cwd: process.cwd(), sessionId }`. When the session is unknown or
- * the header is absent, returning `undefined` keeps the fallback.
- * @param adapterSessionId - The adapter session ID extracted from request
- *   headers, or `undefined` when the header is absent.
- * @returns Resolved context overrides, or `undefined` to use the fallback.
- */
-export type ResolveContextOverrides = (
-  adapterSessionId: string | undefined,
-) => ToolExecutionContextOverrides | undefined;
-
-/**
- * Options for {@link createMcpServer}.
- */
-export interface CreateMcpServerOptions {
-  /** Registry for resolving agent context by adapterSessionId. When present, the `approve` tool is exposed. */
-  contextRegistry?: IMcpContextRegistry;
-  /** Optional tool discovery customization. */
-  toolDiscovery?: McpToolDiscoveryOptions;
-  /** Optional callback to resolve session-stable context overrides from an adapter session ID at tool-call time. */
-  resolveContextOverrides?: ResolveContextOverrides;
-}
-
-/**
- * Transport-agnostic options shared by {@link createHttpMcpHandler},
- * {@link createFetchMcpHandler}, and {@link startHttpMcpServer}.  These fields configure the MCP server and its
- * attached transport without prescribing how the resulting handler is mounted
- * onto an HTTP stack.
- */
-export interface HttpMcpHandlerOptions {
-  /** Agent context for HTTP transport routing. */
-  agentContext?: McpAgentContext;
-  /** Optional MCP tool discovery customization. */
-  toolDiscovery?: McpToolDiscoveryOptions;
-  /**
-   * Optional callback invoked when the underlying MCP transport closes.
-   *
-   * Called synchronously by the MCP SDK's transport `onclose` hook — that is,
-   * after {@link HttpMcpHandlerHandle.close}, {@link FetchMcpHandlerHandle.close},
-   * or {@link HttpMcpServerHandle.close}
-   * has been called and the transport has finished tearing down.  Intended for
-   * best-effort resource cleanup (e.g. flushing session registries) without
-   * blocking the close path.
-   *
-   * When used via {@link startHttpMcpServer}, the callback fires after the MCP
-   * transport closes, which occurs during the combined server-and-transport
-   * teardown initiated by {@link HttpMcpServerHandle.close}.
-   */
-  onclose?: () => void;
-  /** Optional callback for session-stable context override resolution. */
-  resolveContextOverrides?: ResolveContextOverrides;
-}
-
-/**
- * Options accepted by {@link startHttpMcpServer}.
- *
- * Extends {@link HttpMcpHandlerOptions} with `port`, which controls which
- * TCP port the internally-created `http.Server` listens on.
- */
-export interface HttpMcpServerOptions extends HttpMcpHandlerOptions {
-  /** Port for HTTP transport. When omitted or 0, OS assigns an available port. */
-  port?: number;
-}
 
 /**
  * Result returned by {@link createHttpMcpHandler}.
@@ -318,11 +219,6 @@ function buildToolExecutionContextOverrides(
  *
  * **Freshness contract:** Tool lists are resolved fresh on every MCP `tools/list` and
  * `tools/call` request. There is no caching between calls.
- *
- * **Side-effect:** Subscribes to {@link ToolSubjects.registryChanged} on `bus` and
- * sends `notifications/tools/list_changed` to connected MCP clients on each emission.
- * Calling `server.close()` unsubscribes this listener; connected transport closure
- * also reaches the same idempotent cleanup through the SDK's `onclose` hook.
  * @param bus - Bus instance for tool execution and approval RPC.
  * @param sessionId - Session identifier for tool execution context.
  * @param options - Optional server configuration.
@@ -330,6 +226,7 @@ function buildToolExecutionContextOverrides(
  */
 export async function createMcpServer(bus: IMakaioBus, sessionId: string, options?: CreateMcpServerOptions) {
   const { contextRegistry, toolDiscovery, resolveContextOverrides } = options ?? {};
+  const toolExecutionTimeoutMs = validateToolExecutionTimeout(options?.toolExecutionTimeoutMs);
   const server = new Server({ name: 'makaio', version: '1.0.0' }, { capabilities: { tools: { listChanged: true } } });
   const requestToolApproval: RequestToolApproval = (payload) => bus.request(AgentSubjects.toolApprove, payload);
 
@@ -372,24 +269,21 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
       throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
     }
 
-    // Graceful degradation by design: unknown/evicted sessions fall back to
-    // process-level defaults rather than rejecting. The MCP server also runs
-    // standalone (without a bridge service) where resolveContextOverrides is
-    // absent, so failing closed would break the standalone path.
+    // Unknown sessions use process defaults so standalone MCP servers remain usable.
     const sessionOverrides = resolveContextOverrides?.(adapterSessionId);
     const contextOverrides = buildToolExecutionContextOverrides(sessionOverrides, sessionId);
 
-    // Payload shape matches ToolSchemas.execute.request: { toolName, input, contextOverrides }.
-    // sessionId lives inside contextOverrides, not at the top level.
-    // adapterId / adapterName are placed at the top level (canonical location per
-    // the coherent adapter-identity contract in adapter-identity.ts).
-    const execution = await bus.requestOptional(ToolSubjects.execute, {
+    const executePayload = {
       toolName: requestedTool.sourceToolName,
       input: request.params.arguments ?? {},
       adapterId: callIdentity?.adapterId,
       adapterName: callIdentity?.adapterName,
       contextOverrides,
-    });
+    };
+    const execution =
+      toolExecutionTimeoutMs === undefined
+        ? await bus.requestOptional(ToolSubjects.execute, executePayload)
+        : await bus.requestOptional(ToolSubjects.execute, executePayload, { timeout: toolExecutionTimeoutMs });
     if (!execution.handled) {
       throw new McpError(ErrorCode.InternalError, 'Tool execution handler unavailable');
     }
@@ -432,67 +326,6 @@ export function createMcpRequestHandler(
       }
     });
   };
-}
-
-/**
- * Close an HTTP server, tolerating already-stopped state.
- * @param httpServer - HTTP server instance to close.
- * @returns Promise that resolves when close completes.
- */
-async function closeHttpServerSafely(httpServer: http.Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    httpServer.close((err) => {
-      if (err && (err as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') {
-        reject(err);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-/**
- * Start listening and resolve the assigned port.
- * @param httpServer - Node HTTP server.
- * @param requestedPort - Port to bind (0 = auto).
- * @param onListenFailure - Cleanup callback for listen errors.
- * @returns Resolved bound port.
- */
-async function listenForHttpPort(
-  httpServer: http.Server,
-  requestedPort: number,
-  onListenFailure: (error: Error) => Promise<void>,
-): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const onError = (error: Error): void => {
-      void onListenFailure(error)
-        .catch((cleanupError) => {
-          console.error('[MCP Server] Startup cleanup failed after listen error:', cleanupError);
-        })
-        .finally(() => {
-          reject(error);
-        });
-    };
-
-    httpServer.once('error', onError);
-    httpServer.listen(requestedPort, '127.0.0.1', () => {
-      const addr = httpServer.address();
-      if (!addr || typeof addr === 'string') {
-        const addressError = new Error('Unexpected server address format');
-        httpServer.off('error', onError);
-        void onListenFailure(addressError)
-          .then(() => {
-            reject(addressError);
-          })
-          .catch((cleanupError) => {
-            reject(new AggregateError([addressError, cleanupError], 'Failed during MCP server startup'));
-          });
-        return;
-      }
-      httpServer.off('error', onError);
-      resolve(addr.port);
-    });
-  });
 }
 
 /**
@@ -555,13 +388,14 @@ export async function createHttpMcpHandler(
     contextRegistry,
     toolDiscovery: options.toolDiscovery,
     resolveContextOverrides: options.resolveContextOverrides,
+    toolExecutionTimeoutMs: options.toolExecutionTimeoutMs,
   });
 
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
   if (options.onclose) {
     transport.onclose = options.onclose;
   }
-  await mcpServer.connect(transport);
+  await connectMcpServerWithCleanup(mcpServer, transport, () => mcpServer.close(), 'HTTP MCP handler');
 
   // adapterSessionId query-param → x-adapter-session-id header shim.
   // This is a protocol contract (not a listener detail): adapters pass the
@@ -625,25 +459,26 @@ export async function startHttpMcpServer(
 
   console.error(`[MCP Server] HTTP transport listening on port ${port}`);
 
-  return {
-    port,
-    contextRegistry: handle.contextRegistry,
-    close: async () => {
-      // Force-close idle keep-alive connections so httpServer.close() resolves promptly.
-      // Without this, connections held by the Claude Agent SDK subprocess
-      // prevent the server from draining within the test timeout.
+  let closePromise: Promise<void> | undefined;
+  const closeOnce = (): Promise<void> => {
+    closePromise ??= (async () => {
+      // Force-close keep-alive connections before waiting for server drain.
       httpServer.closeAllConnections();
-      const results = await Promise.allSettled([
-        handle.close(),
-        new Promise<void>((resolve, reject) => httpServer.close((err) => (err ? reject(err) : resolve()))),
-      ]);
+      const results = await Promise.allSettled([handle.close(), closeHttpServerSafely(httpServer)]);
       const errors = results
         .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
         .map((result) => (result.reason instanceof Error ? result.reason : new Error(String(result.reason))));
       if (errors.length > 0) {
         throw new AggregateError(errors, 'Failed to close HTTP MCP server resources');
       }
-    },
+    })();
+    return closePromise;
+  };
+
+  return {
+    port,
+    contextRegistry: handle.contextRegistry,
+    close: closeOnce,
   };
 }
 
@@ -653,7 +488,9 @@ export async function startHttpMcpServer(
  * For the stdio transport, returns a {@link StdioMcpServerHandle} whose
  * `close()` method gracefully tears down the MCP server. Pass
  * `options.onclose` to receive a single callback when the transport closes for
- * any reason (client detach via stdin EOF, or explicit `handle.close()`).
+ * any reason (client detach via stdin EOF, or explicit `handle.close()`). Pass
+ * `options.resolveContextOverrides` to resolve current execution context on
+ * every tool call, including calls after client reconnects.
  * Signal handling is intentionally left to the composition root — library code
  * must not own process-global resources such as `process.on('SIGINT')`.
  * @param bus - Bus instance.
@@ -674,15 +511,14 @@ export async function startMcpServer(
 
   const server = await createMcpServer(bus, sessionId, {
     toolDiscovery: options.toolDiscovery,
+    resolveContextOverrides: options.resolveContextOverrides,
+    toolExecutionTimeoutMs: options.toolExecutionTimeoutMs,
   });
   const transport = new StdioServerTransport();
 
   const stdin = process.stdin;
 
-  // Single close-in-progress promise shared between the stdin-EOF path and
-  // the explicit close() path. Both paths funnel through server.close() once;
-  // concurrent callers await the same promise so the underlying SDK call is
-  // never duplicated.
+  // Stdin EOF and explicit close share one teardown promise.
   let closePromise: Promise<void> | undefined;
   const closeOnce = (): Promise<void> => {
     if (!closePromise) {
@@ -730,7 +566,7 @@ export async function startMcpServer(
   stdin.once('end', onStdinEnd);
   stdin.once('close', onStdinEnd);
 
-  await server.connect(transport);
+  await connectMcpServerWithCleanup(server, transport, closeOnce, 'stdio MCP server');
 
   console.error('[MCP Server] Started and listening on stdio');
 

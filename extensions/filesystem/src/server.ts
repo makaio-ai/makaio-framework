@@ -2,6 +2,7 @@ export {
   default,
   filesystemPackage,
   filesystemToolset,
+  readOnlyFilesystemToolset,
   FILE_ACCESS_RULES_KEY,
   DEFAULT_DENIED_PATTERNS,
   createMakaioIgnoreProvider,
