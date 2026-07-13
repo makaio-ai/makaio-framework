@@ -31,7 +31,7 @@
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
-    "vitest": "4.1.7"
+    "vitest": "4.1.10"
   },
   "scripts": {
     "build": "tsdown",

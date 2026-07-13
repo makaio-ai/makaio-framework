@@ -71,7 +71,7 @@
     "@makaio/test-utils": "workspace:*",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",
-    "vitest": "4.1.7"
+    "vitest": "4.1.10"
   },
   "license": "MIT",
   "scripts": {
