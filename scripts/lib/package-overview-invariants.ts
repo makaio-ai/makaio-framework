@@ -6,10 +6,18 @@
  * @packageDocumentation
  */
 
+import { minimatch } from 'minimatch';
+
 /** A Yarn workspace entry relevant to the package overview. */
 export interface WorkspaceEntry {
   readonly location: string;
   readonly name: string;
+}
+
+/** A raw non-root Yarn inventory entry before manifest scoping. */
+export interface YarnWorkspaceEntry {
+  readonly location: string;
+  readonly name: string | null;
 }
 
 /** A package inventory row parsed from `docs/package-overview.md`. */
@@ -37,7 +45,7 @@ interface CheckPackageOverviewOptions {
 
 interface WorkspaceJsonLine {
   readonly location: string;
-  readonly name: string;
+  readonly name: string | null;
 }
 
 /**
@@ -45,13 +53,57 @@ interface WorkspaceJsonLine {
  * @param output - Raw JSONL command output.
  * @returns Non-root workspace entries.
  */
-export function parseYarnWorkspacesList(output: string): WorkspaceEntry[] {
+export function parseYarnWorkspacesList(output: string): YarnWorkspaceEntry[] {
   return output
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .map(parseWorkspaceJsonLine)
-    .filter((workspace) => workspace.location !== '.');
+    .filter((workspace): workspace is YarnWorkspaceEntry => workspace !== undefined);
+}
+
+/**
+ * Scope an enclosing Yarn project's workspace inventory to a nested logical root.
+ * @param workspaces - Workspace entries relative to the active Yarn project.
+ * @param rootLocation - Logical root relative to that project, or `.` when they are identical.
+ * @returns Entries beneath the logical root with that prefix removed.
+ */
+export function scopeWorkspacesToRoot(
+  workspaces: readonly YarnWorkspaceEntry[],
+  rootLocation: string,
+): YarnWorkspaceEntry[] {
+  if (rootLocation === '.') return [...workspaces];
+
+  const prefix = `${rootLocation}/`;
+  return workspaces
+    .filter((workspace) => workspace.location.startsWith(prefix))
+    .map((workspace) => ({ ...workspace, location: workspace.location.slice(prefix.length) }));
+}
+
+/**
+ * Retain only workspaces declared by a logical root's own workspace patterns.
+ * @param workspaces - Workspace entries relative to the logical root.
+ * @param patterns - Yarn workspace patterns from that root's package manifest.
+ * @returns Entries matched by an include pattern and no exclusion pattern.
+ */
+export function filterDeclaredWorkspaces(
+  workspaces: readonly YarnWorkspaceEntry[],
+  patterns: readonly string[],
+): WorkspaceEntry[] {
+  const includes = patterns.filter((pattern) => !pattern.startsWith('!'));
+  const excludes = patterns.filter((pattern) => pattern.startsWith('!')).map((pattern) => pattern.slice(1));
+  return workspaces
+    .filter(
+      (workspace) =>
+        includes.some((pattern) => minimatch(workspace.location, pattern)) &&
+        !excludes.some((pattern) => minimatch(workspace.location, pattern)),
+    )
+    .map((workspace) => {
+      if (workspace.name === null) {
+        throw new Error(`Declared Yarn workspace "${workspace.location}" has no package name`);
+      }
+      return { location: workspace.location, name: workspace.name };
+    });
 }
 
 /**
@@ -142,12 +194,23 @@ export function checkPackageOverview(options: CheckPackageOverviewOptions): Pack
  * @param line - One JSON object from Yarn's JSONL output.
  * @returns Parsed workspace entry.
  */
-function parseWorkspaceJsonLine(line: string): WorkspaceEntry {
+function parseWorkspaceJsonLine(line: string): YarnWorkspaceEntry | undefined {
   const parsed = JSON.parse(line) as unknown;
+  if (isRootWorkspaceJsonLine(parsed)) return undefined;
   if (!isWorkspaceJsonLine(parsed)) {
     throw new Error(`Invalid yarn workspaces list --json line: ${line}`);
   }
   return { location: parsed.location, name: parsed.name };
+}
+
+/**
+ * Recognize the Yarn project root, which is not a documented package entry.
+ * @param value - Parsed JSON value.
+ * @returns Whether the value describes the project root.
+ */
+function isRootWorkspaceJsonLine(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  return (value as Record<string, unknown>)['location'] === '.';
 }
 
 /**
@@ -158,7 +221,7 @@ function parseWorkspaceJsonLine(line: string): WorkspaceEntry {
 function isWorkspaceJsonLine(value: unknown): value is WorkspaceJsonLine {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  return typeof record.location === 'string' && typeof record.name === 'string';
+  return typeof record.location === 'string' && (typeof record.name === 'string' || record.name === null);
 }
 
 /**

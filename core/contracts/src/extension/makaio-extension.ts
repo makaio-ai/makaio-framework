@@ -23,6 +23,7 @@ import type { AnyArtifactKindDefinition } from '../artifact/index.js';
 import type { ArtifactLifecycleHookRegistration } from '../artifact/lifecycle-hooks.js';
 import type { FacetNamespaceDefinition } from '../facet/index.js';
 import type { SurfaceBindingDefinition } from '../materialization/definition.js';
+import type { ExtensionArtifactViewBuildersContribution } from '../materialization/view-builder.js';
 import type {
   ExtensionTransitionActionsContribution,
   ExtensionTransitionRulesContribution,
@@ -453,6 +454,20 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * before any extension that declares lifecycle hooks.
    */
   readonly artifactLifecycleHooks?: ExtensionArtifactLifecycleHooksContribution<THostContext['bus']>;
+
+  /**
+   * Artifact view builder factory contributed by this extension.
+   *
+   * When present, the runtime calls `createBuilders()` during extension
+   * activation and registers the returned builders with the artifact view
+   * builder registry under the extension's owner key. Builders are
+   * unregistered when the extension stops.
+   *
+   * Builders are live extension contributions; only serializable
+   * requests/responses cross the bus. The `ArtifactViewBuilderRegistry`
+   * service must be started before any extension that declares builders.
+   */
+  readonly artifactViewBuilders?: ExtensionArtifactViewBuildersContribution;
 
   /**
    * Facet namespace definitions contributed by this extension.

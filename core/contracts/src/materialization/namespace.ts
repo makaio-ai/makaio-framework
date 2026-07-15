@@ -1,6 +1,72 @@
 import { z } from 'zod';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { SurfaceBindingRegistrationSchema } from './schemas.js';
+import { ArtifactViewAffordanceRequestSchema, ArtifactViewRequestSchema } from './view-builder.js';
+import { ArtifactViewModelSchema } from './view-model.js';
+
+/* -------------------------------------------------------------------------- */
+/*  Artifact view resolve request / response schemas                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Request payload for resolving an artifact view through an affordance.
+ *
+ * Extends {@link ArtifactViewRequestSchema} (`level` + optional `params`)
+ * with the artifact identity and the structural affordance selector — the
+ * resolve RPC reuses the shared view-request shape rather than re-declaring
+ * parallel parameter types.
+ * @param ref - Stable framework artifact identity.
+ * @param level - Requested detail level (`link`, `summary`, or `full`).
+ * @param affordance - Structural affordance selector (own-view, inline, or entry).
+ * @param params - Optional JSON-safe runtime parameters.
+ */
+export const ArtifactViewResolveRequestSchema = ArtifactViewRequestSchema.extend({
+  /** Stable framework artifact identity. */
+  ref: z.string().min(1),
+  /** Structural affordance selector for the view. */
+  affordance: ArtifactViewAffordanceRequestSchema,
+});
+
+/** Request payload for resolving an artifact view. */
+export type ArtifactViewResolveRequest = z.infer<typeof ArtifactViewResolveRequestSchema>;
+
+/**
+ * Discriminated response for an artifact view resolve request.
+ *
+ * Exactly three closed shapes:
+ * - `ok` — positive result with the rendered view, its builder version, and
+ *   the exact artifact revision that produced the view.
+ * - `artifact-not-found` — the referenced artifact does not exist.
+ * - `not-rendered` — the artifact exists but the requested affordance is not
+ *   available or the projection policy suppresses rendering.
+ */
+export const ArtifactViewResolveResponseSchema = z.discriminatedUnion('status', [
+  z.object({
+    /** Result discriminant: the view was successfully rendered. */
+    status: z.literal('ok'),
+    /** Rendered artifact view model. */
+    view: ArtifactViewModelSchema,
+    /** Positive integer builder version that produced this view. */
+    builderVersion: z.number().int().positive(),
+    /** Exact artifact revision resolved to produce this view. */
+    sourceRevision: z.string().min(1),
+  }),
+  z.object({
+    /** Result discriminant: the artifact was not found. */
+    status: z.literal('artifact-not-found'),
+    /** Always `null` for error variants. */
+    view: z.null(),
+  }),
+  z.object({
+    /** Result discriminant: the artifact was not rendered. */
+    status: z.literal('not-rendered'),
+    /** Always `null` for error variants. */
+    view: z.null(),
+  }),
+]);
+
+/** Response payload for an artifact view resolve request. */
+export type ArtifactViewResolveResponse = z.infer<typeof ArtifactViewResolveResponseSchema>;
 
 /**
  * Framework-level materialization bus schemas.
@@ -14,6 +80,7 @@ import { SurfaceBindingRegistrationSchema } from './schemas.js';
  * - `surfaceBinding.changed` — emitted when a surface binding is added (event)
  * - `ref.changed` — emitted when a provider materialization ref changes (event)
  * - `capability.resolved` — emitted when a provider surface capability set is resolved (event)
+ * - `artifact.view.resolve` — resolve an artifact view through an affordance (RPC)
  *
  * Product hosts that extend the framework materialization surface should
  * register a product-owned namespace rather than merging additional subjects
@@ -29,9 +96,11 @@ export const MaterializationSchemas = {
     response: z.object({ registered: z.boolean() }),
   },
 
-  /** List registered surface bindings, optionally filtered by provider or namespace (RPC). */
+  /** List registered surface bindings, optionally filtered by id, provider, or namespace (RPC). */
   'surfaceBinding.list': {
     request: z.object({
+      /** Restrict results to a single binding identifier for exact lookup. */
+      id: z.string().min(1).optional(),
       /** Restrict results to a single provider identifier. */
       provider: z.string().min(1).optional(),
       /** Restrict results to a single namespace identifier. */
@@ -58,6 +127,18 @@ export const MaterializationSchemas = {
     externalId: z.string().min(1),
     /** Storage operation that changed the materialization ref. */
     operation: z.enum(['upserted', 'deleted']),
+    /**
+     * Optional materialization origin provenance.
+     *
+     * - `'factory'` — the change originated from the artifact storage layer
+     *   through an artifact ref upsert or delete.
+     * - `'external'` — the change originated from an external system
+     *   (e.g. inbound sync from a provider).
+     *
+     * Omitted origin is valid for backward compatibility with existing
+     * emitters that predate this field.
+     */
+    origin: z.enum(['factory', 'external']).optional(),
   }),
 
   /** Emitted when a provider surface capability set has been resolved. */
@@ -71,6 +152,18 @@ export const MaterializationSchemas = {
     /** True when at least one optional capability is unavailable. */
     degraded: z.boolean(),
   }),
+
+  /**
+   * Resolve an artifact view through an affordance (RPC).
+   *
+   * Returns one of three closed response shapes: `ok` with the rendered view,
+   * its builder version, and exact source revision; `artifact-not-found`; or
+   * `not-rendered`.
+   */
+  'artifact.view.resolve': {
+    request: ArtifactViewResolveRequestSchema,
+    response: ArtifactViewResolveResponseSchema,
+  },
 } satisfies SchemaRecord;
 
 /**
@@ -91,6 +184,7 @@ export const MaterializationNamespace = createBusNamespace('materialization', Ma
  * - `MaterializationSubjects['surfaceBinding.changed']` — binding changed event
  * - `MaterializationSubjects['ref.changed']` — materialization ref changed event
  * - `MaterializationSubjects['capability.resolved']` — provider capability resolved event
+ * - `MaterializationSubjects['artifact.view.resolve']` — resolve an artifact view (RPC)
  *
  * Nested shorthand (via dot-segment nesting):
  * - `MaterializationSubjects.surfaceBinding.register` — register (RPC)
@@ -98,6 +192,7 @@ export const MaterializationNamespace = createBusNamespace('materialization', Ma
  * - `MaterializationSubjects.surfaceBinding.changed` — changed event
  * - `MaterializationSubjects.ref.changed` — ref changed event
  * - `MaterializationSubjects.capability.resolved` — capability resolved event
+ * - `MaterializationSubjects.artifact.view.resolve` — resolve artifact view (RPC)
  */
 export const MaterializationSubjects = MaterializationNamespace.subjects;
 

@@ -4,7 +4,7 @@ import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { ArtifactSubjects, defineArtifactKind } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
-import { ArtifactSchemaRegistryToken } from '../../framework-packages.js';
+import { ArtifactSchemaRegistryToken } from '../packages.js';
 import { createArtifactKindContributionProcessor } from '../artifact-contribution-processor.js';
 import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
 

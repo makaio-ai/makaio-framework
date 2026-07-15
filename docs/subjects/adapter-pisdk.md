@@ -297,6 +297,7 @@ Type: Event
 |-------|------|----------|
 | `eventType` | `"tool_completed"` | yes |
 | `isError` | `boolean` | yes |
+| `messageId` | `string` | yes |
 | `result` | `unknown` | yes |
 | `toolCallId` | `string` | yes |
 | `toolName` | `string` | yes |
@@ -313,6 +314,7 @@ Type: Event
 |-------|------|----------|
 | `args` | `Record<string, unknown> \| undefined` | no |
 | `eventType` | `"tool_started"` | yes |
+| `messageId` | `string` | yes |
 | `toolCallId` | `string` | yes |
 | `toolName` | `string` | yes |
 

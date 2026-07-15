@@ -222,4 +222,91 @@ describe('defineArtifactKind', () => {
 
     expect(kind.toRegistration().defaultContext?.contains?.kinds).toEqual(['repo']);
   });
+
+  it('serializes projection affordances into kind registration metadata', () => {
+    const kind = defineArtifactKind({
+      kind: 'affordance-test',
+      description: 'Artifact kind for projection affordance serialization tests.',
+      schemaVersion: '1',
+      dataSchema: z.object({ title: z.string() }),
+      conflictPolicy: 'supersedes',
+      projection: {
+        mode: 'surface',
+        affordances: [
+          { kind: 'own-view' },
+          { kind: 'inline', hostRelation: 'blocked-by', as: 'summary' },
+          { kind: 'entry', via: 'dashboard' },
+        ],
+      },
+    });
+
+    const registration = ArtifactKindRegistrationSchema.parse(kind.toRegistration());
+    expect(registration.projection?.affordances).toEqual([
+      { kind: 'own-view' },
+      { kind: 'inline', hostRelation: 'blocked-by', as: 'summary' },
+      { kind: 'entry', via: 'dashboard' },
+    ]);
+  });
+
+  it('defensively copies affordances so registration mutation does not affect future calls', () => {
+    const kind = defineArtifactKind({
+      kind: 'affordance-copy-test',
+      description: 'Artifact kind for affordance defensive-copy tests.',
+      schemaVersion: '1',
+      dataSchema: z.object({ v: z.string() }),
+      conflictPolicy: 'coexist',
+      projection: {
+        mode: 'surface',
+        affordances: [{ kind: 'own-view' }],
+      },
+    });
+
+    const reg1 = kind.toRegistration();
+    // Mutate the emitted affordances array
+    (reg1.projection!.affordances as Record<string, unknown>[]).push({ kind: 'inline', hostRelation: 'x' });
+
+    const reg2 = kind.toRegistration();
+    expect(reg2.projection!.affordances).toHaveLength(1);
+  });
+
+  it('defensively copies projected field fromLevel and viewRole in toRegistration', () => {
+    const projectedFields: ProjectedField[] = [
+      { path: 'title', viewRole: 'title', fromLevel: 'link' },
+      { path: 'status', semantic: 'status', fromLevel: 'summary' },
+    ];
+    const kind = defineArtifactKind({
+      kind: 'projected-level-test',
+      description: 'Artifact kind for projected field fromLevel copy tests.',
+      schemaVersion: '1',
+      dataSchema: z.object({ title: z.string(), status: z.string() }),
+      conflictPolicy: 'manual',
+      projection: {
+        mode: 'surface',
+        projectedFields,
+      },
+    });
+
+    const reg1 = kind.toRegistration();
+    // Mutate emitted projected fields
+    (reg1.projection!.projectedFields![0] as Record<string, unknown>).fromLevel = 'full';
+
+    const reg2 = kind.toRegistration();
+    expect(reg2.projection!.projectedFields![0]?.fromLevel).toBe('link');
+    expect(reg2.projection!.projectedFields![0]?.viewRole).toBe('title');
+    expect(reg2.projection!.projectedFields![1]?.fromLevel).toBe('summary');
+  });
+
+  it('omits affordances from projection when not supplied', () => {
+    const kind = defineArtifactKind({
+      kind: 'no-affordance-test',
+      description: 'Artifact kind without affordance declarations.',
+      schemaVersion: '1',
+      dataSchema: z.object({ v: z.string() }),
+      conflictPolicy: 'coexist',
+      projection: { mode: 'surface' },
+    });
+
+    const registration = kind.toRegistration();
+    expect(registration.projection?.affordances).toBeUndefined();
+  });
 });

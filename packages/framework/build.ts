@@ -3,6 +3,8 @@
  *
  * Builds all framework packages in three grouped tsdown passes that output
  * directly into `./dist/` matching the package `exports` layout.
+ * Set `MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT` to assemble an isolated package copy
+ * for concurrent consumers without mutating this package's normal output.
  *
  * Usage:
  *   tsx build.ts                  (from packages/framework/)
@@ -14,7 +16,7 @@
  *   3. react  — 3 UI packages that additionally externalize React + handle SCSS
  */
 
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { build, type UserConfig } from 'tsdown';
 import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '@makaio/build-tooling/framework-public-surface';
@@ -34,16 +36,19 @@ import { copyRuntimeMigrationChain } from '../../scripts/lib/runtime-migration-a
 import { writeFrameworkDistBuildStamp } from './build-fingerprint.js';
 import { mergeFrameworkBuildStages } from './build-staging.js';
 
-/** This package's root (`packages/framework/`). Build output lands in `./dist/` here. */
+/** This package's source root (`packages/framework/`). */
 const PACKAGE_DIR = import.meta.dirname;
 
 /** Framework workspace root — source packages are resolved relative to this. */
 const FRAMEWORK_ROOT = resolve(PACKAGE_DIR, '..', '..');
 
-const DIST = join(PACKAGE_DIR, 'dist');
+/** Package root receiving the assembled `dist/`, `lib/`, and manifest. */
+const OUTPUT_PACKAGE_DIR = resolve(PACKAGE_DIR, process.env['MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT'] ?? '.');
+
+const DIST = join(OUTPUT_PACKAGE_DIR, 'dist');
 
 /** Runtime-only distribution — `dist/` minus type declarations (`.d.mts`). */
-const LIB = join(PACKAGE_DIR, 'lib');
+const LIB = join(OUTPUT_PACKAGE_DIR, 'lib');
 
 const BUS_PACKAGES = new Set(['@makaio/bus-core']);
 const REACT_PACKAGES = new Set(['@makaio/ui-hooks', '@makaio/ui-components', '@makaio/ui-views']);
@@ -156,7 +161,13 @@ const configs: Array<UserConfig & { name: string }> = [
 
 const totalStart = performance.now();
 const previousCwd = process.cwd();
-const stageRoot = mkdtempSync(join(PACKAGE_DIR, '.build-stages-'));
+
+if (OUTPUT_PACKAGE_DIR !== PACKAGE_DIR) {
+  mkdirSync(OUTPUT_PACKAGE_DIR, { recursive: true });
+  copyFileSync(join(PACKAGE_DIR, 'package.json'), join(OUTPUT_PACKAGE_DIR, 'package.json'));
+}
+
+const stageRoot = mkdtempSync(join(OUTPUT_PACKAGE_DIR, '.build-stages-'));
 const completedStages: Array<{ name: string; path: string }> = [];
 
 process.chdir(FRAMEWORK_ROOT);
@@ -227,7 +238,7 @@ writeFileSync(
   'utf8',
 );
 
-writeFrameworkDistBuildStamp();
+writeFrameworkDistBuildStamp({ workspaceRoot: FRAMEWORK_ROOT, distDir: DIST });
 
 // ---------------------------------------------------------------------------
 // Verify the assembled distribution
@@ -238,7 +249,7 @@ writeFrameworkDistBuildStamp();
 // imports a bare external the manifest does not declare, or a bundled
 // migration chain is missing or inconsistent. These defects only surface at
 // a consumer's boot otherwise.
-const verification = verifyFrameworkDist(PACKAGE_DIR);
+const verification = verifyFrameworkDist(OUTPUT_PACKAGE_DIR);
 if (!verification.ok) {
   console.error('[build] framework distribution verification failed:');
   for (const issue of verification.issues) {

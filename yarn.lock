@@ -4283,7 +4283,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@libsql/client@npm:^0.17.4":
+"@libsql/client@npm:^0.17.3, @libsql/client@npm:^0.17.4":
   version: 0.17.4
   resolution: "@libsql/client@npm:0.17.4"
   dependencies:
@@ -5670,7 +5670,7 @@ __metadata:
   resolution: "@makaio/framework@workspace:packages/framework"
   dependencies:
     "@hono/node-server": "npm:^1.14.1"
-    "@libsql/client": "npm:^0.17.4"
+    "@libsql/client": "npm:^0.17.3"
     ajv: "npm:^8.18.0"
     ajv-formats: "npm:^3.0.1"
     drizzle-orm: "npm:^0.45.2"

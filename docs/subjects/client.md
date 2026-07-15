@@ -790,7 +790,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `baseConfigDir` | `string \| undefined` | no |
 | `clientId` | `string` | yes |
-| `configInheritance` | `"auth-only" \| "full" \| "empty" \| undefined` | no |
+| `configInheritance` | `"full" \| "auth-only" \| "empty" \| undefined` | no |
 | `leaseId` | `string` | yes |
 | `ownerSessionId` | `string \| undefined` | no |
 | `profileName` | `string \| undefined` | no |

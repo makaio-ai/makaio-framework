@@ -1,7 +1,7 @@
 /**
  * Build script for the Electrobun main process and CLI bundle.
  *
- * Produces two bundles via `Bun.build()`:
+ * Produces two bundles via `Bun.build()` in `dist/` by default:
  * - `dist/index.js`  — main-process entry, loaded by the Electrobun runtime.
  * - `dist/cli.mjs`   — CLI entry, exec'd by platform launchers (makaio-launcher.sh).
  *
@@ -16,6 +16,7 @@
  * both main processes and Workers.
  *
  * Usage: bun run build.ts
+ * Set `MAKAIO_ELECTROBUN_BUILD_OUTDIR` to isolate output for concurrent builds.
  */
 import { build } from 'bun';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -80,7 +81,7 @@ const MAKAIO_HOME_DEFAULT =
 
 const MAIN_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/main/index.ts');
 const CLI_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/cli-entry.ts');
-const DIST_DIR = path.join(PACKAGE_ROOT, 'dist');
+const DIST_DIR = path.resolve(PACKAGE_ROOT, process.env['MAKAIO_ELECTROBUN_BUILD_OUTDIR'] ?? 'dist');
 
 mkdirSync(DIST_DIR, { recursive: true });
 

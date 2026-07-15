@@ -1,6 +1,6 @@
 import type { ContributionProcessor } from '@makaio/kernel';
 import type { ArtifactKindRegistration } from '@makaio/contracts';
-import { ArtifactSchemaRegistryToken } from '../framework-packages.js';
+import { ArtifactSchemaRegistryToken } from './packages.js';
 import type { ArtifactKindRegistrationOwner, ArtifactSchemaRegistry } from './artifact-schema-registry.js';
 
 interface ActiveArtifactKindContribution {

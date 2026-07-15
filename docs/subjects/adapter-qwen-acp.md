@@ -129,6 +129,7 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `kind` | `string \| undefined` | no |
+| `messageId` | `string` | yes |
 | `rawInput` | `unknown` | no |
 | `timestamp` | `number` | yes |
 | `title` | `string` | yes |
@@ -143,6 +144,7 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
+| `messageId` | `string` | yes |
 | `rawOutput` | `unknown` | no |
 | `status` | `string \| undefined` | no |
 | `timestamp` | `number` | yes |

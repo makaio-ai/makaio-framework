@@ -52,12 +52,15 @@ import {
   createArtifactKindContributionProcessor,
   createArtifactLifecycleHookContributionProcessor,
   createFacetNamespaceContributionProcessor,
-  createSurfaceBindingContributionProcessor,
   createToolContributionProcessor,
   createTransitionContributionProcessor,
   createWorkflowBlockContributionProcessor,
   FrameworkServicesCoreNamespaces,
 } from '@makaio/services-core';
+import {
+  createArtifactViewBuilderContributionProcessor,
+  createSurfaceBindingContributionProcessor,
+} from '@makaio/services-core/materialization';
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
 import { createWorkflowEnginePackage } from '@makaio/subsystem-workflow-engine/package';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
@@ -492,6 +495,7 @@ export async function bootMakaioRuntimeCore(
     coordinator.registerContributionProcessor(createArtifactLifecycleHookContributionProcessor());
     coordinator.registerContributionProcessor(createFacetNamespaceContributionProcessor());
     coordinator.registerContributionProcessor(createSurfaceBindingContributionProcessor());
+    coordinator.registerContributionProcessor(createArtifactViewBuilderContributionProcessor());
     coordinator.registerContributionProcessor(createToolContributionProcessor());
     coordinator.registerContributionProcessor(createWorkflowBlockContributionProcessor());
     coordinator.registerContributionProcessor(createTransitionContributionProcessor());

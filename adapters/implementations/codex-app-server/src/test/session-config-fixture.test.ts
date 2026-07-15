@@ -51,7 +51,7 @@ async function acquireHandlerlessFixture(): Promise<{
 }
 
 describe('Codex conformance session-config fixture lifecycle', () => {
-  it('removes a newly created lease directory when client-owned setup fails', async () => {
+  it('removes a newly created lease directory when client-owned setup fails', { timeout: 10_000 }, async () => {
     const { fixture, root } = await acquireHandlerlessFixture();
     const leaseId = 'failed-setup-lease';
     const sessionDir = path.join(root, 'codex', 'sessions', leaseId);

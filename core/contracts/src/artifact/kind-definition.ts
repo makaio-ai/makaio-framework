@@ -261,6 +261,11 @@ export function defineArtifactKind<TData extends Record<string, unknown>, TScope
                     projectedFields: options.projection.projectedFields.map((field) => ({ ...field })),
                   }
                 : {}),
+              ...(options.projection.affordances
+                ? {
+                    affordances: options.projection.affordances.map((a) => structuredClone(a)),
+                  }
+                : {}),
             },
           }
         : {}),

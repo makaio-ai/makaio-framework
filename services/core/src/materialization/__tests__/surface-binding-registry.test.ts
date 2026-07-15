@@ -1,5 +1,5 @@
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { MaterializationSubjects } from '@makaio/contracts/materialization';
+import { MaterializationSubjects, type SurfaceBindingRegistration } from '@makaio/contracts/materialization';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SurfaceBindingRegistry } from '../surface-binding-registry.js';
 
@@ -177,6 +177,54 @@ describe('SurfaceBindingRegistry', () => {
     expect(result.bindings[0]?.namespace).toBe('status');
   });
 
+  it('filters list results by exact id', async () => {
+    await bus.request(MaterializationSubjects.surfaceBinding.register, {
+      id: 'github.status.field',
+      provider: 'github',
+      namespace: 'status',
+      target: { kind: 'field', name: 'Status' },
+      appliesTo: ['workpiece'],
+    });
+    await bus.request(MaterializationSubjects.surfaceBinding.register, {
+      id: 'github.priority.field',
+      provider: 'github',
+      namespace: 'priority',
+      target: { kind: 'field', name: 'Priority' },
+      appliesTo: ['workpiece'],
+    });
+
+    const result = await bus.request(MaterializationSubjects.surfaceBinding.list, {
+      id: 'github.status.field',
+    });
+    expect(result.bindings).toHaveLength(1);
+    expect(result.bindings[0]?.id).toBe('github.status.field');
+  });
+
+  it('combines id with provider and namespace filters', async () => {
+    await bus.request(MaterializationSubjects.surfaceBinding.register, {
+      id: 'github.status.field',
+      provider: 'github',
+      namespace: 'status',
+      target: { kind: 'field', name: 'Status' },
+      appliesTo: ['workpiece'],
+    });
+
+    // Matching id + provider + namespace
+    const match = await bus.request(MaterializationSubjects.surfaceBinding.list, {
+      id: 'github.status.field',
+      provider: 'github',
+      namespace: 'status',
+    });
+    expect(match.bindings).toHaveLength(1);
+
+    // Matching id but mismatched provider
+    const mismatch = await bus.request(MaterializationSubjects.surfaceBinding.list, {
+      id: 'github.status.field',
+      provider: 'jira',
+    });
+    expect(mismatch.bindings).toHaveLength(0);
+  });
+
   it('returns an empty array when no bindings are registered', async () => {
     const result = await bus.request(MaterializationSubjects.surfaceBinding.list, {});
     expect(result.bindings).toEqual([]);
@@ -204,5 +252,75 @@ describe('SurfaceBindingRegistry', () => {
 
   it('returns undefined for an unknown binding id', () => {
     expect(registry.getBinding('nonexistent')).toBeUndefined();
+  });
+
+  it('accepts re-registration with reordered params keys', () => {
+    registry.registerBinding({
+      id: 'github.label',
+      provider: 'github',
+      namespace: 'label',
+      target: { kind: 'label' },
+      appliesTo: ['workpiece'],
+      params: { alpha: 'a', bravo: 'b' },
+    });
+
+    // Same binding, params keys in different order — must not throw
+    expect(() =>
+      registry.registerBinding({
+        id: 'github.label',
+        provider: 'github',
+        namespace: 'label',
+        target: { kind: 'label' },
+        appliesTo: ['workpiece'],
+        params: { bravo: 'b', alpha: 'a' },
+      }),
+    ).not.toThrow();
+
+    // Still only one binding
+    const binding = registry.getBinding('github.label');
+    expect(binding).toBeDefined();
+  });
+
+  it('accepts re-registration with reordered top-level keys', () => {
+    registry.registerBinding({
+      id: 'github.label',
+      provider: 'github',
+      namespace: 'label',
+      target: { kind: 'label' },
+      appliesTo: ['workpiece'],
+    });
+
+    // Construct the same object with keys in a different insertion order
+    const reordered: SurfaceBindingRegistration = {
+      namespace: 'label',
+      appliesTo: ['workpiece'],
+      id: 'github.label',
+      target: { kind: 'label' },
+      provider: 'github',
+    };
+
+    expect(() => registry.registerBinding(reordered)).not.toThrow();
+  });
+
+  it('rejects genuinely different definition even with same id', () => {
+    registry.registerBinding({
+      id: 'github.label',
+      provider: 'github',
+      namespace: 'label',
+      target: { kind: 'label' },
+      appliesTo: ['workpiece'],
+      params: { alpha: 'a' },
+    });
+
+    expect(() =>
+      registry.registerBinding({
+        id: 'github.label',
+        provider: 'github',
+        namespace: 'label',
+        target: { kind: 'label' },
+        appliesTo: ['workpiece'],
+        params: { alpha: 'DIFFERENT' },
+      }),
+    ).toThrow("Surface binding 'github.label' is already registered with a different definition");
   });
 });
