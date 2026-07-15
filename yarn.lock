@@ -4493,7 +4493,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     p-defer: "npm:^4.0.1"
-    p-queue: "npm:^9.3.1"
+    p-queue: "npm:^9.3.0"
     tsx: "npm:^4.22.3"
     zod: "npm:4.4.3"
   peerDependencies:
@@ -22249,7 +22249,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"p-queue@npm:^9.3.1":
+"p-queue@npm:^9.3.0, p-queue@npm:^9.3.1":
   version: 9.3.1
   resolution: "p-queue@npm:9.3.1"
   dependencies:
