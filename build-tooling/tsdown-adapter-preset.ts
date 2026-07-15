@@ -25,6 +25,16 @@ export interface AdapterPresetOptions {
    */
   readonly external?: ReadonlyArray<string | RegExp>;
   /**
+   * Framework-facade packages that must remain bundled into this adapter's
+   * JavaScript output.
+   *
+   * Their declaration imports are still rewritten to the stable framework
+   * subpath by the tsgo post-processing step. Use this only for implementation
+   * helpers that are part of the framework type surface but not runtime
+   * dependencies of the standalone adapter.
+   */
+  readonly bundledFrameworkPackages?: ReadonlyArray<string>;
+  /**
    * Whether the adapter has CJS dependencies that need `createRequire`.
    * When true, prepends the createRequire banner to the output.
    */
@@ -41,13 +51,21 @@ const CREATE_REQUIRE_BANNER = "import { createRequire } from 'module'; const req
  * Rolldown plugin that externalizes framework-owned packages (rewriting to
  * `@makaio/framework/<subpath>`) and additional vendor dependencies.
  * @param extra - Additional exact matches or regex patterns to externalize.
+ * @param bundledFrameworkPackages - Framework packages that must stay in the adapter JavaScript bundle.
  * @returns Rolldown plugin.
  */
-function adapterExternals(extra: ReadonlyArray<string | RegExp> = []): Plugin {
+export function adapterExternals(
+  extra: ReadonlyArray<string | RegExp> = [],
+  bundledFrameworkPackages: ReadonlyArray<string> = [],
+): Plugin {
+  const bundled = new Set(bundledFrameworkPackages);
   return {
     name: 'adapter-externals',
     resolveId(source) {
-      const rewritten = rewriteFrameworkImportSpecifier(source);
+      const bundledFrameworkPackage = [...bundled].some(
+        (packageName) => source === packageName || source.startsWith(`${packageName}/`),
+      );
+      const rewritten = bundledFrameworkPackage ? undefined : rewriteFrameworkImportSpecifier(source);
       if (rewritten) return { id: rewritten, external: true };
 
       for (const pattern of extra) {
@@ -97,7 +115,13 @@ export const adapterPreset = {
  * @returns Complete tsdown config.
  */
 export function defineAdapterConfig(options: AdapterPresetOptions = {}): UserConfig {
-  const { entry = ['./src/index.ts'], external = [], needsCreateRequire = false, banner: customBanner } = options;
+  const {
+    entry = ['./src/index.ts'],
+    external = [],
+    bundledFrameworkPackages = [],
+    needsCreateRequire = false,
+    banner: customBanner,
+  } = options;
 
   const bannerParts: string[] = [];
   if (needsCreateRequire) bannerParts.push(CREATE_REQUIRE_BANNER);
@@ -106,7 +130,7 @@ export function defineAdapterConfig(options: AdapterPresetOptions = {}): UserCon
   return defineConfig({
     ...adapterPreset,
     entry,
-    plugins: [adapterExternals(external)],
+    plugins: [adapterExternals(external, bundledFrameworkPackages)],
     ...(bannerParts.length > 0 ? { banner: { js: bannerParts.join('\n') } } : {}),
   });
 }

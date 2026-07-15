@@ -204,10 +204,7 @@ describe('dev publish info file mapping', () => {
     const packages = discoverWorkspacePackagesAtRef('HEAD');
     const claudeCli = packages.find((pkg) => pkg.name === '@makaio/adapter-claude-code-cli');
 
-    expect(claudeCli?.publishWorkspaceDependencies).toEqual([
-      '@makaio/ai-adapters-claude-shared',
-      '@makaio/client-claude-code',
-    ]);
+    expect(claudeCli?.publishWorkspaceDependencies).toEqual(['@makaio/client-claude-code']);
   });
 
   it('groups publish-relevant files by package and ignores tests', () => {

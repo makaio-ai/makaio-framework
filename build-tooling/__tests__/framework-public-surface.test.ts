@@ -122,6 +122,9 @@ describe('FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS', () => {
   it('maps framework packages referenced by public declarations to umbrella subpaths', () => {
     expect(getFrameworkPublicPackageByName('@makaio/subsystem-adapter')?.frameworkSubpath).toBe('adapter-subsystem');
     expect(getFrameworkPublicPackageByName('@makaio/inbound-hooks')?.frameworkSubpath).toBe('inbound-hooks');
+    expect(getFrameworkPublicPackageByName('@makaio/ai-adapters-claude-shared')?.frameworkSubpath).toBe(
+      'adapters/claude',
+    );
   });
 
   it('does not expose descriptor-owned tool extensions as tools subpaths', () => {

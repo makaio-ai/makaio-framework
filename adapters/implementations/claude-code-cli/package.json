@@ -38,12 +38,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@makaio/ai-adapters-claude-shared": "workspace:*",
     "@makaio/client-claude-code": "workspace:*",
     "zod": "4.4.3"
   },
   "publishWorkspaceDependencies": [
-    "@makaio/ai-adapters-claude-shared",
     "@makaio/client-claude-code"
   ],
   "peerDependencies": {
@@ -51,6 +49,7 @@
   },
   "devDependencies": {
     "@makaio/ai-adapters-claude-process-shared": "workspace:*",
+    "@makaio/ai-adapters-claude-shared": "workspace:*",
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
