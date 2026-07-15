@@ -41,7 +41,7 @@
   "dependencies": {
     "@makaio/client-claude-code": "workspace:*",
     "p-defer": "^4.0.1",
-    "p-queue": "^9.3.1",
+    "p-queue": "^9.3.0",
     "zod": "4.4.3"
   },
   "publishWorkspaceDependencies": [
