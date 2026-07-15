@@ -407,6 +407,10 @@
       "types": "./dist/adapters/acp-client/index.d.mts",
       "default": "./dist/adapters/acp-client/index.mjs"
     },
+    "./adapters/claude": {
+      "types": "./dist/adapters/claude/index.d.mts",
+      "default": "./dist/adapters/claude/index.mjs"
+    },
     "./tools": {
       "types": "./dist/tools/index.d.mts",
       "default": "./dist/tools/index.mjs"
