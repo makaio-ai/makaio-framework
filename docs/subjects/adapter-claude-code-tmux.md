@@ -84,6 +84,7 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `isError` | `boolean \| undefined` | no |
+| `messageId` | `string` | yes |
 | `toolName` | `string` | yes |
 | `toolResult` | `unknown` | no |
 | `toolUseId` | `string` | yes |
@@ -97,6 +98,7 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
+| `messageId` | `string` | yes |
 | `toolInput` | `unknown` | no |
 | `toolName` | `string` | yes |
 | `toolUseId` | `string` | yes |

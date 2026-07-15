@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 104 |
-| Subjects | 959 (400 events, 559 RPCs) |
+| Subjects | 974 (402 events, 572 RPCs) |
 | framework | 100 |
 | extension | 4 |
 | kind: bus | 74 |
@@ -53,7 +53,7 @@ next: false
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
-| [`client`](./client.md) | bus | 36 | 11E / 25R |
+| [`client`](./client.md) | bus | 37 | 12E / 25R |
 | [`client-binary:storage`](./client-binary-storage.md) | bus | 11 | 0E / 11R |
 | [`client-profile:storage`](./client-profile-storage.md) | bus | 7 | 0E / 7R |
 | [`client-runtime:storage`](./client-runtime-storage.md) | bus | 2 | 0E / 2R |
@@ -68,7 +68,7 @@ next: false
 | [`kernel:boot`](./kernel-boot.md) | bus | 7 | 6E / 1R |
 | [`kernel:cli`](./kernel-cli.md) | bus | 2 | 0E / 2R |
 | [`kernel:extension`](./kernel-extension.md) | bus | 8 | 3E / 5R |
-| [`materialization`](./materialization.md) | bus | 5 | 3E / 2R |
+| [`materialization`](./materialization.md) | bus | 6 | 3E / 3R |
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |
 | [`native-session-supervisor`](./native-session-supervisor.md) | bus | 4 | 0E / 4R |
@@ -76,14 +76,14 @@ next: false
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
-| [`session`](./session.md) | bus | 58 | 30E / 28R |
+| [`session`](./session.md) | bus | 59 | 31E / 28R |
 | [`skill`](./skill.md) | bus | 6 | 3E / 3R |
 | [`storage:message`](./storage-message.md) | storage | 9 | 1E / 8R |
 | [`storage:session`](./storage-session.md) | storage | 14 | 0E / 14R |
 | [`storage:sessionEvent`](./storage-sessionevent.md) | storage | 5 | 0E / 5R |
 | [`storage:skill`](./storage-skill.md) | storage | 5 | 0E / 5R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
-| [`storage:workflow`](./storage-workflow.md) | storage | 29 | 0E / 29R |
+| [`storage:workflow`](./storage-workflow.md) | storage | 38 | 0E / 38R |
 | [`subagent`](./subagent.md) | bus | 16 | 6E / 10R |
 | [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
@@ -96,7 +96,7 @@ next: false
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
 | [`widget`](./widget.md) | bus | 4 | 4E / 0R |
 | [`worker-node`](./worker-node.md) | bus | 12 | 10E / 2R |
-| [`workflow`](./workflow.md) | bus | 55 | 26E / 29R |
+| [`workflow`](./workflow.md) | bus | 58 | 26E / 32R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

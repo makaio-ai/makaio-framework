@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
-    "@libsql/client": "^0.17.4",
+    "@libsql/client": "^0.17.3",
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
     "drizzle-orm": "^0.45.2",
@@ -214,6 +214,10 @@
     "./services/capability": {
       "types": "./dist/services/capability/index.d.mts",
       "default": "./dist/services/capability/index.mjs"
+    },
+    "./services/materialization": {
+      "types": "./dist/services/materialization/index.d.mts",
+      "default": "./dist/services/materialization/index.mjs"
     },
     "./services/model-registry": {
       "types": "./dist/services/model-registry/index.d.mts",

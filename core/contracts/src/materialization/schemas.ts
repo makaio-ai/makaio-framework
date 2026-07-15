@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+import { JsonObjectContractSchema } from '../shared/json-value.js';
+import { ArtifactViewAffordanceDeclarationSchema } from './view-builder.js';
+import { ArtifactViewLevelSchema } from './view-model.js';
+
+/** View role that a projected field may declare for view rendering. */
+export const ProjectedFieldViewRoleSchema = z.enum(['title', 'summary']);
+
 /**
  * Discriminated target that a surface binding maps to on the external provider.
  *
@@ -85,6 +92,14 @@ export const SurfaceBindingRegistrationSchema = z.object({
   valueMapping: z.record(z.string(), z.string()).optional(),
   /** Optional human-readable description of this surface binding. */
   description: z.string().min(1).optional(),
+  /**
+   * Optional JSON-safe runtime parameters for this binding.
+   *
+   * Parameters are JSON-safe objects validated at runtime. Builder authoring
+   * narrows them through {@link ArtifactViewParamsFor}; this wire schema stays
+   * open because it cannot know which artifact kind is requested.
+   */
+  params: JsonObjectContractSchema.optional(),
 });
 
 /** Serializable registration record for a surface binding. */
@@ -96,16 +111,40 @@ export type SurfaceBindingTarget = z.infer<typeof SurfaceBindingTargetSchema>;
 /** Semantic hint for provider-neutral artifact projected fields. */
 export const ProjectedFieldSemanticSchema = z.enum(['status', 'workflow', 'priority']);
 
-/** A provider-neutral field from artifact data that may be projected to an external surface. */
+/**
+ * A provider-neutral field from artifact data that may be projected to an
+ * external surface or used in view rendering.
+ *
+ * Extended fields for the view projection system:
+ * - `fromLevel` — the minimum detail level at which this field becomes
+ *   available. Levels order monotonically: `link < summary < full`. Omitted
+ *   `fromLevel` means `full` during generic resolution.
+ * - `viewRole` — declares whether this field serves as the artifact's display
+ *   `title` or `summary` in rendered views. At most one of each role may be
+ *   declared per artifact kind.
+ */
 export const ProjectedFieldSchema = z.object({
   /** Dot-separated path into artifact.data, such as `status` or `metadata.priority`. */
   path: z.string().min(1),
   /** Optional semantic hint used by provider-specific materializers. */
   semantic: ProjectedFieldSemanticSchema.optional(),
+  /**
+   * Minimum detail level at which this field becomes available.
+   * Omitted `fromLevel` means `full` during generic resolution.
+   */
+  fromLevel: ArtifactViewLevelSchema.optional(),
+  /**
+   * View role declaration for this field.
+   * At most one `title` and one `summary` role may be declared per kind.
+   */
+  viewRole: ProjectedFieldViewRoleSchema.optional(),
 });
 
 /** Semantic hint for provider-neutral artifact projected fields. */
 export type ProjectedFieldSemantic = z.infer<typeof ProjectedFieldSemanticSchema>;
+
+/** View role for a projected field. */
+export type ProjectedFieldViewRole = z.infer<typeof ProjectedFieldViewRoleSchema>;
 
 /** A provider-neutral artifact field projection declaration. */
 export type ProjectedField = z.infer<typeof ProjectedFieldSchema>;
@@ -117,26 +156,62 @@ export type ProjectedField = z.infer<typeof ProjectedFieldSchema>;
  * - `'surface'` — the artifact maps to a provider work item or issue
  * - `'comment'` — the artifact is rendered as a structured comment on an existing item
  */
-export const ArtifactProjectionPolicySchema = z.object({
-  /** Materialization mode for this artifact kind. */
-  mode: z.enum(['none', 'surface', 'comment']),
-  /**
-   * Default surface role when the artifact is materialized.
-   * - `'workpiece'` — the artifact is the primary tracked item
-   * - `'artifact'` — the artifact is a secondary record attached to a workpiece
-   */
-  defaultRole: z.enum(['workpiece', 'artifact']).optional(),
-  /**
-   * Semantic events that trigger a re-sync of the artifact to the provider surface.
-   * When absent all events trigger a sync.
-   */
-  semanticEvents: z.array(z.enum(['created', 'revised', 'status-changed', 'observation-added'])).optional(),
-  /**
-   * Provider-neutral artifact data fields that materializers may map to external
-   * issue fields or equivalent structured provider surfaces.
-   */
-  projectedFields: z.array(ProjectedFieldSchema).optional(),
-});
+export const ArtifactProjectionPolicySchema = z
+  .object({
+    /** Materialization mode for this artifact kind. */
+    mode: z.enum(['none', 'surface', 'comment']),
+    /**
+     * Default surface role when the artifact is materialized.
+     * - `'workpiece'` — the artifact is the primary tracked item
+     * - `'artifact'` — the artifact is a secondary record attached to a workpiece
+     */
+    defaultRole: z.enum(['workpiece', 'artifact']).optional(),
+    /**
+     * Semantic events that trigger a re-sync of the artifact to the provider surface.
+     * When absent all events trigger a sync.
+     */
+    semanticEvents: z.array(z.enum(['created', 'revised', 'status-changed', 'observation-added'])).optional(),
+    /**
+     * Provider-neutral artifact data fields that materializers may map to external
+     * issue fields or equivalent structured provider surfaces.
+     */
+    projectedFields: z.array(ProjectedFieldSchema).optional(),
+    /**
+     * Affordance declarations controlling where and how this artifact kind may
+     * be rendered as a view.
+     *
+     * When present, affordances are exact and authoritative — only declared
+     * affordances are available. When absent, legacy defaults apply based on
+     * the projection mode. An empty array means the kind renders nowhere.
+     */
+    affordances: z.array(ArtifactViewAffordanceDeclarationSchema).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (!val.projectedFields) return;
+
+    let titleCount = 0;
+    let summaryCount = 0;
+
+    for (const field of val.projectedFields) {
+      if (field.viewRole === 'title') titleCount++;
+      if (field.viewRole === 'summary') summaryCount++;
+    }
+
+    if (titleCount > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['projectedFields'],
+        message: 'At most one projected field may declare viewRole: title',
+      });
+    }
+    if (summaryCount > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['projectedFields'],
+        message: 'At most one projected field may declare viewRole: summary',
+      });
+    }
+  });
 
 /** Projection policy that controls how an artifact kind surfaces on a provider. */
 export type ArtifactProjectionPolicy = z.infer<typeof ArtifactProjectionPolicySchema>;

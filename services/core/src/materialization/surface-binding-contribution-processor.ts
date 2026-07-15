@@ -1,6 +1,6 @@
 import type { ContributionProcessor } from '@makaio/kernel';
 import type { SurfaceBindingRegistration } from '@makaio/contracts/materialization';
-import { SurfaceBindingRegistryToken } from '../framework-packages.js';
+import { SurfaceBindingRegistryToken } from './packages.js';
 import type { SurfaceBindingRegistry } from './surface-binding-registry.js';
 
 interface ActiveSurfaceBindingContribution {

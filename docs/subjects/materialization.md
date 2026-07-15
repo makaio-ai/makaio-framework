@@ -22,6 +22,7 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `artifact.view.resolve` | [`materialization.artifact.view.resolve`](#materialization.artifact.view.resolve) | rpc | — |
 | `capability.resolved` | [`materialization.capability.resolved`](#materialization.capability.resolved) | event | — |
 | `ref.changed` | [`materialization.ref.changed`](#materialization.ref.changed) | event | — |
 | `surfaceBinding.changed` | [`materialization.surfaceBinding.changed`](#materialization.surfaceBinding.changed) | event | — |
@@ -29,6 +30,33 @@ next: false
 | `surfaceBinding.register` | [`materialization.surfaceBinding.register`](#materialization.surfaceBinding.register) | rpc | — |
 
 ## Subject Details
+
+### <a id="materialization.artifact.view.resolve"></a>`materialization.artifact.view.resolve` (rpc)
+
+Resolve an artifact view through an affordance (RPC).
+
+Returns one of three closed response shapes: `ok` with the rendered view,
+its builder version, and exact source revision; `artifact-not-found`; or
+`not-rendered`.
+
+Subject: `materialization.artifact.view.resolve`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `affordance` | `{ kind: "own-view"; } \| { kind: "inline"; hostRelation: string; } \| { kind: "entry"; via?: string \| undefined; collection?: string \| undefined; }` | yes |
+| `level` | `"link" \| "summary" \| "full"` | yes |
+| `params` | `Record<string, unknown> \| undefined` | no |
+| `ref` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `status` | `"ok" \| "artifact-not-found" \| "not-rendered"` | yes |
+| `view` | `{ title: string; sections: ({ type: "summary"; title: string; text: string; } \| { type: "properties"; title: string; rows: { label: string; value: string; }[]; } \| { type: "table"; title: string; columns: string[]; rows: { cells: string[]; link?: { label: string; artifactId?: string \| undefined; url?: string \| undefined; } \| undefined; }[]; } \| { type: "relations"; title: string; groups: { type: string; items: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; }[]; } \| { type: "evidence"; title: string; items: { kind: string; id: string; locator?: string \| undefined; }[]; } \| { type: "raw"; title: string; json: JsonValue; } \| { type: "code"; title: string; language: string; content: string; } \| { type: "diagram"; title: string; notation: "mermaid"; source: string; })[]; summary?: string \| undefined; navigation?: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[] \| undefined; } \| null` | yes |
 
 ### <a id="materialization.capability.resolved"></a>`materialization.capability.resolved` (event)
 
@@ -56,6 +84,7 @@ Type: Event
 | `artifactId` | `string` | yes |
 | `externalId` | `string` | yes |
 | `operation` | `"deleted" \| "upserted"` | yes |
+| `origin` | `"external" \| "factory" \| undefined` | no |
 | `provider` | `string` | yes |
 
 ### <a id="materialization.surfaceBinding.changed"></a>`materialization.surfaceBinding.changed` (event)
@@ -72,7 +101,7 @@ Type: Event
 
 ### <a id="materialization.surfaceBinding.list"></a>`materialization.surfaceBinding.list` (rpc)
 
-List registered surface bindings, optionally filtered by provider or namespace (RPC).
+List registered surface bindings, optionally filtered by id, provider, or namespace (RPC).
 
 Subject: `materialization.surfaceBinding.list`
 Type: Request (RPC)
@@ -81,6 +110,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `id` | `string \| undefined` | no |
 | `namespace` | `string \| undefined` | no |
 | `provider` | `string \| undefined` | no |
 
@@ -88,7 +118,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `bindings` | `{ id: string; provider: string; namespace: string; target: { kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }; appliesTo: ("surface" \| "workpiece" \| "artifact")[]; valueMapping?: Record<string, string> \| undefined; description?: string \| undefined; }[]` | yes |
+| `bindings` | `{ id: string; provider: string; namespace: string; target: { kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }; appliesTo: ("surface" \| "workpiece" \| "artifact")[]; valueMapping?: Record<string, string> \| undefined; description?: string \| undefined; params?: Record<string, unknown> \| undefined; }[]` | yes |
 
 ### <a id="materialization.surfaceBinding.register"></a>`materialization.surfaceBinding.register` (rpc)
 
@@ -106,6 +136,7 @@ Type: Request (RPC)
 | `description` | `string \| undefined` | no |
 | `id` | `string` | yes |
 | `namespace` | `string` | yes |
+| `params` | `Record<string, unknown> \| undefined` | no |
 | `provider` | `string` | yes |
 | `target` | `{ kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }` | yes |
 | `valueMapping` | `Record<string, string> \| undefined` | no |

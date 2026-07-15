@@ -3,7 +3,7 @@ import type { ExtensionToken } from '@makaio/contracts';
 import { defineSurfaceBinding, MaterializationSubjects } from '@makaio/contracts/materialization';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { describe, expect, it } from 'vitest';
-import { SurfaceBindingRegistryToken } from '../../framework-packages.js';
+import { SurfaceBindingRegistryToken } from '../packages.js';
 import { createSurfaceBindingContributionProcessor } from '../surface-binding-contribution-processor.js';
 import { SurfaceBindingRegistry } from '../surface-binding-registry.js';
 

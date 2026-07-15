@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MaterializationSubjects, type SurfaceBindingRegistration } from '@makaio/contracts/materialization';
 import { BaseService } from '@makaio/service-base';
+import { canonicalStringify } from '@makaio/utils';
 
 /**
  * Clone a registration record at API boundaries so external mutation cannot
@@ -47,9 +48,14 @@ export class SurfaceBindingRegistry extends BaseService {
     });
 
     this.registerHandler(MaterializationSubjects.surfaceBinding.list, (ctx) => {
-      const { provider, namespace } = ctx.payload;
+      const { id, provider, namespace } = ctx.payload;
       const bindings = [...this.bindings.values()]
-        .filter((entry) => (!provider || entry.provider === provider) && (!namespace || entry.namespace === namespace))
+        .filter(
+          (entry) =>
+            (!id || entry.id === id) &&
+            (!provider || entry.provider === provider) &&
+            (!namespace || entry.namespace === namespace),
+        )
         .map(cloneRegistration);
       ctx.setResult({ bindings });
     });
@@ -69,7 +75,7 @@ export class SurfaceBindingRegistry extends BaseService {
   public registerBinding(registration: SurfaceBindingRegistration): void {
     const existing = this.bindings.get(registration.id);
     if (existing) {
-      if (JSON.stringify(existing) !== JSON.stringify(registration)) {
+      if (canonicalStringify(existing) !== canonicalStringify(registration)) {
         throw new Error(`Surface binding '${registration.id}' is already registered with a different definition`);
       }
       // Identical re-registration is a no-op — do not emit changed.

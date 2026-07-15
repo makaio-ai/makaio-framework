@@ -140,7 +140,6 @@ export {
   type RunBeforeResult,
 } from './artifact/index.js';
 export { FacetNamespaceRegistry, createFacetNamespaceContributionProcessor } from './facet/index.js';
-export { SurfaceBindingRegistry, createSurfaceBindingContributionProcessor } from './materialization/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
 export { createWorkflowBlockContributionProcessor, WorkflowBlockRegistry } from './workflow-blocks/index.js';
 export {
@@ -230,8 +229,6 @@ export {
   createModelRegistryPackage,
   facetNamespaceRegistryPackage,
   FacetNamespaceRegistryToken,
-  surfaceBindingRegistryPackage,
-  SurfaceBindingRegistryToken,
   frameworkCorePackages,
   ModelRegistryToken,
   sessionBridgePackage,

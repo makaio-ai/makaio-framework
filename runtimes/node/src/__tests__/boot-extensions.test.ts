@@ -40,7 +40,19 @@ import { WorkerNodeRunner } from '../workflow-worker/worker-node-runner.js';
 import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-runner.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
 import { loadBootExtensions } from '../boot-extension-loading.js';
-import { createToolContributionProcessor, SessionOrchestratorToken, toolRegistryPackage } from '@makaio/services-core';
+import {
+  artifactSchemaRegistryPackage,
+  createToolContributionProcessor,
+  SessionOrchestratorToken,
+  toolRegistryPackage,
+} from '@makaio/services-core';
+import {
+  artifactViewBuilderRegistryPackage,
+  artifactViewServicePackage,
+  ArtifactViewBuilderRegistryToken,
+  createArtifactViewBuilderContributionProcessor,
+} from '@makaio/services-core/materialization';
+import type { ArtifactViewBuilder, ExtensionArtifactViewBuildersContribution } from '@makaio/contracts';
 import { filesystemPackage } from '@makaio/extension-filesystem';
 import { shellPackage } from '@makaio/extension-shell';
 import { subagentPackage } from '@makaio/extension-subagent';
@@ -110,6 +122,35 @@ function minimalBootOptions(partial: Partial<CoreBootOptions> = {}): CoreBootOpt
 }
 
 const TEST_MAKAIO_HOME = '/home/test/.makaio';
+
+/**
+ * Create a coordinator wired with the artifact view builder contribution path.
+ * @param extension - Extension contributing artifact view builders.
+ * @returns The configured coordinator.
+ */
+function setupArtifactViewBuilderCoordinator(extension: KernelMakaioExtension): ExtensionCoordinator {
+  const bus = createBusInstance();
+  const coordinator = new ExtensionCoordinator(bus, {
+    extensionContextBase: {
+      platform: process.platform,
+      homedir: '/home/test',
+      makaioHome: TEST_MAKAIO_HOME,
+      username: 'test',
+      machineId: 'machine-1',
+      busUrl: 'ws://127.0.0.1:0/bus',
+      tryImport: async () => null,
+    },
+  });
+
+  coordinator.load([
+    artifactSchemaRegistryPackage,
+    artifactViewBuilderRegistryPackage,
+    artifactViewServicePackage,
+    extension,
+  ]);
+  coordinator.registerContributionProcessor(createArtifactViewBuilderContributionProcessor());
+  return coordinator;
+}
 
 /**
  * Create a minimal workflow worker config for runner composition tests.
@@ -377,6 +418,82 @@ describe('runtime tool extension contributions', () => {
         expect.arrayContaining(['filesystem', 'shell', 'subagent-parent', 'subagent-child']),
       );
       expect(toolNames).toEqual(expect.arrayContaining(['read_file', 'shell_exec', 'spawn_subagent', 'complete_task']));
+    } finally {
+      await coordinator.shutdown();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Artifact view builder contribution extensibility
+// ---------------------------------------------------------------------------
+
+describe('artifact view builder contribution extensibility', () => {
+  it('activates and replaces builder contributions through the coordinator', async () => {
+    const testBuilder: ArtifactViewBuilder = {
+      kind: 'test-review',
+      schemaVersion: '1',
+      version: 1,
+      build: async () => undefined,
+    };
+    const contribution: ExtensionArtifactViewBuildersContribution = {
+      createBuilders: () => [testBuilder],
+    };
+    const extensionWithBuilders: KernelMakaioExtension = {
+      ...makePackage('test-builder-ext'),
+      artifactViewBuilders: contribution,
+    };
+    const coordinator = setupArtifactViewBuilderCoordinator(extensionWithBuilders);
+
+    try {
+      await coordinator.startAll();
+
+      // Verify the builder is registered
+      const registry = coordinator.getExtensionService(ArtifactViewBuilderRegistryToken);
+      expect(registry).toBeDefined();
+      const builder = registry!.getBuilder('test-review', '1');
+      expect(builder).toBeDefined();
+      expect(builder!.version).toBe(1);
+
+      // Disable the extension and verify the builder is removed
+      await coordinator.handleSetEnabled('test-builder-ext', false);
+      expect(registry!.getBuilder('test-review', '1')).toBeUndefined();
+    } finally {
+      await coordinator.shutdown();
+    }
+  });
+
+  it('replaces builder set on extension reactivation', async () => {
+    let builderVersion = 1;
+    const contribution: ExtensionArtifactViewBuildersContribution = {
+      createBuilders: () => [
+        {
+          kind: 'test-review',
+          schemaVersion: '1',
+          version: builderVersion,
+          build: async () => undefined,
+        },
+      ],
+    };
+    const extensionWithBuilders: KernelMakaioExtension = {
+      ...makePackage('test-builder-ext'),
+      artifactViewBuilders: contribution,
+    };
+    const coordinator = setupArtifactViewBuilderCoordinator(extensionWithBuilders);
+
+    try {
+      await coordinator.startAll();
+
+      const registry = coordinator.getExtensionService(ArtifactViewBuilderRegistryToken);
+      expect(registry!.getBuilder('test-review', '1')!.version).toBe(1);
+
+      // Disable and re-enable the extension with a new version
+      builderVersion = 2;
+      await coordinator.handleSetEnabled('test-builder-ext', false);
+      expect(registry!.getBuilder('test-review', '1')).toBeUndefined();
+
+      await coordinator.handleSetEnabled('test-builder-ext', true);
+      expect(registry!.getBuilder('test-review', '1')!.version).toBe(2);
     } finally {
       await coordinator.shutdown();
     }

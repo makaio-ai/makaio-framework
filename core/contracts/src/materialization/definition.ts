@@ -67,6 +67,7 @@ export function defineSurfaceBinding(options: DefineSurfaceBindingOptions): Surf
       appliesTo: [...options.appliesTo],
       ...(options.valueMapping !== undefined ? { valueMapping: { ...options.valueMapping } } : {}),
       ...(options.description !== undefined ? { description: options.description } : {}),
+      ...(options.params !== undefined ? { params: structuredClone(options.params) } : {}),
     }),
   };
 }

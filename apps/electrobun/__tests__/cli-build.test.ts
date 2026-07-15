@@ -10,23 +10,19 @@
  * impression from mocking the file system or the Bun build APIs.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { frameworkExternalPackageNames } from '@makaio/build-tooling/framework-import-map';
 import type { VariantConfig } from '../src/variant-config.js';
-import { acquireElectrobunBuildLock } from './build-test-lock.js';
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
-const DIST_DIR = path.join(PACKAGE_ROOT, 'dist');
-let releaseBuildLock: (() => void) | undefined;
-
-beforeAll(() => {
-  releaseBuildLock = acquireElectrobunBuildLock();
-}, 180_000);
+const TEST_OUTPUT_ROOT = path.join(PACKAGE_ROOT, 'dist', '.tests');
+mkdirSync(TEST_OUTPUT_ROOT, { recursive: true });
+const DIST_DIR = mkdtempSync(path.join(TEST_OUTPUT_ROOT, 'cli-build-'));
 
 afterAll(() => {
-  releaseBuildLockNow();
+  rmSync(DIST_DIR, { recursive: true, force: true });
 });
 
 /**
@@ -47,21 +43,13 @@ function runBuild(env: Record<string, string> = {}): void {
   try {
     execFileSync('bun', ['run', 'build.ts'], {
       cwd: PACKAGE_ROOT,
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, MAKAIO_ELECTROBUN_BUILD_OUTDIR: DIST_DIR },
       stdio: 'pipe',
     });
   } catch (error) {
-    releaseBuildLockNow();
+    rmSync(DIST_DIR, { recursive: true, force: true });
     throw error;
   }
-}
-
-/**
- * Release the shared build lock if this test file owns it.
- */
-function releaseBuildLockNow(): void {
-  releaseBuildLock?.();
-  releaseBuildLock = undefined;
 }
 
 describe('default electrobun build output and framework externalization', () => {

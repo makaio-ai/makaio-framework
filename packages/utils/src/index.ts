@@ -7,6 +7,7 @@ export {
   readStdin,
   resolveCliSignalExitCode,
 } from './cli.js';
+export { canonicalStringify } from './canonical-stringify.js';
 export { isRecord } from './is-record.js';
 export { extractJson } from './extract-json.js';
 export { getErrorString } from './getErrorString.js';

@@ -2,10 +2,19 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension } from '@makaio/contracts';
 import { dep, extensionToken } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import { ArtifactSchemaRegistry } from './artifact/artifact-schema-registry.js';
 import { ArtifactLifecycleHookRegistry } from './artifact/artifact-lifecycle-hook-registry.js';
+import { artifactSchemaRegistryPackage, ArtifactSchemaRegistryToken } from './artifact/packages.js';
 import { FacetNamespaceRegistry } from './facet/facet-namespace-registry.js';
-import { SurfaceBindingRegistry } from './materialization/surface-binding-registry.js';
+import {
+  ArtifactViewBuilderRegistryToken,
+  artifactViewBuilderRegistryPackage,
+  ArtifactViewServiceToken,
+  artifactViewServicePackage,
+  MaterializationOperationCoordinatorToken,
+  materializationOperationCoordinatorPackage,
+  SurfaceBindingRegistryToken,
+  surfaceBindingRegistryPackage,
+} from './materialization/packages.js';
 import { CapabilityService } from './capability/capability-service.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import type { IModelRegistryFetcher } from './model-registry/types.js';
@@ -72,25 +81,25 @@ export const FileSystemToken = extensionToken<FileSystemService>('filesystem');
 export const GitToken = extensionToken<GitService>('git');
 /** Token for the framework subagent orchestration service. */
 export { SubagentServiceToken };
-/** Token for the artifact schema registry service. */
-export const ArtifactSchemaRegistryToken = extensionToken<ArtifactSchemaRegistry>('artifact-schema-registry');
+/** Artifact-domain token and package (defined in the artifact domain module). */
+export { ArtifactSchemaRegistryToken, artifactSchemaRegistryPackage };
+/** Materialization-domain tokens and packages (defined in the materialization domain module). */
+export {
+  ArtifactViewBuilderRegistryToken,
+  artifactViewBuilderRegistryPackage,
+  ArtifactViewServiceToken,
+  artifactViewServicePackage,
+  MaterializationOperationCoordinatorToken,
+  materializationOperationCoordinatorPackage,
+  SurfaceBindingRegistryToken,
+  surfaceBindingRegistryPackage,
+};
 /** Token for the artifact lifecycle hook registry service. */
 export const ArtifactLifecycleHookRegistryToken = extensionToken<ArtifactLifecycleHookRegistry>(
   'artifact-lifecycle-hook-registry',
 );
 /** Token for the facet namespace registry service. */
 export const FacetNamespaceRegistryToken = extensionToken<FacetNamespaceRegistry>('facet-namespace-registry');
-/** Token for the surface binding registry service. */
-export const SurfaceBindingRegistryToken = extensionToken<SurfaceBindingRegistry>('surface-binding-registry');
-
-/** Package that starts the framework artifact schema registry. */
-export const artifactSchemaRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
-  name: ArtifactSchemaRegistryToken.name,
-  displayName: 'Artifact Schema Registry',
-  version: '0.1.0',
-  critical: true,
-  create: (ctx) => new ArtifactSchemaRegistry(ctx.bus),
-};
 
 /** Package that starts the framework artifact lifecycle hook registry. */
 export const artifactLifecycleHookRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
@@ -108,15 +117,6 @@ export const facetNamespaceRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
   version: '0.1.0',
   critical: true,
   create: (ctx) => new FacetNamespaceRegistry(ctx.bus),
-};
-
-/** Package that starts the framework surface binding registry. */
-export const surfaceBindingRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
-  name: SurfaceBindingRegistryToken.name,
-  displayName: 'Surface Binding Registry',
-  version: '0.1.0',
-  critical: true,
-  create: (ctx) => new SurfaceBindingRegistry(ctx.bus),
 };
 
 /** Package that registers framework session storage handlers. */
@@ -314,6 +314,9 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   artifactLifecycleHookRegistryPackage,
   facetNamespaceRegistryPackage,
   surfaceBindingRegistryPackage,
+  materializationOperationCoordinatorPackage,
+  artifactViewBuilderRegistryPackage,
+  artifactViewServicePackage,
   sessionStoragePackage,
   sessionBridgePackage,
   sessionClientAccountLinkingPackage,

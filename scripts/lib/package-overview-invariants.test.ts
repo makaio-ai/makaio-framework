@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   checkPackageOverview,
+  filterDeclaredWorkspaces,
   parsePackageOverviewEntries,
   parseYarnWorkspacesList,
+  scopeWorkspacesToRoot,
 } from './package-overview-invariants.js';
 
 const overview = `
@@ -35,6 +37,66 @@ describe('package overview invariants', () => {
         ].join('\n'),
       ),
     ).toEqual([{ location: 'packages/utils', name: '@makaio/utils' }]);
+  });
+
+  it('ignores an unnamed Yarn project root', () => {
+    expect(
+      parseYarnWorkspacesList(
+        ['{"location":".","name":null}', '{"location":"packages/utils","name":"@makaio/utils"}'].join('\n'),
+      ),
+    ).toEqual([{ location: 'packages/utils', name: '@makaio/utils' }]);
+  });
+
+  it('scopes an enclosing Yarn inventory to the logical package root', () => {
+    expect(
+      scopeWorkspacesToRoot(
+        [
+          { location: 'framework/packages/utils', name: '@makaio/utils' },
+          { location: 'framework/core/contracts', name: '@makaio/contracts' },
+          { location: 'host/services', name: '@host/services' },
+        ],
+        'framework',
+      ),
+    ).toEqual([
+      { location: 'packages/utils', name: '@makaio/utils' },
+      { location: 'core/contracts', name: '@makaio/contracts' },
+    ]);
+  });
+
+  it('preserves an inventory already rooted at the logical package root', () => {
+    const workspaces = [{ location: 'packages/utils', name: '@makaio/utils' }];
+    expect(scopeWorkspacesToRoot(workspaces, '.')).toEqual(workspaces);
+  });
+
+  it('keeps only workspaces declared by the logical root manifest', () => {
+    expect(
+      filterDeclaredWorkspaces(
+        [
+          { location: 'packages/utils', name: '@makaio/utils' },
+          { location: 'packages/framework/dist', name: '@makaio/generated-dist' },
+          { location: 'scripts/tooling', name: '@makaio/internal-tooling' },
+        ],
+        ['packages/**/*', '!packages/framework/dist', '!packages/framework/dist/**'],
+      ),
+    ).toEqual([{ location: 'packages/utils', name: '@makaio/utils' }]);
+  });
+
+  it('ignores unnamed inventory entries outside the logical root manifest', () => {
+    expect(
+      filterDeclaredWorkspaces(
+        [
+          { location: 'scripts', name: null },
+          { location: 'packages/utils', name: '@makaio/utils' },
+        ],
+        ['packages/**/*'],
+      ),
+    ).toEqual([{ location: 'packages/utils', name: '@makaio/utils' }]);
+  });
+
+  it('fails closed when a declared workspace has no package name', () => {
+    expect(() => filterDeclaredWorkspaces([{ location: 'packages/unnamed', name: null }], ['packages/**/*'])).toThrow(
+      'Declared Yarn workspace "packages/unnamed" has no package name',
+    );
   });
 
   it('accepts a complete and exact package overview', () => {

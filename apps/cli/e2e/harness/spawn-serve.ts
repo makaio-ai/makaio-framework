@@ -33,7 +33,7 @@ export interface SpawnServeOptions {
   entryPath?: string;
   /**
    * Additional environment variables to pass to the child process.
-   * Merged on top of the minimal defaults (PATH, HOME).
+   * Merged on top of the minimal defaults (PATH and an isolated home).
    */
   env?: Record<string, string>;
   /**
@@ -94,13 +94,14 @@ async function startCliServeInternal(options?: SpawnServeOptions): Promise<Serve
   await assertEntryFile(entryPath);
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-cli-e2e-'));
   const dbPath = path.join(tempDir, 'makaio.db');
-  const homeDir =
-    options?.env?.HOME ?? options?.env?.USERPROFILE ?? process.env['HOME'] ?? process.env['USERPROFILE'] ?? '';
+  const homeDir = options?.env?.HOME ?? options?.env?.USERPROFILE ?? path.join(tempDir, 'home');
+  await fs.mkdir(homeDir, { recursive: true });
 
   const env: Record<string, string> = {
     PATH: process.env['PATH'] ?? '',
     HOME: homeDir,
-    USERPROFILE: options?.env?.USERPROFILE ?? process.env['USERPROFILE'] ?? homeDir,
+    USERPROFILE: options?.env?.USERPROFILE ?? homeDir,
+    MAKAIO_HOME: path.join(homeDir, '.makaio'),
     MAKAIO_DATABASE_PATH: dbPath,
     ...options?.env,
   };

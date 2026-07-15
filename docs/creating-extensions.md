@@ -273,6 +273,181 @@ For full bus documentation, see [Bus Architecture](./architecture/bus/).
 
 ---
 
+## Artifact View Builders
+
+Extensions can shape how artifacts render as provider-neutral views. There are two
+seams: **projection policy** declared on an artifact kind (serializable, drives the
+generic view builder), and **live view builders** contributed by an extension
+(executable, replace or suppress the generic sections for one exact kind).
+
+Views are resolved through one bus RPC — `MaterializationSubjects.artifact.view.resolve`
+— which returns a validated `ArtifactViewModel` plus its exact `sourceRevision` (`ok`),
+`artifact-not-found`, or `not-rendered`. The view model is semantic: typed sections (summary, properties, table,
+relations, evidence, raw, code, mermaid diagram), a semantic title, and navigation
+links. Provider renderers (e.g. Markdown for an external issue tracker) and physical
+title allocation on provider surfaces stay outside the view model — they consume it.
+
+### Declaring Projection Policy on a Kind
+
+`defineArtifactKind` accepts a `projection` policy with projected fields, view roles,
+and affordances:
+
+```typescript
+import { z } from 'zod';
+import { defineArtifactKind } from '@makaio/contracts';
+
+export const deploymentPlanKind = defineArtifactKind({
+  kind: 'deployment-plan',
+  description: 'Rollout plan for a deployment.',
+  schemaVersion: '1',
+  dataSchema: z.object({
+    name: z.string(),
+    overview: z.string(),
+    status: z.enum(['draft', 'approved']),
+    steps: z.array(z.object({ stage: z.string(), owner: z.string() })),
+  }),
+  conflictPolicy: 'supersedes',
+  projection: {
+    mode: 'surface',
+    projectedFields: [
+      // Dot paths into artifact.data. Omitted fromLevel means 'full'.
+      { path: 'name', viewRole: 'title', fromLevel: 'link' },
+      { path: 'overview', viewRole: 'summary', fromLevel: 'summary' },
+      { path: 'status', fromLevel: 'summary' },
+      { path: 'steps' }, // array of scalar-valued records → table section
+    ],
+    affordances: [
+      // The kind has its own full view.
+      { kind: 'own-view' },
+      // It may be inlined under a 'contains' host relation. `as` is
+      // declaration policy: the request level must equal it exactly, and
+      // omitted `as` matches only full-level requests.
+      { kind: 'inline', hostRelation: 'contains', as: 'summary' },
+      // It may appear as an entry in a container. Exactly one of
+      // `via` or `collection`; the caller picks the level on the request.
+      { kind: 'entry', via: 'release-dashboard', title: 'Plans' },
+    ],
+  },
+});
+```
+
+Rules enforced by the contract schemas:
+
+- At most one projected field may declare `viewRole: 'title'` and one
+  `viewRole: 'summary'`. Fallbacks are `[<kind>] <id>` for the title and
+  `representations.summary` for the summary.
+- Levels order monotonically `link < summary < full`; a field is visible at every
+  level at or above its `fromLevel`.
+- When `affordances` is present it is exact and authoritative; an empty array means
+  the kind renders nowhere. When absent, legacy defaults apply based on `mode`
+  (`none`: nowhere, `surface`: own-view at full, `comment`: caller-supplied inline at
+  summary).
+
+The generic builder projects only declared fields — scalars and scalar arrays become
+property rows, arrays of scalar-valued records become tables, objects and
+heterogeneous arrays become per-field raw sections. Undeclared data is never exposed.
+
+### Contributing Live View Builders
+
+An extension contributes builders through the `artifactViewBuilders` field on
+`MakaioExtension`. The `createBuilders()` factory is called on activation (it may be
+async); the returned builders are registered under the extension's name as the owner
+key and removed when the extension stops.
+
+```typescript
+import { defineArtifactViewBuilder, type MakaioExtension } from '@makaio/contracts';
+
+const deploymentPlanBuilder = defineArtifactViewBuilder({
+  kind: 'deployment-plan',   // exact kind match — no wildcards
+  schemaVersion: '1',        // exact schemaVersion match — no ranges
+  version: 1,                // positive integer, reported as builderVersion
+  build: async (context) => {
+    // context.artifact          — resolved artifact revision
+    // context.level             — requested detail level
+    // context.affordance        — structural affordance selector
+    // context.params            — JSON-safe runtime params (or undefined)
+    // context.genericSections   — always-built generic sections
+    // context.relations         — the artifact's direct relations
+    // context.defaultContext    — resolved context graph; present only when
+    //                             the kind declares a defaultContext selector
+
+    if (context.level === 'link') {
+      return undefined; // keep the generic sections unchanged
+    }
+    if (context.artifact.data['status'] === 'draft') {
+      return { render: false }; // resolver answers not-rendered
+    }
+    return {
+      // Complete replacement. To augment instead, compose explicitly
+      // from context.genericSections.
+      sections: [
+        ...context.genericSections,
+        {
+          type: 'diagram',
+          title: 'Rollout',
+          notation: 'mermaid',
+          source: 'graph TD; build --> stage --> prod;',
+        },
+      ],
+    };
+  },
+});
+
+const extension: MakaioExtension = {
+  name: 'deployment-plans',
+  displayName: 'Deployment Plans',
+  artifactViewBuilders: {
+    createBuilders: () => [deploymentPlanBuilder],
+  },
+};
+
+export default extension;
+```
+
+Builder outcomes are exactly three: `undefined` (keep generic sections), `{ sections }`
+(complete replacement), or `{ render: false }` (suppress rendering).
+
+Use `defineArtifactViewBuilder` rather than annotating an untyped object as
+`ArtifactViewBuilder`: it preserves the literal `kind`, so declaration-merged
+view params narrow `context.params` to that kind's shape before builders are
+erased for runtime registration.
+
+### Ownership, Replacement, and Collisions
+
+The builder registry is owner-scoped:
+
+- Each activation atomically replaces the extension's entire builder set
+  (`replaceBuildersForOwner`). Re-activating the same extension swaps its builders
+  without a gap; stopping it removes them.
+- Only one active builder per `kind + schemaVersion` is allowed across the whole
+  registry. Duplicate keys within one contribution and collisions with another
+  extension's builder are hard errors (`ArtifactViewBuilderCollisionError`) — there
+  are no priorities or overlays.
+- Builder functions are live, in-process contributions. They never cross the bus;
+  only serializable resolve requests and responses do.
+
+### Typed View Params via Declaration Merging
+
+Resolve requests and surface-binding parameters remain open, schema-inferred
+JSON objects because their wire contracts cannot know the requested artifact kind.
+Only a builder context created through `defineArtifactViewBuilder` narrows its
+`params` from the declaration-mergeable `ArtifactViewParamsMap` interface. Before
+any augmentation, builder params fall back to `Readonly<Record<string, unknown>>`;
+after augmentation, a literal builder kind receives its registered shape.
+
+```typescript
+declare module '@makaio/contracts' {
+  interface ArtifactViewParamsMap {
+    'deployment-plan': { includeCompletedStages: boolean };
+  }
+}
+```
+
+At runtime, all params are validated only as JSON-safe objects — builders must
+still treat them defensively.
+
+---
+
 ## CLI Entrypoint
 
 The CLI entrypoint exports a `CliContribution` with named subcommands and an optional
