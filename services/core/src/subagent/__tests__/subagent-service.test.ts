@@ -67,7 +67,7 @@ describe('SubagentService', () => {
   describe('execution flow', () => {
     it('executes only spawned events owned by this service while preserving observability', async () => {
       await service.destroy();
-      service = new SubagentService(MakaioBus, DEFAULT_CONSTRAINTS, undefined, new Set(), 0, 'owner-local');
+      service = new SubagentService(MakaioBus, DEFAULT_CONSTRAINTS, new Set(), 0, 'owner-local');
       await service.init();
 
       const observedOwners: Array<string | undefined> = [];
@@ -93,7 +93,7 @@ describe('SubagentService', () => {
 
     it('single-flights concurrent matching-owner spawned event echoes', async () => {
       await service.destroy();
-      service = new SubagentService(MakaioBus, DEFAULT_CONSTRAINTS, undefined, new Set(), 0, 'owner-local');
+      service = new SubagentService(MakaioBus, DEFAULT_CONSTRAINTS, new Set(), 0, 'owner-local');
       await service.init();
 
       const sessionCreateCalls: unknown[] = [];
@@ -189,7 +189,6 @@ describe('SubagentService', () => {
       expect(adapterStartCalls[0]).toMatchObject({
         adapterId: 'resolved-claude-code',
         sessionId: 'child-1',
-        initialMessage: 'Do something',
         model: 'sonnet',
         reasoningEffort: 'high',
         allowedTools: ['read_file', 'run_tests'],
@@ -198,18 +197,16 @@ describe('SubagentService', () => {
       });
     });
 
-    it('passes machineId to adapter resolution when configured', async () => {
+    it('delegates adapter resolution to the session attach boundary', async () => {
       service.destroy();
       MakaioBus.__resetHandlers?.();
-      service = new SubagentService(MakaioBus, DEFAULT_CONSTRAINTS, 'node-local');
-
+      service = new SubagentService(MakaioBus);
       let resolvePayload: { adapterName?: string; machineId?: string } | undefined;
       mocks = setupSubagentServiceMocks(MakaioBus, {
         onResolveIdPayload: (payload) => {
           resolvePayload = payload;
         },
       });
-
       await service.init();
 
       MakaioBus.on(SessionSubjects.create, (ctx) => {
@@ -232,7 +229,6 @@ describe('SubagentService', () => {
       await vi.waitFor(() => expect(resolvePayload).toBeDefined());
       expect(resolvePayload).toMatchObject({
         adapterName: 'claude-code',
-        machineId: 'node-local',
       });
     });
 

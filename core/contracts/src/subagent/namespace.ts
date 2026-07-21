@@ -133,6 +133,7 @@ export const SubagentSchemas = {
       result: z.string().optional(),
       summary: z.string().optional(),
       error: z.string().optional(),
+      usage: UsageStatsSchema.optional(),
     }),
   },
 

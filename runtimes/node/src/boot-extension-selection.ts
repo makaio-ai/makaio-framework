@@ -167,6 +167,18 @@ function assertSingleRuntimeOwner(
 }
 
 /**
+ * Decide whether a composition root should load the default session orchestrator.
+ * @param loadedExtensionPackages - Executable extension packages available to the runtime.
+ * @returns `true` when no extension declares session-orchestrator ownership.
+ */
+export function shouldLoadDefaultSessionOrchestrator(
+  loadedExtensionPackages: ReadonlyArray<RuntimeOwnershipPackageView>,
+): boolean {
+  assertSingleRuntimeOwner(loadedExtensionPackages, 'sessionOrchestrator');
+  return findRuntimeOwners(loadedExtensionPackages, 'sessionOrchestrator').length === 0;
+}
+
+/**
  * Select framework core packages for the loaded descriptor-backed extensions.
  *
  * The framework session orchestrator is the default owner of
@@ -183,8 +195,7 @@ export function selectFrameworkCorePackages(
     return frameworkCorePackages;
   }
 
-  assertSingleRuntimeOwner(loadedExtensionPackages, 'sessionOrchestrator');
-  if (findRuntimeOwners(loadedExtensionPackages, 'sessionOrchestrator').length === 0) {
+  if (shouldLoadDefaultSessionOrchestrator(loadedExtensionPackages)) {
     return frameworkCorePackages;
   }
 

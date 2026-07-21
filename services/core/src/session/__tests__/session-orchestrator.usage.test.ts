@@ -39,7 +39,7 @@ type CompletedUsages = CompletedUsage[];
  */
 function registerCapturingCompleteHandler(completedUsages: CompletedUsages): UnsubscribeFunction {
   return MakaioBus.on(TurnStorageSubjects.complete, async (ctx) => {
-    completedUsages.push({ turnId: ctx.payload.turnId, usage: ctx.payload.usage });
+    completedUsages.push({ turnId: ctx.payload.turnId, usage: ctx.payload.usage ?? undefined });
     await ctx.next(); // let the mock storage handler respond
   });
 }
@@ -110,7 +110,7 @@ describe('SessionOrchestrator - Usage Tracking', () => {
       provider: 'test-provider',
       model: 'test-model',
       inputTokens: 150,
-      inputCachedTokens: 0,
+      inputCachedTokens: 25,
       outputTokens: 75,
       reasoningTokens: 0,
       totalTokens: 225,
@@ -135,8 +135,13 @@ describe('SessionOrchestrator - Usage Tracking', () => {
     expect(completedUsages[0]?.turnId).toBe(turnId);
     expect(completedUsages[0]?.usage).toBeDefined();
     expect(completedUsages[0]?.usage?.total.inputTokens).toBe(150);
+    expect(completedUsages[0]?.usage?.total.cachedInputTokens).toBe(25);
     expect(completedUsages[0]?.usage?.total.outputTokens).toBe(75);
-    expect(completedUsages[0]?.usage?.byAgent?.['a1']).toEqual({ inputTokens: 150, outputTokens: 75 });
+    expect(completedUsages[0]?.usage?.byAgent?.['a1']).toEqual({
+      inputTokens: 150,
+      cachedInputTokens: 25,
+      outputTokens: 75,
+    });
   });
 
   it('aggregates usage across multiple agents in a multi-agent turn', async () => {

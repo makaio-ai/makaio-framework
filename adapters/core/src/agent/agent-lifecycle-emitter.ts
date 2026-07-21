@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSchemas, type AgentStarted } from '@makaio/contracts';
-import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { updateAgentActivityStatusBestEffort } from './agent-storage-status.js';
 import type { AgentContext } from './types.js';
 import { z } from 'zod';
 
@@ -68,10 +68,7 @@ export class AgentLifecycleEmitter {
         const released = this.completedMessageOrder.shift();
         if (released !== undefined) this.completedMessageIds.delete(released);
       }
-      void this.config.globalBus.requestOptional(AgentStorageSubjects.updateStatus, {
-        agentId: this.config.agentId,
-        status: 'idle',
-      });
+      updateAgentActivityStatusBestEffort(this.config.globalBus, this.config.agentId, 'idle');
     } catch (error) {
       this.completedMessageIds.delete(result.messageId);
       throw error;

@@ -1,4 +1,11 @@
-import type { CompletionMode, SubagentConstraints, SubagentStatus, SubagentConfig } from '@makaio/contracts';
+import type {
+  CompletionMode,
+  SubagentConstraints,
+  SubagentStatus,
+  SubagentConfig,
+  TurnUsage,
+  UsageStats,
+} from '@makaio/contracts';
 import { SubagentError, SubagentErrorCode } from '@makaio/contracts';
 import { RingBuffer } from '../utils/ring-buffer.js';
 import type { TrackedSubagent, InternalPendingRequest, AwaitResult } from './types.js';
@@ -65,6 +72,9 @@ export class SubagentManager {
       depth: options.depth,
       progressUpdates: new RingBuffer<string>(PROGRESS_BUFFER_SIZE),
       toolObservations: [],
+      completedTurnUsage: new Map(),
+      completedTurnSuccess: new Map(),
+      toolCallIds: new Set(),
       startTime: now,
       lastActivityAt: now,
     };
@@ -83,8 +93,17 @@ export class SubagentManager {
     if (!subagent) return;
     subagent.childSessionId = childSessionId;
     subagent.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Open child-message admission after atomic startup completes.
+   * @param subagentId - ID of the subagent whose initial turn is admitted.
+   */
+  public markStarted(subagentId: string): void {
+    const subagent = this.subagents.get(subagentId);
+    if (!subagent) return;
     if (subagent.status === 'spawning') {
-      subagent.status = 'running';
+      this.applyStatus(subagent, 'running');
     }
   }
 
@@ -98,13 +117,55 @@ export class SubagentManager {
   }
 
   /**
+   * Resolve a tracked subagent from its managed child session.
+   * @param childSessionId - Managed child session identifier.
+   * @returns The owning tracked subagent, when present.
+   */
+  public getByChildSessionId(childSessionId: string): TrackedSubagent | undefined {
+    return [...this.subagents.values()].find((subagent) => subagent.childSessionId === childSessionId);
+  }
+
+  /**
+   * Project a live child-session turn start into managed subagent state.
+   * @param childSessionId - Managed child session that started a turn.
+   * @param turnId - Canonical active child turn identifier.
+   */
+  public recordTurnStarted(childSessionId: string, turnId: string): void {
+    const subagent = this.getByChildSessionId(childSessionId);
+    if (subagent === undefined || isTerminal(subagent.status)) return;
+    subagent.activeTurnId = turnId;
+    subagent.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Project a child-session turn completion, clearing only its matching active turn.
+   * @param childSessionId - Managed child session that completed a turn.
+   * @param turnId - Canonically completed child turn identifier.
+   */
+  public recordTurnCompleted(childSessionId: string, turnId: string): void {
+    const subagent = this.getByChildSessionId(childSessionId);
+    if (subagent === undefined || isTerminal(subagent.status)) return;
+    if (subagent.activeTurnId === turnId) subagent.activeTurnId = undefined;
+    subagent.lastActivityAt = Date.now();
+  }
+
+  /**
    * Record one authoritative child-session tool outcome for terminal handoff.
    * @param childSessionId - Child session whose runtime emitted the outcome.
    * @param observation - Validated outcome and optional authoritative Artifact identity.
+   * @param toolCallId - Stable tool-call identity used for replay deduplication.
    */
-  public recordToolObservation(childSessionId: string, observation: TrackedSubagent['toolObservations'][number]): void {
-    const subagent = [...this.subagents.values()].find((candidate) => candidate.childSessionId === childSessionId);
-    if (subagent === undefined) return;
+  public recordToolObservation(
+    childSessionId: string,
+    observation: TrackedSubagent['toolObservations'][number],
+    toolCallId?: string,
+  ): void {
+    const subagent = this.getByChildSessionId(childSessionId);
+    if (subagent === undefined || isTerminal(subagent.status)) return;
+    if (toolCallId !== undefined) {
+      if (subagent.toolCallIds.has(toolCallId)) return;
+      subagent.toolCallIds.add(toolCallId);
+    }
     subagent.toolObservations.push(observation);
     subagent.lastActivityAt = Date.now();
   }
@@ -172,12 +233,21 @@ export class SubagentManager {
     const subagent = this.subagents.get(subagentId);
     if (!subagent) return;
 
+    this.applyStatus(subagent, status);
+  }
+
+  /**
+   * Apply one status transition and its shared terminal-state invariants.
+   * @param subagent - Tracked subagent receiving the status.
+   * @param status - New lifecycle status.
+   */
+  private applyStatus(subagent: TrackedSubagent, status: SubagentStatus): void {
     const now = Date.now();
     subagent.status = status;
     subagent.lastActivityAt = now;
-    if (isTerminal(status)) {
-      subagent.endTime = now;
-    }
+    if (!isTerminal(status)) return;
+    subagent.activeTurnId = undefined;
+    subagent.endTime = now;
   }
 
   /**
@@ -208,6 +278,9 @@ export class SubagentManager {
         SubagentErrorCode.REQUEST_PENDING,
         'Cannot call request_input while another request is pending',
       );
+    }
+    if (subagent.completionCandidate !== undefined) {
+      throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Cannot request input while completion is pending');
     }
     subagent.pendingRequest = request;
     subagent.status = 'waiting_input';
@@ -251,14 +324,140 @@ export class SubagentManager {
       );
     }
 
-    const now = Date.now();
-    subagent.status = 'completed';
+    this.applyStatus(subagent, 'completed');
     subagent.result = result;
     subagent.summary = summary;
     subagent.completionSource = completionSource;
-    subagent.endTime = now;
-    subagent.lastActivityAt = now;
     this.resolveAwaiters(subagentId);
+  }
+
+  /**
+   * Record a completion intent for an exact child turn without terminalizing it.
+   * @param subagentId - Subagent receiving the completion intent.
+   * @param turnId - Exact child turn that must complete canonically.
+   * @param result - Candidate terminal result.
+   * @param summary - Optional candidate summary.
+   * @param source - Mechanism that produced the candidate.
+   */
+  public recordCompletionCandidate(
+    subagentId: string,
+    turnId: string,
+    result: string,
+    summary: string | undefined,
+    source: CompletionMode,
+  ): void {
+    const subagent = this.subagents.get(subagentId);
+    if (!subagent) throw new SubagentError(SubagentErrorCode.NOT_FOUND, `Subagent ${subagentId} not found`);
+    const candidate = subagent.completionCandidate;
+    if (candidate !== undefined) {
+      if (
+        candidate.turnId === turnId &&
+        candidate.result === result &&
+        candidate.summary === summary &&
+        candidate.source === source
+      )
+        return;
+      throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Conflicting subagent completion candidate');
+    }
+    if (isTerminal(subagent.status)) {
+      throw new SubagentError(
+        SubagentErrorCode.ALREADY_TERMINAL,
+        `Subagent already in terminal state: ${subagent.status}`,
+      );
+    }
+    if (subagent.pendingRequest !== undefined) {
+      throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Cannot complete while an input request is pending');
+    }
+    subagent.completionCandidate = { turnId, result, summary, source };
+    subagent.status = 'completing';
+    subagent.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Record the canonical persisted completion for one child turn.
+   * @param subagentId - Subagent whose child turn completed.
+   * @param turnId - Canonically completed turn identifier.
+   * @param usage - Persisted final usage snapshot, when measured.
+   * @param success - Canonical turn success verdict.
+   * @param error - Canonical failure detail.
+   */
+  public recordCompletedTurn(
+    subagentId: string,
+    turnId: string,
+    usage: TurnUsage | undefined,
+    success = true,
+    error?: string,
+  ): void {
+    const subagent = this.subagents.get(subagentId);
+    if (subagent === undefined || isTerminal(subagent.status)) return;
+    if (!subagent.completedTurnUsage.has(turnId)) {
+      subagent.completedTurnUsage.set(
+        turnId,
+        usage === undefined
+          ? undefined
+          : {
+              total: { ...usage.total },
+              ...(usage.byAgent !== undefined
+                ? {
+                    byAgent: Object.fromEntries(
+                      Object.entries(usage.byAgent).map(([agentId, metrics]) => [agentId, { ...metrics }]),
+                    ),
+                  }
+                : {}),
+            },
+      );
+      subagent.completedTurnSuccess.set(turnId, { success, ...(error !== undefined && { error }) });
+    }
+    subagent.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Freeze a completed subagent once matching intent and canonical turn proof exist.
+   * @param subagentId - Subagent to reconcile.
+   * @returns Whether the subagent transitioned to a terminal state.
+   */
+  public finalizeCompletionIfReady(subagentId: string): boolean {
+    const subagent = this.subagents.get(subagentId);
+    if (!subagent) throw new SubagentError(SubagentErrorCode.NOT_FOUND, `Subagent ${subagentId} not found`);
+    if (isTerminal(subagent.status)) return false;
+    const candidate = subagent.completionCandidate;
+    if (candidate === undefined || !subagent.completedTurnUsage.has(candidate.turnId)) return false;
+    const terminal = subagent.completedTurnSuccess.get(candidate.turnId);
+    if (terminal?.success === false) {
+      this.markFailed(subagentId, terminal.error ?? 'child turn failed');
+      return true;
+    }
+    const usage = this.freezeUsage(subagent);
+    this.applyStatus(subagent, 'completed');
+    subagent.result = candidate.result;
+    subagent.summary = candidate.summary;
+    subagent.completionSource = candidate.source;
+    subagent.usage = usage;
+    this.resolveAwaiters(subagentId);
+    return true;
+  }
+
+  /**
+   * Build the terminal secret-free economics snapshot.
+   * @param subagent - Subagent whose canonical turn usage and tools are frozen.
+   * @returns Frozen execution metrics.
+   */
+  private freezeUsage(subagent: TrackedSubagent): UsageStats {
+    let inputTokens = 0;
+    let cachedInputTokens = 0;
+    let outputTokens = 0;
+    let measured = false;
+    for (const usage of subagent.completedTurnUsage.values()) {
+      if (usage === undefined) continue;
+      measured = true;
+      inputTokens += usage.total.inputTokens;
+      cachedInputTokens += usage.total.cachedInputTokens ?? 0;
+      outputTokens += usage.total.outputTokens;
+    }
+    return Object.freeze({
+      ...(measured ? { inputTokens, cachedInputTokens, outputTokens } : {}),
+      toolCallCount: subagent.toolCallIds.size,
+    });
   }
 
   /**
@@ -271,11 +470,8 @@ export class SubagentManager {
     const subagent = this.subagents.get(subagentId);
     if (!subagent || isTerminal(subagent.status)) return;
 
-    const now = Date.now();
-    subagent.status = 'failed';
+    this.applyStatus(subagent, 'failed');
     subagent.error = error;
-    subagent.endTime = now;
-    subagent.lastActivityAt = now;
     this.resolveAwaiters(subagentId);
   }
 
@@ -291,10 +487,7 @@ export class SubagentManager {
       return false;
     }
 
-    const now = Date.now();
-    subagent.status = 'cancelled';
-    subagent.endTime = now;
-    subagent.lastActivityAt = now;
+    this.applyStatus(subagent, 'cancelled');
 
     // Cancel pending request
     if (subagent.pendingRequest) {
@@ -352,6 +545,7 @@ export class SubagentManager {
       result: subagent.result,
       error: subagent.error,
       completionSource: subagent.completionSource,
+      usage: subagent.usage,
       toolObservations: [...subagent.toolObservations],
     };
 
@@ -385,8 +579,12 @@ export class SubagentManager {
   /**
    * Sweep for hung subagents that have had no state activity within the timeout window.
    *
-   * Transitions `spawning` and `running` subagents to `'hung'` (non-terminal).
+   * Transitions inactive started, non-terminal subagents to `'hung'`.
+   * `spawning` subagents are skipped because atomic startup owns their timeout
+   * and child-message admission must remain closed until startup completes.
    * `waiting_input` subagents are skipped — `request_input` owns their timeout.
+   * Completion candidates remain stored if `completing` transitions to `hung`, so a late
+   * canonical turn proof can still terminalize the exact candidate.
    * Already-hung subagents are also skipped to avoid redundant transitions.
    *
    * The coordinator observes `'hung'` via `getStatus` and decides whether to kill
@@ -404,6 +602,8 @@ export class SubagentManager {
 
     for (const subagent of this.subagents.values()) {
       if (isTerminal(subagent.status)) continue;
+
+      if (subagent.status === 'spawning') continue;
 
       // Skip subagents legitimately waiting for parent input —
       // request_input has its own timeout (defaultRequestTimeoutMs).

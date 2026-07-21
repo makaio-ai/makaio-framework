@@ -156,6 +156,7 @@ class SessionTurnAwaitResponseCompletionInitiator:
 class SessionTurnAwaitResponseCompletionUsageTotal:
     input_tokens: float
     output_tokens: float
+    cached_input_tokens: float | None = None
     cost: float | None = None
 
 
@@ -192,6 +193,7 @@ class SessionTurnCompletedPayloadInitiator:
 class SessionTurnCompletedPayloadUsageTotal:
     input_tokens: float
     output_tokens: float
+    cached_input_tokens: float | None = None
     cost: float | None = None
 
 

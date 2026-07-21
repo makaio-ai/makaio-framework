@@ -25,11 +25,14 @@ export function resolveDelegateRoleConfig(
   node: WorkflowDelegateRoleNode,
   role: WorkflowResolvedRole,
 ): WorkflowResolvedRole {
-  const resolvedRole = {
-    ...role,
-    ...(node.completion !== undefined ? { completion: node.completion } : {}),
-  };
-  return applyExactAllowedTools(resolvedRole, node.allowedTools);
+  const resolvedRole = applyExactAllowedTools(
+    {
+      ...role,
+      ...(node.completion !== undefined ? { completion: node.completion } : {}),
+    },
+    node.allowedTools,
+  );
+  return requiresFreshDelegateRoleContext(resolvedRole) ? { ...resolvedRole, contextMode: 'fresh' } : resolvedRole;
 }
 
 /**
@@ -49,11 +52,15 @@ export function resolveDelegateAgentConfig(
 }
 
 /**
- * Determine whether a resolved delegate role preserves session-turn semantics.
+ * Determine whether a delegate role belongs to the fresh-context turn cohort.
+ *
+ * These roles historically ran through a dedicated session-turn path whose
+ * child sessions intentionally omitted parent-history inheritance. The unified
+ * subagent executor must preserve that context contract explicitly.
  * @param role - Effective resolved role configuration.
- * @returns True when the session-turn path preserves the resolved semantics.
+ * @returns True when the role requires explicit fresh context.
  */
-export function shouldUseSessionTurnForDelegateRole(role: WorkflowResolvedRole): boolean {
+function requiresFreshDelegateRoleContext(role: WorkflowResolvedRole): boolean {
   return (
     role.completion === 'turn' &&
     [

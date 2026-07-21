@@ -33,6 +33,7 @@ function usageEquals(left: TurnUsage | undefined, right: TurnUsage | undefined):
   if (left === undefined || right === undefined) return left === right;
   if (
     left.total.inputTokens !== right.total.inputTokens ||
+    left.total.cachedInputTokens !== right.total.cachedInputTokens ||
     left.total.outputTokens !== right.total.outputTokens ||
     left.total.cost !== right.total.cost
   ) {
@@ -49,42 +50,11 @@ function usageEquals(left: TurnUsage | undefined, right: TurnUsage | undefined):
     const rightMetrics = rightByAgent[agentId];
     return (
       leftMetrics?.inputTokens === rightMetrics?.inputTokens &&
+      leftMetrics?.cachedInputTokens === rightMetrics?.cachedInputTokens &&
       leftMetrics?.outputTokens === rightMetrics?.outputTokens &&
       leftMetrics?.cost === rightMetrics?.cost
     );
   });
-}
-
-/**
- * Merge one detached usage batch without mutating the canonical accumulator.
- * @param currentUsage - Last durably committed usage snapshot.
- * @param batch - Detached events to merge into that snapshot.
- * @returns A merged snapshot without mutating either input.
- */
-function mergeUsageBatch(currentUsage: TurnUsage | undefined, batch: readonly AgentUsageEvent[]): TurnUsage {
-  const byAgent = Object.fromEntries(
-    Object.entries(currentUsage?.byAgent ?? {}).map(([agentId, metrics]) => [agentId, { ...metrics }]),
-  );
-  let inputTokens = currentUsage?.total.inputTokens ?? 0;
-  let outputTokens = currentUsage?.total.outputTokens ?? 0;
-  for (const event of batch) {
-    inputTokens += event.inputTokens;
-    outputTokens += event.outputTokens;
-    const current = byAgent[event.agentId];
-    byAgent[event.agentId] = {
-      inputTokens: (current?.inputTokens ?? 0) + event.inputTokens,
-      outputTokens: (current?.outputTokens ?? 0) + event.outputTokens,
-      ...(current?.cost !== undefined && { cost: current.cost }),
-    };
-  }
-  return {
-    total: {
-      inputTokens,
-      outputTokens,
-      ...(currentUsage?.total.cost !== undefined && { cost: currentUsage.total.cost }),
-    },
-    byAgent,
-  };
 }
 
 /**
@@ -109,13 +79,13 @@ export async function persistTurnCompletion(
     status: canonical.status,
     ...(expectedStatus !== undefined && { expectedStatus }),
     error: canonical.error,
-    ...(usage !== undefined && { usage }),
+    usage: usage ?? null,
   });
   if (!completeResult.handled) return { handled: false, transitioned: true };
   const stored = completeResult.data.turn;
   const alreadyCommitted = stored.status === canonical.status && stored.error === canonical.error;
   if (!alreadyCommitted) return { handled: true, transitioned: false };
-  if (usage === undefined || usageEquals(stored.usage, usage)) {
+  if (usageEquals(stored.usage, usage)) {
     return { handled: true, transitioned: true };
   }
   if (completeResult.data.transitioned) {
@@ -126,7 +96,7 @@ export async function persistTurnCompletion(
     turnId: turn.turnId,
     status: canonical.status,
     error: canonical.error,
-    usage,
+    usage: usage ?? null,
   });
   if (!reconciled.handled || !usageEquals(reconciled.data.turn.usage, usage)) {
     throw new Error(`Turn completion usage reconciliation did not persist the canonical snapshot for ${turn.turnId}`);
@@ -157,7 +127,7 @@ export async function flushBufferedTurnUsage(input: {
     const detached = input.bufferedUsage.get(turnId);
     if (detached === undefined || detached.length === 0) return currentUsage;
     input.bufferedUsage.delete(turnId);
-    const mergedUsage = mergeUsageBatch(currentUsage, detached);
+    const mergedUsage = input.usageAccumulator ? input.usageAccumulator.preview(detached) : currentUsage;
     try {
       await persistTurnCompletion(input.bus, input.turn, input.result, mergedUsage);
     } catch (error) {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SubagentSubjects, type WorkflowDelegateRoleNode, type WorkflowStationNode } from '@makaio/contracts';
+import { type WorkflowDelegateRoleNode, type WorkflowStationNode } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
@@ -94,16 +94,6 @@ describe('workflow public station subjects', () => {
           adapterName: 'claude-code',
           model: 'workflow-test-model',
           contextMode: 'fresh',
-        });
-      }),
-    );
-
-    setup.cleanupFns.push(
-      MakaioBus.on(SubagentSubjects.getStatus, (ctx) => {
-        ctx.setResult({
-          status: 'running',
-          childSessionId: `session-${ctx.payload.subagentId}`,
-          progress: [],
         });
       }),
     );

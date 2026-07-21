@@ -6,6 +6,7 @@ import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
 import { MakaioSessionService } from '../../session/session-service.js';
 import { registerMemorySessionStorage } from '../../session/storage/memory-handler.js';
 import { SubagentService } from '../subagent-service.js';
+import { registerSubagentSessionOrchestrationMocks } from './subagent-service.mocks.js';
 
 const PARENT_SESSION_ID = 'parent-1';
 const SUB1_SPAWN = {
@@ -52,6 +53,7 @@ describe('SubagentService - execution target inheritance', () => {
         messageId: 'msg-1',
       });
     });
+    registerSubagentSessionOrchestrationMocks(MakaioBus);
 
     await sessionService.init();
     await subagentService.init();

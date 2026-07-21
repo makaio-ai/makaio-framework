@@ -100,8 +100,18 @@ const AgentAttachResolvedRequestSchema = z.object({
   sessionId: z.string(),
   /** Direct adapter selection plus optional resolved provider context. */
   agent: ResolvedAdapterAgentSelectionSchema,
+  /** Explicit harness preserved by trusted local callers. */
+  harnessId: z.string().optional(),
   /** Initial message to send (optional — can attach without sending). */
   initialMessage: MessageInputSchema.optional(),
+  /** Structured output descriptor forwarded with the reserved initial turn. */
+  responseSchema: ResponseSchemaDescriptorSchema.optional(),
+  /** Origin of the optional initial turn. */
+  source: z.enum(['extension', 'user', 'system']).optional(),
+  /** Extension ID when the initial turn originates from an extension. */
+  extensionId: z.string().optional(),
+  /** Local admission assertion evaluated immediately before initial provider dispatch. */
+  assertInitialMessageAdmission: z.unknown().optional(),
   /** Agent role. Default: 'lead' if no agents exist, else 'member'. */
   role: z.enum(['lead', 'member']).optional(),
 });
@@ -297,6 +307,12 @@ export const OrchestratorSchemas = {
 
       /** Initial message to send (optional — can attach without sending). */
       initialMessage: MessageInputSchema.optional(),
+      /** Structured output descriptor forwarded with the reserved initial turn. */
+      responseSchema: ResponseSchemaDescriptorSchema.optional(),
+      /** Origin of the optional initial turn. */
+      source: z.enum(['extension', 'user', 'system']).optional(),
+      /** Extension ID when the initial turn originates from an extension. */
+      extensionId: z.string().optional(),
       /** Agent role. Default: 'lead' if no agents exist, else 'member'. */
       role: z.enum(['lead', 'member']).optional(),
     }),

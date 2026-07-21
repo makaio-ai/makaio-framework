@@ -18,7 +18,7 @@ function createTestEmitter(
   const emittedCompletePayloads: Array<{ messageId: string; error?: string; errorCategory?: string }> = [];
   const emitter = new AgentLifecycleEmitter({
     agentId,
-    globalBus: { requestOptional: vi.fn() } as never,
+    globalBus: { requestOptional: vi.fn().mockResolvedValue(undefined) } as never,
     emitStarted: async () => {},
     emitComplete: async (payload) => {
       emittedCompletePayloads.push(payload as { messageId: string; error?: string; errorCategory?: string });

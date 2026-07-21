@@ -99,7 +99,7 @@ function registerTurnHandlers(unsubs: Array<() => void>): void {
           completedAt: Date.now(),
           status: ctx.payload.status,
           error: ctx.payload.error,
-          usage: ctx.payload.usage,
+          ...(ctx.payload.usage !== null && { usage: ctx.payload.usage }),
         },
         transitioned: true,
       });

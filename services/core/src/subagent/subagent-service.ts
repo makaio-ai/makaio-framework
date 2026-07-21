@@ -18,14 +18,9 @@ import {
   type ExecuteSubagentResponse,
   type SubagentExecutionFailed,
 } from '@makaio/contracts';
-import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import type { ExecutionTarget } from '@makaio/services-core/execution-target';
 import { ExecutionTargetSubjects } from '../execution-target/namespace.js';
 import { SessionStorageSubjects } from '../session/storage/namespace.js';
-import {
-  resolveRuntimeProviderContext,
-  RuntimeProviderContextResolutionError,
-} from '@makaio/services-core/provider-context';
 import { SubagentManager } from './manager/index.js';
 import {
   handleGetStatusRpc,
@@ -39,6 +34,8 @@ import {
   handleListBySessionRpc,
   type RpcHandlerContext,
 } from './rpc-handlers.js';
+import { getSessionAgentAttachError } from '../session/handlers/attach-error.js';
+import { attachSubagent } from './subagent-attach.js';
 
 // Sentinel for in-memory fallback only — never persisted. Timestamps
 // are module-init snapshots; they are not meaningful for sorting.
@@ -62,16 +59,26 @@ const SUBAGENT_DEFAULT_LOCAL_TARGET: ExecutionTarget = {
  * @param obj - Object potentially containing undefined values.
  * @returns Object with undefined-valued keys omitted.
  */
-function omitUndefined<T extends object>(obj: T): Partial<T> {
-  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined)) as Partial<T>;
-}
-
 /** Spawned event payload type inferred from schema */
 type SpawnedPayload = ExtractSubjectPayload<typeof SubagentSubjects.spawned>;
 type ExecuteSubagentPayload = ExtractSubjectPayload<typeof SubagentSubjects.execute>;
 type ToChildPayload = ExtractSubjectPayload<typeof SubagentSubjects.toChild>;
 type ChildSessionCreatePayload = ExtractSubjectPayload<typeof SessionSubjects.create>;
 type AgentCompletePayload = ExtractSubjectPayload<typeof AgentSubjects.complete>;
+type SessionTurnStartedPayload = ExtractSubjectPayload<typeof SessionSubjects.turn.started>;
+type SessionTurnCompletedPayload = ExtractSubjectPayload<typeof SessionSubjects.turn.completed>;
+
+/** Inputs for the atomic adapter-attach and initial-task startup phase. */
+interface SpawnAttachParams {
+  subagentId: string;
+  parentSessionId: string;
+  adapterName: string;
+  config: SubagentConfig;
+  sessionId: string;
+  task: string;
+  targetWorkingDirectory: string | undefined;
+  shouldAbort: () => boolean;
+}
 
 /** Stable failures while finalizing a failed subagent spawn. */
 export type SubagentFailureFinalizationErrorCode = 'child-session-close-failed' | 'failure-publication-failed';
@@ -106,7 +113,6 @@ export class SubagentService extends BaseService {
    * Creates a new SubagentService instance.
    * @param bus - The event bus for inter-service communication
    * @param constraints - Subagent execution constraints
-   * @param machineId - Optional machine ID for adapter resolution
    * @param delegationAllowSet - Set of peer identities permitted to request
    *   spawn or execute on this node from a remote origin. Authenticated
    *   `workflow-execution` peers are allowed by identity; this set is for
@@ -117,7 +123,6 @@ export class SubagentService extends BaseService {
   public constructor(
     bus: IMakaioBus = MakaioBus,
     constraints: SubagentConstraints = DEFAULT_CONSTRAINTS,
-    private readonly machineId?: string,
     private readonly delegationAllowSet: SpawnDelegationAllowSet = new Set(),
     private readonly requestHandlerPriority = 0,
     private readonly executionOwnerId: string = crypto.randomUUID(),
@@ -199,15 +204,32 @@ export class SubagentService extends BaseService {
       await this.handleAgentComplete(ctx.payload);
     });
 
+    this.registerHandler(SessionSubjects.turn.completed, async (ctx) => {
+      await this.handleSessionTurnCompleted(ctx.payload);
+    });
+
+    this.registerHandler(SessionSubjects.turn.started, (ctx) => {
+      this.handleSessionTurnStarted(ctx.payload);
+    });
+
     this.registerHandler(AgentSubjects.tool.completed, (ctx) => {
-      if (ctx.payload.sessionId === undefined || ctx.payload.success === undefined) return;
-      this.manager.recordToolObservation(ctx.payload.sessionId, {
-        toolName: ctx.payload.toolName,
-        outcome: ctx.payload.success ? 'success' : 'failure',
-        ...(ctx.payload.success === true && ctx.payload.artifactResult !== undefined
-          ? { artifact: ctx.payload.artifactResult }
-          : {}),
-      });
+      if (
+        (ctx.payload as Record<string, unknown>)['_import'] ||
+        ctx.payload.sessionId === undefined ||
+        ctx.payload.success === undefined
+      )
+        return;
+      this.manager.recordToolObservation(
+        ctx.payload.sessionId,
+        {
+          toolName: ctx.payload.toolName,
+          outcome: ctx.payload.success ? 'success' : 'failure',
+          ...(ctx.payload.success === true && ctx.payload.artifactResult !== undefined
+            ? { artifact: ctx.payload.artifactResult }
+            : {}),
+        },
+        ctx.payload.toolCallId,
+      );
     });
 
     // Register state operation RPCs
@@ -245,6 +267,7 @@ export class SubagentService extends BaseService {
       manager: this.manager,
       bus: this.bus,
       executionOwnerId: this.executionOwnerId,
+      onCompletionCandidate: (subagentId) => this.finalizeSubagentIfReady(subagentId),
     };
 
     // getStatus RPC - query subagent state
@@ -366,6 +389,7 @@ export class SubagentService extends BaseService {
     spawningToolCallId: string | undefined,
   ): Promise<string | undefined> {
     const { subagentId } = payload;
+    const shouldAbort = () => this.shouldAbortSpawn(this.manager.get(subagentId)?.status);
     const config = SubagentConfigSchema.parse({ ...payload.config, task });
     const adapterName = config.adapterName?.trim();
 
@@ -437,18 +461,51 @@ export class SubagentService extends BaseService {
       return this.failSpawn(subagentId, parentSessionId, 'session_create', err);
     }
 
-    const tracked = this.manager.get(subagentId);
-    if (tracked && this.isTerminalSubagentStatus(tracked.status)) {
-      return undefined;
-    }
+    if (shouldAbort()) return undefined;
+    return this.attachSpawnedSubagent({
+      subagentId,
+      parentSessionId,
+      adapterName,
+      config,
+      sessionId,
+      task,
+      targetWorkingDirectory: resolutionParams.targetWorkingDirectory,
+      shouldAbort,
+    });
+  }
 
+  /**
+   * Attach the child agent and atomically admit its initial task.
+   * @param params - Resolved startup inputs and cancellation authority.
+   * @returns Error message on failure, otherwise undefined.
+   */
+  private async attachSpawnedSubagent(params: SpawnAttachParams): Promise<string | undefined> {
+    const { subagentId, parentSessionId, adapterName, config, sessionId, task, targetWorkingDirectory, shouldAbort } =
+      params;
     try {
-      await this.startAdapterForSubagent(adapterName, config, sessionId, task, resolutionParams.targetWorkingDirectory);
+      await attachSubagent(this.bus, {
+        subagentId,
+        adapterName,
+        config,
+        sessionId,
+        task,
+        targetWorkingDirectory,
+        assertAdmission: () => {
+          if (this.shouldAbortSpawn(this.manager.get(subagentId)?.status)) throw new Error('startup cancelled');
+        },
+      });
     } catch (err) {
-      return this.failSpawn(subagentId, parentSessionId, 'adapter_start', err);
+      if (shouldAbort()) return undefined;
+      const attachError = getSessionAgentAttachError(err);
+      return this.failSpawn(
+        subagentId,
+        parentSessionId,
+        attachError?.stage === 'initial_message' ? 'agent_start' : 'adapter_start',
+        err,
+      );
     }
 
-    return undefined;
+    if (!shouldAbort()) this.manager.markStarted(subagentId);
   }
 
   /**
@@ -484,81 +541,6 @@ export class SubagentService extends BaseService {
       await this.closeChildSession(subagentId);
     }
     return sessionId;
-  }
-
-  /**
-   * Starts the adapter agent in the newly created child session.
-   * @param adapterName - Adapter type name
-   * @param config - Parsed subagent config
-   * @param sessionId - Child session ID
-   * @param task - Initial task message
-   * @param targetWorkingDirectory - Parent-derived adapter working directory, when present.
-   * @returns Resolves when adapter start succeeds
-   * @throws Error when adapter startup fails
-   */
-  private async startAdapterForSubagent(
-    adapterName: string,
-    config: SubagentConfig,
-    sessionId: string,
-    task: string,
-    targetWorkingDirectory: string | undefined,
-  ): Promise<void> {
-    // Resolve to persisted UUID adapterId before routing startAgent.
-    // adapterName is user-facing type ID and may not match runtime instance identity.
-    const { adapterId } = await this.bus.request(AdapterRuntimeSubjects.resolveId, {
-      adapterName,
-      ...(this.machineId !== undefined && { machineId: this.machineId }),
-    });
-    const suppliedProviderContext = config.providerContext;
-    if (
-      suppliedProviderContext?.state === 'resolved' &&
-      config.providerConfigId !== undefined &&
-      config.providerConfigId !== suppliedProviderContext.providerConfigId
-    ) {
-      throw new Error(
-        `Subagent providerConfigId "${config.providerConfigId}" does not match its resolved provider context "${suppliedProviderContext.providerConfigId}".`,
-      );
-    }
-    if (suppliedProviderContext?.state === 'unresolved' && config.providerConfigId !== undefined) {
-      throw new RuntimeProviderContextResolutionError(
-        'provider-context-unresolved',
-        adapterName,
-        config.providerConfigId,
-      );
-    }
-    const providerContext =
-      suppliedProviderContext ??
-      (config.providerConfigId
-        ? await resolveRuntimeProviderContext(this.bus, {
-            adapterName,
-            providerConfigId: config.providerConfigId,
-          })
-        : undefined);
-    const runtimeOptions = omitUndefined({
-      adapterConfig: config.adapterConfig,
-      cwd: targetWorkingDirectory,
-      allowedTools: config.tools,
-      disallowedTools: config.disallowedTools,
-      allowedDirectories: config.allowedDirectories,
-    });
-    const result = await this.bus.request(AdapterSubjects.startAgent, {
-      adapterId,
-      role: 'lead',
-      ...(providerContext !== undefined && { providerContext }),
-      sessionId,
-      initialMessage: task,
-      model: config.model,
-      reasoningEffort: config.reasoningEffort,
-      systemPrompt: config.systemPrompt,
-      responseSchema: config.responseSchema,
-      ...runtimeOptions,
-      ...(config.harnessId !== undefined && { harnessId: config.harnessId }),
-    });
-
-    // Treat malformed or falsy responses as adapter-start failures.
-    if (!result || result.success !== true) {
-      throw new Error(result?.message ?? 'Adapter start failed');
-    }
   }
 
   /**
@@ -769,12 +751,12 @@ export class SubagentService extends BaseService {
   }
 
   /**
-   * Check whether a subagent has reached a terminal status.
-   * @param status - Subagent status to inspect.
-   * @returns True when the subagent should no longer start or route child work.
+   * Check whether startup must stop for missing or terminal subagent state.
+   * @param status - Current tracked subagent status, when still retained.
+   * @returns True when the subagent must no longer receive startup work.
    */
-  private isTerminalSubagentStatus(status: SubagentStatus): boolean {
-    return status === 'completed' || status === 'failed' || status === 'cancelled';
+  private shouldAbortSpawn(status: SubagentStatus | undefined): boolean {
+    return status === undefined || status === 'completed' || status === 'failed' || status === 'cancelled';
   }
 
   /**
@@ -795,74 +777,94 @@ export class SubagentService extends BaseService {
   }
 
   /**
-   * Handle `agent.complete` events for turn-mode subagents.
-   *
-   * Scans non-terminal subagents for one whose `childSessionId` matches the
-   * event's `sessionId`. If found and the subagent was spawned with
-   * `completion: 'turn'`, terminalizes it based on the turn outcome:
-   *
-   * - `'completed'` or absent (legacy emitters) → marks completed; result is
-   *   `payload.message`.
-   * - `'error'` → marks failed with `payload.error`.
-   * - `'superseded'`, `'merged'`, `'cancelled'`, `'rejected'` → ignored; these
-   *   are not the subagent's final result.
-   *
-   * Guards applied before transitioning:
-   * - Skips when `sessionId` is absent (malformed event from legacy emitter).
-   * - Skips when the subagent is currently in `waiting_input` — the completed
-   *   turn is the question, not the result.
-   * - Skips when `manager.markCompleted` / `manager.markFailed` would throw
-   *   (subagent already terminal — first-terminal-wins).
-   *
-   * Both terminal branches emit `subagent.completed` (with `success` set
-   * accordingly), the same announcement `completeTask` makes. That event is
-   * what drives child-session cleanup (`handleCompleted`) — terminalizing
-   * only the manager state would leak the child session and its adapter.
-   * @param payload - Payload from the `agent.complete` bus event
+   * Record turn-mode completion intent; canonical session completion owns terminalization.
+   * @param payload - Correlated agent completion event.
    */
   private async handleAgentComplete(payload: AgentCompletePayload): Promise<void> {
-    const { sessionId, outcome, message, error } = payload;
+    const { sessionId, turnId, outcome, message, error } = payload;
 
-    // sessionId is optional on BaseAgentEventSchema — guard for legacy emitters
-    if (!sessionId) return;
+    if (!sessionId || !turnId) return;
 
     for (const subagent of this.manager.getAllNonTerminal()) {
       if (subagent.childSessionId !== sessionId) continue;
 
-      // Tool-mode subagents must not be affected by turn completion
       if ((subagent.config.completion ?? 'tool') !== 'turn') return;
-
-      // A completed turn during a pending requestInput round-trip is the
-      // question being asked, not the final result — skip it.
       if (subagent.status === 'waiting_input') return;
-
       const effectiveOutcome = outcome ?? 'completed';
-
       if (effectiveOutcome === 'completed') {
         try {
-          this.manager.markCompleted(subagent.subagentId, message ?? '', undefined, 'turn');
+          this.manager.recordCompletionCandidate(subagent.subagentId, turnId, message ?? '', undefined, 'turn');
+          await this.finalizeSubagentIfReady(subagent.subagentId);
         } catch {
-          // Already terminal (first-terminal-wins) — ignore
           return;
         }
-        await this.bus.emit(SubagentSubjects.completed, {
-          subagentId: subagent.subagentId,
-          success: true,
-          result: message ?? '',
-        });
       } else if (effectiveOutcome === 'error') {
-        const failureReason = error ?? 'agent turn error';
-        this.manager.markFailed(subagent.subagentId, failureReason);
-        await this.bus.emit(SubagentSubjects.completed, {
-          subagentId: subagent.subagentId,
-          success: false,
-          error: failureReason,
-        });
+        try {
+          this.manager.recordCompletionCandidate(
+            subagent.subagentId,
+            turnId,
+            error ?? 'child turn failed',
+            undefined,
+            'turn',
+          );
+          await this.finalizeSubagentIfReady(subagent.subagentId);
+        } catch {
+          return;
+        }
       }
-      // superseded / merged / cancelled / rejected: not the subagent's result — ignore
-
       return;
     }
+  }
+
+  /**
+   * Reconcile canonical child turn completion with a matching completion intent.
+   * @param payload - Persisted session turn completion.
+   */
+  private async handleSessionTurnCompleted(payload: SessionTurnCompletedPayload): Promise<void> {
+    if (payload.ingestionMarker === 'backfill') return;
+    for (const subagent of this.manager.getAllNonTerminal()) {
+      if (subagent.childSessionId !== payload.sessionId) continue;
+      this.manager.recordTurnCompleted(payload.sessionId, payload.turnId);
+      this.manager.recordCompletedTurn(
+        subagent.subagentId,
+        payload.turnId,
+        payload.usage,
+        payload.success,
+        payload.error,
+      );
+      const candidate = subagent.completionCandidate;
+      if (candidate?.turnId !== payload.turnId) return;
+      await this.finalizeSubagentIfReady(subagent.subagentId);
+      return;
+    }
+  }
+
+  /**
+   * Project live child turns so completion RPCs bind to canonical session state.
+   * @param payload - Child session turn-start lifecycle event.
+   */
+  private handleSessionTurnStarted(payload: SessionTurnStartedPayload): void {
+    if (payload.ingestionMarker === 'backfill') return;
+    this.manager.recordTurnStarted(payload.sessionId, payload.turnId);
+  }
+
+  /**
+   * Publish only the terminal snapshot frozen after both completion proofs exist.
+   * @param subagentId - Subagent whose proofs may now reconcile.
+   */
+  private async finalizeSubagentIfReady(subagentId: string): Promise<void> {
+    if (!this.manager.finalizeCompletionIfReady(subagentId)) return;
+    const completed = this.manager.get(subagentId);
+    await this.bus.emit(SubagentSubjects.completed, {
+      subagentId,
+      success: completed?.status === 'completed',
+      ...(completed?.status === 'completed'
+        ? {
+            result: completed.summary ? `${completed.summary}\n\n${completed.result ?? ''}` : completed?.result,
+            usage: completed.usage,
+          }
+        : { error: completed?.error ?? 'child turn failed' }),
+    });
   }
 
   /**

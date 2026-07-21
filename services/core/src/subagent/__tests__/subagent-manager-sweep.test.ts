@@ -42,32 +42,29 @@ describe('SubagentManager — sweepHung and lastActivityAt', () => {
       expect(manager.get('sub-1')?.status).toBe('spawning');
     });
 
-    it('marks inactive non-terminal subagents as hung (non-terminal)', () => {
+    it('does not classify an in-flight startup as hung', () => {
       trackSub('sub-1');
 
       vi.advanceTimersByTime(20);
 
       const swept = manager.sweepHung(10);
-      expect(swept).toBe(1);
-
-      const subagent = manager.get('sub-1');
-      expect(subagent?.status).toBe('hung');
-      // hung is non-terminal: no endTime set, no error field, awaiters not resolved
-      expect(subagent?.endTime).toBeUndefined();
-      expect(subagent?.error).toBeUndefined();
-    });
-
-    it('skips subagents that have been active within the threshold', () => {
-      trackSub('sub-1');
-
-      // 1-hour threshold — recently tracked subagent should not be swept
-      const swept = manager.sweepHung(3_600_000);
       expect(swept).toBe(0);
       expect(manager.get('sub-1')?.status).toBe('spawning');
     });
 
+    it('skips subagents that have been active within the threshold', () => {
+      trackSub('sub-1');
+      manager.markStarted('sub-1');
+
+      // 1-hour threshold — recently tracked subagent should not be swept
+      const swept = manager.sweepHung(3_600_000);
+      expect(swept).toBe(0);
+      expect(manager.get('sub-1')?.status).toBe('running');
+    });
+
     it('skips subagents already in terminal states', () => {
       trackSub('sub-1');
+      manager.markStarted('sub-1');
       manager.markCompleted('sub-1', 'Done');
 
       vi.advanceTimersByTime(20);
@@ -80,6 +77,7 @@ describe('SubagentManager — sweepHung and lastActivityAt', () => {
 
     it('does not resolve awaiters for swept subagents (hung is non-terminal)', () => {
       trackSub('sub-1');
+      manager.markStarted('sub-1');
 
       let awaiterCalled = false;
       manager.addAwaiter('sub-1', () => {
@@ -96,6 +94,7 @@ describe('SubagentManager — sweepHung and lastActivityAt', () => {
 
     it('does not re-sweep subagents already in hung state', () => {
       trackSub('sub-1');
+      manager.markStarted('sub-1');
 
       vi.advanceTimersByTime(20);
       const firstSweep = manager.sweepHung(10);
@@ -132,6 +131,8 @@ describe('SubagentManager — sweepHung and lastActivityAt', () => {
       trackSub('sub-1', 'T1');
       trackSub('sub-2', 'T2');
       trackSub('sub-3', 'T3');
+      manager.markStarted('sub-1');
+      manager.markStarted('sub-2');
 
       // Mark sub-3 as completed so it is terminal and should not be swept
       manager.markCompleted('sub-3', 'Done');
@@ -163,11 +164,16 @@ describe('SubagentManager — sweepHung and lastActivityAt', () => {
 
       manager.setChildSessionId('sub-1', 'child-session-1');
       expect(manager.get('sub-1')!.lastActivityAt).toBeGreaterThan(initial);
+      expect(manager.get('sub-1')?.status).toBe('spawning');
+
+      manager.markStarted('sub-1');
+      expect(manager.get('sub-1')?.status).toBe('running');
     });
 
     it('is bumped on authoritative tool observation and prevents a stale hung sweep', () => {
       trackSub('sub-1');
       manager.setChildSessionId('sub-1', 'child-session-1');
+      manager.markStarted('sub-1');
 
       vi.advanceTimersByTime(9);
       manager.recordToolObservation('child-session-1', {
@@ -182,6 +188,7 @@ describe('SubagentManager — sweepHung and lastActivityAt', () => {
 
     it('is bumped on sweepHung transition', () => {
       trackSub('sub-1');
+      manager.markStarted('sub-1');
 
       const initial = manager.get('sub-1')!.lastActivityAt;
       vi.advanceTimersByTime(20);

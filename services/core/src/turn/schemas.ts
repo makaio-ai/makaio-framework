@@ -49,7 +49,8 @@ export const TurnStorageSchemas = {
       status: z.enum(['completed', 'error']),
       expectedStatus: TurnStatusSchema.optional(),
       error: z.string().optional(),
-      usage: TurnUsageSchema.optional(),
+      /** Replacement usage snapshot. `null` explicitly clears stale usage. */
+      usage: TurnUsageSchema.nullable().optional(),
     }),
     response: z.object({
       turn: TurnSchema,

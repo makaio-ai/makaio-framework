@@ -41,10 +41,10 @@ describe('storage:turn.complete', () => {
   });
 
   /**
-   * Assert that terminal turn completion is idempotent and late usage does not rewrite terminal metadata.
+   * Assert terminal completion supports replacement and explicit usage clearing without metadata rewrites.
    * @param turn - Active turn to complete.
    */
-  async function expectTerminalUsageMergePreservesCompletion(turn: Turn): Promise<void> {
+  async function expectTerminalUsageReplacementPreservesCompletion(turn: Turn): Promise<void> {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const first = await MakaioBus.request(TurnStorageSubjects.complete, {
@@ -75,6 +75,15 @@ describe('storage:turn.complete', () => {
       error: 'first failure',
       usage: { total: { inputTokens: 3, outputTokens: 4 } },
     });
+
+    const cleared = await MakaioBus.request(TurnStorageSubjects.complete, {
+      turnId: turn.turnId,
+      status: 'completed',
+      usage: null,
+    });
+    expect(cleared.transitioned).toBe(false);
+    expect(cleared.turn).toMatchObject({ completedAt: 1_000, status: 'error', error: 'first failure' });
+    expect(cleared.turn.usage).toBeUndefined();
   }
 
   /**
@@ -114,7 +123,7 @@ describe('storage:turn.complete', () => {
 
     const { turn } = await MakaioBus.request(TurnStorageSubjects.create, { sessionId: 'memory-session' });
 
-    await expectTerminalUsageMergePreservesCompletion(turn);
+    await expectTerminalUsageReplacementPreservesCompletion(turn);
   });
 
   it('does not overwrite a terminal memory turn when expected status no longer matches', async () => {
@@ -148,7 +157,7 @@ describe('storage:turn.complete', () => {
     });
     const { turn } = await MakaioBus.request(TurnStorageSubjects.create, { sessionId: 'drizzle-session' });
 
-    await expectTerminalUsageMergePreservesCompletion(turn);
+    await expectTerminalUsageReplacementPreservesCompletion(turn);
   });
 
   it('does not overwrite a terminal drizzle turn when expected status no longer matches', async () => {

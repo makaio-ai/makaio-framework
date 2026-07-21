@@ -9911,6 +9911,9 @@
                     "additionalProperties": {
                       "additionalProperties": false,
                       "properties": {
+                        "cachedInputTokens": {
+                          "type": "number"
+                        },
                         "cost": {
                           "type": "number"
                         },
@@ -9932,6 +9935,9 @@
                   "total": {
                     "additionalProperties": false,
                     "properties": {
+                      "cachedInputTokens": {
+                        "type": "number"
+                      },
                       "cost": {
                         "type": "number"
                       },
@@ -10010,6 +10016,9 @@
                 "additionalProperties": {
                   "additionalProperties": false,
                   "properties": {
+                    "cachedInputTokens": {
+                      "type": "number"
+                    },
                     "cost": {
                       "type": "number"
                     },
@@ -10031,6 +10040,9 @@
               "total": {
                 "additionalProperties": false,
                 "properties": {
+                  "cachedInputTokens": {
+                    "type": "number"
+                  },
                   "cost": {
                     "type": "number"
                   },

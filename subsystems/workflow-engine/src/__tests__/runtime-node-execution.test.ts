@@ -675,6 +675,106 @@ describe('executeStationNode', () => {
     }
   });
 
+  it.each([
+    { status: 'timeout' as const },
+    {
+      status: 'waiting_input' as const,
+      pendingRequest: { messageId: 'request-1', question: 'Continue?' },
+    },
+  ])('kills a role-backed child after non-terminal await status $status', async (awaitResponse) => {
+    const ctx = makeCtx({});
+    const killPayloads: unknown[] = [];
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'test-adapter' });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-abandoned', status: 'spawning' });
+    });
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => requestCtx.setResult(awaitResponse));
+    const cleanupKill = ctx.bus.on(SubagentSubjects.kill, (requestCtx) => {
+      killPayloads.push(requestCtx.payload);
+      requestCtx.setResult({ killed: true });
+    });
+
+    try {
+      const outcome = await executeRoleSubagentNode(
+        {
+          nodeId: 'abandoned-role-station',
+          nodeLabel: 'Station node',
+          roleId: 'reviewer',
+          prompt: 'Analyze',
+          unresolvedRoleError: 'role missing',
+          unavailableRuntimeError: 'runtime missing',
+          unavailableAwaitError: 'await missing',
+          cancellationLabel: 'station',
+        },
+        ctx,
+        emptyExpressionCtx,
+      );
+
+      expect(outcome).toMatchObject({ status: 'failed' });
+      expect(killPayloads).toEqual([
+        {
+          subagentId: 'subagent-abandoned',
+          reason: "Workflow execution 'exec-test' abandoned non-terminal station 'abandoned-role-station'",
+        },
+      ]);
+    } finally {
+      cleanupKill();
+      cleanupAwait();
+      cleanupSpawn();
+      cleanupRole();
+    }
+  });
+
+  it('kills a role-backed child when the await request rejects', async () => {
+    const ctx = makeCtx({});
+    const killPayloads: unknown[] = [];
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'test-adapter' });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-await-failed', status: 'spawning' });
+    });
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, () => {
+      throw new Error('await transport failed');
+    });
+    const cleanupKill = ctx.bus.on(SubagentSubjects.kill, (requestCtx) => {
+      killPayloads.push(requestCtx.payload);
+      requestCtx.setResult({ killed: true });
+    });
+
+    try {
+      await expect(
+        executeRoleSubagentNode(
+          {
+            nodeId: 'await-failed-role-station',
+            nodeLabel: 'Station node',
+            roleId: 'reviewer',
+            prompt: 'Analyze',
+            unresolvedRoleError: 'role missing',
+            unavailableRuntimeError: 'runtime missing',
+            unavailableAwaitError: 'await missing',
+            cancellationLabel: 'station',
+          },
+          ctx,
+          emptyExpressionCtx,
+        ),
+      ).rejects.toThrow('await transport failed');
+      expect(killPayloads).toEqual([
+        {
+          subagentId: 'subagent-await-failed',
+          reason: "Workflow execution 'exec-test' failed awaiting station 'await-failed-role-station'",
+        },
+      ]);
+    } finally {
+      cleanupKill();
+      cleanupAwait();
+      cleanupSpawn();
+      cleanupRole();
+    }
+  });
+
   it('emits frame.sessionLinked after a role-backed node obtains a child session', async () => {
     const links: Array<{ executionId: string; frameId: string; sessionId: string }> = [];
     const ctx = makeCtx({});
@@ -1183,10 +1283,7 @@ describe('executeDelegateNode', () => {
     }
   });
 
-  it.each([
-    { description: 'inherits the parent working directory', parentWorkingDirectory: '/workspace/parent' },
-    { description: 'omits a missing parent working directory', parentWorkingDirectory: undefined },
-  ])('runs delegate-role nodes through a session turn and $description', async ({ parentWorkingDirectory }) => {
+  it('runs turn-completed delegate roles through a fresh-context subagent', async () => {
     const node: WorkflowDelegateRoleNode = {
       id: 'review-delegate',
       type: 'delegate-role',
@@ -1204,6 +1301,7 @@ describe('executeDelegateNode', () => {
     const awaitedTurns: unknown[] = [];
     const closedSessions: unknown[] = [];
     const finalizedResults: unknown[] = [];
+    const spawned: unknown[] = [];
     let parentSessionReads = 0;
     const resultFinalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
     ctx.bus.registerNamespace(resultFinalizer.namespace);
@@ -1222,6 +1320,17 @@ describe('executeDelegateNode', () => {
         providerContext: REVIEW_PROVIDER_CONTEXT,
       });
     });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      spawned.push(requestCtx.payload);
+      requestCtx.setResult({ subagentId: 'subagent-review-delegate', status: 'spawning' });
+    });
+    const unsubscribeSubagentAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({
+        status: 'completed',
+        result: '{"approved":true}',
+        usage: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 30, toolCallCount: 2 },
+      });
+    });
     const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
       createdSessions.push(requestCtx.payload);
       requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'workflow-session-review-delegate' });
@@ -1236,7 +1345,6 @@ describe('executeDelegateNode', () => {
           lastActivityAt: 0,
           status: 'active',
           agents: [],
-          ...(parentWorkingDirectory !== undefined && { targetWorkingDirectory: parentWorkingDirectory }),
         },
       });
     });
@@ -1294,57 +1402,36 @@ describe('executeDelegateNode', () => {
       );
 
       expect(outcome).toEqual({ status: 'completed', output: '{"approved":true}' });
-      expect(createdSessions).toEqual([
+      expect(spawned).toEqual([
         expect.objectContaining({
           parentSessionId: 'exec-test',
-          branchKind: 'subagent',
-          title: "Workflow delegate-role 'review-delegate'",
-          ...(parentWorkingDirectory !== undefined && { targetWorkingDirectory: parentWorkingDirectory }),
-        }),
-      ]);
-      expect((createdSessions[0] as { targetWorkingDirectory?: string }).targetWorkingDirectory).toBe(
-        parentWorkingDirectory,
-      );
-      expect(attachedAgents).toEqual([
-        expect.objectContaining({
-          sessionId: expect.any(String),
-          role: 'lead',
-          agent: expect.objectContaining({
-            kind: 'adapter',
+          depth: 1,
+          config: expect.objectContaining({
+            task: 'Review workflow runtime',
             adapterName: 'claude-code',
             model: 'sonnet',
-            reasoningEffort: 'high',
-            providerConfigId: 'provider-config-review',
-            systemPrompt: 'Review carefully.',
-            providerContext: REVIEW_PROVIDER_CONTEXT,
+            completion: 'turn',
+            contextMode: 'fresh',
+            responseSchema: { schema: { type: 'object' } },
           }),
         }),
       ]);
-      expect(sentMessages).toEqual([
-        expect.objectContaining({
-          sessionId: expect.any(String),
-          message: 'Review workflow runtime',
-          responseSchema: { schema: { type: 'object' } },
-          source: 'system',
-        }),
-      ]);
-      expect(sentMessages[0]).not.toHaveProperty('agent');
-      expect((attachedAgents[0] as { agent: { cwd?: string } }).agent.cwd).toBe(parentWorkingDirectory);
-      expect(parentSessionReads).toBe(1);
-      expect(awaitedTurns).toEqual([
-        {
-          sessionId: expect.any(String),
-          turnId: 'turn-review-delegate',
-          timeoutMs: 1_000,
-        },
-      ]);
-      expect(closedSessions).toEqual([{ sessionId: expect.any(String) }]);
+      expect(createdSessions).toEqual([]);
+      expect(attachedAgents).toEqual([]);
+      expect(sentMessages).toEqual([]);
+      expect(awaitedTurns).toEqual([]);
+      expect(closedSessions).toEqual([]);
+      expect(parentSessionReads).toBe(0);
       expect(finalizedResults).toEqual([
         expect.objectContaining({
           frameId: 'frame-review-delegate',
           nodeId: 'review-delegate',
           economics: {
             durationMs: expect.any(Number),
+            inputTokens: 100,
+            cachedInputTokens: 20,
+            outputTokens: 30,
+            toolCallCount: 2,
             binding: {
               adapterName: 'claude-code',
               providerConfigId: 'provider-config-review',
@@ -1361,6 +1448,8 @@ describe('executeDelegateNode', () => {
       ]);
     } finally {
       unsubscribeRole();
+      unsubscribeSpawn();
+      unsubscribeSubagentAwait();
       unsubscribeCreate();
       unsubscribeParentSession();
       unsubscribeAttach();
@@ -1371,7 +1460,7 @@ describe('executeDelegateNode', () => {
     }
   });
 
-  it('closes delegate-role child sessions when attach is unavailable', async () => {
+  it('fails delegate-role execution when the unified subagent runtime is unavailable', async () => {
     const node: WorkflowDelegateRoleNode = {
       id: 'review-delegate-unavailable',
       type: 'delegate-role',
@@ -1409,13 +1498,9 @@ describe('executeDelegateNode', () => {
 
       expect(outcome).toEqual({
         status: 'failed',
-        error: "Session runtime cannot attach delegate-role node 'review-delegate-unavailable'",
+        error: "Subagent runtime is not available for delegate-role node 'review-delegate-unavailable'",
       });
-      expect(closedSessions).toEqual([
-        {
-          sessionId: expect.stringContaining('review-delegate-unavailable'),
-        },
-      ]);
+      expect(closedSessions).toEqual([]);
     } finally {
       unsubscribeRole();
       unsubscribeCreate();
@@ -1747,6 +1832,12 @@ describe('executeDelegateNode', () => {
     const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'claude-code' });
     });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-review', status: 'spawning' });
+    });
+    const unsubscribeSubagentAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'model summary' });
+    });
     const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
       requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'delegate-session' });
     });
@@ -1795,6 +1886,8 @@ describe('executeDelegateNode', () => {
       await expect(outcome).resolves.toEqual({ status: 'cancelled' });
     } finally {
       unsubscribeRole();
+      unsubscribeSpawn();
+      unsubscribeSubagentAwait();
       unsubscribeCreate();
       unsubscribeAttach();
       unsubscribeSend();

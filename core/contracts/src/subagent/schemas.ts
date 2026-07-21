@@ -20,6 +20,7 @@ export type ContextMode = z.infer<typeof ContextModeSchema>;
  * Subagent status enum.
  * - spawning: Session creation in progress (set by spawn tool)
  * - running: Session created, agent executing (set by SubagentService)
+ * - completing: Completion intent recorded; canonical turn completion pending
  * - waiting_input: Blocked on request_input
  * - hung: No activity within inactivity timeout (non-terminal; coordinator decides action)
  * - completed/failed/cancelled: Terminal states
@@ -27,6 +28,7 @@ export type ContextMode = z.infer<typeof ContextModeSchema>;
 export const SubagentStatusSchema = z.enum([
   'spawning',
   'running',
+  'completing',
   'waiting_input',
   'hung',
   'completed',
@@ -161,9 +163,10 @@ export const DEFAULT_CONSTRAINTS: SubagentConstraints = SubagentConstraintsSchem
 // ============================================================================
 
 export const UsageStatsSchema = z.object({
-  inputTokens: z.number(),
-  outputTokens: z.number(),
-  totalTokens: z.number(),
+  inputTokens: z.number().optional(),
+  cachedInputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  toolCallCount: z.number(),
 });
 export type UsageStats = z.infer<typeof UsageStatsSchema>;
 
@@ -258,6 +261,7 @@ export const AwaitSubagentResponseSchema = z.object({
    * - `'turn'` — first completed agent turn was treated as the result (`completion: 'turn'` mode).
    */
   completionSource: CompletionModeSchema.optional(),
+  usage: UsageStatsSchema.optional(),
   toolObservations: z
     .array(
       z
@@ -343,7 +347,9 @@ export type RequestInputRpcResponse = z.infer<typeof RequestInputRpcResponseSche
  * Complete Task RPC - child signals task completion.
  */
 export const CompleteTaskRequestSchema = z.object({
-  subagentId: z.string(),
+  sessionId: z.string(),
+  /** Optional caller hint; the managed child session's active turn is authoritative. */
+  turnId: z.string().optional(),
   result: z.string(),
   summary: z.string().optional(),
 });

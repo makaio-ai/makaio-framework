@@ -4,6 +4,8 @@ import type {
   SubagentConfig,
   SubagentStatus,
   AwaitSubagentResponse,
+  TurnUsage,
+  UsageStats,
 } from '@makaio/contracts';
 import type { RingBuffer } from '../utils/ring-buffer.js';
 
@@ -31,6 +33,8 @@ export interface TrackedSubagent {
   parentSessionId: string;
   /** Child session running this subagent. */
   childSessionId?: string;
+  /** Currently active live turn in the managed child session. */
+  activeTurnId?: string;
   /** Current status of the subagent. */
   status: SubagentStatus;
   /** Configuration used to spawn this subagent. */
@@ -54,6 +58,21 @@ export interface TrackedSubagent {
    * - `'turn'` — first completed agent turn was used as the result.
    */
   completionSource?: CompletionMode;
+  /** Completion request correlated to one child turn until its canonical completion arrives. */
+  completionCandidate?: {
+    readonly turnId: string;
+    readonly result: string;
+    readonly summary?: string;
+    readonly source: CompletionMode;
+  };
+  /** Canonical persisted usage snapshots keyed by exact child turn. */
+  completedTurnUsage: Map<string, TurnUsage | undefined>;
+  /** Canonical terminal success verdict by child turn. */
+  completedTurnSuccess: Map<string, { readonly success: boolean; readonly error?: string }>;
+  /** Deduplicated child tool calls observed during execution. */
+  toolCallIds: Set<string>;
+  /** Immutable economics snapshot frozen at terminal completion. */
+  usage?: UsageStats;
   /** Tool outcomes observed directly from the child session runtime. */
   toolObservations: NonNullable<AwaitSubagentResponse['toolObservations']>;
   /** Timestamp when the subagent was spawned. */
@@ -91,5 +110,7 @@ export interface AwaitResult {
    * - `'turn'` — first completed agent turn was used as the result.
    */
   completionSource?: CompletionMode;
+  /** Immutable economics snapshot frozen at terminal completion. */
+  usage?: UsageStats;
   toolObservations?: NonNullable<AwaitSubagentResponse['toolObservations']>;
 }

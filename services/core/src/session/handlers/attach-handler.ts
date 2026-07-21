@@ -9,54 +9,34 @@ import { AdapterSubjects, AgentResolutionSubjects, ProviderContextSchema, Sessio
 import type {
   AgentRole,
   AgentSelectionBase,
-  CompressionMode,
   IMakaioSession,
   MessageInput,
-  ProviderContext,
   ResolvedAgentConfig,
   SessionContext,
 } from '@makaio/contracts';
-import { extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
+import { buildTurnInitiator, extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
 import { normalizeSelectionString, resolveAdapterNameById } from '../selection-utils.js';
-import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { resolveAttachProviderSelection } from './attach-provider-selection.js';
-import { dispatchInitialAttachMessage, stopStartedAgentAfterFailure } from './attach-turn-tracking.js';
+import type { AttachAgentParams, ResolvedAttachExecution } from './attach-execution-types.js';
+import {
+  assertSessionActiveAfterStart,
+  dispatchInitialAttachMessage,
+  stopStartedAgentAfterFailure,
+} from './attach-turn-tracking.js';
+import { persistIdentityOrRollback, rollbackPersistedIdentity } from './attach-identity-persistence.js';
 import {
   extractRuntimeOptions,
   launchAttachAgent,
   mergeRuntimeOptions,
   resolveEffectiveAttachCwd,
-  type LaunchAttachAgentInput,
 } from './attach-runtime-options.js';
 import { evaluateNativeLocality } from '../native-locality.js';
 import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import type { SessionTurnManager } from '../session-turn-manager.js';
 import type { TurnReservation } from '../session-turn-manager.js';
-
-/** Identity metadata persisted after an attach agent starts. */
-interface AttachIdentity {
-  adapterName: string;
-  sessionId: string;
-  role: AgentRole;
-  timestamp: number;
-  personaId?: string;
-  profileId?: string;
-  harnessId?: string;
-  providerConfigId?: string;
-  compressionMode?: CompressionMode;
-  model?: string;
-  cwd?: string;
-}
-
-/** Fully resolved inputs for starting and optionally dispatching an attach turn. */
-interface ResolvedAttachExecution {
-  launch: LaunchAttachAgentInput;
-  identity: AttachIdentity;
-  session: IMakaioSession;
-  initialMessage: MessageInput | undefined;
-  sessionContext: SessionContext | undefined;
-}
+import { SessionAgentAttachError } from './attach-error.js';
+import { SessionAttachCloseGate } from './session-attach-close-gate.js';
 
 /**
  * Registers the session.agent.attach RPC handler.
@@ -77,16 +57,28 @@ export function registerAttachHandler(
   turnManager: SessionTurnManager,
   machineId?: string,
 ): () => void {
+  const closeGate = new SessionAttachCloseGate();
   const attachCleanup = bus.on(SessionSubjects.agent.attach, async (ctx) => {
-    ctx.setResult(await attachAgent(bus, turnManager, machineId, ctx.payload));
+    ctx.setResult(
+      await attachAgent(bus, turnManager, machineId, {
+        ...ctx.payload,
+        assertAttachCommitAllowed: () => closeGate.assertAttachCommitAllowed(ctx.payload.sessionId),
+      }),
+    );
   });
   const attachResolvedCleanup = bus.on(SessionSubjects.agent.attachResolved, async (ctx) => {
     if (!ctx.origin.local) {
       throw new Error('[attach-handler] session.agent.attachResolved requires a local-origin request');
     }
+    const admissionAssertion = ctx.payload.assertInitialMessageAdmission;
+    if (admissionAssertion !== undefined && typeof admissionAssertion !== 'function') {
+      throw new Error('[attach-handler] assertInitialMessageAdmission must be a function');
+    }
     ctx.setResult(
       await attachAgent(bus, turnManager, machineId, {
         ...ctx.payload,
+        assertAttachCommitAllowed: () => closeGate.assertAttachCommitAllowed(ctx.payload.sessionId),
+        assertInitialMessageAdmission: admissionAssertion as (() => void) | undefined,
         resolvedProviderContext:
           ctx.payload.agent.providerContext === undefined
             ? undefined
@@ -94,19 +86,13 @@ export function registerAttachHandler(
       }),
     );
   });
+  const closeMiddlewareCleanup = closeGate.registerCloseMiddleware(bus);
 
   return () => {
     attachCleanup();
     attachResolvedCleanup();
+    closeMiddlewareCleanup();
   };
-}
-
-interface AttachAgentParams {
-  readonly sessionId: string;
-  readonly agent: AgentSelectionBase;
-  readonly initialMessage?: MessageInput;
-  readonly role?: AgentRole;
-  readonly resolvedProviderContext?: ProviderContext;
 }
 
 interface AdapterCandidate {
@@ -285,7 +271,18 @@ async function attachAgent(
   machineId: string | undefined,
   params: AttachAgentParams,
 ) {
-  const { sessionId, agent: agentSelection, initialMessage, role: requestedRole, resolvedProviderContext } = params;
+  const {
+    sessionId,
+    agent: agentSelection,
+    initialMessage,
+    responseSchema,
+    source,
+    extensionId,
+    assertAttachCommitAllowed,
+    assertInitialMessageAdmission,
+    role: requestedRole,
+    resolvedProviderContext,
+  } = params;
   const explicitRuntime = extractRuntimeOptions(agentSelection);
   const session = await validateSession(bus, sessionId);
   const resolved = await resolveAttachSelection(bus, sessionId, initialMessage, agentSelection);
@@ -324,7 +321,7 @@ async function attachAgent(
       role,
       effectiveRuntimeOptions,
       resumeAdapterSessionId,
-      harnessId: resolved?.harnessId,
+      harnessId: params.harnessId ?? resolved?.harnessId,
       attachSessionContext,
     },
     identity: {
@@ -334,7 +331,7 @@ async function attachAgent(
       timestamp: Date.now(),
       personaId: getPersonaId(agentSelection),
       profileId: resolved?.profileId,
-      harnessId: resolved?.harnessId,
+      harnessId: params.harnessId ?? resolved?.harnessId,
       providerConfigId: mergedProviderConfigId,
       compressionMode: resolved?.compressionMode,
       model: mergedModel,
@@ -342,7 +339,11 @@ async function attachAgent(
     },
     session,
     initialMessage,
+    responseSchema,
+    initiator: buildTurnInitiator(source, extensionId),
     sessionContext: attachSessionContext,
+    assertAttachCommitAllowed: () => assertAttachCommitAllowed?.(),
+    assertInitialMessageAdmission,
   });
 }
 
@@ -356,23 +357,62 @@ async function attachAgent(
 async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnManager, input: ResolvedAttachExecution) {
   // Idle-only attach does not consume a turn slot. Initial-message attach must
   // reserve before provider startup so it cannot race an active or pending turn.
-  const reservation: TurnReservation | undefined =
-    input.initialMessage === undefined ? undefined : await turnManager.reserveTurn(input.session.sessionId);
+  let reservation: TurnReservation | undefined;
   try {
-    const startResult = await launchAttachAgent(bus, input.launch);
-    await persistIdentityOrRollback(bus, startResult, input.identity);
-    const turnInfo =
-      reservation === undefined || input.initialMessage === undefined
-        ? undefined
-        : await dispatchInitialAttachMessage(
-            bus,
-            turnManager,
-            reservation,
-            startResult,
-            input.session,
-            input.initialMessage,
-            input.sessionContext,
-          );
+    reservation =
+      input.initialMessage === undefined ? undefined : await turnManager.reserveTurn(input.session.sessionId);
+  } catch (error) {
+    throw new SessionAgentAttachError('initial_message', error);
+  }
+  try {
+    let identityPersisted = false;
+    let startResult;
+    try {
+      startResult = await launchAttachAgent(bus, input.launch);
+      await assertSessionActiveAfterStart(bus, startResult, input.session.sessionId);
+      identityPersisted = await persistIdentityOrRollback(bus, startResult, input.identity);
+    } catch (error) {
+      throw new SessionAgentAttachError('agent_attach', error);
+    }
+    let turnInfo;
+    if (reservation === undefined || input.initialMessage === undefined) {
+      try {
+        input.assertAttachCommitAllowed();
+      } catch (error) {
+        const attachError = identityPersisted
+          ? await rollbackPersistedIdentity(bus, startResult.agentId, error)
+          : error;
+        await stopStartedAgentAfterFailure(
+          bus,
+          startResult,
+          input.session.sessionId,
+          'session close won attach commit',
+        );
+        throw new SessionAgentAttachError('agent_attach', attachError);
+      }
+    } else {
+      const assertAdmission = () => {
+        input.assertAttachCommitAllowed();
+        input.assertInitialMessageAdmission?.();
+      };
+      turnInfo = await dispatchInitialAttachMessage(
+        bus,
+        turnManager,
+        reservation,
+        startResult,
+        input.session,
+        input.initialMessage,
+        input.responseSchema,
+        input.initiator,
+        input.sessionContext,
+        assertAdmission,
+      ).catch(async (error: unknown) => {
+        const attachError = identityPersisted
+          ? await rollbackPersistedIdentity(bus, startResult.agentId, error)
+          : error;
+        throw new SessionAgentAttachError('initial_message', attachError);
+      });
+    }
     return {
       agentId: startResult.agentId,
       adapterSessionId: startResult.adapterSessionId,
@@ -517,90 +557,4 @@ async function validateSession(bus: IMakaioBus, sessionId: string): Promise<IMak
 function determineRole(session: { agents: unknown[] }, requestedRole?: AgentRole): AgentRole {
   const isFirstAgent = session.agents.length === 0;
   return requestedRole ?? (isFirstAgent ? 'lead' : 'member');
-}
-
-/**
- * Persists agent identity fields (personaId, profileId, harnessId, providerConfigId) to agent storage.
- *
- * No-ops when none of the identity fields are set, matching the invariant
- * that only agents with resolved persona/profile/harness/provider configuration need
- * an identity record for downstream services and recovery.
- *
- * Persisted fields in this function are:
- * `agentId`, `adapterId`, `adapterName`, `sessionId`, `role`, `status`,
- * `personaId`, `profileId`, `harnessId`, `providerConfigId`, `createdAt`, `lastActivityAt`, and
- * optional `model`, `cwd`, `compressionMode`.
- *
- * Tool/approval configuration (for example `allowedTools` / `disallowedTools`)
- * stays in runtime adapter options and is intentionally not persisted by this
- * function. Bare-attach agents (no personaId, profileId, harnessId, or providerConfigId) skip
- * this function entirely, so identity fields remain absent on their
- * `MakaioSessionAgent` record.
- * @param bus - Bus instance for storage RPC
- * @param params - Agent identity parameters including resolved persona/profile/harness IDs
- */
-async function persistAgentIdentity(
-  bus: IMakaioBus,
-  params: AttachIdentity & { agentId: string; adapterId: string },
-): Promise<void> {
-  if (!params.personaId && !params.profileId && !params.harnessId && !params.providerConfigId) return;
-  await bus.request(AgentStorageSubjects.set, {
-    agentId: params.agentId,
-    agent: {
-      agentId: params.agentId,
-      adapterId: params.adapterId,
-      adapterName: params.adapterName,
-      sessionId: params.sessionId,
-      role: params.role,
-      status: 'idle',
-      personaId: params.personaId,
-      profileId: params.profileId,
-      harnessId: params.harnessId,
-      providerConfigId: params.providerConfigId,
-      createdAt: params.timestamp,
-      lastActivityAt: params.timestamp,
-      ...(params.model !== undefined && { model: params.model }),
-      ...(params.cwd !== undefined && { cwd: params.cwd }),
-      ...(params.compressionMode !== undefined && { compressionMode: params.compressionMode }),
-    },
-  });
-}
-
-/**
- * Persist identity metadata and rollback the started adapter agent on failure.
- * @param bus - Bus instance for persistence and rollback calls
- * @param startResult - startAgent response with adapter/agent IDs
- * @param identity - Identity payload to persist
- */
-async function persistIdentityOrRollback(
-  bus: IMakaioBus,
-  startResult: { agentId: string; adapterId: string },
-  identity: AttachIdentity,
-): Promise<void> {
-  try {
-    await persistAgentIdentity(bus, {
-      agentId: startResult.agentId,
-      adapterId: startResult.adapterId,
-      adapterName: identity.adapterName,
-      sessionId: identity.sessionId,
-      role: identity.role,
-      timestamp: identity.timestamp,
-      personaId: identity.personaId,
-      profileId: identity.profileId,
-      harnessId: identity.harnessId,
-      providerConfigId: identity.providerConfigId,
-      compressionMode: identity.compressionMode,
-      model: identity.model,
-      cwd: identity.cwd,
-    });
-  } catch (error) {
-    console.error('[attach-handler] Failed to persist agent identity, rolling back started agent', {
-      sessionId: identity.sessionId,
-      agentId: startResult.agentId,
-      adapterId: startResult.adapterId,
-      error,
-    });
-    await stopStartedAgentAfterFailure(bus, startResult, identity.sessionId, 'identity persistence failure');
-    throw error;
-  }
 }
