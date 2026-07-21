@@ -43,7 +43,7 @@
   },
   "peerDependencies": {
     "@cursor/sdk": "^1.0.0",
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "devDependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
@@ -51,6 +51,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
     "vitest": "4.1.10"

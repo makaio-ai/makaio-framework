@@ -124,6 +124,7 @@
     "@makaio/subsystem-git": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
+    "drizzle-orm": "0.45.2",
     "zod": "4.4.3"
   },
   "inlinedDependencies": {

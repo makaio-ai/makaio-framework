@@ -45,7 +45,7 @@
     "@makaio/client-claude-code"
   ],
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "devDependencies": {
     "@makaio/ai-adapters-claude-process-shared": "workspace:*",
@@ -54,6 +54,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0"

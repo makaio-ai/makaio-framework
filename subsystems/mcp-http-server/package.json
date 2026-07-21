@@ -24,7 +24,8 @@
     "@makaio/service-base": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "quick-lru": "^7.3.0"
+    "quick-lru": "^7.3.0",
+    "zod": "4.4.3"
   },
   "publishConfig": {
     "exports": {

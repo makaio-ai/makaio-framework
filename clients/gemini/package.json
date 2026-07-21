@@ -11,11 +11,12 @@
     "build": "bun build.ts"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3"
   },

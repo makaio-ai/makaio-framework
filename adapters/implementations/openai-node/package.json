@@ -41,7 +41,7 @@
     "zod": "4.4.3"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0",
+    "@makaio/framework": "workspace:*",
     "openai": ">=6.22.0 <7.0.0"
   },
   "devDependencies": {
@@ -51,6 +51,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/provider-alibaba": "workspace:*",
     "@makaio/provider-nanogpt": "workspace:*",
     "@makaio/provider-openai": "workspace:*",

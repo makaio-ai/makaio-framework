@@ -1,3 +1,7 @@
+---
+title: Architectural Seams
+---
+
 # Architectural Seams
 
 Extension points and future enhancement opportunities across the codebase.

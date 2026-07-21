@@ -17,7 +17,7 @@
   },
   "peerDependencies": {
     "@makaio/bus-core": "*",
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "dependencies": {
     "@makaio/utils": "workspace:*",
@@ -28,6 +28,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "tsdown": "0.22.0",

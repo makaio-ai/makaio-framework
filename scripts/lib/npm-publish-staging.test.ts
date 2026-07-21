@@ -91,14 +91,25 @@ describe('createStagedPackageJson', () => {
     expect(staged.peerDependencies?.['@makaio/ordinary-peer']).toBe('^1.0.0');
   });
 
-  it('stamps a caret peer range for stable framework versions', () => {
-    const staged = createStagedPackageJson({ name: '@makaio/storage-pg', version: '1.0.0' }, '1.0.0');
+  it('stamps a caret peer range for declared stable framework peers', () => {
+    const staged = createStagedPackageJson(
+      {
+        name: '@makaio/storage-pg',
+        version: '1.0.0',
+        peerDependencies: { '@makaio/framework': 'workspace:*' },
+      },
+      '1.0.0',
+    );
     expect(staged.peerDependencies?.['@makaio/framework']).toBe('^1.0.0');
   });
 
-  it('stamps a prerelease-inclusive peer range for prerelease framework versions', () => {
+  it('stamps a prerelease-inclusive range for declared framework peers', () => {
     const staged = createStagedPackageJson(
-      { name: '@makaio/storage-pg', version: '1.0.0-dev-1781260968078' },
+      {
+        name: '@makaio/storage-pg',
+        version: '1.0.0-dev-1781260968078',
+        peerDependencies: { '@makaio/framework': 'workspace:*' },
+      },
       '1.0.0-dev-1781260968078',
     );
     expect(staged.peerDependencies?.['@makaio/framework']).toBe('>=1.0.0-0 <2.0.0');

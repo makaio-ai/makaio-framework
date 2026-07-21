@@ -1,0 +1,53 @@
+---
+'@makaio/adapter-anthropic-sdk': patch
+'@makaio/adapter-claude-agent-sdk': patch
+'@makaio/adapter-claude-code-cli': patch
+'@makaio/adapter-claude-code-tmux': patch
+'@makaio/adapter-codex-app-server': patch
+'@makaio/adapter-cursor-sdk': patch
+'@makaio/adapter-gemini-sdk': patch
+'@makaio/adapter-github-copilot-sdk': patch
+'@makaio/adapter-openai-node': patch
+'@makaio/adapter-pi-sdk': patch
+'@makaio/adapter-qwen-acp': patch
+'@makaio/client-claude-code': patch
+'@makaio/client-codex': patch
+'@makaio/client-cursor': patch
+'@makaio/client-gemini': patch
+'@makaio/client-github-copilot': patch
+'@makaio/client-qwen': patch
+'@makaio/contracts': patch
+'@makaio/extension-account-manager': patch
+'@makaio/extension-claude-code-statusline': patch
+'@makaio/extension-client-commands': patch
+'@makaio/extension-client-hooks': patch
+'@makaio/extension-coderabbit': patch
+'@makaio/extension-filesystem': patch
+'@makaio/extension-git-hooks': patch
+'@makaio/extension-opencode': patch
+'@makaio/extension-pin-message': patch
+'@makaio/extension-prompt': patch
+'@makaio/extension-review': patch
+'@makaio/extension-shell': patch
+'@makaio/extension-subagent': patch
+'@makaio/extension-telemetry-langfuse': patch
+'@makaio/extension-telemetry-otel': patch
+'@makaio/extension-workflow': patch
+'@makaio/framework': patch
+'@makaio/provider-alibaba': patch
+'@makaio/provider-anthropic': patch
+'@makaio/provider-cursor': patch
+'@makaio/provider-github-copilot': patch
+'@makaio/provider-google': patch
+'@makaio/provider-kimi': patch
+'@makaio/provider-nanogpt': patch
+'@makaio/provider-openai': patch
+'@makaio/provider-openai-codex': patch
+'@makaio/provider-opencode-go': patch
+'@makaio/provider-openrouter': patch
+'@makaio/provider-qwen-acp': patch
+'@makaio/provider-z-ai': patch
+'@makaio/sdk': patch
+---
+
+Align published dependency declarations after the workspace dependency refresh.

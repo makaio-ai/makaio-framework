@@ -29,10 +29,11 @@
     "pg": "^8.22.0"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",

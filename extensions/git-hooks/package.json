@@ -22,7 +22,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
@@ -36,6 +36,7 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@types/node": "^24.3.0",
     "execa": "^9.5.2",
     "tsdown": "0.22.0",

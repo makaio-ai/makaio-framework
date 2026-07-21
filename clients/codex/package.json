@@ -13,7 +13,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "dependencies": {
     "@napi-rs/keyring": "^1.2.0",
@@ -26,6 +26,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",
     "@types/proper-lockfile": "^4.1.4",

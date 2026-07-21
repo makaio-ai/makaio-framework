@@ -41,7 +41,7 @@
     "zod": "4.4.3"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0",
+    "@makaio/framework": "workspace:*",
     "@mariozechner/pi-agent-core": ">=0.72.0 <0.74.0",
     "@mariozechner/pi-ai": ">=0.72.0 <0.74.0",
     "@mariozechner/pi-coding-agent": ">=0.72.0 <0.74.0"
@@ -52,6 +52,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/provider-opencode-go": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@mariozechner/pi-agent-core": "0.73.1",

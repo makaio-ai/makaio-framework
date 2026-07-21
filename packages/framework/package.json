@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
-    "@libsql/client": "^0.17.3",
+    "@libsql/client": "^0.17.4",
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
     "drizzle-orm": "^0.45.2",
