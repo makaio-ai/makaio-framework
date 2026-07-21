@@ -3673,12 +3673,21 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hono/node-server@npm:^1.14.1, @hono/node-server@npm:^1.19.9":
+"@hono/node-server@npm:^1.19.9":
   version: 1.19.14
   resolution: "@hono/node-server@npm:1.19.14"
   peerDependencies:
     hono: ^4
   checksum: 10c0/41a099bb3705d96aac44b7a8db8805f2a22ce8a0f767a27b6d10b74a9964925df01c5f35d3631e882f8bcdeee3518884c30f40588ac8c960d88bf71048ba0df3
+  languageName: node
+  linkType: hard
+
+"@hono/node-server@npm:^2.0.5":
+  version: 2.0.5
+  resolution: "@hono/node-server@npm:2.0.5"
+  peerDependencies:
+    hono: ^4
+  checksum: 10c0/b091faad4a6033b5690f134a3defa2b4b0efbf839152bf0246226b2e9403547555a0f96ba2d16645225fc090e3e8dde0907110dd114473583ba75d16e98df561
   languageName: node
   linkType: hard
 
@@ -4820,7 +4829,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/cli@workspace:apps/cli"
   dependencies:
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.5"
     "@makaio/app-mcp-server": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
@@ -5032,7 +5041,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/electron@workspace:apps/electron"
   dependencies:
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.5"
     "@makaio/bus-core": "workspace:*"
     "@makaio/bus-server-vite": "workspace:*"
     "@makaio/bus-transport-websocket": "workspace:*"
@@ -5482,7 +5491,7 @@ __metadata:
     "@biomejs/biome": "npm:2.4.15"
     "@changesets/cli": "npm:^2.31.1"
     "@eslint/js": "npm:^9.36.0"
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.5"
     "@libsql/client": "npm:^0.17.4"
     "@makaio/build-tooling": "workspace:*"
     "@octokit/rest": "npm:^22.0.1"
@@ -5550,7 +5559,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/framework@workspace:packages/framework"
   dependencies:
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.5"
     "@libsql/client": "npm:^0.17.4"
     ajv: "npm:^8.18.0"
     ajv-formats: "npm:^3.0.1"
@@ -5941,7 +5950,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/runtime-node@workspace:runtimes/node"
   dependencies:
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.5"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
