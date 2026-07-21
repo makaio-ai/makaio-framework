@@ -44,7 +44,7 @@
     "zod": "4.4.3"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "devDependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
@@ -53,6 +53,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/client-codex": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/subprocess": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",

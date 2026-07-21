@@ -267,10 +267,10 @@ function createPortableExports(packageJson: PackageJsonLike, rootEntrypoints: Pu
  * Transform a workspace `package.json` into a publishable portable manifest.
  *
  * Moves internal `@makaio/*` workspace dependencies from `dependencies` to
- * `devDependencies`, adds the `@makaio/framework` peer dependency, and marks
- * the package as non-private for publishing. Internal workspace packages are
- * bundled into adapter output at build time, so they must not remain runtime
- * dependencies in the published manifest.
+ * `devDependencies`, rewrites an explicitly declared `@makaio/framework` peer
+ * dependency, and marks the package as non-private for publishing. Internal
+ * workspace packages are bundled into adapter output at build time, so they
+ * must not remain runtime dependencies in the published manifest.
  * @param packageJson - Source workspace `package.json`.
  * @param options - Portable package options.
  * @returns Transformed manifest suitable for npm publishing.
@@ -303,7 +303,9 @@ export function createPortablePackageJson(
     publishedWorkspaceDependencies,
     options.publishVersions ?? {},
   );
-  peerDependencies['@makaio/framework'] = options.frameworkPeerRange ?? `^${options.frameworkVersion}`;
+  if (peerDependencies['@makaio/framework'] !== undefined) {
+    peerDependencies['@makaio/framework'] = options.frameworkPeerRange ?? `^${options.frameworkVersion}`;
+  }
 
   const { publishWorkspaceDependencies: _publishWorkspaceDependencies, ...sourceManifest } = packageJson;
   return {

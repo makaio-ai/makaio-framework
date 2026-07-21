@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createPortablePackageJson } from '../portable-package.js';
 
 describe('portable package helper', () => {
-  it('moves framework workspace dependencies to dev and adds @makaio/framework peer', () => {
+  it('moves framework workspace dependencies to dev and rewrites the framework peer', () => {
     const result = createPortablePackageJson(
       {
         name: '@makaio/adapter-openai-node',
@@ -13,6 +13,7 @@ describe('portable package helper', () => {
           '@makaio/contracts': 'workspace:*',
           openai: '^4.0.0',
         },
+        peerDependencies: { '@makaio/framework': 'workspace:*' },
       },
       { frameworkVersion: '0.1.0' },
     );
@@ -31,7 +32,7 @@ describe('portable package helper', () => {
       {
         name: '@makaio/adapter-openai-node',
         version: '0.1.0',
-        peerDependencies: { openai: '^4.0.0' },
+        peerDependencies: { '@makaio/framework': 'workspace:*', openai: '^4.0.0' },
       },
       { frameworkVersion: '0.1.0' },
     );
@@ -146,12 +147,29 @@ describe('portable package helper', () => {
     expect(result.private).toBe(false);
   });
 
-  it('supports custom framework peer range', () => {
+  it('rewrites an explicitly declared framework peer to a custom range', () => {
     const result = createPortablePackageJson(
-      { name: '@makaio/adapter-test', version: '0.1.0' },
+      {
+        name: '@makaio/adapter-test',
+        version: '0.1.0',
+        peerDependencies: { '@makaio/framework': 'workspace:*' },
+      },
       { frameworkVersion: '0.1.0', frameworkPeerRange: '>=0.1.0' },
     );
     expect(result.peerDependencies?.['@makaio/framework']).toBe('>=0.1.0');
+  });
+
+  it('does not synthesize a framework peer for standalone contracts', () => {
+    const result = createPortablePackageJson(
+      {
+        name: '@makaio/contracts',
+        version: '1.0.0',
+        peerDependencies: { react: '^18.0.0 || ^19.0.0' },
+      },
+      { frameworkVersion: '1.0.0' },
+    );
+
+    expect(result.peerDependencies).toEqual({ react: '^18.0.0 || ^19.0.0' });
   });
 
   it('points published entrypoints only at dist output', () => {

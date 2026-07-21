@@ -26,6 +26,7 @@ export interface PackedPackageManifest {
   readonly devDependencies?: Readonly<Record<string, string>>;
   readonly optionalDependencies?: Readonly<Record<string, string>>;
   readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>;
   readonly publishConfig?: {
     readonly exports?: unknown;
   };

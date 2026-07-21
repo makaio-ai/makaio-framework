@@ -24,7 +24,7 @@
     "directory": "extensions/opencode"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "dependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",

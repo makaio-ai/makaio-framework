@@ -321,7 +321,8 @@ describe('npm packlist policy', () => {
     const issues = checkSourceManifestMakaioReferences(manifest).map((issue) => `${path}: ${issue}`);
 
     expect(issues).toEqual([]);
-    expect(manifest.peerDependencies?.['@makaio/framework']).toBe('^1.0.0');
+    expect(manifest.peerDependencies?.react).toBe('^18.0.0 || ^19.0.0');
+    expect(manifest.peerDependenciesMeta?.react).toEqual({ optional: true });
   });
 
   it('keeps every public adapter package loadable through the convention server entry', () => {
@@ -345,15 +346,20 @@ describe('npm packlist policy', () => {
     expect(issues).toEqual([]);
   });
 
-  it('stages public client packages before npm packlist validation', () => {
-    const clientManifests = discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'clients'));
+  it('stages public client and provider packages before npm packlist validation', () => {
+    const packageGroups = [
+      { kind: 'clients', manifests: discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'clients')) },
+      { kind: 'providers', manifests: discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'providers')) },
+    ];
 
-    const issues = clientManifests.flatMap(({ path, manifest }) => {
-      const directory = (manifest.publishConfig as { directory?: unknown } | undefined)?.directory;
-      return directory === NPM_PUBLISH_DIRECTORY
-        ? []
-        : [`${path}: public clients must publish from ${NPM_PUBLISH_DIRECTORY}`];
-    });
+    const issues = packageGroups.flatMap(({ kind, manifests }) =>
+      manifests.flatMap(({ path, manifest }) => {
+        const directory = (manifest.publishConfig as { directory?: unknown } | undefined)?.directory;
+        return directory === NPM_PUBLISH_DIRECTORY
+          ? []
+          : [`${path}: public ${kind} must publish from ${NPM_PUBLISH_DIRECTORY}`];
+      }),
+    );
 
     expect(issues).toEqual([]);
   });

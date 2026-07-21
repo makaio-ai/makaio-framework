@@ -1,3 +1,7 @@
+---
+title: Package Overview
+---
+
 # Package Overview
 
 This file is the repository map for AI agents and maintainers. Read it together with:

@@ -66,8 +66,12 @@
     "yaml": "^2.9.0",
     "zod": "4.4.3"
   },
+  "peerDependencies": {
+    "@makaio/framework": "workspace:*"
+  },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",

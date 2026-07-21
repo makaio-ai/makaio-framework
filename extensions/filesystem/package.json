@@ -15,7 +15,7 @@
     "./package.json": "./package.json"
   },
   "peerDependencies": {
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "dependencies": {
     "@makaio/contracts": "workspace:*",
@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",

@@ -42,7 +42,7 @@
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": ">=0.91.1 <1.0.0",
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "workspace:*"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.98.0",
@@ -52,6 +52,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0"
   },
