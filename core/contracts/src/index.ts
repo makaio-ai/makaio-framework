@@ -282,6 +282,7 @@ export type {
   StepType,
   ToolCompleted,
   ToolStarted,
+  UsageGranularity,
 } from './agent/index.js';
 export { AgentResolutionSubjects, ResolvedAgentConfigSchema } from './agent-resolution/index.js';
 export type { AgentResolutionContext, ResolvedAgentConfig } from './agent-resolution/index.js';
@@ -732,6 +733,7 @@ export type {
   SubagentConstraints,
   SubagentExecutionFailed,
   SubagentStatus,
+  UsageStats,
 } from './subagent/index.js';
 export { ToolNamespace, ToolSubjects, validateToolAdapterIdentity } from './tool/index.js';
 export type {

@@ -44,10 +44,26 @@ describe('complete_task tool', () => {
     );
 
     expect(capturedPayload).toEqual({
-      subagentId: 'sub-1',
+      sessionId: 'child-session-1',
+      turnId: 'child-turn-1',
       result: 'Created 3 new files',
       summary: 'Implemented the feature as requested',
     });
+  });
+
+  it('completes with session identity only when no turn hint is available', async () => {
+    let capturedPayload: unknown;
+    mockBus.onRequest(SubagentSubjects.completeTask.subject, (payload) => {
+      capturedPayload = payload;
+      return { completed: true };
+    });
+
+    const tool = completeTaskTool();
+    const context = createChildContext({ bus: mockBus.bus, subagentId: 'sub-1' });
+    delete (context as { turnId?: unknown }).turnId;
+    await tool.execute({ result: 'Done' }, context);
+
+    expect(capturedPayload).toEqual({ sessionId: 'child-session-1', result: 'Done', summary: undefined });
   });
 
   it('returns error when already completed', async () => {
@@ -66,11 +82,10 @@ describe('complete_task tool', () => {
     }
   });
 
-  it('returns error when not running as subagent', async () => {
+  it('requires managed session identity', async () => {
     const tool = completeTaskTool();
     const nonSubagentContext = {
       ...createMakaioContext({ cwd: '/test' }),
-      sessionId: 'parent-1',
       subagentDepth: 0,
       bus: mockBus.bus,
     };
@@ -80,7 +95,7 @@ describe('complete_task tool', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.code).toBe(SubagentErrorCode.INVALID_STATE);
-      expect(result.error.message).toBe('Not running as a subagent');
+      expect(result.error.message).toBe('Completion must run inside a managed session');
     }
   });
 

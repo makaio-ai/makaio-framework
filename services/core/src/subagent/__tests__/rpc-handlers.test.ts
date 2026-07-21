@@ -312,6 +312,7 @@ describe('rpc-handlers spawn/await', () => {
     it('maps subagent summary fields correctly', () => {
       manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('My Task'), depth: 1 });
       manager.setChildSessionId('sub-1', 'child-session');
+      manager.markStarted('sub-1');
 
       const result = handleListBySessionRpc(ctx, { parentSessionId: 'parent-1' });
 

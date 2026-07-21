@@ -1,13 +1,20 @@
 /**
- * Initial-message turn tracking for session.agent.attach.
+ * Startup validation and initial-message turn tracking for session.agent.attach.
  *
  * The attach flow starts an adapter agent before it can persist the initial
  * user message. These helpers keep the rollback contract local to that seam.
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects } from '@makaio/contracts';
-import type { IMakaioSession, MessageInput, SessionContext, StartAgentResponse } from '@makaio/contracts';
+import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
+import type {
+  IMakaioSession,
+  MessageInput,
+  ResponseSchemaDescriptor,
+  SessionContext,
+  StartAgentResponse,
+  TurnInitiator,
+} from '@makaio/contracts';
 import { Turn } from '../entities/turn.js';
 import { MessageStorageSubjects } from '../messages/namespace.js';
 import { emitSessionTurnStarted, emitSessionUserMessageSent } from '../session-lifecycle-events.js';
@@ -23,6 +30,33 @@ interface PreparedInitialAttachTurn {
 }
 
 /**
+ * Revalidate the session after asynchronous provider startup.
+ *
+ * A concurrent close can occur after the initial attach validation while the
+ * adapter is still starting. In that case the close event cannot evict an
+ * agent that has not entered the adapter registry yet, so the completed start
+ * must be rolled back here.
+ * @param bus - Bus used for session lookup and adapter rollback.
+ * @param startResult - Successfully started adapter agent.
+ * @param sessionId - Session that must still accept the attachment.
+ */
+export async function assertSessionActiveAfterStart(
+  bus: IMakaioBus,
+  startResult: Pick<Extract<StartAgentResponse, { success: true }>, 'adapterId' | 'agentId'>,
+  sessionId: string,
+): Promise<void> {
+  try {
+    const { session } = await bus.request(SessionSubjects.get, { sessionId });
+    if (!session || session.status !== 'active') {
+      throw new Error(`[attach-handler] Session is no longer active after agent startup: ${sessionId}`);
+    }
+  } catch (error) {
+    await stopStartedAgentAfterFailure(bus, startResult, sessionId, 'session closed during agent startup');
+    throw error;
+  }
+}
+
+/**
  * Set up initial-message turn tracking and stop the started agent if setup fails.
  * @param bus - Bus instance for storage and adapter rollback
  * @param turnManager - Shared owner of attach turn lifecycle state
@@ -32,6 +66,7 @@ interface PreparedInitialAttachTurn {
  * @param agentId - Agent processing the message
  * @param messageId - User message ID
  * @param content - Message content
+ * @param initiator - Provenance for the reserved initial turn
  * @returns Turn tracking info
  */
 async function setupInitialAttachTurnOrRollbackAgent(
@@ -43,9 +78,19 @@ async function setupInitialAttachTurnOrRollbackAgent(
   agentId: string,
   messageId: string,
   content: MessageInput,
+  initiator: TurnInitiator,
 ): Promise<PreparedInitialAttachTurn> {
   try {
-    return await setupInitialAttachTurn(bus, turnManager, reservation, sessionId, agentId, messageId, content);
+    return await setupInitialAttachTurn(
+      bus,
+      turnManager,
+      reservation,
+      sessionId,
+      agentId,
+      messageId,
+      content,
+      initiator,
+    );
   } catch (error) {
     console.error('[attach-handler] Failed to set up initial-message turn, rolling back started agent', {
       sessionId,
@@ -69,7 +114,10 @@ async function setupInitialAttachTurnOrRollbackAgent(
  * @param startResult - Registered idle agent identity
  * @param session - Session receiving the initial turn
  * @param initialMessage - User message to deliver after persistence
+ * @param responseSchema - Optional structured output descriptor for the turn
+ * @param initiator - Provenance for the reserved initial turn
  * @param sessionContext - Attach locality and history context for delivery
+ * @param assertAdmission - Optional local assertion that the initial message may still dispatch
  * @returns Canonical identifiers for the newly created turn and message
  */
 export async function dispatchInitialAttachMessage(
@@ -79,8 +127,17 @@ export async function dispatchInitialAttachMessage(
   startResult: Extract<StartAgentResponse, { success: true }>,
   session: IMakaioSession,
   initialMessage: MessageInput,
+  responseSchema: ResponseSchemaDescriptor | undefined,
+  initiator: TurnInitiator,
   sessionContext: SessionContext | undefined,
+  assertAdmission: (() => void) | undefined,
 ): Promise<{ messageId: string; turnId: string }> {
+  try {
+    assertAdmission?.();
+  } catch (error) {
+    await stopStartedAgentAfterFailure(bus, startResult, session.sessionId, 'initial-message admission rejection');
+    throw error;
+  }
   const prepared = await setupInitialAttachTurnOrRollbackAgent(
     bus,
     turnManager,
@@ -90,6 +147,7 @@ export async function dispatchInitialAttachMessage(
     startResult.agentId,
     crypto.randomUUID(),
     initialMessage,
+    initiator,
   );
   let outcomes;
   try {
@@ -104,7 +162,8 @@ export async function dispatchInitialAttachMessage(
       turnManager.completeTurn.bind(turnManager),
       turnManager,
       sessionContext,
-      undefined,
+      responseSchema,
+      assertAdmission,
     );
   } catch (error) {
     try {
@@ -168,6 +227,7 @@ export async function stopStartedAgentAfterFailure(
  * @param agentId - Agent processing the message
  * @param messageId - User message ID
  * @param content - Message content
+ * @param initiator - Provenance for the reserved initial turn
  * @returns Turn tracking info
  */
 async function setupInitialAttachTurn(
@@ -178,8 +238,9 @@ async function setupInitialAttachTurn(
   agentId: string,
   messageId: string,
   content: MessageInput,
+  initiator: TurnInitiator,
 ): Promise<PreparedInitialAttachTurn> {
-  const turn = await turnManager.createReservedTurn(reservation, [agentId]);
+  const turn = await turnManager.createReservedTurn(reservation, [agentId], initiator);
   const admission = turnManager.admitReservedMessage(turn, messageId, [agentId]);
 
   try {
@@ -210,7 +271,7 @@ async function setupInitialAttachTurn(
   }
 
   try {
-    await emitInitialMessageEvents(bus, sessionId, turn, messageId, content);
+    await emitInitialMessageEvents(bus, sessionId, turn, messageId, content, initiator.source);
   } catch (error) {
     try {
       await admission.rollback('initial-message-lifecycle-failed');
@@ -232,6 +293,7 @@ async function setupInitialAttachTurn(
  * @param turn - Active turn
  * @param messageId - User message ID
  * @param content - Message content
+ * @param source - Origin of the initial turn
  */
 async function emitInitialMessageEvents(
   bus: IMakaioBus,
@@ -239,6 +301,7 @@ async function emitInitialMessageEvents(
   turn: Turn,
   messageId: string,
   content: MessageInput,
+  source: 'extension' | 'user' | 'system',
 ): Promise<void> {
   await emitSessionTurnStarted(bus, {
     sessionId,
@@ -246,6 +309,7 @@ async function emitInitialMessageEvents(
     turnNumber: turn.turnNumber,
     messageId,
     agentIds: [...turn.agentIds],
+    initiator: turn.initiator,
     ingestionMarker: 'live',
   });
   await emitSessionUserMessageSent(bus, {
@@ -255,5 +319,6 @@ async function emitInitialMessageEvents(
     messageId,
     content,
     agentIds: [...turn.agentIds],
+    source,
   });
 }

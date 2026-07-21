@@ -26,6 +26,8 @@ import {
   type AttachHandlerTestContext,
 } from './shared.js';
 import { resetBusHandlers } from '../../__tests__/shared.js';
+import { AgentStorageSubjects } from '../../storage/agent-namespace.js';
+import { getSessionAgentAttachError } from '../attach-error.js';
 
 const TEST_AUTH_METHOD = {
   id: 'api-key',
@@ -210,6 +212,127 @@ describe('registerAttachHandler', () => {
       });
       expect(result.agentId).toBe(agentId);
       expect(result.adapterSessionId).toBe(adapterSessionId);
+    });
+
+    it('rolls back an agent that finishes starting after the session closes', async () => {
+      const session = ctx.createMockSession();
+      const stoppedAgents: unknown[] = [];
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AdapterSubjects.startAgent, (context) => {
+          session.status = 'closed';
+          context.setResult({
+            success: true,
+            agentId,
+            adapterId: context.payload.adapterId,
+            adapterSessionId,
+            sessionId,
+            messageId: 'message-1',
+          });
+        }),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
+          stoppedAgents.push(context.payload);
+          context.setResult({ success: true });
+        }),
+      );
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      await expect(
+        MakaioBus.request(SessionSubjects.agent.attach, {
+          sessionId,
+          agent: { kind: 'adapter', adapterName },
+        }),
+      ).rejects.toThrow('Session is no longer active after agent startup');
+      expect(stoppedAgents).toEqual([
+        {
+          adapterId: buildDeterministicAdapterId('test-machine', adapterName),
+          agentId,
+        },
+      ]);
+    });
+
+    it('rolls back idle attach when a concurrent close claims the session before commit', async () => {
+      const session = ctx.createMockSession();
+      const adapterId = buildDeterministicAdapterId('test-machine', adapterName);
+      const attachStarted = Promise.withResolvers<void>();
+      const releaseAttach = Promise.withResolvers<void>();
+      const closeStarted = Promise.withResolvers<void>();
+      const releaseClose = Promise.withResolvers<void>();
+      const lifecycleOrder: string[] = [];
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
+      ctx.trackUnsubscribe(
+        MakaioBus.on(
+          AdapterSubjects.startAgent,
+          async (context) => {
+            attachStarted.resolve();
+            await releaseAttach.promise;
+            lifecycleOrder.push('agent-started');
+            context.setResult({
+              success: true,
+              agentId,
+              adapterId,
+              adapterSessionId,
+              sessionId,
+              messageId: 'initial-message-id',
+            });
+          },
+          { priority: 1 },
+        ),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(
+          AgentStorageSubjects.set,
+          (context) => {
+            lifecycleOrder.push('identity-persisted');
+            context.setResult({ success: true });
+          },
+          { priority: 1 },
+        ),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AgentStorageSubjects.delete, () => {
+          lifecycleOrder.push('identity-deleted');
+          throw new Error('identity delete failed');
+        }),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
+          lifecycleOrder.push('agent-stopped');
+          context.setResult({ success: true });
+        }),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(SessionSubjects.close, async (context) => {
+          closeStarted.resolve();
+          await releaseClose.promise;
+          session.status = 'closed';
+          context.setResult({ success: true });
+        }),
+      );
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      const attach = MakaioBus.request(SessionSubjects.agent.attachResolved, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+        harnessId: 'reviewer',
+      });
+      await attachStarted.promise;
+      const close = MakaioBus.request(SessionSubjects.close, { sessionId });
+      await closeStarted.promise;
+      releaseAttach.resolve();
+
+      const attachError = await attach.catch((error: unknown) => error);
+      const stagedError = getSessionAgentAttachError(attachError);
+      expect(stagedError?.stage).toBe('agent_attach');
+      expect(stagedError?.cause).toBeInstanceOf(AggregateError);
+      expect((stagedError?.cause as AggregateError).errors[0]).toMatchObject({
+        message: expect.stringContaining('Session close won before agent attach committed'),
+      });
+      releaseClose.resolve();
+      await expect(close).resolves.toEqual({ success: true });
+      expect(lifecycleOrder).toEqual(['agent-started', 'identity-persisted', 'identity-deleted', 'agent-stopped']);
     });
 
     it('uses explicit providerContext on local attachResolved without rebuilding or native activation', async () => {

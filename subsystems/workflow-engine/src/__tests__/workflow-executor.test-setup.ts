@@ -34,11 +34,20 @@ export interface WorkflowExecutorTestSetup {
   cleanupFns: Array<() => void>;
 }
 
+/**
+ * Create a collision-resistant test identity with a stable semantic prefix.
+ * @param prefix - Entity category used in assertions and diagnostics.
+ * @returns Randomized test identity.
+ */
+function createTestId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
 function registerAdapterStartHandler(): () => void {
   return MakaioBus.on(AdapterSubjects.startAgent, async (ctx) => {
     const now = Date.now();
-    const agentId = `agent-${Math.random().toString(36).slice(2)}`;
-    const adapterSessionId = `adapter-session-${Math.random().toString(36).slice(2)}`;
+    const agentId = createTestId('agent');
+    const adapterSessionId = createTestId('adapter-session');
     const sessionId = ctx.payload.sessionId ?? 'session-missing';
     const providerConfigId =
       ctx.payload.providerContext?.state === 'resolved' ? ctx.payload.providerContext.providerConfigId : undefined;
@@ -74,7 +83,7 @@ function registerAdapterStartHandler(): () => void {
       adapterId: ctx.payload.adapterId,
       adapterSessionId,
       sessionId,
-      messageId: `message-${Math.random().toString(36).slice(2)}`,
+      messageId: createTestId('message'),
     });
   });
 }
@@ -89,19 +98,29 @@ function registerAdapterStartHandler(): () => void {
  */
 function registerAgentSendMessageHandler(): () => void {
   return MakaioBus.on(AgentSubjects.sendMessage, (ctx) => {
-    const messageId = ctx.payload.messageId ?? `message-${Math.random().toString(36).slice(2)}`;
+    const messageId = ctx.payload.messageId ?? createTestId('message');
     ctx.setResult({ messageId });
     setTimeout(() => {
-      void MakaioBus.emit(AgentSubjects.complete, {
-        agentId: ctx.payload.agentId,
-        adapterId: ctx.payload.adapterId,
-        adapterName: 'workflow-test-adapter',
-        adapterSessionId: `adapter-session-${ctx.payload.agentId}`,
-        ...(ctx.payload.sessionId !== undefined ? { sessionId: ctx.payload.sessionId } : {}),
-        messageId,
-        ...(ctx.payload.turnId !== undefined ? { turnId: ctx.payload.turnId } : {}),
-        message: `completed:${String(ctx.payload.message)}`,
-      }).catch(() => {});
+      void (async () => {
+        if (ctx.payload.sessionId !== undefined && ctx.payload.turnId !== undefined) {
+          const completion = await MakaioBus.request(SubagentSubjects.completeTask, {
+            sessionId: ctx.payload.sessionId,
+            turnId: ctx.payload.turnId,
+            result: `completed:${String(ctx.payload.message)}`,
+          });
+          if (!completion.completed) return;
+        }
+        await MakaioBus.emit(AgentSubjects.complete, {
+          agentId: ctx.payload.agentId,
+          adapterId: ctx.payload.adapterId,
+          adapterName: 'workflow-test-adapter',
+          adapterSessionId: `adapter-session-${ctx.payload.agentId}`,
+          ...(ctx.payload.sessionId !== undefined ? { sessionId: ctx.payload.sessionId } : {}),
+          messageId,
+          ...(ctx.payload.turnId !== undefined ? { turnId: ctx.payload.turnId } : {}),
+          message: `completed:${String(ctx.payload.message)}`,
+        });
+      })().catch(() => undefined);
     }, 0);
   });
 }
@@ -116,9 +135,11 @@ function registerAgentSendMessageHandler(): () => void {
  */
 function registerSubagentStubHandlers(bus: typeof MakaioBus): Array<() => void> {
   const pending = new Map<string, (result: { status: 'completed' | 'failed'; result?: string }) => void>();
+  const subagentBySession = new Map<string, string>();
 
   const offSpawn = bus.on(SubagentSubjects.spawn, async (ctx) => {
-    const subagentId = `subagent-${Math.random().toString(36).slice(2)}`;
+    const subagentId = createTestId('subagent');
+    subagentBySession.set(`session-${subagentId}`, subagentId);
     await bus.emit(SubagentSubjects.spawned, {
       subagentId,
       parentSessionId: ctx.payload.parentSessionId,
@@ -145,8 +166,21 @@ function registerSubagentStubHandlers(bus: typeof MakaioBus): Array<() => void> 
     ctx.setResult({ status: result.status, result: result.result });
   });
 
+  const offGetStatus = bus.on(SubagentSubjects.getStatus, (ctx) => {
+    ctx.setResult({
+      status: 'running',
+      childSessionId: `session-${ctx.payload.subagentId}`,
+      progress: [],
+    });
+  });
+
   const offCompleteTask = bus.on(SubagentSubjects.completeTask, async (ctx) => {
-    const { subagentId, result } = ctx.payload;
+    const { sessionId, result } = ctx.payload;
+    const subagentId = subagentBySession.get(sessionId);
+    if (subagentId === undefined) {
+      ctx.setResult({ completed: false });
+      return;
+    }
     const resolve = pending.get(subagentId);
     if (resolve) {
       pending.delete(subagentId);
@@ -165,7 +199,7 @@ function registerSubagentStubHandlers(bus: typeof MakaioBus): Array<() => void> 
     ctx.setResult({ killed: true });
   });
 
-  return [offSpawn, offAwait, offCompleteTask, offKill];
+  return [offSpawn, offAwait, offGetStatus, offCompleteTask, offKill];
 }
 
 const MOCK_EXECUTION_TARGET = {
@@ -238,7 +272,8 @@ export async function setupWorkflowExecutorTest(
       // can register its pending resolver before the completion fires.
       setTimeout(() => {
         void MakaioBus.request(SubagentSubjects.completeTask, {
-          subagentId: ctx.payload.subagentId,
+          sessionId: `session-${ctx.payload.subagentId}`,
+          turnId: `turn-${ctx.payload.subagentId}`,
           result: `completed:${ctx.payload.task}`,
         }).catch(() => {});
       }, 0);
@@ -300,6 +335,7 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(
   cleanupFns.push(registerMemorySessionStorage(MakaioBus));
   cleanupFns.push(registerMemorySessionEventStorage(MakaioBus));
   cleanupFns.push(registerMemoryMessageStorage(MakaioBus));
+  cleanupFns.push(registerMemoryAgentStorage(MakaioBus));
 
   const sessionService = new MakaioSessionService(MakaioBus);
   await sessionService.init();
@@ -322,40 +358,18 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(
 
   const adapterStartCalls: Array<ExtractSubjectPayload<typeof AdapterSubjects.startAgent>> = [];
 
-  // FIFO queue of subagent IDs emitted by SubagentSubjects.spawned.
-  // Each spawned event fires before SubagentService calls startAgent for that
-  // subagent, so a FIFO dequeue in the startAgent handler safely matches them.
-  const pendingSubagentIds: string[] = [];
-  cleanupFns.push(
-    MakaioBus.on(SubagentSubjects.spawned, (ctx) => {
-      pendingSubagentIds.push(ctx.payload.subagentId);
-    }),
-  );
-
   if (options.registerAdapterHandler !== false)
     cleanupFns.push(
       MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
         adapterStartCalls.push(ctx.payload);
-        const subagentId = pendingSubagentIds.shift();
         ctx.setResult({
           success: true,
-          agentId: `agent-${Math.random().toString(36).slice(2)}`,
+          agentId: createTestId('agent'),
           adapterId: ctx.payload.adapterId,
-          adapterSessionId: `adapter-session-${Math.random().toString(36).slice(2)}`,
+          adapterSessionId: createTestId('adapter-session'),
           sessionId: ctx.payload.sessionId ?? 'session-missing',
-          messageId: `message-${Math.random().toString(36).slice(2)}`,
+          messageId: createTestId('message'),
         });
-        if (subagentId === undefined) {
-          return;
-        }
-        // Complete the subagent on the next tick so SubagentSubjects.await can
-        // register its pending resolver before the completion fires.
-        setTimeout(() => {
-          void MakaioBus.request(SubagentSubjects.completeTask, {
-            subagentId,
-            result: `completed:${String(ctx.payload.initialMessage ?? '')}`,
-          }).catch(() => {});
-        }, 0);
       }),
     );
 

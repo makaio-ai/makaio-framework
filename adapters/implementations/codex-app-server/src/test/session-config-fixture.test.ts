@@ -17,60 +17,44 @@ afterEach(() => {
   MakaioBus.__resetHandlers?.();
 });
 
-/** List worker-visible Codex conformance fixture roots. */
-async function listFixtureRoots(): Promise<Set<string>> {
-  const entries = await fs.readdir(os.tmpdir(), { withFileTypes: true });
-  return new Set(
-    entries
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith(FIXTURE_ROOT_PREFIX))
-      .map((entry) => path.join(os.tmpdir(), entry.name)),
-  );
-}
-
-/**
- * Resolve the one fixture root created after the provided snapshot.
- * @param previous - Fixture roots visible before acquisition
- * @returns Newly created fixture root
- */
-async function resolveNewFixtureRoot(previous: ReadonlySet<string>): Promise<string> {
-  const roots = [...(await listFixtureRoots())].filter((root) => !previous.has(root));
-  expect(roots).toHaveLength(1);
-  return roots[0] as string;
-}
-
 /** Start a fixture without the client-owned handlers so tests can inject boundary failures. */
-async function acquireHandlerlessFixture(): Promise<{
-  readonly fixture: Awaited<ReturnType<typeof acquireCodexConformanceSessionConfigFixture>>;
-  readonly root: string;
-}> {
+async function acquireHandlerlessFixture(): Promise<
+  Awaited<ReturnType<typeof acquireCodexConformanceSessionConfigFixture>>
+> {
   vi.spyOn(CodexClientSessionService.prototype, 'init').mockResolvedValue();
   vi.spyOn(CodexClientSessionService.prototype, 'destroy').mockResolvedValue();
-  const previousRoots = await listFixtureRoots();
-  const fixture = await acquireCodexConformanceSessionConfigFixture();
-  return { fixture, root: await resolveNewFixtureRoot(previousRoots) };
+  return acquireCodexConformanceSessionConfigFixture();
 }
 
 describe('Codex conformance session-config fixture lifecycle', () => {
   it('removes a newly created lease directory when client-owned setup fails', { timeout: 10_000 }, async () => {
-    const { fixture, root } = await acquireHandlerlessFixture();
+    const fixture = await acquireHandlerlessFixture();
     const leaseId = 'failed-setup-lease';
-    const sessionDir = path.join(root, 'codex', 'sessions', leaseId);
+    let sessionDir: string | undefined;
+    const unsubscribeSetup = MakaioBus.on(CodexClientSubjects.sessionConfig.setup, (ctx) => {
+      sessionDir = ctx.payload.sessionDir;
+      throw new Error('client setup failed');
+    });
 
-    await expect(
-      MakaioBus.request(ClientSubjects.sessionConfig.create, {
-        clientId: 'codex',
-        leaseId,
-        projectDir: os.tmpdir(),
-        configInheritance: 'empty',
-      }),
-    ).rejects.toThrow();
-    await expect(fs.stat(sessionDir)).rejects.toMatchObject({ code: 'ENOENT' });
-
-    await fixture.release();
+    try {
+      await expect(
+        MakaioBus.request(ClientSubjects.sessionConfig.create, {
+          clientId: 'codex',
+          leaseId,
+          projectDir: os.tmpdir(),
+          configInheritance: 'empty',
+        }),
+      ).rejects.toThrow();
+      if (sessionDir === undefined) throw new Error('Client setup did not expose its lease directory.');
+      await expect(fs.stat(sessionDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      unsubscribeSetup();
+      await fixture.release();
+    }
   });
 
   it('preserves client teardown and directory-removal failures in one aggregate', async () => {
-    const { fixture } = await acquireHandlerlessFixture();
+    const fixture = await acquireHandlerlessFixture();
     const unsubscribeSetup = MakaioBus.on(CodexClientSubjects.sessionConfig.setup, (ctx) => {
       ctx.setResult({ env: { CODEX_HOME: ctx.payload.sessionDir }, authMaterialized: false });
     });
@@ -117,7 +101,7 @@ describe('Codex conformance session-config fixture lifecycle', () => {
   });
 
   it('attempts root removal and aggregates it with a service shutdown failure', async () => {
-    const { fixture, root } = await acquireHandlerlessFixture();
+    const fixture = await acquireHandlerlessFixture();
     vi.mocked(CodexClientSessionService.prototype.destroy).mockRejectedValueOnce(new Error('service shutdown failed'));
     const originalRemove = fs.rm.bind(fs);
     const removeSpy = vi.spyOn(fs, 'rm').mockRejectedValueOnce(new Error('fixture root removal failed'));
@@ -131,10 +115,14 @@ describe('Codex conformance session-config fixture lifecycle', () => {
 
     expect(releaseError).toBeInstanceOf(AggregateError);
     expect((releaseError as AggregateError).errors).toHaveLength(2);
-    expect(removeSpy).toHaveBeenCalledWith(root, { recursive: true, force: true });
+    const removedRoot = removeSpy.mock.calls[0]?.[0].toString();
+    expect(path.dirname(removedRoot ?? '')).toBe(os.tmpdir());
+    expect(path.basename(removedRoot ?? '').startsWith(FIXTURE_ROOT_PREFIX)).toBe(true);
 
     removeSpy.mockRestore();
-    await originalRemove(root, { recursive: true, force: true });
+    if (removedRoot !== undefined) {
+      await originalRemove(removedRoot, { recursive: true, force: true });
+    }
   });
 
   it('aggregates runtime-close and fixture-release failures without skipping either stage', async () => {

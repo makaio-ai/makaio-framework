@@ -61,8 +61,8 @@ import {
 import type { AgentConnectorConfigOverrides } from './types.js';
 import { createStructuredOutputTerminalTransform } from './agent-structured-output-retry.js';
 import type { AIModel } from '../types/ai-model.js';
-import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { AgentEventBridge } from './agent-event-bridge.js';
+import { updateAgentActivityStatusBestEffort } from './agent-storage-status.js';
 import { AgentTurnExecutor } from './agent-turn-executor.js';
 import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
 import { AgentConnectorLifecycleManager, type ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
@@ -577,10 +577,7 @@ export abstract class AIAgent<
   ): Promise<void> {
     // Fire-and-forget status update: storage handlers may not be registered (optional enrichment).
     // Failures are intentionally ignored to avoid blocking message processing.
-    void this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, {
-      agentId: this.agentId,
-      status: 'active',
-    });
+    updateAgentActivityStatusBestEffort(this.globalBus, this.agentId, 'active');
 
     this.lifecycleTracker.setCurrentTurnId(ctx.payload.turnId);
     try {

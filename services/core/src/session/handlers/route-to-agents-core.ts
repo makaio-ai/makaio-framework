@@ -47,6 +47,7 @@ export type AgentDispatchOutcome =
  * @param turnManager - Required ledger owner for direct terminal outcomes
  * @param sessionContext - Optional shared session context forwarded to all agents
  * @param responseSchema - Optional structured output descriptor for the turn
+ * @param assertDispatch - Optional synchronous authority check at the provider-dispatch linearization point
  * @returns Durable dispatch outcomes after direct routing failures terminalize.
  */
 export async function routeToAgentsCore(
@@ -61,6 +62,7 @@ export async function routeToAgentsCore(
   turnManager: TurnCompletionRecorder,
   sessionContext?: SessionContext,
   responseSchema?: ResponseSchemaDescriptor,
+  assertDispatch?: () => void,
 ): Promise<readonly AgentDispatchOutcome[]> {
   // The caller admitted this fanout before routing. Verify the whole set before
   // the first provider await so a direct failure can never leave an untracked pair.
@@ -69,6 +71,7 @@ export async function routeToAgentsCore(
   }
   const routingPromises: Array<Promise<AgentDispatchOutcome>> = agents.map(async (agent) => {
     try {
+      assertDispatch?.();
       await bus.request(AgentSubjects.sendMessage, {
         agentId: agent.agentId,
         adapterId: agent.adapterId,

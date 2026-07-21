@@ -1,4 +1,4 @@
-import type { TurnUsage, UsageMetrics } from '@makaio/contracts';
+import type { TurnUsage, UsageGranularity, UsageMetrics } from '@makaio/contracts';
 
 /**
  * Minimal subset of an `agent.usage` event required for per-turn aggregation.
@@ -11,6 +11,12 @@ export interface AgentUsageEvent {
   inputTokens: number;
   /** Output tokens produced in this API call. */
   outputTokens: number;
+  /** Input tokens served from a provider cache. */
+  inputCachedTokens: number;
+  /** Measurement coverage declared by the adapter. */
+  granularity: UsageGranularity;
+  /** Provider-call identity, when the event has one. */
+  llmCallId?: string;
 }
 
 /**
@@ -32,6 +38,9 @@ export interface AgentUsageEvent {
 export class TurnUsageAccumulator {
   /** Per-agent running totals. */
   private readonly byAgent = new Map<string, UsageMetrics>();
+  private readonly coverageByAgent = new Map<string, Exclude<UsageGranularity, 'latest-request-gauge'>>();
+  private readonly ambiguousAgents = new Set<string>();
+  private readonly providerCalls = new Set<string>();
 
   /**
    * Add a usage event to the accumulator.
@@ -42,16 +51,53 @@ export class TurnUsageAccumulator {
    * @param event - Usage event payload from `AgentSubjects.usage`
    */
   public add(event: AgentUsageEvent): void {
+    if (event.granularity === 'latest-request-gauge') return;
+    if (this.ambiguousAgents.has(event.agentId)) return;
+    const coverage = this.coverageByAgent.get(event.agentId);
+    if (coverage !== undefined && coverage !== event.granularity) {
+      this.byAgent.delete(event.agentId);
+      this.ambiguousAgents.add(event.agentId);
+      return;
+    }
+    if (event.granularity === 'provider-call' && event.llmCallId !== undefined) {
+      const callKey = `${event.agentId}:${event.llmCallId}`;
+      if (this.providerCalls.has(callKey)) return;
+      this.providerCalls.add(callKey);
+    }
+    this.coverageByAgent.set(event.agentId, event.granularity);
     const existing = this.byAgent.get(event.agentId);
     if (existing) {
       existing.inputTokens += event.inputTokens;
+      if (event.inputCachedTokens > 0) {
+        existing.cachedInputTokens = (existing.cachedInputTokens ?? 0) + event.inputCachedTokens;
+      }
       existing.outputTokens += event.outputTokens;
     } else {
       this.byAgent.set(event.agentId, {
         inputTokens: event.inputTokens,
+        ...(event.inputCachedTokens > 0 && { cachedInputTokens: event.inputCachedTokens }),
         outputTokens: event.outputTokens,
       });
     }
+  }
+
+  /**
+   * Project additional events without mutating the authoritative accumulator.
+   * @param events - Events to apply to an isolated copy of the current state.
+   * @returns Usage snapshot after the hypothetical additions.
+   */
+  public preview(events: readonly AgentUsageEvent[]): TurnUsage | undefined {
+    const preview = new TurnUsageAccumulator();
+    for (const [agentId, metrics] of this.byAgent) {
+      preview.byAgent.set(agentId, { ...metrics });
+    }
+    for (const [agentId, coverage] of this.coverageByAgent) {
+      preview.coverageByAgent.set(agentId, coverage);
+    }
+    for (const agentId of this.ambiguousAgents) preview.ambiguousAgents.add(agentId);
+    for (const callId of this.providerCalls) preview.providerCalls.add(callId);
+    for (const event of events) preview.add(event);
+    return preview.snapshot();
   }
 
   /**
@@ -67,17 +113,23 @@ export class TurnUsageAccumulator {
     }
 
     let totalInput = 0;
+    let totalCachedInput = 0;
     let totalOutput = 0;
     const byAgentSnapshot: Record<string, UsageMetrics> = {};
 
     for (const [agentId, metrics] of this.byAgent) {
       totalInput += metrics.inputTokens;
+      totalCachedInput += metrics.cachedInputTokens ?? 0;
       totalOutput += metrics.outputTokens;
       byAgentSnapshot[agentId] = { ...metrics };
     }
 
     return {
-      total: { inputTokens: totalInput, outputTokens: totalOutput },
+      total: {
+        inputTokens: totalInput,
+        ...(totalCachedInput > 0 && { cachedInputTokens: totalCachedInput }),
+        outputTokens: totalOutput,
+      },
       byAgent: byAgentSnapshot,
     };
   }
@@ -93,6 +145,9 @@ export class TurnUsageAccumulator {
   public flush(): TurnUsage | undefined {
     const usage = this.snapshot();
     this.byAgent.clear();
+    this.coverageByAgent.clear();
+    this.ambiguousAgents.clear();
+    this.providerCalls.clear();
     return usage;
   }
 
@@ -101,5 +156,8 @@ export class TurnUsageAccumulator {
    */
   public clear(): void {
     this.byAgent.clear();
+    this.coverageByAgent.clear();
+    this.ambiguousAgents.clear();
+    this.providerCalls.clear();
   }
 }

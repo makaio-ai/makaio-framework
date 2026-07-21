@@ -11,6 +11,7 @@ import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { SubagentService } from '../subagent-service.js';
 import { SessionStorageSubjects } from '../../session/storage/namespace.js';
+import { registerSubagentSessionOrchestrationMocks } from './subagent-service.mocks.js';
 
 /** Options for {@link withPeriodicSweepTest}. */
 interface WithPeriodicSweepOptions {
@@ -104,6 +105,7 @@ describe('SubagentService — hung detection and adapter session close', () => {
         messageId: 'msg-1',
       });
     });
+    registerSubagentSessionOrchestrationMocks(MakaioBus);
     await MakaioBus.request(SubagentSubjects.execute, {
       subagentId: 'sub-1',
       parentSessionId: 'parent-1',

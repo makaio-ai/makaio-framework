@@ -7,17 +7,20 @@ import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
 import { MakaioSessionService } from '../../session/session-service.js';
 import { registerMemorySessionStorage } from '../../session/storage/memory-handler.js';
 import { SubagentService } from '../subagent-service.js';
+import { registerSubagentSessionOrchestrationMocks } from './subagent-service.mocks.js';
 
 describe('SubagentService - context mode', () => {
   let sessionService: MakaioSessionService;
   let subagentService: SubagentService;
   let cleanupStorage: (() => void) | undefined;
+  let attachPayloads: Array<{ responseSchema?: ResponseSchemaDescriptor }>;
 
   beforeEach(async () => {
     MakaioBus.__resetHandlers?.();
     cleanupStorage = registerMemorySessionStorage(MakaioBus);
     sessionService = new MakaioSessionService(MakaioBus);
     subagentService = new SubagentService(MakaioBus);
+    attachPayloads = [];
 
     MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
       ctx.setResult({ adapterId: `resolved-${ctx.payload.adapterName}` });
@@ -35,6 +38,11 @@ describe('SubagentService - context mode', () => {
           updatedAt: 0,
         },
       });
+    });
+    registerSubagentSessionOrchestrationMocks(MakaioBus, {
+      onAttachResolvedPayload: (payload) => {
+        attachPayloads.push(payload);
+      },
     });
     await sessionService.init();
     await subagentService.init();
@@ -92,9 +100,7 @@ describe('SubagentService - context mode', () => {
       schema: { type: 'object', properties: { verdict: { type: 'string' } } },
       name: 'verdict_schema',
     };
-    let capturedResponseSchema: unknown;
     MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
-      capturedResponseSchema = ctx.payload.responseSchema;
       ctx.setResult({
         success: true,
         agentId: 'mock-agent',
@@ -116,7 +122,7 @@ describe('SubagentService - context mode', () => {
       depth: 1,
     });
 
-    await vi.waitFor(() => expect(capturedResponseSchema).toEqual(responseSchema));
+    await vi.waitFor(() => expect(attachPayloads.at(-1)?.responseSchema).toEqual(responseSchema));
   });
 
   it('closes child sessions when subagents complete or cancel', async () => {
@@ -137,7 +143,7 @@ describe('SubagentService - context mode', () => {
       });
     });
 
-    const { subagentId: completedSubagentId } = await MakaioBus.request(SubagentSubjects.spawn, {
+    await MakaioBus.request(SubagentSubjects.spawn, {
       parentSessionId,
       config: { task: 'Complete task', adapterName: 'claude-code', contextMode: 'fresh' },
       depth: 1,
@@ -151,9 +157,24 @@ describe('SubagentService - context mode', () => {
     await vi.waitFor(() => expect(childSessionIds).toHaveLength(2));
     const [completedChildSessionId, cancelledChildSessionId] = childSessionIds as [string, string];
 
+    await MakaioBus.emit(SessionSubjects.turn.started, {
+      sessionId: completedChildSessionId,
+      turnId: 'turn-1',
+      turnNumber: 1,
+      messageId: 'msg-1',
+      agentIds: ['agent-1'],
+      ingestionMarker: 'live',
+    });
     await MakaioBus.request(SubagentSubjects.completeTask, {
-      subagentId: completedSubagentId,
+      sessionId: completedChildSessionId,
       result: 'done',
+    });
+    await MakaioBus.emit(SessionSubjects.turn.completed, {
+      sessionId: completedChildSessionId,
+      turnId: 'turn-1',
+      turnNumber: 1,
+      success: true,
+      ingestionMarker: 'live',
     });
     await MakaioBus.request(SubagentSubjects.kill, {
       subagentId: cancelledSubagentId,

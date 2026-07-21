@@ -228,6 +228,8 @@ describe('authority WorkerNode finalization integration', () => {
             role: 'lead',
             ephemeral: true,
             cwd,
+            allowedTools: ['read_file'],
+            allowedDirectories: [cwd],
           });
           expect(adapterCapture.starts).toHaveLength(startsBeforeProbe + 1);
           expect(authorityAgentStarts).toBe(authorityStartsBeforeProbe);
@@ -376,6 +378,7 @@ describe('authority WorkerNode finalization integration', () => {
       toolObservations: [],
       economics: {
         durationMs: expect.any(Number),
+        toolCallCount: 0,
         binding: {
           adapterName: 'workflow-test-adapter',
           providerConfigId: 'deterministic-provider-config',

@@ -42,13 +42,14 @@ export function completeTaskTool() {
       if (!context.bus) {
         return toolError(SubagentErrorCode.INVALID_STATE, 'Bus not available');
       }
-      if (!context.subagentId) {
-        return toolError(SubagentErrorCode.INVALID_STATE, 'Not running as a subagent');
+      if (context.sessionId === undefined) {
+        return toolError(SubagentErrorCode.INVALID_STATE, 'Completion must run inside a managed session');
       }
 
       try {
         const result = await context.bus.request(SubagentSubjects.completeTask, {
-          subagentId: context.subagentId,
+          sessionId: context.sessionId,
+          ...(context.turnId !== undefined && { turnId: context.turnId }),
           result: input.result,
           summary: input.summary,
         });

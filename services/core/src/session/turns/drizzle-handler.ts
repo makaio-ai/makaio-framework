@@ -316,7 +316,7 @@ function registerCompleteHandler(bus: IMakaioBus, db: MakaioDatabase): () => voi
       completedAt: now,
       status,
       error: error ?? null,
-      ...(usage !== undefined && { usage: JSON.stringify(usage) }),
+      ...(usage !== undefined && { usage: usage === null ? null : JSON.stringify(usage) }),
     };
     const [transitionedRow] = await db.update(turns).set(transitionFields).where(transitionWhere).returning();
     if (transitionedRow) {
@@ -342,7 +342,7 @@ function registerCompleteHandler(bus: IMakaioBus, db: MakaioDatabase): () => voi
 
     const [updatedRow] = await db
       .update(turns)
-      .set({ usage: JSON.stringify(usage) })
+      .set({ usage: usage === null ? null : JSON.stringify(usage) })
       .where(and(eq(turns.turnId, turnId), sql`${turns.status} in ('completed', 'error')`))
       .returning();
 

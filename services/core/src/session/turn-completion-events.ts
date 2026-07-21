@@ -30,14 +30,21 @@ export function registerTurnCompletionEvents(
 ): Array<() => void> {
   return [
     bus.on(AgentSubjects.usage, (ctx) => {
-      const { agentId, turnId, inputTokens, outputTokens } = ctx.payload;
+      const { agentId, turnId, inputTokens, inputCachedTokens, outputTokens, granularity, llmCallId } = ctx.payload;
       if (!turnId) {
         console.warn(`[SessionTurnManager] Dropping usage event without turnId (agentId=${agentId}).`);
         return;
       }
       const turn = hooks.resolveUsageTurn(turnId);
       if (!turn || !turn.hasAgent(agentId)) return;
-      const event = { agentId, inputTokens, outputTokens };
+      const event = {
+        agentId,
+        inputTokens,
+        inputCachedTokens,
+        outputTokens,
+        granularity,
+        ...(llmCallId && { llmCallId }),
+      };
       if (hooks.isCompletionInFlight(turn.turnId)) hooks.bufferUsage(turn.turnId, event);
       else hooks.addUsage(turn, event);
     }),

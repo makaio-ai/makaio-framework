@@ -128,6 +128,8 @@ export function createChildContext(options: {
   return {
     ...createMakaioContext({ cwd: '/test' }),
     sessionId: options.sessionId ?? 'child-session-1',
+    turnId: 'child-turn-1',
+    toolCallId: 'child-tool-call-1',
     subagentId: options.subagentId,
     subagentDepth: options.subagentDepth ?? 1,
     bus: options.bus,

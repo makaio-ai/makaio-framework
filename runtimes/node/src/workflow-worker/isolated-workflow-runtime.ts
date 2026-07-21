@@ -2,7 +2,9 @@ import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
 import { ExtensionCoordinator, type KernelMakaioExtension, KernelSubjects } from '@makaio/kernel';
 import {
+  canonicalModelPackage,
   sessionBridgePackage,
+  sessionOrchestratorPackage,
   sessionPackage,
   sessionStoragePackage,
   createSubagentServicePackage,
@@ -17,9 +19,11 @@ import {
   prepareAdapterRuntime,
   type PrepareAdapterRuntimeInput,
 } from '../compose-adapter-runtime.js';
+import { shouldLoadDefaultSessionOrchestrator } from '../boot-extension-selection.js';
 import { tryImport } from '../optional-package.js';
 
 const LOCAL_RUNTIME_SNAPSHOT_PRIORITY = 1;
+const ISOLATED_SESSION_BASE_PACKAGES = [sessionStoragePackage, sessionBridgePackage, sessionPackage] as const;
 
 /** Connect an isolated runtime bus to its authenticated authority. */
 export type WorkflowRuntimeAuthorityConnector = (bus: IMakaioBus) => Promise<void>;
@@ -74,9 +78,10 @@ export interface IsolatedWorkflowRuntime {
  * Compose an isolated, authority-backed runtime for workflow agent steps.
  *
  * The runtime deliberately owns no database and installs no local storage
- * handlers. Session lifecycle and usage requests therefore cross the supplied
- * authenticated authority connection. Product bootstrap, package discovery,
- * relay policy, and worker-pool concerns remain with the caller.
+ * handlers. It owns the session turn orchestration required by local adapters,
+ * while durable session storage and usage requests cross the supplied authenticated
+ * authority connection. Product bootstrap, package discovery, relay policy, and
+ * worker-pool concerns remain with the caller.
  * @param options - Authority connection, packages, adapter preparation, host context, and tools.
  * @returns A started runtime with an idempotent shutdown handle.
  */
@@ -145,13 +150,14 @@ export async function createIsolatedWorkflowRuntime(
 
     coordinator.registerContributionProcessor(createToolContributionProcessor());
     coordinator.load([
-      sessionStoragePackage,
-      sessionBridgePackage,
-      sessionPackage,
+      ...ISOLATED_SESSION_BASE_PACKAGES,
+      // Canonical-model initialization synchronously probes the local adapter subsystem.
+      adapterSubsystemPackage,
+      canonicalModelPackage,
+      ...(shouldLoadDefaultSessionOrchestrator(contributedPackages) ? [sessionOrchestratorPackage] : []),
       createSubagentServicePackage(LOCAL_RUNTIME_SNAPSHOT_PRIORITY),
       toolRegistryPackage,
       clientsCorePackage,
-      adapterSubsystemPackage,
       ...contributedPackages,
     ]);
     await coordinator.startAll();

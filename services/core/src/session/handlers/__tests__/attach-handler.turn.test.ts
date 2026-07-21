@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { MessageInput } from '@makaio/contracts';
+import type { MessageInput, ResponseSchemaDescriptor, TurnInitiator } from '@makaio/contracts';
 import {
   ATTACH_TEST_IDS,
   createAttachHandlerContext,
@@ -14,6 +14,8 @@ import { MessageStorageSubjects } from '../../messages/namespace.js';
 import { SessionEventStorageSubjects } from '../../session-events/index.js';
 import { TurnStorageSubjects } from '../../turns/index.js';
 import { SessionBridge } from '../../session-bridge.js';
+import { AgentStorageSubjects } from '../../storage/agent-namespace.js';
+import { getSessionAgentAttachError } from '../attach-error.js';
 
 describe('registerAttachHandler - turn tracking', () => {
   const { sessionId, adapterName, agentId } = ATTACH_TEST_IDS;
@@ -44,12 +46,15 @@ describe('registerAttachHandler - turn tracking', () => {
         sessionId,
         agent: { kind: 'adapter', adapterName },
         initialMessage: 'Hello, agent!',
+        source: 'extension',
+        extensionId: 'test:attach',
       });
 
       const turn = ctx.getActiveTurn(sessionId);
       expect(turn).toBeDefined();
       expect(turn?.sessionId).toBe(sessionId);
       expect([...turn!.agentIds]).toContain(agentId);
+      expect(turn?.initiator).toEqual({ source: 'extension', sourceId: 'test:attach' });
       expect(result.turnId).toBe(turn?.turnId);
       expect(result.messageId).toMatch(/[0-9a-f-]{36}/);
     });
@@ -63,7 +68,12 @@ describe('registerAttachHandler - turn tracking', () => {
       const appendedMessages: unknown[] = [];
       const turnCompleted: Array<{ turnId: string; success: boolean }> = [];
       const settlements: Array<{ turnId: string; agentId: string }> = [];
-      let sendPayload: { messageId?: string; turnId?: string; sessionId?: string } | undefined;
+      const responseSchema: ResponseSchemaDescriptor = { schema: { type: 'object' }, name: 'initial_result' };
+      let routedInitiator: TurnInitiator | undefined;
+      let admissionChecks = 0;
+      let sendPayload:
+        | { messageId?: string; turnId?: string; sessionId?: string; responseSchema?: ResponseSchemaDescriptor }
+        | undefined;
 
       ctx.trackUnsubscribe(
         registerSuccessfulMessageAppendHandler({
@@ -89,6 +99,7 @@ describe('registerAttachHandler - turn tracking', () => {
         MakaioBus.on(
           AgentSubjects.sendMessage,
           async (context) => {
+            routedInitiator = ctx.getActiveTurn(sessionId)?.initiator;
             sendPayload = context.payload;
             context.setResult({ messageId: context.payload.messageId ?? crypto.randomUUID() });
             await MakaioBus.emit(AgentSubjects.message, {
@@ -116,10 +127,15 @@ describe('registerAttachHandler - turn tracking', () => {
       ctx.trackUnsubscribe(ctx.registerHandler());
 
       try {
-        const result = await MakaioBus.request(SessionSubjects.agent.attach, {
+        const result = await MakaioBus.request(SessionSubjects.agent.attachResolved, {
           sessionId,
           agent: { kind: 'adapter', adapterName },
           initialMessage: 'Hello, agent!',
+          responseSchema,
+          source: 'system',
+          assertInitialMessageAdmission: () => {
+            admissionChecks += 1;
+          },
         });
         await waitForAsync();
 
@@ -128,7 +144,10 @@ describe('registerAttachHandler - turn tracking', () => {
           messageId: result.messageId,
           turnId: result.turnId,
           sessionId,
+          responseSchema,
         });
+        expect(routedInitiator).toEqual({ source: 'system' });
+        expect(admissionChecks).toBe(2);
         expect(appendedMessages).toContainEqual(
           expect.objectContaining({
             role: 'assistant',
@@ -167,7 +186,7 @@ describe('registerAttachHandler - turn tracking', () => {
       ctx.trackUnsubscribe(ctx.registerHandler());
 
       await expect(
-        MakaioBus.request(SessionSubjects.agent.attach, {
+        MakaioBus.request(SessionSubjects.agent.attachResolved, {
           sessionId,
           agent: { kind: 'adapter', adapterName },
           initialMessage: 'Hello, agent!',
@@ -179,6 +198,133 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(completed).toContainEqual(
         expect.objectContaining({ success: false, error: expect.stringContaining('provider dispatch failed') }),
       );
+    });
+
+    it('rolls back the started agent when local admission authority rejects before turn setup', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      const { unsubscribe } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+      const stoppedAgents = recordStoppedAgents(ctx);
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      await expect(
+        MakaioBus.request(SessionSubjects.agent.attachResolved, {
+          sessionId,
+          agent: { kind: 'adapter', adapterName },
+          initialMessage: 'Hello, agent!',
+          assertInitialMessageAdmission: () => {
+            throw new Error('startup cancelled');
+          },
+        }),
+      ).rejects.toThrow('startup cancelled');
+
+      expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
+      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId }));
+    });
+
+    it('terminalizes the prepared turn when admission authority rejects at provider dispatch', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      const { unsubscribe } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+      const stoppedAgents = recordStoppedAgents(ctx);
+      let admissionChecks = 0;
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      await expect(
+        MakaioBus.request(SessionSubjects.agent.attachResolved, {
+          sessionId,
+          agent: { kind: 'adapter', adapterName },
+          initialMessage: 'Hello, agent!',
+          assertInitialMessageAdmission: () => {
+            admissionChecks += 1;
+            if (admissionChecks === 2) throw new Error('startup cancelled at dispatch');
+          },
+        }),
+      ).rejects.toThrow('startup cancelled at dispatch');
+
+      expect(admissionChecks).toBe(2);
+      expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
+      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId }));
+    });
+
+    it('terminalizes and rolls back when close claims the session before initial provider dispatch', async () => {
+      const session = ctx.createMockSession();
+      const messageSetupStarted = Promise.withResolvers<void>();
+      const releaseMessageSetup = Promise.withResolvers<void>();
+      const closeStarted = Promise.withResolvers<void>();
+      const releaseClose = Promise.withResolvers<void>();
+      const routedMessages: unknown[] = [];
+      const deletedAgents: string[] = [];
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
+      const { unsubscribe } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+      const stoppedAgents = recordStoppedAgents(ctx);
+      ctx.trackUnsubscribe(
+        MakaioBus.on(
+          MessageStorageSubjects.append,
+          async (context) => {
+            messageSetupStarted.resolve();
+            await releaseMessageSetup.promise;
+            context.setResult({
+              message: {
+                ...context.payload.message,
+                messageId: context.payload.message.messageId ?? crypto.randomUUID(),
+              },
+            });
+          },
+          { priority: 1 },
+        ),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AgentStorageSubjects.delete, (context) => {
+          deletedAgents.push(context.payload.agentId);
+          throw new Error('identity delete failed');
+        }),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(
+          AgentSubjects.sendMessage,
+          (context) => {
+            routedMessages.push(context.payload);
+            context.setResult({ messageId: context.payload.messageId ?? crypto.randomUUID() });
+          },
+          { priority: 1 },
+        ),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(SessionSubjects.close, async (context) => {
+          closeStarted.resolve();
+          await releaseClose.promise;
+          session.status = 'closed';
+          context.setResult({ success: true });
+        }),
+      );
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      const attach = MakaioBus.request(SessionSubjects.agent.attachResolved, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+        harnessId: 'reviewer',
+        initialMessage: 'Hello, agent!',
+      });
+      await messageSetupStarted.promise;
+      const close = MakaioBus.request(SessionSubjects.close, { sessionId });
+      await closeStarted.promise;
+      releaseMessageSetup.resolve();
+
+      const attachError = await attach.catch((error: unknown) => error);
+      const stagedError = getSessionAgentAttachError(attachError);
+      expect(stagedError?.stage).toBe('initial_message');
+      expect(stagedError?.cause).toBeInstanceOf(AggregateError);
+      expect((stagedError?.cause as AggregateError).errors[0]).toMatchObject({
+        message: expect.stringContaining('Session close won before agent attach committed'),
+      });
+      releaseClose.resolve();
+      await expect(close).resolves.toEqual({ success: true });
+      expect(routedMessages).toHaveLength(0);
+      expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
+      expect(deletedAgents).toEqual([agentId]);
+      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId }));
     });
 
     it.each([
@@ -297,6 +443,13 @@ describe('registerAttachHandler - turn tracking', () => {
       ctx.trackUnsubscribe(unsubscribe);
       let completionAttempts = 0;
       const stoppedAgents = recordStoppedAgents(ctx);
+      const deletedAgents: string[] = [];
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AgentStorageSubjects.delete, (context) => {
+          deletedAgents.push(context.payload.agentId);
+          context.setResult({ success: true });
+        }),
+      );
       ctx.trackUnsubscribe(
         MakaioBus.on(TurnStorageSubjects.complete, (context) => {
           completionAttempts += 1;
@@ -329,9 +482,10 @@ describe('registerAttachHandler - turn tracking', () => {
       ctx.trackUnsubscribe(ctx.registerHandler());
 
       await expect(
-        MakaioBus.request(SessionSubjects.agent.attach, {
+        MakaioBus.request(SessionSubjects.agent.attachResolved, {
           sessionId,
           agent: { kind: 'adapter', adapterName },
+          harnessId: 'reviewer',
           initialMessage: 'Hello, agent!',
         }),
       ).rejects.toThrow('temporary completion storage failure');
@@ -340,6 +494,7 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
       expect(stoppedAgents).toHaveLength(1);
       expect(stoppedAgents[0]).toMatchObject({ agentId });
+      expect(deletedAgents).toEqual([agentId]);
     });
 
     it('emits turn.started event', async () => {

@@ -10,6 +10,21 @@ describe('SubagentManager lifecycle', () => {
     manager = new SubagentManager(DEFAULT_CONSTRAINTS);
   });
 
+  it('clears the active turn for terminal updateStatus transitions', () => {
+    manager.track({
+      subagentId: 'sub-1',
+      parentSessionId: 'parent-1',
+      config: config('Test'),
+      depth: 1,
+    });
+    manager.setChildSessionId('sub-1', 'child-1');
+    manager.recordTurnStarted('child-1', 'turn-1');
+
+    manager.updateStatus('sub-1', 'failed');
+
+    expect(manager.get('sub-1')).toMatchObject({ status: 'failed', activeTurnId: undefined });
+  });
+
   describe('markCompleted', () => {
     it('sets status, result, and endTime', () => {
       manager.track({
@@ -18,6 +33,8 @@ describe('SubagentManager lifecycle', () => {
         config: config('Test'),
         depth: 1,
       });
+      manager.setChildSessionId('sub-1', 'child-1');
+      manager.recordTurnStarted('child-1', 'turn-1');
 
       manager.markCompleted('sub-1', 'Task done!');
 
@@ -25,6 +42,7 @@ describe('SubagentManager lifecycle', () => {
       expect(subagent?.status).toBe('completed');
       expect(subagent?.result).toBe('Task done!');
       expect(subagent?.endTime).toBeDefined();
+      expect(subagent?.activeTurnId).toBeUndefined();
     });
 
     it('throws if subagent not found', () => {

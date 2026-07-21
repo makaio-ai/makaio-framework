@@ -74,6 +74,8 @@ export type TurnStatus = z.infer<typeof TurnStatusSchema>;
 export const UsageMetricsSchema = z.object({
   /** Input tokens consumed */
   inputTokens: z.number(),
+  /** Input tokens served from a provider cache. */
+  cachedInputTokens: z.number().optional(),
   /** Output tokens generated */
   outputTokens: z.number(),
   /** Computed cost in USD (optional, requires pricing data) */

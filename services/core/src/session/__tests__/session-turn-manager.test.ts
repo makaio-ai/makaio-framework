@@ -76,7 +76,7 @@ function registerTurnStorageHandlers(): UnsubFn {
           completedAt: Date.now(),
           status: ctx.payload.status,
           error: ctx.payload.error,
-          usage: ctx.payload.usage,
+          ...(ctx.payload.usage !== null && { usage: ctx.payload.usage }),
           ...(stored.initiator !== undefined && { initiator: stored.initiator }),
         },
         transitioned: true,
@@ -735,7 +735,10 @@ describe('SessionTurnManager', () => {
             turn:
               completionCalls === 2
                 ? storedCompletion!
-                : { ...storedCompletion!, ...(ctx.payload.usage !== undefined && { usage: ctx.payload.usage }) },
+                : {
+                    ...storedCompletion!,
+                    ...(ctx.payload.usage === null ? { usage: undefined } : { usage: ctx.payload.usage }),
+                  },
             transitioned: false,
           });
         }),
@@ -1604,7 +1607,7 @@ describe('SessionTurnManager', () => {
 
       // No additional complete call, and first complete had no usage
       expect(capturedUsages).toHaveLength(1);
-      expect(capturedUsages[0]?.usage).toBeUndefined();
+      expect(capturedUsages[0]?.usage).toBeNull();
     });
 
     it('drops usage events with no turnId', async () => {
@@ -1705,6 +1708,65 @@ describe('SessionTurnManager', () => {
       expect(lastUsage).toBeDefined();
       expect(lastUsage!.total.inputTokens).toBe(150);
       expect(lastUsage!.total.outputTokens).toBe(50);
+    });
+
+    it('clears persisted usage when buffered evidence invalidates its granularity', async () => {
+      const completeUsages: unknown[] = [];
+      let releaseInitialComplete!: () => void;
+      let resolveInitialComplete!: () => void;
+      const initialCompleteStarted = new Promise<void>((resolve) => {
+        resolveInitialComplete = resolve;
+      });
+      const initialCompleteRelease = new Promise<void>((resolve) => {
+        releaseInitialComplete = resolve;
+      });
+
+      unsubs.push(
+        MakaioBus.on(TurnStorageSubjects.complete, async (ctx) => {
+          completeUsages.push(ctx.payload.usage);
+          if (completeUsages.length === 1) {
+            resolveInitialComplete();
+            await initialCompleteRelease;
+          }
+          await ctx.next();
+        }),
+        registerTurnStorageHandlers(),
+      );
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+      const completed = collectTurnCompleted(unsubs);
+      const turn = await manager.createTurn('sess-buffered-mixed-granularity', ['agent-1']);
+      turn.addMessage('msg-1');
+      await MakaioBus.emit(AgentSubjects.usage, {
+        ...BASE_USAGE_FIELDS,
+        agentId: 'agent-1',
+        turnId: turn.turnId,
+        inputTokens: 10,
+        outputTokens: 4,
+      });
+
+      const completion = manager.completeTurn(turn, { success: true, errors: [] });
+      await initialCompleteStarted;
+      await MakaioBus.emit(AgentSubjects.usage, {
+        ...BASE_USAGE_FIELDS,
+        granularity: 'query-aggregate',
+        agentId: 'agent-1',
+        turnId: turn.turnId,
+        inputTokens: 20,
+        outputTokens: 8,
+      });
+      releaseInitialComplete();
+      await completion;
+
+      expect(completeUsages).toEqual([
+        {
+          total: { inputTokens: 10, outputTokens: 4 },
+          byAgent: { 'agent-1': { inputTokens: 10, outputTokens: 4 } },
+        },
+        null,
+      ]);
+      expect(completed).toHaveLength(1);
+      expect(completed[0]?.usage).toBeUndefined();
     });
 
     it('retains buffered usage after a transient persistence failure and emits only after retry', async () => {
@@ -1890,7 +1952,7 @@ describe('SessionTurnManager', () => {
             resolveUsageWrite();
             await usageWriteRelease;
           }
-          storedUsage = ctx.payload.usage;
+          storedUsage = ctx.payload.usage ?? undefined;
           ctx.setResult({
             turn: {
               turnId: ctx.payload.turnId,
@@ -1900,7 +1962,7 @@ describe('SessionTurnManager', () => {
               completedAt: Date.now(),
               status: ctx.payload.status,
               error: ctx.payload.error,
-              usage: storedUsage,
+              ...(storedUsage !== undefined && { usage: storedUsage }),
             },
             transitioned: true,
           });

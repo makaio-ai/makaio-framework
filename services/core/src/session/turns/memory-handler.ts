@@ -189,17 +189,18 @@ function registerCompleteHandler(
     }
 
     const isTerminal = existing.status === 'completed' || existing.status === 'error';
+    const replacementUsage = usage === null ? undefined : (usage ?? existing.usage);
     const updated: Turn = isTerminal
       ? {
           ...existing,
-          usage: usage ?? existing.usage,
+          usage: replacementUsage,
         }
       : {
           ...existing,
           completedAt: Date.now(),
           status,
           error: error ?? undefined,
-          usage: usage ?? existing.usage,
+          usage: replacementUsage,
         };
 
     indexTurn(updated);

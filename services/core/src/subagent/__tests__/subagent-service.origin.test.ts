@@ -28,6 +28,7 @@ import {
 } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { SubagentService } from '../subagent-service.js';
+import { registerSubagentSessionOrchestrationMocks } from './subagent-service.mocks.js';
 
 // ---------------------------------------------------------------------------
 // Minimal transport fixture
@@ -217,7 +218,7 @@ describe('SubagentService — origin guard on spawn', () => {
   it('handles a spawn from a remote origin when the peer is in the delegation allow-set', async () => {
     const bus = createBusInstance({ context: createBusContext() });
     const allowSet = new Set(['workflow-execution:exec-authorized']);
-    const service = new SubagentService(bus, undefined, undefined, allowSet);
+    const service = new SubagentService(bus, undefined, allowSet);
     cleanup.push(() => service.destroy());
     await service.init();
 
@@ -271,7 +272,7 @@ describe('SubagentService — origin guard on spawn', () => {
   it('handles an execute from a remote origin when the peer is in the delegation allow-set', async () => {
     const bus = createBusInstance({ context: createBusContext() });
     const allowSet = new Set(['workflow-execution:exec-authorized']);
-    const service = new SubagentService(bus, undefined, undefined, allowSet);
+    const service = new SubagentService(bus, undefined, allowSet);
     cleanup.push(() => service.destroy());
     await service.init();
 
@@ -304,6 +305,7 @@ describe('SubagentService — origin guard on spawn', () => {
         sessionId: ctx.payload.sessionId ?? 'child-remote-execute',
       });
     });
+    registerSubagentSessionOrchestrationMocks(bus);
 
     await transport.simulateReceive(makeRemoteExecuteRequest(), {
       transportName: 'authorized-transport',
@@ -354,6 +356,7 @@ describe('SubagentService — origin guard on spawn', () => {
         sessionId: ctx.payload.sessionId ?? 'child-workflow-execute',
       });
     });
+    registerSubagentSessionOrchestrationMocks(bus);
 
     await transport.simulateReceive(makeRemoteExecuteRequest(), {
       transportName: 'workflow-transport',

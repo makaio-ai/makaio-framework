@@ -32,6 +32,7 @@ export interface RpcHandlerContext {
   manager: SubagentManager;
   bus: IMakaioBus;
   executionOwnerId?: string;
+  onCompletionCandidate?: (subagentId: string) => Promise<void>;
 }
 
 interface GetStatusResponse {
@@ -42,6 +43,7 @@ interface GetStatusResponse {
   result?: string;
   summary?: string;
   error?: string;
+  usage?: AwaitSubagentResponse['usage'];
 }
 
 /**
@@ -71,6 +73,7 @@ export function handleGetStatusRpc(ctx: RpcHandlerContext, payload: { subagentId
     result: subagent.result,
     summary: subagent.summary,
     error: subagent.error,
+    usage: subagent.usage,
   };
 }
 
@@ -168,7 +171,6 @@ export async function handleAwaitRpc(
   if (!subagent) {
     throw new Error(`Subagent not found: ${subagentId}`);
   }
-
   const terminalStates = ['completed', 'failed', 'cancelled'] as const;
   if (terminalStates.includes(subagent.status as (typeof terminalStates)[number])) {
     return {
@@ -177,6 +179,7 @@ export async function handleAwaitRpc(
       error: subagent.error,
       completionSource: subagent.completionSource,
       toolObservations: [...subagent.toolObservations],
+      usage: subagent.usage,
     };
   }
 
@@ -208,6 +211,7 @@ export async function handleAwaitRpc(
         pendingRequest: result.pendingRequest,
         completionSource: result.completionSource,
         toolObservations: result.toolObservations,
+        usage: result.usage,
       });
     };
 
@@ -240,6 +244,14 @@ export async function handleSendRpc(
 
   if (!subagent) {
     throw new Error(`Subagent not found: ${subagentId}`);
+  }
+  if (subagent.status === 'spawning') {
+    throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Cannot send to a subagent before startup completes');
+  }
+  // Completion intent, not its display status, closes child message admission.
+  // A stalled candidate may be surfaced as `hung` while remaining immutable.
+  if (subagent.completionCandidate !== undefined) {
+    throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Cannot send to a subagent while completion is pending');
   }
 
   let resolvedPending = false;
@@ -331,74 +343,90 @@ export async function handleRequestInputRpc(
   if (!subagent) {
     throw new Error(`Subagent not found: ${subagentId}`);
   }
+  if (subagent.completionCandidate !== undefined) {
+    throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Cannot request input while completion is pending');
+  }
 
   const messageId = crypto.randomUUID();
   const timeout = timeoutMs ?? ctx.manager.constraints.defaultRequestTimeoutMs;
-
-  // Emit request_input to parent
-  await ctx.bus.emit(SubagentSubjects.toParent, {
-    subagentId,
-    messageId,
-    type: 'request_input' as const,
-    content: question,
-    context,
+  let resolved = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let resolveResponse!: (response: RequestInputRpcResponse) => void;
+  const responsePromise = new Promise<RequestInputRpcResponse>((resolve) => {
+    resolveResponse = resolve;
   });
+  const resolver = (response: string | null) => {
+    if (resolved) return;
+    resolved = true;
+    if (timeoutId) clearTimeout(timeoutId);
 
-  // Wait for response
-  return new Promise<RequestInputRpcResponse>((resolve) => {
-    let resolved = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-    const resolver = (response: string | null) => {
-      if (resolved) return;
-      resolved = true;
-      if (timeoutId) clearTimeout(timeoutId);
-
-      if (response === null) {
-        resolve({ responded: false, timedOut: true });
-      } else {
-        resolve({ responded: true, response, timedOut: false });
-      }
-    };
-
-    // setPendingRequest throws SubagentError for NOT_FOUND or REQUEST_PENDING.
-    // Let it propagate - matches pattern of other handlers in this file.
-    ctx.manager.setPendingRequest(subagentId, {
-      messageId,
-      question,
-      context,
-      resolver,
-    });
-
-    if (timeout > 0) {
-      timeoutId = setTimeout(() => {
-        if (resolved) return;
-        // Note: resolvePendingRequest calls the resolver which sets resolved = true
-        ctx.manager.resolvePendingRequest(subagentId, null);
-      }, timeout);
+    if (response === null) {
+      resolveResponse({ responded: false, timedOut: true });
+    } else {
+      resolveResponse({ responded: true, response, timedOut: false });
     }
-  });
+  };
+
+  // Claim waiting_input before publication so completion and input requests
+  // arbitrate synchronously in the manager.
+  ctx.manager.setPendingRequest(subagentId, { messageId, question, context, resolver });
+  if (timeout > 0) {
+    timeoutId = setTimeout(() => {
+      if (resolved) return;
+      ctx.manager.resolvePendingRequest(subagentId, null);
+    }, timeout);
+  }
+  const publication = ctx.bus
+    .emit(SubagentSubjects.toParent, {
+      subagentId,
+      messageId,
+      type: 'request_input' as const,
+      content: question,
+      context,
+    })
+    .then(
+      () => ({ published: true }) as const,
+      (error: unknown) => ({ published: false, error }) as const,
+    );
+  const first = await Promise.race([responsePromise.then((response) => ({ response }) as const), publication]);
+  if ('response' in first) return first.response;
+  if (!first.published) {
+    ctx.manager.resolvePendingRequest(subagentId, null);
+    throw first.error;
+  }
+
+  return responsePromise;
 }
 
 /**
  * Handle completeTask RPC - child signals task completion.
  * @param ctx - Handler context with manager and bus
- * @param payload - Completion with subagentId, result, optional summary
+ * @param payload - Completion with managed child session, optional turn hint, result, and optional summary
  * @returns Response indicating success
  */
 export async function handleCompleteTaskRpc(
   ctx: RpcHandlerContext,
   payload: CompleteTaskRequest,
 ): Promise<CompleteTaskResponse> {
-  const { subagentId, result, summary } = payload;
-  ctx.manager.markCompleted(subagentId, result, summary, 'tool');
-
-  // Emit completed event with summary if provided
-  await ctx.bus.emit(SubagentSubjects.completed, {
-    subagentId,
-    success: true,
-    result: summary ? `${summary}\n\n${result}` : result,
-  });
+  const { sessionId, turnId, result, summary } = payload;
+  const subagent = ctx.manager.getByChildSessionId(sessionId);
+  if (subagent === undefined)
+    throw new SubagentError(SubagentErrorCode.NOT_FOUND, 'No subagent owns this child session');
+  if (subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled') {
+    throw new SubagentError(
+      SubagentErrorCode.ALREADY_TERMINAL,
+      `Subagent already in terminal state: ${subagent.status}`,
+    );
+  }
+  const activeTurnId = subagent.activeTurnId;
+  if (activeTurnId === undefined) {
+    throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'No active turn exists for this child session');
+  }
+  if (turnId !== undefined && turnId !== activeTurnId) {
+    throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Completion turn does not match the active child turn');
+  }
+  ctx.manager.recordCompletionCandidate(subagent.subagentId, activeTurnId, result, summary, 'tool');
+  await ctx.onCompletionCandidate?.(subagent.subagentId);
 
   return { completed: true };
 }

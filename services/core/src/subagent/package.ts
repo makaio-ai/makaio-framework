@@ -26,13 +26,10 @@ export function createSubagentServicePackage(requestHandlerPriority = 0): Makaio
     dependencies: [dep('session')],
     /**
      * Creates a new {@link SubagentService} bound to the package bus.
-     *
-     * The machine ID from the extension context is forwarded for adapter resolution.
-     * @param ctx - Runtime context providing the bus instance and machine identity.
+     * @param ctx - Runtime context providing the bus instance.
      * @returns Uninitialized service instance; host calls `init()`.
      */
-    create: (ctx) =>
-      new SubagentService(ctx.bus, DEFAULT_CONSTRAINTS, ctx.machineId, new Set(), requestHandlerPriority),
+    create: (ctx) => new SubagentService(ctx.bus, DEFAULT_CONSTRAINTS, new Set(), requestHandlerPriority),
   };
 }
 

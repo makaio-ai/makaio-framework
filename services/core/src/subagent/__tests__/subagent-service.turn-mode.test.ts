@@ -26,11 +26,52 @@ function agentCompletePayload(
     adapterName: 'claude-code',
     adapterSessionId: 'adapter-session-1',
     sessionId,
+    turnId: 'turn-1',
     messageId: 'msg-1',
     message: overrides.message ?? 'The result',
     outcome: overrides.outcome,
     error: overrides.error,
   };
+}
+
+/**
+ * Emit the canonical persisted completion proof for the managed child turn.
+ * @param overrides - Canonical completion fields to override.
+ */
+async function completeTurn(
+  overrides: { success?: boolean; error?: string; inputTokens?: number } = {},
+): Promise<void> {
+  const success = overrides.success ?? true;
+  await MakaioBus.emit(SessionSubjects.turn.completed, {
+    sessionId: 'child-sess-1',
+    turnId: 'turn-1',
+    turnNumber: 1,
+    success,
+    ingestionMarker: 'live',
+    ...(overrides.error !== undefined && { error: overrides.error }),
+    ...(overrides.inputTokens !== undefined
+      ? {
+          usage: {
+            total: { inputTokens: overrides.inputTokens, cachedInputTokens: 3, outputTokens: 5 },
+          },
+        }
+      : {}),
+  });
+}
+
+/**
+ * Emit a live canonical turn start for the managed child session.
+ * @param overrides - Turn-start fields to override.
+ */
+async function startTurn(overrides: { turnId?: string; ingestionMarker?: 'live' | 'backfill' } = {}): Promise<void> {
+  await MakaioBus.emit(SessionSubjects.turn.started, {
+    sessionId: 'child-sess-1',
+    turnId: overrides.turnId ?? 'turn-1',
+    turnNumber: 1,
+    messageId: 'msg-1',
+    agentIds: ['agent-1'],
+    ingestionMarker: overrides.ingestionMarker ?? 'live',
+  });
 }
 
 /** Base config for a turn-mode subagent spawn. */
@@ -112,10 +153,31 @@ describe('SubagentService — turn-mode completion', () => {
       });
       expect(status.status).toBe('running');
     });
+    await startTurn();
     return 'child-sess-1';
   }
 
   describe('turn-mode — agent.complete terminalizes', () => {
+    it('retains canonical completion that arrives before the agent completion candidate', async () => {
+      await spawnAndWaitRunning(TURN_SPAWN);
+
+      await completeTurn({ inputTokens: 7 });
+      expect((await MakaioBus.request(SubagentSubjects.getStatus, { subagentId: 'sub-turn-1' })).status).toBe(
+        'running',
+      );
+      await MakaioBus.emit(
+        AgentSubjects.complete,
+        agentCompletePayload('child-sess-1', { outcome: 'completed', message: 'Fast result' }),
+      );
+
+      const result = await MakaioBus.request(SubagentSubjects.await, { subagentId: 'sub-turn-1' });
+      expect(result).toMatchObject({
+        status: 'completed',
+        result: 'Fast result',
+        usage: { inputTokens: 7, cachedInputTokens: 3, outputTokens: 5, toolCallCount: 0 },
+      });
+    });
+
     it('terminalizes with result when outcome is completed', async () => {
       await spawnAndWaitRunning(TURN_SPAWN);
 
@@ -129,10 +191,21 @@ describe('SubagentService — turn-mode completion', () => {
         agentCompletePayload('child-sess-1', { outcome: 'completed', message: 'Summary complete' }),
       );
 
+      expect((await MakaioBus.request(SubagentSubjects.getStatus, { subagentId: 'sub-turn-1' })).status).toBe(
+        'completing',
+      );
+      await completeTurn({ inputTokens: 10 });
+
       const result = await awaiter;
       expect(result.status).toBe('completed');
       expect(result.result).toBe('Summary complete');
       expect(result.completionSource).toBe('turn');
+      expect(result.usage).toEqual({
+        inputTokens: 10,
+        cachedInputTokens: 3,
+        outputTokens: 5,
+        toolCallCount: 0,
+      });
     });
 
     it('terminalizes with result when outcome is absent (legacy emitters)', async () => {
@@ -147,6 +220,7 @@ describe('SubagentService — turn-mode completion', () => {
       const payload = agentCompletePayload('child-sess-1', { message: 'Legacy result' });
       const { outcome: _omitted, ...payloadWithoutOutcome } = payload;
       await MakaioBus.emit(AgentSubjects.complete, payloadWithoutOutcome);
+      await completeTurn();
 
       const result = await awaiter;
       expect(result.status).toBe('completed');
@@ -169,6 +243,7 @@ describe('SubagentService — turn-mode completion', () => {
           error: 'context window exceeded',
         }),
       );
+      await completeTurn({ success: false, error: 'context window exceeded' });
 
       const result = await awaiter;
       expect(result.status).toBe('failed');
@@ -243,6 +318,8 @@ describe('SubagentService — turn-mode completion', () => {
         AgentSubjects.complete,
         agentCompletePayload('child-sess-1', { outcome: 'completed', message: 'Done' }),
       );
+      expect(closedSessions).toEqual([]);
+      await completeTurn();
 
       await vi.waitFor(() => {
         expect(closedSessions).toContain('child-sess-1');
@@ -256,6 +333,7 @@ describe('SubagentService — turn-mode completion', () => {
         AgentSubjects.complete,
         agentCompletePayload('child-sess-1', { outcome: 'error', error: 'context window exceeded' }),
       );
+      await completeTurn({ success: false, error: 'context window exceeded' });
 
       await vi.waitFor(() => {
         expect(closedSessions).toContain('child-sess-1');
@@ -274,6 +352,7 @@ describe('SubagentService — turn-mode completion', () => {
         AgentSubjects.complete,
         agentCompletePayload('child-sess-1', { outcome: 'error', error: 'boom' }),
       );
+      await completeTurn({ success: false, error: 'boom' });
 
       await vi.waitFor(() => {
         expect(completedEvents).toEqual([{ success: false, error: 'boom' }]);
@@ -288,15 +367,15 @@ describe('SubagentService — turn-mode completion', () => {
 
       // completeTask wins first
       await MakaioBus.request(SubagentSubjects.completeTask, {
-        subagentId: 'sub-turn-1',
+        sessionId: 'child-sess-1',
         result: 'Tool result',
       });
 
       const statusAfterTool = await MakaioBus.request(SubagentSubjects.getStatus, {
         subagentId: 'sub-turn-1',
       });
-      expect(statusAfterTool.status).toBe('completed');
-      expect(statusAfterTool.result).toBe('Tool result');
+      expect(statusAfterTool.status).toBe('completing');
+      await completeTurn();
 
       // agent.complete arrives late — should be silently ignored
       await MakaioBus.emit(
@@ -321,13 +400,30 @@ describe('SubagentService — turn-mode completion', () => {
       });
 
       await MakaioBus.request(SubagentSubjects.completeTask, {
-        subagentId: 'sub-turn-1',
+        sessionId: 'child-sess-1',
         result: 'Tool result',
       });
+      await completeTurn();
 
       const response = await awaiter;
       expect(response.status).toBe('completed');
       expect(response.completionSource).toBe('tool');
+    });
+
+    it('allows await to start while canonical completion is still pending', async () => {
+      await spawnAndWaitRunning(TURN_SPAWN);
+      await MakaioBus.request(SubagentSubjects.completeTask, {
+        sessionId: 'child-sess-1',
+        result: 'Tool result',
+      });
+
+      const awaiter = MakaioBus.request(SubagentSubjects.await, {
+        subagentId: 'sub-turn-1',
+        timeoutMs: 5_000,
+      });
+      await completeTurn();
+
+      await expect(awaiter).resolves.toMatchObject({ status: 'completed', result: 'Tool result' });
     });
   });
 
@@ -355,9 +451,10 @@ describe('SubagentService — turn-mode completion', () => {
       });
 
       await MakaioBus.request(SubagentSubjects.completeTask, {
-        subagentId: 'sub-tool-1',
+        sessionId: 'child-sess-1',
         result: 'Tool finished',
       });
+      await completeTurn();
 
       const response = await awaiter;
       expect(response.status).toBe('completed');
@@ -368,9 +465,10 @@ describe('SubagentService — turn-mode completion', () => {
       await spawnAndWaitRunning(TOOL_SPAWN);
 
       await MakaioBus.request(SubagentSubjects.completeTask, {
-        subagentId: 'sub-tool-1',
+        sessionId: 'child-sess-1',
         result: 'Tool finished',
       });
+      await completeTurn();
 
       // Await AFTER the subagent is already terminal — exercises the
       // early-return branch of handleAwaitRpc, not the awaiter callback.
