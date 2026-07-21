@@ -39,6 +39,14 @@ the three available locators.
 Subject: `native-session-supervisor.attach`
 Type: Request (RPC)
 
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `supervisorSessionId` | `string \| undefined` | no |
+
 **Response:**
 
 | Field | Type | Required |
@@ -94,6 +102,14 @@ cannot rely on an undocumented priority ordering between fields.
 
 Subject: `native-session-supervisor.status`
 Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `supervisorSessionId` | `string \| undefined` | no |
 
 **Response:**
 

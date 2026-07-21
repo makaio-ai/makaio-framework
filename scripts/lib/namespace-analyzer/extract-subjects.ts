@@ -207,17 +207,78 @@ function extractFieldsFromZodType(
   if (!typeProp) return undefined;
 
   const outputType = checker.getTypeOfSymbol(typeProp);
+  const constituentTypes = outputType.isUnion() ? outputType.types : [outputType];
+  const fieldNames = new Set(constituentTypes.flatMap((type) => type.getProperties().map((field) => field.getName())));
   const fields: SubjectField[] = [];
 
-  for (const field of outputType.getProperties()) {
-    const fieldType = checker.getTypeOfSymbol(field);
-    const typeString = formatSubjectFieldType(checker, fieldType, options);
-    const isOptional = !!(field.flags & ts.SymbolFlags.Optional);
-    fields.push({ name: field.getName(), type: typeString, required: !isOptional });
+  for (const name of fieldNames) {
+    const typeStrings = new Set<string>();
+    let required = true;
+    let needsUndefined = false;
+    let includesUndefined = false;
+
+    for (const constituentType of constituentTypes) {
+      const field = constituentType.getProperty(name);
+      if (!field) {
+        required = false;
+        needsUndefined = true;
+        continue;
+      }
+
+      const fieldType = checker.getTypeOfSymbol(field);
+      addSubjectFieldTypeMembers(typeStrings, checker, fieldType, options);
+      includesUndefined ||= typeIncludesUndefined(fieldType);
+      if (field.flags & ts.SymbolFlags.Optional) required = false;
+    }
+
+    if (needsUndefined && !includesUndefined) typeStrings.add('undefined');
+    fields.push({ name, type: [...typeStrings].join(' | '), required });
   }
 
   fields.sort((a, b) => a.name.localeCompare(b.name));
   return fields.length > 0 || zodType.getProperty('shape') ? fields : undefined;
+}
+
+/**
+ * Add the distinct top-level members of a field type in rendered order.
+ * @param target - Ordered set receiving rendered type members.
+ * @param checker - Type checker used to render each member.
+ * @param type - Field type whose top-level union members should be added.
+ * @param options - Field rendering options for the active docs surface.
+ */
+function addSubjectFieldTypeMembers(
+  target: Set<string>,
+  checker: ts.TypeChecker,
+  type: ts.Type,
+  options: SubjectExtractionOptions,
+): void {
+  const rendered = formatSubjectFieldType(checker, type, options);
+  const sourceFile = ts.createSourceFile(
+    'subject-field-type.ts',
+    `type SubjectField = ${rendered};`,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declaration = sourceFile.statements[0];
+  const members =
+    declaration && ts.isTypeAliasDeclaration(declaration) && ts.isUnionTypeNode(declaration.type)
+      ? declaration.type.types.map((member) => member.getText(sourceFile))
+      : [rendered];
+
+  for (const member of members) {
+    target.add(member);
+  }
+}
+
+/**
+ * Checks whether a field type already includes top-level `undefined`.
+ * @param type - Field type to inspect.
+ * @returns `true` when the type itself, or one of its union members, is `undefined`.
+ */
+function typeIncludesUndefined(type: ts.Type): boolean {
+  if (type.flags & ts.TypeFlags.Undefined) return true;
+  return type.isUnion() && type.types.some((part) => !!(part.flags & ts.TypeFlags.Undefined));
 }
 
 /**

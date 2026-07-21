@@ -185,7 +185,11 @@ serialized by the handler.
 
 | Field | Type | Required |
 |-------|------|----------|
+| `messageCount` | `number \| undefined` | no |
+| `reason` | `"no-importer" \| "file-missing" \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
 | `status` | `"imported" \| "skipped"` | yes |
+| `turnCount` | `number \| undefined` | no |
 
 ### <a id="log-import.importSession"></a>`log-import.importSession` (rpc)
 

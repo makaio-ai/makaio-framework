@@ -64,7 +64,8 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `error` | `string \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ---
 

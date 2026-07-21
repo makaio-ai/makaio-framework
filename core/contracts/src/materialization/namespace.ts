@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
+import { ArtifactRefSchema } from '../artifact/schemas.js';
 import { SurfaceBindingRegistrationSchema } from './schemas.js';
 import { ArtifactViewAffordanceRequestSchema, ArtifactViewRequestSchema } from './view-builder.js';
 import { ArtifactViewModelSchema } from './view-model.js';
@@ -15,14 +16,14 @@ import { ArtifactViewModelSchema } from './view-model.js';
  * with the artifact identity and the structural affordance selector — the
  * resolve RPC reuses the shared view-request shape rather than re-declaring
  * parallel parameter types.
- * @param ref - Stable framework artifact identity.
+ * @param ref - Immutable reference to the artifact revision to render.
  * @param level - Requested detail level (`link`, `summary`, or `full`).
  * @param affordance - Structural affordance selector (own-view, inline, or entry).
  * @param params - Optional JSON-safe runtime parameters.
  */
 export const ArtifactViewResolveRequestSchema = ArtifactViewRequestSchema.extend({
-  /** Stable framework artifact identity. */
-  ref: z.string().min(1),
+  /** Immutable reference to the artifact revision to render. */
+  ref: ArtifactRefSchema,
   /** Structural affordance selector for the view. */
   affordance: ArtifactViewAffordanceRequestSchema,
 });

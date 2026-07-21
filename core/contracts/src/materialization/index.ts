@@ -42,13 +42,16 @@ export {
   ArtifactViewEvidenceSectionSchema,
   ArtifactViewLevelSchema,
   ArtifactViewLinkSchema,
+  ArtifactViewIdentitySchema,
   ArtifactViewModelSchema,
+  ArtifactViewNavigationSchema,
   ArtifactViewPropertiesSectionSchema,
   ArtifactViewRawSectionSchema,
   ArtifactViewRelationsSectionSchema,
   ArtifactViewSectionSchema,
   ArtifactViewSummarySectionSchema,
   ArtifactViewTableSectionSchema,
+  ArtifactViewSurfaceLinksSchema,
 } from './view-model.js';
 export type {
   ArtifactViewCodeSection,
@@ -56,13 +59,16 @@ export type {
   ArtifactViewEvidenceSection,
   ArtifactViewLevel,
   ArtifactViewLink,
+  ArtifactViewIdentity,
   ArtifactViewModel,
+  ArtifactViewNavigation,
   ArtifactViewPropertiesSection,
   ArtifactViewRawSection,
   ArtifactViewRelationsSection,
   ArtifactViewSection,
   ArtifactViewSummarySection,
   ArtifactViewTableSection,
+  ArtifactViewSurfaceLinks,
 } from './view-model.js';
 export {
   ArtifactViewAffordanceDeclarationSchema,

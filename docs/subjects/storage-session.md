@@ -201,15 +201,15 @@ Type: Request (RPC)
 | `clientId` | `string \| undefined` | no |
 | `cwd` | `string \| null` | yes |
 | `externalSessionId` | `string` | yes |
-| `forkPointMessageId` | `string \| null` | yes |
+| `forkPointMessageId` | `null \| string` | yes |
 | `importStatus` | `"discovered" \| "tracking" \| undefined` | no |
 | `isSidechain` | `boolean \| undefined` | no |
-| `kind` | `"fork" \| "root" \| "subagent" \| "compress"` | yes |
+| `kind` | `"root" \| "fork" \| "subagent" \| "compress"` | yes |
 | `lastClientIdentityObservation` | `{ clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined` | no |
 | `logFilePath` | `string \| null \| undefined` | no |
 | `machineId` | `string \| null \| undefined` | no |
 | `metadata` | `Record<string, JsonValue> \| undefined` | no |
-| `parentAdapterSessionId` | `string \| null` | yes |
+| `parentAdapterSessionId` | `null \| string` | yes |
 | `source` | `string` | yes |
 | `startedAt` | `number \| undefined` | no |
 | `title` | `string \| null \| undefined` | no |

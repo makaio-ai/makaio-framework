@@ -3,10 +3,13 @@ import {
   ArtifactSubjects,
   MaterializationSubjects,
   ArtifactViewModelSchema,
+  ArtifactViewResolveRequestSchema,
   type ArtifactProjectionPolicy,
+  type ArtifactRef,
   type ArtifactViewAffordanceDeclaration,
   type ArtifactViewAffordanceRequest,
   type ArtifactViewLevel,
+  type ArtifactViewNavigation,
   type ArtifactViewResolveResponse,
   type ArtifactViewSection,
   type ResolvedArtifactContextWire,
@@ -119,7 +122,7 @@ function matchesAffordance(
  * `materialization.artifact.view.resolve` bus RPC.
  *
  * Resolution flow:
- * 1. Query the artifact by id via `ArtifactSubjects.query`.
+ * 1. Resolve the exact artifact revision via `ArtifactSubjects.resolve`.
  * 2. Load the kind registration from the schema registry.
  * 3. Interpret the affordance truth table.
  * 4. Select an exact custom builder from the builder registry.
@@ -154,7 +157,7 @@ export class ArtifactViewService extends BaseService {
   /** Register the resolve handler on the bus. */
   protected async onInit(): Promise<void> {
     this.registerHandler(MaterializationSubjects.artifact.view.resolve, async (ctx) => {
-      const { ref, level, affordance, params } = ctx.payload;
+      const { ref, level, affordance, params } = ArtifactViewResolveRequestSchema.parse(ctx.payload);
       const result = await this.resolve(ref, level, affordance, params);
       ctx.setResult(result);
     });
@@ -163,31 +166,26 @@ export class ArtifactViewService extends BaseService {
   /**
    * Resolve an artifact view through the affordance truth table and builder
    * dispatch pipeline.
-   * @param ref - Stable framework artifact identity string.
+   * @param ref - Immutable reference to the artifact revision to render.
    * @param level - Requested detail level.
    * @param affordance - Structural affordance selector.
    * @param params - Optional JSON-safe runtime parameters.
    * @returns Discriminated resolve response.
    */
   private async resolve(
-    ref: string,
+    ref: ArtifactRef,
     level: ArtifactViewLevel,
     affordance: ArtifactViewAffordanceRequest,
     params: Record<string, unknown> | undefined,
   ): Promise<ArtifactViewResolveResponse> {
-    // Step 1: Resolve the artifact by querying for current revision by id.
-    // The view service receives only a string ref (the artifact id). We use
-    // query with currentOnly to retrieve the latest revision.
-    const queryResult = await this.bus.requestOptional(ArtifactSubjects.query, {
-      ids: [ref],
-      currentOnly: true,
-    });
+    // Step 1: Resolve precisely the requested immutable artifact revision.
+    const resolveResult = await this.bus.requestOptional(ArtifactSubjects.resolve, { ref });
 
-    if (!queryResult.handled || queryResult.data.artifacts.length === 0) {
+    if (!resolveResult.handled || resolveResult.data.artifact === null) {
       return { status: 'artifact-not-found', view: null };
     }
 
-    const artifact = queryResult.data.artifacts[0]!;
+    const artifact = resolveResult.data.artifact;
 
     // Step 2: Load kind registration from the schema registry
     const registration = this.schemaRegistry.getKind(artifact.kind, artifact.schemaVersion);
@@ -212,11 +210,7 @@ export class ArtifactViewService extends BaseService {
     let resolvedDefaultContext: ResolvedArtifactContextWire | undefined;
     if (customBuilder !== undefined && registration.defaultContext !== undefined) {
       const contextResult = await this.bus.requestOptional(ArtifactSubjects.resolveContext, {
-        ref: {
-          kind: artifact.kind,
-          id: artifact.id,
-          revision: artifact.revision,
-        },
+        ref,
       });
       if (contextResult.handled) {
         // Pass the resolved context graph through to the builder context.
@@ -228,6 +222,7 @@ export class ArtifactViewService extends BaseService {
 
     // Step 7: Dispatch custom builder if selected
     let finalSections: readonly ArtifactViewSection[] = genericView.sections;
+    let finalNavigation: ArtifactViewNavigation = genericView.navigation;
     let builderVersion = GENERIC_ARTIFACT_VIEW_BUILDER_VERSION;
 
     if (customBuilder !== undefined) {
@@ -241,6 +236,7 @@ export class ArtifactViewService extends BaseService {
         affordance,
         params,
         genericSections: genericView.sections,
+        genericNavigation: genericView.navigation,
         relations: artifact.relations,
         defaultContext: resolvedDefaultContext,
       });
@@ -250,7 +246,10 @@ export class ArtifactViewService extends BaseService {
           return { status: 'not-rendered', view: null };
         }
         if ('sections' in builderResult) {
-          finalSections = builderResult.sections;
+          finalSections = builderResult.sections ?? finalSections;
+        }
+        if ('navigation' in builderResult) {
+          finalNavigation = builderResult.navigation ?? finalNavigation;
         }
       }
       // undefined result: keep generic sections, report custom builder version
@@ -259,8 +258,10 @@ export class ArtifactViewService extends BaseService {
     // Step 8: Assemble and validate the final view model
     const viewModel = {
       title: genericView.title,
-      ...(genericView.summary !== undefined ? { summary: genericView.summary } : {}),
+      artifact: genericView.artifact,
+      navigation: finalNavigation,
       sections: [...finalSections],
+      links: genericView.links,
     };
 
     const validated = ArtifactViewModelSchema.parse(viewModel);
@@ -269,7 +270,7 @@ export class ArtifactViewService extends BaseService {
       status: 'ok',
       view: validated,
       builderVersion,
-      sourceRevision: artifact.revision,
+      sourceRevision: ref.revision,
     };
   }
 }

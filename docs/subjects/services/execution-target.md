@@ -40,11 +40,18 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
+| `busMode` | `"relay" \| "host" \| undefined` | no |
+| `busUrl` | `string \| undefined` | no |
 | `createdAt` | `number` | yes |
 | `description` | `string \| undefined` | no |
 | `enabled` | `boolean` | yes |
+| `env` | `Record<string, string> \| undefined` | no |
+| `gitCredentialMode` | `"token" \| "ssh-agent" \| undefined` | no |
 | `id` | `string` | yes |
+| `image` | `string \| undefined` | no |
 | `name` | `string` | yes |
+| `relayUrl` | `string \| undefined` | no |
+| `repoUrl` | `string \| undefined` | no |
 | `scope` | `string` | yes |
 | `type` | `"local" \| "container-local" \| "container-isolated"` | yes |
 | `updatedAt` | `number` | yes |
@@ -151,11 +158,18 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
+| `busMode` | `"relay" \| "host" \| undefined` | no |
+| `busUrl` | `string \| undefined` | no |
 | `createdAt` | `number` | yes |
 | `description` | `string \| undefined` | no |
 | `enabled` | `boolean` | yes |
+| `env` | `Record<string, string> \| undefined` | no |
+| `gitCredentialMode` | `"token" \| "ssh-agent" \| undefined` | no |
 | `id` | `string` | yes |
+| `image` | `string \| undefined` | no |
 | `name` | `string` | yes |
+| `relayUrl` | `string \| undefined` | no |
+| `repoUrl` | `string \| undefined` | no |
 | `scope` | `string` | yes |
 | `type` | `"local" \| "container-local" \| "container-isolated"` | yes |
 | `updatedAt` | `number` | yes |

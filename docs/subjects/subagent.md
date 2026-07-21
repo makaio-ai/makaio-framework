@@ -65,6 +65,7 @@ Type: Request (RPC)
 | `result` | `string \| undefined` | no |
 | `status` | `"completed" \| "cancelled" \| "failed" \| "timeout" \| "waiting_input"` | yes |
 | `toolObservations` | `{ toolName: string; outcome: "success" \| "failure"; artifact?: { kind: string; id: string; revision: string; } \| undefined; }[] \| undefined` | no |
+| `usage` | `{ toolCallCount: number; inputTokens?: number \| undefined; cachedInputTokens?: number \| undefined; outputTokens?: number \| undefined; } \| undefined` | no |
 
 ### <a id="subagent.cancelled"></a>`subagent.cancelled` (event)
 
@@ -91,7 +92,7 @@ Type: Event
 | `result` | `string \| undefined` | no |
 | `subagentId` | `string` | yes |
 | `success` | `boolean` | yes |
-| `usage` | `{ inputTokens: number; outputTokens: number; totalTokens: number; } \| undefined` | no |
+| `usage` | `{ toolCallCount: number; inputTokens?: number \| undefined; cachedInputTokens?: number \| undefined; outputTokens?: number \| undefined; } \| undefined` | no |
 
 ### <a id="subagent.completeTask"></a>`subagent.completeTask` (rpc)
 
@@ -105,8 +106,9 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `result` | `string` | yes |
-| `subagentId` | `string` | yes |
+| `sessionId` | `string` | yes |
 | `summary` | `string \| undefined` | no |
+| `turnId` | `string \| undefined` | no |
 
 **Response:**
 
@@ -175,8 +177,9 @@ Type: Request (RPC)
 | `pendingRequest` | `{ messageId: string; question: string; context?: string \| undefined; } \| undefined` | no |
 | `progress` | `string[]` | yes |
 | `result` | `string \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "waiting_input" \| "hung"` | yes |
+| `status` | `"completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "completing" \| "waiting_input" \| "hung"` | yes |
 | `summary` | `string \| undefined` | no |
+| `usage` | `{ toolCallCount: number; inputTokens?: number \| undefined; cachedInputTokens?: number \| undefined; outputTokens?: number \| undefined; } \| undefined` | no |
 
 ### <a id="subagent.kill"></a>`subagent.kill` (rpc)
 
@@ -217,7 +220,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `subagents` | `{ subagentId: string; task: string; status: "completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "waiting_input" \| "hung"; }[]` | yes |
+| `subagents` | `{ subagentId: string; task: string; status: "completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "completing" \| "waiting_input" \| "hung"; }[]` | yes |
 
 ### <a id="subagent.reportProgress"></a>`subagent.reportProgress` (rpc)
 

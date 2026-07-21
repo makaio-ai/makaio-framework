@@ -71,7 +71,8 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `accepted` | `boolean` | yes |
+| `accepted` | `true \| false` | yes |
+| `downloadSizeBytes` | `number \| undefined` | no |
 | `message` | `string \| undefined` | no |
 
 ### <a id="host:variant.upgradeProgress"></a>`host:variant.upgradeProgress` (event)

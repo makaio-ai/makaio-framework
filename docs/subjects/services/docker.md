@@ -101,6 +101,12 @@ Type: Event
 
 ### <a id="docker.container.spawn"></a>`docker.container.spawn` (rpc)
 
+Spawn a container from one mode-specific public descriptor.
+
+`container-local` requires `repoPath` and `baseBranch`.
+`container-isolated` requires `repoUrl` and `busMode`. Fields belonging
+only to the other mode are rejected by the strict discriminated union.
+
 Subject: `docker.container.spawn`
 Type: Request (RPC)
 
@@ -109,11 +115,18 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapter` | `string` | yes |
+| `baseBranch` | `string \| undefined` | no |
+| `branch` | `string \| undefined` | no |
+| `busMode` | `"relay" \| "host" \| undefined` | no |
 | `executionId` | `string \| undefined` | no |
 | `image` | `string \| undefined` | no |
 | `mode` | `"container-local" \| "container-isolated"` | yes |
+| `relayUrl` | `string \| undefined` | no |
+| `repoPath` | `string \| undefined` | no |
+| `repoUrl` | `string \| undefined` | no |
 | `runtime` | `"full" \| "simple" \| undefined` | no |
 | `sessionId` | `string` | yes |
+| `worktreeBranch` | `string \| undefined` | no |
 
 **Response:**
 

@@ -2,6 +2,7 @@ import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ArtifactSubjects, ArtifactViewModelSchema, MaterializationSubjects } from '@makaio/contracts';
 import type {
   ArtifactProjectionPolicy,
+  ArtifactRef,
   ArtifactRevision,
   ArtifactViewAffordanceRequest,
   ArtifactViewBuilder,
@@ -300,13 +301,13 @@ describe('ArtifactViewService', () => {
   /* ---------------------------------------------------------------------- */
 
   /**
-   * Register a bus handler for the artifact query subject that returns
-   * the specified artifacts. The handler is tracked for afterEach cleanup.
-   * @param artifacts - Artifacts to return from the query handler.
+   * Register a bus handler for exact artifact resolution. The handler is
+   * tracked for afterEach cleanup.
+   * @param artifacts - Artifacts available to the resolve handler.
    */
   function registerQueryHandler(artifacts: ArtifactRevision[]): void {
-    const cleanup = bus.on(ArtifactSubjects.query, (ctx) => {
-      ctx.setResult({ artifacts });
+    const cleanup = bus.on(ArtifactSubjects.resolve, (ctx) => {
+      ctx.setResult({ artifact: artifacts[0] ?? null });
     });
     cleanups.push(cleanup);
   }
@@ -355,20 +356,20 @@ describe('ArtifactViewService', () => {
 
   /**
    * Convenience helper for resolving an artifact view through the bus.
-   * @param ref - Artifact identity string.
+   * @param ref - Artifact identity string or exact artifact reference.
    * @param level - Requested detail level.
    * @param affordance - Structural affordance selector.
    * @param params - Optional runtime parameters.
    * @returns The discriminated resolve response.
    */
   async function resolveView(
-    ref: string,
+    ref: string | ArtifactRef,
     level: ArtifactViewLevel,
     affordance: ArtifactViewAffordanceRequest,
     params?: Record<string, unknown>,
   ) {
     return bus.request(MaterializationSubjects.artifact.view.resolve, {
-      ref,
+      ref: typeof ref === 'string' ? { refClass: 'artifact', kind: 'test-kind', id: ref, revision: 'rev-1' } : ref,
       level,
       affordance,
       ...(params !== undefined ? { params } : {}),
@@ -380,14 +381,34 @@ describe('ArtifactViewService', () => {
   /* ---------------------------------------------------------------------- */
 
   describe('artifact-not-found', () => {
-    it('returns artifact-not-found when no query handler is registered', async () => {
+    it('returns artifact-not-found when no resolve handler is registered', async () => {
       // No handler registered — requestOptional returns { handled: false }
       const result = await resolveView('artifact-1', 'full', { kind: 'own-view' });
       expect(result.status).toBe('artifact-not-found');
       expect(result.view).toBeNull();
     });
 
-    it('returns artifact-not-found when query handler returns empty array', async () => {
+    it('passes the requested immutable ref to the artifact resolver', async () => {
+      const artifact = makeArtifact({ id: 'artifact-exact', revision: 'rev-exact' });
+      const requestedRef: ArtifactRef = {
+        refClass: 'artifact',
+        kind: artifact.kind,
+        id: artifact.id,
+        revision: artifact.revision,
+      };
+      const cleanup = bus.on(ArtifactSubjects.resolve, (ctx) => {
+        expect(ctx.payload.ref).toEqual(requestedRef);
+        ctx.setResult({ artifact });
+      });
+      cleanups.push(cleanup);
+      schemaRegistry.registerKind(makeKindRegistration({ projection: { mode: 'surface' } }));
+
+      const result = await resolveView(requestedRef, 'full', { kind: 'own-view' });
+
+      expect(result).toMatchObject({ status: 'ok', sourceRevision: 'rev-exact' });
+    });
+
+    it('returns artifact-not-found when the exact resolve handler returns null', async () => {
       registerQueryHandler([]);
       const result = await resolveView('artifact-1', 'full', { kind: 'own-view' });
       expect(result.status).toBe('artifact-not-found');
@@ -506,6 +527,47 @@ describe('ArtifactViewService', () => {
         expect(result.view.title).toBe('My Artifact Title');
       }
     });
+
+    it('returns exact artifact identity, generic related navigation, and undecorated links', async () => {
+      const artifact = makeArtifact({
+        revision: 'rev-7',
+        data: { title: 'Plan', lifecycle: { status: 'approved' } },
+        relations: [
+          {
+            type: 'references',
+            target: { refClass: 'artifact', kind: 'specification', id: 'spec-1', revision: 'rev-2' },
+          },
+        ],
+      });
+      registerQueryHandler([artifact]);
+      schemaRegistry.registerKind(
+        makeKindRegistration({
+          status: { path: 'lifecycle.status' },
+          projection: { mode: 'surface' },
+        }),
+      );
+
+      const result = await resolveView(
+        { refClass: 'artifact', kind: 'test-kind', id: 'artifact-1', revision: 'rev-7' },
+        'full',
+        { kind: 'own-view' },
+      );
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expect(result.view.artifact).toEqual({
+          id: 'artifact-1',
+          kind: 'test-kind',
+          revision: 'rev-7',
+          status: 'approved',
+        });
+        expect(result.view.navigation).toEqual({
+          breadcrumbs: [],
+          related: [{ artifactId: 'spec-1', label: '[specification] spec-1' }],
+        });
+        expect(result.view.links).toEqual({});
+      }
+    });
   });
 
   /* ---------------------------------------------------------------------- */
@@ -514,7 +576,7 @@ describe('ArtifactViewService', () => {
 
   describe('custom builder dispatch', () => {
     it('dispatches custom builder and uses returned sections', async () => {
-      const artifact = makeArtifact();
+      const artifact = makeArtifact({ representations: { summary: 'Generic summary' } });
       registerQueryHandler([artifact]);
       schemaRegistry.registerKind(makeKindRegistration({ projection: { mode: 'surface' } }));
 
@@ -539,6 +601,7 @@ describe('ArtifactViewService', () => {
           expect(propsSection.title).toBe('Custom Props');
           expect(propsSection.rows).toEqual([{ label: 'Key', value: 'Val' }]);
         }
+        expect(result.view.sections.some((section) => section.type === 'summary')).toBe(false);
       }
     });
 
@@ -565,6 +628,43 @@ describe('ArtifactViewService', () => {
         // Generic sections should still be present
         const propsSection = result.view.sections.find((s) => s.type === 'properties');
         expect(propsSection).toBeDefined();
+      }
+    });
+
+    it('lets a builder compose kind-specific breadcrumbs with generic navigation', async () => {
+      const artifact = makeArtifact({
+        relations: [
+          {
+            type: 'references',
+            target: { refClass: 'artifact', kind: 'specification', id: 'spec-1', revision: 'rev-2' },
+          },
+        ],
+      });
+      registerQueryHandler([artifact]);
+      schemaRegistry.registerKind(makeKindRegistration({ projection: { mode: 'surface' } }));
+
+      const builder: ArtifactViewBuilder = {
+        kind: 'test-kind',
+        schemaVersion: '1',
+        version: 8,
+        build: async (context) => ({
+          navigation: {
+            ...context.genericNavigation,
+            breadcrumbs: [{ artifactId: 'program-1', label: 'Program' }],
+          },
+        }),
+      };
+      builderRegistry.replaceBuildersForOwner('test-owner', [builder]);
+
+      const result = await resolveView('artifact-1', 'full', { kind: 'own-view' });
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expect(result.builderVersion).toBe(8);
+        expect(result.view.navigation).toEqual({
+          breadcrumbs: [{ artifactId: 'program-1', label: 'Program' }],
+          related: [{ artifactId: 'spec-1', label: '[specification] spec-1' }],
+        });
       }
     });
   });
@@ -898,7 +998,7 @@ describe('ArtifactViewService', () => {
   /* ---------------------------------------------------------------------- */
 
   describe('builder receives correct context', () => {
-    it('builder receives artifact, level, affordance, params, and genericSections', async () => {
+    it('builder receives artifact, level, affordance, params, generic sections, and generic navigation', async () => {
       const artifact = makeArtifact({ data: { title: 'Title', status: 'open' } });
       registerQueryHandler([artifact]);
       schemaRegistry.registerKind(
@@ -915,6 +1015,7 @@ describe('ArtifactViewService', () => {
         affordance?: ArtifactViewAffordanceRequest;
         params?: Record<string, unknown>;
         genericSectionsLength?: number;
+        genericRelatedLength?: number;
         artifactId?: string;
       } = {};
       const builder: ArtifactViewBuilder = {
@@ -927,6 +1028,7 @@ describe('ArtifactViewService', () => {
             affordance: ctx.affordance,
             params: ctx.params as Record<string, unknown> | undefined,
             genericSectionsLength: ctx.genericSections.length,
+            genericRelatedLength: ctx.genericNavigation.related.length,
             artifactId: ctx.artifact.id,
           };
           return undefined;
@@ -940,6 +1042,7 @@ describe('ArtifactViewService', () => {
       expect(receivedContext.affordance).toEqual({ kind: 'own-view' });
       expect(receivedContext.params).toEqual({ highlight: true });
       expect(receivedContext.genericSectionsLength).toBeGreaterThanOrEqual(0);
+      expect(receivedContext.genericRelatedLength).toBe(0);
       expect(receivedContext.artifactId).toBe('artifact-1');
     });
   });

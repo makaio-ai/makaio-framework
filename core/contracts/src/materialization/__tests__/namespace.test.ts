@@ -198,6 +198,7 @@ describe('ArtifactProjectionPolicySchema projectedFields', () => {
 });
 
 describe('artifact.view.resolve RPC protocol', () => {
+  const ref = { refClass: 'artifact' as const, kind: 'test-kind', id: 'artifact-123', revision: 'rev-1' };
   it('has the fully qualified subject materialization.artifact.view.resolve', () => {
     expect(MaterializationSubjects.artifact.view.resolve.subject).toBe('artifact.view.resolve');
     expect(MaterializationSubjects.artifact.view.resolve.$meta.namespace).toBe('materialization');
@@ -209,7 +210,7 @@ describe('artifact.view.resolve RPC protocol', () => {
     const request = (schema as { request: z.ZodType }).request;
 
     const result = request.safeParse({
-      ref: 'artifact-123',
+      ref,
       level: 'full',
       affordance: { kind: 'own-view' },
     });
@@ -217,12 +218,29 @@ describe('artifact.view.resolve RPC protocol', () => {
     expect(result.success).toBe(true);
   });
 
+  it('requires an immutable artifact ref for a resolve request', () => {
+    expect(
+      ArtifactViewResolveRequestSchema.safeParse({
+        ref: 'artifact-123',
+        level: 'full',
+        affordance: { kind: 'own-view' },
+      }).success,
+    ).toBe(false);
+    expect(
+      ArtifactViewResolveRequestSchema.safeParse({
+        ref: { refClass: 'artifact', kind: 'test-kind', id: 'artifact-123' },
+        level: 'full',
+        affordance: { kind: 'own-view' },
+      }).success,
+    ).toBe(false);
+  });
+
   it('parses an inline resolve request with host relation', () => {
     const schema = MaterializationSchemas['artifact.view.resolve'];
     const request = (schema as { request: z.ZodType }).request;
 
     const result = request.safeParse({
-      ref: 'artifact-456',
+      ref: { ...ref, id: 'artifact-456' },
       level: 'summary',
       affordance: { kind: 'inline', hostRelation: 'blocked-by' },
     });
@@ -235,7 +253,7 @@ describe('artifact.view.resolve RPC protocol', () => {
     const request = (schema as { request: z.ZodType }).request;
 
     const result = request.safeParse({
-      ref: 'artifact-789',
+      ref: { ...ref, id: 'artifact-789' },
       level: 'summary',
       affordance: { kind: 'entry', via: 'dashboard' },
     });
@@ -248,7 +266,7 @@ describe('artifact.view.resolve RPC protocol', () => {
     const request = (schema as { request: z.ZodType }).request;
 
     const result = request.safeParse({
-      ref: 'artifact-789',
+      ref: { ...ref, id: 'artifact-789' },
       level: 'link',
       affordance: { kind: 'entry', collection: 'recent' },
     });
@@ -258,7 +276,7 @@ describe('artifact.view.resolve RPC protocol', () => {
 
   it('strips level from entry affordance in resolve request (container uses top-level)', () => {
     const result = ArtifactViewResolveRequestSchema.safeParse({
-      ref: 'artifact-789',
+      ref: { ...ref, id: 'artifact-789' },
       level: 'summary',
       affordance: { kind: 'entry', via: 'dashboard', level: 'link' },
     });
@@ -276,7 +294,7 @@ describe('artifact.view.resolve RPC protocol', () => {
     const request = (schema as { request: z.ZodType }).request;
 
     const result = request.safeParse({
-      ref: 'artifact-123',
+      ref,
       level: 'full',
       affordance: { kind: 'own-view' },
       params: { depth: 3, includeArchived: true },
@@ -290,7 +308,7 @@ describe('artifact.view.resolve RPC protocol', () => {
     const request = (schema as { request: z.ZodType }).request;
 
     const result = request.safeParse({
-      ref: 'artifact-123',
+      ref,
       level: 'full',
       affordance: { kind: 'own-view' },
       params: 'not-an-object',
@@ -307,7 +325,10 @@ describe('artifact.view.resolve RPC protocol', () => {
       status: 'ok',
       view: {
         title: 'Implementation Plan',
+        artifact: { id: 'plan-1', kind: 'implementation-plan', revision: 'rev-1' },
+        navigation: { breadcrumbs: [], related: [] },
         sections: [{ type: 'summary', title: 'Overview', text: 'A plan for implementing views.' }],
+        links: {},
       },
       builderVersion: 1,
       sourceRevision: 'rev-1',
@@ -323,7 +344,13 @@ describe('artifact.view.resolve RPC protocol', () => {
     expect(
       response.safeParse({
         status: 'ok',
-        view: { title: 'Test', sections: [] },
+        view: {
+          title: 'Test',
+          artifact: { id: 'test-1', kind: 'test', revision: 'rev-1' },
+          navigation: { breadcrumbs: [], related: [] },
+          sections: [],
+          links: {},
+        },
         builderVersion: 0,
         sourceRevision: 'rev-1',
       }).success,
@@ -332,7 +359,13 @@ describe('artifact.view.resolve RPC protocol', () => {
     expect(
       response.safeParse({
         status: 'ok',
-        view: { title: 'Test', sections: [] },
+        view: {
+          title: 'Test',
+          artifact: { id: 'test-1', kind: 'test', revision: 'rev-1' },
+          navigation: { breadcrumbs: [], related: [] },
+          sections: [],
+          links: {},
+        },
         builderVersion: 1.5,
         sourceRevision: 'rev-1',
       }).success,
@@ -346,7 +379,13 @@ describe('artifact.view.resolve RPC protocol', () => {
     expect(
       response.safeParse({
         status: 'ok',
-        view: { title: 'Test', sections: [] },
+        view: {
+          title: 'Test',
+          artifact: { id: 'test-1', kind: 'test', revision: 'rev-1' },
+          navigation: { breadcrumbs: [], related: [] },
+          sections: [],
+          links: {},
+        },
         builderVersion: 1,
       }).success,
     ).toBe(false);
@@ -413,7 +452,13 @@ describe('artifact.view.resolve RPC protocol', () => {
 
     const result = response.safeParse({
       status: 'ok',
-      view: { title: 'Test', sections: [] },
+      view: {
+        title: 'Test',
+        artifact: { id: 'test-1', kind: 'test', revision: 'rev-1' },
+        navigation: { breadcrumbs: [], related: [] },
+        sections: [],
+        links: {},
+      },
       builderVersion: 1,
       sourceRevision: 'rev-1',
       builder: () => ({}),
@@ -429,6 +474,8 @@ describe('artifact.view.resolve RPC protocol', () => {
 
     const view = {
       title: 'Section Variants Test',
+      artifact: { id: 'test-1', kind: 'test', revision: 'rev-42' },
+      navigation: { breadcrumbs: [], related: [] },
       sections: [
         { type: 'summary', title: 'Summary', text: 'A summary section.' },
         {
@@ -470,6 +517,7 @@ describe('artifact.view.resolve RPC protocol', () => {
           source: 'graph TD; A-->B',
         },
       ],
+      links: {},
     };
 
     const result = response.safeParse({

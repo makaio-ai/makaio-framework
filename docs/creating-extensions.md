@@ -278,13 +278,17 @@ For full bus documentation, see [Bus Architecture](./architecture/bus/).
 Extensions can shape how artifacts render as provider-neutral views. There are two
 seams: **projection policy** declared on an artifact kind (serializable, drives the
 generic view builder), and **live view builders** contributed by an extension
-(executable, replace or suppress the generic sections for one exact kind).
+(executable, replace sections or navigation, or suppress rendering for one exact kind).
 
 Views are resolved through one bus RPC — `MaterializationSubjects.artifact.view.resolve`
 — which returns a validated `ArtifactViewModel` plus its exact `sourceRevision` (`ok`),
-`artifact-not-found`, or `not-rendered`. The view model is semantic: typed sections (summary, properties, table,
-relations, evidence, raw, code, mermaid diagram), a semantic title, and navigation
-links. Provider renderers (e.g. Markdown for an external issue tracker) and physical
+`artifact-not-found`, or `not-rendered`. Every resolved view contains a semantic title,
+exact `artifact` identity, structured `navigation`, ordered `sections`, and a `links`
+object. Summary content is one of the eight typed section variants, not a separate
+top-level field. The other variants are properties, table, relations, evidence, raw,
+code, and Mermaid diagram. `links` starts empty; product dashboards and provider
+adapters may decorate its dashboard and materialization URLs after resolution.
+Provider renderers (for example, Markdown for an external issue tracker) and physical
 title allocation on provider surfaces stay outside the view model — they consume it.
 
 ### Declaring Projection Policy on a Kind
@@ -335,7 +339,8 @@ Rules enforced by the contract schemas:
 
 - At most one projected field may declare `viewRole: 'title'` and one
   `viewRole: 'summary'`. Fallbacks are `[<kind>] <id>` for the title and
-  `representations.summary` for the summary.
+  `representations.summary` for summary content. Summary content is emitted as
+  the first generic `summary` section, so section replacement controls it too.
 - Levels order monotonically `link < summary < full`; a field is visible at every
   level at or above its `fromLevel`.
 - When `affordances` is present it is exact and authoritative; an empty array means
@@ -346,6 +351,8 @@ Rules enforced by the contract schemas:
 The generic builder projects only declared fields — scalars and scalar arrays become
 property rows, arrays of scalar-valued records become tables, objects and
 heterogeneous arrays become per-field raw sections. Undeclared data is never exposed.
+Direct artifact relations also become `navigation.related` without extra reads;
+breadcrumbs remain kind-specific.
 
 ### Contributing Live View Builders
 
@@ -367,19 +374,20 @@ const deploymentPlanBuilder = defineArtifactViewBuilder({
     // context.affordance        — structural affordance selector
     // context.params            — JSON-safe runtime params (or undefined)
     // context.genericSections   — always-built generic sections
+    // context.genericNavigation — direct-relation links and empty breadcrumbs
     // context.relations         — the artifact's direct relations
     // context.defaultContext    — resolved context graph; present only when
     //                             the kind declares a defaultContext selector
 
     if (context.level === 'link') {
-      return undefined; // keep the generic sections unchanged
+      return undefined; // keep generic sections and navigation unchanged
     }
     if (context.artifact.data['status'] === 'draft') {
       return { render: false }; // resolver answers not-rendered
     }
     return {
-      // Complete replacement. To augment instead, compose explicitly
-      // from context.genericSections.
+      // Each supplied field replaces its generic counterpart. To augment,
+      // compose explicitly from the corresponding context value.
       sections: [
         ...context.genericSections,
         {
@@ -389,6 +397,10 @@ const deploymentPlanBuilder = defineArtifactViewBuilder({
           source: 'graph TD; build --> stage --> prod;',
         },
       ],
+      navigation: {
+        ...context.genericNavigation,
+        breadcrumbs: [{ artifactId: 'release-1', label: 'Release' }],
+      },
     };
   },
 });
@@ -404,8 +416,16 @@ const extension: MakaioExtension = {
 export default extension;
 ```
 
-Builder outcomes are exactly three: `undefined` (keep generic sections), `{ sections }`
-(complete replacement), or `{ render: false }` (suppress rendering).
+Builder results are `undefined` (keep generic sections and navigation),
+`{ sections }`, `{ navigation }`, `{ sections, navigation }`, or `{ render: false }`
+(suppress rendering). A supplied `sections` or `navigation` field completely replaces
+that generic value; an omitted field keeps its generic value. Compose explicitly from
+`context.genericSections` or `context.genericNavigation` when augmenting either one.
+
+Treat `version` as a monotonic determinism stamp and increment it whenever the
+builder's section or navigation semantics change. The resolver reports it as
+`builderVersion`, allowing provider adapters to include it in their own projection
+fingerprints. The framework does not define a shared render fingerprint.
 
 Use `defineArtifactViewBuilder` rather than annotating an untyped object as
 `ArtifactViewBuilder`: it preserves the literal `kind`, so declaration-merged

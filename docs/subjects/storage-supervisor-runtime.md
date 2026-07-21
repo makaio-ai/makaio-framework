@@ -58,6 +58,14 @@ Exactly one of the locator fields must be provided.
 Subject: `storage:supervisor-runtime.get`
 Type: Request (RPC)
 
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `supervisorSessionId` | `string \| undefined` | no |
+
 **Response:**
 
 | Field | Type | Required |

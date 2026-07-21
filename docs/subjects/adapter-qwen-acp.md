@@ -77,6 +77,10 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `action` | `"allow" \| "deny"` | yes |
+| `message` | `string \| undefined` | no |
+| `shouldAbort` | `boolean \| undefined` | no |
+| `updatedInput` | `Record<string, unknown> \| undefined` | no |
+| `updatedPermissions` | `unknown[] \| undefined` | no |
 
 ### <a id="adapter:qwen-acp.session_update_context_window"></a>`adapter:qwen-acp.session_update_context_window` (event)
 

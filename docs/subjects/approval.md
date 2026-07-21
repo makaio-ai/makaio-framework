@@ -55,6 +55,8 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `action` | `"allow" \| "deny"` | yes |
+| `message` | `string \| undefined` | no |
+| `updatedInput` | `Record<string, unknown> \| undefined` | no |
 
 ### <a id="approval.resolveEnrichedPolicy"></a>`approval.resolveEnrichedPolicy` (rpc)
 

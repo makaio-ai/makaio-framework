@@ -59,7 +59,8 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `code` | `"account-not-found" \| "activation-failed" \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ### <a id="credential.activation.commit"></a>`credential.activation.commit` (rpc)
 
@@ -78,7 +79,8 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `code` | `"transaction-not-found" \| "commit-failed" \| "commit-rollback-failed" \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ### <a id="credential.activation.prepare"></a>`credential.activation.prepare` (rpc)
 
@@ -101,7 +103,9 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `code` | `"account-not-found" \| "activation-failed" \| undefined` | no |
+| `success` | `true \| false` | yes |
+| `transactionId` | `string \| undefined` | no |
 
 ### <a id="credential.activation.rollback"></a>`credential.activation.rollback` (rpc)
 
@@ -120,7 +124,8 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `code` | `"transaction-not-found" \| "rollback-failed" \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ### <a id="credential.changed"></a>`credential.changed` (rpc)
 

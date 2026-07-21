@@ -524,9 +524,11 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
+| `action` | `"reject" \| "approve" \| undefined` | no |
 | `executionId` | `string` | yes |
 | `frameId` | `string` | yes |
-| `source` | `"user" \| "cancelled" \| "timeout"` | yes |
+| `reason` | `string \| undefined` | no |
+| `source` | `"user" \| "timeout" \| "cancelled"` | yes |
 | `stepId` | `string` | yes |
 | `stepType` | `"gate"` | yes |
 

@@ -67,6 +67,48 @@ interface WorkspacePackageManifest {
   readonly publishWorkspaceDependencies?: readonly string[];
 }
 
+/**
+ * Reads multiple Git objects through one batch process.
+ * @param ref - Git ref containing the requested files.
+ * @param paths - Repository-root-relative file paths.
+ * @returns File contents in the same order as `paths`.
+ */
+function readFilesAtRef(ref: string, paths: readonly string[]): string[] {
+  if (paths.length === 0) return [];
+
+  const result = spawnSync('git', ['cat-file', '--batch'], {
+    input: paths.map((path) => `${ref}:${path}`).join('\n') + '\n',
+    maxBuffer: 100 * 1024 * 1024,
+  });
+  if (result.error) {
+    throw new Error(`Failed to read package manifests at ${ref}: ${result.error.message}`, { cause: result.error });
+  }
+  if (result.status !== 0) {
+    throw new Error(`Failed to read package manifests at ${ref}: ${result.stderr?.toString().trim() ?? ''}`);
+  }
+
+  const contents: string[] = [];
+  let offset = 0;
+  for (const path of paths) {
+    const headerEnd = result.stdout.indexOf(0x0a, offset);
+    if (headerEnd < 0) throw new Error(`Missing Git object header for ${ref}:${path}`);
+
+    const header = result.stdout.subarray(offset, headerEnd).toString('utf8');
+    const match = /^[0-9a-f]+ blob (\d+)$/u.exec(header);
+    if (!match) throw new Error(`Unexpected Git object header for ${ref}:${path}: ${header}`);
+
+    const size = Number(match[1]);
+    const contentStart = headerEnd + 1;
+    const contentEnd = contentStart + size;
+    if (result.stdout[contentEnd] !== 0x0a) throw new Error(`Truncated Git object for ${ref}:${path}`);
+
+    contents.push(result.stdout.subarray(contentStart, contentEnd).toString('utf8'));
+    offset = contentEnd + 1;
+  }
+
+  return contents;
+}
+
 /** Workspace package root used for framework build-input mapping. */
 export interface FrameworkBuildPackageRoot {
   readonly name: string;
@@ -132,8 +174,10 @@ function readWorkspacePackageManifestsAtRef(ref: string): WorkspacePackageManife
     .filter((path) => path !== 'package.json' && path.endsWith('/package.json'));
 
   const manifests: WorkspacePackageManifest[] = [];
-  for (const packageJsonPath of packageJsonPaths) {
-    const raw = execFileSync('git', ['show', `${ref}:${packageJsonPath}`], { encoding: 'utf8' });
+  const packageJsonContents = readFilesAtRef(ref, packageJsonPaths);
+  for (const [index, packageJsonPath] of packageJsonPaths.entries()) {
+    const raw = packageJsonContents[index];
+    if (raw === undefined) throw new Error(`Missing package manifest content for ${ref}:${packageJsonPath}`);
     const packageJson = JSON.parse(raw) as {
       name?: string;
       version?: string;

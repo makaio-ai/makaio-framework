@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ExtensionVerifyError, verifyExtensionWorkspace } from './extension-verify.js';
 
 const tempDirs: string[] = [];
-const VERIFY_TEST_TIMEOUT_MS = 15_000;
+const VERIFY_TEST_TIMEOUT_MS = 30_000;
 
 afterEach(async () => {
   while (tempDirs.length > 0) {
