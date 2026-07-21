@@ -3313,7 +3313,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@github/keytar@npm:^7.10.6":
+"@github/keytar@npm:7.10.6, @github/keytar@npm:^7.10.6":
   version: 7.10.6
   resolution: "@github/keytar@npm:7.10.6"
   dependencies:
@@ -3551,18 +3551,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@google/gemini-cli@npm:0.43.0":
-  version: 0.43.0
-  resolution: "@google/gemini-cli@npm:0.43.0"
+"@google/gemini-cli@npm:0.51.0":
+  version: 0.51.0
+  resolution: "@google/gemini-cli@npm:0.51.0"
   dependencies:
-    "@github/keytar": "npm:^7.10.6"
+    "@github/keytar": "npm:7.10.6"
     "@lydell/node-pty": "npm:1.1.0"
     "@lydell/node-pty-darwin-arm64": "npm:1.1.0"
     "@lydell/node-pty-darwin-x64": "npm:1.1.0"
     "@lydell/node-pty-linux-x64": "npm:1.1.0"
     "@lydell/node-pty-win32-arm64": "npm:1.1.0"
     "@lydell/node-pty-win32-x64": "npm:1.1.0"
-    node-pty: "npm:^1.0.0"
+    node-pty: "npm:1.0.0"
   dependenciesMeta:
     "@github/keytar":
       optional: true
@@ -3582,7 +3582,7 @@ __metadata:
       optional: true
   bin:
     gemini: bundle/gemini.js
-  checksum: 10c0/315f72d14ca6d762c9fffca97b2ab834eb3ee78c42c2bda645094b590c23c2f39574dd09f33bc2d023180164c7ba39ff318a40da500055739485c2665cda05a3
+  checksum: 10c0/4cc7d0a15347eabf15270738e0e1b27d89ad680083545ef06ebf5e74e38827e72854c9a323f00faa5e86de1514b14216a05535de6b140628686fa77448d4bf21
   languageName: node
   linkType: hard
 
@@ -4449,7 +4449,7 @@ __metadata:
   resolution: "@makaio/adapter-gemini-sdk@workspace:adapters/implementations/gemini-sdk"
   dependencies:
     "@agentclientprotocol/sdk": "npm:0.21.0"
-    "@google/gemini-cli": "npm:0.43.0"
+    "@google/gemini-cli": "npm:0.51.0"
     "@google/gemini-cli-core": "npm:0.43.0"
     "@google/genai": "npm:1.48.0"
     "@makaio/ai-adapters-core": "workspace:*"
@@ -21266,6 +21266,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"nan@npm:^2.17.0":
+  version: 2.28.0
+  resolution: "nan@npm:2.28.0"
+  dependencies:
+    node-gyp: "npm:latest"
+  checksum: 10c0/84e45fbb6a249df751bba657728792a8d93e3b10bad9774200c858d1ff38723c988c3e4cef50b3742fa8a05da2e49fa16806f6d768405382d8b1094d10d42fa5
+  languageName: node
+  linkType: hard
+
 "nano-css@npm:^5.6.2":
   version: 5.6.2
   resolution: "nano-css@npm:5.6.2"
@@ -21489,6 +21498,16 @@ __metadata:
   version: 1.0.4
   resolution: "node-mock-http@npm:1.0.4"
   checksum: 10c0/86e3f7453cf07ad6b8bd17cf89ff91d45f486a861cf6d891618cf29647d559cbcde1d1f90c9cc02e014ff9f7900b2fb21c96b03ea4b4a415dbe2d65badadceba
+  languageName: node
+  linkType: hard
+
+"node-pty@npm:1.0.0":
+  version: 1.0.0
+  resolution: "node-pty@npm:1.0.0"
+  dependencies:
+    nan: "npm:^2.17.0"
+    node-gyp: "npm:latest"
+  checksum: 10c0/c308686826eb2f7616735f4c71e6e41ff630346b14319972dbdf9711640bc6975ce21eab66a47b7ce9a88c70308fe81bfd9840127388d5fa26c52afbad255871
   languageName: node
   linkType: hard
 
