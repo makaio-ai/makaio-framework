@@ -351,6 +351,71 @@ describe('extractNamespaces', () => {
       },
     ]);
   });
+
+  it('includes fields owned by individual response union variants', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        interface TestSchema<Input, Output> {
+          readonly _input: Input;
+          readonly _output: Output;
+          readonly shape: object;
+        }
+
+        declare function createBusNamespace(domain: string, schemas: unknown): unknown;
+        declare const RequestSchema: TestSchema<{ ref: string }, { ref: string }>;
+        declare const ResponseSchema: TestSchema<
+          never,
+          | { status: 'ok'; view: { title: string }; builderVersion: number; sourceRevision: string; note?: string }
+          | { status: 'not-found'; view: null }
+        >;
+
+        export const DemoNamespace = createBusNamespace('demo', {
+          resolve: { request: RequestSchema, response: ResponseSchema },
+        });
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces[0]?.subjects[0]?.response).toEqual([
+      { name: 'builderVersion', type: 'number | undefined', required: false },
+      { name: 'note', type: 'string | undefined', required: false },
+      { name: 'sourceRevision', type: 'string | undefined', required: false },
+      { name: 'status', type: '"ok" | "not-found"', required: true },
+      { name: 'view', type: '{ title: string; } | null', required: true },
+    ]);
+  });
+
+  it('deduplicates field type members shared by response union variants', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        interface TestSchema<Input, Output> {
+          readonly _input: Input;
+          readonly _output: Output;
+          readonly shape: object;
+        }
+
+        declare function createBusNamespace(domain: string, schemas: unknown): unknown;
+        declare const RequestSchema: TestSchema<Record<string, never>, Record<string, never>>;
+        declare const ResponseSchema: TestSchema<
+          never,
+          | { kind: 'first'; value: string | null }
+          | { kind: 'second'; value: null | number }
+        >;
+
+        export const DemoNamespace = createBusNamespace('demo', {
+          resolve: { request: RequestSchema, response: ResponseSchema },
+        });
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces[0]?.subjects[0]?.response).toEqual([
+      { name: 'kind', type: '"first" | "second"', required: true },
+      { name: 'value', type: 'string | null | number', required: true },
+    ]);
+  });
 });
 
 describe('findCallsites', () => {

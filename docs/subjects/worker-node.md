@@ -115,8 +115,13 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `artifact` | `{ kind: string; id: string; revision: string; scope: { level: string; ids?: Record<string, string> \| undefined; }; schemaVersion: string; data: Record<string, unknown>; relations: { type: string; target: { refClass: "artifact"; kind: string; id: string; revision: string; } \| { refClass: "local"; artifact: { refClass: "artifact"; kind: string; id: string; revision: string; }; localId: string; } \| { refClass: "evidence"; kind: string; id: string; revision?: string \| undefined; locator?: string \| undefined; }; }[]; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; confidence?: { level: "assumed" \| "inferred" \| "stated" \| "confirmed" \| "verified"; basis: { kind: string; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; detail?: string \| undefined; evidenceRef?: { refClass: "artifact"; kind: string; id: string; revision: string; } \| { refClass: "local"; artifact: { refClass: "artifact"; kind: string; id: string; revision: string; }; localId: string; } \| { refClass: "evidence"; kind: string; id: string; revision?: string \| undefined; locator?: string \| undefined; } \| undefined; }[]; } \| undefined; representations?: { markdown?: string \| undefined; summary?: string \| undefined; plaintext?: string \| undefined; } \| undefined; createdAt?: number \| undefined; } \| undefined` | no |
+| `error` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "paused"` | yes |
+| `pausedAtFrameId` | `string \| undefined` | no |
+| `pausedAtGateId` | `string \| undefined` | no |
+| `reason` | `string \| undefined` | no |
+| `status` | `"completed" \| "failed" \| "cancelled" \| "paused"` | yes |
 | `workflowId` | `string` | yes |
 
 ### <a id="worker-node.lifecycle.booting"></a>`worker-node.lifecycle.booting` (event)

@@ -334,12 +334,12 @@ Type: Event
 | `adapterName` | `string` | yes |
 | `adapterSessionId` | `string` | yes |
 | `cwd` | `string \| null` | yes |
-| `forkPointMessageId` | `string \| null` | yes |
-| `kind` | `"fork" \| "root" \| "subagent" \| "compress"` | yes |
+| `forkPointMessageId` | `null \| string` | yes |
+| `kind` | `"root" \| "fork" \| "subagent" \| "compress"` | yes |
 | `logFilePath` | `string \| null \| undefined` | no |
 | `machineId` | `string \| null \| undefined` | no |
 | `model` | `string \| null` | yes |
-| `parentAdapterSessionId` | `string \| null` | yes |
+| `parentAdapterSessionId` | `null \| string` | yes |
 | `startedAt` | `number \| undefined` | no |
 | `title` | `string \| undefined` | no |
 
@@ -387,6 +387,7 @@ For `resume` mode, `sessionId` and `adapterSessionId` are REQUIRED.
 |-------|------|----------|
 | `adapterConfig` | `Record<string, unknown> \| undefined` | no |
 | `adapterId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `allowedDirectories` | `string[] \| undefined` | no |
 | `allowedTools` | `string[] \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
@@ -395,10 +396,11 @@ For `resume` mode, `sessionId` and `adapterSessionId` are REQUIRED.
 | `disallowedTools` | `string[] \| undefined` | no |
 | `env` | `Record<string, string> \| undefined` | no |
 | `ephemeral` | `boolean \| undefined` | no |
+| `forkPointMessageId` | `string \| undefined` | no |
 | `harnessId` | `string \| undefined` | no |
 | `initialMessage` | `string \| { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; } \| undefined` | no |
 | `mcpSessionContext` | `{ sessionId: string; projectId: string \| null; profileId: string \| null; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; } \| { sessionId: string; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; } \| undefined` | no |
-| `mode` | `"create" \| "fork" \| "resume" \| undefined` | no |
+| `mode` | `"fork" \| "resume" \| "create" \| undefined` | no |
 | `model` | `string \| undefined` | no |
 | `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; } \| { state: "unresolved"; } \| undefined` | no |
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
@@ -406,13 +408,22 @@ For `resume` mode, `sessionId` and `adapterSessionId` are REQUIRED.
 | `role` | `"lead" \| "member"` | yes |
 | `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; cacheStrategy?: "auto" \| "systemPrompt" \| "fullPrefix" \| undefined; turnContext?: Record<string, unknown> \| undefined; requestCorrelation?: { sessionId?: string \| undefined; turnId?: string \| undefined; messageId?: string \| undefined; executionId?: string \| undefined; frameId?: string \| undefined; } \| undefined; nativeLocality?: { kind: "native"; } \| { kind: "degrade"; reason: "adapter-unsupported" \| "adapter-mismatch" \| "no-adapter-session" \| "missing-machine-id" \| "machine-mismatch" \| "cwd-mismatch" \| "transforms-present" \| "compression-present" \| "connector-swap" \| "mid-history-unsupported" \| "hybrid-imported-orchestrated" \| "native-attempt-failed" \| "agent-already-started" \| "fork-point-unresolvable"; } \| { kind: "foreign"; machineId: string; } \| undefined; nativeFork?: { sourceSessionId: string; sourceAdapterSessionId: string; forkPointMessageId?: string \| undefined; targetWorkingDirectory?: string \| undefined; } \| undefined; } \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
+| `sourceAdapterSessionId` | `string \| undefined` | no |
+| `sourceSessionId` | `string \| undefined` | no |
 | `systemPrompt` | `string \| { mode: "append"; content: string; } \| undefined` | no |
+| `targetWorkingDirectory` | `string \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `adapterId` | `string \| undefined` | no |
+| `adapterSessionId` | `string \| undefined` | no |
+| `agentId` | `string \| undefined` | no |
+| `message` | `string \| undefined` | no |
+| `messageId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ### <a id="adapter.stopAgent"></a>`adapter.stopAgent` (rpc)
 

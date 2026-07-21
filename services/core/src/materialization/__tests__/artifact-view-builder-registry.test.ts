@@ -434,6 +434,7 @@ describe('ArtifactViewBuilderRegistry', () => {
         affordance: { kind: 'own-view' },
         params: undefined,
         genericSections: [{ type: 'summary', title: 'Summary', text: 'test' }],
+        genericNavigation: { breadcrumbs: [], related: [] },
         relations: [],
         defaultContext: undefined,
       });
@@ -463,6 +464,7 @@ describe('ArtifactViewBuilderRegistry', () => {
         affordance: { kind: 'own-view' },
         params: undefined,
         genericSections: [],
+        genericNavigation: { breadcrumbs: [], related: [] },
         relations: [],
         defaultContext: undefined,
       });
@@ -491,6 +493,7 @@ describe('ArtifactViewBuilderRegistry', () => {
         affordance: { kind: 'own-view' },
         params: undefined,
         genericSections: [],
+        genericNavigation: { breadcrumbs: [], related: [] },
         relations: [],
         defaultContext: undefined,
       });

@@ -20,13 +20,23 @@ function expectValidViewModel(view: ArtifactViewModel): void {
   }
 }
 
+/**
+ * Read the first semantic summary section from a view fixture.
+ * @param view - Artifact view to inspect.
+ * @returns Summary text, or `undefined` when no summary section exists.
+ */
+function findSummaryText(view: ArtifactViewModel): string | undefined {
+  const section = view.sections.find((candidate) => candidate.type === 'summary');
+  return section?.type === 'summary' ? section.text : undefined;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Version constant                                                          */
 /* -------------------------------------------------------------------------- */
 
 describe('GENERIC_ARTIFACT_VIEW_BUILDER_VERSION', () => {
   it('is a positive integer', () => {
-    expect(GENERIC_ARTIFACT_VIEW_BUILDER_VERSION).toBe(1);
+    expect(GENERIC_ARTIFACT_VIEW_BUILDER_VERSION).toBe(4);
     expect(Number.isInteger(GENERIC_ARTIFACT_VIEW_BUILDER_VERSION)).toBe(true);
     expect(GENERIC_ARTIFACT_VIEW_BUILDER_VERSION).toBeGreaterThan(0);
   });
@@ -179,7 +189,7 @@ describe('title and summary roles', () => {
     const view = buildGenericArtifactView(revision, registration, 'full');
 
     expect(view.title).toBe('[implementation-plan] plan-42');
-    expect(view.summary).toBe('Backend API');
+    expect(findSummaryText(view)).toBe('Backend API');
   });
 
   it('falls back to [<kind>] <id> when title role path is missing in data', () => {
@@ -230,7 +240,8 @@ describe('title and summary roles', () => {
 
     const view = buildGenericArtifactView(revision, registration, 'full');
 
-    expect(view.summary).toBe('A brief description');
+    expect(findSummaryText(view)).toBe('A brief description');
+    expect(view.sections[0]?.type).toBe('summary');
   });
 
   it('falls back to representations.summary when no summary role is declared', () => {
@@ -247,7 +258,8 @@ describe('title and summary roles', () => {
 
     const view = buildGenericArtifactView(revision, registration, 'full');
 
-    expect(view.summary).toBe('This is the artifact summary');
+    expect(findSummaryText(view)).toBe('This is the artifact summary');
+    expect(view.sections[0]?.type).toBe('summary');
   });
 
   it('omits summary when no summary role and no representations.summary', () => {
@@ -263,7 +275,7 @@ describe('title and summary roles', () => {
 
     const view = buildGenericArtifactView(revision, registration, 'full');
 
-    expect(view.summary).toBeUndefined();
+    expect(findSummaryText(view)).toBeUndefined();
   });
 
   it('does not duplicate title role field as a property row', () => {
@@ -438,7 +450,7 @@ describe('title and summary level filtering', () => {
     const view = buildGenericArtifactView(revision, registration, 'link');
 
     // Falls back to representations.summary since role field is below threshold
-    expect(view.summary).toBe('Rep summary');
+    expect(findSummaryText(view)).toBe('Rep summary');
   });
 
   it('summary declared at full level resolves at full level', () => {
@@ -455,7 +467,7 @@ describe('title and summary level filtering', () => {
 
     const view = buildGenericArtifactView(revision, registration, 'full');
 
-    expect(view.summary).toBe('Detailed desc');
+    expect(findSummaryText(view)).toBe('Detailed desc');
   });
 
   it('summary declared at link level resolves at all levels', () => {
@@ -469,9 +481,9 @@ describe('title and summary level filtering', () => {
       },
     });
 
-    expect(buildGenericArtifactView(revision, registration, 'link').summary).toBe('Brief desc');
-    expect(buildGenericArtifactView(revision, registration, 'summary').summary).toBe('Brief desc');
-    expect(buildGenericArtifactView(revision, registration, 'full').summary).toBe('Brief desc');
+    expect(findSummaryText(buildGenericArtifactView(revision, registration, 'link'))).toBe('Brief desc');
+    expect(findSummaryText(buildGenericArtifactView(revision, registration, 'summary'))).toBe('Brief desc');
+    expect(findSummaryText(buildGenericArtifactView(revision, registration, 'full'))).toBe('Brief desc');
   });
 
   it('summary declared at summary level falls back at link level', () => {
@@ -488,8 +500,8 @@ describe('title and summary level filtering', () => {
     const linkView = buildGenericArtifactView(revision, registration, 'link');
     const summaryView = buildGenericArtifactView(revision, registration, 'summary');
 
-    expect(linkView.summary).toBeUndefined();
-    expect(summaryView.summary).toBe('Summary desc');
+    expect(findSummaryText(linkView)).toBeUndefined();
+    expect(findSummaryText(summaryView)).toBe('Summary desc');
   });
 });
 
@@ -1323,11 +1335,65 @@ describe('direct relation sections', () => {
 });
 
 /* -------------------------------------------------------------------------- */
-/*  Generic breadcrumbs are always empty                                      */
+/*  Generic identity, navigation, and links                                   */
 /* -------------------------------------------------------------------------- */
 
-describe('generic breadcrumbs', () => {
-  it('produces no breadcrumb-style navigation from context graphs', () => {
+describe('generic identity, navigation, and links', () => {
+  it('projects exact identity and kind-defined status while leaving links empty', () => {
+    const revision = makeRevision({
+      kind: 'implementation-plan',
+      id: 'plan-1',
+      revision: 'rev-7',
+      data: { lifecycle: { status: 'approved' } },
+    });
+    const registration = makeRegistration({
+      kind: 'implementation-plan',
+      status: { path: '/data/lifecycle/status' },
+      projection: { mode: 'surface' },
+    });
+
+    const view = buildGenericArtifactView(revision, registration, 'full');
+
+    expect(view.artifact).toEqual({
+      id: 'plan-1',
+      kind: 'implementation-plan',
+      revision: 'rev-7',
+      status: 'approved',
+    });
+    expect(view.links).toEqual({});
+  });
+
+  it('resolves RFC 6901 escapes without splitting slash- or dot-bearing status keys', () => {
+    const revision = makeRevision({
+      data: {
+        'workflow/state': {
+          'review~phase.status': 'approved',
+        },
+      },
+    });
+    const registration = makeRegistration({
+      status: { path: '/data/workflow~1state/review~0phase.status' },
+      projection: { mode: 'surface' },
+    });
+
+    const view = buildGenericArtifactView(revision, registration, 'full');
+
+    expect(view.artifact.status).toBe('approved');
+  });
+
+  it('keeps dot paths relative to artifact data without stripping a data segment', () => {
+    const revision = makeRevision({ data: { data: { lifecycle: { status: 'approved' } } } });
+    const registration = makeRegistration({
+      status: { path: 'data.lifecycle.status' },
+      projection: { mode: 'surface' },
+    });
+
+    const view = buildGenericArtifactView(revision, registration, 'full');
+
+    expect(view.artifact.status).toBe('approved');
+  });
+
+  it('produces no breadcrumb-style navigation from context declarations', () => {
     const revision = makeRevision({
       data: { status: 'open' },
     });
@@ -1346,10 +1412,10 @@ describe('generic breadcrumbs', () => {
     // Navigation should not contain any breadcrumb-derived entries.
     // The generic builder never interprets defaultContext to generate
     // navigation entries.
-    expect(view.navigation ?? []).toEqual([]);
+    expect(view.navigation.breadcrumbs).toEqual([]);
   });
 
-  it('returns empty navigation even when relations are present', () => {
+  it('derives related navigation in relation order without inventing breadcrumbs', () => {
     const revision = makeRevision({
       data: { status: 'open' },
       relations: [
@@ -1360,6 +1426,32 @@ describe('generic breadcrumbs', () => {
             kind: 'project',
             id: 'proj-1',
             revision: 'rev-1',
+          },
+        },
+        {
+          type: 'evidenced-by',
+          target: {
+            refClass: 'evidence',
+            kind: 'url',
+            id: 'https://example.com/evidence',
+          },
+        },
+        {
+          type: 'references',
+          target: {
+            refClass: 'artifact',
+            kind: 'specification',
+            id: 'spec-2',
+            revision: 'rev-3',
+          },
+        },
+        {
+          type: 'blocks',
+          target: {
+            refClass: 'artifact',
+            kind: 'project',
+            id: 'proj-1',
+            revision: 'rev-2',
           },
         },
       ],
@@ -1373,8 +1465,13 @@ describe('generic breadcrumbs', () => {
 
     const view = buildGenericArtifactView(revision, registration, 'full');
 
-    // Direct relations appear in the relations section, not as navigation breadcrumbs
-    expect(view.navigation ?? []).toEqual([]);
+    expect(view.navigation).toEqual({
+      breadcrumbs: [],
+      related: [
+        { artifactId: 'proj-1', label: '[project] proj-1' },
+        { artifactId: 'spec-2', label: '[specification] spec-2' },
+      ],
+    });
   });
 });
 
@@ -1435,12 +1532,13 @@ describe('output validity', () => {
     // Structural checks against ArtifactViewModel shape
     expect(typeof view.title).toBe('string');
     expect(view.title.length).toBeGreaterThan(0);
-    expect(view.summary).toBe('A test artifact');
+    expect(findSummaryText(view)).toBe('A test artifact');
     expect(Array.isArray(view.sections)).toBe(true);
 
-    // Should have: properties (tags), table (items), raw (config),
+    // Should have: summary, properties (tags), table (items), raw (config),
     // relations, evidence
     const sectionTypes = view.sections.map((s) => s.type);
+    expect(sectionTypes[0]).toBe('summary');
     expect(sectionTypes).toContain('properties');
     expect(sectionTypes).toContain('table');
     expect(sectionTypes).toContain('raw');

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   ArtifactViewLevelSchema,
   ArtifactViewLinkSchema,
+  ArtifactViewIdentitySchema,
   ArtifactViewModelSchema,
+  ArtifactViewNavigationSchema,
+  ArtifactViewSurfaceLinksSchema,
   ArtifactViewSummarySectionSchema,
   ArtifactViewPropertiesSectionSchema,
   ArtifactViewTableSectionSchema,
@@ -14,6 +17,12 @@ import {
   ArtifactViewSectionSchema,
 } from '../index.js';
 import { parsed, rejected } from './helpers.js';
+
+const REQUIRED_VIEW_FIELDS = {
+  artifact: { id: 'artifact-1', kind: 'test-kind', revision: 'rev-1' },
+  navigation: { breadcrumbs: [], related: [] },
+  links: {},
+} as const;
 
 /* -------------------------------------------------------------------------- */
 /*  ArtifactViewLevelSchema                                                   */
@@ -220,14 +229,45 @@ describe('ArtifactViewSectionSchema — eight discriminants', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('ArtifactViewModelSchema', () => {
+  it('validates artifact identity, structured navigation, and downstream-decorated links', () => {
+    expect(
+      parsed(ArtifactViewIdentitySchema, {
+        id: 'artifact-1',
+        kind: 'implementation-plan',
+        revision: 'rev-7',
+        status: 'approved',
+      }),
+    ).toEqual({ id: 'artifact-1', kind: 'implementation-plan', revision: 'rev-7', status: 'approved' });
+
+    expect(
+      parsed(ArtifactViewNavigationSchema, {
+        breadcrumbs: [{ artifactId: 'parent-1', label: 'Parent' }],
+        related: [{ url: 'https://example.com/spec', label: 'Specification' }],
+      }),
+    ).toEqual({
+      breadcrumbs: [{ artifactId: 'parent-1', label: 'Parent' }],
+      related: [{ url: 'https://example.com/spec', label: 'Specification' }],
+    });
+
+    expect(
+      parsed(ArtifactViewSurfaceLinksSchema, {
+        dashboard: 'https://factory.example/artifacts/artifact-1',
+        materialized: 'https://github.com/org/repo/issues/1',
+      }),
+    ).toEqual({
+      dashboard: 'https://factory.example/artifacts/artifact-1',
+      materialized: 'https://github.com/org/repo/issues/1',
+    });
+  });
+
   it('parses a complete view model', () => {
     const vm = parsed(ArtifactViewModelSchema, {
       title: 'Implementation Plan #42',
-      summary: 'A comprehensive implementation plan for the feature.',
-      navigation: [
-        { artifactId: 'plan-42', label: 'Self' },
-        { url: 'https://github.com/org/repo/issues/42', label: 'GitHub Issue' },
-      ],
+      artifact: { id: 'plan-42', kind: 'implementation-plan', revision: 'rev-2', status: 'active' },
+      navigation: {
+        breadcrumbs: [{ artifactId: 'program-1', label: 'Program' }],
+        related: [{ url: 'https://github.com/org/repo/issues/42', label: 'GitHub Issue' }],
+      },
       sections: [
         { type: 'summary', title: 'Overview', text: 'Plan overview text.' },
         {
@@ -236,34 +276,57 @@ describe('ArtifactViewModelSchema', () => {
           rows: [{ label: 'Status', value: 'Active' }],
         },
       ],
+      links: { dashboard: 'https://factory.example/artifacts/plan-42' },
     });
     expect(vm.title).toBe('Implementation Plan #42');
-    expect(vm.summary).toBe('A comprehensive implementation plan for the feature.');
-    expect(vm.navigation).toHaveLength(2);
+    expect(vm.navigation.breadcrumbs).toHaveLength(1);
+    expect(vm.navigation.related).toHaveLength(1);
     expect(vm.sections).toHaveLength(2);
   });
 
   it('title is required and non-empty', () => {
     rejected(ArtifactViewModelSchema, {
+      ...REQUIRED_VIEW_FIELDS,
       title: '',
       sections: [],
     });
     rejected(ArtifactViewModelSchema, {
+      ...REQUIRED_VIEW_FIELDS,
       sections: [],
     });
   });
 
-  it('summary and navigation are optional', () => {
+  it('artifact, navigation, and links are required', () => {
     const vm = parsed(ArtifactViewModelSchema, {
+      ...REQUIRED_VIEW_FIELDS,
       title: 'Minimal View',
       sections: [],
     });
-    expect(vm.summary).toBeUndefined();
-    expect(vm.navigation).toBeUndefined();
+    expect(vm.navigation).toEqual({ breadcrumbs: [], related: [] });
+
+    rejected(ArtifactViewModelSchema, {
+      title: 'Missing artifact',
+      navigation: REQUIRED_VIEW_FIELDS.navigation,
+      links: REQUIRED_VIEW_FIELDS.links,
+      sections: [],
+    });
+    rejected(ArtifactViewModelSchema, {
+      title: 'Missing navigation',
+      artifact: REQUIRED_VIEW_FIELDS.artifact,
+      links: REQUIRED_VIEW_FIELDS.links,
+      sections: [],
+    });
+    rejected(ArtifactViewModelSchema, {
+      title: 'Missing links',
+      artifact: REQUIRED_VIEW_FIELDS.artifact,
+      navigation: REQUIRED_VIEW_FIELDS.navigation,
+      sections: [],
+    });
   });
 
   it('sections array may be empty', () => {
     const vm = parsed(ArtifactViewModelSchema, {
+      ...REQUIRED_VIEW_FIELDS,
       title: 'Empty Sections',
       sections: [],
     });
@@ -272,6 +335,7 @@ describe('ArtifactViewModelSchema', () => {
 
   it('sections preserve insertion order', () => {
     const vm = parsed(ArtifactViewModelSchema, {
+      ...REQUIRED_VIEW_FIELDS,
       title: 'Ordered',
       sections: [
         { type: 'code', title: 'Code', language: 'go', content: 'package main' },
@@ -287,6 +351,7 @@ describe('ArtifactViewModelSchema', () => {
   it('is JSON-safe: no functions, symbols, or undefined values in raw sections', () => {
     // Verify the model itself is JSON-roundtrippable
     const input = {
+      ...REQUIRED_VIEW_FIELDS,
       title: 'JSON-safe test',
       sections: [
         {

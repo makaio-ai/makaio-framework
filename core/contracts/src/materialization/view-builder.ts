@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ResolvedArtifactContextWire } from '../artifact/context-resolution.js';
 import type { ArtifactRelation, ArtifactRevision } from '../artifact/schemas.js';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
-import type { ArtifactViewLevel, ArtifactViewSection } from './view-model.js';
+import type { ArtifactViewLevel, ArtifactViewNavigation, ArtifactViewSection } from './view-model.js';
 import { ArtifactViewLevelSchema } from './view-model.js';
 
 /* -------------------------------------------------------------------------- */
@@ -238,6 +238,13 @@ export interface ArtifactViewBuilderContext<K extends string = string> {
    * rather than fully replace the generic projection.
    */
   readonly genericSections: readonly ArtifactViewSection[];
+  /**
+   * Deterministic navigation produced from direct artifact relations.
+   *
+   * Builders may compose from this value when adding kind-specific
+   * breadcrumbs or replacing generic related links.
+   */
+  readonly genericNavigation: ArtifactViewNavigation;
   /** Direct relations already present on the artifact revision. */
   readonly relations: readonly ArtifactRelation[];
   /**
@@ -255,17 +262,24 @@ export interface ArtifactViewBuilderContext<K extends string = string> {
 /**
  * Builder output for a single artifact view.
  *
- * Exactly three outcomes:
- * - `undefined` — keep the generic sections unchanged.
- * - `{ sections }` — completely replace the generic sections with the
- *   supplied array. Builders that want to augment generic sections
- *   compose explicitly from `context.genericSections`.
+ * Outcomes:
+ * - `undefined` — keep generic sections and navigation unchanged.
+ * - `{ sections }`, `{ navigation }`, or both — replace each supplied
+ *   generic value completely. Builders compose explicitly from
+ *   `context.genericSections` or `context.genericNavigation` to augment it.
  * - `{ render: false }` — suppress rendering entirely. The resolver
  *   produces a `not-rendered` result.
  */
 export type ArtifactViewBuilderResult =
   | undefined
-  | { readonly sections: readonly ArtifactViewSection[] }
+  | {
+      readonly sections: readonly ArtifactViewSection[];
+      readonly navigation?: ArtifactViewNavigation;
+    }
+  | {
+      readonly sections?: readonly ArtifactViewSection[];
+      readonly navigation: ArtifactViewNavigation;
+    }
   | { readonly render: false };
 
 /**

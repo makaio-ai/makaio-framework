@@ -49,14 +49,16 @@ Type: Request (RPC)
 | `affordance` | `{ kind: "own-view"; } \| { kind: "inline"; hostRelation: string; } \| { kind: "entry"; via?: string \| undefined; collection?: string \| undefined; }` | yes |
 | `level` | `"link" \| "summary" \| "full"` | yes |
 | `params` | `Record<string, unknown> \| undefined` | no |
-| `ref` | `string` | yes |
+| `ref` | `{ kind: string; id: string; revision: string; refClass?: "artifact" \| undefined; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
+| `builderVersion` | `number \| undefined` | no |
+| `sourceRevision` | `string \| undefined` | no |
 | `status` | `"ok" \| "artifact-not-found" \| "not-rendered"` | yes |
-| `view` | `{ title: string; sections: ({ type: "summary"; title: string; text: string; } \| { type: "properties"; title: string; rows: { label: string; value: string; }[]; } \| { type: "table"; title: string; columns: string[]; rows: { cells: string[]; link?: { label: string; artifactId?: string \| undefined; url?: string \| undefined; } \| undefined; }[]; } \| { type: "relations"; title: string; groups: { type: string; items: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; }[]; } \| { type: "evidence"; title: string; items: { kind: string; id: string; locator?: string \| undefined; }[]; } \| { type: "raw"; title: string; json: JsonValue; } \| { type: "code"; title: string; language: string; content: string; } \| { type: "diagram"; title: string; notation: "mermaid"; source: string; })[]; summary?: string \| undefined; navigation?: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[] \| undefined; } \| null` | yes |
+| `view` | `{ title: string; artifact: { id: string; kind: string; revision: string; status?: string \| undefined; }; navigation: { breadcrumbs: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; related: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; }; sections: ({ type: "summary"; title: string; text: string; } \| { type: "properties"; title: string; rows: { label: string; value: string; }[]; } \| { type: "table"; title: string; columns: string[]; rows: { cells: string[]; link?: { label: string; artifactId?: string \| undefined; url?: string \| undefined; } \| undefined; }[]; } \| { type: "relations"; title: string; groups: { type: string; items: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; }[]; } \| { type: "evidence"; title: string; items: { kind: string; id: string; locator?: string \| undefined; }[]; } \| { type: "raw"; title: string; json: JsonValue; } \| { type: "code"; title: string; language: string; content: string; } \| { type: "diagram"; title: string; notation: "mermaid"; source: string; })[]; links: { dashboard?: string \| undefined; materialized?: string \| undefined; }; } \| null` | yes |
 
 ### <a id="materialization.capability.resolved"></a>`materialization.capability.resolved` (event)
 

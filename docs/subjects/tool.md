@@ -86,7 +86,9 @@ Purpose: Execute a tool with given input and return the result.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `data` | `unknown \| undefined` | no |
+| `error` | `{ code: string; message: string; details?: unknown; } \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ### <a id="tool.list"></a>`tool.list` (rpc)
 

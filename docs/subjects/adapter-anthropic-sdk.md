@@ -176,7 +176,12 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `type` | `"message_delta" \| "message_start" \| "message_stop" \| "content_block_start" \| "content_block_delta" \| "content_block_stop"` | yes |
+| `content_block` | `TextBlock \| ThinkingBlock \| RedactedThinkingBlock \| ToolUseBlock \| ServerToolUseBlock \| WebSearchToolResultBlock \| WebFetchToolResultBlock \| CodeExecutionToolResultBlock \| BashCodeExecutionToolResultBlock \| TextEditorCodeExecutionToolResultBlock \| ToolSearchToolResultBlock \| ContainerUploadBlock \| undefined` | no |
+| `delta` | `Delta \| RawContentBlockDelta \| undefined` | no |
+| `index` | `number \| undefined` | no |
+| `message` | `Message \| undefined` | no |
+| `type` | `"message_start" \| "message_delta" \| "message_stop" \| "content_block_start" \| "content_block_delta" \| "content_block_stop"` | yes |
+| `usage` | `MessageDeltaUsage \| undefined` | no |
 
 ### <a id="adapter:anthropic-sdk.tool_approval"></a>`adapter:anthropic-sdk.tool_approval` (rpc)
 
@@ -217,6 +222,10 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `action` | `"allow" \| "deny"` | yes |
+| `message` | `string \| undefined` | no |
+| `shouldAbort` | `boolean \| undefined` | no |
+| `updatedInput` | `Record<string, unknown> \| undefined` | no |
+| `updatedPermissions` | `unknown[] \| undefined` | no |
 
 ### <a id="adapter:anthropic-sdk.tool_calls"></a>`adapter:anthropic-sdk.tool_calls` (event)
 

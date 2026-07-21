@@ -69,6 +69,10 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `action` | `"allow" \| "deny"` | yes |
+| `message` | `string \| undefined` | no |
+| `shouldAbort` | `boolean \| undefined` | no |
+| `updatedInput` | `Record<string, unknown> \| undefined` | no |
+| `updatedPermissions` | `unknown[] \| undefined` | no |
 
 ### <a id="adapter:geminiSDK.agent.message.chunk"></a>`adapter:geminiSDK.agent.message.chunk` (event)
 
@@ -127,7 +131,21 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `type` | `"session.created" \| "sdk.raw" \| "session.completed" \| "session.finished" \| "session.error" \| "agent.tool.started" \| "agent.tool.updated" \| "agent.message.chunk" \| "agent.thought.chunk"` | yes |
+| `content` | `ContentBlock \| undefined` | no |
+| `cwd` | `string \| undefined` | no |
+| `error` | `string \| undefined` | no |
+| `kind` | `string \| undefined` | no |
+| `message` | `string \| undefined` | no |
+| `model` | `string \| undefined` | no |
+| `output` | `unknown \| undefined` | no |
+| `raw` | `ServerGeminiStreamEvent \| undefined` | no |
+| `rawInput` | `unknown \| undefined` | no |
+| `reason` | `"FINISH_REASON_UNSPECIFIED" \| "STOP" \| "MAX_TOKENS" \| "SAFETY" \| "RECITATION" \| "LANGUAGE" \| "OTHER" \| "BLOCKLIST" \| "PROHIBITED_CONTENT" \| "SPII" \| "MALFORMED_FUNCTION_CALL" \| "IMAGE_SAFETY" \| "UNEXPECTED_TOOL_CALL" \| "IMAGE_PROHIBITED_CONTENT" \| "NO_IMAGE" \| "IMAGE_RECITATION" \| "IMAGE_OTHER" \| undefined` | no |
+| `status` | `number \| undefined \| string \| null` | no |
+| `title` | `string \| undefined` | no |
+| `toolCallId` | `string \| undefined` | no |
+| `type` | `"session.created" \| "session.completed" \| "session.finished" \| "session.error" \| "agent.message.chunk" \| "agent.thought.chunk" \| "agent.tool.started" \| "agent.tool.updated" \| "sdk.raw"` | yes |
+| `usageMetadata` | `{ cachedContentTokenCount?: number \| undefined; candidatesTokenCount?: number \| undefined; promptTokenCount?: number \| undefined; thoughtsTokenCount?: number \| undefined; toolUsePromptTokenCount?: number \| undefined; totalTokenCount?: number \| undefined; trafficType?: string \| undefined; } \| undefined` | no |
 
 ### <a id="adapter:geminiSDK.session.completed"></a>`adapter:geminiSDK.session.completed` (event)
 

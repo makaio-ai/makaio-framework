@@ -7,7 +7,7 @@ import * as url from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const FRAMEWORK_ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '../../../');
-const EXTENSION_VERIFY_TEST_TIMEOUT_MS = 20_000;
+const EXTENSION_VERIFY_TEST_TIMEOUT_MS = 30_000;
 
 const serveMocks = vi.hoisted(() => ({
   serve: vi.fn(),

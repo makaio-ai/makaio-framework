@@ -45,6 +45,43 @@ export const ArtifactViewLinkSchema = z.object({
 /** A provider-neutral navigation link. */
 export type ArtifactViewLink = z.infer<typeof ArtifactViewLinkSchema>;
 
+/** Stable identity of the artifact revision represented by a view. */
+export const ArtifactViewIdentitySchema = z.object({
+  /** Stable artifact identity. */
+  id: z.string().min(1),
+  /** Open artifact kind discriminator. */
+  kind: z.string().min(1),
+  /** Exact immutable revision represented by the view. */
+  revision: z.string().min(1),
+  /** Optional kind-defined status value resolved from the artifact data. */
+  status: z.string().min(1).optional(),
+});
+
+/** Stable identity of the artifact revision represented by a view. */
+export type ArtifactViewIdentity = z.infer<typeof ArtifactViewIdentitySchema>;
+
+/** Provider-neutral navigation carried by an artifact view. */
+export const ArtifactViewNavigationSchema = z.object({
+  /** Kind-specific breadcrumb trail; the generic builder never invents one. */
+  breadcrumbs: z.array(ArtifactViewLinkSchema),
+  /** Directly related artifact revisions. */
+  related: z.array(ArtifactViewLinkSchema),
+});
+
+/** Provider-neutral navigation carried by an artifact view. */
+export type ArtifactViewNavigation = z.infer<typeof ArtifactViewNavigationSchema>;
+
+/** Surface links that downstream consumers may decorate onto a resolved view. */
+export const ArtifactViewSurfaceLinksSchema = z.object({
+  /** Product dashboard URL, when supplied by the consuming product. */
+  dashboard: z.string().min(1).optional(),
+  /** Provider materialization URL, when supplied by the provider adapter. */
+  materialized: z.string().min(1).optional(),
+});
+
+/** Surface links that downstream consumers may decorate onto a resolved view. */
+export type ArtifactViewSurfaceLinks = z.infer<typeof ArtifactViewSurfaceLinksSchema>;
+
 /* -------------------------------------------------------------------------- */
 /*  Section schemas — eight discriminants                                     */
 /* -------------------------------------------------------------------------- */
@@ -280,19 +317,22 @@ export type ArtifactViewDiagramSection = z.infer<typeof ArtifactViewDiagramSecti
  * field names, or renderer-specific layout directives. The model is
  * JSON-safe: every value in every section must survive a JSON round-trip.
  * @param title - Human-readable title for the artifact view.
- * @param summary - Optional prose summary.
- * @param navigation - Optional ordered set of navigation links.
+ * @param artifact - Stable identity of the represented artifact revision.
+ * @param navigation - Breadcrumb and direct-relation navigation.
  * @param sections - Ordered array of typed sections.
+ * @param links - Downstream-decorated product and provider links.
  */
 export const ArtifactViewModelSchema = z.object({
   /** Human-readable title for the artifact view. */
   title: z.string().min(1),
-  /** Optional prose summary of the artifact. */
-  summary: z.string().min(1).optional(),
-  /** Optional ordered set of navigation links. */
-  navigation: z.array(ArtifactViewLinkSchema).optional(),
+  /** Stable identity of the represented artifact revision. */
+  artifact: ArtifactViewIdentitySchema,
+  /** Breadcrumb and direct-relation navigation. */
+  navigation: ArtifactViewNavigationSchema,
   /** Ordered array of typed sections. */
   sections: z.array(ArtifactViewSectionSchema),
+  /** Product- and provider-owned links, empty until decorated downstream. */
+  links: ArtifactViewSurfaceLinksSchema,
 });
 
 /** Provider-neutral artifact view model. */

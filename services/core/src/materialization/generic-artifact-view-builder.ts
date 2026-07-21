@@ -4,11 +4,14 @@ import type {
   ArtifactRevision,
   ArtifactViewEvidenceSection,
   ArtifactViewLevel,
+  ArtifactViewLink,
   ArtifactViewModel,
+  ArtifactViewNavigation,
   ArtifactViewPropertiesSection,
   ArtifactViewRawSection,
   ArtifactViewRelationsSection,
   ArtifactViewSection,
+  ArtifactViewSummarySection,
   ArtifactViewTableSection,
   ProjectedField,
 } from '@makaio/contracts';
@@ -20,7 +23,7 @@ import { isRecord } from '@makaio/utils';
  * Consumers may assert this value to detect structural changes in the
  * generic projection algorithm across framework versions.
  */
-export const GENERIC_ARTIFACT_VIEW_BUILDER_VERSION = 1;
+export const GENERIC_ARTIFACT_VIEW_BUILDER_VERSION = 4;
 
 /* -------------------------------------------------------------------------- */
 /*  Level ranking                                                             */
@@ -55,19 +58,12 @@ function isFieldVisibleAtLevel(field: ProjectedField, requestLevel: ArtifactView
 const MISSING = Symbol('MISSING');
 
 /**
- * Resolve a dot-separated path against a data record.
- *
- * Returns the value at the path, or the {@link MISSING} sentinel when any
- * segment along the path cannot be traversed.
+ * Resolve path segments against a data record using own properties only.
  * @param data - The root data object.
- * @param path - Dot-separated path string (e.g. `'metadata.priority'`).
+ * @param segments - Exact property names to traverse.
  * @returns The resolved value, or `MISSING` if the path does not exist.
  */
-function resolveDotPath(data: Record<string, unknown>, path: string): unknown | typeof MISSING {
-  // This intentionally does not use bus-core's getPath: projection distinguishes
-  // missing segments from present `undefined` and allows only own object/array
-  // properties, preventing inherited data from becoming view content.
-  const segments = path.split('.');
+function resolvePathSegments(data: Record<string, unknown>, segments: readonly string[]): unknown | typeof MISSING {
   let current: unknown = data;
 
   for (const segment of segments) {
@@ -81,6 +77,22 @@ function resolveDotPath(data: Record<string, unknown>, path: string): unknown | 
   }
 
   return current;
+}
+
+/**
+ * Resolve a dot-separated path against a data record.
+ *
+ * Returns the value at the path, or the {@link MISSING} sentinel when any
+ * segment along the path cannot be traversed.
+ * @param data - The root data object.
+ * @param path - Dot-separated path string (e.g. `'metadata.priority'`).
+ * @returns The resolved value, or `MISSING` if the path does not exist.
+ */
+function resolveDotPath(data: Record<string, unknown>, path: string): unknown | typeof MISSING {
+  // This intentionally does not use bus-core's getPath: projection distinguishes
+  // missing segments from present `undefined` and allows only own object/array
+  // properties, preventing inherited data from becoming view content.
+  return resolvePathSegments(data, path.split('.'));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -425,6 +437,21 @@ function mapFieldToSection(
 /*  Relation section building                                                 */
 /* -------------------------------------------------------------------------- */
 
+type DirectArtifactViewLink = ArtifactViewLink & { artifactId: string };
+
+/**
+ * Project a direct artifact relation target into a stable view link.
+ * @param relation - Relation whose target may reference an artifact.
+ * @returns A projected artifact link, or `undefined` for non-artifact targets.
+ */
+function projectDirectArtifactLink(relation: ArtifactRelation): DirectArtifactViewLink | undefined {
+  if (relation.target.refClass !== 'artifact') return undefined;
+  return {
+    artifactId: relation.target.id,
+    label: `[${relation.target.kind}] ${relation.target.id}`,
+  };
+}
+
 /**
  * Build a relations section from the artifact's direct relations.
  *
@@ -437,14 +464,11 @@ function buildRelationsSection(relations: readonly ArtifactRelation[]): Artifact
   const groupMap = new Map<string, Array<{ artifactId?: string; url?: string; label: string }>>();
 
   for (const relation of relations) {
-    if (relation.target.refClass !== 'artifact') continue;
+    const link = projectDirectArtifactLink(relation);
+    if (!link) continue;
 
-    const target = relation.target;
     const items = groupMap.get(relation.type) ?? [];
-    items.push({
-      artifactId: target.id,
-      label: `[${target.kind}] ${target.id}`,
-    });
+    items.push(link);
     groupMap.set(relation.type, items);
   }
 
@@ -460,6 +484,57 @@ function buildRelationsSection(relations: readonly ArtifactRelation[]): Artifact
     title: 'Relations',
     groups,
   };
+}
+
+/**
+ * Build deterministic navigation from direct artifact relations.
+ *
+ * Direct relations are already present on the resolved revision, so this
+ * projection performs no additional reads. Breadcrumbs remain empty because
+ * only kind-specific builders can assign breadcrumb semantics.
+ * @param relations - Direct relations on the resolved artifact revision.
+ * @returns Generic breadcrumb and related-link navigation.
+ */
+function buildNavigation(relations: readonly ArtifactRelation[]): ArtifactViewNavigation {
+  const related: ArtifactViewNavigation['related'] = [];
+  // ArtifactViewLink addresses one globally stable artifactId. Kind and
+  // revision validate and describe exact refs, but do not scope that identity.
+  const seenArtifactIds = new Set<string>();
+
+  for (const relation of relations) {
+    const link = projectDirectArtifactLink(relation);
+    if (!link || seenArtifactIds.has(link.artifactId)) continue;
+    seenArtifactIds.add(link.artifactId);
+
+    related.push(link);
+  }
+
+  return { breadcrumbs: [], related };
+}
+
+/**
+ * Resolve the kind-defined status value for the view identity.
+ * @param revision - Resolved artifact revision.
+ * @param registration - Effective kind registration.
+ * @returns A non-empty string status, or `undefined` when absent or non-string.
+ */
+function resolveStatus(revision: ArtifactRevision, registration: ArtifactKindRegistration): string | undefined {
+  const declaredPath = registration.status?.path;
+  if (declaredPath === undefined) return undefined;
+
+  // JSON pointers use exact decoded property names. Dot paths are always
+  // relative to artifact data, matching lifecycle and readiness resolution.
+  const value = declaredPath.startsWith('/')
+    ? resolvePathSegments(
+        revision.data,
+        declaredPath
+          .split('/')
+          .slice(1)
+          .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+          .filter((segment, index) => index !== 0 || segment !== 'data'),
+      )
+    : resolveDotPath(revision.data, declaredPath);
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -522,9 +597,9 @@ function buildEvidenceSection(revision: ArtifactRevision): ArtifactViewEvidenceS
  * first, then from fallback sources (kind/id for title, representations.summary
  * for summary).
  *
- * Relation and evidence sections are included only at `full` level.
- * Navigation is always empty: the generic builder never interprets
- * default context graphs to generate breadcrumbs.
+ * Relation and evidence sections are included only at `full` level. Direct
+ * artifact relations become `navigation.related` at every level. The generic
+ * builder never interprets default context graphs or invents breadcrumbs.
  * @param revision - The complete artifact revision to project.
  * @param registration - The kind registration providing projection declarations.
  * @param level - The requested view detail level.
@@ -541,6 +616,7 @@ export function buildGenericArtifactView(
   // Resolve semantic title and summary (level-filtered)
   const title = resolveTitle(revision, titleField, level);
   const summary = resolveSummary(revision, summaryField, level);
+  const status = resolveStatus(revision, registration);
 
   // Identify role-consumed fields so they are not duplicated as properties
   const consumedRolePaths = new Set<string>();
@@ -567,6 +643,17 @@ export function buildGenericArtifactView(
 
   // Build sections array
   const sections: ArtifactViewSection[] = [];
+
+  // Semantic summary is an ordinary replaceable section so a custom builder
+  // can suppress or replace it together with the rest of the generic content.
+  if (summary !== undefined) {
+    const summarySection: ArtifactViewSummarySection = {
+      type: 'summary',
+      title: 'Summary',
+      text: summary,
+    };
+    sections.push(summarySection);
+  }
 
   // Properties section (consolidated)
   if (propertiesRows.length > 0) {
@@ -596,7 +683,14 @@ export function buildGenericArtifactView(
 
   return {
     title,
-    ...(summary !== undefined ? { summary } : {}),
+    artifact: {
+      id: revision.id,
+      kind: revision.kind,
+      revision: revision.revision,
+      ...(status !== undefined ? { status } : {}),
+    },
+    navigation: buildNavigation(revision.relations),
     sections,
+    links: {},
   };
 }

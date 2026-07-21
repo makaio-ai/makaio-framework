@@ -147,7 +147,9 @@ Handler: AIAgent re-resolves credentials, rebuilds connector if SDK-based
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `reason` | `"provider_mismatch" \| "stale_change" \| "turn_active" \| "credential_activation_failed:manager-unavailable" \| "credential_activation_failed:account-not-found" \| "credential_activation_failed:activation-failed" \| "credential_swap_failed" \| undefined` | no |
+| `success` | `true \| false` | yes |
+| `swapped` | `true \| undefined` | no |
 
 ### <a id="agent.cwd.change"></a>`agent.cwd.change` (rpc)
 
@@ -283,7 +285,8 @@ Handler: AIAgent delegates to the active connector's `interrupt()` implementatio
 
 | Field | Type | Required |
 |-------|------|----------|
-| `success` | `boolean` | yes |
+| `reason` | `string \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ### <a id="agent.mcp.servers.set"></a>`agent.mcp.servers.set` (rpc)
 
@@ -639,7 +642,9 @@ registers an override handler. Returning `enforced: true` with a corrected
 
 | Field | Type | Required |
 |-------|------|----------|
-| `enforced` | `boolean` | yes |
+| `enforced` | `true \| false` | yes |
+| `error` | `string \| undefined` | no |
+| `output` | `string \| undefined` | no |
 
 ### <a id="agent.structuredOutput.retryPolicy"></a>`agent.structuredOutput.retryPolicy` (rpc)
 
@@ -811,6 +816,10 @@ Response semantics:
 | Field | Type | Required |
 |-------|------|----------|
 | `action` | `"allow" \| "deny"` | yes |
+| `message` | `string \| undefined` | no |
+| `shouldAbort` | `boolean \| undefined` | no |
+| `updatedInput` | `Record<string, unknown> \| undefined` | no |
+| `updatedPermissions` | `unknown[] \| undefined` | no |
 
 ### <a id="agent.turn.completed"></a>`agent.turn.completed` (event)
 
