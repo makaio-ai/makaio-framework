@@ -414,4 +414,43 @@ describe('client hook response contributions', () => {
       await runtime.coordinator.shutdown();
     }
   });
+
+  it('contributor factory captures bus from extensionContext and uses it at callback time', async () => {
+    const extension: KernelMakaioExtension = {
+      name: 'ctx-consumer',
+      displayName: 'Context Consumer',
+      version: '0.1.0',
+      dependencies: [dep('claude-code.runtime')],
+      clientHookResponses: {
+        createContributors: (ctx) => {
+          // Capture the bus from the extension context at activation time.
+          const bus = ctx.extensionContext.bus;
+          return [
+            {
+              lane: 'canonical' as const,
+              id: 'bus-enricher',
+              priority: 100,
+              timeoutMs: 500,
+              selectors: [{ kind: 'event-name' as const, name: 'PreToolUse' }],
+              respond: async () => {
+                // Use the captured bus at callback time to prove it's live.
+                const hasBus = typeof bus.emit === 'function';
+                return {
+                  canonicalEffects: [createAppendEffect(hasBus ? 'bus-alive' : 'bus-missing')],
+                };
+              },
+            },
+          ];
+        },
+      },
+    };
+
+    const runtime = await startRuntime([extension]);
+    try {
+      const result = await runtime.bus.request(ClaudeCodeClientSubjects.hook.handle, hookRequest());
+      expect(responseOutput(result.stdout).additionalContext).toBe('bus-alive');
+    } finally {
+      await runtime.coordinator.shutdown();
+    }
+  });
 });
