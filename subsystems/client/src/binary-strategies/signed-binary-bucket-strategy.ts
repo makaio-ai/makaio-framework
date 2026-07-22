@@ -16,6 +16,7 @@
  */
 
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { SignedBinaryBucketInstallDescriptor } from '@makaio/contracts/client';
 import type { InstallArtifact, InstallStrategy, StrategyDependencies, StrategyProgressCallback } from './types.js';
@@ -284,49 +285,58 @@ export class SignedBinaryBucketStrategy implements InstallStrategy {
 
     await fs.mkdir(targetDir, { recursive: true });
 
-    const gnupgHome = path.join(targetDir, '.gnupg');
     const keyFilePath = path.join(targetDir, 'signing-key.asc');
     const manifestFilePath = path.join(targetDir, 'manifest.json');
     const sigFilePath = path.join(targetDir, 'manifest.json.sig');
+    // GPG creates Unix-domain sockets below its home. Keep that directory out
+    // of an arbitrarily long install path so macOS socket paths stay valid.
+    const gnupgTempDir = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+    const gnupgHome = await fs.mkdtemp(path.join(gnupgTempDir, 'makaio-gpg-'));
+    await fs.chmod(gnupgHome, 0o700);
 
-    onProgress?.('resolving', null);
-    await this.#downloadVerificationAssets(config, version, keyFilePath, manifestFilePath, sigFilePath);
+    try {
+      onProgress?.('resolving', null);
+      await this.#downloadVerificationAssets(config, version, keyFilePath, manifestFilePath, sigFilePath);
 
-    onProgress?.('verifying', null);
-    const platformEntry = await this.#verifyManifestAndReadPlatformEntry(
-      config,
-      gnupgHome,
-      keyFilePath,
-      manifestFilePath,
-      sigFilePath,
-      platformKey,
-    );
+      onProgress?.('verifying', null);
+      const platformEntry = await this.#verifyManifestAndReadPlatformEntry(
+        config,
+        gnupgHome,
+        keyFilePath,
+        manifestFilePath,
+        sigFilePath,
+        platformKey,
+      );
 
-    onProgress?.('downloading', null);
-    const binaryRelPath = expandTemplate(config.binaryPathTemplate, version, platformSegment, platformEntry.binary);
-    const binaryFilePath = path.resolve(targetDir, platformEntry.binary);
-    await this.#deps.downloadFile(
-      `${config.baseUrl}/${binaryRelPath}`,
-      binaryFilePath,
-      makeDownloadProgressAdapter(onProgress),
-    );
+      onProgress?.('downloading', null);
+      const binaryRelPath = expandTemplate(config.binaryPathTemplate, version, platformSegment, platformEntry.binary);
+      const binaryFilePath = path.resolve(targetDir, platformEntry.binary);
+      await this.#deps.downloadFile(
+        `${config.baseUrl}/${binaryRelPath}`,
+        binaryFilePath,
+        makeDownloadProgressAdapter(onProgress),
+      );
 
-    onProgress?.('verifying', null);
-    const actualChecksum = await this.#deps.computeChecksum(binaryFilePath);
-    if (actualChecksum !== platformEntry.checksum) {
-      throw new Error(`Binary checksum mismatch: expected ${platformEntry.checksum} but computed ${actualChecksum}`);
+      onProgress?.('verifying', null);
+      const actualChecksum = await this.#deps.computeChecksum(binaryFilePath);
+      if (actualChecksum !== platformEntry.checksum) {
+        throw new Error(`Binary checksum mismatch: expected ${platformEntry.checksum} but computed ${actualChecksum}`);
+      }
+
+      onProgress?.('installing', null);
+      if (this.#runtime.platform !== 'win32') {
+        await fs.chmod(binaryFilePath, 0o755);
+      }
+      onProgress?.('installing', 100);
+
+      return { installPath: targetDir, version: this.#descriptor.version, strategy: 'signed-binary-bucket' };
+    } finally {
+      await Promise.all([
+        this.#deps.removeDirectory(gnupgHome),
+        this.#deps.deleteFile(keyFilePath),
+        this.#deps.deleteFile(sigFilePath),
+      ]);
     }
-
-    onProgress?.('installing', null);
-    if (this.#runtime.platform !== 'win32') {
-      await fs.chmod(binaryFilePath, 0o755);
-    }
-    await this.#deps.removeDirectory(gnupgHome);
-    await this.#deps.deleteFile(keyFilePath);
-    await this.#deps.deleteFile(sigFilePath);
-    onProgress?.('installing', 100);
-
-    return { installPath: targetDir, version: this.#descriptor.version, strategy: 'signed-binary-bucket' };
   }
 
   /**

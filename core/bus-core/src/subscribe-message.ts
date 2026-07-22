@@ -3,7 +3,7 @@
  */
 
 import type { PayloadFilter } from '@makaio/core';
-import type { BusSubscribeMessage, BusUnsubscribeMessage } from './types/transports.js';
+import type { BusSubscribeMessage, BusUnsubscribeMessage, SubscriptionDeliveryClass } from './types/transports.js';
 
 /**
  * Per-subject subscription state tracked locally on a client transport.
@@ -13,6 +13,8 @@ export interface SubscriptionEntry {
   filter?: PayloadFilter;
   /** Handler priorities registered for this subject. Empty array = event-only. */
   priorities: number[];
+  /** Whether the subscription may be advertised beyond its direct peer. */
+  deliveryClass?: SubscriptionDeliveryClass;
 }
 
 /**
@@ -26,10 +28,12 @@ export function buildSubscribeMessage(
   ackId?: string,
 ): BusSubscribeMessage {
   const subjects: Record<string, number[]> = {};
+  const deliveryClasses: Record<string, SubscriptionDeliveryClass> = {};
   const filters: Record<string, PayloadFilter> = {};
 
   for (const [subject, entry] of subscriptions) {
     subjects[subject] = entry.priorities;
+    deliveryClasses[subject] = entry.deliveryClass ?? 'relayable';
     if (entry.filter !== undefined) {
       filters[subject] = entry.filter;
     }
@@ -39,6 +43,7 @@ export function buildSubscribeMessage(
     type: 'subscribe',
     ...(ackId !== undefined ? { ackId } : {}),
     subjects,
+    deliveryClasses,
     ...(Object.keys(filters).length > 0 && { filters }),
   };
 }

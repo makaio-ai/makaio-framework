@@ -10,6 +10,12 @@
 
 import { createClientDefinition } from '@makaio/contracts';
 
+/** Namespaced Claude Code hook-response capabilities exposed to contributors. */
+export const CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES = Object.freeze({
+  approve: 'claude-code.tool-response.approve',
+  deny: 'claude-code.tool-response.deny',
+} as const);
+
 /**
  * Static client definition for `@makaio/client-claude-code`.
  *
@@ -139,7 +145,15 @@ export const clientDefinition = createClientDefinition({
         name: 'UserPromptSubmit',
         frameworkSubject: 'client.session.userPrompt.submitted',
       },
-      { name: 'PreToolUse', frameworkSubject: 'client.session.tool.pre', mode: 'request' },
+      {
+        name: 'PreToolUse',
+        frameworkSubject: 'client.session.tool.pre',
+        responseCapabilities: [
+          CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.approve,
+          CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny,
+          'context.append',
+        ],
+      },
       { name: 'PostToolUse', frameworkSubject: 'client.session.tool.post' },
       { name: 'Stop', frameworkSubject: 'client.session.turn.completed' },
       { name: 'SubagentStop' },

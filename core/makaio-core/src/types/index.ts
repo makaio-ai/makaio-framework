@@ -33,6 +33,7 @@ export type {
   LocalSubjectSchema,
   CollectorOnlySubjectSchema,
   ChannelSubjectSchema,
+  HostLocalRequestSubjectSchema,
   DefaultTransportsSubjectSchema,
   BaseSubjectSchema,
   SubjectSchema,

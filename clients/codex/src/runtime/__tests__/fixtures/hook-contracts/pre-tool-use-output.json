@@ -1,0 +1,10 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "additionalContext": "fixture tool context",
+    "permissionDecision": "allow",
+    "updatedInput": {
+      "command": "echo updated fixture"
+    }
+  }
+}

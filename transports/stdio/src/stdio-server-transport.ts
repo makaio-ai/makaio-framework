@@ -23,6 +23,7 @@ import {
   type BusReceiveHandler,
   type BusRequestMessage,
   type BusTransport,
+  type SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
 import { createJsonlTransport, type IJsonlTransport, type SubprocessSpawnOptions } from '@makaio/subprocess';
 import type { PayloadFilter } from '@makaio/core';
@@ -70,7 +71,10 @@ export class StdioServerTransport implements BusTransport {
    * payload filters. Stored for replay after reconnect and for building the
    * outbound subscribe wire message.
    */
-  private readonly localSubscriptions = new Map<string, { priorities: number[]; filter?: PayloadFilter }>();
+  private readonly localSubscriptions = new Map<
+    string,
+    { priorities: number[]; filter?: PayloadFilter; deliveryClass: SubscriptionDeliveryClass }
+  >();
 
   /** Resolver for the current `ready` promise; `null` once resolved. */
   private readyResolve: (() => void) | null = null;
@@ -219,13 +223,20 @@ export class StdioServerTransport implements BusTransport {
    * @param subject - Subject pattern to subscribe to
    * @param filter - Optional payload filter for smart routing
    * @param priorities - Handler priorities registered for this subject
+   * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer
    * @returns Promise that resolves when the subscription is buffered (and sent)
    */
-  public async subscribe(subject: string, filter?: PayloadFilter, priorities: number[] = []): Promise<void> {
-    this.localSubscriptions.set(subject, { priorities, filter });
+  public async subscribe(
+    subject: string,
+    filter?: PayloadFilter,
+    priorities: number[] = [],
+    deliveryClass?: SubscriptionDeliveryClass,
+  ): Promise<void> {
+    const resolvedDeliveryClass = deliveryClass ?? this.localSubscriptions.get(subject)?.deliveryClass ?? 'relayable';
+    this.localSubscriptions.set(subject, { priorities, filter, deliveryClass: resolvedDeliveryClass });
 
     if (this.jsonl !== null) {
-      this.sendSubscribeMessage(subject, filter, priorities);
+      this.sendSubscribeMessage(subject, filter, priorities, resolvedDeliveryClass);
     }
   }
 
@@ -366,14 +377,21 @@ export class StdioServerTransport implements BusTransport {
    * @param subject - Specific subject to subscribe; omit to send all.
    * @param filter - Payload filter for the subject.
    * @param priorities - Handler priorities for the subject.
+   * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer.
    */
-  private sendSubscribeMessage(subject?: string, filter?: PayloadFilter, priorities: number[] = []): void {
+  private sendSubscribeMessage(
+    subject?: string,
+    filter?: PayloadFilter,
+    priorities: number[] = [],
+    deliveryClass: SubscriptionDeliveryClass = 'relayable',
+  ): void {
     if (this.jsonl === null) return;
 
     if (subject !== undefined) {
       this.jsonl.send({
         type: 'subscribe',
         subjects: { [subject]: priorities },
+        deliveryClasses: { [subject]: deliveryClass },
         ...(filter !== undefined ? { filters: { [subject]: filter } } : {}),
       });
       return;
@@ -381,11 +399,13 @@ export class StdioServerTransport implements BusTransport {
 
     // Replay all subscriptions.
     const subjects: Record<string, number[]> = {};
+    const deliveryClasses: Record<string, SubscriptionDeliveryClass> = {};
     const filters: Record<string, PayloadFilter> = {};
     let hasFilters = false;
 
     for (const [subj, entry] of this.localSubscriptions) {
       subjects[subj] = entry.priorities;
+      deliveryClasses[subj] = entry.deliveryClass;
       if (entry.filter !== undefined) {
         filters[subj] = entry.filter;
         hasFilters = true;
@@ -395,6 +415,7 @@ export class StdioServerTransport implements BusTransport {
     this.jsonl.send({
       type: 'subscribe',
       subjects,
+      deliveryClasses,
       ...(hasFilters ? { filters } : {}),
     });
   }

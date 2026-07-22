@@ -296,6 +296,77 @@ const MySchemas = {
 Local subjects are invisible to transports — they are never sent over the wire.
 Use them for process-internal coordination that should not leak across boundaries.
 
+### Host-Local Request Subjects
+
+Wrap a request schema with `hostLocalRequest()` to allow direct remote ingress
+while preventing relay:
+
+```ts
+import { hostLocalRequest } from '@makaio/core';
+
+const MySchemas = {
+  resolveCapability: hostLocalRequest({
+    request: z.object({ capabilityId: z.string() }),
+    response: z.object({ available: z.boolean() }),
+  }),
+};
+```
+
+The invariant: **direct remote ingress is allowed, relay after ingress is
+forbidden.** The first receiving runtime handles the request locally and never
+re-advertises foreign ownership. Three defense-in-depth layers enforce this:
+
+1. **Advertisement filtering** — only receiver-local handler priorities are
+   advertised. Foreign/learned priorities are filtered out, preventing relay
+   nodes from creating indirect forwarding paths.
+2. **Dispatch enforcement** — when an inbound request targets a host-local
+   subject, dispatch runs with `localOnly: true`, skipping all remote entries.
+3. **Receiver-resolved trust** — the receiver resolves host-local semantics
+   from its own registered subject metadata. It never trusts a caller-supplied
+   wire flag.
+
+**A—B—C topology:** With buses A—B—C, A can reach B's host-local handler
+(direct connection), but cannot reach C's through B. Advertisement filtering
+prevents C's handler from appearing in A's remote handler registry, and
+dispatch enforcement prevents forwarding even if the advertisement were
+bypassed. The caller must connect directly to the owning runtime.
+
+### Locality Comparison
+
+| Behavior | `localSubject()` | `hostLocalRequest()` |
+|----------|-----------------|---------------------|
+| Schema constraint | Events and requests | Requests only |
+| Local origin | Stays local | Stays local |
+| Remote ingress | Rejected | Allowed (direct only) |
+| Advertisement | Not advertised | Local priorities only |
+| Relay (A→B→C) | N/A | Forbidden |
+| Transport serialization | Never | On first hop only |
+| Readiness gating | Local only | Local only on receive |
+| Trust model | N/A | Receiver-resolved metadata |
+
+### `RequestContext.deadline`
+
+Request handlers receive a `deadline` property on their context — an absolute
+Unix timestamp (ms) minted once at the request entry point as
+`Date.now() + effectiveTimeout`. It propagates unchanged through every local and
+remote handler in the dispatch chain. Handlers can compare `deadline` to
+`Date.now()` to determine their remaining time budget:
+
+```ts
+bus.on(MySubjects.resolveCapability, async (ctx) => {
+  if (ctx.deadline !== undefined) {
+    const remaining = ctx.deadline - Date.now();
+    console.info(`Time budget: ${remaining}ms`);
+  }
+  ctx.setResult({ available: true });
+});
+```
+
+`deadline` is `undefined` when the request was made with `timeout: 0` (no
+deadline). This is the handler-visible surface of the `deadline` field on
+`BusRequestMessage`, which transports use for per-hop remaining-time
+computation.
+
 ### Channel Subjects
 
 Channel subjects (`channelSubject()`) are restricted to `DirectChannel`
@@ -401,6 +472,10 @@ Pass `timeout: 0` to disable the timeout entirely (use with caution).
 | `../packages/contracts/src/agent/namespace.ts` | `AgentSubjects` registration |
 | `../packages/contracts/src/adapter/namespace.ts` | `AdapterSubjects` registration |
 | `../packages/contracts/src/tool/namespace.ts` | `ToolSubjects` registration |
+| `../core/makaio-core/src/subject-helpers/is-local-schema.ts` | `localSubject()` wrapper |
+| `../core/makaio-core/src/subject-helpers/host-local-request-schema.ts` | `hostLocalRequest()` wrapper |
+| `../core/makaio-core/src/types/context.ts` | `RequestContext.deadline` definition |
+| `../core/bus-core/src/registries/advertised-state.ts` | Advertisement filtering for host-local subjects |
 
 <!-- /web:hide -->
 

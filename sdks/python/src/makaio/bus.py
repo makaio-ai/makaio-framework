@@ -35,6 +35,7 @@ from makaio.types import (
     RequestContext,
     RequestHandlerFn,
     RequestSubject,
+    SubscriptionDeliveryClass,
     SubjectLike,
     WebSocketFactory,
     WildcardSubject,
@@ -297,6 +298,8 @@ class BusClient:
         subject: SubjectLike,
         handler: EventHandlerFn,
         priority: int = 0,
+        *,
+        delivery_class: SubscriptionDeliveryClass = "relayable",
     ) -> Subscription:
         """Register a local event handler and advertise the subscription.
 
@@ -306,14 +309,19 @@ class BusClient:
             :class:`~makaio.types.EventContext`.
         @param priority: Dispatch priority (higher runs first). Unused for
             events dispatched concurrently but included for consistency.
+        @param delivery_class: Whether remote peers may relay this subscription.
         @returns: A :class:`Subscription` handle with a ``close()`` method.
         """
         full_subject = _resolve_subject(subject)
         _ensure_supported_subscription_pattern(full_subject)
+        _ensure_subscription_delivery_class(delivery_class)
         self._remember_subject_types(subject)
         async with self._connection_lock:
             registration = self._bus.register_event(
-                full_subject, handler, priority=priority
+                full_subject,
+                handler,
+                priority=priority,
+                delivery_class=delivery_class,
             )
             try:
                 await self._send_subscribe_snapshot()
@@ -327,6 +335,8 @@ class BusClient:
         subject: SubjectLike,
         handler: RequestHandlerFn,
         priority: int = 0,
+        *,
+        delivery_class: SubscriptionDeliveryClass = "relayable",
     ) -> Subscription:
         """Register a local request handler and advertise its priority.
 
@@ -336,14 +346,19 @@ class BusClient:
         @param handler: Async or sync callable accepting a
             :class:`~makaio.types.RequestContext`.
         @param priority: Dispatch priority for the handler chain.
+        @param delivery_class: Whether remote peers may relay this subscription.
         @returns: A :class:`Subscription` handle with a ``close()`` method.
         """
         full_subject = _resolve_subject(subject)
         _ensure_exact_subject(full_subject)
+        _ensure_subscription_delivery_class(delivery_class)
         self._remember_subject_types(subject)
         async with self._connection_lock:
             registration = self._bus.register_request(
-                full_subject, handler, priority=priority
+                full_subject,
+                handler,
+                priority=priority,
+                delivery_class=delivery_class,
             )
             try:
                 await self._send_subscribe_snapshot()
@@ -930,7 +945,17 @@ class BusClient:
         if not payload:
             return
 
-        await self._send({"type": "subscribe", "subjects": payload})
+        delivery_classes = {
+            subject: self._bus.subscription_delivery_class(subject)
+            for subject in payload
+        }
+        await self._send(
+            {
+                "type": "subscribe",
+                "subjects": payload,
+                "deliveryClasses": delivery_classes,
+            }
+        )
 
     async def _send_unsubscribe(
         self, full_subject: str, priorities: list[int]
@@ -1069,6 +1094,20 @@ def _ensure_supported_subscription_pattern(pattern: str) -> None:
     raise ValueError(
         "subscription patterns must be exact subjects, '*', or end with '.*' or ':*'"
     )
+
+
+def _ensure_subscription_delivery_class(
+    delivery_class: SubscriptionDeliveryClass,
+) -> None:
+    """Raise :exc:`ValueError` for an unknown subscription delivery class.
+
+    @param delivery_class: Delivery class supplied by the SDK consumer.
+    @raises ValueError: If the class is not supported by the wire protocol.
+    """
+    if delivery_class not in ("relayable", "first-hop-only"):
+        raise ValueError(
+            "delivery_class must be 'relayable' or 'first-hop-only'"
+        )
 
 
 def _has_wildcard(subject: str) -> bool:

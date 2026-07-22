@@ -5,7 +5,7 @@
  * stdio framing and bidirectional message flow.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StdioServerTransport } from '../stdio-server-transport.js';
 import type { BusMessage } from '@makaio/bus-core';
 
@@ -90,6 +90,33 @@ process.stdin.on('data', (chunk) => {
           namespace: 'test',
           payload: msg,
           messageId: 'control-unsubscribe'
+        }) + '\\n');
+      }
+    } catch {}
+  }
+});
+process.stdout.write(JSON.stringify({ type: 'subscribe-sync-complete' }) + '\\n');
+`;
+
+const SUBSCRIBE_OBSERVER_SCRIPT = `
+process.stdin.resume();
+process.stdin.setEncoding('utf-8');
+let buf = '';
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  const lines = buf.split('\\n');
+  buf = lines.pop() || '';
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const msg = JSON.parse(line);
+      if (msg.type === 'subscribe') {
+        process.stdout.write(JSON.stringify({
+          type: 'event',
+          subject: 'test.subscribe-control',
+          namespace: 'test',
+          payload: msg,
+          messageId: 'control-subscribe'
         }) + '\\n');
       }
     } catch {}
@@ -387,12 +414,35 @@ describe('StdioServerTransport', { timeout: TRANSPORT_INTEGRATION_TIMEOUT_MS }, 
   });
 
   it('subscribe() sends a subscribe message to the child process', async () => {
-    transport = new StdioServerTransport({ spawn: SPAWN_OPTIONS });
+    transport = new StdioServerTransport({
+      spawn: {
+        command: 'node',
+        args: ['-e', SUBSCRIBE_OBSERVER_SCRIPT],
+        cwd: process.cwd(),
+        processName: 'subscribe-observer-child',
+      },
+    });
+    const received: BusMessage[] = [];
+    transport.onReceive(async (message) => {
+      received.push(message);
+    });
+
+    await transport.subscribe('test.subject', undefined, [100], 'first-hop-only');
+
     await transport.connect();
     await transport.ready;
 
-    // Should not throw; subscribe message is fire-and-forget.
-    await expect(transport.subscribe('test.subject', undefined, [100])).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(received).toHaveLength(1);
+    });
+    expect(received[0]).toMatchObject({
+      type: 'event',
+      payload: {
+        type: 'subscribe',
+        subjects: { 'test.subject': [100] },
+        deliveryClasses: { 'test.subject': 'first-hop-only' },
+      },
+    });
   });
 
   it('unsubscribe() sends an unsubscribe message to the child process', async () => {

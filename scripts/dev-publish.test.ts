@@ -200,7 +200,8 @@ describe('selectLatestDevTag', () => {
 });
 
 describe('dev publish info file mapping', () => {
-  it('retains public workspace dependency metadata during at-ref discovery', { timeout: 20_000 }, () => {
+  // At-ref discovery materializes the real workspace and can contend with distribution builds in the full suite.
+  it('retains public workspace dependency metadata during at-ref discovery', { timeout: 60_000 }, () => {
     const packages = discoverWorkspacePackagesAtRef('HEAD');
     const claudeCli = packages.find((pkg) => pkg.name === '@makaio/adapter-claude-code-cli');
 

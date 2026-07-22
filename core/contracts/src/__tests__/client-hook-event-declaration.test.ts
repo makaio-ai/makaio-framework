@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { ClientRuntimeCapabilitiesSchema, createClientDefinition } from '@makaio/contracts/client';
+import {
+  ClientHookEventDeclarationSchema,
+  ClientRuntimeCapabilitiesSchema,
+  createClientDefinition,
+  deriveHookEventTransportMode,
+} from '@makaio/contracts/client';
 
 describe('ClientHookEventDeclaration', () => {
   it('defaults hookEvents to empty array when omitted', () => {
@@ -66,5 +71,91 @@ describe('ClientHookEventDeclaration', () => {
     expect(def.runtimeCapabilities.hookEvents).toHaveLength(2);
     expect(Object.isFrozen(def.runtimeCapabilities.hookEvents)).toBe(true);
     expect(Object.isFrozen(def.runtimeCapabilities.hookEvents[0])).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// responseCapabilities schema validation
+// ---------------------------------------------------------------------------
+
+describe('ClientHookEventDeclaration — responseCapabilities', () => {
+  it('defaults responseCapabilities to an empty array when omitted', () => {
+    const event = ClientHookEventDeclarationSchema.parse({ name: 'Stop' });
+    expect(event.responseCapabilities).toEqual([]);
+  });
+
+  it('accepts an explicit empty responseCapabilities array', () => {
+    const event = ClientHookEventDeclarationSchema.parse({
+      name: 'Stop',
+      responseCapabilities: [],
+    });
+    expect(event.responseCapabilities).toEqual([]);
+  });
+
+  it('accepts a single response capability', () => {
+    const event = ClientHookEventDeclarationSchema.parse({
+      name: 'PreToolUse',
+      responseCapabilities: ['approve'],
+    });
+    expect(event.responseCapabilities).toEqual(['approve']);
+  });
+
+  it('accepts multiple response capabilities', () => {
+    const event = ClientHookEventDeclarationSchema.parse({
+      name: 'PreToolUse',
+      responseCapabilities: ['approve', 'deny', 'context.append'],
+    });
+    expect(event.responseCapabilities).toEqual(['approve', 'deny', 'context.append']);
+  });
+
+  it('rejects response capabilities with empty strings', () => {
+    const result = ClientHookEventDeclarationSchema.safeParse({
+      name: 'PreToolUse',
+      responseCapabilities: ['approve', ''],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects the removed "mode" field via strict schema', () => {
+    const result = ClientHookEventDeclarationSchema.safeParse({
+      name: 'PreToolUse',
+      mode: 'request',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deriveHookEventTransportMode
+// ---------------------------------------------------------------------------
+
+describe('deriveHookEventTransportMode', () => {
+  it('returns "event" for empty responseCapabilities', () => {
+    const event = ClientHookEventDeclarationSchema.parse({ name: 'Stop' });
+    expect(deriveHookEventTransportMode(event)).toBe('event');
+  });
+
+  it('returns "request" for non-empty responseCapabilities', () => {
+    const event = ClientHookEventDeclarationSchema.parse({
+      name: 'PreToolUse',
+      responseCapabilities: ['approve', 'deny'],
+    });
+    expect(deriveHookEventTransportMode(event)).toBe('request');
+  });
+
+  it('returns "request" for a single capability', () => {
+    const event = ClientHookEventDeclarationSchema.parse({
+      name: 'PreToolUse',
+      responseCapabilities: ['context.append'],
+    });
+    expect(deriveHookEventTransportMode(event)).toBe('request');
+  });
+
+  it('returns "event" for explicitly empty capabilities', () => {
+    const event = ClientHookEventDeclarationSchema.parse({
+      name: 'SessionStart',
+      responseCapabilities: [],
+    });
+    expect(deriveHookEventTransportMode(event)).toBe('event');
   });
 });

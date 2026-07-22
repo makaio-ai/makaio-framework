@@ -10,6 +10,13 @@
 
 import { codexCapabilityMap, createClientDefinition } from '@makaio/contracts';
 
+/** Namespaced Codex hook-response capabilities exposed to contributors. */
+export const CODEX_HOOK_RESPONSE_CAPABILITIES = Object.freeze({
+  block: 'openai.codex-hook-response.block',
+  permissionDeny: 'openai.codex-hook-response.permission.deny',
+  inputUpdate: 'openai.codex-hook-response.input.update',
+} as const);
+
 /**
  * Static client definition for `@makaio/client-codex`.
  *
@@ -87,14 +94,36 @@ export const clientDefinition = createClientDefinition({
     supportsSupervisorLaunch: true,
     supportsManagedBinary: true,
     hookEvents: [
-      { name: 'SessionStart', frameworkSubject: 'client.session.started' },
+      {
+        name: 'SessionStart',
+        frameworkSubject: 'client.session.started',
+        responseCapabilities: ['context.append', CODEX_HOOK_RESPONSE_CAPABILITIES.block],
+      },
       {
         name: 'UserPromptSubmit',
         frameworkSubject: 'client.session.userPrompt.submitted',
+        responseCapabilities: ['context.append', CODEX_HOOK_RESPONSE_CAPABILITIES.block],
       },
-      { name: 'PreToolUse', frameworkSubject: 'client.session.tool.pre' },
-      { name: 'PostToolUse', frameworkSubject: 'client.session.tool.post' },
-      { name: 'Stop', frameworkSubject: 'client.session.turn.completed' },
+      {
+        name: 'PreToolUse',
+        frameworkSubject: 'client.session.tool.pre',
+        responseCapabilities: [
+          'context.append',
+          CODEX_HOOK_RESPONSE_CAPABILITIES.block,
+          CODEX_HOOK_RESPONSE_CAPABILITIES.permissionDeny,
+          CODEX_HOOK_RESPONSE_CAPABILITIES.inputUpdate,
+        ],
+      },
+      {
+        name: 'PostToolUse',
+        frameworkSubject: 'client.session.tool.post',
+        responseCapabilities: ['context.append', CODEX_HOOK_RESPONSE_CAPABILITIES.block],
+      },
+      {
+        name: 'Stop',
+        frameworkSubject: 'client.session.turn.completed',
+        responseCapabilities: [CODEX_HOOK_RESPONSE_CAPABILITIES.block],
+      },
     ],
   },
 });

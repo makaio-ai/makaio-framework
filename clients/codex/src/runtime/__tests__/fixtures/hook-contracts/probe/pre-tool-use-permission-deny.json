@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 3,
+  "provider": "codex",
+  "cliVersion": "0.144.1",
+  "scenarioId": "pre-tool-use-permission-deny",
+  "events": [
+    {
+      "eventName": "PreToolUse",
+      "frameworkSubject": "client.session.tool.pre",
+      "responseCapabilities": [
+        "context.append",
+        "openai.codex-hook-response.block",
+        "openai.codex-hook-response.permission.deny",
+        "openai.codex-hook-response.input.update"
+      ],
+      "mode": "request",
+      "candidateExpectedStatus": "supported",
+      "observedStatus": "supported",
+      "sourceExpectedEffects": [
+        "context.append",
+        "openai.codex-hook-response.block",
+        "openai.codex-hook-response.permission.deny",
+        "openai.codex-hook-response.input.update"
+      ],
+      "observedEffects": [
+        "openai.codex-hook-response.permission.deny"
+      ],
+      "blockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "payloadKeys": [
+        "cwd",
+        "hook_event_name",
+        "model",
+        "permission_mode",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path",
+        "turn_id"
+      ],
+      "sentinelInjected": true
+    }
+  ],
+  "oracle": "sentinel-must-block-tool",
+  "oraclePassed": true,
+  "exitCode": 0
+}

@@ -16,7 +16,8 @@ import { getSubjectFromBusMessage, getReadyTransports, serializeError, sendError
 import type { MessagePayload, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
 import { dispatch } from '../methods/request/dispatch.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
-import { pushAdvertisedSubjectsToPeers, syncAllSubjectsToTransport } from './advertised-state.js';
+import { syncAllSubjectsToTransport } from './advertised-state.js';
+import { propagateSubscribe, propagateUnsubscribe, purgeRemoteHandlersForTransport } from './remote-subscriptions.js';
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface BusTransportRegistry extends Record<string, BusTransport> {}
@@ -169,6 +170,12 @@ const handleRequestMessage = async (
     return;
   }
 
+  // Host-local request subjects accept direct remote ingress but must never be
+  // relayed onward. Locally registered semantics suppress all remote dispatch;
+  // learned per-route provenance is enforced separately by dispatch below.
+  // The request wire remains free of caller-controlled locality flags.
+  const hostLocalRequest = context.namespaceRegistry.isHostLocalRequestSubject(fullSubject);
+
   const definition = resolveSubjectDefinition(message, true);
 
   try {
@@ -186,6 +193,13 @@ const handleRequestMessage = async (
       // Start dispatch from the cursor sent by the originating node (if any).
       priority: message.priority,
       transport: receiveContext,
+      // An inbound request has already consumed its first hop. Learned
+      // first-hop-only routes are excluded, while local and relayable routes
+      // remain eligible for mixed topologies.
+      excludeFirstHopOnlyRemote: true,
+      // Host-local request: run receiver-local handlers only, never forward
+      // to another transport. This is the relay-suppression enforcement point.
+      ...(hostLocalRequest && { localOnly: true }),
     });
 
     if (!outcome.handled) {
@@ -331,146 +345,6 @@ const handleBroadcastMessage = async (
     await deliverBroadcastResults(transport, message.correlationId, allResults, localError);
   } catch (error) {
     await deliverBroadcastResults(transport, message.correlationId, [], serializeError(error));
-  }
-};
-
-/**
- * Propagate a subscribe message to all other registered transports and update
- * the remote handler registry on the bus context.
- *
- * Updates `context.remoteRequestHandlers` for the source transport, then uses
- * {@link pushAdvertisedSubjectsToPeers} to push the full aggregated advertised
- * state (local + all foreign remote priorities) to every peer transport. This
- * eliminates the partial-snapshot / replace-semantics race that existed when
- * multiple sources each sent their own priority-only slice.
- * @param context - Bus context
- * @param sourceTransportName - Name of the transport the subscribe arrived from
- * @param message - The subscribe message to propagate
- */
-const propagateSubscribe = async (
-  context: MakaioBusContext,
-  sourceTransportName: BusTransportKeys,
-  message: Extract<BusMessage, { type: 'subscribe' }>,
-): Promise<void> => {
-  // Update the remote handler registry from the incoming subscribe payload.
-  // A subscribe message replaces the previous priority set for this
-  // transport+subject pair, so stale entries are removed before inserting new ones.
-  for (const [subject, priorities] of Object.entries(message.subjects)) {
-    const sourceName = String(sourceTransportName);
-    const existing = context.remoteRequestHandlers.get(subject);
-    const filtered = existing ? existing.filter((e) => e.transport !== sourceName) : [];
-    for (const priority of priorities) {
-      filtered.push({ transport: sourceName, priority });
-    }
-    if (filtered.length > 0) {
-      context.remoteRequestHandlers.set(subject, filtered);
-    } else {
-      context.remoteRequestHandlers.delete(subject);
-    }
-
-    // Track event-only subscriptions (empty priority array = the source has event handlers).
-    // This is separate from remoteRequestHandlers because event-only sources have no priorities.
-    if (priorities.length === 0) {
-      const eventSet = context.remoteEventHandlers.get(subject) ?? new Set<string>();
-      eventSet.add(sourceName);
-      context.remoteEventHandlers.set(subject, eventSet);
-    } else {
-      // If the source now has request handlers, remove it from the event-only set.
-      context.remoteEventHandlers.get(subject)?.delete(sourceName);
-    }
-  }
-
-  // Push the full aggregated advertised state to all peer transports (excluding source).
-  // Each peer receives the union of local + all foreign remote priorities for each
-  // affected subject — not just the source's priorities — avoiding replace-semantics races.
-  await pushAdvertisedSubjectsToPeers(context, sourceTransportName, Object.keys(message.subjects));
-};
-
-/**
- * Propagate an unsubscribe message to all other registered transports and
- * remove the corresponding entries from the remote handler registry.
- *
- * Uses "full remove" semantics: for each subject in the unsubscribe message,
- * ALL entries for the source transport are removed regardless of priority.
- * This is symmetric with {@link propagateSubscribe}, which does a full replace
- * (filters all entries for the transport, then inserts the new priority set).
- * The semantics are correct because unsubscribe is only sent when zero handlers
- * remain for a subject — `on.ts` sends a SUBSCRIBE with remaining priorities
- * whenever at least one handler persists, so an unsubscribe always means
- * "this transport has no handlers left for this subject".
- *
- * After updating the registry, {@link pushAdvertisedSubjectsToPeers} recomputes
- * the full advertised state for each affected subject. This fixes a latent bug
- * where peers would receive a bare `unsubscribe()` even when local handlers or
- * other remote handlers still existed for the subject.
- * @param context - Bus context
- * @param sourceTransportName - Name of the transport the unsubscribe arrived from
- * @param message - The unsubscribe message to propagate
- */
-const propagateUnsubscribe = async (
-  context: MakaioBusContext,
-  sourceTransportName: BusTransportKeys,
-  message: Extract<BusMessage, { type: 'unsubscribe' }>,
-): Promise<void> => {
-  // For each subject in the unsubscribe message, remove ALL entries for the
-  // source transport. Symmetric with propagateSubscribe's full-replace logic.
-  //
-  // Full-remove: drop ALL entries for this transport. See JSDoc — unsubscribe
-  // only fires when zero handlers remain; partial removal uses subscribe with
-  // the reduced priority set.
-  const sourceName = String(sourceTransportName);
-  for (const subject of Object.keys(message.subjects)) {
-    const existing = context.remoteRequestHandlers.get(subject);
-    if (existing) {
-      const filtered = existing.filter((e) => e.transport !== sourceName);
-      if (filtered.length === 0) {
-        context.remoteRequestHandlers.delete(subject);
-      } else {
-        context.remoteRequestHandlers.set(subject, filtered);
-      }
-    }
-    // Also remove from event-only tracking.
-    context.remoteEventHandlers.get(subject)?.delete(sourceName);
-  }
-
-  // Push the full aggregated advertised state to all peer transports (excluding source).
-  // Peers may still have local handlers or other remote handlers for these subjects,
-  // so we must recompute rather than blindly forwarding the unsubscribe.
-  await pushAdvertisedSubjectsToPeers(context, sourceTransportName, Object.keys(message.subjects));
-};
-
-/**
- * Purge all remote handler entries that belong to the given transport and
- * notify peers that the affected subjects have changed.
- *
- * Called when a transport is unregistered so that dispatch logic stops
- * routing to handlers that no longer exist, and so remaining transports
- * receive an updated advertised state reflecting the missing source.
- * @param context - Bus context whose remote registry is mutated
- * @param transportName - String key of the transport being removed
- */
-const purgeRemoteHandlersForTransport = (context: MakaioBusContext, transportName: string): void => {
-  const affectedSubjects = new Set<string>();
-  for (const [subject, entries] of context.remoteRequestHandlers) {
-    const filtered = entries.filter((e) => e.transport !== transportName);
-    if (filtered.length === 0) {
-      context.remoteRequestHandlers.delete(subject);
-    } else {
-      context.remoteRequestHandlers.set(subject, filtered);
-    }
-    affectedSubjects.add(subject);
-  }
-  for (const [subject, transportSet] of context.remoteEventHandlers) {
-    if (transportSet.has(transportName)) {
-      transportSet.delete(transportName);
-      affectedSubjects.add(subject);
-    }
-  }
-
-  if (affectedSubjects.size > 0) {
-    // Peers should learn that handlers from the disconnected transport are gone.
-    // Cast: transportName is a string but peers need BusTransportKeys for the API.
-    void pushAdvertisedSubjectsToPeers(context, transportName as BusTransportKeys, [...affectedSubjects]);
   }
 };
 

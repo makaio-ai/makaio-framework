@@ -41,6 +41,7 @@ export {
   canonicalizeClientId,
   ClientHookHandleResponseSchema,
   ClientSubjects,
+  NOOP_HOOK_HANDLE_RESPONSE,
   createRawClientHookHandleSubject,
   createRawClientHookReceivedSubject,
   DEFAULT_HOOK_HANDLE_TIMEOUT_MS,
@@ -108,3 +109,19 @@ export type {
   ClientWiringListResponse,
   ClientWiringRemoveResponse,
 } from './wiring-schemas.js';
+export { ClientHookProviderContractRegistry } from './client-hook-provider-contract-registry.js';
+export { ClientHookResponseRegistry } from './client-hook-response-registry.js';
+export { createClientHookResponseContributionProcessor } from './client-hook-response-contribution-processor.js';
+export type {
+  ContributorInstallResult,
+  RegisteredContributor as RegistryContributor,
+} from './client-hook-response-registry.js';
+export { collectContributions } from './client-hook-response-collector.js';
+export type {
+  ClosedFailureResult,
+  CollectionDiagnostic,
+  CollectionResult,
+  ContributorOutcome,
+  DiagnosticSeverity,
+  RegisteredContributor,
+} from './client-hook-response-collector.js';

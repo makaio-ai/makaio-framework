@@ -225,6 +225,7 @@ describe('createMessagePortTransport — envelope mode', () => {
     const subscribeMsg: BusSubscribeMessage = {
       type: 'subscribe',
       subjects: { 'test.subject': [] },
+      deliveryClasses: { 'test.subject': 'relayable' },
     };
     await transport.subscribe('test.subject');
 
@@ -635,6 +636,21 @@ describe('createMessagePortTransport — subscribe / unsubscribe', () => {
     const posted = mock.posted[0] as BusSubscribeMessage;
     expect(posted.type).toBe('subscribe');
     expect(posted.subjects).toEqual({ 'adapter.event': [100, 200] });
+    expect(posted.deliveryClasses).toEqual({ 'adapter.event': 'relayable' });
+
+    await transport.disconnect();
+  });
+
+  it('preserves an explicit delivery class across priority-only re-subscriptions', async () => {
+    const transport = createMessagePortTransport({ port: mock.port });
+    await transport.connect();
+
+    await transport.subscribe('hook.response', undefined, [100], 'first-hop-only');
+    mock.posted.length = 0;
+    await transport.subscribe('hook.response', undefined, [200]);
+
+    const posted = mock.posted[0] as BusSubscribeMessage;
+    expect(posted.deliveryClasses).toEqual({ 'hook.response': 'first-hop-only' });
 
     await transport.disconnect();
   });
@@ -778,5 +794,23 @@ describe('createMessagePortTransport — disconnect cleanup', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(received).toHaveLength(0);
+  });
+
+  it('does not inherit delivery semantics when reused after disconnect', async () => {
+    const mock = createMockPort();
+    const transport = createMessagePortTransport({ port: mock.port });
+    await transport.connect();
+
+    await transport.subscribe('hook.response', undefined, [], 'first-hop-only');
+    await transport.disconnect();
+
+    mock.posted.length = 0;
+    await transport.connect();
+    await transport.subscribe('hook.response');
+
+    const posted = mock.posted[0] as BusSubscribeMessage;
+    expect(posted.deliveryClasses).toEqual({ 'hook.response': 'relayable' });
+
+    await transport.disconnect();
   });
 });

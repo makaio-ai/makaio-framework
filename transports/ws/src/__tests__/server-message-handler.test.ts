@@ -119,6 +119,40 @@ describe('createInboundMessageHandler', () => {
     expect(handlerSpy).toHaveBeenCalledOnce();
   });
 
+  it('rejects malformed priority arrays before they enter aggregate state', async () => {
+    const socket = new MockWebSocket();
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    const deps = makeDeps({ handlers: new Set([handler]), debug: false });
+
+    const inbound = createInboundMessageHandler(socket, deps);
+    await inbound(
+      JSON.stringify({
+        type: 'subscribe',
+        subjects: { 'hook.response': ['invalid'] },
+        deliveryClasses: { 'hook.response': 'relayable' },
+      }),
+    );
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'hook.response': [100] },
+        deliveryClasses: { 'hook.response': 'relayable' },
+      },
+      new MockWebSocket(),
+      deps,
+    );
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(
+      {
+        type: 'subscribe',
+        subjects: { 'hook.response': [100] },
+        deliveryClasses: { 'hook.response': 'relayable' },
+      },
+      undefined,
+    );
+  });
+
   it('does not acknowledge subscribe messages when a handler fails', async () => {
     const socket = new MockWebSocket();
     const sendSafely = vi.fn();
@@ -133,6 +167,7 @@ describe('createInboundMessageHandler', () => {
         type: 'subscribe',
         ackId: 'subscribe-failed',
         subjects: { 'test.subject': [] },
+        deliveryClasses: { 'test.subject': 'relayable' },
       },
       socket,
       makeDeps({ debug: false, handlers, sendSafely }),
@@ -167,5 +202,73 @@ describe('createInboundMessageHandler', () => {
       socket,
       JSON.stringify({ type: 'subscription-ack', ackId: 'unsubscribe-failed' }),
     );
+  });
+
+  it('aggregates priorities and lets first-hop-only win across clients', async () => {
+    const clientA = new MockWebSocket();
+    const clientB = new MockWebSocket();
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    const deps = makeDeps({ handlers: new Set([handler]) });
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'hook.response': [100] },
+        deliveryClasses: { 'hook.response': 'relayable' },
+      },
+      clientA,
+      deps,
+    );
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'hook.response': [200] },
+        deliveryClasses: { 'hook.response': 'first-hop-only' },
+      },
+      clientB,
+      deps,
+    );
+
+    expect(handler).toHaveBeenLastCalledWith(
+      {
+        type: 'subscribe',
+        subjects: { 'hook.response': [200, 100] },
+        deliveryClasses: { 'hook.response': 'first-hop-only' },
+      },
+      undefined,
+    );
+  });
+
+  it('retains the aggregate subscription until the final client unsubscribes', async () => {
+    const clientA = new MockWebSocket();
+    const clientB = new MockWebSocket();
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    const deps = makeDeps({ handlers: new Set([handler]) });
+
+    for (const client of [clientA, clientB]) {
+      await routeMessage(
+        {
+          type: 'subscribe',
+          subjects: { 'hook.response': client === clientA ? [100] : [200] },
+          deliveryClasses: { 'hook.response': client === clientA ? 'relayable' : 'first-hop-only' },
+        },
+        client,
+        deps,
+      );
+    }
+
+    handler.mockClear();
+    await routeMessage({ type: 'unsubscribe', subjects: { 'hook.response': [200] } }, clientB, deps);
+    expect(handler).toHaveBeenLastCalledWith(
+      {
+        type: 'subscribe',
+        subjects: { 'hook.response': [100] },
+        deliveryClasses: { 'hook.response': 'relayable' },
+      },
+      undefined,
+    );
+
+    await routeMessage({ type: 'unsubscribe', subjects: { 'hook.response': [100] } }, clientA, deps);
+    expect(handler).toHaveBeenLastCalledWith({ type: 'unsubscribe', subjects: { 'hook.response': [] } }, undefined);
   });
 });

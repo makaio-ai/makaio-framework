@@ -66,7 +66,7 @@ struct ClientInner {
     control_plane: Mutex<()>,
     writer: Mutex<Option<BoxTransportWriter>>,
     pending: Mutex<HashMap<String, oneshot::Sender<ResponseMessage>>>,
-    event_handlers: Mutex<HashMap<String, HashMap<usize, EventHandler>>>,
+    event_handlers: Mutex<HashMap<String, HashMap<usize, EventHandlerEntry>>>,
     request_handlers: Mutex<HashMap<String, BTreeMap<i64, Vec<RequestHandlerEntry>>>>,
     remote_request_handlers: Mutex<BTreeMap<String, Vec<i64>>>,
     remote_subscribe_synced: AtomicBool,
@@ -79,6 +79,19 @@ struct ClientInner {
 struct RequestHandlerEntry {
     handler_id: usize,
     handler: RequestHandler,
+    delivery_class: SubscriptionDeliveryClass,
+}
+
+#[derive(Clone)]
+struct EventHandlerEntry {
+    handler: EventHandler,
+    delivery_class: SubscriptionDeliveryClass,
+}
+
+#[derive(Default)]
+struct LocalSubscriptionSnapshot {
+    subjects: BTreeMap<String, Vec<i64>>,
+    delivery_classes: BTreeMap<String, SubscriptionDeliveryClass>,
 }
 
 #[derive(Clone)]
@@ -106,7 +119,7 @@ impl RequestChainEntry {
 
 enum SubjectAdvertisementAction {
     None,
-    ReplaceSnapshot(BTreeMap<String, Vec<i64>>),
+    ReplaceSnapshot(LocalSubscriptionSnapshot),
     Unsubscribe(Vec<i64>),
 }
 
@@ -470,9 +483,37 @@ pub struct HeartbeatMessage {
     pub timestamp: u64,
 }
 
+/// Routing scope advertised for a subscribed subject.
+///
+/// Rust SDK handlers are always directly owned by this client, so every local
+/// advertisement currently uses [`SubscriptionDeliveryClass::Relayable`]. The
+/// type still preserves the language-neutral wire contract when remote peers
+/// advertise a stricter scope.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubscriptionDeliveryClass {
+    /// The subscribed handler may be reached through relay nodes.
+    Relayable,
+    /// The subscribed handler accepts direct ingress only and must not be relayed.
+    FirstHopOnly,
+}
+
+impl Default for SubscriptionDeliveryClass {
+    fn default() -> Self {
+        Self::Relayable
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SubscribeMessage {
     pub subjects: BTreeMap<String, Vec<i64>>,
+    /// Delivery class for every advertised subject.
+    ///
+    /// `default` keeps decoding older peers possible; all locally produced
+    /// subscribe messages include an explicit entry for every subject.
+    #[serde(default)]
+    pub delivery_classes: BTreeMap<String, SubscriptionDeliveryClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filters: Option<BTreeMap<String, Value>>,
 }
@@ -914,6 +955,25 @@ impl BusClient {
         F: Fn(EventMessage) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        self.subscribe_with_delivery_class(
+            subject_pattern,
+            SubscriptionDeliveryClass::Relayable,
+            handler,
+        )
+        .await
+    }
+
+    /// Subscribes to inbound events with an explicit routing scope.
+    pub async fn subscribe_with_delivery_class<F, Fut>(
+        &self,
+        subject_pattern: &str,
+        delivery_class: SubscriptionDeliveryClass,
+        handler: F,
+    ) -> BusResult<Subscription>
+    where
+        F: Fn(EventMessage) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
         validate_subscription_pattern(subject_pattern)?;
         let handler_id = self.next_handler_id().await;
         let handler: EventHandler = Arc::new(move |event| Box::pin(handler(event)));
@@ -926,7 +986,13 @@ impl BusClient {
             handlers
                 .entry(subject_pattern.to_string())
                 .or_default()
-                .insert(handler_id, handler.clone());
+                .insert(
+                    handler_id,
+                    EventHandlerEntry {
+                        handler: handler.clone(),
+                        delivery_class,
+                    },
+                );
         }
 
         if let Err(error) = self.send_subscribe_snapshot_with_writer(writer).await {
@@ -964,6 +1030,28 @@ impl BusClient {
         Fut: Future<Output = Result<R, BusTransportError>> + Send + 'static,
         R: IntoRequestHandlerResult + Send + 'static,
     {
+        self.on_request_with_priority_and_delivery_class(
+            full_subject,
+            priority,
+            SubscriptionDeliveryClass::Relayable,
+            handler,
+        )
+        .await
+    }
+
+    /// Registers one request handler with an explicit routing scope.
+    pub async fn on_request_with_priority_and_delivery_class<F, Fut, R>(
+        &self,
+        full_subject: &str,
+        priority: i64,
+        delivery_class: SubscriptionDeliveryClass,
+        handler: F,
+    ) -> BusResult<RequestHandlerRegistration>
+    where
+        F: Fn(RequestContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, BusTransportError>> + Send + 'static,
+        R: IntoRequestHandlerResult + Send + 'static,
+    {
         split_exact_full_subject(full_subject)?;
         let handler_id = self.next_handler_id().await;
         let user_handler = Arc::new(handler);
@@ -991,6 +1079,7 @@ impl BusClient {
                     .push(RequestHandlerEntry {
                         handler_id,
                         handler: handler.clone(),
+                        delivery_class,
                     });
             }
 
@@ -1026,6 +1115,22 @@ impl BusClient {
         R: IntoRequestHandlerResult + Send + 'static,
     {
         self.on_request_with_priority(full_subject, 0, handler)
+            .await
+    }
+
+    /// Registers one priority-`0` request handler with an explicit routing scope.
+    pub async fn on_request_with_delivery_class<F, Fut, R>(
+        &self,
+        full_subject: &str,
+        delivery_class: SubscriptionDeliveryClass,
+        handler: F,
+    ) -> BusResult<RequestHandlerRegistration>
+    where
+        F: Fn(RequestContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R, BusTransportError>> + Send + 'static,
+        R: IntoRequestHandlerResult + Send + 'static,
+    {
+        self.on_request_with_priority_and_delivery_class(full_subject, 0, delivery_class, handler)
             .await
     }
 
@@ -1134,7 +1239,7 @@ impl BusClient {
             handlers
                 .iter()
                 .filter(|(pattern, _)| matches_subscription(&full_subject, pattern))
-                .flat_map(|(_, handlers)| handlers.values().cloned())
+                .flat_map(|(_, handlers)| handlers.values().map(|entry| entry.handler.clone()))
                 .collect::<Vec<_>>()
         };
 
@@ -1370,10 +1475,11 @@ impl BusClient {
     ) -> BusResult<()> {
         match action {
             SubjectAdvertisementAction::None => Ok(()),
-            SubjectAdvertisementAction::ReplaceSnapshot(subjects) => {
+            SubjectAdvertisementAction::ReplaceSnapshot(snapshot) => {
                 writer
                     .send(&BusMessage::Subscribe(SubscribeMessage {
-                        subjects,
+                        delivery_classes: snapshot.delivery_classes,
+                        subjects: snapshot.subjects,
                         filters: None,
                     }))
                     .await
@@ -1431,38 +1537,64 @@ impl BusClient {
         }
     }
 
-    async fn snapshot_local_subscriptions(&self) -> BTreeMap<String, Vec<i64>> {
-        let mut subjects = BTreeMap::new();
+    async fn snapshot_local_subscriptions(&self) -> LocalSubscriptionSnapshot {
+        let mut snapshot = LocalSubscriptionSnapshot::default();
 
         {
             let handlers = self.inner.event_handlers.lock().await;
-            for subject in handlers.keys() {
-                subjects.insert(subject.clone(), Vec::new());
+            for (subject, entries) in handlers.iter() {
+                if entries.is_empty() {
+                    continue;
+                }
+                snapshot.subjects.insert(subject.clone(), Vec::new());
+                snapshot.delivery_classes.insert(
+                    subject.clone(),
+                    aggregate_delivery_classes(entries.values().map(|entry| entry.delivery_class)),
+                );
             }
         }
 
         {
             let handlers = self.inner.request_handlers.lock().await;
             for (subject, priorities) in handlers.iter() {
-                subjects.insert(subject.clone(), request_handler_priorities(priorities));
+                snapshot
+                    .subjects
+                    .insert(subject.clone(), request_handler_priorities(priorities));
+                snapshot.delivery_classes.insert(
+                    subject.clone(),
+                    aggregate_delivery_classes(
+                        snapshot
+                            .delivery_classes
+                            .get(subject)
+                            .copied()
+                            .into_iter()
+                            .chain(
+                                priorities
+                                    .values()
+                                    .flatten()
+                                    .map(|entry| entry.delivery_class),
+                            ),
+                    ),
+                );
             }
         }
 
-        subjects
+        snapshot
     }
 
     async fn send_subscribe_snapshot_with_writer(
         &self,
         writer: &mut BoxTransportWriter,
     ) -> BusResult<()> {
-        let subjects = self.snapshot_local_subscriptions().await;
-        if subjects.is_empty() {
+        let snapshot = self.snapshot_local_subscriptions().await;
+        if snapshot.subjects.is_empty() {
             return Ok(());
         }
 
         writer
             .send(&BusMessage::Subscribe(SubscribeMessage {
-                subjects,
+                delivery_classes: snapshot.delivery_classes,
+                subjects: snapshot.subjects,
                 filters: None,
             }))
             .await
@@ -1506,7 +1638,7 @@ impl BusClient {
         let event_handlers = self.inner.event_handlers.lock().await;
         let request_handlers = self.inner.request_handlers.lock().await;
 
-        let subjects = build_post_removal_snapshot(
+        let mut subjects = build_post_removal_snapshot(
             &event_handlers,
             &request_handlers,
             |subject, handlers| {
@@ -1519,7 +1651,29 @@ impl BusClient {
             |_, priorities| request_handler_priorities(priorities),
         );
 
-        if subjects.contains_key(full_subject) {
+        if subjects.subjects.contains_key(full_subject) {
+            subjects.delivery_classes.insert(
+                full_subject.to_string(),
+                aggregate_delivery_classes(
+                    event_handlers
+                        .get(full_subject)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(id, _)| **id != handler_id)
+                        .map(|(_, entry)| entry.delivery_class)
+                        .chain(
+                            request_handlers
+                                .get(full_subject)
+                                .into_iter()
+                                .flatten()
+                                .flat_map(|(_, entries)| entries.iter())
+                                .map(|entry| entry.delivery_class),
+                        ),
+                ),
+            );
+        }
+
+        if subjects.subjects.contains_key(full_subject) {
             SubjectAdvertisementAction::ReplaceSnapshot(subjects)
         } else if event_handlers.contains_key(full_subject) {
             SubjectAdvertisementAction::Unsubscribe(Vec::new())
@@ -1537,7 +1691,7 @@ impl BusClient {
         let event_handlers = self.inner.event_handlers.lock().await;
         let request_handlers = self.inner.request_handlers.lock().await;
 
-        let subjects = build_post_removal_snapshot(
+        let mut subjects = build_post_removal_snapshot(
             &event_handlers,
             &request_handlers,
             |_, handlers| !handlers.is_empty(),
@@ -1554,7 +1708,34 @@ impl BusClient {
             },
         );
 
-        if subjects.contains_key(full_subject) {
+        if subjects.subjects.contains_key(full_subject) {
+            subjects.delivery_classes.insert(
+                full_subject.to_string(),
+                aggregate_delivery_classes(
+                    event_handlers
+                        .get(full_subject)
+                        .into_iter()
+                        .flatten()
+                        .map(|(_, entry)| entry.delivery_class)
+                        .chain(
+                            request_handlers
+                                .get(full_subject)
+                                .into_iter()
+                                .flatten()
+                                .flat_map(|(priority, entries)| {
+                                    entries.iter().map(move |entry| (*priority, entry))
+                                })
+                                .filter(|(priority, entry)| {
+                                    *priority != removed_priority
+                                        || entry.handler_id != removed_handler_id
+                                })
+                                .map(|(_, entry)| entry.delivery_class),
+                        ),
+                ),
+            );
+        }
+
+        if subjects.subjects.contains_key(full_subject) {
             SubjectAdvertisementAction::ReplaceSnapshot(subjects)
         } else if request_handlers.contains_key(full_subject) {
             SubjectAdvertisementAction::Unsubscribe(vec![removed_priority])
@@ -1841,24 +2022,58 @@ fn step_outbound_request_chain(
 }
 
 fn build_post_removal_snapshot(
-    event_handlers: &HashMap<String, HashMap<usize, EventHandler>>,
+    event_handlers: &HashMap<String, HashMap<usize, EventHandlerEntry>>,
     request_handlers: &HashMap<String, BTreeMap<i64, Vec<RequestHandlerEntry>>>,
-    event_filter: impl Fn(&str, &HashMap<usize, EventHandler>) -> bool,
+    event_filter: impl Fn(&str, &HashMap<usize, EventHandlerEntry>) -> bool,
     request_priorities: impl Fn(&str, &BTreeMap<i64, Vec<RequestHandlerEntry>>) -> Vec<i64>,
-) -> BTreeMap<String, Vec<i64>> {
-    let mut subjects = BTreeMap::new();
+) -> LocalSubscriptionSnapshot {
+    let mut snapshot = LocalSubscriptionSnapshot::default();
     for (subject, handlers) in event_handlers.iter() {
         if event_filter(subject, handlers) {
-            subjects.insert(subject.clone(), Vec::new());
+            snapshot.subjects.insert(subject.clone(), Vec::new());
+            snapshot.delivery_classes.insert(
+                subject.clone(),
+                aggregate_delivery_classes(handlers.values().map(|entry| entry.delivery_class)),
+            );
         }
     }
     for (subject, handlers) in request_handlers.iter() {
         let priorities = request_priorities(subject, handlers);
-        if !priorities.is_empty() || subjects.contains_key(subject) {
-            subjects.insert(subject.clone(), priorities);
+        if !priorities.is_empty() || snapshot.subjects.contains_key(subject) {
+            snapshot.subjects.insert(subject.clone(), priorities);
+            snapshot.delivery_classes.insert(
+                subject.clone(),
+                aggregate_delivery_classes(
+                    snapshot
+                        .delivery_classes
+                        .get(subject)
+                        .copied()
+                        .into_iter()
+                        .chain(
+                            handlers
+                                .values()
+                                .flatten()
+                                .map(|entry| entry.delivery_class),
+                        ),
+                ),
+            );
         }
     }
-    subjects
+    snapshot
+}
+
+/// Combine registrations for one subject with a fail-closed routing rule.
+fn aggregate_delivery_classes(
+    classes: impl IntoIterator<Item = SubscriptionDeliveryClass>,
+) -> SubscriptionDeliveryClass {
+    if classes
+        .into_iter()
+        .any(|class| class == SubscriptionDeliveryClass::FirstHopOnly)
+    {
+        SubscriptionDeliveryClass::FirstHopOnly
+    } else {
+        SubscriptionDeliveryClass::Relayable
+    }
 }
 
 fn request_handler_priorities(handlers: &BTreeMap<i64, Vec<RequestHandlerEntry>>) -> Vec<i64> {

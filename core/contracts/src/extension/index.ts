@@ -82,6 +82,7 @@ export type {
 export type { ExtensionRuntimeOwnership } from './extension-runtime-boot.js';
 export type {
   AdapterContribution,
+  ExtensionClientHookResponsesContribution,
   ExtensionNamespaceContribution,
   ExtensionSessionEventActionsContribution,
   ExtensionToolsContribution,

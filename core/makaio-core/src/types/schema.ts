@@ -73,6 +73,21 @@ export type ChannelSubjectSchema<T extends EventSchema | RequestSchema = EventSc
 };
 
 /**
+ * Wrapper to mark a request subject as host-local.
+ *
+ * Host-local requests accept direct remote ingress (a transport may deliver
+ * the request to this host), but the receiving bus must never relay the
+ * request onward to other transports. Only request schemas are accepted;
+ * events are rejected at the type level.
+ *
+ * Use `hostLocalRequest()` from `@makaio/core` to create these.
+ */
+export type HostLocalRequestSubjectSchema<T extends RequestSchema = RequestSchema> = {
+  readonly __hostLocalRequest: true;
+  readonly schema: T;
+};
+
+/**
  * Wrapper to set a subject-level default transport routing policy.
  *
  * This is weaker than `localSubject()`: the subject remains routable remotely,
@@ -99,6 +114,7 @@ export type SubjectSchema =
   | LocalSubjectSchema
   | CollectorOnlySubjectSchema
   | ChannelSubjectSchema
+  | HostLocalRequestSubjectSchema
   | DefaultTransportsSubjectSchema;
 
 export type SchemaRecord = Record<string, SubjectSchema>;

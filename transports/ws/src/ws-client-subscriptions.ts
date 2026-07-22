@@ -10,6 +10,7 @@ import type { WebSocketLike, ClientTransportCodec } from './types.js';
 import { sendEncoded } from './transport-helpers.js';
 import { buildSubscribeMessage, buildUnsubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import type { PayloadFilter } from '@makaio/core';
+import type { SubscriptionDeliveryClass } from '@makaio/bus-core';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,21 +56,28 @@ export interface SubscriptionDeps {
  * @param subject - Subject pattern (supports wildcards like `'adapter.*'`)
  * @param filter - Optional payload filter; `undefined` preserves the existing filter
  * @param priorities - Handler priorities registered for this subject
+ * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer
  * @param deps - Subscription context
  */
 export async function addSubscription(
   subject: string,
   filter: PayloadFilter | undefined,
   priorities: number[],
+  deliveryClass: SubscriptionDeliveryClass | undefined,
   deps: SubscriptionDeps,
 ): Promise<void> {
-  const existingFilter = deps.localSubscriptions.get(subject)?.filter;
+  const existing = deps.localSubscriptions.get(subject);
+  const existingFilter = existing?.filter;
   const resolvedFilter = filter ?? existingFilter;
-  deps.localSubscriptions.set(subject, { filter: resolvedFilter, priorities });
+  const resolvedDeliveryClass = deliveryClass ?? existing?.deliveryClass ?? 'relayable';
+  deps.localSubscriptions.set(subject, { filter: resolvedFilter, priorities, deliveryClass: resolvedDeliveryClass });
 
   if (deps.socket !== null && deps.socket.readyState === 1) {
     const ack = deps.beginSubscriptionAck?.();
-    const message = buildSubscribeMessage(new Map([[subject, { filter: resolvedFilter, priorities }]]), ack?.ackId);
+    const message = buildSubscribeMessage(
+      new Map([[subject, { filter: resolvedFilter, priorities, deliveryClass: resolvedDeliveryClass }]]),
+      ack?.ackId,
+    );
     try {
       await sendEncoded(message, deps.codec, deps.socket);
       await ack?.promise;

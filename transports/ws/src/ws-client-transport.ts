@@ -15,6 +15,7 @@ import {
   type BusReceiveHandler,
   type BusRequestMessage,
   type BusTransport,
+  type SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
 import { type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
@@ -255,10 +256,16 @@ export class WebSocketClientTransport implements BusTransport {
    * @param subject - Subject pattern (supports wildcards like `'adapter.*'`)
    * @param filter - Optional payload filter for server-side smart-routing
    * @param priorities - Handler priorities registered for this subject
+   * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer
    * @returns Promise that resolves when buffering (and optional send) is complete
    */
-  public async subscribe(subject: string, filter?: PayloadFilter, priorities: number[] = []): Promise<void> {
-    await addSubscription(subject, filter, priorities, this.subscriptionDeps());
+  public async subscribe(
+    subject: string,
+    filter?: PayloadFilter,
+    priorities: number[] = [],
+    deliveryClass?: SubscriptionDeliveryClass,
+  ): Promise<void> {
+    await addSubscription(subject, filter, priorities, deliveryClass, this.subscriptionDeps());
   }
 
   /**

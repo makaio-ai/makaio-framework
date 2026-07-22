@@ -264,6 +264,7 @@ describe('WebSocketClientTransport — unsubscribe', () => {
         type: 'subscribe',
         ackId: 'peer-subscribe-1',
         subjects: { 'peer.topic': [] },
+        deliveryClasses: { 'peer.topic': 'relayable' },
       }),
     );
 
@@ -297,6 +298,7 @@ describe('WebSocketClientTransport — unsubscribe', () => {
         type: 'subscribe',
         ackId: 'peer-subscribe-failed',
         subjects: { 'peer.topic': [] },
+        deliveryClasses: { 'peer.topic': 'relayable' },
       }),
     );
 
@@ -349,6 +351,7 @@ describe('WebSocketClientTransport — unsubscribe', () => {
           type: 'subscribe',
           ackId: 'peer-subscribe-encode-fails',
           subjects: { 'peer.topic': [] },
+          deliveryClasses: { 'peer.topic': 'relayable' },
         }),
       );
 

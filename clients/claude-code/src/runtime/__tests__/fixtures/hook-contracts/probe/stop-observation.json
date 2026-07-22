@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 3,
+  "provider": "claude-code",
+  "cliVersion": "2.1.143",
+  "scenarioId": "stop-observation",
+  "events": [
+    {
+      "eventName": "Stop",
+      "frameworkSubject": "client.session.turn.completed",
+      "responseCapabilities": [],
+      "mode": "event",
+      "candidateExpectedStatus": "unobserved",
+      "observedStatus": "observer-only",
+      "sourceExpectedEffects": [],
+      "observedEffects": [],
+      "blockingCapable": false,
+      "managedCommand": "hook received claude-code",
+      "payloadKeys": [
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "last_assistant_message",
+        "permission_mode",
+        "session_id",
+        "stop_hook_active",
+        "transcript_path"
+      ],
+      "sentinelInjected": false
+    }
+  ],
+  "oracle": "unobserved",
+  "oraclePassed": true,
+  "exitCode": 0
+}

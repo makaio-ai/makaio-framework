@@ -1,0 +1,11 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "fixture response",
+  "model": "gpt-5",
+  "permission_mode": "default",
+  "session_id": "fixture-session",
+  "stop_hook_active": false,
+  "transcript_path": null,
+  "turn_id": "fixture-turn"
+}

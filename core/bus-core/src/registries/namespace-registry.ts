@@ -4,10 +4,15 @@ import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformat
 
 import type { BusNamespace } from '../types/namespace.js';
 import { isChannelSchema } from '../utils/channel-schema.js';
-import { isCollectorOnlySchema } from '@makaio/core';
+import { isCollectorOnlySchema, isHostLocalRequestSchema } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
 import { isLocalSchema } from '../utils/local-schema.js';
 import { unwrapSchema } from '../utils/unwrap-schema.js';
+import {
+  type SubjectRoutingMetadata,
+  buildNamespaceRoutingMetadata,
+  failOnRoutingMetadataCollision,
+} from './routing-metadata.js';
 import {
   assertCompatibleRefinedObjectExtension,
   trackRefinedObjectExtension,
@@ -155,6 +160,8 @@ export interface RegisteredSubjectSchema {
   collectorOnly: boolean;
   /** Whether the subject was registered through `channelSubject()`. */
   channel: boolean;
+  /** Whether the subject was registered through `hostLocalRequest()`. */
+  hostLocalRequest: boolean;
 }
 
 const getScopedBus = async <
@@ -300,6 +307,9 @@ export const createNamespaceRegistry = () => {
   // Canonical unwrapped schemas per namespace (for example `channel.open`) so
   // collision warnings compare both subject keys and same-key schema drift.
   const namespaceSubjectSchemas = new Map<string, ReadonlyMap<string, BaseSubjectSchema>>();
+  // Routing metadata per namespace, keyed by subject name. Compared during
+  // duplicate registration to detect security-critical routing mismatches.
+  const namespaceRoutingMetadata = new Map<string, ReadonlyMap<string, SubjectRoutingMetadata>>();
   // Internal registry for subject schemas (always unwrapped)
   const subjectSchemas = new Map<string, BaseSubjectSchema>();
   const registeredSubjects = new Map<string, RegisteredSubjectSchema>();
@@ -307,6 +317,7 @@ export const createNamespaceRegistry = () => {
   // stripped by unwrapSchema, so routing metadata is tracked separately.
   const localSubjects = new Set<string>();
   const collectorOnlySubjects = new Set<string>();
+  const hostLocalRequestSubjects = new Set<string>();
   // Validation configuration per namespace domain
   const validationConfig = new Map<string, ValidationConfig>();
   // Default transport visibility per fully-qualified subject key.
@@ -333,6 +344,7 @@ export const createNamespaceRegistry = () => {
     > {
       const { name: domain, schemas, options } = definition;
       const incomingSubjectSchemas = buildNamespaceSubjectSchemas(schemas);
+      const incomingRoutingMetadata = buildNamespaceRoutingMetadata(schemas);
 
       // Type alias for the computed FilterPayload - evaluated at registration time
       type Subjects = SubjectRecordFromSchemaRecord<Schemas>;
@@ -342,6 +354,15 @@ export const createNamespaceRegistry = () => {
       // Check if namespace already exists - if so, return it (idempotent)
       const existing = namespaceRegistry.get(domain);
       if (existing) {
+        // SECURITY: Check routing metadata FIRST — a mismatch here means the same
+        // subject carries different security semantics depending on registration
+        // order. This throws rather than warns because silent success would defeat
+        // the no-relay guarantee of hostLocalRequest or the isolation of localSubject.
+        failOnRoutingMetadataCollision(
+          domain,
+          namespaceRoutingMetadata.get(domain) ?? new Map(),
+          incomingRoutingMetadata,
+        );
         warnOnSchemaCollision(domain, namespaceSubjectSchemas.get(domain) ?? new Map(), incomingSubjectSchemas);
         warnOnValidationConfigCollision(
           domain,
@@ -353,12 +374,14 @@ export const createNamespaceRegistry = () => {
 
       validationConfig.set(domain, validationConfigFromOptions(options));
       namespaceSubjectSchemas.set(domain, incomingSubjectSchemas);
+      namespaceRoutingMetadata.set(domain, incomingRoutingMetadata);
 
       for (const [subject, schema] of Object.entries(schemas)) {
         const fullSubjectKey = `${domain}.${subject}`;
         const local = isLocalSchema(schema);
         const collectorOnly = isCollectorOnlySchema(schema);
         const channel = isChannelSchema(schema);
+        const hostLocalRequest = isHostLocalRequestSchema(schema);
         const unwrappedSchema = incomingSubjectSchemas.get(subject) ?? unwrapSchema(schema);
         // Store unwrapped schema so getSchema/isRequestSubject work correctly
         subjectSchemas.set(fullSubjectKey, unwrappedSchema);
@@ -370,6 +393,7 @@ export const createNamespaceRegistry = () => {
           local,
           collectorOnly,
           channel,
+          hostLocalRequest,
         });
         // Track locality before unwrapping — isLocalSchema checks __local which
         // is stripped by unwrapSchema.
@@ -378,6 +402,9 @@ export const createNamespaceRegistry = () => {
         }
         if (collectorOnly) {
           collectorOnlySubjects.add(fullSubjectKey);
+        }
+        if (hostLocalRequest) {
+          hostLocalRequestSubjects.add(fullSubjectKey);
         }
         // Propagate namespace-level defaultTransports to each subject key so
         // emit() can resolve the effective default in O(1).
@@ -481,6 +508,18 @@ export const createNamespaceRegistry = () => {
       return collectorOnlySubjects.has(subject);
     },
     /**
+     * Check if a subject was registered as a host-local request subject.
+     *
+     * Host-local request subjects accept direct remote ingress — a transport
+     * may deliver the request to this host — but the receiving bus must never
+     * relay the request onward to other transports after ingress.
+     * @param subject - Full subject identifier (e.g., "agent.resolveCapability")
+     * @returns True if the subject was wrapped with `hostLocalRequest()`
+     */
+    isHostLocalRequestSubject(subject: string): boolean {
+      return hostLocalRequestSubjects.has(subject);
+    },
+    /**
      * Get the default transport visibility for a subject.
      *
      * Returns the namespace-level `defaultTransports` value recorded at
@@ -581,10 +620,12 @@ export const createNamespaceRegistry = () => {
         ? () => {
             namespaceRegistry.clear();
             namespaceSubjectSchemas.clear();
+            namespaceRoutingMetadata.clear();
             subjectSchemas.clear();
             registeredSubjects.clear();
             localSubjects.clear();
             collectorOnlySubjects.clear();
+            hostLocalRequestSubjects.clear();
             validationConfig.clear();
             defaultTransportsMap.clear();
           }

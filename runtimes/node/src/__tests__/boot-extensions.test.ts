@@ -56,6 +56,9 @@ import type { ArtifactViewBuilder, ExtensionArtifactViewBuildersContribution } f
 import { filesystemPackage } from '@makaio/extension-filesystem';
 import { shellPackage } from '@makaio/extension-shell';
 import { subagentPackage } from '@makaio/extension-subagent';
+import { createAppendEffect } from '@makaio/contracts/client';
+import type { ExtensionClientHookResponsesContribution } from '@makaio/contracts/client';
+import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-client';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -909,5 +912,178 @@ describe('loadBootExtensions createMount seam', () => {
       '/extensions/browser-only-dashboard/browser',
     );
     expect(pkg?.http?.mount).toBe(mount);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client hook response contribution extensibility via coordinator
+// ---------------------------------------------------------------------------
+
+describe('client hook response contribution extensibility', () => {
+  /**
+   * Create a coordinator wired with the clients-core package and the Claude
+   * Code provider contract, ready for testing hook response contributions.
+   * @param extension - Extension contributing hook response callbacks.
+   * @returns The configured coordinator.
+   */
+  function setupHookResponseCoordinator(extension: KernelMakaioExtension): ExtensionCoordinator {
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: {
+        platform: process.platform,
+        homedir: '/home/test',
+        makaioHome: TEST_MAKAIO_HOME,
+        username: 'test',
+        machineId: 'machine-1',
+        busUrl: 'ws://127.0.0.1:0/bus',
+        tryImport: async () => null,
+      },
+    });
+
+    // Create the clients-core package — its runtimeBoot.configure
+    // registers the contribution processor.
+    const clientsCorePackage = createClientsCorePackage();
+    coordinator.load([clientsCorePackage, extension]);
+
+    // Register the contribution processor via the boot wiring path.
+    // In production this is done by registerExtensionBootContributions(),
+    // but here we call runtimeBoot.configure directly to test the
+    // contribution processor registration without full boot.
+    registerExtensionBootContributions([clientsCorePackage], bus, coordinator);
+
+    return coordinator;
+  }
+
+  it('activates an external extension contributing canonical context.append via the coordinator', async () => {
+    const contribution: ExtensionClientHookResponsesContribution = {
+      createContributors: () => [
+        {
+          lane: 'canonical',
+          id: 'coordinator-ctx-appender',
+          priority: 100,
+          timeoutMs: 5000,
+          selectors: [{ kind: 'event-name', name: 'PreToolUse' }],
+          respond: () => ({
+            canonicalEffects: [createAppendEffect('Contributed through coordinator')],
+          }),
+        },
+      ],
+    };
+    const extensionWithHookResponses: KernelMakaioExtension = {
+      ...makePackage('test-hook-ext'),
+      clientHookResponses: contribution,
+    };
+    const coordinator = setupHookResponseCoordinator(extensionWithHookResponses);
+
+    try {
+      await coordinator.startAll();
+
+      // Verify the contributor was installed via the clients-core service
+      const clientsCore = coordinator.getExtensionService(ClientsCoreToken);
+      expect(clientsCore).toBeDefined();
+      const snapshot = clientsCore!.hookResponseRegistry.snapshot(
+        'claude-code',
+        'claude-code.tool-response',
+        'PreToolUse',
+        [],
+      );
+      expect(snapshot).toHaveLength(1);
+      expect(snapshot[0].namespacedId).toBe('test-hook-ext/coordinator-ctx-appender');
+    } finally {
+      await coordinator.shutdown();
+    }
+  });
+
+  it('removes contributors when the extension is disabled via the coordinator', async () => {
+    const contribution: ExtensionClientHookResponsesContribution = {
+      createContributors: () => [
+        {
+          lane: 'canonical',
+          id: 'disable-test',
+          priority: 100,
+          timeoutMs: 5000,
+          selectors: [{ kind: 'event-name', name: 'PreToolUse' }],
+          respond: () => undefined,
+        },
+      ],
+    };
+    const extensionWithHookResponses: KernelMakaioExtension = {
+      ...makePackage('test-disable-ext'),
+      clientHookResponses: contribution,
+    };
+    const coordinator = setupHookResponseCoordinator(extensionWithHookResponses);
+
+    try {
+      await coordinator.startAll();
+
+      const clientsCore = coordinator.getExtensionService(ClientsCoreToken);
+      expect(clientsCore).toBeDefined();
+      expect(
+        clientsCore!.hookResponseRegistry.snapshot('claude-code', 'claude-code.tool-response', 'PreToolUse', []),
+      ).toHaveLength(1);
+
+      // Disable the extension
+      await coordinator.handleSetEnabled('test-disable-ext', false);
+      expect(
+        clientsCore!.hookResponseRegistry.snapshot('claude-code', 'claude-code.tool-response', 'PreToolUse', []),
+      ).toHaveLength(0);
+    } finally {
+      await coordinator.shutdown();
+    }
+  });
+
+  it('re-enables an extension with a fresh contributor batch', async () => {
+    let activationCount = 0;
+    const contribution: ExtensionClientHookResponsesContribution = {
+      createContributors: () => {
+        activationCount += 1;
+        return [
+          {
+            lane: 'canonical',
+            id: 'reenable-test',
+            priority: 100,
+            timeoutMs: 5000,
+            selectors: [{ kind: 'event-name', name: 'PreToolUse' }],
+            respond: () => ({
+              canonicalEffects: [createAppendEffect(`activation-${String(activationCount)}`)],
+            }),
+          },
+        ];
+      },
+    };
+    const extensionWithHookResponses: KernelMakaioExtension = {
+      ...makePackage('test-reenable-ext'),
+      clientHookResponses: contribution,
+    };
+    const coordinator = setupHookResponseCoordinator(extensionWithHookResponses);
+
+    try {
+      await coordinator.startAll();
+
+      const clientsCore = coordinator.getExtensionService(ClientsCoreToken);
+      expect(clientsCore).toBeDefined();
+      expect(
+        clientsCore!.hookResponseRegistry.snapshot('claude-code', 'claude-code.tool-response', 'PreToolUse', []),
+      ).toHaveLength(1);
+      expect(activationCount).toBe(1);
+
+      // Disable and re-enable
+      await coordinator.handleSetEnabled('test-reenable-ext', false);
+      expect(
+        clientsCore!.hookResponseRegistry.snapshot('claude-code', 'claude-code.tool-response', 'PreToolUse', []),
+      ).toHaveLength(0);
+
+      await coordinator.handleSetEnabled('test-reenable-ext', true);
+      const snapshot = clientsCore!.hookResponseRegistry.snapshot(
+        'claude-code',
+        'claude-code.tool-response',
+        'PreToolUse',
+        [],
+      );
+      expect(snapshot).toHaveLength(1);
+      expect(activationCount).toBe(2);
+    } finally {
+      await coordinator.shutdown();
+    }
   });
 });

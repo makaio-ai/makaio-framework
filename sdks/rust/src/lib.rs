@@ -14,5 +14,5 @@ pub use bus::{
     BroadcastResponseMessage, BusClient, BusClientError, BusClientOptions, BusMessage, BusResult,
     BusTransportError, DispatchMode, EventMessage, EventSubject, IntoRequestHandlerResult,
     RequestContext, RequestHandlerRegistration, RequestMessage, RequestOptions, RequestSubject,
-    ResponseMessage, SubscribeMessage, Subscription, UnsubscribeMessage,
+    ResponseMessage, SubscribeMessage, Subscription, SubscriptionDeliveryClass, UnsubscribeMessage,
 };

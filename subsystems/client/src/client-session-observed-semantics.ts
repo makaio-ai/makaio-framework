@@ -157,6 +157,19 @@ export const ClientHookHandleResponseSchema = z.object({
 
 export type ClientHookHandleResponse = z.infer<typeof ClientHookHandleResponseSchema>;
 
+/**
+ * Frozen no-op hook handle response shared across all client composers.
+ *
+ * exitCode 0 with empty stdout/stderr is the provider-valid passthrough
+ * that permits the tool invocation to proceed unchanged.  A single frozen
+ * instance avoids per-client duplication and per-call object allocation.
+ */
+export const NOOP_HOOK_HANDLE_RESPONSE: ClientHookHandleResponse = Object.freeze({
+  exitCode: 0,
+  stdout: '',
+  stderr: '',
+});
+
 type RawClientHookHandleSubjectRecord = SubjectRecord<
   'hook.handle',
   RequestMessagePayload<RawClientHookPayload, ClientHookHandleResponse>
@@ -180,11 +193,16 @@ export type RawClientHookHandleSubject = SubjectDefinition<
  * Build a non-owning subject definition for `client:<id>.hook.handle`.
  *
  * The returned definition uses `isRequest: true` so the bus dispatches it
- * through the request/response pipeline.  Concrete client packages own their
- * full `client:<id>` namespace via {@link createClientNamespace}; this helper
- * is intentionally non-owning for the same reasons as
- * {@link createRawClientHookReceivedSubject} — see that function's doc for
- * the full rationale.
+ * through the request/response pipeline, and `hostLocalRequest: true` so the
+ * bus accepts direct remote ingress but never relays the request onward to
+ * other transports.  This matches the owning namespace registration in
+ * {@link createClientNamespace}, which wraps the schema with
+ * `hostLocalRequest()`.
+ *
+ * Concrete client packages own their full `client:<id>` namespace via
+ * {@link createClientNamespace}; this helper is intentionally non-owning for
+ * the same reasons as {@link createRawClientHookReceivedSubject} — see that
+ * function's doc for the full rationale.
  * @param rawClientId - Stable client identifier, optionally prefixed with `client:`
  * @returns Non-owning subject definition for the client's raw hook handle ingress
  */
@@ -201,6 +219,7 @@ export function createRawClientHookHandleSubject(rawClientId: string): RawClient
       isRequest: true,
       local: false,
       channel: false,
+      hostLocalRequest: true,
     },
   } as RawClientHookHandleSubject;
 }

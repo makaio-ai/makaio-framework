@@ -65,7 +65,7 @@ describe('buildCodexWiringList', () => {
     const settings = createMockSettings([
       {
         event: 'SessionStart',
-        command: 'makaio --debounce-failure hook received codex SessionStart',
+        command: 'makaio --no-launch hook handle codex SessionStart --timeout 5000',
       },
     ]);
     const result = await buildCodexWiringList(settings, 'makaio');
@@ -77,7 +77,7 @@ describe('buildCodexWiringList', () => {
     const settings = createMockSettings([
       {
         event: 'SessionStart',
-        command: 'makaio --debounce-failure hook received codex SessionStart',
+        command: 'makaio --no-launch hook handle codex SessionStart --timeout 5000',
       },
     ]);
     const result = await buildCodexWiringList(settings, 'makaio');
@@ -103,7 +103,7 @@ describe('buildCodexWiringList', () => {
     try {
       await writeHooksJson(hooksPath, [
         { event: 'SessionStart', command: 'makaio hook received codex SessionStart' },
-        { event: 'UserPromptSubmit', command: 'makaio --debounce-failure hook received codex UserPromptSubmit' },
+        { event: 'UserPromptSubmit', command: 'makaio --no-launch hook handle codex UserPromptSubmit --timeout 5000' },
       ]);
       const settings = new CodexClientSettings({ globalHooks: hooksPath, projectHooks: null });
 
@@ -169,11 +169,11 @@ describe('applyCodexWiring', () => {
   it('skips already-installed entries and reflects the count', async () => {
     // Seed all hooks as installed so addHook returns added: false for each.
     const allInstalled: CodexHookEntry[] = [
-      { event: 'SessionStart', command: 'makaio --debounce-failure hook received codex SessionStart' },
-      { event: 'UserPromptSubmit', command: 'makaio --debounce-failure hook received codex UserPromptSubmit' },
-      { event: 'PreToolUse', command: 'makaio --debounce-failure hook received codex PreToolUse' },
-      { event: 'PostToolUse', command: 'makaio --debounce-failure hook received codex PostToolUse' },
-      { event: 'Stop', command: 'makaio --debounce-failure hook received codex Stop' },
+      { event: 'SessionStart', command: 'makaio --no-launch hook handle codex SessionStart --timeout 5000' },
+      { event: 'UserPromptSubmit', command: 'makaio --no-launch hook handle codex UserPromptSubmit --timeout 5000' },
+      { event: 'PreToolUse', command: 'makaio --no-launch hook handle codex PreToolUse --timeout 5000' },
+      { event: 'PostToolUse', command: 'makaio --no-launch hook handle codex PostToolUse --timeout 5000' },
+      { event: 'Stop', command: 'makaio --no-launch hook handle codex Stop --timeout 5000' },
     ];
     const settings = createMockSettings(allInstalled);
 
@@ -208,11 +208,14 @@ describe('applyCodexWiring', () => {
     // left empty so buildCodexWiringList would report them as not-installed —
     // applyCodexWiring reads perScope directly for replace detection.
     const staleHooks: CodexHookEntry[] = [
-      { event: 'SessionStart', command: 'makaio-dev hook received codex SessionStart' },
-      { event: 'UserPromptSubmit', command: 'makaio-dev hook received codex UserPromptSubmit' },
-      { event: 'PreToolUse', command: 'makaio-dev hook received codex PreToolUse' },
-      { event: 'PostToolUse', command: 'makaio-dev hook received codex PostToolUse' },
-      { event: 'Stop', command: 'makaio-dev hook received codex Stop' },
+      { event: 'SessionStart', command: 'makaio-dev --no-launch hook handle codex SessionStart --timeout 5000' },
+      {
+        event: 'UserPromptSubmit',
+        command: 'makaio-dev --no-launch hook handle codex UserPromptSubmit --timeout 5000',
+      },
+      { event: 'PreToolUse', command: 'makaio-dev --no-launch hook handle codex PreToolUse --timeout 5000' },
+      { event: 'PostToolUse', command: 'makaio-dev --no-launch hook handle codex PostToolUse --timeout 5000' },
+      { event: 'Stop', command: 'makaio-dev --no-launch hook handle codex Stop --timeout 5000' },
     ];
 
     // Shared call log to assert removeHook precedes addHook for each event.
@@ -294,7 +297,10 @@ describe('removeCodexWiring', () => {
     expect(
       calls.every(([req]) => {
         const { event, match } = req;
-        return match.commandContains === `hook received codex ${event}`;
+        return (
+          match.commandContains === `hook received codex ${event}` ||
+          match.commandContains === `hook handle codex ${event}`
+        );
       }),
     ).toBe(true);
   });

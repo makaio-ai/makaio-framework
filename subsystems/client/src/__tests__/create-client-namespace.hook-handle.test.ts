@@ -109,6 +109,13 @@ describe('createRawClientHookHandleSubject', () => {
     expect(subject.$meta.isRequest).toBe(true);
   });
 
+  it('sets hostLocalRequest to true', () => {
+    const clientId = nextClientId('host-local');
+    const subject = createRawClientHookHandleSubject(clientId);
+
+    expect(subject.$meta.hostLocalRequest).toBe(true);
+  });
+
   it('does not register the namespace on the bus', () => {
     const clientId = nextClientId('non-owning');
     const subject = createRawClientHookHandleSubject(clientId);
@@ -156,6 +163,13 @@ describe('createClientNamespace — hook.handle subject', () => {
     expect(subjects.hook.handle.$meta.isRequest).toBe(true);
   });
 
+  it('registers hook.handle with hostLocalRequest metadata', () => {
+    const clientId = nextClientId('ns-handle-hlr');
+    const { subjects } = createClientNamespace(clientId);
+
+    expect(subjects.hook.handle.$meta.hostLocalRequest).toBe(true);
+  });
+
   it('hook.handle schema is accessible from the bus after namespace registration', () => {
     const clientId = nextClientId('ns-schema');
     const { subjects } = createClientNamespace(clientId);
@@ -200,8 +214,8 @@ describe('createClientNamespace — hook.handle subject', () => {
 // deriveSessionEventDescriptors — mode propagation
 // ---------------------------------------------------------------------------
 
-describe('deriveSessionEventDescriptors — mode propagation', () => {
-  it('propagates explicit mode: request for matching declarations', () => {
+describe('deriveSessionEventDescriptors — mode derivation from responseCapabilities', () => {
+  it('derives request mode for events with responseCapabilities', () => {
     const definition = createClientDefinition({
       id: 'test-handle',
       name: 'Test Handle',
@@ -210,7 +224,13 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,
-        hookEvents: [{ name: 'PreToolUse', frameworkSubject: 'client.session.tool.pre', mode: 'request' }],
+        hookEvents: [
+          {
+            name: 'PreToolUse',
+            frameworkSubject: 'client.session.tool.pre',
+            responseCapabilities: ['approve', 'deny'],
+          },
+        ],
       },
     });
 
@@ -221,7 +241,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
     expect(descriptors[0]?.mode).toBe('request');
   });
 
-  it('defaults mode to event when no mode is declared', () => {
+  it('derives event mode when responseCapabilities is empty (default)', () => {
     const definition = createClientDefinition({
       id: 'test-event',
       name: 'Test Event',
@@ -240,7 +260,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
     expect(descriptors[0]?.mode).toBe('event');
   });
 
-  it('preserves declaration order and mode for mixed event/request declarations', () => {
+  it('preserves declaration order and derives mode for mixed capability declarations', () => {
     const definition = createClientDefinition({
       id: 'test-mixed',
       name: 'Test Mixed',
@@ -251,7 +271,11 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
         supportsHooks: true,
         hookEvents: [
           { name: 'SessionStart', frameworkSubject: 'client.session.started' },
-          { name: 'PreToolUse', frameworkSubject: 'client.session.tool.pre', mode: 'request' },
+          {
+            name: 'PreToolUse',
+            frameworkSubject: 'client.session.tool.pre',
+            responseCapabilities: ['approve', 'deny'],
+          },
           { name: 'PostToolUse', frameworkSubject: 'client.session.tool.post' },
         ],
       },
@@ -265,7 +289,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
     expect(descriptors[2]).toStrictEqual({ eventName: 'PostToolUse', mode: 'event' });
   });
 
-  it('excludes declarations without a frameworkSubject', () => {
+  it('includes declarations without a frameworkSubject', () => {
     const definition = createClientDefinition({
       id: 'test-no-subject',
       name: 'Test No Subject',
@@ -280,14 +304,15 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
 
     const descriptors = deriveSessionEventDescriptors(definition);
 
-    expect(descriptors).toHaveLength(1);
-    expect(descriptors[0]?.eventName).toBe('SessionStart');
+    expect(descriptors).toHaveLength(2);
+    expect(descriptors[0]).toStrictEqual({ eventName: 'SessionStart', mode: 'event' });
+    expect(descriptors[1]).toStrictEqual({ eventName: 'InternalEvent', mode: 'event' });
   });
 
-  it('returns an empty array when no hookEvents have a frameworkSubject', () => {
+  it('returns descriptors for events without a frameworkSubject', () => {
     const definition = createClientDefinition({
-      id: 'test-empty',
-      name: 'Test Empty',
+      id: 'test-no-fw-subject',
+      name: 'Test No FW Subject',
       version: '0.1.0',
       authMethods: [],
       defaultApprovalPolicy: 'always-ask',
@@ -299,6 +324,7 @@ describe('deriveSessionEventDescriptors — mode propagation', () => {
 
     const descriptors = deriveSessionEventDescriptors(definition);
 
-    expect(descriptors).toHaveLength(0);
+    expect(descriptors).toHaveLength(1);
+    expect(descriptors[0]).toStrictEqual({ eventName: 'InternalOnly', mode: 'event' });
   });
 });

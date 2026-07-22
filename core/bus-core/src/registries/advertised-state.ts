@@ -10,7 +10,10 @@
 
 import type { MakaioBusContext } from '../types/bus.js';
 import type { BusTransport } from '../types/transports.js';
+import type { SubscriptionDeliveryClass } from '../types/transports.js';
 import type { BusTransportKeys } from './transport-registry.js';
+import { getMatchingHandlerEntries } from '../methods/request/getMatchingHandlers.js';
+import { matchesSubscription } from '../utils/subscription-matching.js';
 
 /**
  * Push the full advertised state for one (target, subject) pair.
@@ -40,8 +43,8 @@ export function pushAdvertisedSubject(
   const prioritySet = new Set<number>();
 
   // Collect local request handler priorities.
-  const localEntries = context.requestHandlers.get(subject);
-  if (localEntries) {
+  const localEntries = getMatchingHandlerEntries(context, subject);
+  if (localEntries.length > 0) {
     for (const entry of localEntries) {
       prioritySet.add(entry.priority);
     }
@@ -49,13 +52,27 @@ export function pushAdvertisedSubject(
 
   // Collect event-only handler presence (no priorities needed, but affects subscribe/unsubscribe decision).
   const hasLocalEventHandlers = context.eventHandlers.has(subject);
+  const hasLocalHandlers = localEntries.length > 0 || hasLocalEventHandlers;
+
+  // Host-local request subjects accept direct remote ingress but must never be
+  // relayed onward. Foreign (learned) priorities are therefore excluded from the
+  // advertised set so that only receiver-local handler priorities are visible to
+  // directly connected transports. This prevents a relay node from advertising
+  // handlers it learned from another transport, which would create an indirect
+  // forwarding path through the topology.
+  const isHostLocalRequest = context.namespaceRegistry.isHostLocalRequestSubject(subject);
 
   // Collect foreign remote handler priorities, excluding entries owned by the target
   // to avoid the target thinking it should route requests back to itself.
+  // For host-local request subjects, skip ALL foreign priorities — only local
+  // handler priorities are advertised. Schema-less relays include only remote
+  // entries with explicit relayable provenance; missing metadata is fail-closed.
   const remoteEntries = context.remoteRequestHandlers.get(subject);
-  if (remoteEntries) {
+  const remoteDeliveryClasses = context.remoteSubscriptionDeliveryClasses.get(subject);
+  if (remoteEntries && !isHostLocalRequest) {
     for (const entry of remoteEntries) {
       if (entry.transport === targetTransportName) continue;
+      if (remoteDeliveryClasses?.get(entry.transport) !== 'relayable') continue;
       prioritySet.add(entry.priority);
     }
   }
@@ -63,10 +80,16 @@ export function pushAdvertisedSubject(
   // Check if any foreign transport has event-only handlers for this subject.
   // Event-only subscriptions produce no priority entries in remoteRequestHandlers
   // but must still trigger a subscribe (with empty priority array) to peers.
+  // For host-local request subjects, foreign event handlers are not re-advertised
+  // to prevent transitive relay paths.
   const remoteEventSet = context.remoteEventHandlers.get(subject);
   const hasForeignEventHandlers =
+    !isHostLocalRequest &&
     remoteEventSet !== undefined &&
-    (remoteEventSet.size > 1 || (remoteEventSet.size === 1 && !remoteEventSet.has(targetTransportName)));
+    [...remoteEventSet].some(
+      (transportName) =>
+        transportName !== targetTransportName && remoteDeliveryClasses?.get(transportName) === 'relayable',
+    );
 
   if (prioritySet.size === 0 && !hasLocalEventHandlers && !hasForeignEventHandlers) {
     // Nothing to advertise for this subject — tell the target to stop routing it.
@@ -78,15 +101,20 @@ export function pushAdvertisedSubject(
       });
     });
   } else {
+    const deliveryClass: SubscriptionDeliveryClass =
+      hasLocalHandlers && isHostLocalRequest ? 'first-hop-only' : 'relayable';
     // Advertise the full priority set (may be empty for event-only subjects).
-    return Promise.resolve(targetTransport.subscribe(subject, undefined, [...prioritySet])).catch((error: unknown) => {
-      console.debug('[AdvertisedState] subscribe propagation failed', {
-        transport: targetTransportName,
-        subject,
-        priorities: [...prioritySet],
-        error,
-      });
-    });
+    return Promise.resolve(targetTransport.subscribe(subject, undefined, [...prioritySet], deliveryClass)).catch(
+      (error: unknown) => {
+        console.debug('[AdvertisedState] subscribe propagation failed', {
+          transport: targetTransportName,
+          subject,
+          priorities: [...prioritySet],
+          deliveryClass,
+          error,
+        });
+      },
+    );
   }
 }
 
@@ -111,11 +139,12 @@ export function pushAdvertisedSubjectsToPeers(
   affectedSubjects: string[],
 ): Promise<void> {
   const promises: Promise<void>[] = [];
+  const expandedSubjects = expandHostLocalWildcardSubjects(context, affectedSubjects);
   for (const name of context.transportRegistry.names()) {
     if (excludeTransportName !== null && name === excludeTransportName) continue;
     const target = context.transportRegistry.getTransport(name);
     if (!target) continue;
-    for (const subject of affectedSubjects) {
+    for (const subject of expandedSubjects) {
       promises.push(pushAdvertisedSubject(context, String(name), target, subject));
     }
   }
@@ -155,6 +184,12 @@ export async function syncAllSubjectsToTransport(
   for (const subject of context.eventHandlers.keys()) subjects.add(subject);
   for (const subject of context.remoteRequestHandlers.keys()) subjects.add(subject);
   for (const subject of context.remoteEventHandlers.keys()) subjects.add(subject);
+  for (const subject of context.remoteSubscriptionDeliveryClasses.keys()) subjects.add(subject);
+  for (const registered of context.namespaceRegistry.listRegisteredSubjects()) {
+    if (registered.hostLocalRequest && getMatchingHandlerEntries(context, registered.fullSubject).length > 0) {
+      subjects.add(registered.fullSubject);
+    }
+  }
 
   const nameStr = String(transportName);
   const promises: Promise<void>[] = [];
@@ -190,4 +225,24 @@ export async function syncAllSubjectsToTransport(
       });
     });
   }
+}
+
+/**
+ * Add exact host-local subjects covered by affected wildcard request handlers.
+ *
+ * The exact advertisement acts as a first-hop-only guard for the broader
+ * relayable wildcard route on schema-less peers.
+ * @param context - Bus context containing registered schemas
+ * @param affectedSubjects - Handler patterns whose advertised state changed
+ * @returns Affected patterns plus matching exact host-local subjects
+ */
+function expandHostLocalWildcardSubjects(context: MakaioBusContext, affectedSubjects: string[]): Set<string> {
+  const expanded = new Set(affectedSubjects);
+  for (const registered of context.namespaceRegistry.listRegisteredSubjects()) {
+    if (!registered.hostLocalRequest) continue;
+    if (affectedSubjects.some((pattern) => matchesSubscription(registered.fullSubject, pattern))) {
+      expanded.add(registered.fullSubject);
+    }
+  }
+  return expanded;
 }

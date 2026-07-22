@@ -19,7 +19,11 @@ import {
   prepareAdapterRuntime,
   type PrepareAdapterRuntimeInput,
 } from '../compose-adapter-runtime.js';
-import { shouldLoadDefaultSessionOrchestrator } from '../boot-extension-selection.js';
+import {
+  registerExtensionBootContributions,
+  shouldLoadDefaultSessionOrchestrator,
+} from '../boot-extension-selection.js';
+import type { ShutdownStep } from '../boot-phase.js';
 import { tryImport } from '../optional-package.js';
 
 const LOCAL_RUNTIME_SNAPSHOT_PRIORITY = 1;
@@ -75,6 +79,30 @@ export interface IsolatedWorkflowRuntime {
 }
 
 /**
+ * Create an idempotent reverse-order shutdown runner over a mutable startup stack.
+ * @param steps - Startup-owned cleanup steps appended as resources activate.
+ * @returns Idempotent shutdown function.
+ */
+function createShutdownRunner(steps: readonly ShutdownStep[]): () => Promise<void> {
+  let promise: Promise<void> | undefined;
+  return () => {
+    promise ??= (async () => {
+      const errors: unknown[] = [];
+      for (const step of [...steps].reverse()) {
+        try {
+          await step();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors, 'Isolated workflow runtime shutdown reported errors');
+    })();
+    return promise;
+  };
+}
+
+/**
  * Compose an isolated, authority-backed runtime for workflow agent steps.
  *
  * The runtime deliberately owns no database and installs no local storage
@@ -106,23 +134,8 @@ export async function createIsolatedWorkflowRuntime(
   });
 
   let identity: ReturnType<typeof activateAdapterRuntimeIdentity> | undefined;
-  let shutdownPromise: Promise<void> | undefined;
-
-  const shutdown = (): Promise<void> => {
-    shutdownPromise ??= (async () => {
-      try {
-        identity?.cleanup();
-      } finally {
-        identity = undefined;
-        try {
-          await coordinator.shutdown();
-        } finally {
-          await bus.disconnect();
-        }
-      }
-    })();
-    return shutdownPromise;
-  };
+  const shutdownSteps: ShutdownStep[] = [() => bus.disconnect()];
+  const shutdown = createShutdownRunner(shutdownSteps);
 
   try {
     await options.connectAuthority(bus);
@@ -149,7 +162,7 @@ export async function createIsolatedWorkflowRuntime(
     });
 
     coordinator.registerContributionProcessor(createToolContributionProcessor());
-    coordinator.load([
+    const packagesToLoad = [
       ...ISOLATED_SESSION_BASE_PACKAGES,
       // Canonical-model initialization synchronously probes the local adapter subsystem.
       adapterSubsystemPackage,
@@ -159,10 +172,17 @@ export async function createIsolatedWorkflowRuntime(
       toolRegistryPackage,
       clientsCorePackage,
       ...contributedPackages,
-    ]);
+    ];
+    coordinator.load(packagesToLoad);
+    shutdownSteps.push(...registerExtensionBootContributions(packagesToLoad, bus, coordinator));
+    shutdownSteps.push(() => coordinator.shutdown());
     await coordinator.startAll();
 
     identity = activateAdapterRuntimeIdentity({ bus, currentMachineId: context.machineId });
+    shutdownSteps.push(() => {
+      identity?.cleanup();
+      identity = undefined;
+    });
     const toolRegistry = coordinator.getExtensionService(ToolRegistryToken);
     if (toolRegistry === undefined) {
       throw new Error('Isolated workflow tool registry did not start.');

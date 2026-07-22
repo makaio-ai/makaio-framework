@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 3,
+  "provider": "codex",
+  "cliVersion": "0.144.1",
+  "scenarioId": "stop-block",
+  "events": [
+    {
+      "eventName": "Stop",
+      "frameworkSubject": "client.session.turn.completed",
+      "responseCapabilities": [
+        "openai.codex-hook-response.block"
+      ],
+      "mode": "request",
+      "candidateExpectedStatus": "supported",
+      "observedStatus": "supported",
+      "sourceExpectedEffects": [
+        "openai.codex-hook-response.block"
+      ],
+      "observedEffects": [
+        "openai.codex-hook-response.block"
+      ],
+      "blockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "payloadKeys": [
+        "cwd",
+        "hook_event_name",
+        "last_assistant_message",
+        "model",
+        "permission_mode",
+        "session_id",
+        "stop_hook_active",
+        "transcript_path",
+        "turn_id"
+      ],
+      "sentinelInjected": true
+    }
+  ],
+  "oracle": "final-response-must-contain-marker",
+  "oraclePassed": true,
+  "exitCode": 0
+}

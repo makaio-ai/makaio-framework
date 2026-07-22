@@ -9,6 +9,7 @@ describe('buildSubscribeMessage', () => {
 
     expect(message.type).toBe('subscribe');
     expect(message.subjects).toEqual({ 'session.created': [] });
+    expect(message.deliveryClasses).toEqual({ 'session.created': 'relayable' });
   });
 
   it('preserves handler priorities for multiple subjects', () => {
@@ -24,6 +25,18 @@ describe('buildSubscribeMessage', () => {
       'ui.navigate': [100, 200],
       'adapter.event': [50],
       'session.created': [],
+    });
+  });
+
+  it('preserves explicit delivery classes and defaults omitted entries to relayable', () => {
+    const subscriptions = new Map<string, SubscriptionEntry>([
+      ['hook.response', { priorities: [100], deliveryClass: 'first-hop-only' }],
+      ['session.created', { priorities: [] }],
+    ]);
+
+    expect(buildSubscribeMessage(subscriptions).deliveryClasses).toEqual({
+      'hook.response': 'first-hop-only',
+      'session.created': 'relayable',
     });
   });
 
@@ -81,6 +94,7 @@ describe('buildSubscribeMessage', () => {
 
     expect(message.type).toBe('subscribe');
     expect(message.subjects).toEqual({});
+    expect(message.deliveryClasses).toEqual({});
     expect(Object.hasOwn(message, 'filters')).toBe(false);
   });
 });

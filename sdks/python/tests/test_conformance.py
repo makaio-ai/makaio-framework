@@ -274,6 +274,10 @@ async def test_reconnect_subscription_replay() -> None:
     assert "agent.*" in replay_frame["subjects"]
     assert "approval.request" in replay_frame["subjects"]
     assert replay_frame["subjects"]["approval.request"] == [250]
+    assert replay_frame["deliveryClasses"] == {
+        "agent.*": "relayable",
+        "approval.request": "relayable",
+    }
 
     reconnect_ws.push(_msg("subscribe-sync-complete"))
     await asyncio.sleep(0.05)

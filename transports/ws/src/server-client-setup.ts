@@ -18,7 +18,7 @@ import { NoHandlerError, TimeoutError, isNoHandlerErrorForSubject } from '@makai
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry } from './client-registry.js';
-import { createInboundMessageHandler } from './server-message-handler.js';
+import { createInboundMessageHandler, invokeSubscriptionUpdates } from './server-message-handler.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 
 const DEFAULT_CLIENT_BROADCAST_TIMEOUT_MS = 5_000;
@@ -103,11 +103,15 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
   };
   const closeListener = (): void => {
     auth?.cleanupSocket(socket);
-    registry.removeClient(socket);
+    const subscriptionUpdates = registry.removeClient(socket);
     socket.removeEventListener('message', messageListener);
     socket.removeEventListener('close', closeListener);
     socket.removeEventListener('error', errorListener);
     broadcastAggregator.handleClientDisconnect(socket);
+    void invokeSubscriptionUpdates(subscriptionUpdates, handlers, {
+      debug,
+      logContext: 'dispatching disconnected client subscriptions',
+    });
 
     if (debug) {
       console.info(`[ServerTransport] Client disconnected (${registry.size} remaining)`);

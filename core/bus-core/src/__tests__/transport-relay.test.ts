@@ -60,7 +60,11 @@ function createRecordedRelayTransport(
     recordedSends,
     advertise: async (subjects) => {
       if (capturedHandler) {
-        await capturedHandler({ type: 'subscribe', subjects });
+        await capturedHandler({
+          type: 'subscribe',
+          subjects,
+          deliveryClasses: Object.fromEntries(Object.keys(subjects).map((subject) => [subject, 'relayable' as const])),
+        });
       }
     },
   };
@@ -208,8 +212,16 @@ describe('Transport relay and subscription propagation', () => {
       try {
         // Advertise both transports for the subject — dispatch will try failing first,
         // then fall through to successTransport.
-        await failingTransport.simulateReceive({ type: 'subscribe', subjects: { 'unknown.action': [0] } });
-        await successTransport.simulateReceive({ type: 'subscribe', subjects: { 'unknown.action': [0] } });
+        await failingTransport.simulateReceive({
+          type: 'subscribe',
+          subjects: { 'unknown.action': [0] },
+          deliveryClasses: { 'unknown.action': 'relayable' },
+        });
+        await successTransport.simulateReceive({
+          type: 'subscribe',
+          subjects: { 'unknown.action': [0] },
+          deliveryClasses: { 'unknown.action': 'relayable' },
+        });
 
         await sourceTransport.simulateReceive({
           type: 'request',
@@ -248,8 +260,16 @@ describe('Transport relay and subscription propagation', () => {
 
       try {
         // Advertise both transports — dispatch skips the failing one and falls through.
-        await failingTransport.simulateReceive({ type: 'subscribe', subjects: { 'unknown.action': [0] } });
-        await successTransport.simulateReceive({ type: 'subscribe', subjects: { 'unknown.action': [0] } });
+        await failingTransport.simulateReceive({
+          type: 'subscribe',
+          subjects: { 'unknown.action': [0] },
+          deliveryClasses: { 'unknown.action': 'relayable' },
+        });
+        await successTransport.simulateReceive({
+          type: 'subscribe',
+          subjects: { 'unknown.action': [0] },
+          deliveryClasses: { 'unknown.action': 'relayable' },
+        });
 
         await sourceTransport.simulateReceive({
           type: 'request',
@@ -290,8 +310,16 @@ describe('Transport relay and subscription propagation', () => {
 
       try {
         // Advertise both — dispatch tries both, collects the first non-NoHandler error.
-        await failingTransport.simulateReceive({ type: 'subscribe', subjects: { 'unknown.action': [0] } });
-        await alsoFailingTransport.simulateReceive({ type: 'subscribe', subjects: { 'unknown.action': [0] } });
+        await failingTransport.simulateReceive({
+          type: 'subscribe',
+          subjects: { 'unknown.action': [0] },
+          deliveryClasses: { 'unknown.action': 'relayable' },
+        });
+        await alsoFailingTransport.simulateReceive({
+          type: 'subscribe',
+          subjects: { 'unknown.action': [0] },
+          deliveryClasses: { 'unknown.action': 'relayable' },
+        });
 
         await sourceTransport.simulateReceive({
           type: 'request',
@@ -347,11 +375,12 @@ describe('Transport relay and subscription propagation', () => {
         const subscribeMsg: BusSubscribeMessage = {
           type: 'subscribe',
           subjects: { 'test.confirm': [], 'test.prompt': [] },
+          deliveryClasses: { 'test.confirm': 'relayable', 'test.prompt': 'relayable' },
         };
         await sourceTransport.simulateReceive(subscribeMsg);
 
-        expect(subscribable.subscribe).toHaveBeenCalledWith('test.confirm', undefined, []);
-        expect(subscribable.subscribe).toHaveBeenCalledWith('test.prompt', undefined, []);
+        expect(subscribable.subscribe).toHaveBeenCalledWith('test.confirm', undefined, [], 'relayable');
+        expect(subscribable.subscribe).toHaveBeenCalledWith('test.prompt', undefined, [], 'relayable');
       } finally {
         unregister();
       }
@@ -376,13 +405,14 @@ describe('Transport relay and subscription propagation', () => {
           .simulateReceive({
             type: 'subscribe',
             subjects: { 'test.confirm': [] },
+            deliveryClasses: { 'test.confirm': 'relayable' },
           })
           .then(() => {
             settled = true;
           });
 
         await Promise.resolve();
-        expect(subscribable.subscribe).toHaveBeenCalledWith('test.confirm', undefined, []);
+        expect(subscribable.subscribe).toHaveBeenCalledWith('test.confirm', undefined, [], 'relayable');
         expect(settled).toBe(false);
 
         releaseSubscribe();
@@ -490,7 +520,11 @@ describe('Transport relay and subscription propagation', () => {
 
       try {
         // Advertise the tab transport's handler so dispatch knows to route compute.solve there.
-        await tabHandler?.({ type: 'subscribe', subjects: { 'compute.solve': [0] } });
+        await tabHandler?.({
+          type: 'subscribe',
+          subjects: { 'compute.solve': [0] },
+          deliveryClasses: { 'compute.solve': 'relayable' },
+        });
 
         // Act: server sends a request into the worker bus (MakaioBus).
         // The worker has no local handler, so the registry relays to tabTransport.
@@ -534,7 +568,7 @@ describe('Transport relay and subscription propagation', () => {
           ctx.setResult({ output: 'handled' });
         });
 
-        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.testRequest', undefined, [0]);
+        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.testRequest', undefined, [0], 'relayable');
 
         cleanup();
 
@@ -552,7 +586,7 @@ describe('Transport relay and subscription propagation', () => {
       try {
         const cleanup = MakaioBus.on(TestSubjects.testRequest, () => undefined, { handlerKind: 'event' });
 
-        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.testRequest', undefined, [0]);
+        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.testRequest', undefined, [0], 'relayable');
 
         cleanup();
       } finally {
@@ -568,7 +602,7 @@ describe('Transport relay and subscription propagation', () => {
       try {
         const cleanup = MakaioBus.on(TestSubjects.$all, () => undefined, { handlerKind: 'event' });
 
-        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.*', undefined, []);
+        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.*', undefined, [], 'relayable');
 
         cleanup();
 
@@ -586,7 +620,7 @@ describe('Transport relay and subscription propagation', () => {
       try {
         const cleanup = MakaioBus.on(TestSubjects.$all, () => undefined, { handlerKind: 'request', priority: 250 });
 
-        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.*', undefined, [250]);
+        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.*', undefined, [250], 'relayable');
 
         cleanup();
 
@@ -606,7 +640,7 @@ describe('Transport relay and subscription propagation', () => {
       const unregister = registerTransport('late-sub' as keyof BusTransportRegistry, subscribable).unregister;
 
       try {
-        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.testRequest', undefined, [0]);
+        expect(subscribable.subscribe).toHaveBeenCalledWith('relayTest.testRequest', undefined, [0], 'relayable');
       } finally {
         unregister();
         cleanup();

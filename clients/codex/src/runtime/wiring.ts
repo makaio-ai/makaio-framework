@@ -20,7 +20,12 @@ import type {
   ClientWiringApplyResponse,
   ClientWiringRemoveResponse,
 } from '@makaio/subsystem-client';
-import { buildHookCommand, deriveSessionEventDescriptors } from '@makaio/subsystem-client';
+import {
+  buildClientCommand,
+  buildHookCommand,
+  deriveSessionEventDescriptors,
+  DEFAULT_HOOK_HANDLE_TIMEOUT_MS,
+} from '@makaio/subsystem-client';
 import { clientDefinition } from '../definition.js';
 import type { CodexClientSettings } from './client-settings.js';
 import type { CodexScope } from '../schemas/config.js';
@@ -54,6 +59,8 @@ export interface CodexWiringSettings {
  * the `commandContains` filter in {@link removeCodexWiring}.
  */
 export const CODEX_HOOK_COMMAND_SENTINEL = 'hook received codex';
+/** Sentinel for synchronous Codex hook responses. */
+export const CODEX_HOOK_HANDLE_COMMAND_SENTINEL = 'hook handle codex';
 
 // ---------------------------------------------------------------------------
 // Derived wiring descriptors (module-scoped, computed once)
@@ -90,10 +97,8 @@ export async function buildCodexWiringList(
 ): Promise<{ entries: ClientWiringEntry[] }> {
   const { effective } = await settings.listHooks(projectDir !== undefined ? { projectDir } : {});
 
-  const entries: ClientWiringEntry[] = SESSION_EVENTS.map(({ eventName }) => {
-    const command = buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName, undefined, [
-      '--debounce-failure',
-    ]);
+  const entries: ClientWiringEntry[] = SESSION_EVENTS.map(({ eventName, mode }) => {
+    const command = buildModeCommand(makaioCommand, eventName, mode);
     const installed = effective.some((entry) => entry.event === eventName && entry.command === command);
     return {
       group: 'session-events',
@@ -134,11 +139,9 @@ export async function applyCodexWiring(
   const scopeRecord = perScope.find((s) => s.scope === scope);
   const scopeHooks = scopeRecord?.hooks ?? [];
 
-  for (const { eventName } of SESSION_EVENTS) {
-    const sentinel = `${CODEX_HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName, undefined, [
-      '--debounce-failure',
-    ]);
+  for (const { eventName, mode } of SESSION_EVENTS) {
+    const sentinel = `${mode === 'request' ? CODEX_HOOK_HANDLE_COMMAND_SENTINEL : CODEX_HOOK_COMMAND_SENTINEL} ${eventName}`;
+    const command = buildModeCommand(makaioCommand, eventName, mode);
 
     const existingEntry = scopeHooks.find((entry) => entry.event === eventName && entry.command.includes(sentinel));
 
@@ -194,14 +197,35 @@ export async function removeCodexWiring(
   let removed = 0;
 
   for (const { eventName } of SESSION_EVENTS) {
-    const result = await settings.removeHook({
-      scope,
-      event: eventName,
-      match: { commandContains: `${CODEX_HOOK_COMMAND_SENTINEL} ${eventName}` },
-      ...(projectDir !== undefined ? { projectDir } : {}),
-    });
-    removed += result.removed;
+    for (const sentinel of [CODEX_HOOK_COMMAND_SENTINEL, CODEX_HOOK_HANDLE_COMMAND_SENTINEL]) {
+      const result = await settings.removeHook({
+        scope,
+        event: eventName,
+        match: { commandContains: `${sentinel} ${eventName}` },
+        ...(projectDir !== undefined ? { projectDir } : {}),
+      });
+      removed += result.removed;
+    }
   }
 
   return { removed };
+}
+
+/**
+ * Build the managed command for one capability-derived hook mode.
+ * @param makaioCommand - Makaio CLI executable.
+ * @param eventName - Native Codex event name.
+ * @param mode - Capability-derived transport mode.
+ * @returns Shell-safe managed hook command.
+ */
+function buildModeCommand(makaioCommand: string, eventName: string, mode: 'event' | 'request'): string {
+  return mode === 'request'
+    ? buildClientCommand(makaioCommand, [
+        '--no-launch',
+        ...CODEX_HOOK_HANDLE_COMMAND_SENTINEL.split(' '),
+        eventName,
+        '--timeout',
+        String(DEFAULT_HOOK_HANDLE_TIMEOUT_MS),
+      ])
+    : buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName, undefined, ['--debounce-failure']);
 }

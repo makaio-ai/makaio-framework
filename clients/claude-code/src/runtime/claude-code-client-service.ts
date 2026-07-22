@@ -70,16 +70,13 @@ import {
   ClientSubjects,
   assertAbsoluteProjectDir,
   type ClientHookHandleResponse,
+  type ClientHookProviderContractRegistry,
+  type ClientHookResponseRegistry,
   type RawClientHookPayload,
 } from '@makaio/subsystem-client';
-import {
-  ClientAccountIdentifierSchema,
-  type ClientRuntimeStarted,
-  type ClientSessionStarted,
-} from '@makaio/contracts/client';
+import { type ClientRuntimeStarted, type ClientSessionStarted } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';
-import { z } from 'zod';
 import { ClaudeCodeClientSettings } from './client-settings.js';
 import { handleClaudeCodeConfigPrime } from './config-prime-handler.js';
 import { normalizeClaudeCodeHook, type ClaudeCodeNormalizedEvent } from './hook-normalizer.js';
@@ -89,10 +86,13 @@ import {
   normalizeClaudeCodeStatusline,
   type StatuslineIdentityContext,
 } from './statusline-normalizer.js';
+import { attachSessionId, resolveIdentityFromSession } from './statusline-identity.js';
 import { ClaudeCodeClientSubjects } from './namespace.js';
 import { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
 import { clearClaudeCodeNativeCredentialsForSession } from './native-credentials.js';
 import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from './wiring.js';
+import { claudeCodeToolResponseContract } from './hook-response-contracts.js';
+import { composeHookResponse, type ComposeHookResponseOptions } from './hook-response-composer.js';
 
 /** Stable client ID for Claude Code — used to filter `client.runtime.started` events. */
 const CLIENT_ID = 'claude-code';
@@ -205,16 +205,48 @@ export class ClaudeCodeClientService extends BaseService {
   private readonly machineId: string | undefined;
 
   /**
+   * Provider contract registry from clients-core, used to register the
+   * Claude Code tool-response contract during provider activation.
+   *
+   * When `undefined`, the service operates without contract registration
+   * (backward-compatible test mode).
+   */
+  private readonly providerContractRegistry: ClientHookProviderContractRegistry | undefined;
+
+  /**
+   * Hook response contributor registry from clients-core, used by the
+   * composer to query matching contributors for request-mode hook events.
+   *
+   * When `undefined`, the service operates without contributor collection
+   * (backward-compatible test mode — `handlePreToolUse` returns the no-op
+   * passthrough).
+   */
+  private readonly hookResponseRegistry: ClientHookResponseRegistry | undefined;
+
+  /**
    * Creates a new Claude Code client service.
    * @param bus - Bus instance used for hook subscription and semantic emission.
    *   Defaults to the global {@link MakaioBus} singleton.
    * @param machineId - Stable runtime identity of the observing machine,
    *   caller-supplied from the extension context. Omit in tests or when the
    *   identity is unavailable.
+   * @param providerContractRegistry - Provider contract registry from
+   *   clients-core. Omit in tests that do not exercise hook response
+   *   contracts.
+   * @param hookResponseRegistry - Hook response contributor registry from
+   *   clients-core. Omit in tests that do not exercise the hook response
+   *   pipeline.
    */
-  public constructor(bus: IMakaioBus = MakaioBus, machineId?: string) {
+  public constructor(
+    bus: IMakaioBus = MakaioBus,
+    machineId?: string,
+    providerContractRegistry?: ClientHookProviderContractRegistry,
+    hookResponseRegistry?: ClientHookResponseRegistry,
+  ) {
     super(bus);
     this.machineId = machineId;
+    this.providerContractRegistry = providerContractRegistry;
+    this.hookResponseRegistry = hookResponseRegistry;
   }
 
   /**
@@ -259,6 +291,7 @@ export class ClaudeCodeClientService extends BaseService {
       await this.handleStatuslineReceived(payload);
     });
 
+    this.registerProviderContract();
     this.registerHookHandleHandler();
     this.registerConfigHandlers();
     this.registerConfigPrimeHandler();
@@ -270,12 +303,37 @@ export class ClaudeCodeClientService extends BaseService {
   /**
    * Clear the adapter-managed session ID set, session identity cache, and
    * config dir cache on teardown.
+   *
+   * Provider contract unregistration is handled via {@link addCleanup} in
+   * {@link registerProviderContract}, so it runs automatically during the
+   * base-class destroy sequence alongside handler unsubscription.
    */
   protected override onDestroy(): void {
     this.managedAdapterSessionIds.clear();
     this.sessionIdentityCacheEpoch += 1;
     this.sessionIdentityCache.clear();
     this.cachedConfigDir = undefined;
+  }
+
+  /**
+   * Register the Claude Code tool-response provider contract with
+   * clients-core so that contributor activation validation succeeds.
+   *
+   * When the provider contract registry is not available (e.g. in
+   * backward-compatible test mode), this is a silent no-op. Cleanup is
+   * registered via {@link addCleanup} so unregistration happens
+   * automatically during the base-class destroy sequence.
+   */
+  private registerProviderContract(): void {
+    if (!this.providerContractRegistry) return;
+    this.providerContractRegistry.registerProviderContract('claude-code.runtime', claudeCodeToolResponseContract);
+    this.addCleanup(() =>
+      this.providerContractRegistry?.unregisterProviderContract(
+        'claude-code.runtime',
+        claudeCodeToolResponseContract.clientId,
+        claudeCodeToolResponseContract.contractId,
+      ),
+    );
   }
 
   /**
@@ -482,7 +540,19 @@ export class ClaudeCodeClientService extends BaseService {
    */
   private registerHookHandleHandler(): void {
     this.registerHandler(ClaudeCodeClientSubjects.hook.handle, async (ctx) => {
-      ctx.setResult(await this.handleHookRequest(ctx.payload));
+      ctx.setResult(
+        await this.handleHookRequest(ctx.payload, {
+          deadline: ctx.deadline,
+          signal: ctx.signal,
+          onDiagnostics: (diagnostics) => {
+            for (const diagnostic of diagnostics) {
+              console.warn(
+                `[ClaudeCodeClientService] Hook contributor '${diagnostic.contributorId}': ${diagnostic.message}`,
+              );
+            }
+          },
+        }),
+      );
     });
   }
 
@@ -494,29 +564,40 @@ export class ClaudeCodeClientService extends BaseService {
    * request-mode events can add a handler branch without touching the
    * registration plumbing.
    * @param payload - Raw hook payload delivered on `client:claude-code.hook.handle`.
+   * @param options - Request-scoped deadline and signal from the bus context.
    * @returns Response to forward to the client binary via stdout.
    */
-  private async handleHookRequest(payload: RawClientHookPayload): Promise<ClientHookHandleResponse> {
+  private async handleHookRequest(
+    payload: RawClientHookPayload,
+    options?: ComposeHookResponseOptions,
+  ): Promise<ClientHookHandleResponse> {
     switch (payload.eventName) {
       case 'PreToolUse':
-        return this.handlePreToolUse(payload);
+        return this.handlePreToolUse(payload, options);
       default:
         return { exitCode: 0, stdout: '', stderr: '' };
     }
   }
 
   /**
-   * Handle a `PreToolUse` request-mode hook.
+   * Handle a `PreToolUse` request-mode hook via the hook response composer.
    *
-   * Native hook payloads do not yet provide a reliable agent/session correlation
-   * key for bus-mediated tool policy requests.  Until that contract exists this
-   * handler remains a fail-open passthrough.
-   * @param _payload - Raw `PreToolUse` hook payload, currently unused while the
-   *   handler is a passthrough.
-   * @returns No-op response that permits the tool invocation to proceed.
+   * When the hook response registry is available, delegates to
+   * {@link composeHookResponse} which orchestrates contributor collection
+   * and effect reduction.  Falls back to the no-op passthrough when the
+   * registry is not available (backward-compatible test mode).
+   * @param payload - Raw `PreToolUse` hook payload.
+   * @param options - Request-scoped deadline and signal from the bus context.
+   * @returns Composed response, or no-op when no registry is available.
    */
-  private async handlePreToolUse(_payload: RawClientHookPayload): Promise<ClientHookHandleResponse> {
-    return { exitCode: 0, stdout: '', stderr: '' };
+  private async handlePreToolUse(
+    payload: RawClientHookPayload,
+    options?: ComposeHookResponseOptions,
+  ): Promise<ClientHookHandleResponse> {
+    if (!this.hookResponseRegistry) {
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }
+    return composeHookResponse(this.hookResponseRegistry, payload, options);
   }
 
   /**
@@ -798,60 +879,4 @@ function isResolveBinaryMissingGlobalBinary(error: unknown): boolean {
     return false;
   }
   return error.subject?.endsWith('resolveBinary') === true && error.cause instanceof BinaryNotFoundError;
-}
-
-/**
- * Attach a resolved Makaio session without changing standalone identities.
- * @param identity - Resolved client account identity
- * @param sessionId - Optional Makaio session identifier
- * @returns Identity enriched with the session identifier when available
- */
-function attachSessionId(
-  identity: StatuslineIdentityContext,
-  sessionId: string | undefined,
-): StatuslineIdentityContext {
-  return sessionId === undefined || identity.sessionId === sessionId ? identity : { ...identity, sessionId };
-}
-
-/**
- * Extract a {@link StatuslineIdentityContext} from a session record.
- *
- * Reads the `clientAccountId` field and parses the `identifiers` array from
- * `lastClientIdentityObservation.payload.identifiers`.  Returns `null` when
- * either is absent or when the stored identifiers cannot be parsed.
- * @param session - Session record returned by the storage layer
- * @returns Resolved identity context, or `null` when insufficient evidence
- */
-// Structural param type is intentional — this private helper accepts the
-// subset of session fields it needs rather than coupling to a storage entity.
-function resolveIdentityFromSession(session: {
-  sessionId: string;
-  clientAccountId?: string;
-  lastClientIdentityObservation?: { payload: Record<string, unknown> };
-}): StatuslineIdentityContext | null {
-  const clientAccountId = session.clientAccountId;
-  if (!clientAccountId) {
-    return null;
-  }
-
-  const rawIdentifiers = session.lastClientIdentityObservation?.payload['identifiers'];
-  if (!Array.isArray(rawIdentifiers) || rawIdentifiers.length === 0) {
-    return null;
-  }
-
-  let identifiers;
-  try {
-    identifiers = z.array(ClientAccountIdentifierSchema).min(1).parse(rawIdentifiers);
-  } catch {
-    return null;
-  }
-
-  const displayLabel = session.lastClientIdentityObservation?.payload['displayLabel'];
-
-  return {
-    clientAccountId,
-    sessionId: session.sessionId,
-    identifiers,
-    displayLabel: typeof displayLabel === 'string' && displayLabel.trim().length > 0 ? displayLabel.trim() : undefined,
-  };
 }

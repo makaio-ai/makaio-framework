@@ -30,7 +30,7 @@ The framework includes extensions that connect your tools without writing code:
 | Extension | What it does |
 |-----------|-------------|
 | [account-manager](../extensions/account-manager/) | Auto-discovers your Claude Code and Codex accounts, tracks usage windows and rate limits, lets you switch between accounts from CLI or desktop UI |
-| [client-hooks](../extensions/client-hooks/) | Bridges hook events from any AI client tool into the Makaio bus — the generic pipe that makes everything else possible |
+| [client-hooks](../extensions/client-hooks/) | Bridges hook events from any AI client tool into the Makaio bus, including the [response pipeline](architecture/client-hook-responses.md) that lets extensions approve, deny, or enrich tool calls |
 | [claude-code-statusline](../extensions/claude-code-statusline/) | Captures Claude Code's native statusline data (tokens, costs, session info) and emits it on the bus |
 | [prompt](../extensions/prompt/) | Provider-agnostic CLI for sending prompts: `makaio prompt send "..." --model sonnet` — works with any connected adapter |
 

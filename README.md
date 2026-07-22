@@ -268,6 +268,7 @@ Cross-language SDKs are generated from a [shared protocol manifest](sdks/manifes
 | Writing an adapter | [docs/creating-adapters.md](docs/creating-adapters.md) |
 | Extension model | [docs/architecture/extensions/index.md](docs/architecture/extensions/index.md) |
 | Bus architecture | [docs/architecture/bus/](docs/architecture/bus/index.md) |
+| Client hook response pipeline | [docs/architecture/client-hook-responses.md](docs/architecture/client-hook-responses.md) |
 | Transport (WebSocket, cross-process) | [docs/architecture/transport.md](docs/architecture/transport.md) |
 
 **Host and deploy:**

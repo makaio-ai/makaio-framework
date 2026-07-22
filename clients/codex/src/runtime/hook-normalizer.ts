@@ -124,18 +124,7 @@ function extractToolName(payload: Record<string, unknown>): string | undefined {
  * @returns Tool call ID string, or `undefined` when absent
  */
 function extractToolCallId(payload: Record<string, unknown>): string | undefined {
-  return pickNonEmptyString(payload, 'call_id');
-}
-
-/**
- * Extract optional tool execution outcome from a raw Codex post-tool payload.
- *
- * Codex reports whether the tool call succeeded under `success`.
- * @param payload - Raw hook payload object
- * @returns Boolean success flag, or `undefined` when absent
- */
-function extractSuccess(payload: Record<string, unknown>): boolean | undefined {
-  return typeof payload['success'] === 'boolean' ? payload['success'] : undefined;
+  return pickNonEmptyString(payload, 'tool_use_id');
 }
 
 /**
@@ -201,7 +190,6 @@ export function normalizeCodexHook(raw: RawClientHookPayload, machineId?: string
           ...base,
           toolName: extractToolName(raw.payload),
           toolCallId: extractToolCallId(raw.payload),
-          success: extractSuccess(raw.payload),
         },
       };
 

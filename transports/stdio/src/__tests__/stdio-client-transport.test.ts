@@ -603,6 +603,7 @@ describe('StdioClientTransport', () => {
       expect(written).toEqual({
         type: 'subscribe',
         subjects: { 'adapter.*': [100, 200] },
+        deliveryClasses: { 'adapter.*': 'relayable' },
       });
 
       hostIn.end();
@@ -621,7 +622,27 @@ describe('StdioClientTransport', () => {
       expect(written).toEqual({
         type: 'subscribe',
         subjects: { 'mcp.event': [] },
+        deliveryClasses: { 'mcp.event': 'relayable' },
         filters: { 'mcp.event': { agentId: 'agent-1' } },
+      });
+
+      hostIn.end();
+    });
+
+    it('subscribe() writes an explicit first-hop-only delivery class', async () => {
+      const { transport, hostIn, hostOut } = createTestTransport();
+      transports.push(transport);
+
+      await connectAndSync(transport, hostIn, hostOut);
+
+      const linesPromise = collectLines(hostOut, 1);
+      await transport.subscribe('hook.response', undefined, [], 'first-hop-only');
+
+      const [written] = await linesPromise;
+      expect(written).toEqual({
+        type: 'subscribe',
+        subjects: { 'hook.response': [] },
+        deliveryClasses: { 'hook.response': 'first-hop-only' },
       });
 
       hostIn.end();

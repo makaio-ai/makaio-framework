@@ -154,7 +154,7 @@ export type { BroadcastContext, BroadcastResult } from './methods/broadcast.js';
 export { localSubject } from './utils/local-schema.js';
 export { collectorOnlySubject } from '@makaio/core';
 export { channelSubject } from './utils/channel-schema.js';
-export { defaultTransports } from '@makaio/core';
+export { defaultTransports, hostLocalRequest } from '@makaio/core';
 
 export type { IDirectChannel, ChannelEndpoint, ChannelEndpointOptions } from './channel/index.js';
 export { SystemChannelSchemas, createChannelEndpoint, openChannel } from './channel/index.js';
@@ -175,6 +175,7 @@ export { BusLifecycle } from './lifecycle.js';
 
 export { buildSubscribeMessage, buildUnsubscribeMessage } from './subscribe-message.js';
 export type { SubscriptionEntry } from './subscribe-message.js';
+export type { SubscriptionDeliveryClass } from './types/transports.js';
 
 export { createExtensionNamespace } from './create-extension-namespace.js';
 export type {

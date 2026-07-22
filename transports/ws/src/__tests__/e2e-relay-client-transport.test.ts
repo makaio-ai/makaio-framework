@@ -152,6 +152,7 @@ describe('createE2ERelayClientTransport', () => {
       type: 'subscribe',
       ackId: expect.any(String),
       subjects: { 'agent.started': [] },
+      deliveryClasses: { 'agent.started': 'relayable' },
       filters: { 'agent.started': { agentId: 'agent-1' } },
     });
 
@@ -235,6 +236,7 @@ describe('createE2ERelayClientTransport', () => {
       type: 'subscribe',
       ackId: expect.any(String),
       subjects: { 'relay.error': [] },
+      deliveryClasses: { 'relay.error': 'relayable' },
     });
     expect(JSON.parse(ws.sentMessages[1])).toEqual({
       type: 'unsubscribe',

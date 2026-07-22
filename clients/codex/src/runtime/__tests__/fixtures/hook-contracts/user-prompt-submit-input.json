@@ -1,0 +1,10 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5",
+  "permission_mode": "default",
+  "prompt": "fixture prompt",
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "turn_id": "fixture-turn"
+}

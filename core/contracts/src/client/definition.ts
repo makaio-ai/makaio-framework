@@ -86,33 +86,52 @@ export type LogSourceDefinition = z.infer<typeof LogSourceDefinitionSchema>;
  * wiring layer to know what hooks to install, and by the UI to display
  * available events.
  */
-export const ClientHookEventDeclarationSchema = z.object({
-  /** Native event name as emitted by the binary (e.g. `'PreToolUse'`). */
-  name: z.string().min(1),
-  /**
-   * Global framework subject this event maps to, when one exists.
-   * Omit for client-specific events with no global counterpart.
-   *
-   * Intentionally an open string — the contracts layer does not constrain
-   * the set of framework subjects because new subjects may be added by
-   * extensions without updating client definitions. Typo prevention is
-   * handled by hook-event-sync integration tests in each client package.
-   */
-  frameworkSubject: z.string().min(1).optional(),
-  /**
-   * Hook interaction mode for this event.
-   *
-   * - `'event'` (default) — fire-and-forget: the wiring layer installs
-   *   `makaio hook received ...` for this event. The client binary does
-   *   not wait for a response.
-   * - `'request'` — request/response: the wiring layer installs
-   *   `makaio hook handle ...` for this event. The client binary blocks
-   *   until the command exits and reads its stdout as the response.
-   */
-  mode: z.enum(['event', 'request']).default('event'),
-});
+export const ClientHookEventDeclarationSchema = z
+  .object({
+    /** Native event name as emitted by the binary (e.g. `'PreToolUse'`). */
+    name: z.string().min(1),
+    /**
+     * Global framework subject this event maps to, when one exists.
+     * Omit for client-specific events with no global counterpart.
+     *
+     * Intentionally an open string — the contracts layer does not constrain
+     * the set of framework subjects because new subjects may be added by
+     * extensions without updating client definitions. Typo prevention is
+     * handled by hook-event-sync integration tests in each client package.
+     */
+    frameworkSubject: z.string().min(1).optional(),
+    /**
+     * Response capabilities this hook event supports.
+     *
+     * An empty array (the default) means fire-and-forget: the wiring layer
+     * installs `makaio hook received ...` for this event. A non-empty array
+     * means request/response: the wiring layer installs
+     * `makaio hook handle ...` and the client binary blocks until the
+     * command exits and reads its stdout as the response.
+     *
+     * Capability IDs are open strings: canonical IDs such as
+     * `'context.append'` coexist with client-owned namespaced provider IDs
+     * without importing provider packages into contracts.
+     */
+    responseCapabilities: z.array(z.string().min(1)).readonly().default([]),
+  })
+  .strict();
 
 export type ClientHookEventDeclaration = z.infer<typeof ClientHookEventDeclarationSchema>;
+
+/**
+ * Derives the transport mode solely from whether the event has response
+ * capabilities.
+ *
+ * Events with at least one response capability use `'request'` mode
+ * (blocking request/response), while events with an empty capabilities
+ * array use `'event'` mode (fire-and-forget).
+ * @param event - The parsed hook event declaration.
+ * @returns `'request'` when the event has response capabilities, `'event'` otherwise.
+ */
+export function deriveHookEventTransportMode(event: ClientHookEventDeclaration): 'event' | 'request' {
+  return event.responseCapabilities.length > 0 ? 'request' : 'event';
+}
 
 // ---------------------------------------------------------------------------
 // Config isolation descriptor

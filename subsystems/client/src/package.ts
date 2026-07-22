@@ -22,6 +22,9 @@ import { ClientProfileStorageNamespace } from './storage/profile-storage-namespa
 import type { StrategyDependencies } from './binary-strategies/index.js';
 import type { PostInstallHandler } from './client-binary-manager-types.js';
 import type { ClientBinaryResolutionPolicy } from './client-binary-manager-types.js';
+import { ClientHookProviderContractRegistry } from './client-hook-provider-contract-registry.js';
+import { ClientHookResponseRegistry } from './client-hook-response-registry.js';
+import { createClientHookResponseContributionProcessor } from './client-hook-response-contribution-processor.js';
 
 // ---------------------------------------------------------------------------
 // Composite service
@@ -34,17 +37,29 @@ import type { ClientBinaryResolutionPolicy } from './client-binary-manager-types
  * {@link ClientSessionConfigService}
  * under a single {@link ExtensionServiceLifecycle} handle.
  *
+ * Also exposes the client hook response pipeline registries so other
+ * subsystems (provider runtimes, contribution processors) can register
+ * and unregister provider contracts and query contributor snapshots.
+ *
  * The host coordinator calls `init()` once and `destroy()` once; this class
  * ensures all five services participate in the same lifecycle without any
  * requiring knowledge of the others.
  */
 export class ClientsCoreService implements ExtensionServiceLifecycle {
+  /** Provider contract catalog registry for the hook response pipeline. */
+  public readonly providerContractRegistry: ClientHookProviderContractRegistry;
+
+  /** Contributor definition registry for the hook response pipeline. */
+  public readonly hookResponseRegistry: ClientHookResponseRegistry;
+
   /**
    * @param runtimeService - Handles `client.*` runtime observation subjects
    * @param binaryManager - Handles `client.*` binary-management subjects
    * @param configPrimeService - Handles generic `client.config.prime` delegation
    * @param profileService - Handles `client.profile.*` CRUD subjects
    * @param sessionConfigService - Handles `client.sessionConfig.*` isolation subjects
+   * @param providerContractRegistry - Provider contract catalog for activation-time validation
+   * @param hookResponseRegistry - Contributor definition registry for the hook response pipeline
    */
   public constructor(
     private readonly runtimeService: ClientRuntimeService,
@@ -52,7 +67,12 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
     private readonly configPrimeService: ClientConfigPrimeService,
     private readonly profileService: ClientProfileService,
     private readonly sessionConfigService: ClientSessionConfigService,
-  ) {}
+    providerContractRegistry: ClientHookProviderContractRegistry,
+    hookResponseRegistry: ClientHookResponseRegistry,
+  ) {
+    this.providerContractRegistry = providerContractRegistry;
+    this.hookResponseRegistry = hookResponseRegistry;
+  }
 
   /**
    * Initialize all five sub-services in parallel.
@@ -217,6 +237,12 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
   const { definitions = [], strategyDependencies, postInstallHandlers, binaryResolutionPolicy } = options;
   const definitionSnapshot = [...definitions];
 
+  // Registries are created eagerly at factory scope so both
+  // `runtimeBoot.configure()` (runs before startAll) and `create()`
+  // (runs during startAll) can reference them.
+  const providerContractRegistry = new ClientHookProviderContractRegistry();
+  const hookResponseRegistry = new ClientHookResponseRegistry(providerContractRegistry);
+
   return {
     name: 'makaio.clients-core',
     displayName: 'Clients Core',
@@ -260,7 +286,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
      * @returns Uninitialized composite service
      */
     create: (ctx) => {
-      const registry = new ClientDefinitionRegistry(definitionSnapshot);
+      const defRegistry = new ClientDefinitionRegistry(definitionSnapshot);
       const clientsBasePath = path.join(ctx.makaioHome, 'clients');
       const binaryManager = new ClientBinaryManager(
         ctx.bus,
@@ -270,18 +296,39 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
           postInstallHandlers,
           ...(binaryResolutionPolicy !== undefined && { resolutionPolicy: binaryResolutionPolicy }),
         },
-        registry,
+        defRegistry,
         strategyDependencies,
       );
       const profileService = new ClientProfileService(ctx.bus, clientsBasePath);
       const sessionConfigService = new ClientSessionConfigService(ctx.bus, clientsBasePath);
+
       return new ClientsCoreService(
         new ClientRuntimeService(ctx.bus),
         binaryManager,
         new ClientConfigPrimeService(ctx.bus),
         profileService,
         sessionConfigService,
+        providerContractRegistry,
+        hookResponseRegistry,
       );
+    },
+    /**
+     * Register the client hook response contribution processor before
+     * extension startup.
+     *
+     * The processor wires {@link ExtensionClientHookResponsesContribution}
+     * declared by extension manifests into the
+     * {@link ClientHookResponseRegistry}. Provider runtimes that need to
+     * register validator contracts do so through the
+     * {@link ClientHookProviderContractRegistry} exposed on the
+     * {@link ClientsCoreService}.
+     */
+    runtimeBoot: {
+      configure: (context) => {
+        context.registerContributionProcessor(
+          createClientHookResponseContributionProcessor(hookResponseRegistry, providerContractRegistry),
+        );
+      },
     },
   };
 }

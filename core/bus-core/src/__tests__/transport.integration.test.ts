@@ -215,6 +215,7 @@ describe('Transport Integration', () => {
       await mockTransport.simulateReceive({
         type: 'subscribe',
         subjects: { 'test.testRequest': [0] },
+        deliveryClasses: { 'test.testRequest': 'relayable' },
       });
     }
 
@@ -307,6 +308,7 @@ describe('Transport Integration', () => {
       await filteredOutTransport.simulateReceive({
         type: 'subscribe',
         subjects: { 'test.testRequest': [0] },
+        deliveryClasses: { 'test.testRequest': 'relayable' },
       });
 
       const result = await MakaioBus.request(TestSubjects.testRequest, { input: 'stale-subscription' });
@@ -331,6 +333,7 @@ describe('Transport Integration', () => {
         await secondTransport.simulateReceive({
           type: 'subscribe',
           subjects: { 'test.testRequest': [0] },
+          deliveryClasses: { 'test.testRequest': 'relayable' },
         });
 
         const originalSend = mockTransport.send.bind(mockTransport);
@@ -574,7 +577,11 @@ describe('Transport Integration', () => {
 
     it('should throw if transport send fails for requests', async () => {
       // Advertise the mock transport so dispatch routes to it, then override send to throw.
-      await mockTransport.simulateReceive({ type: 'subscribe', subjects: { 'test.testRequest': [0] } });
+      await mockTransport.simulateReceive({
+        type: 'subscribe',
+        subjects: { 'test.testRequest': [0] },
+        deliveryClasses: { 'test.testRequest': 'relayable' },
+      });
       mockTransport.send = async () => {
         throw new Error('Transport error');
       };

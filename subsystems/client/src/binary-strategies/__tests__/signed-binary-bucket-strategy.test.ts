@@ -263,6 +263,31 @@ describe('SignedBinaryBucketStrategy.execute', () => {
     expect(stages).toContain('installing');
   });
 
+  it('uses and cleans up a short GPG home when the install target is long', async () => {
+    const longTargetDir = path.join(tmpDir, 'install-'.repeat(24));
+    const deps = makeDeps(longTargetDir);
+    const strategy = new SignedBinaryBucketStrategy(makeDescriptor(), deps, {
+      platform: 'darwin',
+      arch: 'arm64',
+      isMusl: false,
+    });
+
+    await strategy.execute('2.1.143', longTargetDir);
+
+    const importCall = (deps.exec as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([command, args]) => command === 'gpg' && (args as string[]).includes('--import'),
+    );
+    expect(importCall).toBeDefined();
+    const gpgArgs = importCall?.[1] as string[];
+    const gpgHome = gpgArgs[gpgArgs.indexOf('--homedir') + 1];
+
+    expect(gpgHome).not.toBeUndefined();
+    expect(gpgHome.startsWith(longTargetDir)).toBe(false);
+    expect(path.join(gpgHome, 'S.gpg-agent.extra').length).toBeLessThan(104);
+    expect(deps.removeDirectory).toHaveBeenCalledWith(gpgHome);
+    await expect(fs.access(gpgHome)).rejects.toThrow();
+  });
+
   it('does not chmod on win32', async () => {
     const win32Checksum = '1111111111111111111111111111111111111111111111111111111111111111';
     const depsWin32 = makeDeps(tmpDir, {
@@ -383,6 +408,8 @@ describe('SignedBinaryBucketStrategy.execute', () => {
     });
 
     await expect(strategy.execute('2.1.143', tmpDir)).rejects.toThrow('Manifest GPG signature verification failed');
+    expect(deps.removeDirectory).toHaveBeenCalledTimes(1);
+    expect(deps.deleteFile).toHaveBeenCalledTimes(2);
   });
 
   it('rejects when the signed manifest version does not match the descriptor pin', async () => {

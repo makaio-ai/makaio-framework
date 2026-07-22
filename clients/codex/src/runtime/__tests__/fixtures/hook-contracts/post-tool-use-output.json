@@ -1,0 +1,8 @@
+{
+  "decision": "block",
+  "reason": "fixture tool result rejected",
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "fixture tool result context"
+  }
+}

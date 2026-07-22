@@ -45,6 +45,11 @@ export type SubjectDefinitionMeta<
    */
   channel: boolean;
   /**
+   * If true, this subject accepts direct remote ingress but must never be
+   * relayed onward to other transports after ingress.
+   */
+  hostLocalRequest?: boolean;
+  /**
    * Default transport routing for bus calls on this subject when the caller
    * does not provide an explicit `transports` option.
    *
@@ -117,6 +122,7 @@ export type ValidSubjectDefinition<Domain extends string = string> = {
     isRequest: boolean;
     local: boolean;
     channel: boolean;
+    hostLocalRequest?: boolean;
     defaultTransports?: TransportRoutingDefault;
   };
   subject: string;

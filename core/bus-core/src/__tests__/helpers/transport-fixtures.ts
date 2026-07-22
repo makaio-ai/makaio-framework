@@ -179,7 +179,9 @@ export interface BidirectionalTransportPair {
  *
  * `subscribe()` and `unsubscribe()` are no-ops — subscribe propagation for
  * these tests is seeded manually via `remoteRequestHandlers`, matching the
- * pattern used in `cross-transport-priority-dispatch.test.ts`.
+ * pattern used in `cross-transport-priority-dispatch.test.ts`. Set
+ * `propagateSubscriptions` to exercise the real subscribe/unsubscribe routing
+ * path instead.
  * @param options - Configuration: `spy` is an optional callback invoked
  *   synchronously (before `queueMicrotask` delivery) for every message crossing
  *   the pair — useful for capturing the `BusRequestMessage.priority` cursor.
@@ -191,9 +193,12 @@ export interface BidirectionalTransportPair {
 export function createBidirectionalTransportPair(options?: {
   spy?: (message: BusMessage, direction: 'a-to-b' | 'b-to-a') => void;
   label?: string;
+  /** Deliver subscribe and unsubscribe calls to the peer's receive handler. */
+  propagateSubscriptions?: boolean;
 }): BidirectionalTransportPair {
   const spy = options?.spy;
   const label = options?.label ?? 'in-process';
+  const propagateSubscriptions = options?.propagateSubscriptions ?? false;
   // This pair intentionally omits TransportReceiveContext: it models the
   // priority-cursor transport path only. Use MockTransport or createStubTransport
   // for tests that need context propagation.
@@ -210,10 +215,12 @@ export function createBidirectionalTransportPair(options?: {
    * @param message - Message to deliver
    * @param target - Recipient inbound handler
    */
-  function deliver(message: BusMessage, target: InboundHandler | undefined): void {
-    if (!target) return;
-    queueMicrotask(() => {
-      void target(message);
+  function deliver(message: BusMessage, target: InboundHandler | undefined): Promise<void> {
+    if (!target) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      queueMicrotask(() => {
+        void target(message).then(resolve, reject);
+      });
     });
   }
 
@@ -235,12 +242,42 @@ export function createBidirectionalTransportPair(options?: {
   ): BusTransport['send'] {
     return function send(message: BusMessage, timeout?: number): Promise<unknown> {
       spy?.(message, direction);
-      deliver(message, getPeer());
+      void deliver(message, getPeer());
       if (message.type === 'request') {
         return correlations.track(message.correlationId, timeout ?? 30_000) as Promise<unknown>;
       }
       return Promise.resolve(true);
     } as BusTransport['send'];
+  }
+
+  /**
+   * Build a subscription method that optionally delivers its wire message to the peer.
+   * @param getPeer - Resolve the peer's inbound message handler.
+   */
+  function buildSubscribe(getPeer: () => InboundHandler | undefined): BusTransport['subscribe'] {
+    return async (subject, filter, priorities = [], deliveryClass = 'relayable') => {
+      if (!propagateSubscriptions) return;
+      await deliver(
+        {
+          type: 'subscribe',
+          subjects: { [subject]: priorities },
+          deliveryClasses: { [subject]: deliveryClass },
+          ...(filter !== undefined && { filters: { [subject]: filter } }),
+        },
+        getPeer(),
+      );
+    };
+  }
+
+  /**
+   * Build an unsubscription method that optionally delivers its wire message to the peer.
+   * @param getPeer - Resolve the peer's inbound message handler.
+   */
+  function buildUnsubscribe(getPeer: () => InboundHandler | undefined): BusTransport['unsubscribe'] {
+    return async (subject) => {
+      if (!propagateSubscriptions) return;
+      await deliver({ type: 'unsubscribe', subjects: { [subject]: [] } }, getPeer());
+    };
   }
 
   const sideA: BidirectionalTransportSide = {
@@ -249,8 +286,8 @@ export function createBidirectionalTransportPair(options?: {
     disconnect: async () => {
       correlationsA.cleanup();
     },
-    subscribe: async () => {},
-    unsubscribe: async () => {},
+    subscribe: buildSubscribe(() => inboundHandlerB),
+    unsubscribe: buildUnsubscribe(() => inboundHandlerB),
 
     onReceive(handler: InboundHandler): () => void {
       inboundHandlerA = async (message: BusMessage): Promise<void> => {
@@ -275,8 +312,8 @@ export function createBidirectionalTransportPair(options?: {
     disconnect: async () => {
       correlationsB.cleanup();
     },
-    subscribe: async () => {},
-    unsubscribe: async () => {},
+    subscribe: buildSubscribe(() => inboundHandlerA),
+    unsubscribe: buildUnsubscribe(() => inboundHandlerA),
 
     onReceive(handler: InboundHandler): () => void {
       inboundHandlerB = async (message: BusMessage): Promise<void> => {

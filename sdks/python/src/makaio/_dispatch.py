@@ -27,6 +27,7 @@ from makaio.types import (
     EventHandlerFn,
     RequestContext,
     RequestHandlerFn,
+    SubscriptionDeliveryClass,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -44,12 +45,14 @@ class Registration:
     @param pattern: The subject pattern or full subject this registration covers.
     @param priority: Numeric dispatch priority (higher runs first).
     @param handler: The registered handler callable.
+    @param delivery_class: Whether remote peers may relay this subscription.
     """
 
     kind: Literal['event', 'request']
     pattern: str
     priority: int
     handler: Any
+    delivery_class: SubscriptionDeliveryClass = 'relayable'
 
 
 @dataclass(frozen=True)
@@ -162,6 +165,7 @@ class LocalBus:
         handler: EventHandlerFn,
         *,
         priority: int = 0,
+        delivery_class: SubscriptionDeliveryClass = 'relayable',
     ) -> Registration:
         """Register an event handler for *pattern*.
 
@@ -169,9 +173,16 @@ class LocalBus:
             ``'prefix:*'``).
         @param handler: Async or sync callable accepting ``EventContext``.
         @param priority: Dispatch priority; higher values run first.
+        @param delivery_class: Whether remote peers may relay this subscription.
         @returns: A ``Registration`` handle that can be passed to ``remove()``.
         """
-        reg = Registration(kind='event', pattern=pattern, priority=priority, handler=handler)
+        reg = Registration(
+            kind='event',
+            pattern=pattern,
+            priority=priority,
+            handler=handler,
+            delivery_class=delivery_class,
+        )
         entry = HandlerEntry(priority=priority, registration=reg, handler=handler)
         entries = self._event_handlers.setdefault(pattern, [])
         _insert_sorted(entries, entry)
@@ -183,16 +194,22 @@ class LocalBus:
         handler: RequestHandlerFn,
         *,
         priority: int,
+        delivery_class: SubscriptionDeliveryClass = 'relayable',
     ) -> Registration:
         """Register a request handler for *full_subject*.
 
         @param full_subject: Exact subject string (e.g. ``'tool.execute'``).
         @param handler: Async or sync callable accepting ``RequestContext``.
         @param priority: Dispatch priority; higher values run first.
+        @param delivery_class: Whether remote peers may relay this subscription.
         @returns: A ``Registration`` handle that can be passed to ``remove()``.
         """
         reg = Registration(
-            kind='request', pattern=full_subject, priority=priority, handler=handler
+            kind='request',
+            pattern=full_subject,
+            priority=priority,
+            handler=handler,
+            delivery_class=delivery_class,
         )
         entry = HandlerEntry(priority=priority, registration=reg, handler=handler)
         entries = self._request_handlers.setdefault(full_subject, [])
@@ -283,6 +300,30 @@ class LocalBus:
         @returns: Sorted list of pattern strings currently registered.
         """
         return sorted(self._event_handlers.keys())
+
+    def subscription_delivery_class(
+        self, full_subject: str
+    ) -> SubscriptionDeliveryClass:
+        """Return the fail-closed aggregate delivery class for a subscription.
+
+        Event and request handlers may share the same advertised subject. If
+        any registration is first-hop-only, that stronger boundary applies to
+        the complete subject snapshot.
+
+        @param full_subject: Exact subject or event pattern to query.
+        @returns: ``'first-hop-only'`` when any handler requires it, otherwise
+            ``'relayable'``.
+        """
+        entries = [
+            *self._event_handlers.get(full_subject, []),
+            *self._request_handlers.get(full_subject, []),
+        ]
+        if any(
+            entry.registration.delivery_class == 'first-hop-only'
+            for entry in entries
+        ):
+            return 'first-hop-only'
+        return 'relayable'
 
     # ------------------------------------------------------------------
     # Event dispatch

@@ -74,14 +74,24 @@ await client.close()
 **Event subscription**
 
 ```python
-sub = await client.subscribe(subject, handler, priority=0)
+sub = await client.subscribe(
+    subject,
+    handler,
+    priority=0,
+    delivery_class="relayable",  # or "first-hop-only"
+)
 await sub.close()  # unsubscribe
 ```
 
 **Request handlers**
 
 ```python
-sub = await client.on_request(subject, handler, priority=0)
+sub = await client.on_request(
+    subject,
+    handler,
+    priority=0,
+    delivery_class="relayable",  # or "first-hop-only"
+)
 await sub.close()
 ```
 

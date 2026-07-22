@@ -9,17 +9,18 @@
  * 2. {@link buildHookCommand} — build the full hook command string for a single
  *    session-event wiring entry: `<makaioCommand> <sentinel> <eventName>`.
  *
- * 3. {@link deriveSessionEventDescriptors} — filter a client definition's
- *    `hookEvents` array down to the events that have a `frameworkSubject` and
- *    return them as `{ eventName }` descriptors, which is the form consumed by
- *    the per-client `buildWiringList`, `applyWiring`, and `removeWiring`
- *    functions.
+ * 3. {@link deriveSessionEventDescriptors} — derive descriptors from a client
+ *    definition's `hookEvents` array.  Every declared hook event is returned so
+ *    a managed hook command is installed for each one.  The `frameworkSubject`
+ *    field controls only whether additional normalized observation happens, not
+ *    whether a managed hook command is installed.
  *
  * Both helpers are framework-boundary safe: they depend only on
  * `@makaio/contracts` types and have no host or client-specific imports.
  * @packageDocumentation
  */
 
+import { deriveHookEventTransportMode } from '@makaio/contracts/client';
 import type { ClientDefinition } from '@makaio/contracts/client';
 
 // ---------------------------------------------------------------------------
@@ -104,8 +105,10 @@ export function buildHookCommand(
  * Derive the ordered list of session-event wiring descriptors from a client
  * definition.
  *
- * Only hook events that carry a `frameworkSubject` are included — events
- * without one are client-internal and do not need framework wiring.
+ * Every declared hook event is returned — the `frameworkSubject` field controls
+ * only whether additional normalized observation happens, not whether a managed
+ * hook command is installed.  Events without a `frameworkSubject` still need
+ * hook wiring so they arrive through raw ingress for observer-only processing.
  * @param clientDefinition - The parsed static client definition whose
  *   `runtimeCapabilities.hookEvents` array is the source of truth.
  * @returns Read-only array of `{ eventName, mode }` descriptors in declaration order.
@@ -113,9 +116,10 @@ export function buildHookCommand(
 export function deriveSessionEventDescriptors(
   clientDefinition: ClientDefinition,
 ): ReadonlyArray<SessionEventDescriptor> {
-  return clientDefinition.runtimeCapabilities.hookEvents
-    .filter((e) => e.frameworkSubject !== undefined)
-    .map((e) => ({ eventName: e.name, mode: e.mode }));
+  return clientDefinition.runtimeCapabilities.hookEvents.map((e) => ({
+    eventName: e.name,
+    mode: deriveHookEventTransportMode(e),
+  }));
 }
 
 /**
