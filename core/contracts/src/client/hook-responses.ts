@@ -19,6 +19,8 @@
  * @packageDocumentation
  */
 
+import type { ExtensionContext } from '../extension/extension-context.js';
+
 // ---------------------------------------------------------------------------
 // Canonical Effects
 // ---------------------------------------------------------------------------
@@ -346,9 +348,18 @@ export interface ContributorResponse {
  * Provides the extension identity and a lookup for active provider contracts
  * so the factory can validate contributor selectors and failure policies.
  */
-export interface ContributorActivationContext {
+export interface ContributorActivationContext<THostContext extends ExtensionContext = ExtensionContext> {
   /** Name of the activating extension. */
   readonly extensionName: string;
+  /**
+   * Per-extension host context from the activating runtime.
+   *
+   * Contributor factories can capture the bus, service lookup, shutdown
+   * signal, and other host-scoped resources from this context rather than
+   * relying on module-global mutable state. The context belongs to the
+   * same extension activation as the manifest being processed.
+   */
+  readonly extensionContext: THostContext;
   /**
    * Look up a provider contract catalog entry by its exact client and
    * contract identifiers.
@@ -366,19 +377,19 @@ export interface ContributorActivationContext {
  * `createContributors` once during extension activation; the returned batch
  * is validated before installation.
  */
-export interface ExtensionClientHookResponsesContribution {
+export interface ExtensionClientHookResponsesContribution<THostContext extends ExtensionContext = ExtensionContext> {
   /**
    * Factory that produces contributor definitions for this extension.
    *
    * Called once during extension activation. The returned contributors are
    * validated against the active provider contract catalog before being
    * installed in the hook response pipeline.
-   * @param ctx - Activation context supplying extension identity and
-   *   provider contract lookup.
+   * @param ctx - Activation context supplying extension identity,
+   *   host extension context, and provider contract lookup.
    * @returns Contributor definitions or a promise resolving to them.
    */
   readonly createContributors: (
-    ctx: ContributorActivationContext,
+    ctx: ContributorActivationContext<THostContext>,
   ) => ContributorDefinition[] | Promise<ContributorDefinition[]>;
 }
 
