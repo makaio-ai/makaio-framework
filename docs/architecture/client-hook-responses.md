@@ -263,6 +263,9 @@ import {
 // On your MakaioExtension:
 const clientHookResponses: ExtensionClientHookResponsesContribution = {
   createContributors: (ctx) => {
+    // Capture activation-scoped resources for use in callbacks.
+    const { bus } = ctx.extensionContext;
+
     const contributor: ContributorDefinition = {
       id: 'my-context-enricher',
       priority: 100,
@@ -323,14 +326,19 @@ according to the contributor's `failurePolicy`.
 
 ### Activation context
 
-The `createContributors` factory receives a `ContributorActivationContext`
-with:
+The `createContributors` factory receives a
+`ContributorActivationContext<THostContext>` with:
 
 - `extensionName` --- the activating extension's name.
-- `getProviderContract(contractId)` --- looks up a
-  `ProviderContractCatalogEntry` by contract ID. Use this to check whether
-  a provider contract is active before returning provider-specific
-  contributors.
+- `extensionContext` --- the per-extension host context from the activating
+  runtime. Contains the typed bus, service lookup (`getService`), shutdown
+  signal, data directory, and other host-scoped resources. Contributor
+  factories can capture these at activation time so callbacks use
+  activation-scoped resources rather than module-global mutable state.
+- `getProviderContract(clientId, contractId)` --- looks up a
+  `ProviderContractCatalogEntry` by client and contract ID. Use this to
+  check whether a provider contract is active before returning
+  provider-specific contributors.
 
 ---
 
