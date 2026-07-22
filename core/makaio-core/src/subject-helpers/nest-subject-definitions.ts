@@ -10,6 +10,7 @@ import {
 import { isRequestSchema } from './is-request-schema.js';
 import { isChannelSchema } from './is-channel-schema.js';
 import { isLocalSchema } from './is-local-schema.js';
+import { isHostLocalRequestSchema } from './host-local-request-schema.js';
 import { isDefaultTransportsSchema } from './default-transports-schema.js';
 import { unwrapSchema } from './unwrap-schema.js';
 
@@ -98,9 +99,10 @@ export function nestSubjectDefinitions<Domain extends string, T extends Record<s
       current = current[parts[i]] as Record<string, unknown>;
     }
 
-    // Check if schema is wrapped as local or channel and unwrap for type detection
+    // Check if schema is wrapped as local, channel, or host-local-request and unwrap for type detection
     const local = isLocalSchema(schema);
     const channel = isChannelSchema(schema);
+    const hostLocalRequest = isHostLocalRequestSchema(schema);
     const subjectDefaultTransports = isDefaultTransportsSchema(schema)
       ? schema.__defaultTransports
       : namespaceDefaultTransports;
@@ -113,6 +115,7 @@ export function nestSubjectDefinitions<Domain extends string, T extends Record<s
         isRequest: isRequestSchema(innerSchema),
         local,
         channel,
+        ...(hostLocalRequest && { hostLocalRequest }),
         ...(subjectDefaultTransports !== undefined && { defaultTransports: subjectDefaultTransports }),
       },
     };

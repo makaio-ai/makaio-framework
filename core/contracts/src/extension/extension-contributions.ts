@@ -175,4 +175,6 @@ export interface ExtensionUiContribution {
   readonly configComponent?: ExtensionConfigComponentLoader;
 }
 
+export type { ExtensionClientHookResponsesContribution } from '../client/hook-responses.js';
+
 export type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';

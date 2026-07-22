@@ -32,7 +32,11 @@ const cursorClientDefinitionInput: Parameters<typeof createClientDefinition>[0] 
   runtimeCapabilities: {
     supportsHooks: true,
     hookEvents: [
-      { name: 'preToolUse', frameworkSubject: 'client.session.tool.pre', mode: 'request' },
+      {
+        name: 'preToolUse',
+        frameworkSubject: 'client.session.tool.pre',
+        responseCapabilities: ['approve', 'deny', 'context.append'],
+      },
       { name: 'afterFileEdit' },
     ],
   },

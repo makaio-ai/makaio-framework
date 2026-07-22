@@ -178,8 +178,8 @@ describe('normalizeCodexHook', () => {
   });
 
   describe('PreToolUse — tool fields', () => {
-    it('extracts tool_name and call_id', () => {
-      const result = normalizeCodexHook(makeRaw('PreToolUse', { tool_name: 'bash', call_id: 'call-123' }));
+    it('extracts tool_name and tool_use_id', () => {
+      const result = normalizeCodexHook(makeRaw('PreToolUse', { tool_name: 'bash', tool_use_id: 'call-123' }));
 
       expect(result!.payload).toMatchObject({ toolName: 'bash', toolCallId: 'call-123' });
     });
@@ -199,36 +199,24 @@ describe('normalizeCodexHook', () => {
       expect(payload.toolName).toBeUndefined();
     });
 
-    it('treats empty-string call_id as absent', () => {
-      const result = normalizeCodexHook(makeRaw('PreToolUse', { call_id: '' }));
+    it('treats empty-string tool_use_id as absent', () => {
+      const result = normalizeCodexHook(makeRaw('PreToolUse', { tool_use_id: '' }));
       const payload = result!.payload as { toolCallId?: string };
 
       expect(payload.toolCallId).toBeUndefined();
     });
   });
 
-  describe('PostToolUse — tool fields + success', () => {
-    it('extracts tool_name, call_id, and success flag', () => {
+  describe('PostToolUse — tool fields', () => {
+    it('extracts tool_name and tool_use_id without guessing success from tool_response', () => {
       const result = normalizeCodexHook(
-        makeRaw('PostToolUse', { tool_name: 'bash', call_id: 'call-456', success: true }),
+        makeRaw('PostToolUse', { tool_name: 'bash', tool_use_id: 'call-456', tool_response: { output: 'ok' } }),
       );
 
       expect(result!.payload).toMatchObject({
         toolName: 'bash',
         toolCallId: 'call-456',
-        success: true,
       });
-    });
-
-    it('extracts success: false correctly', () => {
-      const result = normalizeCodexHook(makeRaw('PostToolUse', { tool_name: 'patch', success: false }));
-
-      expect((result!.payload as { success?: boolean }).success).toBe(false);
-    });
-
-    it('leaves success undefined when absent', () => {
-      const result = normalizeCodexHook(makeRaw('PostToolUse', {}));
-
       expect((result!.payload as { success?: boolean }).success).toBeUndefined();
     });
 
@@ -239,8 +227,8 @@ describe('normalizeCodexHook', () => {
       expect(payload.toolName).toBeUndefined();
     });
 
-    it('treats empty-string call_id as absent in PostToolUse', () => {
-      const result = normalizeCodexHook(makeRaw('PostToolUse', { call_id: '' }));
+    it('treats empty-string tool_use_id as absent in PostToolUse', () => {
+      const result = normalizeCodexHook(makeRaw('PostToolUse', { tool_use_id: '' }));
       const payload = result!.payload as { toolCallId?: string };
 
       expect(payload.toolCallId).toBeUndefined();

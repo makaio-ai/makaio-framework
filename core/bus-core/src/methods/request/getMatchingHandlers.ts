@@ -57,18 +57,39 @@ export function getMatchingHandlers(
  * single process lifetime but is not guaranteed to be consistent across restarts.
  * @param context - Bus context containing remote handler registry
  * @param fullSubjectKey - Subject to match against
+ * @param excludeFirstHopOnly - Whether to omit routes that may serve only direct ingress
  * @returns Array of matching remote entries sorted by priority (highest first)
  */
 export function getMatchingRemoteEntries(
   context: MakaioBusContext,
   fullSubjectKey: string,
+  excludeFirstHopOnly = false,
 ): Array<{ transport: string; priority: number }> {
   const { remoteRequestHandlers } = context;
   const result: Array<{ transport: string; priority: number }> = [];
+  const blockedTransports = new Set<string>();
+  const seenRoutes = new Set<string>();
+
+  if (excludeFirstHopOnly) {
+    for (const [pattern, deliveryByTransport] of context.remoteSubscriptionDeliveryClasses) {
+      if (!matchesSubscription(fullSubjectKey, pattern)) continue;
+      for (const [transport, deliveryClass] of deliveryByTransport) {
+        if (deliveryClass !== 'relayable') blockedTransports.add(transport);
+      }
+    }
+  }
 
   for (const [pattern, entries] of remoteRequestHandlers) {
     if (matchesSubscription(fullSubjectKey, pattern)) {
-      result.push(...entries);
+      for (const entry of entries) {
+        if (blockedTransports.has(entry.transport)) continue;
+        if (excludeFirstHopOnly && !context.remoteSubscriptionDeliveryClasses.get(pattern)?.has(entry.transport))
+          continue;
+        const routeKey = `${entry.transport}\0${entry.priority}`;
+        if (seenRoutes.has(routeKey)) continue;
+        seenRoutes.add(routeKey);
+        result.push(entry);
+      }
     }
   }
 

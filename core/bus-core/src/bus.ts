@@ -58,6 +58,7 @@ export const createBusContext = (): MakaioBusContext => {
     namespaceRegistry,
     remoteRequestHandlers: new Map(),
     remoteEventHandlers: new Map(),
+    remoteSubscriptionDeliveryClasses: new Map(),
   };
 
   context.transportRegistry = createTransportRegistry(context);

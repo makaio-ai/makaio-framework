@@ -13,6 +13,7 @@ describe('relay envelope helpers', () => {
     const message: BusMessage = {
       type: 'subscribe',
       subjects: { 'agent.*': [] },
+      deliveryClasses: { 'agent.*': 'relayable' },
       filters: {
         'agent.*': { agentId: 'agent-1' },
       },

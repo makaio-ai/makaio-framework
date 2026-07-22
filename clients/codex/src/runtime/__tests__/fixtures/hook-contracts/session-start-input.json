@@ -1,0 +1,9 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-5",
+  "permission_mode": "default",
+  "session_id": "fixture-session",
+  "source": "startup",
+  "transcript_path": null
+}

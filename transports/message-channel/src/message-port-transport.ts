@@ -24,6 +24,7 @@ import type {
   BusSubscribeMessage,
   BusUnsubscribeMessage,
   BusTransport,
+  SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -60,8 +61,14 @@ export interface MessagePortTransport extends BusTransport {
    * @param filter - Optional payload filter for server-side smart-routing
    * @param priorities - Handler priorities registered for this subject; an
    *   empty array signals event-only handlers
+   * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer
    */
-  subscribe(subject: string, filter?: PayloadFilter, priorities?: number[]): Promise<void>;
+  subscribe(
+    subject: string,
+    filter?: PayloadFilter,
+    priorities?: number[],
+    deliveryClass?: SubscriptionDeliveryClass,
+  ): Promise<void>;
 
   /**
    * Unsubscribe from a subject on the remote peer.
@@ -130,6 +137,9 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
   // Track the filter last sent for each subscribed subject so that
   // priority-only re-subscriptions (filter === undefined) preserve it.
   const localFilters = new Map<string, PayloadFilter | undefined>();
+
+  // Track delivery semantics so priority-only re-subscriptions preserve them.
+  const localDeliveryClasses = new Map<string, SubscriptionDeliveryClass>();
 
   /** Stored reference to the current message handler for cleanup. */
   let messageHandler: ((event: MessageEvent) => void) | null = null;
@@ -282,6 +292,7 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
     localSubscriptions.clear();
     localPriorities.clear();
     localFilters.clear();
+    localDeliveryClasses.clear();
 
     if (debug) {
       console.info(`[${transportName}] Disconnected`);
@@ -369,19 +380,29 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
    * @param subject - Subject to subscribe to (may include wildcards)
    * @param filter - Optional payload filter for server-side smart-routing
    * @param priorities - Handler priorities registered for this subject
+   * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer
    * @returns Promise that resolves when the subscribe message is sent
    */
-  async function subscribe(subject: string, filter?: PayloadFilter, priorities?: number[]): Promise<void> {
+  async function subscribe(
+    subject: string,
+    filter?: PayloadFilter,
+    priorities?: number[],
+    deliveryClass?: SubscriptionDeliveryClass,
+  ): Promise<void> {
     // Preserve the existing filter when only priorities change.
     const resolvedFilter = filter ?? localFilters.get(subject);
+
+    const resolvedDeliveryClass = deliveryClass ?? localDeliveryClasses.get(subject) ?? 'relayable';
 
     localSubscriptions.add(subject);
     localPriorities.set(subject, priorities ?? []);
     localFilters.set(subject, resolvedFilter);
+    localDeliveryClasses.set(subject, resolvedDeliveryClass);
 
     const message: BusSubscribeMessage = {
       type: 'subscribe',
       subjects: { [subject]: priorities ?? [] },
+      deliveryClasses: { [subject]: resolvedDeliveryClass },
       ...(resolvedFilter && { filters: { [subject]: resolvedFilter } }),
     };
 
@@ -405,6 +426,7 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
     localSubscriptions.delete(subject);
     localPriorities.delete(subject);
     localFilters.delete(subject);
+    localDeliveryClasses.delete(subject);
 
     const message: BusUnsubscribeMessage = {
       type: 'unsubscribe',

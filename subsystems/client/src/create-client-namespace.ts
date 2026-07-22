@@ -19,7 +19,7 @@
  */
 
 import { MakaioBus } from '@makaio/bus-core';
-import { createBusNamespace, type SchemaRecord } from '@makaio/core';
+import { createBusNamespace, hostLocalRequest, type SchemaRecord } from '@makaio/core';
 import {
   canonicalizeClientId,
   ClientHookHandleResponseSchema,
@@ -68,10 +68,10 @@ function buildClientSubjects<AdditionalSchemas extends SchemaRecord>(
   const namespace = MakaioBus.registerNamespace(
     createBusNamespace(`client:${clientId}`, {
       'hook.received': RawClientHookPayloadSchema,
-      'hook.handle': {
+      'hook.handle': hostLocalRequest({
         request: RawClientHookPayloadSchema,
         response: ClientHookHandleResponseSchema,
-      },
+      }),
       ...additionalSchemas,
     }),
   );

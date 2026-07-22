@@ -41,13 +41,31 @@ is preserved without overwriting a concurrently changed canonical credential.
 
 ### Hook Events
 
-| Hook Name | Framework Subject |
-|-----------|------------------|
-| `SessionStart` | `client.session.started` |
-| `UserPromptSubmit` | `client.session.userPrompt.submitted` |
-| `PreToolUse` | `client.session.tool.pre` |
-| `PostToolUse` | `client.session.tool.post` |
-| `Stop` | `client.session.turn.completed` |
+| Hook Name | Framework Subject | Response Capabilities |
+|-----------|------------------|----------------------|
+| `SessionStart` | `client.session.started` | `context.append`, `openai.codex-hook-response.block` |
+| `UserPromptSubmit` | `client.session.userPrompt.submitted` | `context.append`, `openai.codex-hook-response.block` |
+| `PreToolUse` | `client.session.tool.pre` | `context.append`, `openai.codex-hook-response.block`, `openai.codex-hook-response.permission.deny`, `openai.codex-hook-response.input.update` |
+| `PostToolUse` | `client.session.tool.post` | `context.append`, `openai.codex-hook-response.block` |
+| `Stop` | `client.session.turn.completed` | `openai.codex-hook-response.block` |
+
+All five events synchronously consume JSON output in the pinned upstream source tag `rust-v0.144.1`. Live CLI probes remain pending; the contract only exposes source-accepted fields.
+
+### Hook Response Contract (`openai.codex-hook-response@1`)
+
+The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defines how contributions are validated for Codex:
+
+| Field | Value |
+|-------|-------|
+| `contractId` | `openai.codex-hook-response` |
+| `version` | `1.1.0` |
+| `supportedInteractions` | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` |
+
+**Blockability:** All five events support blocking responses. SessionStart uses `continue: false` with `stopReason`; the other events use their event-specific block form.
+
+**Composition:** Contributions are collected deterministically. Context appends render as `hookSpecificOutput.additionalContext`; blocks use `decision: "block"` with a non-empty reason; PreToolUse additionally supports `permissionDecision: "deny"` and an allowed `updatedInput` rewrite.
+
+See [Client Hook Response Pipeline](../../docs/architecture/client-hook-responses.md) for the full architecture.
 
 ## Native Tools
 
@@ -106,6 +124,8 @@ Capabilities are sourced from `codexCapabilityMap` in `@makaio/contracts`, keepi
 | `CodexClientSubjects` | namespace subjects | Typed bus subjects for `client:codex.*` |
 | `CODEX_CLIENT_NAMESPACE` | `string` | Fully-qualified namespace domain (`'client:codex'`) |
 | `normalizeCodexHook` | function | Normalizes a raw Codex hook payload into a `CodexNormalizedEvent` |
+| `codexProviderContractCatalog` | `ProviderContractCatalogEntry` | Provider contract catalog entry for the `openai.codex-hook-response` contract |
+| `composeCodexHookResponse` | function | Collects and renders source-verified synchronous hook responses |
 
 ### Server entrypoint (`./server`)
 

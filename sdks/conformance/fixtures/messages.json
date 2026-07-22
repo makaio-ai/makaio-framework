@@ -141,42 +141,72 @@
       "type": "subscribe",
       "subjects": {
         "agent.complete": []
+      },
+      "deliveryClasses": {
+        "agent.complete": "relayable"
       }
     },
     "subscribe.agent.complete.updated": {
       "type": "subscribe",
       "subjects": {
         "agent.complete": []
+      },
+      "deliveryClasses": {
+        "agent.complete": "relayable"
       }
     },
     "subscribe.agent.wildcard": {
       "type": "subscribe",
       "subjects": {
         "agent.*": []
+      },
+      "deliveryClasses": {
+        "agent.*": "relayable"
       }
     },
     "subscribe.approval.request": {
       "type": "subscribe",
       "subjects": {
         "approval.request": [250]
+      },
+      "deliveryClasses": {
+        "approval.request": "relayable"
+      }
+    },
+    "subscribe.approval.request.first-hop-only": {
+      "type": "subscribe",
+      "subjects": {
+        "approval.request": [250]
+      },
+      "deliveryClasses": {
+        "approval.request": "first-hop-only"
       }
     },
     "subscribe.approval.request.initial": {
       "type": "subscribe",
       "subjects": {
         "approval.request": [100]
+      },
+      "deliveryClasses": {
+        "approval.request": "relayable"
       }
     },
     "subscribe.approval.request.updated": {
       "type": "subscribe",
       "subjects": {
         "approval.request": [250, 100]
+      },
+      "deliveryClasses": {
+        "approval.request": "relayable"
       }
     },
     "subscribe.approval.request.remaining": {
       "type": "subscribe",
       "subjects": {
         "approval.request": [250]
+      },
+      "deliveryClasses": {
+        "approval.request": "relayable"
       }
     },
     "subscribe-sync-complete": {

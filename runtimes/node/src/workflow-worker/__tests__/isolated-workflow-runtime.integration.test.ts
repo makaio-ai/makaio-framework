@@ -108,6 +108,9 @@ describe('createIsolatedWorkflowRuntime integration', () => {
       readonly makaioHome: string;
       readonly machineId: string;
     }> = [];
+    const runtimeBootConfigured = vi.fn();
+    const runtimeBootCleanup = vi.fn();
+    const processedExtensions: string[] = [];
 
     const repositoryEchoTool = defineTool({
       name: 'repository_echo',
@@ -130,6 +133,17 @@ describe('createIsolatedWorkflowRuntime integration', () => {
             tools: [repositoryEchoTool],
           }),
         ],
+      },
+      runtimeBoot: {
+        configure: ({ registerContributionProcessor }) => {
+          runtimeBootConfigured();
+          registerContributionProcessor({
+            processActivated: async (name) => {
+              processedExtensions.push(name);
+            },
+          });
+          return runtimeBootCleanup;
+        },
       },
       create: (context) => {
         if (context.cwd === undefined) throw new Error('Isolated runtime did not provide extension cwd');
@@ -197,6 +211,8 @@ describe('createIsolatedWorkflowRuntime integration', () => {
         toolsets: [readOnlyFilesystemToolset],
       });
       expect(observedContext).toEqual([{ cwd, makaioHome: '/runtime-makaio-home', machineId: 'isolated-worker-1' }]);
+      expect(runtimeBootConfigured).toHaveBeenCalledOnce();
+      expect(processedExtensions).toContain('test-client-contribution');
       await authority.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
 
       const visible = await runtime.bus.request(SessionSubjects.get, { sessionId: session.sessionId });
@@ -287,6 +303,7 @@ describe('createIsolatedWorkflowRuntime integration', () => {
         await runtime.shutdown();
         await runtime.shutdown();
         expect(disconnectSpy).toHaveBeenCalledOnce();
+        expect(runtimeBootCleanup).toHaveBeenCalledOnce();
         await expect(runtime.bus.request(ToolSubjects.list, {})).rejects.toThrow();
         await expect(runtime.bus.request(SessionSubjects.get, { sessionId: session.sessionId })).rejects.toThrow();
       }

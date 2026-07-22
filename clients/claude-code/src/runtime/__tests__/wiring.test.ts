@@ -666,15 +666,17 @@ describe('applyClaudeCodeWiring', () => {
     ]);
 
     // addHook must have been called once per event with the new 'makaio' command.
+    // All 9 events from the client definition are iterated: 5 stale replacements
+    // plus 4 new events (SubagentStop, Notification, MCPServerStart, MCPServerStop).
     const addCalls = (staleSettings.addHook as ReturnType<typeof vi.fn>).mock.calls as [
       { scope: string; eventName: string; hook: { type: string; command: string } },
     ][];
-    expect(addCalls).toHaveLength(5);
+    expect(addCalls).toHaveLength(9);
     expect(addCalls.every((args) => args[0].hook.command.startsWith('makaio '))).toBe(true);
     expect(addCalls.every((args) => !args[0].hook.command.startsWith('makaio-dev '))).toBe(true);
 
-    // Replacements count as applied (addHook returned added=true), plus the statusline.
-    expect(result.applied).toBe(6);
+    // All 9 hooks applied (addHook returned added=true), plus the statusline = 10.
+    expect(result.applied).toBe(10);
     expect(result.skipped).toBe(0);
 
     for (const eventName of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) {

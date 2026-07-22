@@ -11,6 +11,7 @@ import {
   type BusRequestMessage,
   type BusTransportError,
   type BusTransport,
+  type SubscriptionDeliveryClass,
   getSubjectFromBusMessage,
   CorrelationTracker,
 } from '@makaio/bus-core';
@@ -307,14 +308,28 @@ export class ServerTransport implements BusTransport {
    * @param subject - Subject pattern
    * @param filter - Optional payload filter
    * @param priorities - Handler priorities for priority-based dispatch
+   * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer
    */
-  public async subscribe(subject: string, filter?: PayloadFilter, priorities: number[] = []): Promise<void> {
-    const existingFilter = this.serverSubscriptions.get(subject)?.filter;
+  public async subscribe(
+    subject: string,
+    filter?: PayloadFilter,
+    priorities: number[] = [],
+    deliveryClass?: SubscriptionDeliveryClass,
+  ): Promise<void> {
+    const existing = this.serverSubscriptions.get(subject);
+    const existingFilter = existing?.filter;
     const resolvedFilter = filter ?? existingFilter;
-    this.serverSubscriptions.set(subject, { filter: resolvedFilter, priorities });
+    const resolvedDeliveryClass = deliveryClass ?? existing?.deliveryClass ?? 'relayable';
+    this.serverSubscriptions.set(subject, {
+      filter: resolvedFilter,
+      priorities,
+      deliveryClass: resolvedDeliveryClass,
+    });
 
     if (this.registry.size > 0) {
-      const message = buildSubscribeMessage(new Map([[subject, { filter: resolvedFilter, priorities }]]));
+      const message = buildSubscribeMessage(
+        new Map([[subject, { filter: resolvedFilter, priorities, deliveryClass: resolvedDeliveryClass }]]),
+      );
       const serialized = JSON.stringify(message);
       for (const client of this.registry.getReadyClients()) {
         this.sendToClientSafely(client, serialized);

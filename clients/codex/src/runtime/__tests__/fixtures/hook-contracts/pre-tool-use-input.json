@@ -1,0 +1,14 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5",
+  "permission_mode": "default",
+  "session_id": "fixture-session",
+  "tool_input": {
+    "command": "echo fixture"
+  },
+  "tool_name": "Bash",
+  "tool_use_id": "fixture-tool-use",
+  "transcript_path": null,
+  "turn_id": "fixture-turn"
+}

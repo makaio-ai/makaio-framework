@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar, Union
+from typing import Any, Generic, Literal, Protocol, TypeVar, Union
 
 T = TypeVar("T")
 Req = TypeVar("Req")
 Res = TypeVar("Res")
 
 JSONValue = Any
+
+SubscriptionDeliveryClass = Literal["relayable", "first-hop-only"]
 
 
 class EventSubject(Generic[T]):

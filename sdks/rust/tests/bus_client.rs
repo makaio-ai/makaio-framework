@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use makaio_sdk::bus::{
     AuthMode, BroadcastResponseMessage, BusClientOptions, BusMessage, BusTransportError,
     DispatchMode, EventMessage, HeartbeatMessage, RequestMessage, RequestOptions, ResponseMessage,
-    SubscribeMessage, UnsubscribeMessage,
+    SubscribeMessage, SubscriptionDeliveryClass, UnsubscribeMessage,
 };
 use makaio_sdk::generated::subjects::{self, SubjectKind, SUBJECTS};
 use makaio_sdk::{BusClient, BusClientError};
@@ -82,6 +82,38 @@ fn serializes_and_deserializes_wire_envelopes() {
         serde_json::to_value(BusMessage::SubscribeSyncComplete {})
             .expect("sync complete should serialize"),
         json!({ "type": "subscribe-sync-complete" })
+    );
+
+    let subscribe = serde_json::from_value::<BusMessage>(json!({
+        "type": "subscribe",
+        "subjects": { "tool.list": [100] },
+        "deliveryClasses": { "tool.list": "first-hop-only" },
+    }))
+    .expect("subscribe envelope should deserialize");
+    assert_eq!(
+        subscribe,
+        BusMessage::Subscribe(SubscribeMessage {
+            subjects: BTreeMap::from([("tool.list".to_string(), vec![100])]),
+            delivery_classes: BTreeMap::from([(
+                "tool.list".to_string(),
+                SubscriptionDeliveryClass::FirstHopOnly,
+            )]),
+            filters: None,
+        })
+    );
+
+    let legacy_subscribe = serde_json::from_value::<BusMessage>(json!({
+        "type": "subscribe",
+        "subjects": { "tool.list": [100] },
+    }))
+    .expect("legacy subscribe envelope should deserialize");
+    assert_eq!(
+        legacy_subscribe,
+        BusMessage::Subscribe(SubscribeMessage {
+            subjects: BTreeMap::from([("tool.list".to_string(), vec![100])]),
+            delivery_classes: BTreeMap::new(),
+            filters: None,
+        })
     );
 }
 
@@ -195,6 +227,7 @@ async fn subscribe_and_emit_use_expected_event_framing() {
             "subjects": {
                 "agent.message": [],
             },
+            "deliveryClasses": { "agent.message": "relayable" },
         })
     );
 
@@ -206,6 +239,75 @@ async fn subscribe_and_emit_use_expected_event_framing() {
     assert!(event["messageId"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn explicit_delivery_classes_are_advertised_and_same_subject_conflicts_fail_closed() {
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let server = serve_once(move |mut ws| async move {
+        while let Some(Ok(message)) = ws.next().await {
+            if let Some(value) = wire_value(message) {
+                seen_tx.send(value).expect("wire frame should be sent");
+            }
+        }
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let mut event_subscription = bus
+        .subscribe_with_delivery_class(
+            subjects::tool::EXECUTE,
+            SubscriptionDeliveryClass::FirstHopOnly,
+            |_| async {},
+        )
+        .await
+        .expect("first-hop event subscription should register");
+
+    assert_eq!(
+        next_seen_value(&mut seen_rx).await,
+        json!({
+            "type": "subscribe",
+            "subjects": { "tool.execute": [] },
+            "deliveryClasses": { "tool.execute": "first-hop-only" },
+        })
+    );
+
+    let _request_handler = bus
+        .on_request_with_priority_and_delivery_class(
+            subjects::tool::EXECUTE,
+            10,
+            SubscriptionDeliveryClass::Relayable,
+            |_| async { Ok(json!({ "ok": true })) },
+        )
+        .await
+        .expect("relayable request handler should register");
+
+    assert_eq!(
+        next_seen_value(&mut seen_rx).await,
+        json!({
+            "type": "subscribe",
+            "subjects": { "tool.execute": [10] },
+            "deliveryClasses": { "tool.execute": "first-hop-only" },
+        })
+    );
+
+    event_subscription
+        .unsubscribe()
+        .await
+        .expect("event subscription should unregister");
+    assert_eq!(
+        next_seen_value(&mut seen_rx).await,
+        json!({
+            "type": "subscribe",
+            "subjects": { "tool.execute": [10] },
+            "deliveryClasses": { "tool.execute": "relayable" },
+        })
+    );
 
     bus.close().await.expect("client should close");
     server.assert_completed().await;
@@ -508,9 +610,10 @@ async fn global_wildcard_subscription_is_publicly_supported() {
             serde_json::to_value(subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "*": [],
-                },
+            "subjects": {
+                "*": [],
+            },
+            "deliveryClasses": { "*": "relayable" },
             })
         );
 
@@ -561,9 +664,10 @@ async fn namespace_wildcard_subscription_dispatches_child_namespace_events() {
             serde_json::to_value(subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "adapter:*": [],
-                },
+            "subjects": {
+                "adapter:*": [],
+            },
+            "deliveryClasses": { "adapter:*": "relayable" },
             })
         );
 
@@ -859,6 +963,7 @@ async fn request_uses_local_handler_before_remote_transport_by_default() {
             "subjects": {
                 "tool.list": [0],
             },
+            "deliveryClasses": { "tool.list": "relayable" },
         })
     );
     assert!(
@@ -880,9 +985,10 @@ async fn remote_dispatch_mode_forwards_request_even_when_local_handler_exists() 
             serde_json::to_value(subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.list": [0],
-                },
+            "subjects": {
+                "tool.list": [0],
+            },
+            "deliveryClasses": { "tool.list": "relayable" },
             })
         );
 
@@ -1068,6 +1174,7 @@ async fn same_priority_request_handlers_chain_fifo_and_advertise_duplicates() {
             "subjects": {
                 "tool.list": [10],
             },
+            "deliveryClasses": { "tool.list": "relayable" },
         })
     );
     assert_eq!(
@@ -1077,6 +1184,7 @@ async fn same_priority_request_handlers_chain_fifo_and_advertise_duplicates() {
             "subjects": {
                 "tool.list": [10, 10],
             },
+            "deliveryClasses": { "tool.list": "relayable" },
         })
     );
 
@@ -1194,6 +1302,10 @@ async fn advertised_higher_priority_remote_handler_runs_before_local_handler() {
             &mut ws,
             BusMessage::Subscribe(SubscribeMessage {
                 subjects: BTreeMap::from([(subjects::tool::LIST.to_string(), vec![100])]),
+                delivery_classes: BTreeMap::from([(
+                    subjects::tool::LIST.to_string(),
+                    SubscriptionDeliveryClass::FirstHopOnly,
+                )]),
                 filters: None,
             }),
         )
@@ -1205,9 +1317,10 @@ async fn advertised_higher_priority_remote_handler_runs_before_local_handler() {
             serde_json::to_value(local_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.list": [0],
-                },
+            "subjects": {
+                "tool.list": [0],
+            },
+            "deliveryClasses": { "tool.list": "relayable" },
             })
         );
 
@@ -1274,6 +1387,7 @@ async fn remote_unsubscribe_preserves_remaining_advertised_priorities() {
             &mut ws,
             BusMessage::Subscribe(SubscribeMessage {
                 subjects: BTreeMap::from([(subjects::tool::LIST.to_string(), vec![300, 100])]),
+                delivery_classes: BTreeMap::new(),
                 filters: None,
             }),
         )
@@ -1285,9 +1399,10 @@ async fn remote_unsubscribe_preserves_remaining_advertised_priorities() {
             serde_json::to_value(local_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.list": [50],
-                },
+            "subjects": {
+                "tool.list": [50],
+            },
+            "deliveryClasses": { "tool.list": "relayable" },
             })
         );
 
@@ -1351,6 +1466,7 @@ async fn local_first_interleaves_remote_priority_between_local_handlers() {
             &mut ws,
             BusMessage::Subscribe(SubscribeMessage {
                 subjects: BTreeMap::from([(subjects::tool::LIST.to_string(), vec![7])]),
+                delivery_classes: BTreeMap::new(),
                 filters: None,
             }),
         )
@@ -1362,9 +1478,10 @@ async fn local_first_interleaves_remote_priority_between_local_handlers() {
             serde_json::to_value(first_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.list": [8],
-                },
+            "subjects": {
+                "tool.list": [8],
+            },
+            "deliveryClasses": { "tool.list": "relayable" },
             })
         );
         let second_subscribe = read_bus_message(&mut ws).await;
@@ -1372,9 +1489,10 @@ async fn local_first_interleaves_remote_priority_between_local_handlers() {
             serde_json::to_value(second_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.list": [8, 6],
-                },
+            "subjects": {
+                "tool.list": [8, 6],
+            },
+            "deliveryClasses": { "tool.list": "relayable" },
             })
         );
 
@@ -1524,6 +1642,7 @@ async fn request_handler_priority_snapshots_update_and_remove_priorities() {
             "subjects": {
                 "tool.execute": [100],
             },
+            "deliveryClasses": { "tool.execute": "relayable" },
         })
     );
     assert_eq!(
@@ -1533,6 +1652,7 @@ async fn request_handler_priority_snapshots_update_and_remove_priorities() {
             "subjects": {
                 "tool.execute": [250, 100],
             },
+            "deliveryClasses": { "tool.execute": "relayable" },
         })
     );
 
@@ -1547,6 +1667,7 @@ async fn request_handler_priority_snapshots_update_and_remove_priorities() {
             "subjects": {
                 "tool.execute": [250],
             },
+            "deliveryClasses": { "tool.execute": "relayable" },
         })
     );
 
@@ -1577,9 +1698,10 @@ async fn request_handler_priority_cursor_dispatch_selects_highest_lower_priority
             serde_json::to_value(first_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "approval.request": [100],
-                },
+            "subjects": {
+                "approval.request": [100],
+            },
+            "deliveryClasses": { "approval.request": "relayable" },
             })
         );
 
@@ -1588,9 +1710,10 @@ async fn request_handler_priority_cursor_dispatch_selects_highest_lower_priority
             serde_json::to_value(second_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "approval.request": [250, 100],
-                },
+            "subjects": {
+                "approval.request": [250, 100],
+            },
+            "deliveryClasses": { "approval.request": "relayable" },
             })
         );
 
@@ -1699,6 +1822,7 @@ async fn removing_last_request_handler_keeps_event_subscription_advertised() {
             "subjects": {
                 "tool.execute": [],
             },
+            "deliveryClasses": { "tool.execute": "relayable" },
         })
     );
     assert_eq!(
@@ -1708,6 +1832,7 @@ async fn removing_last_request_handler_keeps_event_subscription_advertised() {
             "subjects": {
                 "tool.execute": [10],
             },
+            "deliveryClasses": { "tool.execute": "relayable" },
         })
     );
 
@@ -1722,6 +1847,7 @@ async fn removing_last_request_handler_keeps_event_subscription_advertised() {
             "subjects": {
                 "tool.execute": [],
             },
+            "deliveryClasses": { "tool.execute": "relayable" },
         })
     );
 
@@ -1738,9 +1864,10 @@ async fn request_handler_registration_sends_result_response() {
             serde_json::to_value(subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.execute": [0],
-                },
+            "subjects": {
+                "tool.execute": [0],
+            },
+            "deliveryClasses": { "tool.execute": "relayable" },
             })
         );
 
@@ -1835,9 +1962,10 @@ async fn same_priority_request_handler_registration_updates_snapshot() {
             serde_json::to_value(first_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.execute": [0],
-                },
+            "subjects": {
+                "tool.execute": [0],
+            },
+            "deliveryClasses": { "tool.execute": "relayable" },
             })
         );
 
@@ -1846,9 +1974,10 @@ async fn same_priority_request_handler_registration_updates_snapshot() {
             serde_json::to_value(second_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "tool.execute": [0, 0],
-                },
+            "subjects": {
+                "tool.execute": [0, 0],
+            },
+            "deliveryClasses": { "tool.execute": "relayable" },
             })
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -2070,9 +2199,10 @@ async fn reconnect_replays_local_subscriptions() {
             serde_json::to_value(first_event_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "agent.message": [],
-                },
+            "subjects": {
+                "agent.message": [],
+            },
+            "deliveryClasses": { "agent.message": "first-hop-only" },
             })
         );
 
@@ -2081,10 +2211,14 @@ async fn reconnect_replays_local_subscriptions() {
             serde_json::to_value(first_request_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "agent.message": [],
-                    "approval.request": [100],
-                },
+            "subjects": {
+                "agent.message": [],
+                "approval.request": [100],
+            },
+            "deliveryClasses": {
+                "agent.message": "first-hop-only",
+                "approval.request": "relayable",
+            },
             })
         );
 
@@ -2101,10 +2235,14 @@ async fn reconnect_replays_local_subscriptions() {
             serde_json::to_value(replay_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
-                "subjects": {
-                    "agent.message": [],
-                    "approval.request": [100],
-                },
+            "subjects": {
+                "agent.message": [],
+                "approval.request": [100],
+            },
+            "deliveryClasses": {
+                "agent.message": "first-hop-only",
+                "approval.request": "relayable",
+            },
             })
         );
 
@@ -2158,14 +2296,18 @@ async fn reconnect_replays_local_subscriptions() {
         .expect("client should connect");
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Value>();
     let _event_subscription = bus
-        .subscribe(subjects::agent::MESSAGE, move |event| {
-            let event_tx = event_tx.clone();
-            async move {
-                event_tx
-                    .send(event.payload)
-                    .expect("event should be delivered");
-            }
-        })
+        .subscribe_with_delivery_class(
+            subjects::agent::MESSAGE,
+            SubscriptionDeliveryClass::FirstHopOnly,
+            move |event| {
+                let event_tx = event_tx.clone();
+                async move {
+                    event_tx
+                        .send(event.payload)
+                        .expect("event should be delivered");
+                }
+            },
+        )
         .await
         .expect("event subscription should register");
     let _approval_handler = bus

@@ -254,7 +254,14 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         await self.client.subscribe(subjects.AGENT_STARTED, handler)
 
         subscribe_frame = await self.websocket.wait_sent(1)
-        self.assertEqual(subscribe_frame, {"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}})
+        self.assertEqual(
+            subscribe_frame,
+            {
+                "type": "subscribe",
+                "subjects": {subjects.AGENT_STARTED: []},
+                "deliveryClasses": {subjects.AGENT_STARTED: "relayable"},
+            },
+        )
 
         await self.client.emit(subjects.AGENT_STARTED, {"agentId": "agent-1"})
         payload, message = await asyncio.wait_for(received, timeout=1)
@@ -350,6 +357,97 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
                 start_mode="fresh",
             ),
         )
+
+    async def test_first_hop_only_subscription_is_advertised_and_replayed(self):
+        initial_websocket = FakeWebSocket()
+        reconnect_websocket = FakeWebSocket()
+        websockets = iter((initial_websocket, reconnect_websocket))
+        client = BusClient(
+            "ws://test", websocket_factory=lambda url: next(websockets)
+        )
+        await client.connect()
+
+        async def handler(ctx: RequestContext):
+            ctx.set_result({"action": "allow"})
+
+        await client.on_request(
+            subjects.APPROVAL_REQUEST,
+            handler,
+            priority=250,
+            delivery_class="first-hop-only",
+        )
+
+        expected = conformance_message(
+            "subscribe.approval.request.first-hop-only"
+        )
+        self.assertEqual(await initial_websocket.wait_sent(1), expected)
+
+        await client.reconnect()
+
+        self.assertEqual(await reconnect_websocket.wait_sent(1), expected)
+        await client.close()
+
+    async def test_event_subscription_accepts_first_hop_only_delivery_class(self):
+        async def handler(ctx: EventContext):
+            pass
+
+        await self.client.subscribe(
+            subjects.AGENT_STARTED,
+            handler,
+            delivery_class="first-hop-only",
+        )
+
+        self.assertEqual(
+            await self.websocket.wait_sent(1),
+            {
+                "type": "subscribe",
+                "subjects": {subjects.AGENT_STARTED: []},
+                "deliveryClasses": {
+                    subjects.AGENT_STARTED: "first-hop-only"
+                },
+            },
+        )
+
+    async def test_first_hop_only_wins_conflicting_handler_delivery_classes(self):
+        async def handler(ctx: RequestContext):
+            ctx.set_result({"action": "allow"})
+
+        await self.client.on_request(
+            subjects.APPROVAL_REQUEST,
+            handler,
+            priority=100,
+        )
+        await self.websocket.wait_sent(1)
+
+        restricted = await self.client.on_request(
+            subjects.APPROVAL_REQUEST,
+            handler,
+            priority=250,
+            delivery_class="first-hop-only",
+        )
+        restricted_frame = await self.websocket.wait_sent(2)
+        self.assertEqual(
+            restricted_frame["deliveryClasses"],
+            {subjects.APPROVAL_REQUEST: "first-hop-only"},
+        )
+
+        await restricted.close()
+        relaxed_frame = await self.websocket.wait_sent(3)
+        self.assertEqual(
+            relaxed_frame["deliveryClasses"],
+            {subjects.APPROVAL_REQUEST: "relayable"},
+        )
+
+    async def test_subscribe_rejects_unknown_delivery_class(self):
+        async def handler(ctx: EventContext):
+            pass
+
+        with self.assertRaisesRegex(ValueError, "delivery_class"):
+            await self.client.subscribe(
+                subjects.AGENT_STARTED,
+                handler,
+                delivery_class="unknown",
+            )
 
     async def test_request_response_correlation(self):
         request_task = asyncio.create_task(self.client.request(subjects.TOOL_LIST, {"scope": "workspace"}))
@@ -593,6 +691,10 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
                         subjects.AGENT_STARTED: [],
                         subjects.APPROVAL_REQUEST: [100],
                     },
+                    "deliveryClasses": {
+                        subjects.AGENT_STARTED: "relayable",
+                        subjects.APPROVAL_REQUEST: "relayable",
+                    },
                 }
             ],
         )
@@ -647,7 +749,13 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             reconnect_websocket.sent,
-            [{"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}}],
+            [
+                {
+                    "type": "subscribe",
+                    "subjects": {subjects.AGENT_STARTED: []},
+                    "deliveryClasses": {subjects.AGENT_STARTED: "relayable"},
+                }
+            ],
         )
         await client.close()
 
@@ -669,7 +777,13 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             reconnect_websocket.sent,
-            [{"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}}],
+            [
+                {
+                    "type": "subscribe",
+                    "subjects": {subjects.AGENT_STARTED: []},
+                    "deliveryClasses": {subjects.AGENT_STARTED: "relayable"},
+                }
+            ],
         )
         await client.close()
 
@@ -786,7 +900,13 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         await client.reconnect()
         self.assertEqual(
             reconnect_websocket.sent,
-            [{"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}}],
+            [
+                {
+                    "type": "subscribe",
+                    "subjects": {subjects.AGENT_STARTED: []},
+                    "deliveryClasses": {subjects.AGENT_STARTED: "relayable"},
+                }
+            ],
         )
 
         await client._mark_connection_closed("stale socket closed", transport=initial_transport)
@@ -984,15 +1104,36 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         first = await self.client.on_request(subjects.TOOL_EXECUTE, first_handler, priority=10)
         first_subscribe = await self.websocket.wait_sent(1)
-        self.assertEqual(first_subscribe, {"type": "subscribe", "subjects": {subjects.TOOL_EXECUTE: [10]}})
+        self.assertEqual(
+            first_subscribe,
+            {
+                "type": "subscribe",
+                "subjects": {subjects.TOOL_EXECUTE: [10]},
+                "deliveryClasses": {subjects.TOOL_EXECUTE: "relayable"},
+            },
+        )
 
         second = await self.client.on_request(subjects.TOOL_EXECUTE, second_handler, priority=5)
         second_subscribe = await self.websocket.wait_sent(2)
-        self.assertEqual(second_subscribe, {"type": "subscribe", "subjects": {subjects.TOOL_EXECUTE: [10, 5]}})
+        self.assertEqual(
+            second_subscribe,
+            {
+                "type": "subscribe",
+                "subjects": {subjects.TOOL_EXECUTE: [10, 5]},
+                "deliveryClasses": {subjects.TOOL_EXECUTE: "relayable"},
+            },
+        )
 
         await first.close()
         replacement_subscribe = await self.websocket.wait_sent(3)
-        self.assertEqual(replacement_subscribe, {"type": "subscribe", "subjects": {subjects.TOOL_EXECUTE: [5]}})
+        self.assertEqual(
+            replacement_subscribe,
+            {
+                "type": "subscribe",
+                "subjects": {subjects.TOOL_EXECUTE: [5]},
+                "deliveryClasses": {subjects.TOOL_EXECUTE: "relayable"},
+            },
+        )
 
         await second.close()
         unsubscribe_frame = await self.websocket.wait_sent(4)
@@ -1060,11 +1201,28 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         await self.client.subscribe("*", global_handler)
         first_subscribe = await self.websocket.wait_sent(1)
-        self.assertEqual(first_subscribe, {"type": "subscribe", "subjects": {"*": []}})
+        self.assertEqual(
+            first_subscribe,
+            {
+                "type": "subscribe",
+                "subjects": {"*": []},
+                "deliveryClasses": {"*": "relayable"},
+            },
+        )
 
         await self.client.subscribe("adapter:*", adapter_handler)
         second_subscribe = await self.websocket.wait_sent(2)
-        self.assertEqual(second_subscribe, {"type": "subscribe", "subjects": {"*": [], "adapter:*": []}})
+        self.assertEqual(
+            second_subscribe,
+            {
+                "type": "subscribe",
+                "subjects": {"*": [], "adapter:*": []},
+                "deliveryClasses": {
+                    "*": "relayable",
+                    "adapter:*": "relayable",
+                },
+            },
+        )
 
         await self.websocket.receive(
             {
@@ -1110,7 +1268,14 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         await first.close()
         replacement_frame = await self.websocket.wait_sent(3)
-        self.assertEqual(replacement_frame, {"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}})
+        self.assertEqual(
+            replacement_frame,
+            {
+                "type": "subscribe",
+                "subjects": {subjects.AGENT_STARTED: []},
+                "deliveryClasses": {subjects.AGENT_STARTED: "relayable"},
+            },
+        )
 
         await self.websocket.receive(
             {
@@ -1285,7 +1450,14 @@ class ConnectLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
         await client.connect()
         subscribe_frame = await working_websocket.wait_sent(1)
-        self.assertEqual(subscribe_frame, {"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}})
+        self.assertEqual(
+            subscribe_frame,
+            {
+                "type": "subscribe",
+                "subjects": {subjects.AGENT_STARTED: []},
+                "deliveryClasses": {subjects.AGENT_STARTED: "relayable"},
+            },
+        )
 
         await client.close()
 

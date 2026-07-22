@@ -21,7 +21,7 @@ import { deserializeTransportError } from '@makaio/bus-core';
 import { isRecord } from '@makaio/utils';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
-import type { ClientRegistry } from './client-registry.js';
+import type { ClientRegistry, ClientSubscriptionUpdate } from './client-registry.js';
 import type { TransportReceiveContext } from '@makaio/core';
 
 /**
@@ -44,6 +44,22 @@ export interface MessageHandlerDeps {
   sendSafely: (client: WebSocketLike, data: string) => void;
   /** Enable debug logging. */
   debug: boolean;
+}
+
+/**
+ * Validate the priority arrays carried by subscription control messages.
+ * @param value - Untrusted subjects payload
+ * @returns True when every subject maps to finite numeric priorities
+ */
+function isSubscriptionSubjects(value: unknown): value is Record<string, number[]> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (priorities) =>
+        Array.isArray(priorities) &&
+        priorities.every((priority) => typeof priority === 'number' && Number.isFinite(priority)),
+    )
+  );
 }
 
 /**
@@ -76,6 +92,29 @@ async function invokeHandlers(
   }
 
   return results.every((result) => result.status === 'fulfilled');
+}
+
+/**
+ * Dispatch authoritative transport-level subscription updates in order.
+ * @param updates - Aggregate control messages produced by the client registry
+ * @param handlers - Registered bus handlers
+ * @param options - Dispatch and logging context
+ * @returns True when every update reached every handler successfully
+ */
+export async function invokeSubscriptionUpdates(
+  updates: ClientSubscriptionUpdate[],
+  handlers: Set<BusReceiveHandler>,
+  options: {
+    debug: boolean;
+    receiveContext?: TransportReceiveContext;
+    logContext?: string;
+  },
+): Promise<boolean> {
+  let allApplied = true;
+  for (const update of updates) {
+    if (!(await invokeHandlers(update, handlers, options))) allApplied = false;
+  }
+  return allApplied;
 }
 
 /**
@@ -145,12 +184,12 @@ export async function routeMessage(
   // priority-based dispatch.
   if (message.type === 'subscribe') {
     const subscribeMessage = message as BusSubscribeMessage;
-    if (!isRecord(subscribeMessage.subjects)) {
+    if (!isSubscriptionSubjects(subscribeMessage.subjects)) {
       if (debug) console.warn('[ServerTransport] Malformed subscribe message: missing subjects record');
       return;
     }
-    registry.handleSubscribeMessage(socket, subscribeMessage);
-    const handlersApplied = await invokeHandlers(subscribeMessage, handlers, {
+    const updates = registry.handleSubscribeMessage(socket, subscribeMessage);
+    const handlersApplied = await invokeSubscriptionUpdates(updates, handlers, {
       debug,
       receiveContext,
       logContext: 'dispatching subscribe',
@@ -163,12 +202,12 @@ export async function routeMessage(
 
   if (message.type === 'unsubscribe') {
     const unsubscribeMessage = message as BusUnsubscribeMessage;
-    if (!isRecord(unsubscribeMessage.subjects)) {
+    if (!isSubscriptionSubjects(unsubscribeMessage.subjects)) {
       if (debug) console.warn('[ServerTransport] Malformed unsubscribe message: missing subjects record');
       return;
     }
-    registry.handleUnsubscribeMessage(socket, unsubscribeMessage.subjects);
-    const handlersApplied = await invokeHandlers(unsubscribeMessage, handlers, {
+    const updates = registry.handleUnsubscribeMessage(socket, unsubscribeMessage.subjects);
+    const handlersApplied = await invokeSubscriptionUpdates(updates, handlers, {
       debug,
       receiveContext,
       logContext: 'dispatching unsubscribe',

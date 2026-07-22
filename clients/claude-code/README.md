@@ -40,17 +40,42 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 
 ### Hook Events
 
-| Hook Name | Framework Subject |
-|-----------|------------------|
-| `SessionStart` | `client.session.started` |
-| `UserPromptSubmit` | `client.session.userPrompt.submitted` |
-| `PreToolUse` | `client.session.tool.pre` |
-| `PostToolUse` | `client.session.tool.post` |
-| `Stop` | `client.session.turn.completed` |
-| `SubagentStop` | _(no framework subject — not normalized)_ |
-| `Notification` | _(no framework subject — not normalized)_ |
-| `MCPServerStart` | _(no framework subject — not normalized)_ |
-| `MCPServerStop` | _(no framework subject — not normalized)_ |
+| Hook Name | Framework Subject | Response Capabilities |
+|-----------|------------------|----------------------|
+| `SessionStart` | `client.session.started` | *(none)* |
+| `UserPromptSubmit` | `client.session.userPrompt.submitted` | *(none)* |
+| `PreToolUse` | `client.session.tool.pre` | `approve`, `deny`, `context.append` |
+| `PostToolUse` | `client.session.tool.post` | *(none)* |
+| `Stop` | `client.session.turn.completed` | *(none)* |
+| `SubagentStop` | _(no framework subject --- not normalized)_ | *(none)* |
+| `Notification` | _(no framework subject --- not normalized)_ | *(none)* |
+| `MCPServerStart` | _(no framework subject --- not normalized)_ | *(none)* |
+| `MCPServerStop` | _(no framework subject --- not normalized)_ | *(none)* |
+
+Only `PreToolUse` declares response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); `PreToolUse` uses `makaio hook handle` (request/response) and produces a native `hookSpecificOutput` JSON response.
+
+### Hook Response Contract (`claude-code.tool-response@1`)
+
+The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defines how contributions are validated and composed for Claude Code:
+
+| Field | Value |
+|-------|-------|
+| `contractId` | `claude-code.tool-response` |
+| `version` | `1.0.0` |
+| `supportedInteractions` | `PreToolUse`, `approve`, `deny`, `context.append` |
+
+**Blockability:** `PreToolUse`, `approve`, and `deny` are blockable; `context.append` is not.
+
+**Provider effect builders** (exported from `./runtime`):
+
+| Builder | Decision |
+|---------|----------|
+| `createApproveEffect(reason?)` | `allow` |
+| `createDenyEffect(reason?)` | `deny` |
+
+**Composition:** deny wins over allow (restrictive precedence). Multiple `context.append` effects are concatenated with newlines. When only `context.append` effects are present, the default decision is `allow`. Closed-failure causes a `deny` with the failure detail as reason.
+
+See [Client Hook Response Pipeline](../../docs/architecture/client-hook-responses.md) for the full architecture.
 
 ## Native Tools
 
@@ -155,7 +180,11 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 | `ClaudeCodeClientSubjects` | namespace subjects | Typed bus subjects for `client:claude-code.*` |
 | `normalizeClaudeCodeHook` | function | Normalizes a raw hook payload into an array of `ClaudeCodeNormalizedEvent`s (empty for unknown events) |
 | `resolveClaudeCodeSettingsPaths` | function | Resolves settings file paths from environment + options |
-| `CLAUDE_CODE_HOOK_SESSION_START` … `CLAUDE_CODE_HOOK_MCP_SERVER_STOP` | string constants | Hook event name constants |
+| `CLAUDE_CODE_HOOK_SESSION_START` ... `CLAUDE_CODE_HOOK_MCP_SERVER_STOP` | string constants | Hook event name constants |
+| `claudeCodeToolResponseContract` | `ProviderContractCatalogEntry` | Provider contract catalog entry for the `claude-code.tool-response` contract |
+| `createApproveEffect` | function | Creates a provider contribution envelope with `decision: 'allow'` |
+| `createDenyEffect` | function | Creates a provider contribution envelope with `decision: 'deny'` |
+| `composeHookResponse` | function | Collects contributions from the registry and serializes the native Claude Code response |
 
 ### Server entrypoint (`./server`)
 

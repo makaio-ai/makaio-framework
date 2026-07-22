@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 3,
+  "provider": "codex",
+  "cliVersion": "0.144.1",
+  "scenarioId": "user-prompt-submit-block",
+  "events": [
+    {
+      "eventName": "UserPromptSubmit",
+      "frameworkSubject": "client.session.userPrompt.submitted",
+      "responseCapabilities": [
+        "context.append",
+        "openai.codex-hook-response.block"
+      ],
+      "mode": "request",
+      "candidateExpectedStatus": "supported",
+      "observedStatus": "supported",
+      "sourceExpectedEffects": [
+        "context.append",
+        "openai.codex-hook-response.block"
+      ],
+      "observedEffects": [
+        "openai.codex-hook-response.block"
+      ],
+      "blockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "payloadKeys": [
+        "cwd",
+        "hook_event_name",
+        "model",
+        "permission_mode",
+        "prompt",
+        "session_id",
+        "transcript_path",
+        "turn_id"
+      ],
+      "sentinelInjected": true
+    }
+  ],
+  "oracle": "sentinel-must-block-before-model",
+  "oraclePassed": true,
+  "exitCode": 0
+}

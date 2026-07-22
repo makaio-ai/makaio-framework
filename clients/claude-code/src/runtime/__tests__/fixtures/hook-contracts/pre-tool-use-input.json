@@ -1,0 +1,12 @@
+{
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "cwd": "/workspace",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_use_id": "fixture-tool-use",
+  "tool_input": {
+    "command": "echo hello"
+  }
+}

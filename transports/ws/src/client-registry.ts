@@ -6,7 +6,12 @@
  * messages to interested clients.
  */
 
-import type { BusMessage, BusSubscribeMessage } from '@makaio/bus-core';
+import type {
+  BusMessage,
+  BusSubscribeMessage,
+  BusUnsubscribeMessage,
+  SubscriptionDeliveryClass,
+} from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
 import { shouldReceiveMessage, getSubjectFromBusMessage } from '@makaio/bus-core';
 import type { WebSocketLike } from './types.js';
@@ -18,6 +23,14 @@ export interface ClientRegistryOptions {
   /** Enable debug logging. */
   debug?: boolean;
 }
+
+interface ClientSubscriptionState {
+  priorities: number[];
+  deliveryClass: SubscriptionDeliveryClass;
+}
+
+/** Transport-level subscription updates produced after per-client state changes. */
+export type ClientSubscriptionUpdate = BusSubscribeMessage | BusUnsubscribeMessage;
 
 /**
  * Manages the set of connected WebSocket clients and their per-client state.
@@ -35,6 +48,7 @@ export class ClientRegistry {
   private readonly clients = new Set<WebSocketLike>();
   private readonly authenticatingClients = new Set<WebSocketLike>();
   private readonly clientSubscriptions = new Map<WebSocketLike, Set<string>>();
+  private readonly clientSubscriptionState = new Map<WebSocketLike, Map<string, ClientSubscriptionState>>();
   private readonly clientFilters = new Map<WebSocketLike, Map<string, PayloadFilter>>();
   private readonly debug: boolean;
 
@@ -91,16 +105,21 @@ export class ClientRegistry {
    *
    * Safe to call on sockets that were never fully added (e.g. auth failures).
    * @param socket - The socket to remove
+   * @returns Aggregate subscription updates produced by removing the client
    */
-  public removeClient(socket: WebSocketLike): void {
+  public removeClient(socket: WebSocketLike): ClientSubscriptionUpdate[] {
+    const affectedSubjects = new Set(this.clientSubscriptionState.get(socket)?.keys() ?? []);
     this.clients.delete(socket);
     this.authenticatingClients.delete(socket);
     this.clientSubscriptions.delete(socket);
+    this.clientSubscriptionState.delete(socket);
     this.clientFilters.delete(socket);
 
     if (this.debug) {
       console.info(`[ClientRegistry] Client removed (${this.clients.size} remaining)`);
     }
+
+    return this.buildAggregateUpdates(affectedSubjects);
   }
 
   /**
@@ -135,8 +154,9 @@ export class ClientRegistry {
    * server-side filtering.
    * @param client - The WebSocket client
    * @param message - Subscribe message with subjects and optional filters
+   * @returns Aggregate subscription replacements for the affected subjects
    */
-  public handleSubscribeMessage(client: WebSocketLike, message: BusSubscribeMessage): void {
+  public handleSubscribeMessage(client: WebSocketLike, message: BusSubscribeMessage): ClientSubscriptionUpdate[] {
     let subs = this.clientSubscriptions.get(client);
     if (!subs) {
       subs = new Set();
@@ -144,9 +164,18 @@ export class ClientRegistry {
     }
 
     let filters = this.clientFilters.get(client);
+    let subscriptionState = this.clientSubscriptionState.get(client);
+    if (!subscriptionState) {
+      subscriptionState = new Map();
+      this.clientSubscriptionState.set(client, subscriptionState);
+    }
 
-    for (const [subject] of Object.entries(message.subjects)) {
+    for (const [subject, priorities] of Object.entries(message.subjects)) {
       subs.add(subject);
+      subscriptionState.set(subject, {
+        priorities,
+        deliveryClass: message.deliveryClasses?.[subject] === 'relayable' ? 'relayable' : 'first-hop-only',
+      });
       const newFilter = message.filters?.[subject];
       if (newFilter !== undefined) {
         if (!filters) {
@@ -164,25 +193,34 @@ export class ClientRegistry {
       const filterCount = message.filters ? Object.keys(message.filters).length : 0;
       console.info(`[ClientRegistry] Client subscribed to ${subjectCount} subjects, ${filterCount} filters`);
     }
+
+    return this.buildAggregateUpdates(new Set(Object.keys(message.subjects)));
   }
 
   /**
    * Apply an unsubscribe message to the per-client tracking state.
    * @param client - The WebSocket client
    * @param subjects - Map of subject patterns to priorities being removed
+   * @returns Aggregate replacements or final unsubscriptions for the affected subjects
    */
-  public handleUnsubscribeMessage(client: WebSocketLike, subjects: Record<string, number[]>): void {
+  public handleUnsubscribeMessage(
+    client: WebSocketLike,
+    subjects: Record<string, number[]>,
+  ): ClientSubscriptionUpdate[] {
     const subs = this.clientSubscriptions.get(client);
     const filters = this.clientFilters.get(client);
 
     for (const subject of Object.keys(subjects)) {
       subs?.delete(subject);
+      this.clientSubscriptionState.get(client)?.delete(subject);
       filters?.delete(subject);
     }
 
     if (this.debug) {
       console.info(`[ClientRegistry] Client unsubscribed from ${Object.keys(subjects).length} subjects`);
     }
+
+    return this.buildAggregateUpdates(new Set(Object.keys(subjects)));
   }
 
   // ---------------------------------------------------------------------------
@@ -284,5 +322,46 @@ export class ClientRegistry {
     const subs = this.clientSubscriptions.get(client) ?? new Set<string>();
     const filters = this.clientFilters.get(client) ?? new Map<string, PayloadFilter>();
     return shouldReceiveMessage(subject, payload, subs, filters);
+  }
+
+  /**
+   * Build authoritative transport-level control updates for affected subjects.
+   * @param affectedSubjects - Subjects whose per-client membership changed
+   * @returns Aggregate subscribe replacements and final unsubscriptions
+   */
+  private buildAggregateUpdates(affectedSubjects: Set<string>): ClientSubscriptionUpdate[] {
+    const subjects: Record<string, number[]> = {};
+    const deliveryClasses: Record<string, SubscriptionDeliveryClass> = {};
+    const removedSubjects: Record<string, number[]> = {};
+
+    for (const subject of affectedSubjects) {
+      const priorities = new Set<number>();
+      let hasSubscription = false;
+      let deliveryClass: SubscriptionDeliveryClass = 'relayable';
+
+      for (const subscriptions of this.clientSubscriptionState.values()) {
+        const state = subscriptions.get(subject);
+        if (!state) continue;
+        hasSubscription = true;
+        for (const priority of state.priorities) priorities.add(priority);
+        if (state.deliveryClass === 'first-hop-only') deliveryClass = 'first-hop-only';
+      }
+
+      if (hasSubscription) {
+        subjects[subject] = [...priorities].sort((left, right) => right - left);
+        deliveryClasses[subject] = deliveryClass;
+      } else {
+        removedSubjects[subject] = [];
+      }
+    }
+
+    const updates: ClientSubscriptionUpdate[] = [];
+    if (Object.keys(subjects).length > 0) {
+      updates.push({ type: 'subscribe', subjects, deliveryClasses });
+    }
+    if (Object.keys(removedSubjects).length > 0) {
+      updates.push({ type: 'unsubscribe', subjects: removedSubjects });
+    }
+    return updates;
   }
 }

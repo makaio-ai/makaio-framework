@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 3,
+  "provider": "claude-code",
+  "cliVersion": "2.1.143",
+  "scenarioId": "pre-tool-use-approve",
+  "events": [
+    {
+      "eventName": "PreToolUse",
+      "frameworkSubject": "client.session.tool.pre",
+      "responseCapabilities": [
+        "claude-code.tool-response.approve",
+        "claude-code.tool-response.deny",
+        "context.append"
+      ],
+      "mode": "request",
+      "candidateExpectedStatus": "supported",
+      "observedStatus": "supported",
+      "sourceExpectedEffects": [
+        "claude-code.tool-response.approve",
+        "claude-code.tool-response.deny",
+        "context.append"
+      ],
+      "observedEffects": [
+        "claude-code.tool-response.approve"
+      ],
+      "blockingCapable": true,
+      "managedCommand": "hook handle claude-code",
+      "payloadKeys": [
+        "cwd",
+        "effort",
+        "hook_event_name",
+        "permission_mode",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "sentinelInjected": true
+    }
+  ],
+  "oracle": "sentinel-must-allow-tool",
+  "oraclePassed": true,
+  "exitCode": 1
+}

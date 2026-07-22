@@ -45,6 +45,10 @@ framework runtime.
 ## Fixture Rules
 
 - `subscribe.subjects` is always a `Record<string, number[]>`.
+- `subscribe.deliveryClasses` is always a `Record<string, "relayable" | "first-hop-only">`
+  with one explicit entry for every key in `subscribe.subjects`.
+- When multiple local handlers advertise the same subject, `first-hop-only` wins so the aggregate
+  subscription cannot weaken any handler's relay boundary.
 - `subscribe` messages represent replace semantics for the current local subscription snapshot.
 - `unsubscribe` messages remove the full remaining priority set for a subject when no handlers remain.
 - `subscribe` and `unsubscribe` may carry an optional `ackId`; transports that support dynamic

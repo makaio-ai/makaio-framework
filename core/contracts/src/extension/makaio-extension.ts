@@ -7,6 +7,7 @@ import type { ExtensionRuntimeOwnership } from './extension-runtime-boot.js';
 import type { ExtensionCliContribution } from './extension-cli.js';
 import type {
   AdapterContribution,
+  ExtensionClientHookResponsesContribution,
   ExtensionNamespaceContribution,
   ExtensionSessionEventActionsContribution,
   ExtensionToolsContribution,
@@ -329,6 +330,21 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * is discovery metadata only.
    */
   readonly clients?: readonly ClientDefinition[];
+
+  /**
+   * Client hook response contribution surface for this extension.
+   *
+   * When present, the runtime calls `createContributors(ctx)` once during
+   * extension activation and validates the returned contributor definitions
+   * against the active provider contract catalog before installing them in
+   * the hook response pipeline.
+   *
+   * Contributors declared here respond to client hook events with canonical
+   * effects (e.g. `context.append`) or provider-specific contribution
+   * envelopes. Descriptor metadata is discovery-only; executable callbacks
+   * are not serialized.
+   */
+  readonly clientHookResponses?: ExtensionClientHookResponsesContribution;
 
   // ---------------------------------------------------------------------------
   // Provider contribution surface

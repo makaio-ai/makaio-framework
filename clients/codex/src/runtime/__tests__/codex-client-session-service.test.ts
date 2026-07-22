@@ -144,7 +144,7 @@ describe('CodexClientSessionService', () => {
       await emitRawHook(bus, 'PreToolUse', {
         session_id: 'sess-5',
         tool_name: 'bash',
-        call_id: 'call-1',
+        tool_use_id: 'call-1',
       });
       cleanup();
 
@@ -163,8 +163,8 @@ describe('CodexClientSessionService', () => {
       await emitRawHook(bus, 'PostToolUse', {
         session_id: 'sess-6',
         tool_name: 'bash',
-        call_id: 'call-2',
-        success: true,
+        tool_use_id: 'call-2',
+        tool_response: { output: 'ok' },
       });
       cleanup();
 
@@ -174,7 +174,6 @@ describe('CodexClientSessionService', () => {
         source: 'native-hook',
         toolName: 'bash',
         toolCallId: 'call-2',
-        success: true,
       });
     });
   });
@@ -356,8 +355,13 @@ describe('CodexClientSessionService', () => {
 
       await emitRawHook(bus, 'UserPromptSubmit', { session_id: 'sess-1', prompt: 'hello' });
       await emitRawHook(bus, 'Stop', { session_id: 'sess-1' });
-      await emitRawHook(bus, 'PreToolUse', { session_id: 'sess-1', tool_name: 'bash', call_id: 'c-1' });
-      await emitRawHook(bus, 'PostToolUse', { session_id: 'sess-1', tool_name: 'bash', call_id: 'c-1', success: true });
+      await emitRawHook(bus, 'PreToolUse', { session_id: 'sess-1', tool_name: 'bash', tool_use_id: 'c-1' });
+      await emitRawHook(bus, 'PostToolUse', {
+        session_id: 'sess-1',
+        tool_name: 'bash',
+        tool_use_id: 'c-1',
+        tool_response: { output: 'ok' },
+      });
 
       cleanup();
 

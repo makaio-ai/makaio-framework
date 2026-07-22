@@ -11,6 +11,7 @@ from makaio.types import (
     RequestSubject,
     RequestTimeoutError,
     ServerHealth,
+    SubscriptionDeliveryClass,
     WildcardSubject,
 )
 
@@ -25,6 +26,7 @@ __all__ = [
     "RequestTimeoutError",
     "ServerHealth",
     "Subscription",
+    "SubscriptionDeliveryClass",
     "WildcardSubject",
     "from_wire",
     "probe_health",

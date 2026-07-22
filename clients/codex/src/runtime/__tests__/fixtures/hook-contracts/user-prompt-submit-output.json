@@ -1,0 +1,8 @@
+{
+  "decision": "block",
+  "reason": "fixture prompt rejected",
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "fixture prompt context"
+  }
+}

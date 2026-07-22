@@ -43,6 +43,8 @@ export interface DispatchOptions extends WithReceiveContext {
    * Used when the caller explicitly opts into local-only dispatch (e.g., `transports: []`).
    */
   localOnly?: boolean;
+  /** Exclude remote routes whose owner marked the subscription as first-hop-only. */
+  excludeFirstHopOnlyRemote?: boolean;
 }
 
 /** Outcome of a dispatch attempt. */
@@ -237,6 +239,7 @@ async function executeLocalEntry(
     correlationId: options.correlationId,
     transport: options.transport,
     origin: options.transport ? REMOTE_ORIGIN : LOCAL_ORIGIN,
+    ...(options.deadline !== undefined && { deadline: options.deadline }),
     ...(options.signal !== undefined && { signal: options.signal }),
     setResult: (value) => {
       resultValue = value;
@@ -491,7 +494,11 @@ export async function dispatch(
   const remoteEntries =
     subjectDefinition.$meta.local || options.localOnly
       ? []
-      : resolveRemoteEntries(context, getMatchingRemoteEntries(context, fullSubjectKey), options.allowedTransports);
+      : resolveRemoteEntries(
+          context,
+          getMatchingRemoteEntries(context, fullSubjectKey, options.excludeFirstHopOnlyRemote),
+          options.allowedTransports,
+        );
 
   const merged = buildMergedList(localEntries, remoteEntries);
 
@@ -527,7 +534,7 @@ export async function dispatch(
       // subscribe-sync completes.
       const retryRemote = resolveRemoteEntries(
         context,
-        getMatchingRemoteEntries(context, fullSubjectKey),
+        getMatchingRemoteEntries(context, fullSubjectKey, options.excludeFirstHopOnlyRemote),
         options.allowedTransports,
       );
       const retryMerged = buildMergedList(localEntries, retryRemote);

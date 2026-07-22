@@ -25,6 +25,7 @@ import type {
   BusSubscribeMessage,
   BusTransport,
   BusUnsubscribeMessage,
+  SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
 import {
   CorrelationTracker,
@@ -258,11 +259,18 @@ export class StdioClientTransport implements BusTransport {
    * @param subject - Subject pattern (supports wildcards like `'adapter.*'`)
    * @param filter - Optional payload filter for server-side smart-routing
    * @param priorities - Handler priorities registered for this subject
+   * @param deliveryClass - Whether the subscription may be advertised beyond its direct peer
    */
-  public async subscribe(subject: string, filter?: PayloadFilter, priorities: number[] = []): Promise<void> {
+  public async subscribe(
+    subject: string,
+    filter?: PayloadFilter,
+    priorities: number[] = [],
+    deliveryClass: SubscriptionDeliveryClass = 'relayable',
+  ): Promise<void> {
     const message: BusSubscribeMessage = {
       type: 'subscribe',
       subjects: { [subject]: priorities },
+      deliveryClasses: { [subject]: deliveryClass },
       ...(filter !== undefined ? { filters: { [subject]: filter } } : {}),
     };
     this.writeMessage(message);

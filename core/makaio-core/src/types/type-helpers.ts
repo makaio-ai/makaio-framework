@@ -11,6 +11,7 @@ import type {
   ChannelSubjectSchema,
   DefaultTransportsSubjectSchema,
   EventSchema,
+  HostLocalRequestSubjectSchema,
   LocalSubjectSchema,
   RequestSchema,
   SubjectSchema,
@@ -27,9 +28,11 @@ type UnwrapSchema<S> = S extends { readonly __local: true; readonly schema: infe
     ? Inner
     : S extends { readonly __channel: true; readonly schema: infer Inner }
       ? Inner
-      : S extends { readonly __defaultTransports: TransportRoutingDefault; readonly schema: infer Inner }
+      : S extends { readonly __hostLocalRequest: true; readonly schema: infer Inner }
         ? Inner
-        : S;
+        : S extends { readonly __defaultTransports: TransportRoutingDefault; readonly schema: infer Inner }
+          ? Inner
+          : S;
 
 /**
  * Infer payload type from schema, including subject metadata wrappers.
@@ -71,6 +74,13 @@ export type InferSubjectMeta<S extends SubjectSchema, Ns extends string> = {
   local: S extends LocalSubjectSchema ? true : false;
   /** True when the subject is wrapped with `channelSubject()`. */
   channel: S extends ChannelSubjectSchema ? true : false;
+  /**
+   * True when the subject is wrapped with `hostLocalRequest()`.
+   *
+   * Host-local requests accept direct remote ingress but must never be
+   * relayed onward to other transports after ingress.
+   */
+  hostLocalRequest: S extends HostLocalRequestSubjectSchema ? true : false;
   /** Inferred payload type (request/response pair or event payload). */
   payload: InferSchemaPayload<S>;
   /** The namespace this subject belongs to. */

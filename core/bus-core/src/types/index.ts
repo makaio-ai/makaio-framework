@@ -22,4 +22,5 @@ export type {
   BusBroadcastMessage,
   BusBroadcastResponseMessage,
   BusTransport,
+  SubscriptionDeliveryClass,
 } from './transports.js';

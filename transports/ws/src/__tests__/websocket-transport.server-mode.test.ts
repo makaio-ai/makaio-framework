@@ -48,6 +48,58 @@ class CountingWebSocketServer implements WebSocketServerLike {
 }
 
 describe('Server mode behavior', () => {
+  it('replaces the aggregate until the final client disconnects abruptly', async () => {
+    const wss = new MockWebSocketServer();
+    const transport = new ServerTransport({ websocket: wss });
+    const received: unknown[] = [];
+    transport.onReceive(async (message) => {
+      received.push(message);
+    });
+
+    try {
+      await transport.connect();
+      const clientA = new MockWebSocket();
+      const clientB = new MockWebSocket();
+      wss.simulateConnection(clientA);
+      wss.simulateConnection(clientB);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      clientA.receiveMessage(
+        JSON.stringify({
+          type: 'subscribe',
+          subjects: { 'hook.response': [100] },
+          deliveryClasses: { 'hook.response': 'relayable' },
+        }),
+      );
+      clientB.receiveMessage(
+        JSON.stringify({
+          type: 'subscribe',
+          subjects: { 'hook.response': [200] },
+          deliveryClasses: { 'hook.response': 'first-hop-only' },
+        }),
+      );
+      await vi.waitFor(() => expect(received).toHaveLength(2));
+
+      clientB.terminate();
+
+      await vi.waitFor(() => {
+        expect(received.at(-1)).toEqual({
+          type: 'subscribe',
+          subjects: { 'hook.response': [100] },
+          deliveryClasses: { 'hook.response': 'relayable' },
+        });
+      });
+
+      clientA.terminate();
+
+      await vi.waitFor(() => {
+        expect(received.at(-1)).toEqual({ type: 'unsubscribe', subjects: { 'hook.response': [] } });
+      });
+    } finally {
+      await transport.disconnect();
+    }
+  });
+
   it('manages multiple client connections and broadcasts', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({
@@ -394,6 +446,7 @@ describe('Server mode behavior', () => {
         JSON.stringify({
           type: 'subscribe',
           subjects: { 'dialog.other': [] },
+          deliveryClasses: { 'dialog.other': 'relayable' },
         }),
       );
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -445,6 +498,7 @@ describe('Server mode behavior', () => {
         JSON.stringify({
           type: 'subscribe',
           subjects: { 'dialog.confirm': [] },
+          deliveryClasses: { 'dialog.confirm': 'relayable' },
         }),
       );
       await new Promise((resolve) => setTimeout(resolve, 10));

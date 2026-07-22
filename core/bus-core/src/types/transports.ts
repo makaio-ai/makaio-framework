@@ -7,6 +7,9 @@
 
 import type { PayloadFilter, TransportReceiveContext } from '@makaio/core';
 
+/** Controls whether a subscription may be advertised beyond its direct peer. */
+export type SubscriptionDeliveryClass = 'relayable' | 'first-hop-only';
+
 /**
  * Subscribe message for client subscription management.
  *
@@ -41,6 +44,13 @@ export interface BusSubscribeMessage {
    * An empty array indicates event-only handlers with no priority-based dispatch.
    */
   subjects: Record<string, number[]>;
+  /**
+   * Owner-derived delivery semantics for every advertised subject.
+   *
+   * Receivers must treat missing or unknown values as `first-hop-only` so an
+   * incomplete control message cannot weaken a no-relay boundary.
+   */
+  deliveryClasses: Record<string, SubscriptionDeliveryClass>;
   /**
    * Optional payload filters per subject.
    * Key is the subject pattern, value is the filter to apply.
@@ -484,8 +494,14 @@ export interface BusTransport {
    * @param filter - Optional payload filter for fine-grained routing
    * @param priorities - Handler priorities registered for this subject; an empty
    *   array signals event-only handlers that do not participate in priority dispatch
+   * @param deliveryClass - Whether the remote peer may advertise this subscription onward
    */
-  subscribe(subject: string, filter?: PayloadFilter, priorities?: number[]): Promise<void>;
+  subscribe(
+    subject: string,
+    filter?: PayloadFilter,
+    priorities?: number[],
+    deliveryClass?: SubscriptionDeliveryClass,
+  ): Promise<void>;
 
   /**
    * Unsubscribe from a subject.

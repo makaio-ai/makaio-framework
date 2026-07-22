@@ -15,6 +15,7 @@ export {
   ClientToolCapabilityAnnotationSchema,
   ClientToolDefinitionSchema,
   ConfigIsolationSchema,
+  deriveHookEventTransportMode,
   LogSourceDefinitionSchema,
   ManagedInstallDescriptorSchema,
   NpmInstallDescriptorSchema,
@@ -196,3 +197,30 @@ export type {
   SessionConfigTeardownRequest,
   SessionConfigTeardownResponse,
 } from './profile.js';
+export {
+  createAppendEffect,
+  DEFAULT_FAILURE_POLICY,
+  isValidContributorId,
+  isValidTimeoutMs,
+  validateClosedPolicy,
+} from './hook-responses.js';
+export type {
+  ActivationErrorCode,
+  ActivationValidationError,
+  CanonicalAppendEffect,
+  CanonicalEffect,
+  CapabilitySelector,
+  ContributorActivationContext,
+  ContributorCallbackContext,
+  ContributorDefinition,
+  ContributorResponse,
+  EventNameSelector,
+  ExtensionClientHookResponsesContribution,
+  FailurePolicy,
+  InteractionBlockability,
+  InteractionSelector,
+  ProviderContractCatalogEntry,
+  ProviderContributionEnvelope,
+  RuntimeOutcome,
+  RuntimeOutcomeCode,
+} from './hook-responses.js';

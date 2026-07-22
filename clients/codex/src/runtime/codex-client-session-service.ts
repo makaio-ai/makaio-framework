@@ -42,11 +42,14 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
 import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/subsystem-client';
+import type { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ClientRuntimeStarted } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { CodexClientSettings } from './client-settings.js';
 import { handleCodexConfigPrime } from './config-prime-handler.js';
 import { normalizeCodexHook } from './hook-normalizer.js';
+import { composeCodexHookResponse } from './hook-response-composer.js';
+import { codexProviderContractCatalog } from './hook-response-contracts.js';
 import { CodexClientSubjects } from './namespace.js';
 import { CodexSessionConfigHandler } from './session-config-handler.js';
 import { applyCodexWiring, buildCodexWiringList, removeCodexWiring } from './wiring.js';
@@ -115,6 +118,17 @@ export class CodexClientSessionService extends BaseService {
   private readonly managedAdapterSessionIds = new Set<string>();
 
   /**
+   * Optional provider contract registry for registering and unregistering
+   * the Codex hook response contract during the service lifecycle.
+   *
+   * When `undefined`, contract registration is skipped — this allows
+   * lightweight test construction without requiring a full clients-core
+   * dependency.
+   */
+  private readonly providerContractRegistry: ClientHookProviderContractRegistry | undefined;
+  private readonly hookResponseRegistry: ClientHookResponseRegistry | undefined;
+
+  /**
    * Creates a new Codex client session service.
    * @param bus - Bus instance used for subscribing and emitting events
    * @param settings - Optional {@link CodexClientSettings} instance for tests
@@ -124,28 +138,52 @@ export class CodexClientSessionService extends BaseService {
    *   caller-supplied from the extension context. Omit in tests or when the
    *   identity is unavailable.
    * @param sessionConfigHandler - Optional native auth lease handler override.
+   * @param providerContractRegistry - Optional provider contract registry
+   *   from clients-core for registering the Codex hook response contract.
+   *   Omit in tests that do not exercise the response pipeline.
+   * @param hookResponseRegistry - Optional contributor registry used by the terminal composer.
    */
   public constructor(
     bus: IMakaioBus = MakaioBus,
     settings?: CodexClientSettings,
     machineId?: string,
     sessionConfigHandler: CodexSessionConfigHandler = new CodexSessionConfigHandler(),
+    providerContractRegistry?: ClientHookProviderContractRegistry,
+    hookResponseRegistry?: ClientHookResponseRegistry,
   ) {
     super(bus);
     this.settingsOverride = settings;
     this.machineId = machineId;
     this.sessionConfigHandler = sessionConfigHandler;
+    this.providerContractRegistry = providerContractRegistry;
+    this.hookResponseRegistry = hookResponseRegistry;
   }
 
   /**
-   * Register the raw hook ingress handler, config management request handlers,
-   * wiring management request handlers, the config-prime lifecycle handler,
-   * and the session config setup/teardown handlers on the bus.
+   * Register the raw hook ingress handler, the `hook.handle` request handler,
+   * config management request handlers, wiring management request handlers,
+   * the config-prime lifecycle handler, and the session config
+   * setup/teardown handlers on the bus.
    *
    * Also subscribes to `client.runtime.started` to track adapter-managed
    * sessions for the {@link handleHookReceived} suppression gate.
+   *
+   * When a {@link ClientHookProviderContractRegistry} was supplied at
+   * construction time, the Codex provider contract is registered so that
+   * contributors can be validated against it during extension activation.
    */
   protected override onInit(): void {
+    if (this.providerContractRegistry !== undefined) {
+      this.providerContractRegistry.registerProviderContract('codex.runtime', codexProviderContractCatalog);
+      this.addCleanup(() =>
+        this.providerContractRegistry?.unregisterProviderContract(
+          'codex.runtime',
+          codexProviderContractCatalog.clientId,
+          codexProviderContractCatalog.contractId,
+        ),
+      );
+    }
+
     this.registerHandler(ClientSubjects.runtime.started, ({ payload }) => {
       this.handleRuntimeStarted(payload);
     });
@@ -158,6 +196,8 @@ export class CodexClientSessionService extends BaseService {
     this.registerHandler(CodexClientSubjects.hook.received, async ({ payload }) => {
       await this.handleHookReceived(payload);
     });
+
+    this.registerHookHandleHandler();
 
     this.registerHandler(CodexClientSubjects.config.hooks.list, async (ctx) => {
       ctx.setResult(await (await this.createSettings()).listHooks(ctx.payload));
@@ -215,11 +255,44 @@ export class CodexClientSessionService extends BaseService {
   }
 
   /**
-   * Clear the adapter-managed session ID set on teardown.
+   * Clear the adapter-managed session ID set and config cache on teardown.
+   *
+   * Provider contract unregistration is handled via {@link addCleanup} in
+   * {@link onInit}, so it runs automatically during the base-class destroy
+   * sequence alongside handler unsubscription.
    */
   protected override onDestroy(): void {
     this.managedAdapterSessionIds.clear();
     this.cachedConfigDir = undefined;
+  }
+
+  /**
+   * Register the `hook.handle` request handler.
+   *
+   * The handler receives request-mode hook payloads and returns a
+   * {@link ClientHookHandleResponse} composed by
+   * {@link composeCodexHookResponse}. The pinned Codex `0.144.1` source
+   * parses synchronous responses for all five declared events.
+   *
+   * Extracted from {@link onInit} to keep the init method concise.
+   */
+  private registerHookHandleHandler(): void {
+    this.registerHandler(CodexClientSubjects.hook.handle, (ctx) => {
+      if (!this.hookResponseRegistry) {
+        ctx.setResult({ exitCode: 0, stdout: '', stderr: '' });
+        return;
+      }
+      return composeCodexHookResponse(this.hookResponseRegistry, ctx.payload, {
+        deadline: ctx.deadline,
+        signal: ctx.signal,
+        onDiagnostics: (diagnostics) =>
+          diagnostics.forEach((diagnostic) =>
+            console.warn(
+              `[CodexClientSessionService] Hook contributor '${diagnostic.contributorId}': ${diagnostic.message}`,
+            ),
+          ),
+      }).then((response) => ctx.setResult(response));
+    });
   }
 
   /**

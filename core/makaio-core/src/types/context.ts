@@ -42,6 +42,18 @@ export interface RequestContext<Payload, Response> extends BaseMessageContext {
   /** AbortSignal supplied by the originating request, if any. */
   signal?: AbortSignal;
 
+  /**
+   * Absolute Unix timestamp (ms) when this request expires.
+   *
+   * Computed once at the request entry point as `Date.now() + effectiveTimeout`
+   * and propagated unchanged through every local and remote handler in the
+   * dispatch chain. Handlers can compare `deadline` to `Date.now()` to determine
+   * their remaining time budget.
+   *
+   * Undefined when no deadline was set (timeout: 0).
+   */
+  readonly deadline?: number;
+
   /** Set the response value (ends the handler chain) */
   setResult: (result: Response) => void;
 

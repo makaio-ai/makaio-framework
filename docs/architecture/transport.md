@@ -315,12 +315,66 @@ transports. Results are aggregated as `{ nodeId, payload }` entries from local
 handlers and relay transports. `ServerTransport` filters only its internal
 per-client fan-out.
 
-### Security: Local Subject Enforcement
+### Security: Locality Enforcement
 
-Messages targeting `localSubject()` subjects are **dropped** at the transport
-boundary. The transport registry checks `isLocalSubject()` for inbound events
-and rejects them with a warning. This prevents remote peers from invoking
-process-internal subjects.
+The transport layer enforces two locality primitives that restrict how subjects
+interact with transports:
+
+**`localSubject()` — full transport isolation.** Messages targeting local
+subjects are **dropped** at the transport boundary. The transport registry
+checks `isLocalSubject()` for inbound events and rejects them with a warning.
+Local subjects are never serialized, never sent over the wire, and never
+advertised to peers. This prevents remote peers from invoking process-internal
+subjects.
+
+**`hostLocalRequest()` — direct ingress, no relay.** Host-local request
+subjects accept direct remote ingress but the receiving bus never relays the
+request onward to other transports. This is enforced through three layers of
+defense-in-depth:
+
+1. **Advertisement filtering** — `pushAdvertisedSubject()` excludes all foreign
+   (learned) priorities for host-local request subjects. Only receiver-local
+   handler priorities are advertised to peers. This prevents relay nodes from
+   discovering a forwarding path to a handler they do not own.
+2. **Dispatch enforcement** — `handleRequestMessage()` in the transport
+   registry checks `isHostLocalRequestSubject()` on every inbound request. When
+   the subject is host-local, dispatch runs with `localOnly: true`, which
+   causes the handler chain to skip all remote entries and bypass the readiness
+   gate.
+3. **Receiver-resolved trust** — the receiver looks up host-local semantics
+   from its own namespace registry. It never trusts a caller-supplied wire flag.
+   The wire protocol carries no host-local marker; locality is resolved
+   entirely by the receiving runtime.
+
+With buses A—B—C, A can send a host-local request to B (direct connection), but
+A cannot reach C's host-local handler through B. The caller must connect
+directly to the owning runtime.
+
+| Behavior | `localSubject()` | `hostLocalRequest()` |
+|----------|-----------------|---------------------|
+| Schema constraint | Events and requests | Requests only |
+| Local origin | Stays local | Stays local |
+| Remote ingress | Rejected | Allowed (direct only) |
+| Advertisement | Not advertised | Local priorities only |
+| Relay (A→B→C) | N/A | Forbidden |
+| Transport serialization | Never | On first hop only |
+| Readiness gating | Local only | Local only on receive |
+| Trust model | N/A | Receiver-resolved metadata |
+
+### `RequestContext.deadline`
+
+Request handlers receive a `deadline` property on their context — an absolute
+Unix timestamp (ms) minted once at the request entry point. It propagates
+unchanged through every handler in the dispatch chain (local and remote).
+Handlers can compare `deadline` to `Date.now()` to determine their remaining
+time budget. `deadline` is `undefined` when the request was made with
+`timeout: 0`.
+
+This is the handler-visible surface of the `deadline` field on
+`BusRequestMessage`. On each remote hop, the transport computes remaining time
+as `Math.max(0, deadline - Date.now())` for the wire `timeout` field. Without
+this absolute-timestamp approach, each hop would restart its timeout from the
+original value, allowing unbounded total execution.
 
 ## Module Augmentation
 
@@ -491,5 +545,8 @@ and heartbeat messages use their own compact shapes.
 | `../transports/message-channel/src/message-port-transport.ts` | MessagePort transport |
 | `../packages/bus-server/src/loopback-transport.ts` | Loopback transport for relay |
 | `../packages/bus-server/src/server.ts` | `createBusServer` factory |
+| `../core/makaio-core/src/subject-helpers/host-local-request-schema.ts` | `hostLocalRequest()` wrapper and `isHostLocalRequestSchema()` |
+| `../core/makaio-core/src/subject-helpers/is-local-schema.ts` | `localSubject()` wrapper and `isLocalSchema()` |
+| `../core/makaio-core/src/types/context.ts` | `RequestContext.deadline` definition |
 
 <!-- /web:hide -->

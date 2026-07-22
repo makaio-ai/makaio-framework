@@ -1,0 +1,87 @@
+{
+  "version": "0.2.0",
+  "clientId": "codex",
+  "cliVersion": "0.144.1",
+  "sourceEvidence": {
+    "kind": "pinned-source",
+    "reference": "https://github.com/openai/codex/tree/rust-v0.144.1/codex-rs/hooks",
+    "verifiedAt": "2026-07-21"
+  },
+  "liveProbe": {
+    "status": "captured",
+    "capturedAt": "2026-07-21T18:40:49.991Z"
+  },
+  "events": {
+    "SessionStart": {
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
+      "hookFired": true,
+      "expectedStdoutConsumed": true,
+      "expectedBlockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "responseCapabilities": [
+        "context.append",
+        "openai.codex-hook-response.block"
+      ],
+      "inputFixture": "session-start-input.json",
+      "outputFixture": "session-start-output.json"
+    },
+    "UserPromptSubmit": {
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
+      "hookFired": true,
+      "expectedStdoutConsumed": true,
+      "expectedBlockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "responseCapabilities": [
+        "context.append",
+        "openai.codex-hook-response.block"
+      ],
+      "inputFixture": "user-prompt-submit-input.json",
+      "outputFixture": "user-prompt-submit-output.json"
+    },
+    "PreToolUse": {
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
+      "hookFired": true,
+      "expectedStdoutConsumed": true,
+      "expectedBlockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "responseCapabilities": [
+        "context.append",
+        "openai.codex-hook-response.block",
+        "openai.codex-hook-response.permission.deny",
+        "openai.codex-hook-response.input.update"
+      ],
+      "inputFixture": "pre-tool-use-input.json",
+      "outputFixture": "pre-tool-use-output.json"
+    },
+    "PostToolUse": {
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
+      "hookFired": true,
+      "expectedStdoutConsumed": true,
+      "expectedBlockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "responseCapabilities": [
+        "context.append",
+        "openai.codex-hook-response.block"
+      ],
+      "inputFixture": "post-tool-use-input.json",
+      "outputFixture": "post-tool-use-output.json"
+    },
+    "Stop": {
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
+      "hookFired": true,
+      "expectedStdoutConsumed": true,
+      "expectedBlockingCapable": true,
+      "managedCommand": "hook handle codex",
+      "responseCapabilities": [
+        "openai.codex-hook-response.block"
+      ],
+      "inputFixture": "stop-input.json",
+      "outputFixture": "stop-output.json"
+    }
+  }
+}

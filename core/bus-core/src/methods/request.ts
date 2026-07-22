@@ -119,6 +119,11 @@ export async function request<
 
   const allowedTransports = resolveAllowedTransports(options?.transports);
 
+  // Mint the absolute deadline once at the request entry point. Every local and
+  // remote handler in the dispatch chain observes this same value. timeout === 0
+  // disables the deadline (no-timeout semantics).
+  const deadline = timeout > 0 ? Date.now() + timeout : undefined;
+
   let outcome: Awaited<ReturnType<typeof dispatch>>;
   try {
     const dispatchPromise = dispatch(context, subjectDefinition, payload, {
@@ -128,6 +133,7 @@ export async function request<
       timeout,
       signal,
       localOnly,
+      deadline,
     });
     // timeout === 0 disables automatic timeout but still honours AbortSignal.
     outcome = await awaitWithTimeoutAndSignal(dispatchPromise, timeout, signal);

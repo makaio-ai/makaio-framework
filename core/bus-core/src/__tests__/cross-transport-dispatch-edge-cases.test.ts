@@ -106,6 +106,10 @@ describe('Test 6: Timeout and deadline propagation', () => {
     MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.ping', [
       { transport: 'deadline-transport', priority: 0 },
     ]);
+    MakaioBus.getContext().remoteSubscriptionDeliveryClasses.set(
+      'edgeCase.ping',
+      new Map([['deadline-transport', 'relayable']]),
+    );
 
     const before = Date.now();
     await MakaioBus.request(EdgeNamespace.ping, { id: 'deadline-test' }, { timeout: 5000 });
@@ -168,6 +172,10 @@ describe('Test 6: Timeout and deadline propagation', () => {
     MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.ping', [
       { transport: 'deadline-transport', priority: 0 },
     ]);
+    MakaioBus.getContext().remoteSubscriptionDeliveryClasses.set(
+      'edgeCase.ping',
+      new Map([['deadline-transport', 'relayable']]),
+    );
 
     try {
       // Simulate an inbound request that already carries a past deadline.
@@ -186,6 +194,93 @@ describe('Test 6: Timeout and deadline propagation', () => {
       // The relay hop must use the pre-set deadline; remaining time < 5000.
       expect(capturedMessage!.timeout).toBeLessThan(5000);
     } finally {
+      unregisterSource.unregister();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 6b: Deadline surfaces in handler context (local and inbound-transport)
+// ---------------------------------------------------------------------------
+
+describe('Test 6b: Deadline surfaces in RequestContext for local and inbound requests', () => {
+  beforeEach(() => {
+    MakaioBus.__resetHandlers?.();
+  });
+
+  afterEach(() => {
+    MakaioBus.__resetHandlers?.();
+  });
+
+  it('local handler context exposes deadline from the request entry point', async () => {
+    let observedDeadline: number | undefined;
+
+    const cleanup = MakaioBus.on(EdgeNamespace.ping, (ctx) => {
+      observedDeadline = ctx.deadline;
+      ctx.setResult({ pong: true });
+    });
+
+    try {
+      const before = Date.now();
+      await MakaioBus.request(EdgeNamespace.ping, { id: 'ctx-deadline' }, { timeout: 4000 });
+      const after = Date.now();
+
+      expect(observedDeadline).toBeDefined();
+      expect(observedDeadline).toBeGreaterThanOrEqual(before + 4000);
+      expect(observedDeadline).toBeLessThanOrEqual(after + 4000);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('inbound transport request propagates wire deadline into handler context', async () => {
+    let observedDeadline: number | undefined;
+
+    const cleanup = MakaioBus.on(EdgeNamespace.ping, (ctx) => {
+      observedDeadline = ctx.deadline;
+      ctx.setResult({ pong: true });
+    });
+
+    // Create a source transport to inject an inbound request with a pre-set deadline
+    let sourceHandler: ((message: BusMessage) => Promise<void>) | undefined;
+    const sourceTransport: BusTransport = {
+      name: 'deadline-ctx-source',
+      send: vi.fn(async () => true) as BusTransport['send'],
+      onReceive: (handler) => {
+        sourceHandler = handler;
+        return () => {
+          sourceHandler = undefined;
+        };
+      },
+      connect: async () => {},
+      disconnect: async () => {},
+      subscribe: async () => {},
+      unsubscribe: async () => {},
+    };
+
+    const unregisterSource = MakaioBus.getContext().transportRegistry.registerTransport(
+      'deadline-ctx-source' as keyof BusTransportRegistry,
+      sourceTransport,
+    );
+
+    try {
+      const wireDeadline = Date.now() + 10_000;
+
+      await sourceHandler?.({
+        type: 'request',
+        namespace: 'edgeCase',
+        subject: 'ping',
+        payload: { id: 'inbound-deadline' },
+        correlationId: 'corr-inbound-deadline',
+        messageId: 'msg-inbound-deadline',
+        timeout: 10_000,
+        deadline: wireDeadline,
+      });
+
+      // The handler must observe the exact wire deadline — not a re-minted one
+      expect(observedDeadline).toBe(wireDeadline);
+    } finally {
+      cleanup();
       unregisterSource.unregister();
     }
   });

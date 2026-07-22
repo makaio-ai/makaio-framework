@@ -490,6 +490,32 @@ class TestRegistration(unittest.IsolatedAsyncioTestCase):
         assert snapshot['tool.execute'] == [100, 50]
         assert snapshot['tool.list'] == [10]
 
+    def test_subscription_delivery_class_is_aggregated_fail_closed(self) -> None:
+        """Any first-hop-only handler constrains the advertised subject."""
+        bus = LocalBus()
+
+        async def handler(ctx: RequestContext) -> None:
+            ctx.set_result(None)
+
+        bus.register_request(
+            'tool.execute',
+            handler,
+            priority=100,
+            delivery_class='relayable',
+        )
+        restricted = bus.register_request(
+            'tool.execute',
+            handler,
+            priority=50,
+            delivery_class='first-hop-only',
+        )
+
+        assert bus.subscription_delivery_class('tool.execute') == 'first-hop-only'
+
+        bus.remove(restricted)
+
+        assert bus.subscription_delivery_class('tool.execute') == 'relayable'
+
     async def test_unsubscribe_event_handler(self) -> None:
         """After removing an event registration, the handler is no longer called."""
         bus = LocalBus()

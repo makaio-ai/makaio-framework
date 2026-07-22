@@ -1,0 +1,8 @@
+{
+  "continue": false,
+  "stopReason": "fixture startup rejected",
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "fixture session context"
+  }
+}

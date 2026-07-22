@@ -7,9 +7,10 @@
  * instance, making them straightforward to unit-test with a mock.
  *
  * **Session-events group:** One hook per `hookEvents` entry that carries a
- * `frameworkSubject`.  The hook command depends on the event's `mode`:
- * - `mode: 'event'`   → `${makaioCommand} hook received claude-code ${eventName}`
- * - `mode: 'request'` → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 5000`
+ * `frameworkSubject`.  The hook command depends on the event's derived transport
+ * mode (from `responseCapabilities`):
+ * - empty capabilities → `${makaioCommand} hook received claude-code ${eventName}`
+ * - non-empty capabilities → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 5000`
  *
  * The command sentinels `'hook received claude-code'` and
  * `'hook handle claude-code'` are used for removal and installation detection.
@@ -66,11 +67,12 @@ export interface ClaudeCodeWiringSettings {
 // ---------------------------------------------------------------------------
 
 /**
- * Descriptors for all session-events hooks derived from the client definition.
+ * Descriptors for all hook events derived from the client definition.
  *
- * Only hook events that carry a `frameworkSubject` are included — events
- * without one (e.g. `SubagentStop`, `Notification`) are Claude-specific raw
- * events that Makaio does not need to observe via a hook.
+ * Includes every event declared in the definition's `hookEvents` array,
+ * regardless of whether it carries a `frameworkSubject`.  Events without a
+ * framework mapping (e.g. `SubagentStop`, `Notification`) are still wired
+ * so that the raw ingress reaches the bus for Claude-specific consumers.
  */
 const SESSION_EVENTS_DESCRIPTORS = deriveSessionEventDescriptors(clientDefinition);
 

@@ -22,6 +22,7 @@ import type {
 } from '@makaio/core';
 import type { OnceOptions } from '../methods/once.js';
 import type { BusTransport } from './transports.js';
+import type { SubscriptionDeliveryClass } from './transports.js';
 import type { BroadcastResult } from '../methods/broadcast.js';
 
 import type { ScopedBus } from '../scoped-bus.js';
@@ -86,6 +87,8 @@ export interface MakaioBusContext {
    * `subscribe` (with an empty priority array) rather than an `unsubscribe`.
    */
   remoteEventHandlers: Map<string, Set<string>>;
+  /** Owner-derived delivery semantics keyed by subject pattern and source transport. */
+  remoteSubscriptionDeliveryClasses: Map<string, Map<string, SubscriptionDeliveryClass>>;
 }
 
 /**

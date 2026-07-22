@@ -328,4 +328,73 @@ describe('createClientsCorePackage (integration)', () => {
     expect(entry).toBeDefined();
     expect(entry?.clientId).toBe('claude-code');
   });
+
+  // -------------------------------------------------------------------------
+  // Service surface: hook response registries
+  // -------------------------------------------------------------------------
+
+  it('exposes providerContractRegistry on the service surface', async () => {
+    await bootService([MANAGED_DEFINITION]);
+
+    expect(service.providerContractRegistry).toBeDefined();
+    expect(typeof service.providerContractRegistry.registerProviderContract).toBe('function');
+    expect(typeof service.providerContractRegistry.getProviderContract).toBe('function');
+  });
+
+  it('exposes hookResponseRegistry on the service surface', async () => {
+    await bootService([MANAGED_DEFINITION]);
+
+    expect(service.hookResponseRegistry).toBeDefined();
+    expect(typeof service.hookResponseRegistry.installContributors).toBe('function');
+    expect(typeof service.hookResponseRegistry.removeContributors).toBe('function');
+    expect(typeof service.hookResponseRegistry.snapshot).toBe('function');
+  });
+
+  it('provider runtime can register and unregister contracts through the service surface', async () => {
+    await bootService([]);
+
+    const catalog = {
+      clientId: 'claude-code',
+      contractId: 'anthropic.tool-response',
+      version: '1.0.0',
+      supportedInteractions: ['PreToolUse'],
+      blockability: [{ interaction: 'PreToolUse', blockable: true }],
+      validate: () => true as const,
+    };
+
+    // Register.
+    service.providerContractRegistry.registerProviderContract('ext-provider', catalog);
+    const found = service.providerContractRegistry.getProviderContract('claude-code', 'anthropic.tool-response');
+    expect(found?.contractId).toBe('anthropic.tool-response');
+
+    // Unregister.
+    service.providerContractRegistry.unregisterProviderContract(
+      'ext-provider',
+      'claude-code',
+      'anthropic.tool-response',
+    );
+    expect(
+      service.providerContractRegistry.getProviderContract('claude-code', 'anthropic.tool-response'),
+    ).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // runtimeBoot contribution
+  // -------------------------------------------------------------------------
+
+  it('declares a runtimeBoot contribution that registers a processor', () => {
+    const pkg = createClientsCorePackage();
+    expect(pkg.runtimeBoot).toBeDefined();
+
+    const processors: unknown[] = [];
+    pkg.runtimeBoot?.configure({
+      bus: createBusInstance(),
+      registerContributionProcessor: (processor) => {
+        processors.push(processor);
+      },
+      forEachActiveExtension: () => {},
+    });
+
+    expect(processors).toHaveLength(1);
+  });
 });

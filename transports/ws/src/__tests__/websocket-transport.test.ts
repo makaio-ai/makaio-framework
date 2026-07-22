@@ -165,7 +165,7 @@ describe('Client mode behavior', () => {
 
     try {
       await transport.connect();
-      const subscribe = transport.subscribe('approval.request', { sessionId: 'session-1' });
+      const subscribe = transport.subscribe('approval.request', { sessionId: 'session-1' }, [], 'first-hop-only');
       await waitForCondition(() => ws.sentMessages.length > 0, 1000, 'subscription message was not sent');
       const subscribeMessage = JSON.parse(ws.sentMessages.at(-1)!) as { ackId?: string };
       ws.receiveMessage(JSON.stringify({ type: 'subscription-ack', ackId: subscribeMessage.ackId }));
@@ -180,6 +180,7 @@ describe('Client mode behavior', () => {
       expect(JSON.parse(ws.sentMessages[0])).toEqual({
         type: 'subscribe',
         subjects: { 'approval.request': [] },
+        deliveryClasses: { 'approval.request': 'first-hop-only' },
         filters: { 'approval.request': { sessionId: 'session-1' } },
       });
     } finally {
