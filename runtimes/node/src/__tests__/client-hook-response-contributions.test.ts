@@ -8,9 +8,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { dep } from '@makaio/contracts';
+import { createBusNamespace } from '@makaio/core';
 import { createAppendEffect, type ContributorDefinition } from '@makaio/contracts/client';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import { ExtensionCoordinator } from '@makaio/kernel';
@@ -410,6 +412,61 @@ describe('client hook response contributions', () => {
       expect(started).toBe(2);
       expect(responseOutput(result.stdout).additionalContext).toBe('first\nsecond');
       expect(captured).toMatchObject({ session_id: 'session-42', tool_name: 'read_file', tool_use_id: 'tool-99' });
+    } finally {
+      await runtime.coordinator.shutdown();
+    }
+  });
+
+  it('contributor factory captures bus from extensionContext and uses it at callback time', async () => {
+    let capturedBus: IMakaioBus | undefined;
+    const observed: string[] = [];
+    const extension: KernelMakaioExtension = {
+      name: 'ctx-consumer',
+      displayName: 'Context Consumer',
+      version: '0.1.0',
+      dependencies: [dep('claude-code.runtime')],
+      clientHookResponses: {
+        createContributors: (ctx) => {
+          // Capture the bus from the extension context at activation time.
+          const bus = ctx.extensionContext.bus;
+          capturedBus = bus;
+          // Extension-owned probe namespace: `respond` emits on the captured
+          // bus at callback time and the subscription observes the delivery,
+          // proving the bus is usable during hook handling — not just shaped
+          // like a bus.
+          const { subjects } = bus.registerNamespace(
+            createBusNamespace('ctx-consumer-probe', { fired: z.object({ source: z.string() }) }),
+          );
+          bus.on(subjects.fired, (event) => {
+            observed.push(event.payload.source);
+          });
+          return [
+            {
+              lane: 'canonical' as const,
+              id: 'bus-enricher',
+              priority: 100,
+              timeoutMs: 500,
+              selectors: [{ kind: 'event-name' as const, name: 'PreToolUse' }],
+              respond: async () => {
+                await bus.emit(subjects.fired, { source: 'bus-enricher' });
+                return {
+                  canonicalEffects: [createAppendEffect('bus-alive')],
+                };
+              },
+            },
+          ];
+        },
+      },
+    };
+
+    const runtime = await startRuntime([extension]);
+    try {
+      const result = await runtime.bus.request(ClaudeCodeClientSubjects.hook.handle, hookRequest());
+      expect(responseOutput(result.stdout).additionalContext).toBe('bus-alive');
+      // Identity: the activation context carries the runtime's live bus, so
+      // the probe round-trip above ran on the same broker the host uses.
+      expect(capturedBus).toBe(runtime.bus);
+      expect(observed).toEqual(['bus-enricher']);
     } finally {
       await runtime.coordinator.shutdown();
     }

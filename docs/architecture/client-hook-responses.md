@@ -259,10 +259,18 @@ import {
   type ExtensionClientHookResponsesContribution,
   createAppendEffect,
 } from '@makaio/contracts/client';
+import type { KernelExtensionContext } from '@makaio/kernel/extension';
 
-// On your MakaioExtension:
-const clientHookResponses: ExtensionClientHookResponsesContribution = {
+// On your MakaioExtension. Parameterize with the concrete host context so
+// activation-scoped resources keep their host types (e.g. `bus` stays the
+// typed IMakaioBus instead of the erased ExtensionContext default). When the
+// manifest itself is declared as `MakaioExtension<KernelExtensionContext>`,
+// the parameter is threaded automatically and can be omitted here.
+const clientHookResponses: ExtensionClientHookResponsesContribution<KernelExtensionContext> = {
   createContributors: (ctx) => {
+    // Capture activation-scoped resources for use in callbacks.
+    const { bus } = ctx.extensionContext;
+
     const contributor: ContributorDefinition = {
       id: 'my-context-enricher',
       priority: 100,
@@ -323,14 +331,19 @@ according to the contributor's `failurePolicy`.
 
 ### Activation context
 
-The `createContributors` factory receives a `ContributorActivationContext`
-with:
+The `createContributors` factory receives a
+`ContributorActivationContext<THostContext>` with:
 
 - `extensionName` --- the activating extension's name.
-- `getProviderContract(contractId)` --- looks up a
-  `ProviderContractCatalogEntry` by contract ID. Use this to check whether
-  a provider contract is active before returning provider-specific
-  contributors.
+- `extensionContext` --- the per-extension host context from the activating
+  runtime. Contains the typed bus, service lookup (`getService`), shutdown
+  signal, data directory, and other host-scoped resources. Contributor
+  factories can capture these at activation time so callbacks use
+  activation-scoped resources rather than module-global mutable state.
+- `getProviderContract(clientId, contractId)` --- looks up a
+  `ProviderContractCatalogEntry` by client and contract ID. Use this to
+  check whether a provider contract is active before returning
+  provider-specific contributors.
 
 ---
 

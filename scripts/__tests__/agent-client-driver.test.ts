@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildChildEnvironment } from '../lib/agent-clients/command-construction.js';
 import type { SpawnCommand } from '../lib/agent-clients/command-construction.js';
@@ -574,7 +575,7 @@ describe('native probe driver', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-client-publish-'));
     const fixturesDir = path.join(root, 'clients');
     const sourceFixturesDir = resolveDefaultFixturesDir(
-      path.resolve(process.cwd(), 'framework/scripts/test-agent-clients.ts'),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'test-agent-clients.ts'),
     );
     const manifestRelativePath = path.join(
       'codex',
@@ -663,7 +664,7 @@ describe('native probe driver', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-client-no-publish-'));
     const fixturesDir = path.join(root, 'clients');
     const sourceFixturesDir = resolveDefaultFixturesDir(
-      path.resolve(process.cwd(), 'framework/scripts/test-agent-clients.ts'),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'test-agent-clients.ts'),
     );
     const manifestRelativePath = path.join(
       'codex',

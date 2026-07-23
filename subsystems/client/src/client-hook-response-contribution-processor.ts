@@ -50,13 +50,14 @@ export function createClientHookResponseContributionProcessor(
   return {
     filter: (pkg: KernelMakaioExtension): boolean => !!pkg.clientHookResponses,
 
-    async processActivated(name: string, pkg: KernelMakaioExtension, _ctx: KernelExtensionContext): Promise<void> {
+    async processActivated(name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext): Promise<void> {
       const contribution = pkg.clientHookResponses;
       if (!contribution) return;
 
       // Build the activation context for the factory.
-      const activationCtx: ContributorActivationContext = {
+      const activationCtx: ContributorActivationContext<KernelExtensionContext> = {
         extensionName: name,
+        extensionContext: ctx,
         getProviderContract: (clientId: string, contractId: string): ProviderContractCatalogEntry | undefined =>
           contractRegistry.getProviderContract(clientId, contractId),
       };

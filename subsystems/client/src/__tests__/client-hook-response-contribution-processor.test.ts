@@ -275,7 +275,7 @@ describe('createClientHookResponseContributionProcessor', () => {
     await processor.processStopped?.('never-activated');
   });
 
-  it('passes the activation context with correct extensionName and getProviderContract', async () => {
+  it('passes the activation context with extensionContext, extensionName, and getProviderContract', async () => {
     const contractRegistry = new ClientHookProviderContractRegistry();
     const catalog = makeCatalog();
     contractRegistry.registerProviderContract('provider-ext', catalog);
@@ -283,7 +283,7 @@ describe('createClientHookResponseContributionProcessor', () => {
     const responseRegistry = new ClientHookResponseRegistry(contractRegistry);
     const processor = createClientHookResponseContributionProcessor(responseRegistry, contractRegistry);
 
-    let capturedCtx: ContributorActivationContext | undefined;
+    let capturedCtx: ContributorActivationContext<KernelExtensionContext> | undefined;
     const pkg: KernelMakaioExtension = {
       name: 'ext-ctx-test',
       displayName: 'Context Test',
@@ -296,10 +296,16 @@ describe('createClientHookResponseContributionProcessor', () => {
       },
     };
 
-    await processor.processActivated('ext-ctx-test', pkg, makeContext());
+    const extensionCtx = makeContext();
+    await processor.processActivated('ext-ctx-test', pkg, extensionCtx);
 
     expect(capturedCtx).toBeDefined();
     expect(capturedCtx?.extensionName).toBe('ext-ctx-test');
+
+    // The extensionContext should be the exact reference passed to processActivated.
+    expect(capturedCtx?.extensionContext).toBeDefined();
+    expect(capturedCtx?.extensionContext).toBe(extensionCtx);
+    expect(capturedCtx?.extensionContext.bus).toBe(extensionCtx.bus);
 
     // The getProviderContract lookup requires the exact client and contract identities.
     const found = capturedCtx?.getProviderContract('claude-code', 'anthropic.tool-response');
@@ -308,6 +314,52 @@ describe('createClientHookResponseContributionProcessor', () => {
 
     // Non-existent contract should return undefined.
     expect(capturedCtx?.getProviderContract('claude-code', 'nonexistent')).toBeUndefined();
+  });
+
+  it('provides distinct extension contexts for different activations', async () => {
+    const contractRegistry = new ClientHookProviderContractRegistry();
+    const responseRegistry = new ClientHookResponseRegistry(contractRegistry);
+    const processor = createClientHookResponseContributionProcessor(responseRegistry, contractRegistry);
+
+    let capturedCtxA: ContributorActivationContext<KernelExtensionContext> | undefined;
+    let capturedCtxB: ContributorActivationContext<KernelExtensionContext> | undefined;
+
+    const pkgA: KernelMakaioExtension = {
+      name: 'ext-iso-a',
+      displayName: 'Isolation A',
+      version: '0.1.0',
+      clientHookResponses: {
+        createContributors: (ctx) => {
+          capturedCtxA = ctx;
+          return [makeContributor('hook-a')];
+        },
+      },
+    };
+
+    const pkgB: KernelMakaioExtension = {
+      name: 'ext-iso-b',
+      displayName: 'Isolation B',
+      version: '0.1.0',
+      clientHookResponses: {
+        createContributors: (ctx) => {
+          capturedCtxB = ctx;
+          return [makeContributor('hook-b')];
+        },
+      },
+    };
+
+    const extensionCtxA = makeContext();
+    const extensionCtxB = makeContext();
+
+    await processor.processActivated('ext-iso-a', pkgA, extensionCtxA);
+    await processor.processActivated('ext-iso-b', pkgB, extensionCtxB);
+
+    // Each factory receives the correct extension context reference.
+    expect(capturedCtxA?.extensionContext).toBe(extensionCtxA);
+    expect(capturedCtxB?.extensionContext).toBe(extensionCtxB);
+
+    // The buses are distinct instances (each makeContext creates its own).
+    expect(capturedCtxA?.extensionContext.bus).not.toBe(capturedCtxB?.extensionContext.bus);
   });
 
   it('handles async createContributors factory', async () => {

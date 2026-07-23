@@ -344,7 +344,7 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * envelopes. Descriptor metadata is discovery-only; executable callbacks
    * are not serialized.
    */
-  readonly clientHookResponses?: ExtensionClientHookResponsesContribution;
+  readonly clientHookResponses?: ExtensionClientHookResponsesContribution<THostContext>;
 
   // ---------------------------------------------------------------------------
   // Provider contribution surface
