@@ -358,6 +358,12 @@ export interface ContributorActivationContext<THostContext extends ExtensionCont
    * signal, and other host-scoped resources from this context rather than
    * relying on module-global mutable state. The context belongs to the
    * same extension activation as the manifest being processed.
+   *
+   * Required by design: every activation has a host context, so an
+   * optional field would force factories to null-check a value that
+   * always exists. Hosts that construct this context outside the
+   * built-in processor must supply the activation's context (breaking
+   * for such constructors; accepted as a pre-release contract change).
    */
   readonly extensionContext: THostContext;
   /**

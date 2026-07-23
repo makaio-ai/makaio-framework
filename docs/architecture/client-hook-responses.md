@@ -259,9 +259,14 @@ import {
   type ExtensionClientHookResponsesContribution,
   createAppendEffect,
 } from '@makaio/contracts/client';
+import type { KernelExtensionContext } from '@makaio/kernel/extension';
 
-// On your MakaioExtension:
-const clientHookResponses: ExtensionClientHookResponsesContribution = {
+// On your MakaioExtension. Parameterize with the concrete host context so
+// activation-scoped resources keep their host types (e.g. `bus` stays the
+// typed IMakaioBus instead of the erased ExtensionContext default). When the
+// manifest itself is declared as `MakaioExtension<KernelExtensionContext>`,
+// the parameter is threaded automatically and can be omitted here.
+const clientHookResponses: ExtensionClientHookResponsesContribution<KernelExtensionContext> = {
   createContributors: (ctx) => {
     // Capture activation-scoped resources for use in callbacks.
     const { bus } = ctx.extensionContext;
