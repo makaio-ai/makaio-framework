@@ -185,11 +185,9 @@ export interface RequestRoutingDeps {
  * Send a server-initiated request to all connected clients in priority order,
  * retrying until one handles it.
  *
- * Routing is **unfiltered** — all connected clients are tried regardless of
- * their subscription state. This mirrors the transport registry's
- * `getRpcRelayTargets` design: subscriptions are eventually-consistent and
- * must not gate request correctness. Truly browser-local subjects are already
- * excluded via `$meta.local`.
+ * Routing considers only clients authorized for the request subject. Among
+ * those eligible clients, subscriptions influence ordering but do not gate
+ * request correctness.
  *
  * Each retry uses a unique correlation ID so stale responses or timeouts from
  * earlier attempts cannot settle the currently active attempt.
@@ -207,8 +205,8 @@ export async function routeRequestToClients(
   const { registry, correlations } = deps;
   const fullSubject = `${requestMsg.namespace}.${requestMsg.subject}`;
 
-  const readyClients = registry.getReadyClients();
-  const prioritizedClients = readyClients
+  const eligibleClients = registry.getEligibleRequestClients(fullSubject);
+  const prioritizedClients = eligibleClients
     .map((client) => ({
       client,
       priority: registry.getRequestRoutingPriority(client, fullSubject, requestMsg.payload),

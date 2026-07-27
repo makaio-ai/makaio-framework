@@ -13,7 +13,6 @@ import type {
   WorkflowExecution,
   WorkflowFrameState,
   WorkflowNodeType,
-  WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -195,13 +194,55 @@ interface FramePersistenceOptions {
 }
 
 /**
+ * Ephemeral platform/workspace fields resolved on the executing machine.
+ *
+ * These values are NEVER persisted. They are derived at runtime from the
+ * worker's local environment (in-process execution) or from a
+ * {@link WorkerRuntimeContext} produced by the materializer (isolated workers).
+ */
+export interface EphemeralPlatformFields {
+  /** Absolute path to the active repository/workspace root. */
+  readonly repoPath: string;
+  /** Absolute path to the Makaio home directory. */
+  readonly makaioHome: string;
+  /** Host operating system. */
+  readonly os: 'darwin' | 'linux' | 'win32';
+  /** CPU architecture (e.g. `'arm64'`, `'x64'`). */
+  readonly arch: string;
+  /** Active git worktree path, if different from `repoPath`. */
+  readonly worktree?: string;
+}
+
+/**
  * Platform fields made available to station handlers during runtime.
  */
 export interface RuntimePlatformContext {
-  /** Host/workspace context for station handlers. */
-  readonly context: WorkflowWorkerConfig['context'];
+  /** Host/workspace context for station handlers (ephemeral, worker-local). */
+  readonly context: EphemeralPlatformFields;
   /** Extra environment variables injected into this workflow run. */
   readonly env: Record<string, string>;
+}
+
+/**
+ * Derive ephemeral platform fields from the current process environment.
+ *
+ * These fields are never persisted; they describe the executing machine's
+ * local filesystem and platform. Both the {@link RuntimeContext} default
+ * constructor and the {@link WorkflowExecutor} share this helper to avoid
+ * duplicating the OS normalization ternary.
+ * @param cwd - Workspace/repository root path. Defaults to `process.cwd()`.
+ * @param makaioHome - Explicit Makaio home override. Falls back to the
+ *   `MAKAIO_HOME` environment variable, then `~/.makaio`.
+ * @returns Ephemeral platform fields for the current machine.
+ */
+export function resolveEphemeralPlatformFields(cwd?: string, makaioHome?: string): EphemeralPlatformFields {
+  const resolvedOs = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux';
+  return {
+    repoPath: cwd ?? process.cwd(),
+    makaioHome: makaioHome ?? process.env['MAKAIO_HOME'] ?? `${os.homedir()}/.makaio`,
+    os: resolvedOs,
+    arch: process.arch,
+  };
 }
 
 /**
@@ -210,12 +251,7 @@ export interface RuntimePlatformContext {
  */
 function resolveDefaultPlatformContext(): RuntimePlatformContext {
   return {
-    context: {
-      repoPath: process.cwd(),
-      makaioHome: process.env['MAKAIO_HOME'] ?? `${os.homedir()}/.makaio`,
-      os: process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux',
-      arch: process.arch,
-    },
+    context: resolveEphemeralPlatformFields(),
     env: {},
   };
 }
@@ -353,8 +389,8 @@ export class RuntimeContext {
     this.runtimeLoopGates = options.runtimeLoopGates ?? new Map();
   }
 
-  /** Platform/workspace context exposed to station handlers. */
-  public readonly platformContext: WorkflowWorkerConfig['context'];
+  /** Platform/workspace context exposed to station handlers (ephemeral). */
+  public readonly platformContext: EphemeralPlatformFields;
 
   /** Extra environment variables exposed to station handlers. */
   public readonly env: Record<string, string>;

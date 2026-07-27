@@ -15,13 +15,18 @@ function createRunContext(definitionSnapshot?: WorkflowDefinition): WorkflowRunC
     executionId: 'execution-authority-bootstrap',
     workflowId: 'workflow-authority-bootstrap',
     source: { kind: 'path', path: '.factory/workflows/review.ts' },
+    materializationSpec: {
+      kind: 'workspace-snapshot',
+      snapshotId: 'authority-bootstrap-snapshot',
+      digest: 'sha256-authority-bootstrap',
+      sourcePath: '.factory/workflows/review.ts',
+    },
     ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
     inputs: {},
     triggerPayload: {},
     scope: { type: 'global' },
     coordinatorSessionId: 'session-authority-bootstrap',
     cancelSubject: 'workflow.execution-authority-bootstrap.cancel',
-    context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'linux', arch: 'arm64' },
     env: {},
     createdAt: Date.now(),
   });
@@ -59,16 +64,16 @@ function createStatefulDefinition(description = 'authority snapshot'): WorkflowD
 }
 
 describe('bootstrapAuthorityLoadedState', () => {
-  it('pins a worker-loaded definition when the authority has no snapshot', async () => {
+  it('does not trust a worker-loaded definition when the authority has no snapshot', async () => {
     const definition = createStatefulDefinition();
     const { bus, writes } = createBus(createRunContext());
 
-    await expect(bootstrapAuthorityLoadedState(bus, 'execution-authority-bootstrap', definition)).resolves.toBe(true);
+    await expect(bootstrapAuthorityLoadedState(bus, 'execution-authority-bootstrap', definition)).resolves.toBe(false);
 
     expect(writes).toHaveLength(1);
-    expect(writes[0]?.runContext.definitionSnapshot).toBe(definition);
+    expect(writes[0]?.runContext.definitionSnapshot).toBeUndefined();
     expect(writes[0]?.runContext.terminalAuthority).toBe('authority');
-    expect(writes[0]?.initialState).toEqual({ source: 'authority' });
+    expect(writes[0]?.initialState).toBeUndefined();
   });
 
   it('retains a canonically equal authority-pinned snapshot', async () => {

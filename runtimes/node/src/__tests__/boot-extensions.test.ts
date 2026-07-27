@@ -21,9 +21,11 @@ import {
   ToolSubjects,
   WorkerNodeNamespace,
   WorkerNodeSubjects,
+  type ProviderAllocationRef,
   type WorkerNodeDispatch,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
+import { ExecutionAttemptAuthority, type ExecutionAttemptRepository } from '@makaio/subsystem-workflow-engine';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -65,6 +67,13 @@ import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-cl
 // ---------------------------------------------------------------------------
 
 const FRAMEWORK_VERSION = '3.0.0';
+
+const TEST_ALLOCATION_REF: ProviderAllocationRef = {
+  version: 1,
+  providerId: 'test-provider',
+  providerData: {},
+};
+
 let fixtureRoot: string | undefined;
 
 /**
@@ -168,7 +177,6 @@ function makeWorkerConfig(): WorkflowWorkerConfig {
     inputs: {},
     scope: { type: 'global' },
     busAuth: { kind: 'none' },
-    context: { repoPath: '/repo', makaioHome: TEST_MAKAIO_HOME, os: 'linux', arch: 'x64' },
     env: {},
     coordinatorSessionId: 'session-1',
     cancelSubject: 'workflow.wfx-1.cancel',
@@ -591,6 +599,32 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
 // ---------------------------------------------------------------------------
 
 describe('workflow-level runner boot composition', () => {
+  /**
+   * Minimal in-memory repository fixture for boot-composition tests.
+   *
+   * These tests verify runner wiring, not repository behavior. The
+   * repository returns plausible records so that the Authority can
+   * create attempts and commit outcomes through the normal path.
+   */
+  const stubRepository: ExecutionAttemptRepository = {
+    createAttempt: (input) =>
+      Promise.resolve({
+        executionAttemptId: input.executionAttemptId,
+        executionId: input.executionId,
+        status: 'pending',
+        allocationRef: null,
+        createdAt: new Date().toISOString(),
+      }),
+    beginProvisioning: () => Promise.resolve({ kind: 'started' as const }),
+    recordAllocation: () => Promise.resolve({ kind: 'recorded' as const }),
+    recordProvisioningFailure: () => Promise.resolve({ kind: 'recorded' as const }),
+    getActiveAttempt: () => Promise.resolve(null),
+    commitOutcome: (input) => Promise.resolve({ kind: 'accepted', outcome: input.result }),
+    abandonPendingAttempt: () => Promise.resolve({ kind: 'abandoned' }),
+    recordInfrastructureFailure: () => Promise.resolve({ kind: 'recorded' }),
+  };
+  const stubAuthority = new ExecutionAttemptAuthority(stubRepository);
+
   it('returns undefined when no runner is configured', () => {
     const runner = createNodeWorkflowRunner({
       moduleDir: '/runtime/src',
@@ -620,8 +654,9 @@ describe('workflow-level runner boot composition', () => {
       runner: {
         mode: 'worker-node',
         dispatch,
-        manifest: { packages: [] },
+        manifest: { contributionRefs: [] },
       },
+      authority: stubAuthority,
     });
 
     expect(runner).toBeInstanceOf(WorkerNodeRunner);
@@ -635,9 +670,10 @@ describe('workflow-level runner boot composition', () => {
       runner: {
         mode: 'worker-node',
         dispatch,
-        manifest: { packages: [] },
+        manifest: { contributionRefs: [] },
         requirements: { persistentStorage: true, customCapabilities: [] },
       },
+      authority: stubAuthority,
     });
 
     expect(runner).toBeInstanceOf(WorkerNodeRunner);
@@ -649,17 +685,24 @@ describe('workflow-level runner boot composition', () => {
     let capturedConfig: unknown;
     const cleanup = bus.on(WorkerNodeSubjects.dispatch, (ctx) => {
       capturedConfig = ctx.payload.config;
-      ctx.setResult({
+      const result = {
         executionId: ctx.payload.config.executionId,
         workflowId: ctx.payload.config.workflowId,
-        status: 'completed',
-      });
+        status: 'completed' as const,
+      };
+      // Commit the outcome through the Authority so the runner's
+      // outcomePromise settles, mirroring real worker behavior.
+      void stubAuthority
+        .commitOutcome(ctx.payload.executionAttemptId, ctx.payload.config.executionId, result)
+        .then((decision) => stubAuthority.settleOutcome(ctx.payload.executionAttemptId, decision));
+      ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
     const runner = createNodeWorkflowRunner({
       moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: { mode: 'worker-node' },
       bus,
+      authority: stubAuthority,
     });
 
     try {
@@ -667,11 +710,11 @@ describe('workflow-level runner boot composition', () => {
         throw new Error('Expected worker-node runner');
       }
       const config = makeWorkerConfig();
-      const result = await runner.run(config, new AbortController().signal);
+      const completion = await runner.run(config, new AbortController().signal);
 
       expect(runner).toBeInstanceOf(WorkerNodeRunner);
-      expect(result.status).toBe('completed');
-      expect(capturedConfig).toEqual(config);
+      expect(completion.result.status).toBe('completed');
+      expect(capturedConfig).toEqual({ ...config, terminalAuthority: 'authority' });
     } finally {
       cleanup();
     }
@@ -681,11 +724,20 @@ describe('workflow-level runner boot composition', () => {
     let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
     const dispatch: WorkerNodeDispatch = async (request) => {
       capturedRequest = request;
-      return {
+      const result = {
         executionId: 'wfx-1',
         workflowId: 'workflow-1',
-        status: 'completed',
+        status: 'completed' as const,
       };
+      // Commit the outcome through the Authority so the runner's
+      // outcomePromise settles, mirroring real worker behavior.
+      const decision = await stubAuthority.commitOutcome(
+        request.executionAttemptId,
+        request.config.executionId,
+        result,
+      );
+      stubAuthority.settleOutcome(request.executionAttemptId, decision);
+      return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = createNodeWorkflowRunner({
       moduleDir: '/runtime/src',
@@ -694,6 +746,7 @@ describe('workflow-level runner boot composition', () => {
         mode: 'worker-node',
         dispatch,
       },
+      authority: stubAuthority,
     });
     const signal = new AbortController().signal;
 

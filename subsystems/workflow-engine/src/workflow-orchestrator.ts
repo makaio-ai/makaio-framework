@@ -1,4 +1,5 @@
-/* eslint max-lines: ["error", { "max": 430, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 100, "skipBlankLines": true, "skipComments": true }] */
+/* eslint max-lines: ["error", { "max": 445, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 100, "skipBlankLines": true, "skipComments": true }] */
+import * as os from 'node:os';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   WORKFLOW_CANCELLED_REASON,
@@ -9,6 +10,7 @@ import {
   WorkflowDefinition,
   WorkflowExecution,
   WorkflowRunContext,
+  WorkflowRunContextSchema,
   WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
@@ -353,7 +355,15 @@ async function runRuntimeSequence(
     signal,
     undefined,
     artifactBinding,
-    { context: config.context, env: config.env },
+    {
+      context: {
+        repoPath: process.cwd(),
+        makaioHome: process.env['MAKAIO_HOME'] ?? `${os.homedir()}/.makaio`,
+        os: process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux',
+        arch: process.arch,
+      },
+      env: config.env,
+    },
     { suspensionStrategy: config.suspensionStrategy, resumeFrames, runtimeLoopGates },
   );
   const expressionCtx = runtimeCtx.buildExpressionContext();
@@ -418,27 +428,29 @@ async function loadResumeFrames(
  * @param definition - Loaded definition snapshot for definition-sourced runs.
  * @returns Durable run-context shape used by shared finalizer state.
  */
-function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: WorkflowDefinition): WorkflowRunContext {
-  return {
+function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: WorkflowDefinition) {
+  return WorkflowRunContextSchema.parse({
     executionId: config.executionId,
     workflowId: config.workflowId,
-    source: config.source,
+    source:
+      config.source.kind === 'path'
+        ? { kind: 'path', path: config.materializationSpec?.sourcePath ?? '' }
+        : config.source,
     definitionSnapshot: config.source.kind === 'definition' ? (config.definition ?? definition) : definition,
-    workerManifest: { packages: [] },
+    workerManifest: { contributionRefs: [] },
     inputs: config.inputs,
     config: config.config ?? {},
     scope: config.scope,
     triggerPayload: config.triggerPayload,
     ...(config.artifactRef !== undefined ? { artifactRef: config.artifactRef } : {}),
-    ...(config.executionHints !== undefined ? { executionHints: config.executionHints } : {}),
     coordinatorSessionId: config.coordinatorSessionId,
     cancelSubject: config.cancelSubject,
-    context: config.context,
     env: config.env,
     createdAt: Date.now(),
     suspensionStrategy: config.suspensionStrategy,
     ...(config.terminalAuthority !== undefined ? { terminalAuthority: config.terminalAuthority } : {}),
-  };
+    ...(config.materializationSpec !== undefined ? { materializationSpec: config.materializationSpec } : {}),
+  });
 }
 
 /**

@@ -1,12 +1,13 @@
+/* eslint max-lines: ["error", { "max": 420, "skipBlankLines": true, "skipComments": true }] */
 import { z } from 'zod';
 import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
 import { ArtifactScopeSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js';
 import { AIReasoningLevelSchema } from '../model/index.js';
-import { ExecutionHintsSchema } from './execution-hints.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowDelegateResultFinalizerIdSchema, WorkflowFinalizerIdSchema } from './finalization.js';
+import { WorkerNodeRequirementsSchema } from '../capabilities/worker-node/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -873,6 +874,13 @@ export const WorkflowStateDefinitionSchema = z.object({
 /** Inferred type for {@link WorkflowStateDefinitionSchema}. */
 export type WorkflowStateDefinition = z.infer<typeof WorkflowStateDefinitionSchema>;
 
+/** Mirror of `WorkflowWorkerSourceSchema` (inline to avoid circular import with `worker.ts`). */
+const ExecutableSourceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('path'), path: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('source'), filename: z.string().min(1), source: z.string() }).strict(),
+  z.object({ kind: z.literal('definition'), workflowId: z.string().min(1) }).strict(),
+]);
+
 // ─────────────────────────────────────────────────────────────
 // Workflow Definition (stored entity)
 // ─────────────────────────────────────────────────────────────
@@ -957,20 +965,16 @@ export const WorkflowDefinitionSchema = z.object({
    * Absent on locally-authored definitions.
    */
   source: WorkflowDefinitionProvenanceSchema.optional(),
+  /** Portable executable source for worker dispatch (see `ExecutableSourceSchema`). */
+  executableSource: ExecutableSourceSchema.optional(),
+  /** Resource requirements for WorkerNode provider selection. */
+  requirements: WorkerNodeRequirementsSchema.optional(),
   /**
    * Framework finalizer selected by the compiled workflow definition after a
    * successful execution. This immutable definition-owned selector cannot be
    * overridden by execution callers or dispatch metadata.
    */
   successFinalizerId: WorkflowFinalizerIdSchema.optional(),
-  /**
-   * Advisory execution hints that constrain worker provisioning and routing.
-   *
-   * Merged at execution start with any per-call hints supplied by the caller
-   * (caller wins on overlap; capabilities are deduplicated).
-   * The runner may inspect these to select a compatible provider.
-   */
-  executionHints: ExecutionHintsSchema.optional(),
 });
 
 /**

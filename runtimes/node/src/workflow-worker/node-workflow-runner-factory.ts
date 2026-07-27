@@ -7,6 +7,11 @@ import type {
 } from '@makaio/contracts';
 import { WorkerNodeSubjects } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
+import {
+  ExecutionAttemptAuthority,
+  type ExecutionAttemptRepository,
+  type WorkflowMaterializationSpecResolver,
+} from '@makaio/subsystem-workflow-engine';
 import type { WorkflowRunnerBootOptions } from '../boot-types.js';
 import type { WorkflowWorkerEntryMode } from './worker-entry-resolver.js';
 import { ThinWorkflowPiscinaRunner } from './thin-workflow-piscina-runner.js';
@@ -34,6 +39,16 @@ export interface CreateNodeWorkflowRunnerPackageOptionsParams {
    * dispatch function is supplied. Ignored for Piscina mode.
    */
   readonly bus?: IMakaioBus;
+  /**
+   * Injected execution attempt persistence port.
+   *
+   * Required when `workflowRunner.mode` is `'worker-node'`. Threaded
+   * through to the workflow engine service options so the Authority
+   * service can delegate durable decisions.
+   */
+  readonly executionAttemptRepository?: ExecutionAttemptRepository;
+  /** Host-owned resolvers for portable path-backed workflow starts. */
+  readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
 }
 
 /** Workflow engine package options produced by Node runtime composition. */
@@ -55,6 +70,23 @@ export interface NodeWorkflowRunnerPackageOptions {
     /** Makaio data-home path forwarded to workflow workers. */
     readonly makaioHome?: string;
   };
+  /**
+   * Injected execution attempt persistence port.
+   *
+   * Present only when the workflow runner uses WorkerNode dispatch mode.
+   * Forwarded to the workflow engine service for Authority construction.
+   */
+  readonly executionAttemptRepository?: ExecutionAttemptRepository;
+  /**
+   * Execution attempt Authority constructed from the injected repository.
+   *
+   * Present only when the workflow runner uses WorkerNode dispatch mode.
+   * Shared between the runner (for attempt creation before dispatch) and
+   * the workflow engine service (for outcome commitment).
+   */
+  readonly executionAttemptAuthority?: ExecutionAttemptAuthority;
+  /** Host-owned resolvers forwarded to the workflow engine service. */
+  readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
 }
 
 /**
@@ -62,7 +94,7 @@ export interface NodeWorkflowRunnerPackageOptions {
  * @returns A fresh manifest instance for isolated runner options.
  */
 function createEmptyWorkerContributionManifest(): WorkerContributionManifest {
-  return { packages: [] };
+  return { contributionRefs: [] };
 }
 
 /**
@@ -73,6 +105,21 @@ function createEmptyWorkerContributionManifest(): WorkerContributionManifest {
 export function createNodeWorkflowRunnerPackageOptions(
   params: CreateNodeWorkflowRunnerPackageOptionsParams,
 ): NodeWorkflowRunnerPackageOptions {
+  // Construction gate: WorkerNode mode requires an injected repository.
+  if (params.workflowRunner?.mode === 'worker-node' && !params.executionAttemptRepository) {
+    throw new Error(
+      `WorkerNode dispatch mode requires an ExecutionAttemptRepository. ` +
+        `Pass 'executionAttemptRepository' to createNodeWorkflowRunnerPackageOptions ` +
+        `when workflowRunner.mode is 'worker-node'.`,
+    );
+  }
+
+  // Create the Authority early so it can be shared between the runner
+  // (attempt creation before dispatch) and the engine service (outcome commitment).
+  const executionAttemptAuthority = params.executionAttemptRepository
+    ? new ExecutionAttemptAuthority(params.executionAttemptRepository)
+    : undefined;
+
   const defaultWorkerEntryMode: WorkflowWorkerEntryMode =
     basename(params.runtimeModuleDir) === 'src' ? 'source' : 'dist';
   const workflowRunner = createNodeWorkflowRunner({
@@ -80,6 +127,7 @@ export function createNodeWorkflowRunnerPackageOptions(
     defaultWorkerEntryMode,
     runner: params.workflowRunner,
     bus: params.bus,
+    authority: executionAttemptAuthority,
   });
 
   return {
@@ -90,6 +138,15 @@ export function createNodeWorkflowRunnerPackageOptions(
       platformDefaults: params.platformDefaults,
       makaioHome: params.makaioHome,
     },
+    ...(params.executionAttemptRepository !== undefined && {
+      executionAttemptRepository: params.executionAttemptRepository,
+    }),
+    ...(executionAttemptAuthority !== undefined && {
+      executionAttemptAuthority,
+    }),
+    ...(params.workflowMaterializationSpecResolvers !== undefined && {
+      workflowMaterializationSpecResolvers: params.workflowMaterializationSpecResolvers,
+    }),
   };
 }
 
@@ -112,6 +169,13 @@ interface CreateNodeWorkflowRunnerParams {
    * function is supplied. Ignored for Piscina mode.
    */
   readonly bus?: IMakaioBus;
+  /**
+   * Execution attempt Authority injected into WorkerNode runners.
+   *
+   * Required when `runner.mode` is `'worker-node'`. The runner uses this
+   * to create attempts before dispatch and wait for committed outcomes.
+   */
+  readonly authority?: ExecutionAttemptAuthority;
 }
 
 /**
@@ -142,6 +206,12 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
     }
 
     case 'worker-node': {
+      if (params.authority === undefined) {
+        throw new Error(
+          `WorkerNodeRunner requires an ExecutionAttemptAuthority. ` +
+            `Pass 'authority' to createNodeWorkflowRunner when runner.mode is 'worker-node'.`,
+        );
+      }
       const bus = params.bus;
       const dispatch =
         runner.dispatch ??
@@ -151,6 +221,7 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
               bus.request(
                 WorkerNodeSubjects.dispatch,
                 {
+                  executionAttemptId: request.executionAttemptId,
                   config: request.config,
                   manifest: request.manifest,
                   requirements: request.requirements,
@@ -166,6 +237,7 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
       }
       return new WorkerNodeRunner({
         dispatch,
+        authority: params.authority,
         ...(runner.manifest !== undefined && { manifest: runner.manifest }),
         ...(runner.requirements !== undefined && { requirements: runner.requirements }),
       });
@@ -182,6 +254,7 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
       return new ThinWorkflowPiscinaRunner({
         workerEntry,
         manifest: runner.manifest ?? createEmptyWorkerContributionManifest(),
+        ...(runner.resolveWorkspaceRoot !== undefined && { resolveWorkspaceRoot: runner.resolveWorkspaceRoot }),
         maxConcurrency: runner.maxConcurrency,
         idleTimeoutMs: runner.idleTimeoutMs,
       });

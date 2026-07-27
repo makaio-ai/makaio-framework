@@ -5,6 +5,7 @@ import {
   type IWorkflowRunner,
   type WorkflowExecutionScope,
   type WorkflowRunContext,
+  type WorkflowRunnerCompletion,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
@@ -115,16 +116,12 @@ describe('workflow public rerun subjects', () => {
       id: 'rerun-context-original',
     } satisfies WorkflowExecutionScope;
     const originalArtifactRef = { kind: 'workpiece', id: 'rerun-context-original' };
-    const originalExecutionHints = {
-      providers: { piscina: { maxWorkers: 1 } },
-    };
     const originalTriggerPayload = { source: 'original-trigger', count: 1 };
 
     const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.start, {
       workflowId: workflow.id,
       scope: originalScope,
       artifactRef: originalArtifactRef,
-      executionHints: originalExecutionHints,
       triggerPayload: originalTriggerPayload,
     });
 
@@ -137,14 +134,10 @@ describe('workflow public rerun subjects', () => {
     });
     expect(inheritedRunContext?.scope).toEqual(originalScope);
     expect(inheritedRunContext?.artifactRef).toEqual(originalArtifactRef);
-    expect(inheritedRunContext?.executionHints).toEqual(originalExecutionHints);
     expect(inheritedRunContext?.triggerPayload).toEqual(originalTriggerPayload);
 
     const overrideScope = { type: 'session', id: 'rerun-context-override' } satisfies WorkflowExecutionScope;
     const overrideArtifactRef = { kind: 'implementation-plan', id: 'rerun-context-override' };
-    const overrideExecutionHints = {
-      providers: { 'github-actions': { pool: 'large' } },
-    };
     const overrideTriggerPayload = { source: 'override-trigger', count: 2 };
 
     const { executionId: overrideRerunExecutionId } = await MakaioBus.request(WorkflowSubjects.rerun, {
@@ -152,7 +145,6 @@ describe('workflow public rerun subjects', () => {
       mode: 'snapshot',
       scope: overrideScope,
       artifactRef: overrideArtifactRef,
-      executionHints: overrideExecutionHints,
       triggerPayload: overrideTriggerPayload,
     });
     const { runContext: overrideRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
@@ -160,7 +152,6 @@ describe('workflow public rerun subjects', () => {
     });
     expect(overrideRunContext?.scope).toEqual(overrideScope);
     expect(overrideRunContext?.artifactRef).toEqual(overrideArtifactRef);
-    expect(overrideRunContext?.executionHints).toEqual(overrideExecutionHints);
     expect(overrideRunContext?.triggerPayload).toEqual(overrideTriggerPayload);
   });
 
@@ -228,13 +219,13 @@ describe('workflow public rerun subjects', () => {
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     let runCount = 0;
     const workflowRunner: IWorkflowRunner = {
-      run(config, signal) {
+      async run(config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         runCount += 1;
         if (runCount > 1) {
           return waitForRunnerAbort(config, signal);
         }
-        return runWorkflowOrchestrator({
+        const result = await runWorkflowOrchestrator({
           config,
           loaded: {
             definition: loadedWorkflow,
@@ -243,6 +234,7 @@ describe('workflow public rerun subjects', () => {
           bus: MakaioBus,
           signal,
         });
+        return { state: 'uncommitted', result };
       },
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner });
@@ -254,14 +246,22 @@ describe('workflow public rerun subjects', () => {
         resolve(ctx.payload.executionId);
       });
     });
-    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, { filePath });
+    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, {
+      filePath,
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'workspace-public-rerun',
+        rootDigest: 'sha256-public-rerun-file-snapshot',
+        sourcePath: 'workflows/public-rerun-file-snapshot.ts',
+      },
+    });
     await expect(originalCompletedPromise).resolves.toBe(originalExecutionId);
 
     const { runContext: originalRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
       executionId: originalExecutionId,
     });
     expect(originalRunContext?.workflowId).toBe(originalExecutionId);
-    expect(originalRunContext?.source).toEqual({ kind: 'path', path: filePath });
+    expect(originalRunContext?.source).toEqual({ kind: 'path', path: 'workflows/public-rerun-file-snapshot.ts' });
     expect(originalRunContext?.definitionSnapshot?.id).toBe(loadedWorkflow.id);
 
     const { executionId: rerunExecutionId } = await MakaioBus.request(WorkflowSubjects.rerun, {
@@ -272,14 +272,14 @@ describe('workflow public rerun subjects', () => {
     const rerunConfig = capturedConfigs.at(1);
     expect(rerunConfig?.executionId).toBe(rerunExecutionId);
     expect(rerunConfig?.workflowId).toBe(loadedWorkflow.id);
-    expect(rerunConfig?.source).toEqual({ kind: 'path', path: filePath });
+    expect(rerunConfig?.source).toEqual({ kind: 'path', path: 'workflows/public-rerun-file-snapshot.ts' });
     expect(rerunConfig?.definition?.id).toBe(loadedWorkflow.id);
 
     const { runContext: rerunRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
       executionId: rerunExecutionId,
     });
     expect(rerunRunContext?.workflowId).toBe(loadedWorkflow.id);
-    expect(rerunRunContext?.source).toEqual({ kind: 'path', path: filePath });
+    expect(rerunRunContext?.source).toEqual({ kind: 'path', path: 'workflows/public-rerun-file-snapshot.ts' });
     expect(rerunRunContext?.definitionSnapshot?.id).toBe(loadedWorkflow.id);
   });
 
@@ -301,13 +301,13 @@ describe('workflow public rerun subjects', () => {
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     let runCount = 0;
     const workflowRunner: IWorkflowRunner = {
-      run(config, signal) {
+      async run(config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         runCount += 1;
         if (runCount > 1) {
           return waitForRunnerAbort(config, signal);
         }
-        return runWorkflowOrchestrator({
+        const result = await runWorkflowOrchestrator({
           config,
           loaded: {
             definition: loadedWorkflow,
@@ -316,6 +316,7 @@ describe('workflow public rerun subjects', () => {
           bus: MakaioBus,
           signal,
         });
+        return { state: 'uncommitted', result };
       },
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner });
@@ -327,7 +328,15 @@ describe('workflow public rerun subjects', () => {
         resolve(ctx.payload.executionId);
       });
     });
-    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, { filePath });
+    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, {
+      filePath,
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'workspace-public-rerun',
+        rootDigest: 'sha256-public-rerun-file-current',
+        sourcePath: 'workflows/public-rerun-file-current.ts',
+      },
+    });
     await expect(originalCompletedPromise).resolves.toBe(originalExecutionId);
 
     const { executionId: rerunExecutionId } = await MakaioBus.request(WorkflowSubjects.rerun, {
@@ -338,8 +347,13 @@ describe('workflow public rerun subjects', () => {
     const rerunConfig = capturedConfigs.at(1);
     expect(rerunConfig?.executionId).toBe(rerunExecutionId);
     expect(rerunConfig?.workflowId).toBe(loadedWorkflow.id);
-    expect(rerunConfig?.source).toEqual({ kind: 'path', path: filePath });
+    expect(rerunConfig?.source).toEqual({ kind: 'path', path: 'workflows/public-rerun-file-current.ts' });
     expect(rerunConfig?.definition).toBeUndefined();
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: rerunExecutionId }),
+    ).resolves.toMatchObject({
+      runContext: { definitionSnapshot: { id: loadedWorkflow.id } },
+    });
   });
 
   it('reruns failed file-backed executions in current mode without a loaded snapshot', async () => {
@@ -351,7 +365,7 @@ describe('workflow public rerun subjects', () => {
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     let runCount = 0;
     const workflowRunner: IWorkflowRunner = {
-      run(config, signal) {
+      run(config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         runCount += 1;
         if (runCount === 1) {
@@ -363,13 +377,24 @@ describe('workflow public rerun subjects', () => {
     setup = await setupWorkflowExecutorTest({ workflowRunner });
 
     const filePath = '/workspace/workflows/public-rerun-file-current-load-failure.ts';
-    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, { filePath });
+    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, {
+      filePath,
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'workspace-public-rerun',
+        rootDigest: 'sha256-public-rerun-file-current-load-failure',
+        sourcePath: 'workflows/public-rerun-file-current-load-failure.ts',
+      },
+    });
     await expectExecutionStatus(originalExecutionId, 'failed');
 
     const { runContext: originalRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
       executionId: originalExecutionId,
     });
-    expect(originalRunContext?.source).toEqual({ kind: 'path', path: filePath });
+    expect(originalRunContext?.source).toEqual({
+      kind: 'path',
+      path: 'workflows/public-rerun-file-current-load-failure.ts',
+    });
     expect(originalRunContext?.workflowId).toBe(originalExecutionId);
     expect(originalRunContext?.definitionSnapshot).toBeUndefined();
 
@@ -378,18 +403,16 @@ describe('workflow public rerun subjects', () => {
       mode: 'current',
       input: { retry: true },
       config: { fixed: true },
-      executionHints: { providers: { piscina: { maxWorkers: 1 } } },
       reason: 'source fixed',
     });
 
     const rerunConfig = capturedConfigs.at(1);
     expect(rerunConfig?.executionId).toBe(rerunExecutionId);
     expect(rerunConfig?.workflowId).toBe(rerunExecutionId);
-    expect(rerunConfig?.source).toEqual({ kind: 'path', path: filePath });
+    expect(rerunConfig?.source).toEqual({ kind: 'path', path: 'workflows/public-rerun-file-current-load-failure.ts' });
     expect(rerunConfig?.definition).toBeUndefined();
     expect(rerunConfig?.inputs).toEqual({ retry: true });
     expect(rerunConfig?.config).toEqual({ fixed: true });
-    expect(rerunConfig?.executionHints).toEqual({ providers: { piscina: { maxWorkers: 1 } } });
 
     const { links } = await MakaioBus.request(WorkflowSubjects.listExecutionLinks, {
       targetExecutionId: rerunExecutionId,
@@ -409,20 +432,15 @@ describe('workflow public rerun subjects', () => {
       throw new Error('Workflow executor test setup did not initialize.');
     }
 
-    const workflow = {
-      ...createWorkflowDefinition({
-        id: 'public-rerun-current',
-        name: 'Public Rerun Current v1',
-        root: {
-          id: 'public-rerun-current-root',
-          type: 'sequence',
-          nodes: [],
-        },
-      }),
-      executionHints: {
-        providers: { piscina: { maxWorkers: 1 } },
+    const workflow = createWorkflowDefinition({
+      id: 'public-rerun-current',
+      name: 'Public Rerun Current v1',
+      root: {
+        id: 'public-rerun-current-root',
+        type: 'sequence',
+        nodes: [],
       },
-    };
+    });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
 
     const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.start, {
@@ -434,9 +452,6 @@ describe('workflow public rerun subjects', () => {
       workflow: {
         ...workflow,
         name: 'Public Rerun Current v2',
-        executionHints: {
-          providers: { piscina: { maxWorkers: 4 } },
-        },
       },
     });
 
@@ -451,7 +466,6 @@ describe('workflow public rerun subjects', () => {
     });
     expect(rerunRunContext?.definitionSnapshot?.name).toBe('Public Rerun Current v2');
     expect(rerunRunContext?.inputs).toEqual({ value: 'override' });
-    expect(rerunRunContext?.executionHints).toEqual({ providers: { piscina: { maxWorkers: 4 } } });
   });
 
   it('rejects source-backed snapshot reruns when no runner-backed dispatch is available', async () => {
@@ -474,19 +488,13 @@ describe('workflow public rerun subjects', () => {
       workflowId: workflow.id,
       source: { kind: 'path', path: '/repo/workflows/requires-runner.ts' },
       definitionSnapshot: workflow,
-      workerManifest: { packages: [] },
+      workerManifest: { contributionRefs: [] },
       inputs: {},
       config: {},
       scope: { type: 'global' },
       triggerPayload: {},
       coordinatorSessionId: 'session-public-rerun-source-requires-runner',
       cancelSubject: `workflow.${originalExecutionId}.cancel`,
-      context: {
-        repoPath: '/repo',
-        makaioHome: '/home/.makaio',
-        os: 'linux',
-        arch: 'arm64',
-      },
       env: {},
       createdAt: Date.now(),
       suspensionStrategy: 'wait-in-process',
@@ -510,7 +518,7 @@ describe('workflow public rerun subjects', () => {
     expectRequestErrorCause(
       error,
       WorkflowErrorCode.NOT_EXECUTABLE,
-      `Workflow source execution '${workflow.id}' requires a workflow runner or WorkerNode capability requirements.`,
+      `Workflow source execution '${workflow.id}' requires a workflow runner.`,
     );
     const { links } = await MakaioBus.request(WorkflowSubjects.listExecutionLinks, {
       sourceExecutionId: originalExecutionId,
@@ -528,19 +536,13 @@ describe('workflow public rerun subjects', () => {
       executionId,
       workflowId: 'public-rerun-missing-snapshot',
       source: { kind: 'path', path: '/repo/not-loaded-by-in-process-runner.mjs' },
-      workerManifest: { packages: [] },
+      workerManifest: { contributionRefs: [] },
       inputs: {},
       config: {},
       scope: { type: 'global' },
       triggerPayload: {},
       coordinatorSessionId: 'session-public-rerun-missing-snapshot',
       cancelSubject: `workflow.${executionId}.cancel`,
-      context: {
-        repoPath: '/repo',
-        makaioHome: '/home/.makaio',
-        os: 'linux',
-        arch: 'arm64',
-      },
       env: {},
       createdAt: Date.now(),
       suspensionStrategy: 'wait-in-process',

@@ -141,6 +141,13 @@
       "when": 1783825707353,
       "tag": "0019_terminal-authority",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784915844776,
+      "tag": "0020_remote-worker-execution",
+      "breakpoints": true
     }
   ]
 }

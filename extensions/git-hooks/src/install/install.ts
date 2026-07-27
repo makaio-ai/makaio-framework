@@ -41,6 +41,13 @@ export interface InstallGitHooksOptions {
    * Example: `['/usr/local/bin/makaio-git-hook-receiver']`
    */
   readonly receiverCommand: readonly string[];
+  /**
+   * Maximum receiver delivery time before a hook fails open.
+   *
+   * Defaults to two seconds. Callers may raise the budget when receiver
+   * delivery is more important than hook latency.
+   */
+  readonly receiverTimeoutSeconds?: number;
 }
 
 /**
@@ -108,6 +115,9 @@ export async function installGitHooks(options: InstallGitHooksOptions): Promise<
       stateFile,
       originalHook: backupPath,
       receiverCommand: [...options.receiverCommand],
+      ...(options.receiverTimeoutSeconds === undefined
+        ? {}
+        : { receiverTimeoutSeconds: options.receiverTimeoutSeconds }),
     });
 
     await writeFileAtomicExclusive(target.path, wrapper, 0o755);

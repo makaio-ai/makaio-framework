@@ -24,9 +24,9 @@
     "ajv-formats": "^3.0.1",
     "drizzle-orm": "^0.45.2",
     "glob": "13.0.6",
-    "hono": "^4.12.27",
+    "hono": "^4.12.23",
     "type-fest": "^5.2.0",
-    "ws": "^8.21.1",
+    "ws": "^8.21.0",
     "zod": "4.4.3"
   },
   "peerDependencies": {
@@ -119,6 +119,10 @@
       "types": "./dist/contracts/canonical-model/index.d.mts",
       "default": "./dist/contracts/canonical-model/index.mjs"
     },
+    "./contracts/capabilities": {
+      "types": "./dist/contracts/capabilities/index.d.mts",
+      "default": "./dist/contracts/capabilities/index.mjs"
+    },
     "./contracts/extension": {
       "types": "./dist/contracts/extension/index.d.mts",
       "default": "./dist/contracts/extension/index.mjs"
@@ -166,6 +170,10 @@
     "./contracts/variant": {
       "types": "./dist/contracts/variant/index.d.mts",
       "default": "./dist/contracts/variant/index.mjs"
+    },
+    "./contracts/worker-node": {
+      "types": "./dist/contracts/worker-node/index.d.mts",
+      "default": "./dist/contracts/worker-node/index.mjs"
     },
     "./kernel": {
       "types": "./dist/kernel/index.d.mts",
@@ -218,6 +226,10 @@
     "./services/materialization": {
       "types": "./dist/services/materialization/index.d.mts",
       "default": "./dist/services/materialization/index.mjs"
+    },
+    "./services/workflow-transitions": {
+      "types": "./dist/services/workflow-transitions/index.d.mts",
+      "default": "./dist/services/workflow-transitions/index.mjs"
     },
     "./services/model-registry": {
       "types": "./dist/services/model-registry/index.d.mts",
@@ -510,6 +522,10 @@
     "./workflow-engine": {
       "types": "./dist/workflow-engine/index.d.mts",
       "default": "./dist/workflow-engine/index.mjs"
+    },
+    "./workflow-engine/execution-attempt-repository": {
+      "types": "./dist/workflow-engine/execution-attempt-repository.d.mts",
+      "default": "./dist/workflow-engine/execution-attempt-repository.mjs"
     },
     "./workflow-engine/package": {
       "types": "./dist/workflow-engine/package.d.mts",

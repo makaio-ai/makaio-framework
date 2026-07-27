@@ -20,6 +20,18 @@ afterEach(async () => {
 });
 
 describe('renderHookWrapper', () => {
+  it('rejects invalid receiver timeout values before rendering shell input', () => {
+    expect(() =>
+      renderHookWrapper({
+        hookName: 'post-commit',
+        stateFile: '/tmp/.makaio-hooks.json',
+        originalHook: undefined,
+        receiverCommand: ['/bin/true'],
+        receiverTimeoutSeconds: 0,
+      }),
+    ).toThrow('Receiver timeout must be a positive integer');
+  });
+
   it(
     'bounds receiver delivery and preserves the original hook exit code',
     async () => {

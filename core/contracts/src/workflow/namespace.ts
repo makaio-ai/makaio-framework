@@ -20,14 +20,18 @@ import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } fro
 import { ExecutionLinkListQuerySchema, ExecutionLinkSchema, SpanRecordSchema } from './span.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowRunContextSchema } from './run-context.js';
+import { WorkerMaterializationSpecSchema } from '../capabilities/worker-node/types.js';
 import { WorkLogExecutionSummarySchema, WorkLogFrameEntrySchema, WorkLogStatsSchema } from './worklog.js';
-import { ExecutionHintsSchema } from './execution-hints.js';
 import { JsonPatchOperationSchema } from './json-patch.js';
 import {
   CompleteExternalExecutionRequestSchema,
   RegisterExternalExecutionRequestSchema,
 } from './external-execution.js';
 import { WorkflowRunResultSchema } from './worker.js';
+import {
+  WorkflowDelegateResultFinalizationGatewayRequestSchema,
+  WorkflowDelegateResultFinalizationResponseSchema,
+} from './finalization.js';
 
 /**
  * Structured progress signal emitted by a station handler via `ctx.updateProgress()`.
@@ -178,11 +182,6 @@ export const WorkflowSchemas = {
        * When omitted, the executor uses the workflow definition's required scope.
        */
       scope: WorkflowExecutionScopeSchema.optional(),
-      /**
-       * Advisory hints for worker provisioning.
-       * Passed opaquely to the execution host after JSON-safety validation.
-       */
-      executionHints: ExecutionHintsSchema.optional(),
       parentSessionId: z.string().optional(),
       triggerPayload: JsonObjectContractSchema.optional(),
     }),
@@ -196,7 +195,6 @@ export const WorkflowSchemas = {
       config: JsonValueSchema.optional(),
       artifactRef: WorkflowArtifactRefSchema.optional(),
       scope: WorkflowExecutionScopeSchema.optional(),
-      executionHints: ExecutionHintsSchema.optional(),
       parentSessionId: z.string().optional(),
       triggerPayload: JsonObjectContractSchema.optional(),
       reason: z.string().min(1).optional(),
@@ -236,6 +234,15 @@ export const WorkflowSchemas = {
         }
       }),
     response: z.object({ accepted: z.boolean(), status: ExecutionStatusSchema }),
+  },
+  /**
+   * Finalize a successful delegate result through the Authority-owned static
+   * gateway. The handler verifies the attempt peer and durable node selector
+   * before invoking the selected local finalizer.
+   */
+  finalizeDelegateResult: {
+    request: WorkflowDelegateResultFinalizationGatewayRequestSchema,
+    response: WorkflowDelegateResultFinalizationResponseSchema,
   },
   getExecution: {
     request: z.object({ executionId: z.string() }),
@@ -356,6 +363,11 @@ export const WorkflowSchemas = {
        */
       filePath: z.string().min(1),
       /**
+       * Host-resolved portable workspace reference. Path execution fails before
+       * persistence if this is omitted.
+       */
+      materializationSpec: WorkerMaterializationSpecSchema.optional(),
+      /**
        * Trigger payload forwarded to the workflow execution context.
        * Use this to pass structured input when the file is triggered from a
        * CLI flag or stdin rather than a named bus trigger.
@@ -443,8 +455,9 @@ export const WorkflowSchemas = {
    *
    * Trust-boundary rules (enforced by the handler, not the schema):
    * - Local callers: always permitted.
-   * - Direct HMAC callers: `peer.kind === 'workflow-execution' && peer.id === executionId`.
-   * - Relay/E2E callers: authenticated and encrypted peer required.
+   * - Direct HMAC callers: authenticated `workflow-execution-attempt` peer
+   *   whose Authority-issued `executionId` claim matches the request.
+   * - Relay/E2E callers: authenticated, encrypted peer bound to `executionId`.
    */
   getRunContext: {
     request: z.object({ executionId: z.string().min(1) }),

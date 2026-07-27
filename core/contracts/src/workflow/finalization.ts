@@ -121,10 +121,26 @@ export const WorkflowDelegateResultFinalizationRequestSchema = z
   })
   .strict();
 
+/**
+ * Static authority gateway request for one delegate result finalization.
+ *
+ * Unlike the dynamically named finalizer subject, this envelope is safe to
+ * expose to restricted remote execution attempts. The Authority validates the
+ * selected finalizer against its durable definition snapshot before routing
+ * the enclosed payload to the finalizer's local namespace.
+ */
+export const WorkflowDelegateResultFinalizationGatewayRequestSchema =
+  WorkflowDelegateResultFinalizationRequestSchema.extend({
+    finalizerId: WorkflowDelegateResultFinalizerIdSchema,
+  }).strict();
+
 /** Authority response containing the durable delegate frame output. */
 export const WorkflowDelegateResultFinalizationResponseSchema = z.object({ output: JsonValueSchema }).strict();
 
 export type WorkflowDelegateResultFinalizationRequest = z.infer<typeof WorkflowDelegateResultFinalizationRequestSchema>;
+export type WorkflowDelegateResultFinalizationGatewayRequest = z.infer<
+  typeof WorkflowDelegateResultFinalizationGatewayRequestSchema
+>;
 export type WorkflowDelegateEconomics = z.infer<typeof WorkflowDelegateEconomicsSchema>;
 export type WorkflowDelegateResultFinalizationResponse = z.infer<
   typeof WorkflowDelegateResultFinalizationResponseSchema

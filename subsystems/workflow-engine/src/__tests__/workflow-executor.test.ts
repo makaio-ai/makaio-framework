@@ -6,6 +6,7 @@ import type {
   WorkflowFrameState,
   WorkflowGateInstance,
   WorkflowRunContext,
+  WorkflowRunnerCompletion,
   WorkflowRunResult,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
@@ -132,7 +133,10 @@ async function seedPausedExecutionAndGate(
   gateId: string,
   frameId: string,
   schema: WorkflowGateInstance['schema'] = {},
-  options: { readonly seedResumeFrame?: boolean } = {},
+  options: {
+    readonly materializationSpec?: NonNullable<WorkflowRunContext['materializationSpec']>;
+    readonly seedResumeFrame?: boolean;
+  } = {},
 ): Promise<WorkflowGateInstance> {
   const execution = createWorkflowExecution({
     id: executionId,
@@ -144,22 +148,26 @@ async function seedPausedExecutionAndGate(
 
   // Persist a run context so resumePausedExecution can look it up.
   const workflow = createWorkflowDefinition({ id: workflowId });
+  const source =
+    options.materializationSpec === undefined
+      ? ({ kind: 'definition', workflowId } as const)
+      : ({ kind: 'path', path: options.materializationSpec.sourcePath } as const);
   const runContext: WorkflowRunContext = {
     executionId,
     workflowId,
-    source: { kind: 'definition', workflowId },
+    source,
     definitionSnapshot: workflow,
-    workerManifest: { packages: [] },
+    workerManifest: { contributionRefs: [] },
     inputs: {},
     config: {},
     scope: { type: 'global' },
     triggerPayload: {},
     coordinatorSessionId: 'session-test',
     cancelSubject: `workflow.${executionId}.cancel`,
-    context: { repoPath: '/repo', makaioHome: '/home/.makaio', os: 'linux', arch: 'x64' },
     env: {},
     createdAt: Date.now(),
     suspensionStrategy: 'exit-and-redispatch',
+    ...(options.materializationSpec !== undefined ? { materializationSpec: options.materializationSpec } : {}),
   };
   await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
 
@@ -215,8 +223,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
     // construct the paused result dynamically from the config.
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunResult> =>
-          Promise.resolve(makePausedRunResult(config.executionId, config.workflowId, 'gate-approve', 'frame-gate-1')),
+        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+          Promise.resolve({
+            state: 'uncommitted',
+            result: makePausedRunResult(config.executionId, config.workflowId, 'gate-approve', 'frame-gate-1'),
+          }),
       ),
     };
 
@@ -257,7 +268,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
   it('serializes cancellation after a pause CAS before paused projection', async () => {
     const workflowId = `wf-pause-cancel-race-${Math.random().toString(36).slice(2)}`;
     const definition = createWorkflowDefinition({ id: workflowId });
-    const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+    const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
     const pauseRequestReached = Promise.withResolvers<void>();
     const releasePauseRequest = Promise.withResolvers<void>();
     const pauseRequestFinished = Promise.withResolvers<void>();
@@ -290,7 +301,10 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     try {
       const executionId = await startWorkflowThroughExecutor(workflowId);
-      releaseRunner.resolve(makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'));
+      releaseRunner.resolve({
+        state: 'uncommitted',
+        result: makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'),
+      });
       await pauseRequestReached.promise;
 
       const cancellation = MakaioBus.request(WorkflowSubjects.cancel, {
@@ -319,7 +333,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
   it('allows a paused lifecycle handler to await reentrant cancellation', async () => {
     const workflowId = `wf-pause-reentrant-cancel-${Math.random().toString(36).slice(2)}`;
     const definition = createWorkflowDefinition({ id: workflowId });
-    const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+    const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
     const stubRunner: IWorkflowRunner = { run: vi.fn(() => releaseRunner.promise) };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
@@ -338,7 +352,10 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     try {
       const executionId = await startWorkflowThroughExecutor(workflowId);
-      releaseRunner.resolve(makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'));
+      releaseRunner.resolve({
+        state: 'uncommitted',
+        result: makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'),
+      });
       await cancellationFinished.promise;
       await vi.waitFor(async () => {
         const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
@@ -355,7 +372,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
   ] as const)('does not let a resolved %s runner overwrite concurrent cancellation', async (terminalStatus) => {
     const workflowId = `wf-cancel-${terminalStatus}-race-${Math.random().toString(36).slice(2)}`;
     const definition = createWorkflowDefinition({ id: workflowId });
-    const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+    const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
     const cancellationPersisted = Promise.withResolvers<void>();
     const releaseCancellationPublication = Promise.withResolvers<void>();
     const stubRunner: IWorkflowRunner = { run: vi.fn(() => releaseRunner.promise) };
@@ -371,11 +388,13 @@ describe('WorkflowExecutor — paused gate integration', () => {
       const executionId = await startWorkflowThroughExecutor(workflowId);
       const cancellation = MakaioBus.request(WorkflowSubjects.cancel, { executionId, reason: 'race winner' });
       await cancellationPersisted.promise;
-      releaseRunner.resolve(
-        terminalStatus === 'completed'
-          ? { executionId, workflowId, status: 'completed' }
-          : { executionId, workflowId, status: 'failed', error: 'late runner failure' },
-      );
+      releaseRunner.resolve({
+        state: 'uncommitted',
+        result:
+          terminalStatus === 'completed'
+            ? { executionId, workflowId, status: 'completed' }
+            : { executionId, workflowId, status: 'failed', error: 'late runner failure' },
+      });
       releaseCancellationPublication.resolve();
       await expect(cancellation).resolves.toEqual({ cancelled: true });
       await waitForExecutionTaskToSettle(executionId);
@@ -469,18 +488,27 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const gateId = 'gate-approve';
     const frameId = 'frame-gate-approve-1';
 
-    const runnerCalls: Array<{ executionId: string }> = [];
+    const materializationSpec = {
+      kind: 'workspace-snapshot' as const,
+      snapshotId: 'snapshot-resume',
+      digest: 'sha256-resume',
+      sourcePath: 'workflows/resume.ts',
+    };
+    const runnerCalls: WorkflowWorkerConfig[] = [];
     const stubRunner: IWorkflowRunner = {
-      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunResult> => {
-        runnerCalls.push({ executionId: config.executionId });
-        return Promise.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' });
+      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+        runnerCalls.push(config);
+        return Promise.resolve({
+          state: 'uncommitted',
+          result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+        });
       }),
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
 
     // Seed storage with a paused execution and a waiting gate.
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {}, { materializationSpec });
 
     // Send a gate.respond through the bus — the executor's low-priority fallback
     // handler should accept it.
@@ -502,8 +530,13 @@ describe('WorkflowExecutor — paused gate integration', () => {
     });
     expect(gate?.status).toBe('resumed');
 
-    // The runner must have been called with the execution ID (resume dispatch).
-    expect(runnerCalls.some((c) => c.executionId === executionId)).toBe(true);
+    // Resume must forward the complete portable workspace identity to the runner.
+    expect(runnerCalls).toHaveLength(1);
+    expect(runnerCalls[0]).toMatchObject({
+      executionId,
+      source: { kind: 'path', path: materializationSpec.sourcePath },
+      materializationSpec,
+    });
   });
 
   it('accepts only one concurrent paused gate response for the same frame', async () => {
@@ -513,9 +546,9 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const frameId = 'frame-gate-atomic-1';
 
     const runnerCalls: Array<{ executionId: string }> = [];
-    const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+    const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
     const stubRunner: IWorkflowRunner = {
-      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunResult> => {
+      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         runnerCalls.push({ executionId: config.executionId });
         return releaseRunner.promise;
       }),
@@ -552,7 +585,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     expect(gate?.status).toBe('resumed');
     expect([{ decision: 'approved-a' }, { decision: 'approved-b' }]).toContainEqual(gate?.resumeData);
 
-    releaseRunner.resolve({ executionId, workflowId, status: 'completed' });
+    releaseRunner.resolve({ state: 'uncommitted', result: { executionId, workflowId, status: 'completed' } });
     await vi.waitFor(() => {
       expect(stubRunner.run).toHaveBeenCalledTimes(1);
     });
@@ -566,8 +599,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunResult> =>
-          Promise.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' }),
+        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+          Promise.resolve({
+            state: 'uncommitted',
+            result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+          }),
       ),
     };
 
@@ -619,9 +655,9 @@ describe('WorkflowExecutor — paused gate integration', () => {
       const frameId = 'frame-gate-race-1';
 
       const runnerCalls: Array<{ executionId: string }> = [];
-      const releaseRunner = Promise.withResolvers<WorkflowRunResult>();
+      const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunResult> => {
+        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return releaseRunner.promise;
         }),
@@ -653,7 +689,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       ]);
 
       expect(runnerCalls).toEqual([{ executionId }]);
-      releaseRunner.resolve({ executionId, workflowId, status: 'completed' });
+      releaseRunner.resolve({ state: 'uncommitted', result: { executionId, workflowId, status: 'completed' } });
       await vi.waitFor(() => {
         expect(stubRunner.run).toHaveBeenCalledTimes(1);
       });
@@ -670,8 +706,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunResult> =>
-          Promise.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' }),
+        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+          Promise.resolve({
+            state: 'uncommitted',
+            result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+          }),
       ),
     };
 
@@ -707,8 +746,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunResult> =>
-          Promise.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' }),
+        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+          Promise.resolve({
+            state: 'uncommitted',
+            result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+          }),
       ),
     };
 
@@ -748,9 +790,12 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const runnerCalls: Array<{ executionId: string }> = [];
     const stubRunner: IWorkflowRunner = {
-      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunResult> => {
+      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         runnerCalls.push({ executionId: config.executionId });
-        return Promise.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' });
+        return Promise.resolve({
+          state: 'uncommitted',
+          result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+        });
       }),
     };
 
@@ -785,8 +830,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunResult> =>
-          Promise.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' }),
+        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+          Promise.resolve({
+            state: 'uncommitted',
+            result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+          }),
       ),
     };
 
@@ -820,12 +868,15 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
       const runnerCalls: Array<{ executionId: string }> = [];
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunResult> => {
+        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return Promise.resolve({
-            executionId: config.executionId,
-            workflowId: config.workflowId,
-            status: 'completed',
+            state: 'uncommitted',
+            result: {
+              executionId: config.executionId,
+              workflowId: config.workflowId,
+              status: 'completed',
+            },
           });
         }),
       };
@@ -865,12 +916,15 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
       const runnerCalls: Array<{ executionId: string }> = [];
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunResult> => {
+        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return Promise.resolve({
-            executionId: config.executionId,
-            workflowId: config.workflowId,
-            status: 'completed',
+            state: 'uncommitted',
+            result: {
+              executionId: config.executionId,
+              workflowId: config.workflowId,
+              status: 'completed',
+            },
           });
         }),
       };
@@ -903,12 +957,15 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
       const runnerCalls: Array<{ executionId: string }> = [];
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunResult> => {
+        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return Promise.resolve({
-            executionId: config.executionId,
-            workflowId: config.workflowId,
-            status: 'completed',
+            state: 'uncommitted',
+            result: {
+              executionId: config.executionId,
+              workflowId: config.workflowId,
+              status: 'completed',
+            },
           });
         }),
       };

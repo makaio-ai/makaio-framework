@@ -2,7 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type {
   IWorkflowRunner,
   WorkerContributionManifest,
-  WorkflowRunResult,
+  WorkflowRunnerCompletion,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { WorkflowWorkerConfigSchema } from '@makaio/contracts';
@@ -69,21 +69,22 @@ export class InProcessWorkflowRunner implements IWorkflowRunner {
    * @param config - Workflow worker configuration to validate before execution.
    * @param signal - AbortSignal for cooperative cancellation.
    * @param _manifest - Ignored; in-process runners share the host contribution set.
-   * @returns The terminal workflow run result.
+   * @returns Uncommitted completion; the host executor owns finalization.
    */
   public async run(
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     _manifest?: WorkerContributionManifest,
-  ): Promise<WorkflowRunResult> {
+  ): Promise<WorkflowRunnerCompletion> {
     const parsedConfig = WorkflowWorkerConfigSchema.parse(config);
     const loaded = await loadWorkflowFromConfig(parsedConfig);
     const effectiveConfig = await resolveAwaitTriggerConfig(parsedConfig, loaded, this.#bus, signal);
-    return runWorkflowOrchestrator({
+    const result = await runWorkflowOrchestrator({
       config: effectiveConfig,
       loaded,
       bus: this.#bus,
       signal,
     });
+    return { state: 'uncommitted', result };
   }
 }

@@ -355,9 +355,18 @@ export {
   VCSPRSchemas,
   VCSPRSubjects,
   BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
+  MATERIALIZATION_MODES,
+  MaterializationModeSchema,
+  PROVIDER_ALLOCATION_REF_VERSION,
   WORKER_NODE_CAPABILITY_ID,
+  LocalDirectoryMaterializationSchema,
+  OutcomeAckDecisionSchema,
+  ProviderAllocationRefSchema,
+  WorkerContributionRefSchema,
+  WorkerMaterializationSpecSchema,
   WorkerNodeCapabilitiesSchema,
   WorkerNodeRequirementsSchema,
+  WorkspaceSnapshotMaterializationSchema,
   registerWorkerNodeProvider,
   unregisterWorkerNodeProvider,
 } from './capabilities/index.js';
@@ -432,14 +441,25 @@ export type {
   ReviewerState,
   ReviewsSummary,
   UpgradeHandler,
+  AllocationInspection,
+  AllocationState,
+  IRecoverableWorkerNodeProvider,
   IWorkerNodeProvider,
+  IWorkerNodeRecoveryCapability,
+  MaterializationMode,
   NormalizedWorkerNodeCapabilities,
   NormalizedWorkerNodeRequirements,
+  OutcomeAckDecision,
+  ProviderAllocationRef,
+  WorkerContributionRef,
+  WorkerMaterializationSpec,
   WorkerNodeCapabilities,
+  WorkerNodeCapabilitiesInput,
   WorkerNodeDispatch,
+  WorkerNodeDispatchAck,
   WorkerNodeHandle,
   WorkerNodeProvisionRequest,
-  WorkerNodeReadyState,
+  WorkerNodeProvisionResult,
   WorkerNodeRequirements,
 } from './capabilities/index.js';
 export { CapabilitySubjects } from './capability/index.js';
@@ -826,6 +846,7 @@ export {
   createWorkflowFinalizerNamespace,
   WorkflowDelegateResultFinalizerIdSchema,
   WorkflowDelegateResultFinalizationRequestSchema,
+  WorkflowDelegateResultFinalizationGatewayRequestSchema,
   WorkflowDelegateEconomicsSchema,
   WorkflowDelegateResultFinalizationResponseSchema,
   WorkflowDelegateToolObservationSchema,
@@ -905,6 +926,7 @@ export type {
   WorkflowFinalizationIntent,
   WorkflowFinalizationClaim,
   WorkflowDelegateResultFinalizationRequest,
+  WorkflowDelegateResultFinalizationGatewayRequest,
   WorkflowDelegateEconomics,
   WorkflowDelegateResultFinalizationResponse,
 } from './workflow/index.js';
@@ -937,17 +959,17 @@ export {
   WorkflowWorkerSourceSchema,
   WorkflowWorkerConfigSchema,
   WorkflowRunResultSchema,
-  WorkerContributionPackageRefSchema,
   WorkerContributionManifestSchema,
 } from './workflow/index.js';
 export type {
   WorkflowWorkerBusAuth,
   WorkflowWorkerSource,
   WorkflowWorkerConfig,
+  WorkerRuntimeContext,
   WorkflowRunResult,
+  WorkflowRunnerCompletion,
   WorkflowRunnerRunOptions,
   IWorkflowRunner,
-  WorkerContributionPackageRef,
   WorkerContributionManifest,
 } from './workflow/index.js';
 export {
@@ -1004,15 +1026,12 @@ export type {
 } from './workflow/index.js';
 export { WorkflowBlocksNamespace, WorkflowBlocksSchemas, WorkflowBlocksSubjects } from './workflow-blocks/index.js';
 export {
-  ExecutionHintsSchema,
-  ExecutionSourceHintSchema,
   TransitionActionInvocationSchema,
   TransitionConditionSchema,
   TransitionEventTypeSchema,
   TransitionRuleDefinitionSchema,
 } from './workflow/index.js';
 export type {
-  ExecutionHints,
   ExtensionTransitionActionsContribution,
   ExtensionTransitionRulesContribution,
   TransitionActionFactory,
@@ -1053,6 +1072,7 @@ export type {
   WorkflowArtifactBinding,
 } from './workflow/index.js';
 export {
+  WORKER_BOOTSTRAP_IDENTITY_ID,
   WorkerNodeDispatchRequestSchema,
   WorkerNodeDispatchResponseSchema,
   WorkerNodeNamespace,
@@ -1060,7 +1080,11 @@ export {
   WorkerNodeSubjects,
   SuspensionStrategySchema,
 } from './worker-node/index.js';
-export type { SuspensionStrategy } from './worker-node/index.js';
+export type {
+  SuspensionStrategy,
+  WorkerBootstrapClaimRequest,
+  WorkerBootstrapClaimResponse,
+} from './worker-node/index.js';
 export {
   BrowserEntrypointSchema,
   CliManifestSchema,

@@ -20,6 +20,7 @@ import { BroadcastAggregator } from './broadcast-aggregator.js';
 import { buildSubscribeMessage, buildUnsubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { ClientRegistry } from './client-registry.js';
 import { setupClientConnection, routeRequestToClients } from './server-client-setup.js';
+import { resolveHmacIdentityAllowedSubjects } from './auth/identity-secret-registry.js';
 
 export interface ServerTransportOptions {
   websocket: WebSocketServerLike;
@@ -76,7 +77,18 @@ export class ServerTransport implements BusTransport {
     this.name = name;
     this.auth = auth;
     this.debug = debug;
-    this.registry = new ClientRegistry({ debug });
+    this.registry = new ClientRegistry({
+      debug,
+      subjectRestrictionResolver: auth
+        ? (client) => {
+            const ctx = auth.getReceiveContext?.(client);
+            const peerId = ctx?.peer?.id;
+            if (peerId === undefined) return null;
+            return resolveHmacIdentityAllowedSubjects(peerId);
+          }
+        : undefined,
+      socketAuthChecker: auth ? (client) => auth.isSocketAuthenticated?.(client) ?? true : undefined,
+    });
     this.broadcastAggregator = new BroadcastAggregator({ debug });
   }
 
@@ -187,13 +199,21 @@ export class ServerTransport implements BusTransport {
    * Returns array of results from all handlers that responded.
    * - **Events/Other**: Broadcasts to all interested clients. Returns delivery status boolean.
    *
-   * For requests, routing is **unfiltered** — all connected clients are tried.
+   * For requests, routing considers only clients authorized for the subject;
+   * subscriptions order eligible clients but do not decide eligibility.
    * For events, subscription-based filtering is applied for efficiency.
    * @param message - The bus message to send
    * @param timeout - Correlation timeout in milliseconds; `0` means no automatic timeout
    * @returns Promise resolving to response data (requests), aggregated results (broadcasts), or delivery status (events)
    */
   public async send(message: BusMessage, timeout?: number): Promise<unknown> {
+    if (message.type === 'response') {
+      const client = this.registry.consumeResponseClient(message.correlationId);
+      if (!client) return false;
+      this.sendToClientSafely(client, JSON.stringify(message));
+      return true;
+    }
+
     // Handle server-initiated broadcasts with response aggregation
     if (message.type === 'broadcast') {
       const subject = getSubjectFromBusMessage(message) ?? undefined;
@@ -213,7 +233,7 @@ export class ServerTransport implements BusTransport {
       );
     }
 
-    // Handle server-initiated requests — unfiltered routing to all connected clients
+    // Handle server-initiated requests with subject-authorized routing.
     if (message.type === 'request') {
       return routeRequestToClients(message, timeout ?? DEFAULT_REQUEST_TIMEOUT_MS, {
         registry: this.registry,
@@ -245,12 +265,6 @@ export class ServerTransport implements BusTransport {
     if (!sentToAny) {
       if (subject && this.debug) console.warn(`[ServerTransport] No interested clients for subject: ${subject}`);
 
-      // Response delivery is best-effort because the original requester may
-      // have disconnected after dispatch but before the handler completed.
-      if (message.type === 'response') {
-        return false;
-      }
-
       // it's valid to have no interested clients -> only throw if there are no clients at all
       if (!subject) {
         throw new Error('No connected clients available to receive message');
@@ -279,6 +293,7 @@ export class ServerTransport implements BusTransport {
    */
   public cancelRequest(correlationId: string, error?: Error): void {
     this.correlations.cancel(correlationId, error);
+    this.registry.cancelRequestOrigin(correlationId);
   }
 
   /**

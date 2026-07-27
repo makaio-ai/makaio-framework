@@ -5,8 +5,9 @@ import type {
   WorkflowDefinition,
   WorkflowZodSchemas,
 } from '@makaio/contracts';
+import type { WorkspaceRootResolver } from './local-directory-materializer.js';
 
-export type { IWorkflowRunner, WorkflowRunResult } from '@makaio/contracts';
+export type { IWorkflowRunner, WorkflowRunnerCompletion, WorkflowRunResult } from '@makaio/contracts';
 
 /**
  * Runtime-loaded workflow module shape consumed by the Node workflow runners.
@@ -39,6 +40,14 @@ export interface ThinWorkflowPiscinaRunnerOptions {
   readonly workerEntry: string;
   /** Contribution manifest declaring which extension packages to load in workers. */
   readonly manifest: WorkerContributionManifest;
+  /**
+   * Host-owned resolver for portable local-directory workspace IDs.
+   *
+   * Required when a Piscina task has a path-backed source or declared worker
+   * contributions. The runner realizes those portable references before it
+   * transfers the task to a worker thread.
+   */
+  readonly resolveWorkspaceRoot?: WorkspaceRootResolver;
   /** Maximum concurrent worker threads. @defaultValue 4 */
   readonly maxConcurrency?: number;
   /** Idle timeout before threads are reaped (ms). @defaultValue 30000 */

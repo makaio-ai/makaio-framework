@@ -234,15 +234,6 @@ const SpawnRequestBase = z
   .object({
     /** Unique session identifier */
     sessionId: z.string(),
-    /**
-     * Workflow execution identifier for workflow-execution containers.
-     *
-     * When provided the Docker service mints a per-execution HMAC secret and
-     * writes it into the private stdin bootstrap so the container can
-     * authenticate as `peer = { kind: 'workflow-execution', id: executionId }`.
-     * Session-based subagent containers omit this field.
-     */
-    executionId: z.string().optional(),
     /** Adapter to load in container */
     adapter: z.string(),
     /** Container runtime type */
@@ -324,7 +315,7 @@ export const CredentialFreeRelayUrlSchema = z
 /**
  * Spawn request for container-local mode.
  */
-export const ContainerLocalSpawnRequestSchema = SpawnRequestBase.extend({
+const ContainerLocalSpawnRequestBaseSchema = SpawnRequestBase.extend({
   mode: z.literal('container-local'),
   /** Host path to git repository */
   repoPath: z.string(),
@@ -333,6 +324,27 @@ export const ContainerLocalSpawnRequestSchema = SpawnRequestBase.extend({
   /** Branch to create */
   worktreeBranch: z.string().optional(),
 }).strict();
+
+/** Session-local container request with no workflow execution identity. */
+const ContainerLocalSessionSpawnRequestSchema = ContainerLocalSpawnRequestBaseSchema;
+
+/** Container-local workflow request with one complete execution identity. */
+export const ContainerLocalWorkflowSpawnRequestSchema = ContainerLocalSpawnRequestBaseSchema.extend({
+  /** Workflow execution identifier. */
+  executionId: z.string(),
+  /** Authority-created attempt identifier for this workflow dispatch. */
+  executionAttemptId: z.string(),
+}).strict();
+export type ContainerLocalWorkflowSpawnRequest = z.infer<typeof ContainerLocalWorkflowSpawnRequestSchema>;
+
+/**
+ * Container-local requests are either session-only or have a complete workflow
+ * execution identity. Partial identities are invalid by construction.
+ */
+export const ContainerLocalSpawnRequestSchema = z.union([
+  ContainerLocalSessionSpawnRequestSchema,
+  ContainerLocalWorkflowSpawnRequestSchema,
+]);
 export type ContainerLocalSpawnRequest = z.infer<typeof ContainerLocalSpawnRequestSchema>;
 
 /**
@@ -358,10 +370,7 @@ export type ContainerIsolatedSpawnRequest = z.infer<typeof ContainerIsolatedSpaw
 /**
  * Discriminated spawn request union.
  */
-export const SpawnRequestSchema = z.discriminatedUnion('mode', [
-  ContainerLocalSpawnRequestSchema,
-  ContainerIsolatedSpawnRequestSchema,
-]);
+export const SpawnRequestSchema = z.union([ContainerLocalSpawnRequestSchema, ContainerIsolatedSpawnRequestSchema]);
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
 
 /**

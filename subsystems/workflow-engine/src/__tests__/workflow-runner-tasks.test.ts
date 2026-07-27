@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { type IWorkflowRunner, type WorkflowWorkerConfig, WorkflowRunContextSchema } from '@makaio/contracts';
+import {
+  type IWorkflowRunner,
+  type WorkflowRunnerCompletion,
+  type WorkflowWorkerConfig,
+  WorkflowRunContextSchema,
+} from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { type ActiveExecution } from '../types.js';
@@ -24,20 +29,13 @@ describe('buildDefinitionRunnerParamsFromRunContext', () => {
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
       definitionSnapshot: workflow,
-      workerManifest: { packages: [] },
+      workerManifest: { contributionRefs: [] },
       inputs: {},
       scope: { type: 'global' },
       triggerPayload: {},
       coordinatorSessionId: 'session-resume-metadata',
-      executionHints: { requirements: { capabilities: ['workflow.remote'] } },
       dispatchMetadata: { poolId: 'pool-original', provider: 'github-actions' },
       cancelSubject: 'workflow.exec-resume-metadata.cancel',
-      context: {
-        repoPath: '/repo',
-        makaioHome: '/home/.makaio',
-        os: 'darwin',
-        arch: 'arm64',
-      },
       env: {},
       createdAt: Date.now(),
       suspensionStrategy: 'exit-and-resume',
@@ -65,7 +63,6 @@ describe('buildDefinitionRunnerParamsFromRunContext', () => {
       triggerPayload: {},
       coordinatorSessionId: 'session-terminal-authority',
       cancelSubject: 'workflow.exec-terminal-authority.cancel',
-      context: { repoPath: '/repo', makaioHome: '/home/.makaio', os: 'linux', arch: 'arm64' },
       env: {},
       createdAt: Date.now(),
       terminalAuthority: 'worker',
@@ -74,6 +71,36 @@ describe('buildDefinitionRunnerParamsFromRunContext', () => {
     const params = buildDefinitionRunnerParamsFromRunContext(runContext, workflow, { resume: true });
 
     expect(params.terminalAuthority).toBe('worker');
+  });
+
+  it('preserves the durable materialization spec for a path-backed resume', () => {
+    const workflow = createWorkflowDefinition({ id: 'wf-path-resume' });
+    const materializationSpec = {
+      kind: 'workspace-snapshot' as const,
+      snapshotId: 'snapshot-path-resume',
+      digest: 'sha256-path-resume',
+      sourcePath: 'workflows/path-resume.ts',
+    };
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: 'exec-path-resume',
+      workflowId: workflow.id,
+      source: { kind: 'path', path: 'workflows/path-resume.ts' },
+      definitionSnapshot: workflow,
+      workerManifest: { contributionRefs: [] },
+      inputs: {},
+      scope: { type: 'global' },
+      triggerPayload: {},
+      coordinatorSessionId: 'session-path-resume',
+      cancelSubject: 'workflow.exec-path-resume.cancel',
+      env: {},
+      createdAt: Date.now(),
+      suspensionStrategy: 'exit-and-redispatch',
+      materializationSpec,
+    });
+
+    const params = buildDefinitionRunnerParamsFromRunContext(runContext, workflow, { resume: true });
+
+    expect(params.materializationSpec).toEqual(materializationSpec);
   });
 });
 
@@ -97,13 +124,12 @@ describe('worker-owned paused runner results', () => {
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
       definitionSnapshot: workflow,
-      workerManifest: { packages: [] },
+      workerManifest: { contributionRefs: [] },
       inputs: {},
       scope: { type: 'global' },
       triggerPayload: {},
       coordinatorSessionId: 'session-worker-paused',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/repo', makaioHome: '/home/.makaio', os: 'linux', arch: 'arm64' },
       env: {},
       createdAt: Date.now(),
       terminalAuthority: 'worker',
@@ -128,7 +154,7 @@ describe('worker-owned paused runner results', () => {
     const lifecyclePublications = new Map<string, Promise<void>>();
     const publishingLifecycleExecutions = new Set<string>();
     const workerRunner: IWorkflowRunner = {
-      run: async (config: WorkflowWorkerConfig) => {
+      run: async (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         expect(config.terminalAuthority).toBe('worker');
         const { execution: running } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
           executionId: config.executionId,
@@ -144,11 +170,14 @@ describe('worker-owned paused runner results', () => {
           pausedAtFrameId: 'frame-worker-paused',
         });
         return {
-          executionId: config.executionId,
-          workflowId: config.workflowId,
-          status: 'paused',
-          pausedAtGateId: 'gate-worker-paused',
-          pausedAtFrameId: 'frame-worker-paused',
+          state: 'uncommitted',
+          result: {
+            executionId: config.executionId,
+            workflowId: config.workflowId,
+            status: 'paused',
+            pausedAtGateId: 'gate-worker-paused',
+            pausedAtFrameId: 'frame-worker-paused',
+          },
         };
       },
     };
@@ -166,7 +195,6 @@ describe('worker-owned paused runner results', () => {
         lifecyclePublications,
         publishingLifecycleExecutions,
       }),
-      resolveWorkflowContext: () => runContext.context,
       config: {
         stepTimeoutMs: 10_000,
         stepCooldownMs: 0,
@@ -191,7 +219,6 @@ describe('worker-owned paused runner results', () => {
         boundInputs: {},
         boundConfig: {},
         scope: { type: 'global' },
-        workspaceRoot: '/repo',
         terminalAuthority: 'worker',
       });
 
@@ -203,5 +230,96 @@ describe('worker-owned paused runner results', () => {
     } finally {
       offPaused();
     }
+  });
+});
+
+describe('authority-committed runner results', () => {
+  let setup: WorkflowExecutorTestSetup | undefined;
+
+  beforeEach(async () => {
+    setup = await setupWorkflowExecutorTest();
+  });
+
+  afterEach(async () => {
+    if (setup) await teardownWorkflowExecutorTest(setup);
+    setup = undefined;
+  });
+
+  it('does not release a running execution when a faulty runner claims authority convergence', async () => {
+    const workflow = createWorkflowDefinition({ id: 'wf-faulty-authority-commit' });
+    const execution = createWorkflowExecution({ id: 'exec-faulty-authority-commit', workflowId: workflow.id });
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: workflow,
+      workerManifest: { contributionRefs: [] },
+      inputs: {},
+      scope: { type: 'global' },
+      triggerPayload: {},
+      coordinatorSessionId: 'session-faulty-authority-commit',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      env: {},
+      createdAt: Date.now(),
+      terminalAuthority: 'authority',
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+    const activeExecutions = new Map<string, ActiveExecution>([
+      [
+        execution.id,
+        {
+          execution,
+          workflow,
+          runContext,
+          runtimeHandlers: new Map(),
+          runtimeLoopGates: new Map(),
+        },
+      ],
+    ]);
+    const workerRunner: IWorkflowRunner = {
+      run: async (config): Promise<WorkflowRunnerCompletion> => ({
+        state: 'authority-committed',
+        result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+      }),
+    };
+    const deps: RunnerTaskDeps = {
+      workflowRunner: workerRunner,
+      workflowAbortControllers: new Map(),
+      executionTasks: new Map(),
+      activeExecutions,
+      buildFinalizerDeps: () => ({
+        bus: MakaioBus,
+        activeExecutions,
+        shellAbortControllers: new Map(),
+        activeRunnerSteps: new Map(),
+        durableLifecycleTransitions: new Map(),
+        lifecyclePublications: new Map(),
+        publishingLifecycleExecutions: new Set(),
+      }),
+      config: {
+        stepTimeoutMs: 10_000,
+        stepCooldownMs: 0,
+        busAuth: { kind: 'none' },
+        platformDefaults: { cwd: '/repo' },
+        cancelTimeoutMs: 10_000,
+      },
+    };
+
+    await buildExecutionTask(deps, {
+      executionId: execution.id,
+      workflowId: workflow.id,
+      workflow,
+      source: { kind: 'definition', workflowId: workflow.id },
+      coordinatorSessionId: runContext.coordinatorSessionId,
+      sanitizedTriggerPayload: {},
+      boundInputs: {},
+      boundConfig: {},
+      scope: { type: 'global' },
+      terminalAuthority: 'authority',
+    });
+
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id }),
+    ).resolves.toEqual(expect.objectContaining({ execution: expect.objectContaining({ status: 'failed' }) }));
   });
 });

@@ -17,10 +17,12 @@ import type {
   WorkflowArtifactBinding,
   WorkflowRunContext,
   WorkLogGateEvent,
-  ExecutionHints,
   WorkflowDefinitionProvenance,
+  WorkflowWorkerSource,
   JsonPatchOperation,
+  WorkerMaterializationSpec,
 } from '@makaio/contracts';
+import type { NormalizedWorkerNodeRequirements } from '@makaio/contracts';
 import type { DualColumnBundle } from '@makaio/storage-drizzle';
 
 /**
@@ -82,13 +84,18 @@ export const workflowDefinitionsDual = defineDualTable(
      * Absent on locally-authored definitions.
      */
     source: c.jsonCol<WorkflowDefinitionProvenance>('source'),
+    /**
+     * Portable executable source for worker dispatch (JSON).
+     * Tells the runtime where to load the workflow module on a worker node.
+     */
+    executableSource: c.jsonCol<WorkflowWorkerSource>('executable_source'),
+    /**
+     * Resource requirements for WorkerNode provider selection (JSON).
+     * Constrains pool/provider matching during dispatch.
+     */
+    requirements: c.jsonCol<NormalizedWorkerNodeRequirements>('requirements'),
     /** Definition-owned finalizer selected after successful execution. */
     successFinalizerId: c.text('success_finalizer_id'),
-    /**
-     * Advisory execution hints for worker provisioning (JSON).
-     * Merged with per-call hints at execution start.
-     */
-    executionHints: c.jsonCol<ExecutionHints>('execution_hints'),
   }),
   {
     sqlite: (t) => [
@@ -433,8 +440,8 @@ export type SelectWorkflowExecutionLink = typeof workflowExecutionLinks.$inferSe
  *
  * The `source.kind` discriminant is stored flat (`sourceKind` + optional
  * `sourcePath`/`sourceFilename`/`sourceCode`) for efficient querying.
- * Large blobs (`definitionSnapshot`, `workerManifest`, `context`, `env`, etc.)
- * are stored as JSON columns.
+ * Large blobs (`definitionSnapshot`, `workerManifest`, `materializationSpec`,
+ * `env`, etc.) are stored as JSON columns.
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
@@ -470,8 +477,6 @@ export const workflowRunContextsDual = defineDualTable(
     triggerPayload: c.jsonCol<Record<string, JsonValue>>('trigger_payload').notNull(),
     /** Explicit artifact reference supplied by the execution starter. */
     artifactRef: c.jsonCol<WorkflowRunContext['artifactRef']>('artifact_ref'),
-    /** Advisory worker provisioning hints supplied by the start request. */
-    executionHints: c.jsonCol<WorkflowRunContext['executionHints']>('execution_hints'),
     /** Opaque dispatch metadata that must survive pause/resume boundaries. */
     dispatchMetadata: c.jsonCol<WorkflowRunContext['dispatchMetadata']>('dispatch_metadata'),
     /** Scope type discriminant. */
@@ -486,19 +491,6 @@ export const workflowRunContextsDual = defineDualTable(
     scopeId: c.text('scope_id').notNull().default(''),
     /** Bus subject for cancellation signals. */
     cancelSubject: c.text('cancel_subject').notNull(),
-    /**
-     * Platform/workspace context (JSON).
-     * Contains `repoPath`, `makaioHome`, `os`, `arch`, and optional `worktree`.
-     */
-    context: c
-      .jsonCol<{
-        repoPath: string;
-        makaioHome: string;
-        os: 'darwin' | 'linux' | 'win32';
-        arch: string;
-        worktree?: string;
-      }>('context')
-      .notNull(),
     /** Extra non-secret environment variables (JSON object). */
     env: c.jsonCol<Record<string, string>>('env').notNull(),
     /** Snapshot creation timestamp (epoch ms). */
@@ -513,6 +505,14 @@ export const workflowRunContextsDual = defineDualTable(
     suspensionStrategy: c.text('suspension_strategy').$type<WorkflowRunContext['suspensionStrategy']>(),
     /** Component that exclusively owns durable terminalization. */
     terminalAuthority: c.text('terminal_authority').$type<WorkflowRunContext['terminalAuthority']>(),
+    /**
+     * Portable materialization specification for path-backed workflows (JSON).
+     *
+     * Discriminated on `kind` (`local-directory` or `workspace-snapshot`).
+     * Absent for definition-sourced and source-sourced executions that
+     * need no filesystem materialization.
+     */
+    materializationSpec: c.jsonCol<WorkerMaterializationSpec>('materialization_spec'),
   }),
   {
     sqlite: (t) => [index('idx_run_contexts_workflow').on(t.workflowId)],

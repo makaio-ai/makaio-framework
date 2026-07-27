@@ -1,7 +1,5 @@
-import * as os from 'node:os';
-import type { SuspensionStrategy, WorkflowRunContext, WorkflowWorkerConfig } from '@makaio/contracts';
+import { WorkflowRunContextSchema, type SuspensionStrategy, type WorkflowRunContext } from '@makaio/contracts';
 import type { ExecutorConfig } from './types.js';
-import { resolveWorkerOs } from './workflow-runner-tasks.js';
 
 /**
  * Variant fields supplied by each workflow execution start path.
@@ -27,39 +25,26 @@ export interface BuildWorkflowRunContextParams {
   readonly triggerPayload: WorkflowRunContext['triggerPayload'];
   /** Optional artifact bound at start. */
   readonly artifactRef?: WorkflowRunContext['artifactRef'];
-  /** Optional provider execution hints. */
-  readonly executionHints?: WorkflowRunContext['executionHints'];
-  /** Workspace root resolved for this execution. */
-  readonly workspaceRoot: string;
   /** Suspension strategy selected by the caller for this execution. */
   readonly suspensionStrategy?: SuspensionStrategy;
-}
-
-/**
- * Build the worker context embedded in a {@link WorkflowRunContext}.
- *
- * The context is derived from `ExecutorConfig.platformDefaults` and the current
- * process environment. `repoPath` is the execution workspace root; `makaioHome`
- * comes from executor config, `MAKAIO_HOME`, or `~/.makaio`.
- * @param config - Executor configuration.
- * @param workspaceRoot - Resolved workspace root for this execution.
- * @returns Fully populated workflow worker context.
- */
-export function resolveWorkflowContext(config: ExecutorConfig, workspaceRoot: string): WorkflowWorkerConfig['context'] {
-  const makaioHome = config.makaioHome ?? process.env['MAKAIO_HOME'] ?? `${os.homedir()}/.makaio`;
-  const resolvedOs = resolveWorkerOs(process.platform);
-
-  return {
-    repoPath: workspaceRoot,
-    makaioHome,
-    os: resolvedOs,
-    arch: process.arch,
-  };
+  /**
+   * Portable materialization specification for path-backed workflows.
+   *
+   * Required when `source.kind === 'path'` so the worker can obtain its
+   * workspace contents without an Authority-local absolute path. The host
+   * seam resolves this before calling execution start.
+   */
+  readonly materializationSpec?: WorkflowRunContext['materializationSpec'];
 }
 
 /**
  * Build a {@link WorkflowRunContext} from invariant execution fields plus
  * caller-specific start metadata.
+ *
+ * The run context is portable: it contains no Authority-local absolute paths,
+ * OS, or architecture information. Ephemeral runtime context (workspace root,
+ * platform, contribution entrypoints) is derived locally on the worker at
+ * execution time via the {@link WorkerRuntimeContext} contract.
  * @param params - Variant fields unique to each start path.
  * @param executorConfig - Executor configuration supplying platform defaults.
  * @returns Fully populated run context ready for persistence.
@@ -68,23 +53,22 @@ export function buildWorkflowRunContext(
   params: BuildWorkflowRunContextParams,
   executorConfig: ExecutorConfig,
 ): WorkflowRunContext {
-  return {
+  return WorkflowRunContextSchema.parse({
     executionId: params.executionId,
     workflowId: params.workflowId,
     source: params.source,
     ...(params.definitionSnapshot !== undefined ? { definitionSnapshot: params.definitionSnapshot } : {}),
-    workerManifest: { packages: [] },
+    workerManifest: { contributionRefs: [] },
     inputs: params.inputs,
     config: params.config,
     scope: params.scope,
     triggerPayload: params.triggerPayload,
     ...(params.artifactRef !== undefined ? { artifactRef: params.artifactRef } : {}),
-    ...(params.executionHints !== undefined ? { executionHints: params.executionHints } : {}),
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
-    context: resolveWorkflowContext(executorConfig, params.workspaceRoot),
     env: executorConfig.platformDefaults.env ?? {},
     createdAt: Date.now(),
     suspensionStrategy: params.suspensionStrategy ?? 'wait-in-process',
-  };
+    ...(params.materializationSpec !== undefined ? { materializationSpec: params.materializationSpec } : {}),
+  });
 }

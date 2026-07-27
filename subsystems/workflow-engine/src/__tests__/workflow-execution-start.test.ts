@@ -16,19 +16,13 @@ function makeRunContext(params: Parameters<StartExecutionDeps['buildRunContext']
     executionId: params.executionId,
     workflowId: params.workflowId,
     source: params.source,
-    workerManifest: { packages: [] },
+    workerManifest: { contributionRefs: [] },
     inputs: params.inputs,
     config: params.config,
     scope: params.scope,
     triggerPayload: params.triggerPayload,
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
-    context: {
-      repoPath: params.workspaceRoot,
-      makaioHome: '/home/.makaio',
-      os: 'linux',
-      arch: 'arm64',
-    },
     env: {},
     createdAt: Date.now(),
     suspensionStrategy: 'wait-in-process',
@@ -67,6 +61,7 @@ describe('startFileExecution', () => {
       activeExecutions: new Map(),
       executionTasks: new Map(),
       workflowRunner: undefined,
+      materializationSpecResolvers: new Set(),
       buildRunContext: vi.fn(makeRunContext),
       buildRunnerTaskDeps: vi.fn(() => {
         throw new Error('buildRunnerTaskDeps should not be called without a workflow runner');
@@ -88,6 +83,45 @@ describe('startFileExecution', () => {
       expect(deps.executionTasks.size).toBe(0);
     } finally {
       offStarted();
+      offSetExecutionStart();
+      offClose();
+      offCreate();
+    }
+  });
+
+  it('rejects a path-backed start without a host-resolved materialization spec before persistence', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(SessionNamespace);
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+
+    const setExecutionStart = vi.fn();
+    const offCreate = bus.on(SessionSubjects.create, (ctx) => ctx.setResult({ sessionId: 'session-file-start' }));
+    const offClose = bus.on(SessionSubjects.close, (ctx) => ctx.setResult({ success: true }));
+    const offSetExecutionStart = bus.on(WorkflowStorageSubjects.setExecutionStart, (ctx) => {
+      setExecutionStart(ctx.payload);
+      ctx.setResult({ id: ctx.payload.execution.id, executionId: ctx.payload.execution.id });
+    });
+    const deps: StartExecutionDeps = {
+      bus,
+      config: { ...DEFAULT_EXECUTOR_CONFIG, platformDefaults: { cwd: '/repo' } },
+      activeExecutions: new Map(),
+      executionTasks: new Map(),
+      workflowRunner: { run: vi.fn() },
+      materializationSpecResolvers: new Set(),
+      buildRunContext: vi.fn(makeRunContext),
+      buildRunnerTaskDeps: vi.fn(),
+      buildFinalizerDeps: vi.fn(),
+      resolveExecutionWorkspaceRoot: vi.fn(async () => '/repo'),
+      runExecution: vi.fn(async () => {}),
+    };
+
+    try {
+      await expect(startFileExecution(deps, '/repo/workflows/file.ts')).rejects.toThrow(
+        'path-backed execution requires a resolved materializationSpec',
+      );
+      expect(setExecutionStart).not.toHaveBeenCalled();
+    } finally {
       offSetExecutionStart();
       offClose();
       offCreate();
@@ -122,7 +156,6 @@ describe('persistLoadedExecutionStart', () => {
       scope: { type: 'global' },
       triggerPayload: {},
       coordinatorSessionId: 'session-worker-start-storage-required',
-      workspaceRoot: '/repo',
       suspensionStrategy: 'wait-in-process',
     });
 

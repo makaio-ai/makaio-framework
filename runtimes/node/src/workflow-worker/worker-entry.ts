@@ -19,6 +19,23 @@ import { loadWorkerContributions } from './runtime/worker-contributions.js';
 import { resolveAwaitTriggerConfig } from './await-trigger.js';
 
 // ─────────────────────────────────────────────────────────────
+// Module overview
+// ─────────────────────────────────────────────────────────────
+
+// This file implements the Piscina worker-thread entrypoint — a deliberately
+// separate lifecycle from the headless worker harness (headless-workflow-worker.ts).
+//
+// The headless harness is designed for remote workers that bootstrap over the
+// network, pull run context from the bus, materialize workspaces from portable
+// specs, and submit outcomes via bus ACK.  Piscina workers run in-process on
+// the same machine as the coordinator, receive fully-resolved config via
+// Piscina's `run()` method, and return results through the worker thread's
+// return value.
+//
+// Materializers establish contribution identity and return verified worker-local
+// entrypoints before this worker starts.
+
+// ─────────────────────────────────────────────────────────────
 // Public types
 // ─────────────────────────────────────────────────────────────
 
@@ -26,14 +43,17 @@ import { resolveAwaitTriggerConfig } from './await-trigger.js';
  * Parameters accepted by the Piscina worker entrypoint.
  *
  * Mirrors the shape passed by {@link ThinWorkflowPiscinaRunner.run} — the `config`
- * is the raw (unserialized) `WorkflowWorkerConfig` and the `manifest` declares
- * which extension packages to load.
+ * is the raw (unserialized) `WorkflowWorkerConfig`, `manifest` declares the
+ * exact contribution identity, and `contributionEntrypoints` is the matching
+ * verified local realization returned by materialization.
  */
 export interface WorkflowWorkerRunParams {
   /** Raw workflow worker configuration (will be validated by Zod schema). */
   readonly config: unknown;
   /** Contribution manifest declaring which extension packages to load. */
   readonly manifest: WorkerContributionManifest;
+  /** Verified worker-local entrypoints in manifest order. */
+  readonly contributionEntrypoints: readonly string[];
   /** Optional abort signal for cooperative cancellation. */
   readonly signal?: AbortSignal;
 }
@@ -48,7 +68,7 @@ export interface WorkflowWorkerRunParams {
  * Implements the full worker lifecycle:
  * 1. Parse and validate `config` against `WorkflowWorkerConfigSchema`
  * 2. Boot an isolated bus instance (with optional WebSocket transport)
- * 3. Load worker-local contributions from the manifest
+ * 3. Load worker-local contributions from verified materialization output
  * 4. Boot worker-local tool runtime if toolset contributions exist
  * 5. Load the workflow module from the source descriptor
  * 6. Run the workflow orchestrator
@@ -57,7 +77,7 @@ export interface WorkflowWorkerRunParams {
  * Contributions are loaded once per workflow, not once per step — the
  * orchestrator owns step dispatch and reuses the same bus and runtime
  * throughout the execution.
- * @param params - Worker run parameters including config, manifest, and signal.
+ * @param params - Worker run parameters including config, verified contributions, and signal.
  * @returns The terminal workflow run result.
  */
 export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Promise<WorkflowRunResult> {
@@ -92,13 +112,15 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
     });
     await waitForSubscriptionPropagation(cancelCleanup);
 
-    // Step 3: Load contributions — pass makaioHome so that relative import
-    // paths in the manifest (npm-installed packages) are resolved to absolute
-    // paths on this machine before import().
-    const contributions = await loadWorkerContributions(params.manifest, {
+    if (params.contributionEntrypoints.length !== params.manifest.contributionRefs.length) {
+      throw new Error('Worker contribution materialization does not match the declared contribution identity set.');
+    }
+
+    // Step 3: Import only the entrypoints verified by materialization. Import
+    // failures are fatal — workers never proceed with a partial set.
+    const contributions = await loadWorkerContributions(params.contributionEntrypoints, {
       bus: handle.bus,
       signal: abortController.signal,
-      makaioHome: config.context.makaioHome,
     });
 
     // Step 4: Boot the worker-local tool runtime only when toolsets are present.

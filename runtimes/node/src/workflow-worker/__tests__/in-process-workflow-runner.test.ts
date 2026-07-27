@@ -1,27 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
-import { createBusInstance } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
-import { createMockBus } from '@makaio/test-utils';
 import { z } from 'zod';
-
-// ---------------------------------------------------------------------------
-// Mocks — declared before dynamic imports
-// ---------------------------------------------------------------------------
-
-const mockRunWorkflowOrchestrator = vi.fn();
-const mockLoadWorkflowFromConfig = vi.fn();
-
-vi.mock('@makaio/subsystem-workflow-engine/workflow-orchestrator', () => ({
-  runWorkflowOrchestrator: mockRunWorkflowOrchestrator,
-}));
-
-vi.mock('../workflow-loader.js', () => ({
-  loadWorkflowFromConfig: mockLoadWorkflowFromConfig,
-}));
-
-// Import after mocking
-const { InProcessWorkflowRunner } = await import('../in-process-workflow-runner.js');
+import { InProcessWorkflowRunner } from '../in-process-workflow-runner.js';
+import { makeBusWithStorage } from './fixtures.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -34,49 +16,39 @@ const { InProcessWorkflowRunner } = await import('../in-process-workflow-runner.
  */
 function makeDefinition(overrides: Partial<WorkflowDefinition> = {}): WorkflowDefinition {
   return {
-    id: 'wf-001',
-    name: 'Test Workflow',
-    root: { id: 'wf-001__root', type: 'sequence', nodes: [] },
+    id: 'wf-unit-001',
+    name: 'Unit Test Workflow',
+    root: { id: 'wf-unit-001__root', type: 'sequence', nodes: [] },
     scope: { type: 'global' as const },
     ...overrides,
   };
 }
 
 /**
- * Build a minimal {@link WorkflowWorkerConfig} for testing.
+ * Build a minimal {@link WorkflowWorkerConfig} backed by an inline definition.
+ *
+ * Using `source.kind === 'definition'` with a populated `definition` avoids any
+ * file-system access in unit tests while still exercising the real loader and
+ * orchestrator paths.
  * @param overrides - Partial overrides merged on top of defaults.
  * @returns A valid WorkflowWorkerConfig stub.
  */
 function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWorkerConfig {
   return {
-    source: { kind: 'definition', workflowId: 'wf-001' },
-    executionId: 'exec-001',
-    workflowId: 'wf-001',
+    source: { kind: 'definition', workflowId: 'wf-unit-001' },
+    executionId: 'exec-unit-001',
+    workflowId: 'wf-unit-001',
     definition: makeDefinition(),
-    triggerPayload: {},
+    triggerPayload: { event: 'manual' },
     inputs: {},
     scope: { type: 'global' as const },
     busAuth: { kind: 'none' },
-    context: {
-      repoPath: '/repo',
-      makaioHome: '/home/.makaio',
-      os: 'linux',
-      arch: 'x64',
-    },
     env: {},
-    coordinatorSessionId: 'session-001',
-    cancelSubject: 'workflow.cancel.wf-001',
+    coordinatorSessionId: 'session-unit-001',
+    cancelSubject: 'workflow.cancel.wf-unit-001',
     suspensionStrategy: 'wait-in-process',
     ...overrides,
   };
-}
-
-/**
- * Build a stub {@link IMakaioBus} with minimum required surface for testing.
- * @returns A mock bus instance.
- */
-function makeBus() {
-  return createMockBus().bus;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,218 +56,107 @@ function makeBus() {
 // ---------------------------------------------------------------------------
 
 describe('InProcessWorkflowRunner', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  it('returns { state: uncommitted, result } for a zero-step workflow', async () => {
+    const [bus, cleanup] = makeBusWithStorage();
+    try {
+      const runner = new InProcessWorkflowRunner({ bus });
+      const result = await runner.run(makeConfig(), new AbortController().signal);
+
+      expect(result).toEqual({
+        state: 'uncommitted',
+        result: {
+          executionId: 'exec-unit-001',
+          workflowId: 'wf-unit-001',
+          status: 'completed',
+        },
+      });
+    } finally {
+      cleanup();
+    }
   });
 
-  it('loads the workflow from config and passes it to the orchestrator', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
+  it('rejects with a schema error when workflowId is the wrong type', async () => {
+    const [bus, cleanup] = makeBusWithStorage();
+    try {
+      const runner = new InProcessWorkflowRunner({ bus });
+      const signal = new AbortController().signal;
+      const invalidConfig = makeConfig();
+      Object.assign(invalidConfig, { workflowId: 123 });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const expectedResult = { executionId: 'exec-001', workflowId: 'wf-001', status: 'completed' as const };
-    const signal = new AbortController().signal;
-    const config = makeConfig();
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
-
-    const result = await runner.run(config, signal);
-
-    expect(mockLoadWorkflowFromConfig).toHaveBeenCalledOnce();
-    expect(mockLoadWorkflowFromConfig).toHaveBeenCalledWith(config);
-    expect(result).toBe(expectedResult);
+      await expect(runner.run(invalidConfig, signal)).rejects.toThrow();
+    } finally {
+      cleanup();
+    }
   });
 
-  it('forwards the validated config to the orchestrator', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
+  it('rejects when definition-sourced config has no definition field', async () => {
+    const [bus, cleanup] = makeBusWithStorage();
+    try {
+      const runner = new InProcessWorkflowRunner({ bus });
+      // Omit definition — loadWorkflowFromConfig throws before reaching the orchestrator.
+      const config = makeConfig({ definition: undefined });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const config = makeConfig({ workflowId: 'specific-workflow' });
-    const signal = new AbortController().signal;
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
-      executionId: 'exec-001',
-      workflowId: 'specific-workflow',
-      status: 'completed',
-    });
-
-    await runner.run(config, signal);
-
-    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledOnce();
-    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ config }));
+      await expect(runner.run(config, new AbortController().signal)).rejects.toThrow(
+        "missing the required 'definition' field",
+      );
+    } finally {
+      cleanup();
+    }
   });
 
-  it('preserves start artifact references through worker config validation', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
+  it('rejects when the abort signal fires while awaiting a bus-event trigger', async () => {
+    const [bus, cleanup] = makeBusWithStorage();
+    try {
+      bus.registerNamespace(createBusNamespace('demo', { started: z.object({ buildId: z.string() }) }));
+      const runner = new InProcessWorkflowRunner({ bus });
+      const controller = new AbortController();
 
-    const artifactRef = { kind: 'implementation-plan', id: 'artifact-42' };
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const config = makeConfig({ artifactRef });
-    const signal = new AbortController().signal;
+      const runPromise = runner.run(
+        makeConfig({
+          triggerPayload: {},
+          definition: makeDefinition({
+            triggers: [{ type: 'bus-event', subject: 'demo.started' }],
+          }),
+        }),
+        controller.signal,
+      );
 
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
-      executionId: 'exec-001',
-      workflowId: 'wf-001',
-      status: 'completed',
-    });
+      // Abort after the runner has suspended waiting for the trigger.
+      await Promise.resolve();
+      controller.abort('test-abort');
 
-    await runner.run(config, signal);
-
-    expect(mockLoadWorkflowFromConfig).toHaveBeenCalledWith(expect.objectContaining({ artifactRef }));
-    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({ artifactRef }),
-      }),
-    );
+      await expect(runPromise).rejects.toBe('test-abort');
+    } finally {
+      cleanup();
+    }
   });
 
-  it('validates config before loading the workflow', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
-    const signal = new AbortController().signal;
-    const invalidConfig = makeConfig();
-    Object.assign(invalidConfig, { workflowId: 123 });
+  it('waits for a bus-event trigger and passes its payload to the orchestrator', async () => {
+    const [bus, cleanup] = makeBusWithStorage();
+    try {
+      const { subjects } = bus.registerNamespace(
+        createBusNamespace('demo', { started: z.object({ buildId: z.string() }) }),
+      );
+      const runner = new InProcessWorkflowRunner({ bus });
 
-    await expect(runner.run(invalidConfig, signal)).rejects.toThrow();
+      const runPromise = runner.run(
+        makeConfig({
+          triggerPayload: {},
+          definition: makeDefinition({
+            triggers: [{ type: 'bus-event', subject: 'demo.started' }],
+          }),
+        }),
+        new AbortController().signal,
+      );
 
-    expect(mockLoadWorkflowFromConfig).not.toHaveBeenCalled();
-    expect(mockRunWorkflowOrchestrator).not.toHaveBeenCalled();
-  });
+      await Promise.resolve();
+      await bus.emit(subjects.started, { buildId: 'build-001' });
 
-  it('forwards the loaded workflow to the orchestrator', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
-
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const signal = new AbortController().signal;
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
-      executionId: 'exec-001',
-      workflowId: 'wf-001',
-      status: 'completed',
-    });
-
-    await runner.run(makeConfig(), signal);
-
-    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ loaded: loadedWorkflow }));
-  });
-
-  it('forwards the bus to the orchestrator', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
-
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const signal = new AbortController().signal;
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
-      executionId: 'exec-001',
-      workflowId: 'wf-001',
-      status: 'completed',
-    });
-
-    await runner.run(makeConfig(), signal);
-
-    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ bus }));
-  });
-
-  it('forwards the abort signal to the orchestrator', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
-
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const controller = new AbortController();
-    const signal = controller.signal;
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
-      executionId: 'exec-001',
-      workflowId: 'wf-001',
-      status: 'completed',
-    });
-
-    await runner.run(makeConfig(), signal);
-
-    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ signal }));
-  });
-
-  it('waits for bus-event triggers when triggerPayload is empty', async () => {
-    const bus = createBusInstance();
-    const { subjects } = bus.registerNamespace(
-      createBusNamespace('demo', { started: z.object({ buildId: z.string() }) }),
-    );
-    const runner = new InProcessWorkflowRunner({ bus });
-    const signal = new AbortController().signal;
-    const loadedWorkflow = {
-      definition: makeDefinition({
-        triggers: [{ type: 'bus-event', subject: 'demo.started' }],
-      }),
-      runtimeHandlers: new Map(),
-    };
-    const expectedResult = { executionId: 'exec-001', workflowId: 'wf-001', status: 'completed' as const };
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
-
-    const runPromise = runner.run(makeConfig(), signal);
-    await Promise.resolve();
-    await bus.emit(subjects.started, { buildId: 'build-001' });
-
-    await expect(runPromise).resolves.toBe(expectedResult);
-    expect(mockRunWorkflowOrchestrator.mock.calls[0]?.[0].config.triggerPayload).toEqual({ buildId: 'build-001' });
-  });
-
-  it('ignores the manifest parameter — in-process runners share the host contribution set', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
-
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const signal = new AbortController().signal;
-    const manifest = { packages: [{ name: 'ignored-pkg', importPath: 'file:///ext/ignored.mjs' }] };
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
-      executionId: 'exec-001',
-      workflowId: 'wf-001',
-      status: 'completed',
-    });
-
-    // Should not throw even though the manifest is provided
-    await runner.run(makeConfig(), signal, manifest);
-
-    // Manifest is never forwarded to the orchestrator
-    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(expect.not.objectContaining({ manifest }));
-  });
-
-  it('propagates errors from the orchestrator', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
-
-    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
-    const signal = new AbortController().signal;
-    const orchestratorError = new Error('Orchestrator failed');
-
-    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
-    mockRunWorkflowOrchestrator.mockRejectedValueOnce(orchestratorError);
-
-    await expect(runner.run(makeConfig(), signal)).rejects.toThrow('Orchestrator failed');
-  });
-
-  it('propagates errors from loadWorkflowFromConfig', async () => {
-    const bus = makeBus();
-    const runner = new InProcessWorkflowRunner({ bus });
-    const signal = new AbortController().signal;
-    const loaderError = new Error('Loader failed');
-
-    mockLoadWorkflowFromConfig.mockRejectedValueOnce(loaderError);
-
-    await expect(runner.run(makeConfig(), signal)).rejects.toThrow('Loader failed');
-    expect(mockRunWorkflowOrchestrator).not.toHaveBeenCalled();
+      const result = await runPromise;
+      expect(result.state).toBe('uncommitted');
+      expect(result.result.status).toBe('completed');
+    } finally {
+      cleanup();
+    }
   });
 });

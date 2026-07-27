@@ -69,8 +69,6 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
   const config = options.config ?? originalRunContext.config ?? {};
   const triggerPayload = options.triggerPayload ?? originalRunContext.triggerPayload;
   const artifactRef = options.artifactRef ?? originalRunContext.artifactRef;
-  const executionHints =
-    options.executionHints ?? (options.mode === 'snapshot' ? originalRunContext.executionHints : undefined);
   const scopeOverride = options.scopeOverride ?? originalRunContext.scope;
 
   const startOptions: DefinitionStartOptions = {
@@ -79,7 +77,6 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
     parentSessionId: options.parentSessionId,
     triggerPayload,
     artifactRef,
-    executionHints,
     scopeOverride,
     executionLinks: (rerunExecutionId) => [
       {
@@ -170,9 +167,11 @@ async function rerunSnapshot(
     parentSessionId: overrides.parentSessionId,
     triggerPayload: overrides.triggerPayload,
     artifactRef: overrides.artifactRef,
-    executionHints: overrides.executionHints,
     scopeOverride: overrides.scopeOverride,
     executionLinks: overrides.executionLinks,
+    ...(originalRunContext.materializationSpec !== undefined
+      ? { materializationSpec: originalRunContext.materializationSpec }
+      : {}),
   });
 }
 
@@ -180,9 +179,10 @@ async function rerunSnapshot(
  * Execute a current-mode rerun for executions that were originally started
  * directly from a source file rather than a stored definition row.
  *
- * The saved snapshot supplies the logical workflow ID and launch-time binding
- * metadata, but is intentionally not passed as `definitionSnapshot`; the worker
- * must reload the current source module and own the executable topology.
+ * The saved snapshot supplies the Authority-owned finalizer contract and
+ * launch-time binding metadata. It is persisted on the rerun context but is
+ * intentionally not delivered as the worker `definition`; the worker reloads
+ * the current source module and owns the executable topology.
  * @param deps - Shared executor state and callbacks.
  * @param originalRunContext - The original execution's run context.
  * @param overrides - Caller-supplied option overrides.
@@ -195,14 +195,20 @@ async function rerunCurrentSourceBacked(
   overrides: DefinitionStartOptions,
 ): Promise<string> {
   if (originalRunContext.definitionSnapshot === undefined && originalRunContext.source.kind === 'path') {
-    return startFileExecution(deps, originalRunContext.source.path, overrides);
+    const { materializationSpec } = originalRunContext;
+    if (materializationSpec === undefined) {
+      throw new Error('Invalid persisted path-backed run context: materializationSpec is required');
+    }
+    return startFileExecution(deps, originalRunContext.source.path, {
+      ...overrides,
+      materializationSpec,
+    });
   }
   const workflow = requireDefinitionSnapshot(originalRunContext);
 
-  // Current source reruns pass the saved snapshot only as launch metadata.
-  // Input/config binding currently preserves caller values without schema
-  // validation or defaults; the worker reloads the source and persists the
-  // executable definition snapshot it actually ran.
+  // Current source reruns preserve an Authority-owned snapshot on the durable
+  // context while the path-source launch deliberately omits `definition` from
+  // the worker config so the worker reloads its materialized source.
   return startResolvedDefinitionExecution(deps, workflow.id, {
     workflow,
     executionSource: originalRunContext.source,
@@ -211,8 +217,10 @@ async function rerunCurrentSourceBacked(
     parentSessionId: overrides.parentSessionId,
     triggerPayload: overrides.triggerPayload,
     artifactRef: overrides.artifactRef,
-    executionHints: overrides.executionHints,
     scopeOverride: overrides.scopeOverride,
     executionLinks: overrides.executionLinks,
+    ...(originalRunContext.materializationSpec !== undefined
+      ? { materializationSpec: originalRunContext.materializationSpec }
+      : {}),
   });
 }

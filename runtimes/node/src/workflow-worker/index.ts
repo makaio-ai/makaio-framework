@@ -28,5 +28,40 @@ export {
   type WorkflowRuntimeAuthorityConnector,
   type WorkflowRuntimeContributionLoader,
 } from './isolated-workflow-runtime.js';
+export {
+  runHeadlessWorkflowWorker,
+  type HeadlessWorkerBootstrapCredentials,
+  type HeadlessWorkerBootstrap,
+  type HeadlessWorkerBusConnector,
+  type MaterializedWorkspace,
+  type HeadlessWorkerMaterializer,
+  type HeadlessWorkerContributionLoader,
+  type HeadlessWorkerExecutor,
+  type HeadlessWorkerPostCommitObserver,
+  type HeadlessWorkflowWorkerDeps,
+  type HeadlessWorkflowWorkerResult,
+} from './headless-workflow-worker.js';
+export {
+  OutcomeDeliveryError,
+  submitOutcomeWithAck,
+  DELIVERED_DECISIONS,
+  type OutcomeSubmitRetryConfig,
+  type OutcomeSubmitPayload,
+  type OutcomeReconnect,
+} from './outcome-submission.js';
 export { loadWorkflowFromConfig } from './workflow-loader.js';
 export { loadWorkflowModule, loadWorkflowModules } from './workflow-file-loader.js';
+export {
+  materializeLocalDirectory,
+  computeDirectoryDigest,
+  computeContributionPackageDigest,
+  computeFileDigest,
+  verifyContribution,
+  assertContainedIn,
+  assertNoSymlinkEscape,
+  parseSriIntegrity,
+  MaterializationError,
+  type ParsedSriIntegrity,
+  type WorkspaceRootResolver,
+  type LocalDirectoryMaterializerOptions,
+} from './local-directory-materializer.js';

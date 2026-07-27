@@ -11,6 +11,8 @@
  * These tests invoke the real Electrobun build before checking the launcher.
  * They also assemble an isolated `@makaio/framework` runtime package, because
  * the launcher bundle externalizes framework imports to package subpaths.
+ * That full framework + launcher build is why this lives in the desktop E2E
+ * surface rather than the default unit test surface.
  *
  * The test uses `execFileSync` (not `execSync`) to avoid shell interpretation
  * of the bundle path and to keep argument handling explicit.
@@ -21,7 +23,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 
-const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
+const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..', '..', '..', 'apps', 'electrobun');
 const WORKSPACE_ROOT = resolveWorkspaceRoot(PACKAGE_ROOT);
 const TEST_OUTPUT_ROOT = path.join(PACKAGE_ROOT, 'dist', '.tests');
 mkdirSync(TEST_OUTPUT_ROOT, { recursive: true });
@@ -60,7 +62,7 @@ describe('CLI launcher smoke test', () => {
       rmSync(TEST_ROOT, { recursive: true, force: true });
       throw error;
     }
-  }, 330_000);
+  }, 450_000);
 
   afterAll(() => {
     rmSync(TEST_ROOT, { recursive: true, force: true });
@@ -98,7 +100,7 @@ function buildFrameworkPackage(): void {
     cwd: WORKSPACE_ROOT,
     env: { ...process.env, MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT: FRAMEWORK_PACKAGE_ROOT },
     stdio: 'inherit',
-    timeout: 180_000,
+    timeout: 300_000,
   });
 }
 

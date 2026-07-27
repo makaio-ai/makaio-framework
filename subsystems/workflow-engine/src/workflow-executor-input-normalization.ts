@@ -1,4 +1,4 @@
-import { ExecutionHintsSchema, JsonValueSchema, type JsonValue, type WorkflowRunContext } from '@makaio/contracts';
+import { JsonValueSchema, type JsonValue } from '@makaio/contracts';
 
 /**
  * Coerce a bus-parsed config value to a plain object or `undefined`.
@@ -42,16 +42,4 @@ export function normalizeStartInput(input: unknown): JsonValue | undefined {
     return undefined;
   }
   return JsonValueSchema.parse(input);
-}
-
-/**
- * Normalize workflow.start execution hints to the public opaque hints contract.
- * @param executionHints - Request payload hints value.
- * @returns Parsed execution hints, or undefined when omitted.
- */
-export function normalizeExecutionHints(executionHints: unknown): WorkflowRunContext['executionHints'] {
-  if (executionHints === undefined) {
-    return undefined;
-  }
-  return ExecutionHintsSchema.parse(executionHints);
 }

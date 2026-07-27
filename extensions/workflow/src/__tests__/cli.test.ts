@@ -139,11 +139,12 @@ describe('bootEmbeddedWorkflowRuntime', () => {
     expect(options?.enablePackageManager).toBe(false);
   });
 
-  it('calls bootMakaioRuntimeCore with workflowRunner.mode: in-process', async () => {
+  it('configures in-process execution with an invocation workspace materialization resolver', async () => {
     await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
 
     const options = bootMock.mock.calls[0]?.[3];
     expect(options?.workflowRunner).toEqual({ mode: 'in-process' });
+    expect(options?.workflowMaterializationSpecResolvers).toHaveLength(1);
   });
 
   it('resolves push embedded upstream telemetry from environment', async () => {

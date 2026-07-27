@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 104 |
-| Subjects | 974 (402 events, 572 RPCs) |
+| Subjects | 975 (401 events, 574 RPCs) |
 | framework | 100 |
 | extension | 4 |
 | kind: bus | 74 |
@@ -95,8 +95,8 @@ next: false
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
 | [`widget`](./widget.md) | bus | 4 | 4E / 0R |
-| [`worker-node`](./worker-node.md) | bus | 12 | 10E / 2R |
-| [`workflow`](./workflow.md) | bus | 58 | 26E / 32R |
+| [`worker-node`](./worker-node.md) | bus | 12 | 9E / 3R |
+| [`workflow`](./workflow.md) | bus | 59 | 26E / 33R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

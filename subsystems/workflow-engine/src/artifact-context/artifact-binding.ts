@@ -145,7 +145,6 @@ function buildArtifactExpressionContext(
     config: runContext.config ?? {},
     trigger: runContext.triggerPayload,
     scope: runContext.scope,
-    context: runContext.context,
     env: runContext.env,
     execution: {
       id: execution.id,

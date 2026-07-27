@@ -435,13 +435,21 @@ export async function bootMakaioRuntimeCore(
     }
 
     const platformDefaults = { cwd: process.cwd() };
+    const workflowRunner =
+      options.workflowRunner?.mode === 'piscina' &&
+      options.workflowRunner.resolveWorkspaceRoot === undefined &&
+      options.piscinaWorkspaceRootResolver !== undefined
+        ? { ...options.workflowRunner, resolveWorkspaceRoot: options.piscinaWorkspaceRootResolver }
+        : options.workflowRunner;
     const workflowRunnerPackageOptions = createNodeWorkflowRunnerPackageOptions({
       busUrl,
       runtimeModuleDir: srcDir,
       platformDefaults,
-      workflowRunner: options.workflowRunner,
+      workflowRunner,
       makaioHome,
       bus,
+      executionAttemptRepository: options.executionAttemptRepository,
+      workflowMaterializationSpecResolvers: options.workflowMaterializationSpecResolvers,
     });
 
     const { adapterSubsystemPackage } = prepareAdapterRuntime({
@@ -559,12 +567,16 @@ export async function bootMakaioRuntimeCore(
     });
     const piscinaRunner = new ThinWorkflowPiscinaRunner({
       workerEntry: piscinaWorkerEntry,
-      manifest: { packages: [] },
+      manifest: { contributionRefs: [] },
+      ...(options.piscinaWorkspaceRootResolver !== undefined && {
+        resolveWorkspaceRoot: options.piscinaWorkspaceRootResolver,
+      }),
     });
     const piscinaProvider = new PiscinaThinWorkflowProvider({
       id: BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
       displayName: 'Local (Piscina)',
       runner: piscinaRunner,
+      bus,
     });
     try {
       await registerWorkerNodeProvider(bus, piscinaProvider);

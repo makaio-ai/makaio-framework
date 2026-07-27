@@ -4,6 +4,7 @@ import { MockWebSocket, MockWebSocketServer } from './test-helpers.js';
 import type { BusBroadcastMessage, BusEventMessage, BusRequestMessage } from '@makaio/bus-core';
 import { NO_HANDLER_ERROR_CODE, NoHandlerError } from '@makaio/bus-core';
 import type { TransportAuth, WebSocketLike, WebSocketServerLike } from '../types.js';
+import { clearHmacIdentitySecretsForTesting, registerHmacIdentitySecret } from '../auth/identity-secret-registry.js';
 
 class FailingSendWebSocket extends MockWebSocket {
   send(_data: string | BufferSource | Blob): void {
@@ -47,7 +48,145 @@ class CountingWebSocketServer implements WebSocketServerLike {
   }
 }
 
+function makeAuth(
+  identities: Map<WebSocketLike, string> = new Map(),
+  isSocketAuthenticated: (socket: WebSocketLike) => boolean = () => true,
+): TransportAuth {
+  return {
+    authenticateClient: async () => undefined,
+    authenticateServer: async () => undefined,
+    handleAuthMessage: () => false,
+    getReceiveContext: (socket) => {
+      const identityId = socket ? identities.get(socket) : undefined;
+      return identityId
+        ? { transportName: 'websocket', peer: { kind: 'worker-bootstrap', id: identityId, authenticated: true } }
+        : undefined;
+    },
+    isSocketAuthenticated,
+    cleanupSocket: () => undefined,
+    cleanup: () => undefined,
+  };
+}
+
 describe('Server mode behavior', () => {
+  it('excludes subject-restricted clients from server-initiated request targets', async () => {
+    const identityId = 'restricted-request-target';
+    registerHmacIdentitySecret(identityId, 'request-target-secret', {
+      peerKind: 'worker-bootstrap',
+      allowedSubjects: ['worker-node.control.bootstrap.claim'],
+    });
+
+    const wss = new MockWebSocketServer();
+    const restrictedClient = new MockWebSocket();
+    const transport = new ServerTransport({
+      websocket: wss,
+      auth: makeAuth(new Map([[restrictedClient, identityId]])),
+    });
+
+    try {
+      await transport.connect();
+      wss.simulateConnection(restrictedClient);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      await expect(
+        transport.send({
+          type: 'request',
+          namespace: 'worker-node',
+          subject: 'control.outcome.submit',
+          payload: {},
+          correlationId: 'restricted-request',
+          messageId: 'restricted-request-message',
+        }),
+      ).rejects.toBeInstanceOf(NoHandlerError);
+
+      expect(restrictedClient.sentMessages).toHaveLength(0);
+    } finally {
+      clearHmacIdentitySecretsForTesting();
+      await transport.disconnect();
+    }
+  });
+
+  it('closes revoked clients instead of retaining them as request targets', async () => {
+    const wss = new MockWebSocketServer();
+    const revokedClient = new MockWebSocket();
+    const closeSpy = vi.spyOn(revokedClient, 'close');
+    const transport = new ServerTransport({
+      websocket: wss,
+      auth: makeAuth(new Map(), (socket) => socket !== revokedClient),
+    });
+
+    try {
+      await transport.connect();
+      wss.simulateConnection(revokedClient);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      await expect(
+        transport.send({
+          type: 'request',
+          namespace: 'worker-node',
+          subject: 'control.bootstrap.claim',
+          payload: {},
+          correlationId: 'revoked-request',
+          messageId: 'revoked-request-message',
+        }),
+      ).rejects.toBeInstanceOf(NoHandlerError);
+
+      expect(closeSpy).toHaveBeenCalledWith(1008, 'Authentication expired');
+      expect(revokedClient.sentMessages).toHaveLength(0);
+    } finally {
+      await transport.disconnect();
+    }
+  });
+
+  it('routes correlated responses only to their requesting socket', async () => {
+    const identityId = 'restricted-response-observer';
+    registerHmacIdentitySecret(identityId, 'response-observer-secret', {
+      peerKind: 'worker-bootstrap',
+      allowedSubjects: ['worker-node.control.bootstrap.claim'],
+    });
+
+    const wss = new MockWebSocketServer();
+    const restrictedObserver = new MockWebSocket();
+    const requester = new MockWebSocket();
+    const transport = new ServerTransport({
+      websocket: wss,
+      auth: makeAuth(new Map([[restrictedObserver, identityId]])),
+    });
+    transport.onReceive(async (message) => {
+      if (message.type !== 'request') return;
+      await transport.send({ type: 'response', correlationId: message.correlationId, result: { approved: true } });
+    });
+
+    try {
+      await transport.connect();
+      wss.simulateConnection(restrictedObserver);
+      wss.simulateConnection(requester);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      requester.receiveMessage(
+        JSON.stringify({
+          type: 'request',
+          namespace: 'worker-node',
+          subject: 'control.bootstrap.claim',
+          payload: {},
+          correlationId: 'request-owner',
+          messageId: 'request-owner-message',
+        }),
+      );
+
+      await vi.waitFor(() => expect(requester.sentMessages).toHaveLength(1));
+      expect(JSON.parse(requester.sentMessages[0]!)).toMatchObject({
+        type: 'response',
+        correlationId: 'request-owner',
+        result: { approved: true },
+      });
+      expect(restrictedObserver.sentMessages).toHaveLength(0);
+    } finally {
+      clearHmacIdentitySecretsForTesting();
+      await transport.disconnect();
+    }
+  });
+
   it('replaces the aggregate until the final client disconnects abruptly', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({ websocket: wss });

@@ -56,12 +56,6 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
     inputs: {},
     scope: { type: 'global' },
     busAuth: { kind: 'none' },
-    context: {
-      repoPath: '/repo',
-      makaioHome: '/home/.makaio',
-      os: 'linux',
-      arch: 'x64',
-    },
     env: {},
     coordinatorSessionId: 'session-001',
     cancelSubject: 'workflow.cancel.wf-001',
@@ -183,7 +177,12 @@ describe('runWorkflowInWorker', () => {
     const config = makeConfig();
     const result = await runWorkflowInWorker({
       config,
-      manifest: { packages: [{ name: 'test-pkg', importPath: './test.mjs' }] },
+      manifest: {
+        contributionRefs: [
+          { packageName: 'test-pkg', version: '1.0.0', entrypoint: 'test.mjs', integrity: 'sha384-test' },
+        ],
+      },
+      contributionEntrypoints: ['/verified/test.mjs'],
     });
 
     expect(mockBootWorkerBus).toHaveBeenCalledOnce();
@@ -209,7 +208,7 @@ describe('runWorkflowInWorker', () => {
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
     const config = makeConfig();
-    const runPromise = runWorkflowInWorker({ config, manifest: { packages: [] } });
+    const runPromise = runWorkflowInWorker({ config, manifest: { contributionRefs: [] }, contributionEntrypoints: [] });
     await vi.waitFor(() => expect(transport.subscribe).toHaveBeenCalled());
 
     expect(mockParentPortPostMessage).not.toHaveBeenCalled();
@@ -244,7 +243,11 @@ describe('runWorkflowInWorker', () => {
       status: 'completed',
     });
 
-    await runWorkflowInWorker({ config: makeConfig(), manifest: { packages: [] } });
+    await runWorkflowInWorker({
+      config: makeConfig(),
+      manifest: { contributionRefs: [] },
+      contributionEntrypoints: [],
+    });
 
     expect(runtimeHandle.close).toHaveBeenCalledOnce();
     expect(busHandle.close).toHaveBeenCalledOnce();
@@ -262,9 +265,9 @@ describe('runWorkflowInWorker', () => {
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockRejectedValueOnce(new Error('Orchestrator exploded'));
 
-    await expect(runWorkflowInWorker({ config: makeConfig(), manifest: { packages: [] } })).rejects.toThrow(
-      'Orchestrator exploded',
-    );
+    await expect(
+      runWorkflowInWorker({ config: makeConfig(), manifest: { contributionRefs: [] }, contributionEntrypoints: [] }),
+    ).rejects.toThrow('Orchestrator exploded');
 
     expect(runtimeHandle.close).toHaveBeenCalledOnce();
     expect(busHandle.close).toHaveBeenCalledOnce();
@@ -285,7 +288,11 @@ describe('runWorkflowInWorker', () => {
     mockLoadWorkflowModule.mockResolvedValueOnce(loadedWorkflow);
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
-    await runWorkflowInWorker({ config: makeConfig(), manifest: { packages: [] } });
+    await runWorkflowInWorker({
+      config: makeConfig(),
+      manifest: { contributionRefs: [] },
+      contributionEntrypoints: [],
+    });
 
     // bootWorkerRuntime is only called when contributions are non-empty
     expect(mockBootWorkerRuntime).not.toHaveBeenCalled();
@@ -308,7 +315,7 @@ describe('runWorkflowInWorker', () => {
       busUrl: 'ws://localhost:9999',
       busAuth: { kind: 'hmac', secret: 'test-secret' },
     });
-    await runWorkflowInWorker({ config, manifest: { packages: [] } });
+    await runWorkflowInWorker({ config, manifest: { contributionRefs: [] }, contributionEntrypoints: [] });
 
     expect(mockBootWorkerBus).toHaveBeenCalledWith(
       expect.objectContaining({ busUrl: 'ws://localhost:9999', busAuth: { kind: 'hmac', secret: 'test-secret' } }),
@@ -321,7 +328,8 @@ describe('runWorkflowInWorker', () => {
     await expect(
       runWorkflowInWorker({
         config: invalidConfig as WorkflowWorkerConfig,
-        manifest: { packages: [] },
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
       }),
     ).rejects.toThrow();
 
@@ -346,7 +354,11 @@ describe('runWorkflowInWorker', () => {
       source: { kind: 'definition', workflowId: 'wf-001' },
       definition,
     });
-    const result = await runWorkflowInWorker({ config, manifest: { packages: [] } });
+    const result = await runWorkflowInWorker({
+      config,
+      manifest: { contributionRefs: [] },
+      contributionEntrypoints: [],
+    });
 
     // File-loader must never be called for definition-sourced workflows
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
@@ -374,11 +386,65 @@ describe('runWorkflowInWorker', () => {
       // definition intentionally omitted
     });
 
-    await expect(runWorkflowInWorker({ config, manifest: { packages: [] } })).rejects.toThrow(
+    await expect(
+      runWorkflowInWorker({ config, manifest: { contributionRefs: [] }, contributionEntrypoints: [] }),
+    ).rejects.toThrow(
       `Definition-sourced worker config for workflowId "wf-001" is missing the required 'definition' field.`,
     );
 
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
     expect(mockRunWorkflowOrchestrator).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when contribution loading throws — no orchestration', async () => {
+    const busHandle = makeBusHandle();
+
+    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
+    mockLoadWorkerContributions.mockRejectedValueOnce(new Error('contribution import failure'));
+
+    await expect(
+      runWorkflowInWorker({
+        config: makeConfig(),
+        manifest: {
+          contributionRefs: [
+            { packageName: 'broken-pkg', version: '1.0.0', entrypoint: 'broken.mjs', integrity: 'sha384-test' },
+          ],
+        },
+        contributionEntrypoints: ['/verified/broken.mjs'],
+      }),
+    ).rejects.toThrow('contribution import failure');
+
+    // Orchestrator must never run when contributions fail to load
+    expect(mockRunWorkflowOrchestrator).not.toHaveBeenCalled();
+    // Worker ready message must not be sent before composition completes
+    expect(mockParentPortPostMessage).not.toHaveBeenCalled();
+    // Bus must be closed in the finally block
+    expect(busHandle.close).toHaveBeenCalledOnce();
+  });
+
+  it('loads only materializer-verified contribution entrypoints', async () => {
+    const busHandle = makeBusHandle();
+
+    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
+    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
+    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
+      executionId: 'exec-001',
+      workflowId: 'wf-001',
+      status: 'completed',
+    });
+
+    const entrypoints = ['/verified/test.mjs'];
+    const manifest = {
+      contributionRefs: [
+        { packageName: 'test-pkg', version: '1.0.0', entrypoint: 'test.mjs', integrity: 'sha384-test' },
+      ],
+    };
+    await runWorkflowInWorker({ config: makeConfig(), manifest, contributionEntrypoints: entrypoints });
+
+    expect(mockLoadWorkerContributions).toHaveBeenCalledWith(entrypoints, {
+      bus: busHandle.bus,
+      signal: expect.any(AbortSignal),
+    });
   });
 });

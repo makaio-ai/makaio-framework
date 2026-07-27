@@ -13,14 +13,12 @@ import {
   EXECUTION_LIST_MIN_LIMIT,
   ExecutionsByArtifactRefsQuerySchema,
   serializeArtifactRef,
-} from '@makaio/contracts';
-import type {
-  JsonPatchOperation,
-  JsonValue,
-  ExecutionLink,
-  WorkflowExecution,
-  WorkflowGateInstance,
-  WorkflowRunContext,
+  type ExecutionLink,
+  type JsonPatchOperation,
+  type JsonValue,
+  type WorkflowExecution,
+  type WorkflowGateInstance,
+  type WorkflowRunContext,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowExecution } from './schema.js';
@@ -36,6 +34,7 @@ import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-
 import { registerWorklogProjection } from '../worklog/worklog-projection-service.js';
 import { registerExternalExecutionStorageHandlers } from './external-execution-handler.js';
 import { registerFinalizationHandlers } from './finalization-handler.js';
+import { isExecutionBoundAccessAllowed } from '../execution-bound-access.js';
 
 // The `.sqlite` face is the canonical static type for BOTH dialects:
 // `DialectSchema` presents the Postgres twins through the same SQLite-typed
@@ -357,6 +356,8 @@ function registerExecutionCrudHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
 
   const unsubGetExecution = bus.on(WorkflowStorageSubjects.getExecution, async (ctx) => {
     const { executionId } = ctx.payload;
+    if (!isExecutionBoundAccessAllowed(ctx, executionId))
+      throw new Error(`Unauthorized execution read: ${executionId}`);
     const rows = await db.select().from(workflowExecutions).where(eq(workflowExecutions.id, executionId));
     ctx.setResult({ execution: rows[0] ? mapExecution(rows[0]) : null });
   });

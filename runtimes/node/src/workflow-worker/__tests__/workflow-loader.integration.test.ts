@@ -29,12 +29,6 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
     inputs: {},
     scope: { type: 'global' },
     busAuth: { kind: 'none' },
-    context: {
-      repoPath: '/repo',
-      makaioHome: '/home/.makaio',
-      os: 'linux',
-      arch: 'x64',
-    },
     env: {},
     coordinatorSessionId: 'session-loader-001',
     cancelSubject: 'workflow.cancel.wf-loader-001',

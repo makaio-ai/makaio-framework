@@ -17,12 +17,13 @@ import {
   SubagentSubjects,
   createClientDefinition,
 } from '@makaio/contracts';
-import type { WorkflowDelegateAgentNode } from '@makaio/contracts';
+import type { ProviderAllocationRef, WorkflowDelegateAgentNode, WorkflowRunResult } from '@makaio/contracts';
 import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ClientStorageSubjects, ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
-import { WorkflowExecutor } from '@makaio/subsystem-workflow-engine';
+import { ExecutionAttemptAuthority, WorkflowExecutor } from '@makaio/subsystem-workflow-engine';
+import type { ExecutionAttemptRepository } from '@makaio/subsystem-workflow-engine';
 import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
 import { WorkflowStorageSubjects } from '../../../../../subsystems/workflow-engine/src/storage/namespace.js';
 import {
@@ -38,6 +39,77 @@ import {
   createDeterministicAdapterContribution,
   type DeterministicAdapterCapture,
 } from './deterministic-adapter-fixture.js';
+
+const testAllocationRef: ProviderAllocationRef = {
+  version: 1,
+  providerId: 'test-provider',
+  providerData: {},
+};
+
+/**
+ * Create a minimal in-memory execution attempt repository for integration tests.
+ * @returns An ExecutionAttemptRepository backed by Maps.
+ */
+function createIntegrationRepository(): ExecutionAttemptRepository {
+  const attempts = new Map<string, { executionAttemptId: string; executionId: string }>();
+  const outcomes = new Map<string, WorkflowRunResult>();
+  const active = new Map<string, string>();
+
+  return {
+    async createAttempt(input) {
+      attempts.set(input.executionAttemptId, input);
+      active.set(input.executionId, input.executionAttemptId);
+      return {
+        executionAttemptId: input.executionAttemptId,
+        executionId: input.executionId,
+        status: 'pending' as const,
+        allocationRef: null,
+        createdAt: new Date().toISOString(),
+      };
+    },
+    async beginProvisioning() {
+      return { kind: 'started' as const };
+    },
+    async recordAllocation() {
+      return { kind: 'recorded' as const };
+    },
+    async recordProvisioningFailure() {
+      return { kind: 'recorded' as const };
+    },
+    async getActiveAttempt(executionId, executionAttemptId) {
+      if (active.get(executionId) !== executionAttemptId) return null;
+      const a = attempts.get(executionAttemptId);
+      if (!a) return null;
+      return {
+        ...a,
+        status: 'pending' as const,
+        allocationRef: null,
+        createdAt: new Date().toISOString(),
+      };
+    },
+    async commitOutcome(input) {
+      const prior = outcomes.get(input.executionAttemptId);
+      if (prior) {
+        if (JSON.stringify(prior) === JSON.stringify(input.result)) {
+          return { kind: 'duplicate', outcome: prior };
+        }
+        return { kind: 'conflict' };
+      }
+      const activeId = active.get(input.executionId);
+      if (activeId !== input.executionAttemptId) {
+        return { kind: 'fenced' };
+      }
+      outcomes.set(input.executionAttemptId, input.result);
+      return { kind: 'accepted', outcome: input.result };
+    },
+    async abandonPendingAttempt() {
+      return { kind: 'abandoned' as const };
+    },
+    async recordInfrastructureFailure() {
+      return { kind: 'recorded' as const };
+    },
+  };
+}
 
 describe('authority WorkerNode finalization integration', () => {
   const cleanups: Array<() => Promise<void> | void> = [];
@@ -64,16 +136,22 @@ describe('authority WorkerNode finalization integration', () => {
     cleanups.push(() => closeHttpServer(server));
     const port = await listenOnLoopback(server);
     const transportSecret = 'authority-finalization-integration-secret';
+    const attemptExecutionIds = new Map<string, string>();
     const transport = new BusServerTransportProvider({
       httpServer: server,
       auth: new HmacAuth({
         secret: transportSecret,
         resolveSecret: () => transportSecret,
-        resolvePeer: (executionId) => ({
-          kind: 'workflow-execution',
-          id: executionId,
-          authenticated: true,
-        }),
+        resolvePeer: (attemptId) => {
+          const executionId = attemptExecutionIds.get(attemptId);
+          if (executionId === undefined) return null;
+          return {
+            kind: 'workflow-execution-attempt',
+            id: attemptId,
+            authenticated: true,
+            claims: { executionId },
+          };
+        },
       }),
     });
     cleanups.push(() => transport.disconnect());
@@ -128,20 +206,27 @@ describe('authority WorkerNode finalization integration', () => {
       }),
     );
     cleanups.push(
-      MakaioBus.on(WorkerNodeSubjects.control.ready, (ctx) => {
+      MakaioBus.on(WorkerNodeSubjects.control['attempt-ready'], (ctx) => {
         readyEvents.push(ctx.payload);
       }),
     );
+    const authority = new ExecutionAttemptAuthority(createIntegrationRepository());
+    let resolveDispatchComplete!: (executionId: string) => void;
+    const dispatchComplete = new Promise<string>((resolve) => {
+      resolveDispatchComplete = resolve;
+    });
     const runner = new WorkerNodeRunner({
-      manifest: { packages: [] },
+      authority,
+      manifest: { contributionRefs: [] },
       dispatch: async (request, signal) => {
+        attemptExecutionIds.set(request.executionAttemptId, request.config.executionId);
         const runtime = await createIsolatedWorkflowRuntime({
           connectAuthority: async (bus) => {
             bus.registerTransport(
               new WebSocketClientTransport({
                 url: `ws://127.0.0.1:${port}/bus`,
                 autoReconnect: false,
-                auth: new HmacAuth({ secret: transportSecret, identityId: request.config.executionId }),
+                auth: new HmacAuth({ secret: transportSecret, identityId: request.executionAttemptId }),
               }),
             );
             await bus.connect();
@@ -241,21 +326,35 @@ describe('authority WorkerNode finalization integration', () => {
               authMethods: [{ id: 'native', mode: 'inferred' }],
             },
           });
-          await runtime.bus.emit(WorkerNodeSubjects.control.ready, {
-            nodeId: runtime.machineId,
+          await runtime.bus.emit(WorkerNodeSubjects.control['attempt-ready'], {
+            executionAttemptId: request.executionAttemptId,
             executionId: request.config.executionId,
             adapters: [adapterCapture.adapterId],
           });
+          const { definitionSnapshot } = await runtime.bus.request(WorkflowSubjects.getRunContext, {
+            executionId: request.config.executionId,
+          });
+          if (definitionSnapshot === undefined)
+            throw new Error('Authority did not provide a trusted workflow snapshot');
           const result = await runWorkflowOrchestrator({
             config: request.config,
-            loaded: { definition: request.config.definition!, runtimeHandlers: new Map() },
+            loaded: { definition: definitionSnapshot, runtimeHandlers: new Map() },
             bus: runtime.bus,
             signal,
           });
           await Promise.all(adapterCapture.completionTasks);
-          return result;
+          // Commit the outcome through the Authority so waitForOutcome resolves
+          const decision = await authority.commitOutcome(
+            request.executionAttemptId,
+            request.config.executionId,
+            result,
+          );
+          authority.settleOutcome(request.executionAttemptId, decision);
+          return { executionAttemptId: request.executionAttemptId, allocationRef: testAllocationRef };
         } finally {
           await runtime.shutdown();
+          attemptExecutionIds.delete(request.executionAttemptId);
+          resolveDispatchComplete(request.config.executionId);
         }
       },
     });
@@ -268,8 +367,17 @@ describe('authority WorkerNode finalization integration', () => {
         platformDefaults: { cwd },
       },
       runner,
+      authority,
     );
     cleanups.push(() => executor.destroy());
+    executor.registerWorkflowMaterializationSpecResolver({
+      resolve: async () => ({
+        kind: 'workspace-snapshot',
+        snapshotId: 'authority-finalization-snapshot',
+        digest: 'sha256-authority-finalization',
+        sourcePath: 'authority-flow.ts',
+      }),
+    });
     const finalizerId = 'test.authority-finalizer';
     const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
     MakaioBus.registerNamespace(namespace);
@@ -342,24 +450,24 @@ describe('authority WorkerNode finalization integration', () => {
         },
       }),
       successFinalizerId: finalizerId,
+      executableSource: { kind: 'path' as const, path: 'authority-flow.ts' },
     };
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
-    const completed = new Promise<string>((resolve, reject) => {
-      cleanups.push(
-        MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => resolve(ctx.payload.executionId)),
-        MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => reject(new Error(ctx.payload.error))),
-      );
-    });
     const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
-    await expect(completed).resolves.toBe(executionId);
-    await expect(MakaioBus.request(WorkflowSubjects.getExecution, { executionId })).resolves.toEqual(
-      expect.objectContaining({ execution: expect.objectContaining({ status: 'completed' }) }),
-    );
+    await expect(MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId })).resolves.toMatchObject({
+      runContext: {
+        source: { kind: 'path', path: 'authority-flow.ts' },
+        definitionSnapshot: { id: workflow.id },
+      },
+    });
+    // Authority-committed completions bypass executor finalization and
+    // lifecycle event emission. Wait for the dispatch to complete instead.
+    await expect(dispatchComplete).resolves.toBe(executionId);
     expect(usageEvents).toContainEqual(
       expect.objectContaining({ adapterName: 'workflow-test-adapter', totalTokens: 2, costUnits: 2 }),
     );
     expect(readyEvents).toContainEqual({
-      nodeId: 'authority-worker',
+      executionAttemptId: expect.any(String),
       executionId,
       adapters: [adapterCapture.adapterId],
     });

@@ -5,6 +5,7 @@ import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowExecutionFrame } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
+import { isExecutionBoundAccessAllowed } from '../execution-bound-access.js';
 
 type WorkflowExecutionFramesTable = typeof workflowEngineSchema.sqlite.workflowExecutionFrames;
 type DbFrameRow = WorkflowExecutionFramesTable['$inferSelect'];
@@ -73,6 +74,9 @@ export function registerFrameHandlers(bus: IMakaioBus, db: MakaioDatabase): () =
 
   const unsubSetFrame = bus.on(WorkflowStorageSubjects.setFrame, async (ctx) => {
     const { executionId, frame } = ctx.payload as { executionId: string; frame: WorkflowFrameState };
+    if (!isExecutionBoundAccessAllowed(ctx, executionId)) {
+      throw new Error(`Unauthorized: caller is not permitted to write frames for execution: ${executionId}`);
+    }
     const dbValues = toFrameDbValues(executionId, frame);
     await serializeDatabaseOperation(db, () =>
       db.insert(workflowExecutionFrames).values(dbValues).onConflictDoUpdate({
@@ -93,6 +97,9 @@ export function registerFrameHandlers(bus: IMakaioBus, db: MakaioDatabase): () =
   });
 
   const unsubListFrames = bus.on(WorkflowStorageSubjects.listFrames, async (ctx) => {
+    if (!isExecutionBoundAccessAllowed(ctx, ctx.payload.executionId)) {
+      throw new Error(`Unauthorized: caller is not permitted to list frames for execution: ${ctx.payload.executionId}`);
+    }
     const rows = await db
       .select()
       .from(workflowExecutionFrames)

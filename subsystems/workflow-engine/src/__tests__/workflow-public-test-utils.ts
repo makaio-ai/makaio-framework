@@ -1,7 +1,12 @@
 import { expect, vi } from 'vitest';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { type WorkflowErrorCode, type WorkflowRunResult, type WorkflowWorkerConfig } from '@makaio/contracts';
+import {
+  type WorkflowErrorCode,
+  type WorkflowRunnerCompletion,
+  type WorkflowRunResult,
+  type WorkflowWorkerConfig,
+} from '@makaio/contracts';
 
 /**
  * Assert that a failed bus request wraps a typed workflow error.
@@ -18,20 +23,24 @@ export function expectRequestErrorCause(error: unknown, code: WorkflowErrorCode,
  * Keep a stub workflow runner alive until test teardown aborts it.
  * @param config - Worker config passed to the runner.
  * @param signal - Abort signal controlled by the executor.
- * @returns Cancellation result resolved on abort.
+ * @returns Uncommitted cancellation completion resolved on abort.
  */
-export function waitForRunnerAbort(config: WorkflowWorkerConfig, signal: AbortSignal): Promise<WorkflowRunResult> {
+export function waitForRunnerAbort(
+  config: WorkflowWorkerConfig,
+  signal: AbortSignal,
+): Promise<WorkflowRunnerCompletion> {
   const cancelledResult: WorkflowRunResult = {
     executionId: config.executionId,
     workflowId: config.workflowId,
     status: 'cancelled',
     reason: 'test teardown',
   };
+  const completion: WorkflowRunnerCompletion = { state: 'uncommitted', result: cancelledResult };
   if (signal.aborted) {
-    return Promise.resolve(cancelledResult);
+    return Promise.resolve(completion);
   }
   return new Promise((resolve) => {
-    signal.addEventListener('abort', () => resolve(cancelledResult), { once: true });
+    signal.addEventListener('abort', () => resolve(completion), { once: true });
   });
 }
 
