@@ -128,6 +128,7 @@ function createSwapTestAgent(
     providerContext?: AIAgentConfig['providerContext'];
     definitionProviders?: AIAgentConfig['definitionProviders'];
     prepareAuthRuntime?: AIAgentConfig['prepareAuthRuntime'];
+    resumeAdapterSessionId?: AIAgentConfig['resumeAdapterSessionId'];
     onConfigInput?: (input: ConfigFactoryInput) => void;
   },
 ): SwapTestAgent {
@@ -146,6 +147,7 @@ function createSwapTestAgent(
     ...(options?.providerContext !== undefined && { providerContext: options.providerContext }),
     ...(options?.definitionProviders !== undefined && { definitionProviders: options.definitionProviders }),
     ...(options?.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
+    ...(options?.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: options.resumeAdapterSessionId }),
     configFactory: async (input) => {
       options?.onConfigInput?.(input);
       return {
@@ -207,6 +209,59 @@ describe('AIAgent.swapConnector', () => {
     expect(initialConnector.closeCalled).toBe(true);
     expect(agent.currentConnector.model).toBe('test-model-2');
     expect(agent.currentConnector.cwd).toBe('/test/cwd1');
+  });
+
+  it('publishes an explicit fresh decision so later swaps do not resurrect the start-time resume target', async () => {
+    const observedResumeIds: Array<string | undefined> = [];
+    agent = createSwapTestAgent((config) => new MockConnector(config.model, config.cwd), {
+      resumeAdapterSessionId: 'start-time-resume',
+      onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
+    });
+    await agent.init();
+
+    // Explicit fresh decision (key present, value undefined) — e.g. a
+    // non-native warm rehydrate.
+    await agent.testSwapConnector({ resumeAdapterSessionId: undefined });
+    // Later mutation swap without the key must inherit the published fresh
+    // decision, not the consumed start-time resume target.
+    await agent.testSwapConnector({ model: 'test-model-2' });
+
+    expect(observedResumeIds).toEqual(['start-time-resume', undefined, undefined]);
+  });
+
+  it('queued swaps observe the published resume decision of an in-flight swap', async () => {
+    // The fresh decision must be published inside the serialized swap
+    // transaction: a swap queued behind the rehydrate must not build its
+    // connector from the consumed start-time resume target.
+    const observedResumeIds: Array<string | undefined> = [];
+    agent = createSwapTestAgent((config) => new MockConnector(config.model, config.cwd), {
+      resumeAdapterSessionId: 'start-time-resume',
+      onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
+    });
+    await agent.init();
+
+    const freshSwap = agent.testSwapConnector({ resumeAdapterSessionId: undefined });
+    const queuedSwap = agent.testSwapConnector({ model: 'test-model-2' });
+    await Promise.all([freshSwap, queuedSwap]);
+
+    expect(observedResumeIds).toEqual(['start-time-resume', undefined, undefined]);
+  });
+
+  it('publishes the provider-confirmed identity of a resumed swap for later swaps to inherit', async () => {
+    const observedResumeIds: Array<string | undefined> = [];
+    agent = createSwapTestAgent((config) => new MockConnector(config.model, config.cwd), {
+      resumeAdapterSessionId: 'start-time-resume',
+      onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
+    });
+    await agent.init();
+
+    // MockConnector confirms 'test-session-id' — the provider rotated the
+    // session on resume. Later swaps must continue the live conversation,
+    // not the abandoned requested target.
+    await agent.testSwapConnector({ resumeAdapterSessionId: 'resumed-session' });
+    await agent.testSwapConnector({ model: 'test-model-2' });
+
+    expect(observedResumeIds).toEqual(['start-time-resume', 'resumed-session', 'test-session-id']);
   });
 
   it('rejects when connector is processing', async () => {

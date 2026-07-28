@@ -38,7 +38,14 @@ export const RehydrateAgentSchema = {
     /** Optional model override for new connector (adapter-specific, e.g., 'sonnet', 'opus') */
     model: z.string().optional(),
 
-    /** Optional persisted native session ID for resume-capable connectors */
+    /**
+     * Optional persisted native session ID for resume-capable connectors.
+     *
+     * Consumed only when the rehydrate resolves to native resume: a fresh
+     * replacement connector mints a new provider session identity instead,
+     * because pinning a used session ID on a fresh generation collides with
+     * the provider's durable session store.
+     */
     adapterSessionId: z.string().optional(),
 
     /**
@@ -49,8 +56,8 @@ export const RehydrateAgentSchema = {
      * layer) is responsible for evaluating locality before setting this field;
      * the adapter trusts it without re-evaluation.
      *
-     * Distinct from `adapterSessionId` which is always forwarded as an identity
-     * marker regardless of whether native resume is intended.
+     * Distinct from `adapterSessionId` which marks the identity of the
+     * provider session a resumed generation continues.
      */
     resumeAdapterSessionId: z.string().optional(),
   }),

@@ -213,7 +213,9 @@ describe('connector runtime lifecycle', () => {
       reportCleanupFailure,
     });
 
-    await expect(manager.swapConnector({ model: 'new-model' })).resolves.toBeUndefined();
+    // The swap resolves despite the old-lease cleanup failure and reports the
+    // replacement's provider-confirmed session ID (MockConnector's constant).
+    await expect(manager.swapConnector({ model: 'new-model' })).resolves.toBe('test-session-id');
     expect(currentRuntime.connector.model).toBe('new-model');
     expect(oldConnector.close).toHaveBeenCalledOnce();
     expect(oldLeaseRelease).toHaveBeenCalledOnce();

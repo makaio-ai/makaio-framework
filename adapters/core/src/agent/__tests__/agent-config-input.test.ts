@@ -46,3 +46,69 @@ describe('buildConfigFactoryInput error cleanup', () => {
     expect(tracker.resolve('message-2', { nativeId: 'tool-3' }).correlationId).toBeNull();
   });
 });
+
+describe('buildConfigFactoryInput resume override semantics', () => {
+  /**
+   * Build a minimal agent config carrying a start-time resume target.
+   * @returns Config with `resumeAdapterSessionId: 'start-time-resume'`
+   */
+  function createConfigWithStartResume(): Parameters<typeof buildConfigFactoryInput>[0]['config'] {
+    const { bus: adapterBus } = createMockScopedBus();
+    const { bus: globalBus } = createMockGlobalBus();
+    return {
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      adapterName: 'test-adapter',
+      capabilities: [],
+      nativeTools: [],
+      adapterBus,
+      globalBus,
+      resumeAdapterSessionId: 'start-time-resume',
+      configFactory: async () => ({
+        bus: adapterBus,
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        model: 'test-model',
+        cwd: '/tmp',
+      }),
+      connectorFactory: () => ({}) as AIAgentConnector,
+    };
+  }
+
+  it('inherits the start-time resume target when the override key is absent', () => {
+    const input = buildConfigFactoryInput({
+      config: createConfigWithStartResume(),
+      availableModels: undefined,
+      currentReasoningEffort: undefined,
+      clearAllToolCalls: () => {},
+      overrides: { model: 'other-model' },
+    });
+
+    expect(input.resumeAdapterSessionId).toBe('start-time-resume');
+  });
+
+  it('builds a fresh generation when the override key is present with undefined', () => {
+    const input = buildConfigFactoryInput({
+      config: createConfigWithStartResume(),
+      availableModels: undefined,
+      currentReasoningEffort: undefined,
+      clearAllToolCalls: () => {},
+      overrides: { resumeAdapterSessionId: undefined },
+    });
+
+    expect(input.resumeAdapterSessionId).toBeUndefined();
+  });
+
+  it('prefers an explicit override resume target over the start-time target', () => {
+    const input = buildConfigFactoryInput({
+      config: createConfigWithStartResume(),
+      availableModels: undefined,
+      currentReasoningEffort: undefined,
+      clearAllToolCalls: () => {},
+      overrides: { resumeAdapterSessionId: 'override-resume' },
+    });
+
+    expect(input.resumeAdapterSessionId).toBe('override-resume');
+  });
+});

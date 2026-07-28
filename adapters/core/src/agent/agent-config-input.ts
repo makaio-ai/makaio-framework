@@ -145,7 +145,13 @@ export function buildConfigFactoryInput<TBus extends ScopedBus<string>, TConnect
     env: cfg.env,
     adapterSessionId: overrides?.adapterSessionId ?? cfg.adapterSessionId,
     sessionId: cfg.sessionId,
-    resumeAdapterSessionId: overrides?.resumeAdapterSessionId ?? cfg.resumeAdapterSessionId,
+    // Key presence gates the override (like reasoningEffort): an explicit
+    // `undefined` builds a fresh connector, while an absent key inherits the
+    // agent config's start-time resume target for the initial generation.
+    resumeAdapterSessionId:
+      overrides !== undefined && 'resumeAdapterSessionId' in overrides
+        ? overrides.resumeAdapterSessionId
+        : cfg.resumeAdapterSessionId,
     reasoningEffort: resolveConfigReasoningEffort(overrides, deps.currentReasoningEffort),
     supportedReasoningLevels: resolveSupportedReasoningLevels(deps.availableModels, overrides?.model ?? cfg.model),
     allowedTools: cfg.allowedTools,

@@ -647,6 +647,8 @@ export abstract class AIAgent<
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
   ): Promise<void> {
+    // Resume-decision publication happens inside the coordinator's serialized
+    // swap transaction so queued swaps can never observe the stale target.
     await this.connectorSwapCoordinator.swapConnector(configOverrides, beforeCommit);
   }
 

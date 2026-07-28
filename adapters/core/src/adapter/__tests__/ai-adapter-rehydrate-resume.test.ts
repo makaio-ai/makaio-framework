@@ -121,11 +121,13 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
 
     expect(capturedConfig).toEqual(
       expect.objectContaining({
-        adapterSessionId: 'persisted-native-session',
         allowedDirectories: ['/workspace'],
       }),
     );
     expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
+    // Fresh generations mint their own provider identity downstream — the
+    // used persisted session ID must not be pinned on the replacement.
+    expect(capturedConfig).not.toHaveProperty('adapterSessionId');
   });
 
   describe('unconfirmed identity invariant', () => {
@@ -139,7 +141,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       // the record carries a placeholder adapterSessionId but no nativeLocality.
       const capturedConfig = await rehydrateColdAgent(undefined);
 
-      expect(capturedConfig.adapterSessionId).toBe('persisted-native-session');
+      expect(capturedConfig).not.toHaveProperty('adapterSessionId');
       expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
     });
 
@@ -151,57 +153,142 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
     });
   });
 
-  it('passes requested adapterSessionId as native resume context during warm rehydrate', async () => {
-    const capturedConfigs: Array<BaseAgentConnectorConfig<TestBus> & { adapterId: string }> = [];
-    ({ adapter } = createTestAdapter('test-adapter-warm-rehydrate-config', {
-      configFactory: async (input) => ({
-        bus: input.bus,
-        agentId: input.agentId,
-        adapterId: input.adapterId,
-        adapterName: input.adapterName,
-        model: input.model ?? 'test-model',
-        cwd: input.cwd ?? os.tmpdir(),
-        ...(input.adapterSessionId !== undefined && { adapterSessionId: input.adapterSessionId }),
-        ...(input.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: input.resumeAdapterSessionId }),
-      }),
-      connectorFactory: async (config) => {
-        capturedConfigs.push(config);
-        return new MockConnector(config);
-      },
-    }));
-    await adapter.init();
+  describe('warm rehydrate native resume gate', () => {
+    /**
+     * Start a live agent, warm-rehydrate it, and return the replacement
+     * connector config created by the swap.
+     * @param rehydrateOverrides - Extra rehydrate RPC payload fields (adapterSessionId, resumeAdapterSessionId)
+     * @param nativeLocality - Optional host-evaluated locality verdict served by the agent-storage handler
+     * @param runtimeUpdates - When provided, captures storage:agent.updateRuntime payloads
+     * @returns Captured replacement connector configuration
+     */
+    async function rehydrateWarmAgent(
+      rehydrateOverrides: { adapterSessionId?: string; resumeAdapterSessionId?: string },
+      nativeLocality?: NativeLocalityVerdict,
+      runtimeUpdates?: Array<{ agentId: string; adapterSessionId?: string }>,
+    ): Promise<BaseAgentConnectorConfig<TestBus> & { adapterId: string }> {
+      const capturedConfigs: Array<BaseAgentConnectorConfig<TestBus> & { adapterId: string }> = [];
+      ({ adapter } = createTestAdapter('test-adapter-warm-rehydrate-config', {
+        configFactory: async (input) => ({
+          bus: input.bus,
+          agentId: input.agentId,
+          adapterId: input.adapterId,
+          adapterName: input.adapterName,
+          model: input.model ?? 'test-model',
+          cwd: input.cwd ?? os.tmpdir(),
+          ...(input.adapterSessionId !== undefined && { adapterSessionId: input.adapterSessionId }),
+          ...(input.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: input.resumeAdapterSessionId }),
+        }),
+        connectorFactory: async (config) => {
+          capturedConfigs.push(config);
+          return new MockConnector(config);
+        },
+      }));
+      await adapter.init();
 
-    cleanupFns.push(
-      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
-      }),
-    );
+      cleanupFns.push(
+        MakaioBus.on(AgentStorageSubjects.get, (ctx) => {
+          ctx.setResult({
+            agent: {
+              agentId: ctx.payload.agentId,
+              adapterId: adapter.adapterId,
+              adapterName: 'test-adapter-warm-rehydrate-config',
+              sessionId: 'warm-session',
+              adapterSessionId: 'live-native-session',
+              role: 'lead' as const,
+              status: 'idle' as const,
+              model: 'test-model',
+              cwd: os.tmpdir(),
+              createdAt: Date.now(),
+              lastActivityAt: Date.now(),
+              ...(nativeLocality !== undefined && { nativeLocality }),
+            },
+          });
+        }),
+        MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+          ctx.setResult({ success: true });
+        }),
+        MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
+          runtimeUpdates?.push({
+            agentId: ctx.payload.agentId,
+            ...(ctx.payload.adapterSessionId !== undefined && { adapterSessionId: ctx.payload.adapterSessionId }),
+          });
+          ctx.setResult({ success: true });
+        }),
+      );
 
-    const startResult = await MakaioBus.request(AdapterSubjects.startAgent, {
-      adapterId: adapter.adapterId,
-      role: 'lead',
-      mode: 'resume',
-      sessionId: 'warm-session',
-      adapterSessionId: 'live-native-session',
-      model: 'test-model',
-      cwd: os.tmpdir(),
-      providerContext: createNoAuthTestProviderContext('provider-config', 'provider'),
+      const startResult = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        role: 'lead',
+        mode: 'resume',
+        sessionId: 'warm-session',
+        adapterSessionId: 'live-native-session',
+        model: 'test-model',
+        cwd: os.tmpdir(),
+        providerContext: createNoAuthTestProviderContext('provider-config', 'provider'),
+      });
+      expect(startResult.success).toBe(true);
+      if (!startResult.success) throw new Error('Failed to start agent');
+
+      await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        adapterId: adapter.adapterId,
+        agentId: startResult.agentId,
+        ...rehydrateOverrides,
+      });
+
+      const capturedConfig = capturedConfigs.at(-1);
+      if (!capturedConfig) throw new Error('Expected connector config to be captured');
+      return capturedConfig;
+    }
+
+    it('mints a fresh provider identity when the RPC supplies no resume decision', async () => {
+      // The RPC contract makes the service layer own the resume decision:
+      // adapterSessionId alone never implies resume, warm or cold. The fresh
+      // replacement must not pin either the requested or the live session ID —
+      // both refer to used provider sessions in the durable session store.
+      const capturedConfig = await rehydrateWarmAgent({ adapterSessionId: 'persisted-native-session' });
+
+      expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
+      expect(capturedConfig.adapterSessionId).toBeDefined();
+      expect(capturedConfig.adapterSessionId).not.toBe('persisted-native-session');
+      expect(capturedConfig.adapterSessionId).not.toBe('live-native-session');
     });
-    expect(startResult.success).toBe(true);
-    if (!startResult.success) throw new Error('Failed to start agent');
 
-    await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
-      adapterId: adapter.adapterId,
-      agentId: startResult.agentId,
-      adapterSessionId: 'persisted-native-session',
-    });
-
-    expect(capturedConfigs.at(-1)).toEqual(
-      expect.objectContaining({
+    it('resumes with the RPC-supplied resumeAdapterSessionId', async () => {
+      const capturedConfig = await rehydrateWarmAgent({
         adapterSessionId: 'persisted-native-session',
         resumeAdapterSessionId: 'persisted-native-session',
-      }),
-    );
+      });
+
+      expect(capturedConfig.adapterSessionId).toBe('persisted-native-session');
+      expect(capturedConfig.resumeAdapterSessionId).toBe('persisted-native-session');
+    });
+
+    it('resumes the live session when the stored record carries a native locality verdict', async () => {
+      const capturedConfig = await rehydrateWarmAgent({}, { kind: 'native' });
+
+      expect(capturedConfig.adapterSessionId).toBe('live-native-session');
+      expect(capturedConfig.resumeAdapterSessionId).toBe('live-native-session');
+    });
+
+    it('starts the replacement connector fresh under foreign locality', async () => {
+      const capturedConfig = await rehydrateWarmAgent({}, { kind: 'foreign', machineId: 'remote-machine' });
+
+      expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
+      expect(capturedConfig.adapterSessionId).toBeDefined();
+      expect(capturedConfig.adapterSessionId).not.toBe('live-native-session');
+    });
+
+    it('persists the moved provider identity after a fresh warm rehydrate', async () => {
+      // The replacement mints a new provider session; storage must follow the
+      // registry, because the agent.started reconciliation is write-once and
+      // restartAgents would otherwise resume the abandoned session from the
+      // stale stored ID.
+      const runtimeUpdates: Array<{ agentId: string; adapterSessionId?: string }> = [];
+      await rehydrateWarmAgent({}, undefined, runtimeUpdates);
+
+      expect(runtimeUpdates).toContainEqual(expect.objectContaining({ adapterSessionId: 'mock-adapter-session-id' }));
+    });
   });
 
   describe('RPC-supplied resumeAdapterSessionId (service-evaluated locality)', () => {
@@ -225,10 +312,11 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
 
     it('omits resumeAdapterSessionId when RPC does not supply it and no persisted verdict', async () => {
       // Neither the RPC payload nor the persisted record confirms native
-      // locality — connector starts fresh, first send must inject history.
+      // locality — connector starts fresh (with a freshly minted provider
+      // identity), first send must inject history.
       const capturedConfig = await rehydrateColdAgent(undefined, undefined);
 
-      expect(capturedConfig.adapterSessionId).toBe('persisted-native-session');
+      expect(capturedConfig).not.toHaveProperty('adapterSessionId');
       expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
     });
   });
@@ -286,6 +374,111 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     );
   }
 
+  it('persists the moved provider identity after a fresh cold rehydrate', async () => {
+    ({ adapter } = createTestAdapter('test-adapter-claim'));
+    await adapter.init();
+
+    // No locality verdict — the cold rehydrate starts fresh and the
+    // connector confirms a new provider session ('mock-adapter-session-id').
+    registerStorageHandlers(undefined, 'persisted-native-session');
+    const runtimeUpdates: Array<{ agentId: string; adapterSessionId?: string }> = [];
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
+        runtimeUpdates.push({
+          agentId: ctx.payload.agentId,
+          ...(ctx.payload.adapterSessionId !== undefined && { adapterSessionId: ctx.payload.adapterSessionId }),
+        });
+        ctx.setResult({ success: true });
+      }),
+    );
+
+    await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      adapterId: adapter.adapterId,
+      agentId: 'agent-fresh-persist',
+    });
+
+    // Storage must follow the confirmed identity — the agent.started
+    // reconciliation is write-once and restartAgents would otherwise resume
+    // the abandoned session from the stale stored ID.
+    expect(runtimeUpdates).toContainEqual(
+      expect.objectContaining({ agentId: 'agent-fresh-persist', adapterSessionId: 'mock-adapter-session-id' }),
+    );
+  });
+
+  it('divergent RPC resume target leaves no dangling claim', async () => {
+    ({ adapter } = createTestAdapter('test-adapter-claim'));
+    await adapter.init();
+
+    // Persisted identity differs from the RPC resume target: the resumed
+    // generation must carry the resume target as its identity so that
+    // registry.set() clears the matching claim instead of stranding it.
+    registerStorageHandlers(undefined, 'persisted-native-session');
+
+    await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      adapterId: adapter.adapterId,
+      agentId: 'agent-divergent',
+      resumeAdapterSessionId: 'rpc-override-session',
+    });
+
+    // Free the registered occupancy — only a stranded pending claim could
+    // still lock the provider session afterwards.
+    expect(adapter.disposeAgent('agent-divergent')).toBe(true);
+
+    const startResult = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      role: 'lead',
+      mode: 'resume',
+      sessionId: 'claim-test-session',
+      adapterSessionId: 'rpc-override-session',
+      model: 'test-model',
+      cwd: os.tmpdir(),
+      providerContext: createNoAuthTestProviderContext('cfg', 'provider'),
+    });
+
+    expect(startResult.success).toBe(true);
+  });
+
+  it('warm rehydrate rejects a resume target owned by another live agent', async () => {
+    ({ adapter } = createTestAdapter('test-adapter-claim'));
+    await adapter.init();
+
+    registerStorageHandlers(undefined, 'unused-persisted-session');
+
+    /**
+     * Start a live agent occupying the given provider session.
+     * @param sessionId - Makaio session ID for the start request
+     * @param adapterSessionId - Provider session the agent occupies
+     * @returns The started agent's ID
+     */
+    async function startLiveAgent(sessionId: string, adapterSessionId: string): Promise<string> {
+      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        role: 'lead',
+        mode: 'resume',
+        sessionId,
+        adapterSessionId,
+        model: 'test-model',
+        cwd: os.tmpdir(),
+        providerContext: createNoAuthTestProviderContext('cfg', 'provider'),
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error('Failed to start agent');
+      return result.agentId;
+    }
+
+    const agentA = await startLiveAgent('claim-session-a', 'session-a');
+    await startLiveAgent('claim-session-b', 'session-b');
+
+    // Agent A must not be attachable to agent B's provider conversation.
+    await expect(
+      MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        adapterId: adapter.adapterId,
+        agentId: agentA,
+        resumeAdapterSessionId: 'session-b',
+      }),
+    ).rejects.toThrow('already claimed');
+  });
+
   it('concurrent cold rehydrate for same native resume ID is rejected', async () => {
     // Two promises coordinate the race:
     // - `gate`: blocks the first connector creation until we are ready.
@@ -328,18 +521,22 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     // therefore holds the claim before we fire the second.
     await connectorEntered;
 
-    // The second rehydrate for the same provider session must be rejected while
-    // the first holds the claim.
-    const secondRehydrate = MakaioBus.request(AdapterSubjects.rehydrateAgent, {
-      adapterId: adapter.adapterId,
-      agentId: 'agent-concurrent-2',
-    });
+    // The second rehydrate for the same provider session must be rejected
+    // while the first still holds the claim — assert BEFORE releasing the
+    // gate. (Releasing first would race: once the first rehydrate completes,
+    // the resumed session is released again because the provider confirmed a
+    // different identity, and a late second claim would legitimately succeed.)
+    await expect(
+      MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        adapterId: adapter.adapterId,
+        agentId: 'agent-concurrent-2',
+      }),
+    ).rejects.toThrow('already claimed');
 
     // Unblock the first rehydrate connector creation.
     resolveGate();
 
     await expect(firstRehydrate).resolves.toBeDefined();
-    await expect(secondRehydrate).rejects.toThrow('already claimed');
   });
 
   it('failed cold rehydrate releases the adapter-session claim', async () => {
@@ -387,13 +584,17 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
       agentId: 'agent-clean',
     });
 
-    // The registry entry must exist.
-    expect(adapter.getAgent('agent-clean')).toBeDefined();
+    // The entry is registered under the provider-confirmed identity
+    // (MockConnector confirms 'mock-adapter-session-id', not the resumed
+    // session).
+    const rehydrated = adapter.getAgent('agent-clean');
+    expect(rehydrated).toBeDefined();
+    expect(rehydrated?.adapterSessionId).toBe('mock-adapter-session-id');
 
-    // The entry occupies the provider session so a concurrent resume-mode
-    // startAgent for the same adapterSessionId must be rejected.
-    // This also confirms the claim was replaced by the real entry (not left
-    // as a dangling pending claim) — the registry.set() auto-clears claims.
+    // Because the provider confirmed a different identity, the claimed
+    // resume target has no live writer anymore and must be released — a
+    // dangling pending claim would lock the session forever. A resume-mode
+    // start for it therefore succeeds.
     const startResult = await MakaioBus.request(AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
@@ -405,6 +606,6 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
       providerContext: createNoAuthTestProviderContext('cfg', 'provider'),
     });
 
-    expect(startResult.success).toBe(false);
+    expect(startResult.success).toBe(true);
   });
 });

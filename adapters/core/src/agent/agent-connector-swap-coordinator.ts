@@ -12,6 +12,8 @@ interface AgentConnectorSwapRuntimeConfig {
   providerContext?: ProviderContext;
   /** MCP session context used to build later connector generations. */
   mcpSessionContext?: AgentConnectorConfigOverrides['mcpSessionContext'];
+  /** Resume target inherited by later connector generations (explicit `undefined` = fresh). */
+  resumeAdapterSessionId?: string | undefined;
 }
 
 /** Own serialized connector replacement, account activation, and config publication. */
@@ -85,12 +87,27 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
   ): Promise<void> {
-    await this.lifecycleManager.swapConnector(configOverrides, beforeCommit);
+    const confirmedAdapterSessionId = await this.lifecycleManager.swapConnector(configOverrides, beforeCommit);
     if (configOverrides?.providerContext !== undefined) {
       this.runtimeConfig.providerContext = configOverrides.providerContext;
     }
     if (configOverrides?.mcpSessionContext !== undefined) {
       this.runtimeConfig.mcpSessionContext = configOverrides.mcpSessionContext;
+    }
+    // Publish an explicit resume decision before the barrier releases the
+    // next queued swap (one-shot discipline, like nativeFork): later swaps
+    // that omit the key must inherit this decision instead of resurrecting a
+    // consumed start-time resume target — a fresh rehydrate stays fresh
+    // across queued model/cwd/credential swaps under any interleaving.
+    // A resumed swap publishes the provider-confirmed identity when it
+    // diverges from the requested target (providers may rotate the session
+    // ID on resume) so the next inherited generation continues the live
+    // conversation, not the abandoned one.
+    if (configOverrides !== undefined && 'resumeAdapterSessionId' in configOverrides) {
+      this.runtimeConfig.resumeAdapterSessionId =
+        configOverrides.resumeAdapterSessionId === undefined
+          ? undefined
+          : (confirmedAdapterSessionId ?? configOverrides.resumeAdapterSessionId);
     }
   }
 }
