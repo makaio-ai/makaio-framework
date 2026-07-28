@@ -1,17 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { ToolListChangedNotificationSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import { McpContextRegistry } from './context-registry.js';
+import { createMcpServer } from './create-mcp-server.js';
 import {
-  createHttpMcpHandler,
-  createMcpRequestHandler,
-  createMcpServer,
   handleApproveToolCall,
   startHttpMcpServer,
   startMcpServer,
@@ -247,31 +244,6 @@ describe('handleApproveToolCall', () => {
   });
 });
 
-describe('createMcpRequestHandler', () => {
-  it('returns 500 when transport request handling rejects', async () => {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-    const handleRequestSpy = vi.spyOn(transport, 'handleRequest').mockRejectedValue(new Error('boom'));
-    const handler = createMcpRequestHandler(transport);
-    const req = {} as import('node:http').IncomingMessage;
-    const res = {
-      headersSent: false,
-      writableEnded: false,
-      statusCode: 200,
-      end: vi.fn(),
-    } as Partial<import('node:http').ServerResponse> as import('node:http').ServerResponse;
-
-    handler(req, res);
-    await vi.waitFor(() => {
-      expect(res.statusCode).toBe(500);
-      expect(res.end).toHaveBeenCalledWith('Internal Server Error');
-    });
-
-    expect(handleRequestSpy).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe('startMcpServer (stdio)', () => {
   it('returns a StdioMcpServerHandle with a close() method', async () => {
     const bus = createBusInstance();
@@ -378,7 +350,7 @@ describe('startMcpServer (stdio)', () => {
 });
 
 describe('startHttpMcpServer', () => {
-  it('invokes the transport onclose hook once when the handle closes', async () => {
+  it('invokes the endpoint onclose hook once when the handle closes', async () => {
     const bus = createBusInstance();
     const onclose = vi.fn();
 
@@ -396,7 +368,10 @@ describe('startHttpMcpServer', () => {
     await expect(handle.close()).resolves.toBeUndefined();
   });
 
-  it('cleans up MCP resources when http.Server.listen throws synchronously', async () => {
+  // Startup now fails before any MCP client session exists, so nothing was ever
+  // subscribed to the tool registry. See mcp-transport-registry.test.ts for the
+  // stronger sibling covering a session that fails to connect at request time.
+  it('never subscribes to the tool registry when http.Server.listen throws synchronously', async () => {
     const bus = createBusInstance();
     const sendToolListChanged = vi.spyOn(Server.prototype, 'sendToolListChanged').mockResolvedValue();
 
@@ -405,23 +380,6 @@ describe('startHttpMcpServer', () => {
       revision: 5,
       reason: 'toolset-registered',
       toolsetName: 'after-invalid-port',
-    });
-
-    expect(sendToolListChanged).not.toHaveBeenCalled();
-  });
-});
-
-describe('createHttpMcpHandler startup', () => {
-  it('releases registry subscriptions when transport startup fails', async () => {
-    const bus = createBusInstance();
-    vi.spyOn(StreamableHTTPServerTransport.prototype, 'start').mockRejectedValue(new Error('http startup failed'));
-    const sendToolListChanged = vi.spyOn(Server.prototype, 'sendToolListChanged').mockResolvedValue();
-
-    await expect(createHttpMcpHandler(bus)).rejects.toThrow('http startup failed');
-    await bus.emit(ToolSubjects.registryChanged, {
-      revision: 4,
-      reason: 'toolset-registered',
-      toolsetName: 'after-failed-start',
     });
 
     expect(sendToolListChanged).not.toHaveBeenCalled();

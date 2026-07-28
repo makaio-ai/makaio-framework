@@ -46,8 +46,23 @@ export interface CreateMcpServerOptions extends ToolExecutionTimeoutOption {
 export interface HttpMcpHandlerOptions extends ToolExecutionTimeoutOption {
   agentContext?: McpAgentContext;
   toolDiscovery?: McpToolDiscoveryOptions;
+  /**
+   * Fires once when the endpoint itself closes.
+   *
+   * It does **not** fire when an individual MCP client disconnects or
+   * terminates its session: one endpoint serves many MCP clients, and their
+   * comings and goings are not endpoint lifecycle events.
+   */
   onclose?: () => void;
   resolveContextOverrides?: ResolveContextOverrides;
+  /**
+   * Idle time (ms) with no open HTTP exchange before an MCP client session is
+   * closed. A client holding its standalone SSE stream is never idle. Defaults
+   * to 10 minutes.
+   */
+  idleTimeoutMs?: number;
+  /** Interval (ms) between idle-session sweeps. Defaults to 60 seconds. */
+  sweepIntervalMs?: number;
 }
 
 /** Options for starting a standalone HTTP MCP server. */

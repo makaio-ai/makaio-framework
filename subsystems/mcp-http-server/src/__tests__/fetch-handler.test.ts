@@ -14,12 +14,12 @@
  * - POST requests return valid JSON-RPC responses with proper content-type
  * - adapterSessionId query-param shim promotes param to x-adapter-session-id
  *   header (observable via resolveContextOverrides)
- * - Handler returns 500 Response on internal errors (does not throw)
- * - GET to the handler returns a response (SSE stream or appropriate status)
+ * - Session startup failure answers 500 without leaking a bus subscription
+ * - A closed endpoint refuses new sessions with 503 rather than throwing
+ * - A GET without an MCP session ID is refused with 400
  * - onclose fires exactly once after handle.close()
  */
 
-import * as http from 'node:http';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -27,111 +27,38 @@ import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import type { ToolExecutionContextOverrides } from '@makaio/contracts';
 import { createFetchMcpHandler } from '../fetch-handler.js';
-import { createClient, registerEmptyToolList } from './helpers.js';
+import { McpTransportRegistry } from '../mcp-transport-registry.js';
+import { createClient, mountFetchHandler, registerEmptyToolList } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Message the handler logs when a request could not open an MCP client session. */
+const LOG_SESSION_CREATE_FAILED = '[MCP Server] Failed to create an MCP client session:';
+
 /**
- * Mount a fetch-style handler behind a plain `node:http` server, bridging
- * the Node `IncomingMessage` / `ServerResponse` pair into Web Standard
- * `Request` / `Response`.
- * @param handler - Fetch-compatible handler to mount.
- * @returns Object with the bound port and a stop function.
+ * Build a well-formed MCP `initialize` POST request.
+ * @returns A request that opens a new MCP protocol session.
  */
-async function mountFetchHandler(
-  handler: (request: Request) => Promise<Response>,
-): Promise<{ port: number; stop: () => Promise<void> }> {
-  const httpServer = http.createServer(async (req, res) => {
-    try {
-      // Build the Web Standard Request from the Node IncomingMessage.
-      const url = new URL(req.url ?? '/', `http://127.0.0.1`);
-      const headers = new Headers();
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (value !== undefined) {
-          const values = Array.isArray(value) ? value : [value];
-          for (const v of values) {
-            headers.append(key, v);
-          }
-        }
-      }
-
-      const hasBody = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE';
-      const bodyStream = hasBody
-        ? new ReadableStream({
-            start(controller) {
-              req.on('data', (chunk: Buffer) => controller.enqueue(chunk));
-              req.on('end', () => controller.close());
-              req.on('error', (err) => controller.error(err));
-            },
-          })
-        : undefined;
-
-      const request = new Request(url.toString(), {
-        method: req.method,
-        headers,
-        body: bodyStream,
-        // @ts-expect-error -- Node 18+ supports duplex on Request but TS types lag behind
-        duplex: bodyStream ? 'half' : undefined,
-      });
-
-      const response = await handler(request);
-
-      // Write status and headers.
-      const responseHeaders: Record<string, string | string[]> = {};
-      response.headers.forEach((v, k) => {
-        const existing = responseHeaders[k];
-        if (existing !== undefined) {
-          responseHeaders[k] = Array.isArray(existing) ? [...existing, v] : [existing, v];
-        } else {
-          responseHeaders[k] = v;
-        }
-      });
-      res.writeHead(response.status, responseHeaders);
-
-      // Stream body.
-      if (response.body) {
-        const reader = response.body.getReader();
-        const pump = async (): Promise<void> => {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-          }
-          res.end();
-        };
-        await pump().catch(() => res.end());
-      } else {
-        res.end();
-      }
-    } catch {
-      if (!res.headersSent) {
-        res.writeHead(500).end('Bridge error');
-      }
-    }
+function makeInitializeRequest(): Request {
+  return new Request('http://localhost/mcp', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'test-client', version: '1.0.0' },
+      },
+    }),
   });
-
-  const port = await new Promise<number>((resolve, reject) => {
-    httpServer.once('error', reject);
-    httpServer.listen(0, '127.0.0.1', () => {
-      const addr = httpServer.address();
-      if (!addr || typeof addr === 'string') {
-        reject(new Error('Unexpected address format'));
-        return;
-      }
-      resolve(addr.port);
-    });
-  });
-
-  return {
-    port,
-    stop: () =>
-      new Promise<void>((resolve, reject) => {
-        httpServer.closeAllConnections();
-        httpServer.close((err) => (err ? reject(err) : resolve()));
-      }),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -242,14 +169,71 @@ describe('createFetchMcpHandler', () => {
     );
   });
 
-  it('releases registry subscriptions when transport startup fails', async () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])('rejects invalid idleTimeoutMs %s', async (idleTimeoutMs) => {
+    await expect(createFetchMcpHandler(createBusInstance(), { idleTimeoutMs })).rejects.toThrow(
+      'idleTimeoutMs must be a positive finite number of milliseconds',
+    );
+  });
+
+  it.each([
+    0,
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])('rejects invalid sweepIntervalMs %s', async (sweepIntervalMs) => {
+    await expect(createFetchMcpHandler(createBusInstance(), { sweepIntervalMs })).rejects.toThrow(
+      'sweepIntervalMs must be a positive finite number of milliseconds',
+    );
+  });
+
+  it('rejects a sweepIntervalMs beyond the timer ceiling', async () => {
+    // Only the sweep interval is handed to a timer, so only it carries the
+    // 32-bit delay ceiling on top of the shared positive-finite contract.
+    await expect(createFetchMcpHandler(createBusInstance(), { sweepIntervalMs: 2_147_483_648 })).rejects.toThrow(
+      'sweepIntervalMs must be no greater than 2147483647 milliseconds',
+    );
+  });
+
+  it('answers a JSON-RPC 500 rather than throwing when routing itself fails', async () => {
     const bus = createBusInstance();
+    const cleanup = registerEmptyToolList(bus);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(McpTransportRegistry.prototype, 'route').mockRejectedValue(new Error('routing exploded'));
+
+    const handle = await createFetchMcpHandler(bus);
+    cleanups.push(async () => {
+      await handle.close();
+      cleanup();
+    });
+
+    // A fetch host has no second error surface the way the Node handler's
+    // `void dispatch(...).catch(...)` does: anything escaping this handler
+    // reaches the runtime as an unhandled rejection and is answered with its
+    // own opaque 500 instead of an MCP-shaped envelope.
+    const response = await handle.handler(makeInitializeRequest());
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: -32603 } });
+  });
+
+  it('answers 500 and releases registry subscriptions when session startup fails', async () => {
+    const bus = createBusInstance();
+    // Sessions are built on the first request, so transport startup failure now
+    // surfaces on that request rather than at handler creation.
     vi.spyOn(WebStandardStreamableHTTPServerTransport.prototype, 'start').mockRejectedValue(
       new Error('fetch startup failed'),
     );
     const sendToolListChanged = vi.spyOn(Server.prototype, 'sendToolListChanged').mockResolvedValue();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(createFetchMcpHandler(bus)).rejects.toThrow('fetch startup failed');
+    const handle = await createFetchMcpHandler(bus);
+    cleanups.push(() => handle.close());
+
+    const response = await handle.handler(makeInitializeRequest());
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: -32603 } });
+
     await bus.emit(ToolSubjects.registryChanged, {
       revision: 1,
       reason: 'toolset-registered',
@@ -259,20 +243,25 @@ describe('createFetchMcpHandler', () => {
     expect(sendToolListChanged).not.toHaveBeenCalled();
   });
 
-  it('preserves startup and cleanup failures as an AggregateError', async () => {
+  it('preserves session startup and cleanup failures as an AggregateError', async () => {
     const startupError = new Error('fetch startup failed');
     const cleanupError = new Error('fetch cleanup failed');
     vi.spyOn(WebStandardStreamableHTTPServerTransport.prototype, 'start').mockRejectedValue(startupError);
     vi.spyOn(Server.prototype, 'close').mockRejectedValue(cleanupError);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(createFetchMcpHandler(createBusInstance())).rejects.toSatisfy((error: unknown) => {
-      return (
-        error instanceof AggregateError &&
-        error.errors[0] === startupError &&
-        error.errors[1] === cleanupError &&
-        error.message === 'Failed to start and clean up fetch MCP handler'
-      );
-    });
+    const handle = await createFetchMcpHandler(createBusInstance());
+    cleanups.push(() => handle.close().catch(() => undefined));
+
+    await handle.handler(makeInitializeRequest());
+
+    // Both causes must survive to the operator-facing log rather than one
+    // masking the other.
+    const logged = consoleError.mock.calls.find(([message]) => message === LOG_SESSION_CREATE_FAILED)?.[1];
+    expect(logged).toBeInstanceOf(AggregateError);
+    const aggregate = logged as AggregateError;
+    expect(aggregate.errors).toEqual([startupError, cleanupError]);
+    expect(aggregate.message).toBe('Failed to start and clean up MCP client session');
   });
 
   // -------------------------------------------------------------------------
@@ -313,25 +302,7 @@ describe('createFetchMcpHandler', () => {
       cleanup();
     });
 
-    const initRequest = new Request('http://localhost/mcp', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-03-26',
-          capabilities: {},
-          clientInfo: { name: 'test-client', version: '1.0.0' },
-        },
-      }),
-    });
-
-    const response = await handle.handler(initRequest);
+    const response = await handle.handler(makeInitializeRequest());
 
     expect(response.status).toBe(200);
     const contentType = response.headers.get('content-type');
@@ -462,7 +433,7 @@ describe('createFetchMcpHandler', () => {
   // Error handling
   // -------------------------------------------------------------------------
 
-  it('returns a 500 Response when the transport throws (does not throw)', async () => {
+  it('refuses new sessions with 503 after the endpoint is closed', async () => {
     const bus = createBusInstance();
     const cleanup = registerEmptyToolList(bus);
 
@@ -472,39 +443,23 @@ describe('createFetchMcpHandler', () => {
       cleanup();
     });
 
-    // Close the handle first so the transport is torn down, then send a
-    // request. The closed transport should cause an error that the handler
-    // catches and converts to a 500 Response.
     await handle.close();
 
-    const request = new Request('http://localhost/mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-03-26',
-          capabilities: {},
-          clientInfo: { name: 'test-client', version: '1.0.0' },
-        },
-      }),
-    });
-
-    // The handler must NOT throw — it should return a Response.
-    const response = await handle.handler(request);
-    // Expect either a 500 (caught error) or a 400-range status (transport
-    // rejects after close). Either way, it must not throw.
+    // The handler must NOT throw — a closed endpoint is a routing outcome.
+    const response = await handle.handler(makeInitializeRequest());
     expect(response).toBeInstanceOf(Response);
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Server is shutting down' },
+    });
   });
 
   // -------------------------------------------------------------------------
   // GET requests (SSE)
   // -------------------------------------------------------------------------
 
-  it('returns a response for GET requests', async () => {
+  it('rejects a GET without an MCP session ID', async () => {
     const bus = createBusInstance();
     const cleanup = registerEmptyToolList(bus);
 
@@ -521,11 +476,13 @@ describe('createFetchMcpHandler', () => {
 
     const response = await handle.handler(request);
 
-    // GET without a valid MCP session should be rejected by the transport
-    // (the transport requires an initialize handshake before accepting a GET
-    // for SSE). The response should be an error status, not a throw.
+    // A GET can never open a session, so it is refused before any transport is
+    // built rather than returning a stream nobody owns.
     expect(response).toBeInstanceOf(Response);
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' },
+    });
   });
 
   // -------------------------------------------------------------------------

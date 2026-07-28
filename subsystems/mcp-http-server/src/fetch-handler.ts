@@ -11,14 +11,12 @@
 
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { McpContextRegistry, type IMcpContextRegistry } from './context-registry.js';
-import {
-  ADAPTER_SESSION_ID_HEADER,
-  ADAPTER_SESSION_ID_PARAM,
-  createMcpServer,
-  type HttpMcpHandlerOptions,
-} from './server.js';
-import { connectMcpServerWithCleanup } from './mcp-server-lifecycle.js';
+import type { IMcpContextRegistry } from './context-registry.js';
+import { ADAPTER_SESSION_ID_HEADER, ADAPTER_SESSION_ID_PARAM } from './create-mcp-server.js';
+import { MCP_INTERNAL_ERROR, mcpRouteFailureError, toMcpErrorResponse } from './mcp-http-errors.js';
+import { createMcpEndpoint } from './mcp-endpoint.js';
+import { trackStreamCompletion, type McpRouteResult } from './mcp-transport-registry.js';
+import type { HttpMcpHandlerOptions } from './server-options.js';
 
 /**
  * Result returned by {@link createFetchMcpHandler}.
@@ -39,7 +37,7 @@ export interface FetchMcpHandlerHandle {
   /** Context registry for registering and unregistering agent sessions. */
   readonly contextRegistry: IMcpContextRegistry;
   /**
-   * Gracefully close the MCP server and its transport.
+   * Gracefully close the endpoint and every MCP client session it owns.
    *
    * Idempotent: repeated calls await the same underlying close operation and
    * do not trigger a second teardown.
@@ -81,6 +79,10 @@ function applyAdapterSessionIdShim(request: Request): Request {
  * Web Standard `Request` and returns a `Promise<Response>`. Mount it on Hono,
  * Bun.serve, Cloudflare Workers, Deno, or any other fetch-compatible HTTP stack.
  *
+ * The endpoint serves many concurrent MCP clients, one `(transport, server)`
+ * pair per MCP protocol session; see `McpTransportRegistry` for the lifecycle
+ * contract shared with the Node handler.
+ *
  * ```ts
  * import { createFetchMcpHandler } from '@makaio/subsystem-mcp-http-server';
  *
@@ -110,47 +112,57 @@ export async function createFetchMcpHandler(
   bus: IMakaioBus,
   options: HttpMcpHandlerOptions = {},
 ): Promise<FetchMcpHandlerHandle> {
-  const contextRegistry = new McpContextRegistry();
-
-  const sessionId = options.agentContext?.adapterSessionId ?? crypto.randomUUID();
-  if (options.agentContext) {
-    contextRegistry.register(sessionId, options.agentContext);
-  }
-
-  const mcpServer = await createMcpServer(bus, sessionId, {
-    contextRegistry,
-    toolDiscovery: options.toolDiscovery,
-    resolveContextOverrides: options.resolveContextOverrides,
-    toolExecutionTimeoutMs: options.toolExecutionTimeoutMs,
-  });
-
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => crypto.randomUUID(),
-  });
-  if (options.onclose) {
-    transport.onclose = options.onclose;
-  }
-  await connectMcpServerWithCleanup(mcpServer, transport, () => mcpServer.close(), 'fetch MCP handler');
+  const endpoint = createMcpEndpoint<WebStandardStreamableHTTPServerTransport>(
+    bus,
+    options,
+    (hooks) =>
+      new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: (mcpSessionId) => hooks.onSessionInitialized(mcpSessionId),
+      }),
+  );
 
   const handler = async (request: Request): Promise<Response> => {
+    // Routing is inside the error path, not ahead of it. A fetch handler has no
+    // second error surface: anything that escapes here reaches the host runtime
+    // as an unhandled rejection, which Workers and Deno answer with their own
+    // opaque 500 instead of the JSON-RPC envelope an MCP client expects.
+    let route: McpRouteResult<WebStandardStreamableHTTPServerTransport> | undefined;
     try {
-      return await transport.handleRequest(applyAdapterSessionIdShim(request));
+      const shimmed = applyAdapterSessionIdShim(request);
+      route = await endpoint.registry.route({
+        method: shimmed.method,
+        mcpSessionId: shimmed.headers.get('mcp-session-id') ?? undefined,
+      });
+
+      if (route.outcome !== 'dispatch') {
+        return toMcpErrorResponse(mcpRouteFailureError(route.outcome));
+      }
+
+      const response = await route.transport.handleRequest(shimmed);
+      if (response.body === null) {
+        route.finish();
+        return response;
+      }
+      // The activity lease is held until the body ends, so a client holding its
+      // standalone SSE stream never looks idle to the reaper.
+      return new Response(trackStreamCompletion(response.body, route.finish), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     } catch (error) {
+      // A lease taken before the failure must not outlive the request that took
+      // it, or the session it pins becomes unreapable.
+      if (route?.outcome === 'dispatch') route.finish();
       console.error('[MCP Server] Failed to handle request:', error);
-      return new Response('Internal Server Error', { status: 500 });
+      return toMcpErrorResponse(MCP_INTERNAL_ERROR);
     }
   };
 
-  let closePromise: Promise<void> | undefined;
-
   return {
     handler,
-    contextRegistry,
-    close(): Promise<void> {
-      if (!closePromise) {
-        closePromise = mcpServer.close();
-      }
-      return closePromise;
-    },
+    contextRegistry: endpoint.contextRegistry,
+    close: endpoint.close,
   };
 }

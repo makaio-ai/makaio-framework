@@ -54,13 +54,17 @@ const SWEEP_INTERVAL_MS = 60 * 1000;
  * using a coalescing promise so concurrent registrations never start two
  * server instances.
  *
- * The service maintains three parallel session stores:
+ * Everything here is keyed by **adapter** session, not by MCP protocol session:
+ * many adapter sessions share one endpoint, and each connected MCP client owns
+ * a separate protocol session that the HTTP server manages internally.
+ *
+ * The service maintains three parallel adapter-session stores:
  * - `pinnedSessions` (plain Map) — sessions exempt from both TTL sweep and
  *   LRU count-eviction; only removed by explicit `mcp.session.unregister` or
  *   on server close
  * - `sessions` (QuickLRU) — non-pinned sessions subject to TTL/LRU eviction
  * - `contextRegistry` (Map-backed, inside the HTTP server handle) — source of
- *   truth for the MCP server's per-request routing
+ *   truth for resolving an adapter session's agent context on every MCP request
  *
  * The `resolveContextOverrides` callback threaded into `startHttpMcpServer`
  * bridges these stores so tool execution always uses session-stable
@@ -204,13 +208,17 @@ export class McpServerBridgeService extends BaseService {
         if (!adapterSessionId) return undefined;
         return this.resolveOverrides(adapterSessionId);
       },
+      // Endpoint-level: fires only when the HTTP MCP server itself stops
+      // serving, never when an individual MCP client disconnects or sends a
+      // DELETE. Resetting the bridge on a single client's departure would
+      // rebind a new port and strand every adapter holding the old one.
       onclose: () => {
         this.startPromise = null;
         const handle = this.mcpHandle;
-        // Best-effort cleanup: clear all sessions that were not explicitly
-        // unregistered before the transport closed. The TTL sweep remains the
-        // safety net, but this reduces the stale-session window to zero on
-        // clean server shutdown.
+        // Best-effort cleanup: clear all adapter sessions that were not
+        // explicitly unregistered before the endpoint closed. The TTL sweep
+        // remains the safety net, but this reduces the stale-session window to
+        // zero on clean server shutdown.
         for (const [adapterSessionId] of this.pinnedSessions) {
           handle?.contextRegistry.unregister(adapterSessionId);
         }
