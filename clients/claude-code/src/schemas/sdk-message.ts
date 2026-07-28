@@ -4,6 +4,7 @@ import { SDKAssistantMessageSchema } from './assistant-message.js';
 import { SDKResultMessageSchema } from './result-message.js';
 import { SDKSystemMessageSchema } from './system-message.js';
 import { SDKStreamEventMessageSchema } from './stream-event.js';
+import { SDKRateLimitEventMessageSchema } from './rate-limit-event.js';
 
 /**
  * Union of all SDK message types (raw shape — `agentId` optional).
@@ -12,6 +13,11 @@ import { SDKStreamEventMessageSchema } from './stream-event.js';
  * Note: Uses z.union() instead of z.discriminatedUnion() because
  * SDKSystemMessageSchema and SDKResultMessageSchema are already
  * discriminated unions on 'subtype'.
+ *
+ * The union is wider than `KNOWN_SDK_MESSAGE_TYPES` on purpose: it describes
+ * every payload the client knowingly emits on `sdk.event`, while the known-type
+ * set describes the subset the turn-state machine may consume. Diagnostic-only
+ * messages such as `rate_limit_event` belong here but not there.
  */
 export const SDKMessageSchema = z.union([
   SDKSystemMessageSchema,
@@ -19,6 +25,7 @@ export const SDKMessageSchema = z.union([
   SDKUserMessageSchema,
   SDKResultMessageSchema,
   SDKStreamEventMessageSchema,
+  SDKRateLimitEventMessageSchema,
 ]);
 
 /** Raw SDK message type — `agentId` may be absent. */

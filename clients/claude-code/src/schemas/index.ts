@@ -210,6 +210,10 @@ export {
 } from './sdk-message.js';
 export type { EnrichedSDKMessage, SDKMessage } from './sdk-message.js';
 
+// Diagnostic-only rate limit event
+export { SDKRateLimitEventMessageSchema, SDKRateLimitInfoSchema } from './rate-limit-event.js';
+export type { SDKRateLimitEventMessage, SDKRateLimitInfo } from './rate-limit-event.js';
+
 // Claude Code status line payload schema
 export {
   ClaudeCodeStatuslineRawPayloadSchema,
