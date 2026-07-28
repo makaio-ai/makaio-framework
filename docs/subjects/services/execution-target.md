@@ -40,7 +40,6 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `busMode` | `"relay" \| "host" \| undefined` | no |
 | `busUrl` | `string \| undefined` | no |
 | `createdAt` | `number` | yes |
 | `description` | `string \| undefined` | no |
@@ -50,7 +49,6 @@ Type: Event
 | `id` | `string` | yes |
 | `image` | `string \| undefined` | no |
 | `name` | `string` | yes |
-| `relayUrl` | `string \| undefined` | no |
 | `repoUrl` | `string \| undefined` | no |
 | `scope` | `string` | yes |
 | `type` | `"local" \| "container-local" \| "container-isolated"` | yes |
@@ -97,7 +95,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executionTarget` | `{ id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "local"; description?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-local"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-isolated"; busMode: "relay" \| "host"; gitCredentialMode: "token" \| "ssh-agent"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; relayUrl?: string \| undefined; repoUrl?: string \| undefined; } \| null` | yes |
+| `executionTarget` | `{ id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "local"; description?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-local"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-isolated"; gitCredentialMode: "token" \| "ssh-agent"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; repoUrl?: string \| undefined; } \| null` | yes |
 
 ### <a id="execution-target.list"></a>`execution-target.list` (rpc)
 
@@ -115,7 +113,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executionTargets` | `({ id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "local"; description?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-local"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-isolated"; busMode: "relay" \| "host"; gitCredentialMode: "token" \| "ssh-agent"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; relayUrl?: string \| undefined; repoUrl?: string \| undefined; })[]` | yes |
+| `executionTargets` | `({ id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "local"; description?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-local"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-isolated"; gitCredentialMode: "token" \| "ssh-agent"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; repoUrl?: string \| undefined; })[]` | yes |
 
 ### <a id="execution-target.resolve"></a>`execution-target.resolve` (rpc)
 
@@ -132,7 +130,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executionTarget` | `{ id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "local"; description?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-local"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-isolated"; busMode: "relay" \| "host"; gitCredentialMode: "token" \| "ssh-agent"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; relayUrl?: string \| undefined; repoUrl?: string \| undefined; }` | yes |
+| `executionTarget` | `{ id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "local"; description?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-local"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { id: string; name: string; scope: string; enabled: boolean; createdAt: number; updatedAt: number; type: "container-isolated"; gitCredentialMode: "token" \| "ssh-agent"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; repoUrl?: string \| undefined; }` | yes |
 
 ### <a id="execution-target.set"></a>`execution-target.set` (rpc)
 
@@ -143,7 +141,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executionTarget` | `{ type: "local"; id: string; scope: string; name: string; enabled: boolean; description?: string \| undefined; } \| { type: "container-local"; id: string; scope: string; name: string; enabled: boolean; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { type: "container-isolated"; id: string; scope: string; name: string; enabled: boolean; busMode: "relay" \| "host"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; relayUrl?: string \| undefined; gitCredentialMode?: "token" \| "ssh-agent" \| undefined; repoUrl?: string \| undefined; }` | yes |
+| `executionTarget` | `{ type: "local"; id: string; scope: string; name: string; enabled: boolean; description?: string \| undefined; } \| { type: "container-local"; id: string; scope: string; name: string; enabled: boolean; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { type: "container-isolated"; id: string; scope: string; name: string; enabled: boolean; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; gitCredentialMode?: "token" \| "ssh-agent" \| undefined; repoUrl?: string \| undefined; }` | yes |
 
 **Response:**
 
@@ -158,7 +156,6 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `busMode` | `"relay" \| "host" \| undefined` | no |
 | `busUrl` | `string \| undefined` | no |
 | `createdAt` | `number` | yes |
 | `description` | `string \| undefined` | no |
@@ -168,7 +165,6 @@ Type: Event
 | `id` | `string` | yes |
 | `image` | `string \| undefined` | no |
 | `name` | `string` | yes |
-| `relayUrl` | `string \| undefined` | no |
 | `repoUrl` | `string \| undefined` | no |
 | `scope` | `string` | yes |
 | `type` | `"local" \| "container-local" \| "container-isolated"` | yes |

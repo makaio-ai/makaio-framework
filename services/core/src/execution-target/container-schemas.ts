@@ -161,39 +161,6 @@ export const ContainerBootstrapConfigSchema = z
      */
     busAuthSecret: z.string().optional(),
     /**
-     * Expected relay peer for E2E workflow-container connections.
-     *
-     * Relay containers use this public signing key to verify the host-side E2E
-     * peer before sending the encrypted `workflow.getRunContext` request.
-     */
-    relayPeer: z
-      .object({
-        /** Expected peer identity id. */
-        id: z.string().min(1),
-        /** Base64URL raw ECDSA P-256 signing public key. */
-        signingPublicKey: z.string().min(1),
-      })
-      .strict()
-      .optional(),
-    /**
-     * E2E relay identity this container must claim.
-     *
-     * Workflow relay containers receive a per-execution signing key from the
-     * host over stdin so the host can verify the `executionId` peer during the
-     * encrypted relay handshake. Absent for direct-HMAC and session containers.
-     */
-    relayIdentity: z
-      .object({
-        /** Relay identity id the container must claim. */
-        id: z.string().min(1),
-        /** Base64URL raw ECDSA P-256 signing public key. */
-        signingPublicKey: z.string().min(1),
-        /** PKCS8 PEM ECDSA P-256 private key used by the container. */
-        signingPrivateKeyPem: z.string().min(1),
-      })
-      .strict()
-      .optional(),
-    /**
      * Git access token for cloning private repositories inside the container.
      * Replaces the `MAKAIO_GIT_TOKEN` environment variable.
      */
@@ -244,7 +211,6 @@ const SpawnRequestBase = z
   .strict();
 
 const GIT_REMOTE_PROTOCOLS = new Set(['git:', 'http:', 'https:', 'ssh:']);
-const RELAY_PROTOCOLS = new Set(['ws:', 'wss:']);
 const SCP_LIKE_GIT_REMOTE = /^git@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?:[^\s?#]+$/;
 
 /**
@@ -305,13 +271,6 @@ export const CredentialFreeGitRemoteSchema = z.string().refine(isCredentialFreeG
   message: 'Repository remote must use a supported credential-free Git URL.',
 });
 
-/** Public relay endpoint limited to credential-free WebSocket transports. */
-export const CredentialFreeRelayUrlSchema = z
-  .string()
-  .refine((value) => isCredentialFreeUrl(value, RELAY_PROTOCOLS, false), {
-    message: 'Relay URL must use credential-free ws or wss transport.',
-  });
-
 /**
  * Spawn request for container-local mode.
  */
@@ -356,14 +315,6 @@ export const ContainerIsolatedSpawnRequestSchema = SpawnRequestBase.extend({
   repoUrl: CredentialFreeGitRemoteSchema,
   /** Branch to check out inside the container. When omitted, the repo's default branch is cloned. */
   branch: z.string().optional(),
-  /**
-   * Bus connectivity mode.
-   * - 'host': ws://host.docker.internal
-   * - 'relay': wss://relay.makaio.dev
-   */
-  busMode: z.enum(['host', 'relay']),
-  /** Relay URL override for 'relay' mode */
-  relayUrl: CredentialFreeRelayUrlSchema.optional(),
 }).strict();
 export type ContainerIsolatedSpawnRequest = z.infer<typeof ContainerIsolatedSpawnRequestSchema>;
 

@@ -9,7 +9,6 @@ describe('ExecutionTargetInputSchema', () => {
       type: 'container-isolated',
       scope: 'default',
       enabled: true,
-      busMode: 'host',
     });
 
     if (parsed.type !== 'container-isolated') {
@@ -26,7 +25,6 @@ describe('ExecutionTargetInputSchema', () => {
       type: 'container-isolated',
       scope: 'default',
       enabled: true,
-      busMode: 'host',
       gitCredentialMode: 'ssh-agent',
     });
 

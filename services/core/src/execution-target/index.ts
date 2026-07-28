@@ -20,7 +20,6 @@ export { ExecutionTargetNamespace, ExecutionTargetSubjects } from './namespace.j
 export {
   CONTAINER_BOOTSTRAP_PRIVATE_ENV_VARS,
   CredentialFreeGitRemoteSchema,
-  CredentialFreeRelayUrlSchema,
   ContainerAdapterAuthEnvelopeSchema,
   ContainerAdapterAuthSelectorSchema,
   ContainerBootstrapConfigSchema,

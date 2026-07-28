@@ -23,7 +23,7 @@ const DockerSchemas = {
    * Spawn a container from one mode-specific public descriptor.
    *
    * `container-local` requires `repoPath` and `baseBranch`.
-   * `container-isolated` requires `repoUrl` and `busMode`. Fields belonging
+   * `container-isolated` requires `repoUrl`. Fields belonging
    * only to the other mode are rejected by the strict discriminated union.
    */
   'container.spawn': {
