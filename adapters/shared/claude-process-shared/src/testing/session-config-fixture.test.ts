@@ -47,4 +47,39 @@ describe('Claude conformance session-config fixture lifecycle', () => {
       await fs.rm(invalidBaseDir, { recursive: true, force: true });
     }
   });
+
+  it('keeps transcripts in the suite-scoped store across lease destruction', async () => {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-claude-base-'));
+    const fixture = await acquireClaudeConformanceSessionConfigFixture();
+    const leaseId = `transcript-${crypto.randomUUID()}`;
+
+    try {
+      const created = await MakaioBus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        leaseId,
+        baseConfigDir: baseDir,
+        configInheritance: 'auth-only',
+      });
+
+      // The lease's transcript store must resolve into the fixture root, never
+      // into the operator's real config home.
+      const storeDir = await fs.readlink(path.join(created.sessionDir, 'projects'));
+      expect(path.basename(storeDir)).toBe('projects-store');
+      expect(storeDir).not.toBe(path.join(os.homedir(), '.claude', 'projects'));
+
+      const transcriptDir = path.join(created.sessionDir, 'projects', '-repo');
+      await fs.mkdir(transcriptDir, { recursive: true });
+      await fs.writeFile(path.join(transcriptDir, 'session-1.jsonl'), '{}\n', 'utf8');
+
+      await MakaioBus.request(ClientSubjects.sessionConfig.destroy, { clientId: 'claude-code', leaseId });
+
+      // Lease directory is gone, but the transcript survived in the store —
+      // this is the property native resume across connector leases relies on.
+      await expect(fs.stat(created.sessionDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.readFile(path.join(storeDir, '-repo', 'session-1.jsonl'), 'utf8')).resolves.toBe('{}\n');
+    } finally {
+      await fixture.release();
+      await fs.rm(baseDir, { recursive: true, force: true });
+    }
+  });
 });

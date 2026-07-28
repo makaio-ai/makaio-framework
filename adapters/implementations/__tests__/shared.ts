@@ -13,7 +13,11 @@ import {
   createNoAuthTestProviderContext,
 } from '@makaio/ai-adapters-core';
 import { MakaioBus, createChannelEndpoint } from '@makaio/bus-core';
-import { registerMemorySessionStorage, MakaioSessionService } from '@makaio/services-core/session';
+import {
+  registerMemoryAgentStorage,
+  registerMemorySessionStorage,
+  MakaioSessionService,
+} from '@makaio/services-core/session';
 import os from 'node:os';
 import { filesystemToolset } from '@makaio/extension-filesystem';
 import { ToolRegistry } from '@makaio/services-core/tools';
@@ -244,8 +248,11 @@ function getAdapterTestQueue(adapterName: string, concurrency?: number): PQueue 
 const testToolRegistry = new ToolRegistry();
 await testToolRegistry.register(filesystemToolset);
 
-// Register memory storage handlers before session service (required by MakaioSessionService contract)
+// Register memory storage handlers before session service (required by MakaioSessionService contract).
+// Agent storage must be present too: runtime mutations (cwd/model change) report
+// `*_committed_persistence_failed` when `storage:agent.updateRuntime` goes unhandled.
 registerMemorySessionStorage(MakaioBus);
+registerMemoryAgentStorage(MakaioBus);
 
 // Register a credential channel so connectors can call resolveConnectorCredentials() in tests.
 // The subscription is intentionally never unsubscribed — it's global test harness infrastructure

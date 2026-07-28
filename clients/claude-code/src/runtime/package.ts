@@ -24,6 +24,7 @@ export type { StatuslineIdentityContext } from './statusline-normalizer.js';
 export { resolveClaudeCodeSettingsPaths } from './settings-paths.js';
 export type { ClaudeCodeSettingsPath, ResolveClaudeCodeSettingsPathsOptions } from './settings-paths.js';
 export { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
+export type { ClaudeCodeSessionConfigSetupOptions } from './session-config-handler.js';
 export {
   claudeCodeToolResponseContract,
   createApproveEffect,
