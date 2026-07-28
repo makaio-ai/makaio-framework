@@ -1,12 +1,18 @@
 /** @packageDocumentation */
 import { deriveHookEventTransportMode } from '@makaio/contracts';
 import type { ClientDefinition } from '@makaio/contracts';
-import { clientDefinition as claudeCodeDefinition } from '../../../clients/claude-code/src/definition.js';
-import { clientDefinition as codexDefinition } from '../../../clients/codex/src/definition.js';
+import { probeContractFor } from './clients/index.js';
+import {
+  DEFAULT_ALLOWED_TOOLS,
+  RESPONSE_CONSUMED_MARKER,
+  TOOL_MARKER_PROMPT,
+  type ProbeEffectScenario,
+} from './probe-contract.js';
 import type { EvidenceStatus, ProbeScenario, ProviderId, ScenarioManifest } from './types.js';
 
 type VersionCommand = NonNullable<ClientDefinition['versionCommand']>;
 type ManagedInstall = NonNullable<ClientDefinition['managedInstall']>;
+type HookEvent = ClientDefinition['runtimeCapabilities']['hookEvents'][number];
 
 /**
  * Resolves the static client definition for a supported probe provider.
@@ -14,53 +20,42 @@ type ManagedInstall = NonNullable<ClientDefinition['managedInstall']>;
  * @returns The provider's static definition.
  */
 function definitionFor(provider: ProviderId): ClientDefinition {
-  return provider === 'claude-code' ? claudeCodeDefinition : codexDefinition;
+  return probeContractFor(provider).definition;
 }
 
 /**
  * Provides a marker-only prompt that attempts the named native event.
+ *
+ * Scenarios whose oracle needs a different action override this through the
+ * client-owned probe contract.
  * @param eventName - Native hook event being exercised.
- * @param effect - Optional effect whose observable outcome changes the prompt.
  * @returns Bounded synthetic user prompt.
  */
-function promptFor(eventName: string, effect?: string): string {
-  if (eventName === 'PreToolUse')
-    return effect?.endsWith('input.update')
-      ? 'MAKAIO_PROBE_MARKER: use the shell tool to run `touch MAKAIO_PROBE_ORIGINAL_MARKER`, then reply probe-ack.'
-      : 'MAKAIO_PROBE_MARKER: use the shell tool to run `touch MAKAIO_PROBE_TOOL_MARKER`, then reply probe-ack.';
+function promptFor(eventName: string): string {
+  if (eventName === 'PreToolUse') return TOOL_MARKER_PROMPT;
   if (eventName === 'PostToolUse') {
     return `MAKAIO_PROBE_MARKER: use the shell tool to read MAKAIO_PROBE.md. If and only if its result fails, reply with exactly ${RESPONSE_CONSUMED_MARKER}; otherwise reply with exactly probe-ack.`;
   }
   return `MAKAIO_PROBE_MARKER: exercise ${eventName} if available, then reply with exactly probe-ack.`;
 }
 
-/**
- * Provides a tool request whose absence proves a request hook stopped the turn before model work began.
- * @returns Bounded synthetic user prompt.
- */
-function preModelBlockPrompt(): string {
-  return 'MAKAIO_PROBE_MARKER: use the shell tool to run `touch MAKAIO_PROBE_TOOL_MARKER`, then reply probe-ack.';
-}
-
-const RESPONSE_CONSUMED_MARKER = 'MAKAIO_PROBE_RESPONSE_CONSUMED';
-const TOOL_MARKER = 'MAKAIO_PROBE_TOOL_MARKER';
-const ORIGINAL_MARKER = 'MAKAIO_PROBE_ORIGINAL_MARKER';
-const REWRITTEN_MARKER = 'MAKAIO_PROBE_REWRITTEN_MARKER';
-const READ_PROBE_FILE_TOOL = 'Bash(cat MAKAIO_PROBE.md)';
-const TOUCH_TOOL_MARKER_TOOL = 'Bash(touch MAKAIO_PROBE_TOOL_MARKER)';
-const TEST_TOOL_MARKER_TOOL = 'Bash(test -e MAKAIO_PROBE_TOOL_MARKER)';
-const DEFAULT_ALLOWED_TOOLS = [READ_PROBE_FILE_TOOL, TOUCH_TOOL_MARKER_TOOL, TEST_TOOL_MARKER_TOOL] as const;
-const NO_TOOL_MARKER_ALLOWED_TOOLS = [READ_PROBE_FILE_TOOL, TEST_TOOL_MARKER_TOOL] as const;
-
+/** Source-backed expectation for one declared event. */
 interface EvidenceCandidate {
   readonly status: EvidenceStatus;
   readonly effects: readonly string[];
   readonly blocking: boolean;
 }
 
+/**
+ * Central source-evidence table.
+ *
+ * Deliberately **not** client-owned: a client contributes how a claimed effect
+ * is rendered and observed, never which effects it may claim. Widening an entry
+ * without a matching captured probe fails the committed fixture suite.
+ */
 const EVIDENCE: Record<ProviderId, Readonly<Record<string, EvidenceCandidate>>> = {
   'claude-code': {
-    SessionStart: { status: 'unobserved', effects: [], blocking: false },
+    SessionStart: { status: 'supported', effects: ['context.append'], blocking: false },
     UserPromptSubmit: { status: 'unobserved', effects: [], blocking: false },
     PreToolUse: {
       status: 'supported',
@@ -104,23 +99,29 @@ const EVIDENCE: Record<ProviderId, Readonly<Record<string, EvidenceCandidate>>> 
   },
 };
 
-type HookEvent = ClientDefinition['runtimeCapabilities']['hookEvents'][number];
-
 /**
- * Produces the common scenario fields for one exact event/effect attempt.
+ * Merges harness-owned scenario scaffolding with one client-owned probe shape.
  * @param provider - Provider under test.
  * @param event - Declared native hook event.
- * @param evidence - Pinned source expectation for the event.
- * @param suffix - Stable effect-specific scenario suffix.
- * @returns Common scenario fields without an oracle or sentinel.
+ * @param evidence - Central source expectation for the event.
+ * @param seed - Client-owned native shape and observable oracle.
+ * @param sentinelEffect - Declared effect this scenario attempts, when it attempts one.
+ * @returns Complete bounded probe scenario.
  */
-function scenarioBase(provider: ProviderId, event: HookEvent, evidence: EvidenceCandidate, suffix: string) {
+function buildScenario(
+  provider: ProviderId,
+  event: HookEvent,
+  evidence: EvidenceCandidate,
+  seed: ProbeEffectScenario,
+  sentinelEffect?: string,
+): ProbeScenario {
   const mode = deriveHookEventTransportMode(event);
   const eventId = event.name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
   return {
-    id: `${eventId}-${suffix}`,
-    description: `Attempts the ${event.name} ${suffix} behavior with stable markers.`,
-    allowedTools: DEFAULT_ALLOWED_TOOLS,
+    id: `${eventId}-${seed.suffix}`,
+    description: seed.description ?? `Attempts the ${event.name} ${seed.suffix} behavior with stable markers.`,
+    prompt: seed.prompt ?? promptFor(event.name),
+    allowedTools: seed.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
     expectedEvents: [
       {
         eventName: event.name,
@@ -129,171 +130,17 @@ function scenarioBase(provider: ProviderId, event: HookEvent, evidence: Evidence
         mode,
       },
     ],
+    ...(seed.sentinelOutput !== undefined && { sentinelOutput: seed.sentinelOutput }),
     candidateExpectedStatus: evidence.status,
     sourceExpectedEffects: evidence.effects,
+    ...(sentinelEffect !== undefined && { sentinelEffect }),
+    ...(seed.expectedResponseMarker !== undefined && { expectedResponseMarker: seed.expectedResponseMarker }),
+    ...(seed.expectedPresentMarker !== undefined && { expectedPresentMarker: seed.expectedPresentMarker }),
+    ...(seed.expectedAbsentMarker !== undefined && { expectedAbsentMarker: seed.expectedAbsentMarker }),
     blockingCapable: evidence.blocking,
     expectedManagedCommand: mode === 'request' ? `hook handle ${provider}` : `hook received ${provider}`,
+    oracle: seed.oracle,
     timeoutSeconds: 60,
-  } as const;
-}
-
-/**
- * Builds a context effect whose consumption must alter the structured final response.
- * @param provider - Provider under test.
- * @param event - Declared native hook event.
- * @param evidence - Pinned source expectation for the event.
- * @returns Context-consumption scenario.
- */
-function contextScenario(provider: ProviderId, event: HookEvent, evidence: EvidenceCandidate): ProbeScenario {
-  return {
-    ...scenarioBase(provider, event, evidence, 'context-append'),
-    prompt: promptFor(event.name, 'context.append'),
-    sentinelOutput: JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: event.name,
-        ...(provider === 'claude-code' ? { permissionDecision: 'allow' } : {}),
-        additionalContext: `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`,
-      },
-    }),
-    sentinelEffect: 'context.append',
-    expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
-    oracle: 'final-response-must-contain-marker' as const,
-  };
-}
-
-/**
- * Builds one provider-native blocking scenario.
- * @param provider - Provider under test.
- * @param event - Declared native hook event.
- * @param evidence - Pinned source expectation for the event.
- * @param effect - Exact namespaced blocking effect.
- * @returns Blocking scenario with an event-appropriate behavior oracle.
- */
-function blockScenario(
-  provider: ProviderId,
-  event: HookEvent,
-  evidence: EvidenceCandidate,
-  effect: string,
-): ProbeScenario {
-  const instruction = `The requested tool result failed. Reply with exactly ${RESPONSE_CONSUMED_MARKER}.`;
-  const sentinelOutput =
-    event.name === 'SessionStart'
-      ? JSON.stringify({ continue: false, stopReason: RESPONSE_CONSUMED_MARKER })
-      : JSON.stringify({ decision: 'block', reason: instruction });
-  if (event.name === 'PreToolUse') {
-    return {
-      ...scenarioBase(provider, event, evidence, effect.split('.').at(-1)!),
-      prompt: promptFor(event.name, effect),
-      sentinelOutput,
-      sentinelEffect: effect,
-      expectedAbsentMarker: TOOL_MARKER,
-      oracle: 'sentinel-must-block-tool' as const,
-    };
-  }
-  const terminatesBeforeModel = event.name === 'SessionStart' || event.name === 'UserPromptSubmit';
-  return {
-    ...scenarioBase(provider, event, evidence, effect.split('.').at(-1)!),
-    prompt: terminatesBeforeModel ? preModelBlockPrompt() : promptFor(event.name, effect),
-    sentinelOutput,
-    sentinelEffect: effect,
-    ...(terminatesBeforeModel
-      ? {
-          expectedAbsentMarker: TOOL_MARKER,
-          oracle: 'sentinel-must-block-before-model' as const,
-        }
-      : {
-          expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
-          oracle: 'final-response-must-contain-marker' as const,
-        }),
-  };
-}
-
-/**
- * Builds every effect-level scenario supported by the pinned provider contract.
- * @param provider - Provider under test.
- * @param event - Declared native hook event.
- * @param evidence - Pinned source expectation for the event.
- * @returns One behavior scenario per source-expected effect.
- */
-function supportedScenarios(provider: ProviderId, event: HookEvent, evidence: EvidenceCandidate): ProbeScenario[] {
-  return evidence.effects.map((effect) => {
-    if (effect === 'context.append') return contextScenario(provider, event, evidence);
-    if (provider === 'claude-code' && effect.endsWith('.approve'))
-      return {
-        ...scenarioBase(provider, event, evidence, 'approve'),
-        allowedTools: NO_TOOL_MARKER_ALLOWED_TOOLS,
-        prompt: promptFor(event.name, effect),
-        sentinelOutput: JSON.stringify({
-          hookSpecificOutput: { hookEventName: event.name, permissionDecision: 'allow' },
-        }),
-        sentinelEffect: effect,
-        expectedPresentMarker: TOOL_MARKER,
-        oracle: 'sentinel-must-allow-tool' as const,
-      };
-    if (effect.endsWith('.input.update'))
-      return {
-        ...scenarioBase(provider, event, evidence, 'input-update'),
-        prompt: promptFor(event.name, effect),
-        sentinelOutput: JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: event.name,
-            permissionDecision: 'allow',
-            updatedInput: { command: `touch ${REWRITTEN_MARKER}` },
-          },
-        }),
-        sentinelEffect: effect,
-        expectedPresentMarker: REWRITTEN_MARKER,
-        expectedAbsentMarker: ORIGINAL_MARKER,
-        oracle: 'sentinel-must-rewrite-tool' as const,
-      };
-    if (provider === 'claude-code' && effect.endsWith('.deny'))
-      return {
-        ...scenarioBase(provider, event, evidence, 'deny'),
-        prompt: promptFor(event.name, effect),
-        sentinelOutput: JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: event.name,
-            permissionDecision: 'deny',
-            permissionDecisionReason: 'MAKAIO_PROBE_DENY',
-          },
-        }),
-        sentinelEffect: effect,
-        expectedAbsentMarker: TOOL_MARKER,
-        oracle: 'sentinel-must-block-tool' as const,
-      };
-    if (effect.endsWith('.permission.deny'))
-      return {
-        ...scenarioBase(provider, event, evidence, 'permission-deny'),
-        prompt: promptFor(event.name, effect),
-        sentinelOutput: JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: event.name,
-            permissionDecision: 'deny',
-            permissionDecisionReason: 'MAKAIO_PROBE_DENY',
-          },
-        }),
-        sentinelEffect: effect,
-        expectedAbsentMarker: TOOL_MARKER,
-        oracle: 'sentinel-must-block-tool' as const,
-      };
-    return blockScenario(provider, event, evidence, effect);
-  });
-}
-
-/**
- * Builds the baseline that establishes Claude's dontAsk policy does not run an unapproved tool.
- * @param event - The PreToolUse event whose request hook guards the tool.
- * @param evidence - Pinned source expectation for the event.
- * @returns A no-sentinel negative control for the permission-decision proof.
- */
-function claudePreToolUseNegativeControl(event: HookEvent, evidence: EvidenceCandidate): ProbeScenario {
-  return {
-    ...scenarioBase('claude-code', event, evidence, 'unapproved-tool-negative-control'),
-    description: 'Proves Claude dontAsk leaves the marker absent without a hook permission decision.',
-    allowedTools: NO_TOOL_MARKER_ALLOWED_TOOLS,
-    prompt: promptFor(event.name),
-    expectedAbsentMarker: TOOL_MARKER,
-    oracle: 'native-must-deny-unapproved-tool',
   };
 }
 
@@ -303,27 +150,25 @@ function claudePreToolUseNegativeControl(event: HookEvent, evidence: EvidenceCan
  * @returns Complete bounded scenario manifest.
  */
 export function getManifest(provider: ProviderId): ScenarioManifest {
-  const definition = definitionFor(provider);
-  const pinnedVersion = definition.managedInstall?.version;
+  const contract = probeContractFor(provider);
+  const pinnedVersion = contract.definition.managedInstall?.version;
   if (!pinnedVersion) throw new Error(`Provider "${provider}" has no managedInstall descriptor`);
   return {
     schemaVersion: 1,
     provider,
     pinnedVersion,
-    scenarios: definition.runtimeCapabilities.hookEvents.flatMap<ProbeScenario>((event) => {
+    scenarios: contract.definition.runtimeCapabilities.hookEvents.flatMap<ProbeScenario>((event) => {
       const evidence = EVIDENCE[provider][event.name] ?? { status: 'unobserved', effects: [], blocking: false };
-      if (evidence.status === 'supported') {
-        const scenarios = supportedScenarios(provider, event, evidence);
-        return provider === 'claude-code' && event.name === 'PreToolUse'
-          ? [...scenarios, claudePreToolUseNegativeControl(event, evidence)]
-          : scenarios;
+      if (evidence.status !== 'supported') {
+        return [buildScenario(provider, event, evidence, { suffix: 'observation', oracle: 'unobserved' })];
       }
       return [
-        {
-          ...scenarioBase(provider, event, evidence, 'observation'),
-          prompt: promptFor(event.name),
-          oracle: 'unobserved' as const,
-        },
+        ...evidence.effects.map((effect) =>
+          buildScenario(provider, event, evidence, contract.scenarioForEffect(event.name, effect), effect),
+        ),
+        ...(contract.baselineScenarios?.(event.name) ?? []).map((seed) =>
+          buildScenario(provider, event, evidence, seed),
+        ),
       ];
     }),
   };

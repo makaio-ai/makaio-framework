@@ -2,8 +2,9 @@
  * Claude Code hook response composer.
  *
  * One terminal `hook.handle` composer covering every request-capable Claude
- * Code event.  Currently only `PreToolUse` is request-capable (proven by the
- * Phase 0 manifest).  Observer-only events bypass this composer entirely —
+ * Code event.  Which events those are is declared in the client definition and
+ * proven by the fixture manifest; `PreToolUse` and `SessionStart` are
+ * request-capable today.  Observer-only events bypass this composer entirely —
  * they remain on the `hook.received` pathway with no response.
  *
  * ## Composition pipeline
@@ -24,13 +25,23 @@
  *
  * ## Native output format
  *
- * PreToolUse native output is JSON on stdout:
+ * Native output is JSON on stdout. `PreToolUse` carries a permission decision:
  * ```json
  * {
  *   "hookSpecificOutput": {
  *     "hookEventName": "PreToolUse",
  *     "permissionDecision": "allow" | "deny",
  *     "permissionDecisionReason": "optional reason"
+ *   }
+ * }
+ * ```
+ *
+ * Events with no decision to make carry appended context alone:
+ * ```json
+ * {
+ *   "hookSpecificOutput": {
+ *     "hookEventName": "SessionStart",
+ *     "additionalContext": "..."
  *   }
  * }
  * ```
@@ -45,11 +56,11 @@ import { NOOP_HOOK_HANDLE_RESPONSE } from '@makaio/subsystem-client';
 import {
   CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_ID,
   claudeCodeToolResponseContract,
+  rendersDecision,
   type ClaudeCodePreToolUseEffects,
   type ClaudeCodeToolDecision,
 } from './hook-response-contracts.js';
 import { clientDefinition } from '../definition.js';
-import { CLAUDE_CODE_HOOK_PRE_TOOL_USE } from './schemas.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -166,19 +177,21 @@ function reduceEffects(effects: ReadonlyArray<CanonicalEffect | ProviderContribu
 // ---------------------------------------------------------------------------
 
 /**
- * Serialize a PreToolUse decision into the native Claude Code output format.
+ * Serialize a permission decision into the native Claude Code output format.
+ * @param eventName - Native Claude Code hook event the decision belongs to.
  * @param decision - The resolved tool decision.
  * @param reason - Optional reason string.
  * @param additionalContext - Context appended before the tool executes.
  * @returns JSON string for the native Claude Code hook output.
  */
-function serializePreToolUseOutput(
+function serializeDecisionOutput(
+  eventName: string,
   decision: ClaudeCodeToolDecision,
   reason: string | undefined,
   additionalContext: string | undefined,
 ): string {
   const hookSpecificOutput: Record<string, string> = {
-    hookEventName: CLAUDE_CODE_HOOK_PRE_TOOL_USE,
+    hookEventName: eventName,
     permissionDecision: decision,
   };
 
@@ -190,6 +203,20 @@ function serializePreToolUseOutput(
   }
 
   return JSON.stringify({ hookSpecificOutput });
+}
+
+/**
+ * Serialize appended context for an event that carries no permission decision.
+ *
+ * Claude Code's documented shape for context contribution outside PreToolUse is
+ * `hookSpecificOutput.additionalContext` with no decision fields. Events that
+ * cannot render a decision must never receive one.
+ * @param eventName - Native Claude Code hook event name.
+ * @param additionalContext - Context to append.
+ * @returns JSON string for the native Claude Code hook output.
+ */
+function serializeContextOutput(eventName: string, additionalContext: string): string {
+  return JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } });
 }
 
 // ---------------------------------------------------------------------------
@@ -204,8 +231,8 @@ function serializePreToolUseOutput(
  * @returns A deny response, or the no-op if the event is not block-capable.
  */
 function closedFailureToResponse(detail: string, eventName: string): ClientHookHandleResponse {
-  if (eventName === CLAUDE_CODE_HOOK_PRE_TOOL_USE) {
-    const stdout = serializePreToolUseOutput('deny', detail, undefined);
+  if (rendersDecision(eventName)) {
+    const stdout = serializeDecisionOutput(eventName, 'deny', detail, undefined);
     return { exitCode: 0, stdout, stderr: '' };
   }
 
@@ -220,18 +247,37 @@ function closedFailureToResponse(detail: string, eventName: string): ClientHookH
  * @returns The native Claude Code hook handle response.
  */
 function buildResponseFromEffects(reduced: ReducedEffects, eventName: string): ClientHookHandleResponse {
-  if (reduced.decision === undefined && reduced.appendedContext === undefined) {
-    // No effects remain — return the provider-valid no-op.
-    return NOOP_RESPONSE;
-  }
-
-  if (eventName === CLAUDE_CODE_HOOK_PRE_TOOL_USE) {
+  if (rendersDecision(eventName)) {
+    if (reduced.decision === undefined && reduced.appendedContext === undefined) {
+      // No effects remain — return the provider-valid no-op.
+      return NOOP_RESPONSE;
+    }
     const effectiveDecision = reduced.decision ?? 'allow';
-    const stdout = serializePreToolUseOutput(effectiveDecision, reduced.reason, reduced.appendedContext);
+    const stdout = serializeDecisionOutput(eventName, effectiveDecision, reduced.reason, reduced.appendedContext);
     return { exitCode: 0, stdout, stderr: '' };
   }
 
-  return NOOP_RESPONSE;
+  // Every other event renders appended context only; it has no decision to make.
+  if (reduced.appendedContext === undefined) return NOOP_RESPONSE;
+  return { exitCode: 0, stdout: serializeContextOutput(eventName, reduced.appendedContext), stderr: '' };
+}
+
+/**
+ * Render collected effects into the native Claude Code hook response.
+ *
+ * The single place that knows what Claude Code native hook output looks like.
+ * Both the terminal `hook.handle` composer and the evidence-capture probe
+ * resolve their native shape through this function, so a shape proven against
+ * the pinned binary and a shape emitted at runtime cannot drift apart.
+ * @param eventName - Native Claude Code hook event name.
+ * @param effects - Canonical effects and provider envelopes to render.
+ * @returns Native Claude Code hook handle response.
+ */
+export function renderClaudeCodeNativeResponse(
+  eventName: string,
+  effects: ReadonlyArray<CanonicalEffect | ProviderContributionEnvelope>,
+): ClientHookHandleResponse {
+  return buildResponseFromEffects(reduceEffects(effects), eventName);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +356,6 @@ export async function composeHookResponse(
     return NOOP_RESPONSE;
   }
 
-  // 5. Reduce effects and build response
-  const reduced = reduceEffects(allEffects);
-  return buildResponseFromEffects(reduced, eventName);
+  // 5. Render collected effects into the native response
+  return renderClaudeCodeNativeResponse(eventName, allEffects);
 }

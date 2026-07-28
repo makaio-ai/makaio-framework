@@ -22,14 +22,22 @@ consumed the response without rewriting history into a placeholder capture.
 | Status          | Meaning |
 |-----------------|---------|
 | `supported`     | Pinned source or official documentation establishes a synchronous response contract. |
-| `observer-only` | A live probe observed the event but established no synchronous response contract. |
+| `observer-only` | A live probe observed the event fire. No response was attempted, so the capture says nothing about whether the event could consume one. |
 | `unobserved`    | Available evidence does not establish a synchronous response contract. |
 
-### Claude Code (CLI v2.1.143)
+Probe scope follows the declared contract, so these statuses are not symmetric.
+An event is probed for response consumption only once source evidence has
+declared it `supported`; every other event receives an observation-only scenario
+that injects no sentinel and asserts nothing beyond the event firing. An
+`observer-only` capture therefore records the **absence of an attempt**, never a
+refused response. Widening a contract starts by revisiting the source evidence
+for that event — an existing `observer-only` capture is not counter-evidence.
+
+### Claude Code (CLI v2.1.219)
 
 | Event             | Source Candidate | Capabilities             | Expected Stdout | Blocking | Framework Subject                          |
 |-------------------|-----------------|--------------------------|-----------------|----------|--------------------------------------------|
-| `SessionStart`    | unobserved      | *(none)*                 | No              | No       | `client.session.started`                   |
+| `SessionStart`    | supported       | `context.append`         | Yes             | No       | `client.session.started`                   |
 | `UserPromptSubmit`| unobserved      | *(none)*                 | No              | No       | `client.session.userPrompt.submitted`      |
 | `PreToolUse`      | supported       | `claude-code.tool-response.approve`, `claude-code.tool-response.deny`, `context.append` | Yes | Yes | `client.session.tool.pre` |
 | `PostToolUse`     | unobserved      | *(none)*                 | No              | No       | `client.session.tool.post`                 |
@@ -41,9 +49,22 @@ consumed the response without rewriting history into a placeholder capture.
 
 #### Claude Code Notes
 
-- Only `PreToolUse` declares `responseCapabilities` in the client definition.
-  The wiring layer installs `makaio hook handle claude-code` for events with
-  capabilities and `makaio hook received claude-code` for events without.
+- `PreToolUse` and `SessionStart` declare `responseCapabilities` in the client
+  definition. The wiring layer installs `makaio hook handle claude-code` for
+  events with capabilities and `makaio hook received claude-code` for events
+  without.
+- `SessionStart` carries `context.append` only. It contributes context to a
+  session that has already started and can refuse nothing, so it is declared
+  non-blockable: a closed-policy contributor that fails on `SessionStart`
+  cannot convert its failure into a deny the way it can on `PreToolUse`.
+  Native output is `hookSpecificOutput.additionalContext` with no decision
+  fields, the same shape Codex renders for this event.
+- The remaining events are declared without response capabilities because the
+  current source-evidence reading establishes no synchronous contract for them —
+  not because a probe showed the binary ignoring a response. Widening one of
+  them means re-reading the official hook documentation, flipping the source
+  evidence, and capturing a probe — the declaration cannot outrun the evidence,
+  which the fixture suite enforces.
 - `SubagentStop`, `Notification`, `MCPServerStart`, and `MCPServerStop` have
   no `frameworkSubject` --- they remain in the `client:claude-code` raw namespace
   and are not normalized into `client.session.*` observations.
@@ -79,15 +100,19 @@ consumed the response without rewriting history into a placeholder capture.
 |-------------------|--------------------|
 | Fixture version   | 0.2.0              |
 | Live probe status | captured            |
-| Claude Code CLI   | 2.1.143            |
+| Claude Code CLI   | 2.1.219            |
 | Codex CLI         | 0.144.1            |
 
-Paid probes against both pinned CLI binaries completed on 2026-07-21. The
-provider manifests record their exact capture timestamps and event-level
-observations. Claude confirmed `PreToolUse` response consumption, observed five
-additional lifecycle hooks without response capabilities, and did not induce
+The provider manifests record their exact capture timestamps and event-level
+observations. Claude confirmed `PreToolUse` response consumption and
+`SessionStart` context consumption, saw four additional lifecycle hooks fire in
+observation-only scenarios that attempted no response, and did not induce
 `Notification`, `MCPServerStart`, or `MCPServerStop`. Codex confirmed every
 declared effect for all five events.
+
+Every claim in the tables above is re-earned against the pinned binary, not
+carried forward: bumping a pin invalidates the committed captures, because the
+fixture suite requires each capture's `cliVersion` to equal the descriptor pin.
 
 ---
 
@@ -329,6 +354,13 @@ Provider envelopes are validated at runtime by the provider contract's
 `validate` function. Invalid envelopes are treated as failures and handled
 according to the contributor's `failurePolicy`.
 
+`validate` receives the current event alongside the envelope, so validity is
+not a question of shape alone. A contract may span both blockable and
+non-blockable interactions, and an envelope that is well-formed for one can be
+meaningless on another — a Claude Code permission decision on `SessionStart`,
+for example, has nothing to render into. Both first-party contracts reject
+those rather than letting reduction discard them unannounced.
+
 ### Activation context
 
 The `createContributors` factory receives a
@@ -358,8 +390,8 @@ defines the interactions it supports and how contributions are validated.
 |-------|-------|
 | `clientId` | `claude-code` |
 | `contractId` | `claude-code.tool-response` |
-| `version` | `1.0.0` |
-| `supportedInteractions` | `PreToolUse`, `approve`, `deny`, `context.append` |
+| `version` | `1.1.0` |
+| `supportedInteractions` | `PreToolUse`, `SessionStart`, `approve`, `deny`, `context.append` |
 
 **Blockability:**
 
@@ -368,6 +400,7 @@ defines the interactions it supports and how contributions are validated.
 | `PreToolUse` | Yes |
 | `approve` | Yes |
 | `deny` | Yes |
+| `SessionStart` | No |
 | `context.append` | No |
 
 **Effect builders** (from `@makaio/client-claude-code/runtime`):

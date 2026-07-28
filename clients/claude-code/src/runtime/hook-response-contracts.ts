@@ -1,10 +1,9 @@
 /**
  * Claude Code hook response provider contracts.
  *
- * Declares only the capabilities proven for pinned Claude Code 2.1.143 in
- * Phase 0 evidence capture.  Every interaction and blockability entry is backed
- * by the fixture manifest at
- * `__tests__/fixtures/hook-contracts/manifest.json`.
+ * Declares only the capabilities proven for pinned Claude Code 2.1.219 by live
+ * evidence capture.  Every interaction and blockability entry is backed by the
+ * fixture manifest at `__tests__/fixtures/hook-contracts/manifest.json`.
  *
  * This module owns three things:
  *
@@ -47,10 +46,14 @@ export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_ID = 'claude-code.tool-response'
 /**
  * Semantic version of the Claude Code tool-response contract.
  *
- * Pinned to the proven capabilities of Claude Code CLI 2.1.143.  Bump this
+ * Pinned to the proven capabilities of Claude Code CLI 2.1.219.  Bump this
  * version when future CLI releases expand the native response surface.
+ *
+ * `1.1.0` adds `SessionStart` as a request-capable, non-blockable interaction
+ * carrying canonical `context.append`. Purely additive: every `1.0.0`
+ * contributor remains valid.
  */
-export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.0.0';
+export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.1.0';
 
 // ---------------------------------------------------------------------------
 // Claude-specific effect types
@@ -135,17 +138,35 @@ export function createDenyEffect(reason?: string): ProviderContributionEnvelope<
  * Blockability metadata for every interaction supported by the Claude Code
  * tool-response contract.
  *
- * Only `PreToolUse` is blockable — proven by the Phase 0 manifest.  The
- * The namespaced approve and deny capabilities map to the PreToolUse event
- * and inherit its blockability. `context.append` is a canonical effect and is not
- * independently blockable.
+ * Only `PreToolUse` is blockable — proven by the manifest.  The namespaced
+ * approve and deny capabilities map to the PreToolUse event and inherit its
+ * blockability. `SessionStart` contributes context to a session that has
+ * already started and can refuse nothing, so it is listed explicitly as
+ * non-blockable rather than left absent: a closed-policy contributor must fail
+ * its blockability check loudly instead of silently matching no entry.
+ * `context.append` is a canonical effect and is not independently blockable.
  */
 const BLOCKABILITY: readonly InteractionBlockability[] = Object.freeze([
   Object.freeze({ interaction: 'PreToolUse', blockable: true }),
   Object.freeze({ interaction: CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.approve, blockable: true }),
   Object.freeze({ interaction: CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny, blockable: true }),
+  Object.freeze({ interaction: 'SessionStart', blockable: false }),
   Object.freeze({ interaction: 'context.append', blockable: false }),
 ]);
+
+/**
+ * Whether an event's native output has a slot for a permission decision.
+ *
+ * For Claude Code these are the same question: the only way a hook blocks is a
+ * `deny` decision, so an event that renders no decision can refuse nothing.
+ * Both the runtime reducer and contract validation read this table, so neither
+ * can drift into disagreeing with declared blockability.
+ * @param eventName - Native Claude Code hook event name.
+ * @returns `true` when the event renders a permission decision.
+ */
+export function rendersDecision(eventName: string): boolean {
+  return BLOCKABILITY.some((entry) => entry.interaction === eventName && entry.blockable);
+}
 
 // ---------------------------------------------------------------------------
 // Supported interactions
@@ -155,12 +176,13 @@ const BLOCKABILITY: readonly InteractionBlockability[] = Object.freeze([
  * Interactions supported by the Claude Code tool-response contract.
  *
  * These names must match the namespaced `responseCapabilities` declared in
- * the client definition plus canonical `context.append` and the event name
- * (PreToolUse) so both event-name and capability selectors resolve
+ * the client definition plus canonical `context.append` and the names of every
+ * request-capable event, so both event-name and capability selectors resolve
  * correctly during contributor activation validation.
  */
 const SUPPORTED_INTERACTIONS: readonly string[] = Object.freeze([
   'PreToolUse',
+  'SessionStart',
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.approve,
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny,
   'context.append',
@@ -227,13 +249,34 @@ function validateToolResponseEffects(effects: Record<string, unknown>): true | s
  * (`'allow'` or `'deny'`) and an optional `reason` string.  Rejects
  * anything else to prevent malformed native output from reaching the
  * Claude Code CLI.
+ *
+ * A well-formed decision is still rejected on an event that renders no
+ * decision. The contract spans both blockable and non-blockable interactions,
+ * so shape alone cannot establish that an envelope means anything here: the
+ * reducer would drop such a decision while the contributor believed it had
+ * denied something. Rejecting names the mistake at its source.
+ *
+ * A rejection is an error, and a `closed`-policy contributor's error suppresses
+ * the whole response — but such a contributor cannot reach this branch, because
+ * closed policy is refused at activation on exactly the non-blockable
+ * interactions this rejects for.
  * @param output - Raw callback output to validate.
+ * @param ctx - Provider validation context carrying the current event name.
  * @returns `true` when valid, or a string describing the validation error.
  */
-function validateToolResponseOutput(output: unknown): true | string {
+function validateToolResponseOutput(output: unknown, ctx: Record<string, unknown>): true | string {
   const effects = extractToolResponseEffects(output);
   if (effects === undefined) return true;
-  return typeof effects === 'string' ? effects : validateToolResponseEffects(effects);
+  if (typeof effects === 'string') return effects;
+
+  const shape = validateToolResponseEffects(effects);
+  if (shape !== true) return shape;
+
+  const eventName = String(ctx.eventName);
+  if (!rendersDecision(eventName)) {
+    return `Permission decisions are not renderable on '${eventName}'; it carries no decision`;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,8 +290,10 @@ function validateToolResponseOutput(output: unknown): true | string {
  * provider activation so that:
  * - Contributors referencing the namespaced approve/deny capabilities or canonical `context.append`
  *   capabilities pass activation-time validation.
- * - Contributors with `failurePolicy: 'closed'` pass blockability checks
- *   for the `PreToolUse` interaction.
+ * - Contributors with `failurePolicy: 'closed'` pass blockability checks on
+ *   blockable interactions and are rejected on non-blockable ones, so a
+ *   contributor that expects to be able to refuse `SessionStart` fails at
+ *   activation instead of discovering at runtime that it cannot.
  * - Runtime envelope validation catches malformed native output before it
  *   reaches the Claude Code CLI.
  */

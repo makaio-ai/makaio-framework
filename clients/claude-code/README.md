@@ -11,7 +11,7 @@ Static client definition and schema library for the Anthropic Claude Code CLI. T
 | `version` | `0.1.0` |
 | `description` | Anthropic Claude Code CLI — an agentic coding assistant |
 | `binary.name` | `claude` |
-| `binary.supportedVersions` | `^2.1.143` |
+| `binary.supportedVersions` | `^2.1.0` |
 | `defaultApprovalPolicy` | `full-access` |
 | `defaultAuth` | `anthropic-oauth` via client method `native` |
 | `configIsolation.envVar` | `CLAUDE_CONFIG_DIR` |
@@ -42,7 +42,7 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 
 | Hook Name | Framework Subject | Response Capabilities |
 |-----------|------------------|----------------------|
-| `SessionStart` | `client.session.started` | *(none)* |
+| `SessionStart` | `client.session.started` | `context.append` |
 | `UserPromptSubmit` | `client.session.userPrompt.submitted` | *(none)* |
 | `PreToolUse` | `client.session.tool.pre` | `approve`, `deny`, `context.append` |
 | `PostToolUse` | `client.session.tool.post` | *(none)* |
@@ -52,7 +52,7 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 | `MCPServerStart` | _(no framework subject --- not normalized)_ | *(none)* |
 | `MCPServerStop` | _(no framework subject --- not normalized)_ | *(none)* |
 
-Only `PreToolUse` declares response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); `PreToolUse` uses `makaio hook handle` (request/response) and produces a native `hookSpecificOutput` JSON response.
+`PreToolUse` and `SessionStart` declare response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); events with them use `makaio hook handle` (request/response) and produce a native `hookSpecificOutput` JSON response. `PreToolUse` renders a permission decision; `SessionStart` renders `additionalContext` alone, since it has no decision to make.
 
 ### Hook Response Contract (`claude-code.tool-response@1`)
 
@@ -61,10 +61,10 @@ The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defin
 | Field | Value |
 |-------|-------|
 | `contractId` | `claude-code.tool-response` |
-| `version` | `1.0.0` |
-| `supportedInteractions` | `PreToolUse`, `approve`, `deny`, `context.append` |
+| `version` | `1.1.0` |
+| `supportedInteractions` | `PreToolUse`, `SessionStart`, `approve`, `deny`, `context.append` |
 
-**Blockability:** `PreToolUse`, `approve`, and `deny` are blockable; `context.append` is not.
+**Blockability:** `PreToolUse`, `approve`, and `deny` are blockable; `SessionStart` and `context.append` are not.
 
 **Provider effect builders** (exported from `./runtime`):
 

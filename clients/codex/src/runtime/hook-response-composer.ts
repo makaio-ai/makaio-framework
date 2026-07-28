@@ -157,11 +157,16 @@ function renderPreToolUse(
 }
 /**
  * Reduce ordered effects into one provider-valid Codex response.
+ *
+ * The single place that knows what Codex native hook output looks like. Both
+ * the terminal `hook.handle` composer and the evidence-capture probe resolve
+ * their native shape through this function, so a shape proven against the
+ * pinned binary and a shape emitted at runtime cannot drift apart.
  * @param eventName - Native Codex hook event name.
  * @param effects - Deterministically ordered effects to reduce.
  * @returns The terminal native hook response.
  */
-function output(
+export function renderCodexNativeResponse(
   eventName: string,
   effects: readonly (CanonicalEffect | ProviderContributionEnvelope)[],
 ): ClientHookHandleResponse {
@@ -215,14 +220,14 @@ export async function composeCodexHookResponse(
   );
   if (result.diagnostics.length) options?.onDiagnostics?.(result.diagnostics);
   if (result.closedFailure)
-    return output(payload.eventName, [
+    return renderCodexNativeResponse(payload.eventName, [
       {
         clientId: CODEX_CLIENT_ID,
         contractId: CODEX_CONTRACT_ID,
         effects: { decision: 'block', reason: result.closedFailure.detail },
       },
     ]);
-  return output(
+  return renderCodexNativeResponse(
     payload.eventName,
     result.outcomes.flatMap((outcome) => outcome.effects ?? []),
   );

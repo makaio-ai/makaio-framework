@@ -122,9 +122,15 @@ export function buildClaudeCodeCredentialsKeychainService(configDir?: string): s
 
 /**
  * Resolve the Keychain account name Claude Code uses for credential storage.
+ *
+ * Exported because a session lease must publish the account it wrote under.
+ * The `claude` binary resolves this account from `USER` alone and has no
+ * `os.userInfo()` fallback when reading an isolated credential store, so a
+ * lease that materializes credentials without also publishing the account
+ * produces an entry the binary cannot find.
  * @returns OS account name used for the Keychain entry.
  */
-function resolveKeychainAccount(): string {
+export function resolveKeychainAccount(): string {
   let account: string;
   try {
     account = process.env.USER || os.userInfo().username;

@@ -17,9 +17,38 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { deriveHookEventTransportMode } from '@makaio/contracts';
 import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from '../wiring.js';
 import type { ClaudeCodeWiringSettings } from '../wiring.js';
 import { ClaudeCodeClientSettings } from '../client-settings.js';
+import { clientDefinition } from '../../definition.js';
+
+// ---------------------------------------------------------------------------
+// Representative events
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve one declared hook event that still runs in observer (`event`) mode.
+ *
+ * The cases below verify the `hook received` sentinel and its
+ * `--debounce-failure` root flag, which only apply to observer-mode events.
+ * Naming a specific event here would couple those cases to a capability
+ * decision they do not test: declaring a response capability moves that event
+ * to request mode and would turn them red for the wrong reason. Request-mode
+ * wiring is covered explicitly against `PreToolUse`, the event whose native
+ * decision surface those cases actually depend on.
+ * @returns Name of the first declared observer-mode hook event.
+ */
+function firstObserverModeEvent(): string {
+  const match = clientDefinition.runtimeCapabilities.hookEvents.find(
+    (event) => deriveHookEventTransportMode(event) === 'event',
+  );
+  if (!match) throw new Error('Claude Code declares no observer-mode hook event');
+  return match.name;
+}
+
+/** Representative observer-only event; exercises `hook received` wiring. */
+const EVENT_MODE_EVENT = firstObserverModeEvent();
 
 // ---------------------------------------------------------------------------
 // Mock factory
@@ -89,22 +118,28 @@ describe('buildClaudeCodeWiringList', () => {
 
   it('marks session-events entry as installed when matching hook command exists', async () => {
     const settings = createMockSettings({
-      SessionStart: [
-        { hooks: [{ type: 'command', command: 'makaio --debounce-failure hook received claude-code SessionStart' }] },
+      [EVENT_MODE_EVENT]: [
+        {
+          hooks: [
+            { type: 'command', command: `makaio --debounce-failure hook received claude-code ${EVENT_MODE_EVENT}` },
+          ],
+        },
       ],
     });
     const result = await buildClaudeCodeWiringList(settings, 'makaio');
-    const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
-    expect(sessionStart?.installed).toBe(true);
+    const entry = result.entries.find((e) => e.name === EVENT_MODE_EVENT);
+    expect(entry?.installed).toBe(true);
   });
 
   it('marks stale session-events commands without the debounce root flag as not installed', async () => {
     const settings = createMockSettings({
-      SessionStart: [{ hooks: [{ type: 'command', command: 'makaio hook received claude-code SessionStart' }] }],
+      [EVENT_MODE_EVENT]: [
+        { hooks: [{ type: 'command', command: `makaio hook received claude-code ${EVENT_MODE_EVENT}` }] },
+      ],
     });
     const result = await buildClaudeCodeWiringList(settings, 'makaio');
-    const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
-    expect(sessionStart?.installed).toBe(false);
+    const entry = result.entries.find((e) => e.name === EVENT_MODE_EVENT);
+    expect(entry?.installed).toBe(false);
   });
 
   it('marks installed when an exact command follows a stale managed hook for the same event', async () => {
@@ -115,11 +150,14 @@ describe('buildClaudeCodeWiringList', () => {
         JSON.stringify(
           {
             hooks: {
-              SessionStart: [
+              [EVENT_MODE_EVENT]: [
                 {
                   hooks: [
-                    { type: 'command', command: 'makaio hook received claude-code SessionStart' },
-                    { type: 'command', command: 'makaio --debounce-failure hook received claude-code SessionStart' },
+                    { type: 'command', command: `makaio hook received claude-code ${EVENT_MODE_EVENT}` },
+                    {
+                      type: 'command',
+                      command: `makaio --debounce-failure hook received claude-code ${EVENT_MODE_EVENT}`,
+                    },
                   ],
                 },
               ],
@@ -133,8 +171,8 @@ describe('buildClaudeCodeWiringList', () => {
       const settings = new ClaudeCodeClientSettings({ configDir });
 
       const result = await buildClaudeCodeWiringList(settings, 'makaio');
-      const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
-      expect(sessionStart?.installed).toBe(true);
+      const entry = result.entries.find((e) => e.name === EVENT_MODE_EVENT);
+      expect(entry?.installed).toBe(true);
     } finally {
       await fs.rm(configDir, { recursive: true, force: true });
     }
@@ -157,7 +195,7 @@ describe('buildClaudeCodeWiringList', () => {
   it('uses the provided makaioCommand in all command fields', async () => {
     const settings = createMockSettings();
     const result = await buildClaudeCodeWiringList(settings, 'makaio-dev');
-    const hookEntry = result.entries.find((e) => e.name === 'SessionStart');
+    const hookEntry = result.entries.find((e) => e.name === EVENT_MODE_EVENT);
     expect(hookEntry?.command).toContain('makaio-dev');
     const statuslineEntry = result.entries.find((e) => e.name === 'statusline');
     expect(statuslineEntry?.command).toContain('makaio-dev');
@@ -168,9 +206,9 @@ describe('buildClaudeCodeWiringList', () => {
     const settings = createMockSettings();
     const envPairs = ['MAKAIO_CONFIG_FILE=/path/to/config.ts', 'MAKAIO_HOME=/path/to/.makaio-dev'];
     const result = await buildClaudeCodeWiringList(settings, '/path/to/cli-entry.ts', envPairs);
-    const hookEntry = result.entries.find((e) => e.name === 'SessionStart');
+    const hookEntry = result.entries.find((e) => e.name === EVENT_MODE_EVENT);
     expect(hookEntry?.command).toBe(
-      'MAKAIO_CONFIG_FILE=/path/to/config.ts MAKAIO_HOME=/path/to/.makaio-dev /path/to/cli-entry.ts --debounce-failure hook received claude-code SessionStart',
+      `MAKAIO_CONFIG_FILE=/path/to/config.ts MAKAIO_HOME=/path/to/.makaio-dev /path/to/cli-entry.ts --debounce-failure hook received claude-code ${EVENT_MODE_EVENT}`,
     );
     const statuslineEntry = result.entries.find((e) => e.name === 'statusline');
     expect(statuslineEntry?.command).toBe(
@@ -256,10 +294,10 @@ describe('applyClaudeCodeWiring', () => {
 
       await applyClaudeCodeWiring(realSettings, 'user', 'makaio');
 
-      const { effective } = await realSettings.listHooks({ eventName: 'SessionStart' });
-      const sessionStartHooks = effective['SessionStart'] ?? [];
-      expect(JSON.stringify(sessionStartHooks)).toContain(
-        'makaio --debounce-failure hook received claude-code SessionStart',
+      const { effective } = await realSettings.listHooks({ eventName: EVENT_MODE_EVENT });
+      const eventModeHooks = effective[EVENT_MODE_EVENT] ?? [];
+      expect(JSON.stringify(eventModeHooks)).toContain(
+        `makaio --debounce-failure hook received claude-code ${EVENT_MODE_EVENT}`,
       );
     } finally {
       await fs.rm(configDir, { recursive: true, force: true });

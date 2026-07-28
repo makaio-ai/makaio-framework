@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "provider": "claude-code",
-  "cliVersion": "2.1.143",
+  "cliVersion": "2.1.219",
   "scenarioId": "stop-observation",
   "events": [
     {
@@ -16,11 +16,14 @@
       "blockingCapable": false,
       "managedCommand": "hook received claude-code",
       "payloadKeys": [
+        "background_tasks",
         "cwd",
         "effort",
         "hook_event_name",
         "last_assistant_message",
         "permission_mode",
+        "prompt_id",
+        "session_crons",
         "session_id",
         "stop_hook_active",
         "transcript_path"

@@ -35,7 +35,7 @@ export type {
   ClaudeCodePreToolUseEffects,
   ClaudeCodeToolDecision,
 } from './hook-response-contracts.js';
-export { composeHookResponse } from './hook-response-composer.js';
+export { composeHookResponse, renderClaudeCodeNativeResponse } from './hook-response-composer.js';
 export {
   executeCredentialSourceLock as executeClaudeCodeNativeCredentialSourceLock,
   withCredentialSourceLock as withClaudeCodeNativeCredentialSourceLock,

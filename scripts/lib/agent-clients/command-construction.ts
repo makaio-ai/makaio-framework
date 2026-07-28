@@ -1,6 +1,6 @@
 /** @packageDocumentation */
 import type { CredentialMode, ProbeScenario, ProviderId } from './types.js';
-import { CHILD_ENV_ALLOWLIST, PROVIDER_CREDENTIAL_VARS, PROVIDER_NATIVE_AUTH_ENV_VARS } from './types.js';
+import { CHILD_ENV_ALLOWLIST, PROVIDER_CREDENTIAL_VARS } from './types.js';
 
 /** A CLI command with a hard per-scenario deadline. */
 export interface SpawnCommand {
@@ -14,6 +14,13 @@ export interface SpawnCommand {
 
 /**
  * Builds the intentionally small child environment.
+ *
+ * Ambient state is admitted only through {@link CHILD_ENV_ALLOWLIST} and the
+ * single credential variable selected by the active mode. A native-login lease
+ * is a different kind of source: it is client-owned, secret-free by contract,
+ * and it is the only component that knows what its child needs in order to read
+ * back the credentials it just materialized. Its environment is therefore
+ * delivered as published, minus the provider's explicit credential variables.
  * @param params - Provider credential selection, isolation variable, and parent environment.
  * @returns Environment containing only process requirements and one credential.
  */
@@ -43,9 +50,18 @@ export function buildChildEnvironment(params: {
     if (mode === credentialMode && parentEnv[name]) env[name] = parentEnv[name]!;
   }
   if (credentialMode === 'native-login' && nativeAuthEnv) {
-    for (const name of PROVIDER_NATIVE_AUTH_ENV_VARS[provider]) {
-      const value = nativeAuthEnv[name];
-      if (value) env[name] = value;
+    // A name-based admit-list here made the harness re-declare what each client
+    // publishes, and it drifted: Claude Code's lease publishes the macOS
+    // Keychain account (USER) its credentials were written under, the list
+    // dropped it, and the child fell back to whatever ambient USER survived.
+    // Probe evidence must not depend on ambient developer state, so the lease
+    // environment is admitted whole — the same way the production seam merges
+    // it into a spawned client. Credential variables stay refused so a
+    // native-login probe can never be rescued by a credential and still be
+    // recorded as native-login evidence.
+    const providerCredentialVars = PROVIDER_CREDENTIAL_VARS[provider];
+    for (const [name, value] of Object.entries(nativeAuthEnv)) {
+      if (value && providerCredentialVars[name] === undefined) env[name] = value;
     }
   }
   env[configIsolationEnvVar] = tempConfigDir;
