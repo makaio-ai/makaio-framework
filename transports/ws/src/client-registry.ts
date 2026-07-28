@@ -8,13 +8,41 @@
 
 import type {
   BusMessage,
+  BusRequestMessage,
   BusSubscribeMessage,
   BusUnsubscribeMessage,
   SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
-import { shouldReceiveMessage, getSubjectFromBusMessage } from '@makaio/bus-core';
+import { DEFAULT_REQUEST_TIMEOUT_MS, shouldReceiveMessage, getSubjectFromBusMessage } from '@makaio/bus-core';
 import type { WebSocketLike } from './types.js';
+
+/**
+ * Callback that resolves allowed subjects for a client socket.
+ *
+ * Returns the live restriction list when the client's authenticated identity
+ * declares `allowedSubjects`, or `null` when the client is unrestricted
+ * (either because the identity has no restriction, or the identity is unknown).
+ *
+ * Implementations should resolve from the live identity-secret-registry so
+ * revocations and rotations are reflected immediately — matching the per-message
+ * revalidation freshness on the inbound path.
+ * @param client - The WebSocket client to resolve restrictions for.
+ * @returns Allowed subjects list, or `null` when unrestricted.
+ */
+export type SubjectRestrictionResolver = (client: WebSocketLike) => ReadonlySet<string> | null;
+
+/**
+ * Callback that checks whether a client socket is still authenticated.
+ *
+ * When provided, outbound routing skips clients whose authentication
+ * has expired (e.g. after identity secret rotation or revocation).
+ * This closes the gap where rotated/revoked sockets continue receiving
+ * subscribed events until their next inbound frame.
+ * @param client - The WebSocket client to check.
+ * @returns `true` when the client is still authenticated.
+ */
+export type SocketAuthChecker = (client: WebSocketLike) => boolean;
 
 /**
  * Options for `ClientRegistry`.
@@ -22,11 +50,32 @@ import type { WebSocketLike } from './types.js';
 export interface ClientRegistryOptions {
   /** Enable debug logging. */
   debug?: boolean;
+  /**
+   * Optional callback that resolves subject restrictions for a client socket.
+   *
+   * When provided, outbound event and broadcast forwarding skips clients whose
+   * restriction list does not include the message subject. This provides
+   * defense-in-depth for the inbound subscription filter.
+   */
+  subjectRestrictionResolver?: SubjectRestrictionResolver;
+  /**
+   * Optional callback that checks whether a client socket is still
+   * authenticated. When provided, outbound routing skips and closes
+   * clients whose authentication has expired (e.g. after identity
+   * secret rotation). The inbound `isSocketAuthenticated` check
+   * remains as defense-in-depth.
+   */
+  socketAuthChecker?: SocketAuthChecker;
 }
 
 interface ClientSubscriptionState {
   priorities: number[];
   deliveryClass: SubscriptionDeliveryClass;
+}
+
+interface RequestOrigin {
+  socket: WebSocketLike;
+  expiration: ReturnType<typeof setTimeout> | undefined;
 }
 
 /** Transport-level subscription updates produced after per-client state changes. */
@@ -50,13 +99,18 @@ export class ClientRegistry {
   private readonly clientSubscriptions = new Map<WebSocketLike, Set<string>>();
   private readonly clientSubscriptionState = new Map<WebSocketLike, Map<string, ClientSubscriptionState>>();
   private readonly clientFilters = new Map<WebSocketLike, Map<string, PayloadFilter>>();
+  private readonly requestOrigins = new Map<string, RequestOrigin>();
   private readonly debug: boolean;
+  private readonly subjectRestrictionResolver: SubjectRestrictionResolver | undefined;
+  private readonly socketAuthChecker: SocketAuthChecker | undefined;
 
   /**
    * @param options - Registry configuration
    */
   public constructor(options: ClientRegistryOptions = {}) {
     this.debug = options.debug ?? false;
+    this.subjectRestrictionResolver = options.subjectRestrictionResolver;
+    this.socketAuthChecker = options.socketAuthChecker;
   }
 
   // ---------------------------------------------------------------------------
@@ -114,6 +168,10 @@ export class ClientRegistry {
     this.clientSubscriptions.delete(socket);
     this.clientSubscriptionState.delete(socket);
     this.clientFilters.delete(socket);
+    for (const [correlationId, origin] of this.requestOrigins) {
+      if (origin.socket !== socket) continue;
+      this.clearRequestOrigin(correlationId, origin);
+    }
 
     if (this.debug) {
       console.info(`[ClientRegistry] Client removed (${this.clients.size} remaining)`);
@@ -244,7 +302,7 @@ export class ClientRegistry {
   /**
    * Compute request routing priority for a client.
    *
-   * Prioritization is best-effort only; requests still remain unfiltered.
+   * Priority only orders clients that have already passed request eligibility.
    * - 2: client has subscriptions and the subject/filter matches
    * - 1: client has no subscriptions declared (default catch-all mode)
    * - 0: client has subscriptions but the current request does not match
@@ -262,7 +320,86 @@ export class ClientRegistry {
   }
 
   /**
+   * Collect ready clients that are authorized to receive a request subject.
+   *
+   * Eligibility is distinct from request priority: subscriptions influence
+   * ordering among eligible clients, but cannot authorize a socket to receive
+   * a subject outside its live identity restriction.
+   * @param subject - Full request subject (`namespace.subject`)
+   * @returns Eligible clients in connection order
+   */
+  public getEligibleRequestClients(subject: string): WebSocketLike[] {
+    const result: WebSocketLike[] = [];
+    for (const client of this.clients) {
+      if (!this.isReadyAndAuthenticated(client)) continue;
+      if (!this.isSubjectAllowedForClient(client, subject)) continue;
+      result.push(client);
+    }
+    return result;
+  }
+
+  /**
+   * Associate an accepted inbound request with its requesting socket.
+   *
+   * The association is single-use and lasts until the request's propagated
+   * deadline. Requests with `timeout: 0` have no deadline and remain tracked
+   * until a response, cancellation, or socket removal.
+   * @param socket - Socket that submitted the request
+   * @param request - Accepted inbound request envelope
+   */
+  public trackRequestOrigin(socket: WebSocketLike, request: BusRequestMessage): void {
+    const { correlationId } = request;
+    if (this.requestOrigins.has(correlationId)) return;
+
+    const remainingLifetime = this.getRequestRemainingLifetime(request);
+    if (remainingLifetime === 0) return;
+
+    const origin: RequestOrigin = {
+      socket,
+      expiration: undefined,
+    };
+    if (remainingLifetime !== undefined) {
+      origin.expiration = setTimeout(() => {
+        if (this.requestOrigins.get(correlationId) === origin) {
+          this.requestOrigins.delete(correlationId);
+        }
+      }, remainingLifetime);
+    }
+    this.requestOrigins.set(correlationId, origin);
+  }
+
+  /**
+   * Consume the requesting socket for a correlated response.
+   *
+   * Responses are correlation-addressed, not subscription-addressed. A
+   * restricted socket may receive its own response, but no other socket can.
+   * @param correlationId - Response correlation identifier
+   * @returns Eligible requesting socket, or `undefined` when none remains
+   */
+  public consumeResponseClient(correlationId: string): WebSocketLike | undefined {
+    const origin = this.requestOrigins.get(correlationId);
+    if (!origin) return undefined;
+
+    this.clearRequestOrigin(correlationId, origin);
+    return this.isReadyAndAuthenticated(origin.socket) ? origin.socket : undefined;
+  }
+
+  /**
+   * Remove the response route for a cancelled inbound request.
+   * @param correlationId - Cancelled request correlation identifier
+   */
+  public cancelRequestOrigin(correlationId: string): void {
+    const origin = this.requestOrigins.get(correlationId);
+    if (origin) this.clearRequestOrigin(correlationId, origin);
+  }
+
+  /**
    * Collect all connected clients interested in a given subject/payload.
+   *
+   * When a `subjectRestrictionResolver` is configured, clients whose
+   * authenticated identity restricts them to a set of allowed subjects are
+   * excluded when the outbound subject is not in that set. This provides
+   * defense-in-depth for the inbound subscription filter.
    * @param subject - The message subject (if any)
    * @param payload - The message payload (if any)
    * @param exclude - Optional client to exclude (e.g. the sender in cross-client event forwarding)
@@ -271,9 +408,10 @@ export class ClientRegistry {
   public getInterestedClients(subject: string | undefined, payload: unknown, exclude?: WebSocketLike): WebSocketLike[] {
     const result: WebSocketLike[] = [];
     for (const client of this.clients) {
-      if (client !== exclude && client.readyState === 1 && this.clientWantsMessage(client, subject, payload)) {
-        result.push(client);
-      }
+      if (client === exclude || !this.isReadyAndAuthenticated(client)) continue;
+      if (!this.clientWantsMessage(client, subject, payload)) continue;
+      if (!this.isSubjectAllowedForClient(client, subject)) continue;
+      result.push(client);
     }
     return result;
   }
@@ -322,6 +460,66 @@ export class ClientRegistry {
     const subs = this.clientSubscriptions.get(client) ?? new Set<string>();
     const filters = this.clientFilters.get(client) ?? new Map<string, PayloadFilter>();
     return shouldReceiveMessage(subject, payload, subs, filters);
+  }
+
+  /**
+   * Check whether a client can receive an outbound frame at this instant.
+   * @param client - Client socket to evaluate
+   * @returns `true` when the socket is open and remains authenticated
+   */
+  private isReadyAndAuthenticated(client: WebSocketLike): boolean {
+    if (client.readyState !== 1) return false;
+    if (!this.socketAuthChecker || this.socketAuthChecker(client)) return true;
+
+    // Match the inbound expired-auth lifecycle: reject the socket immediately
+    // and let its close listener remove all associated registry state.
+    client.close(1008, 'Authentication expired');
+    return false;
+  }
+
+  /**
+   * Compute the remaining response-routing lifetime for an inbound request.
+   * @param request - Accepted request envelope
+   * @returns Remaining milliseconds, `undefined` for no-timeout requests, or `0` when expired
+   */
+  private getRequestRemainingLifetime(request: BusRequestMessage): number | undefined {
+    if (request.deadline !== undefined) {
+      return Math.max(0, request.deadline - Date.now());
+    }
+    const timeout = request.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    return timeout > 0 ? timeout : undefined;
+  }
+
+  /**
+   * Clear an origin entry and its deadline timer.
+   * @param correlationId - Origin correlation identifier
+   * @param origin - Current origin entry
+   */
+  private clearRequestOrigin(correlationId: string, origin: RequestOrigin): void {
+    if (origin.expiration !== undefined) clearTimeout(origin.expiration);
+    this.requestOrigins.delete(correlationId);
+  }
+
+  /**
+   * Defense-in-depth: check whether the outgoing subject is allowed for a
+   * client whose authenticated identity may declare subject restrictions.
+   *
+   * When no `subjectRestrictionResolver` is configured, or the resolver
+   * returns `null` (unrestricted identity), the check passes. When the
+   * resolver returns a restriction list, the outgoing subject must appear
+   * in that list.
+   *
+   * The resolver is called on every outbound check — not cached — so
+   * revocations and rotations are reflected immediately.
+   * @param client - The WebSocket client.
+   * @param subject - The outgoing message subject (if any).
+   * @returns `true` when the subject is allowed (or no restriction applies).
+   */
+  private isSubjectAllowedForClient(client: WebSocketLike, subject: string | undefined): boolean {
+    if (!this.subjectRestrictionResolver || subject === undefined) return true;
+    const allowed = this.subjectRestrictionResolver(client);
+    if (allowed === null) return true;
+    return allowed.has(subject);
   }
 
   /**

@@ -11,6 +11,10 @@ import type {
   WorkerNodeDispatch,
   WorkerNodeRequirements,
 } from '@makaio/contracts';
+import type {
+  ExecutionAttemptRepository,
+  WorkflowMaterializationSpecResolver,
+} from '@makaio/subsystem-workflow-engine';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
 import type { ConfigProvider } from '@makaio/providers';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
@@ -30,6 +34,7 @@ import type { DatabaseBootOptions } from './initialize-node-database.js';
 import type { ExtensionDiscovery } from './extension-discovery.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
+import type { WorkspaceRootResolver } from './workflow-worker/local-directory-materializer.js';
 
 /** Dev-mode map from npm package name to absolute workspace package directory. */
 export type DevPortalMap = ReadonlyMap<string, string>;
@@ -77,6 +82,8 @@ export type WorkflowRunnerBootOptions =
       readonly mode: 'piscina';
       /** Contribution manifest loaded inside isolated workers. */
       readonly manifest?: WorkerContributionManifest;
+      /** Host-owned resolver for portable local-directory workspace IDs. */
+      readonly resolveWorkspaceRoot?: WorkspaceRootResolver;
       /** Explicit worker entry path. Overrides workerEntryMode resolution. */
       readonly workerEntry?: string;
       /** Source/dist worker entry mode used when workerEntry is omitted. */
@@ -395,6 +402,31 @@ export interface CoreBootOptions {
    * that runs the workflow worker entry end-to-end.
    */
   readonly workflowRunner?: WorkflowRunnerBootOptions;
+
+  /**
+   * Host-owned allowed-root resolver for local Piscina execution.
+   *
+   * This is intentionally a boot seam rather than persisted workflow state:
+   * it maps the portable workspace ID to a directory that this host is
+   * permitted to realize.
+   */
+  readonly piscinaWorkspaceRootResolver?: WorkspaceRootResolver;
+
+  /** Host-owned resolvers that create portable specs for path-backed workflow starts. */
+  readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
+
+  /**
+   * Injected execution attempt persistence port for WorkerNode dispatch.
+   *
+   * Required when `workflowRunner.mode` is `'worker-node'`. The consuming
+   * Factory provides the concrete implementation that owns durable attempt
+   * records and accept/duplicate/conflict/fence decisions.
+   *
+   * When omitted, framework-only, in-process, and Piscina modes operate
+   * without attempt tracking. WorkerNode mode fails fast at boot when this
+   * is not provided.
+   */
+  readonly executionAttemptRepository?: ExecutionAttemptRepository;
 
   /**
    * Runtime data home for config, database, machine identity, and installed

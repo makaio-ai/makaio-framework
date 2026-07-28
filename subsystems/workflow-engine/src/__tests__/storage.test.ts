@@ -229,9 +229,6 @@ describe('workflow storage handlers', () => {
         syncedAt: '2026-06-01T00:00:00.000Z',
         metadata: { repo: 'cyberport/ai-factory' },
       },
-      executionHints: {
-        requirements: { capabilities: ['makaio.factory.github-actions'] },
-      },
       successFinalizerId: 'factory.success-finalizer',
     };
 
@@ -240,7 +237,6 @@ describe('workflow storage handlers', () => {
 
     expect(fetched?.source).toEqual(workflow.source);
     expect(fetched?.successFinalizerId).toBe(workflow.successFinalizerId);
-    expect(fetched?.executionHints).toEqual(workflow.executionHints);
   });
 
   it('round-trips definition state through storage', async () => {
@@ -319,9 +315,6 @@ describe('workflow storage handlers', () => {
         syncedAt: '2026-06-01T00:00:00.000Z',
         metadata: { repo: 'acme/factory' },
       },
-      executionHints: {
-        requirements: { capabilities: ['makaio.factory.github-actions'] },
-      },
     } satisfies WorkflowDefinition;
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
@@ -340,31 +333,7 @@ describe('workflow storage handlers', () => {
       description: 'Initial description',
       triggers: [{ type: 'manual' }],
       source: workflow.source,
-      executionHints: workflow.executionHints,
     });
-  });
-
-  it('clears stored executionHints when an update payload provides an empty object', async () => {
-    const workflow = {
-      ...createWorkflowDefinition({ id: 'workflow-clear-execution-hints' }),
-      executionHints: {
-        requirements: { capabilities: ['makaio.factory.github-actions'] },
-      },
-    } satisfies WorkflowDefinition;
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-
-    await MakaioBus.request(WorkflowStorageSubjects.set, {
-      workflow: {
-        id: workflow.id,
-        name: workflow.name,
-        root: workflow.root,
-        scope: workflow.scope,
-        executionHints: {},
-      },
-    });
-
-    const { workflow: fetched } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
-    expect(fetched?.executionHints).toEqual({});
   });
 
   it('lists workflows filtered by scope', async () => {
@@ -476,7 +445,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-coordinator-atomic',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
     });
@@ -518,7 +486,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-coordinator-state',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
     });
@@ -568,7 +535,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-coordinator-links',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
     });
@@ -606,7 +572,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-coordinator-link-rollback',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
     });
@@ -660,7 +625,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-coordinator-link-target-mismatch',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
     });
@@ -802,7 +766,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-suspension-strategy',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
       suspensionStrategy: 'exit-and-redispatch',
@@ -830,7 +793,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-terminal-authority',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'linux', arch: 'arm64' },
       env: {},
       createdAt: Date.now(),
       terminalAuthority: 'authority',
@@ -857,7 +819,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-authority-bootstrap',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'linux', arch: 'arm64' },
       env: {},
       createdAt: Date.now(),
       terminalAuthority: 'authority',
@@ -905,7 +866,6 @@ describe('workflow storage handlers', () => {
       scope: { type: 'global' },
       coordinatorSessionId: 'session-coordinator-mismatch',
       cancelSubject: 'workflow.different-execution-id.cancel',
-      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
     });

@@ -277,23 +277,30 @@ export async function finalizeDelegateResult(
       `Delegate result finalizer '${params.resultFinalizerId}' requires frame and delegate node identity`,
     );
   }
+  const request = {
+    finalizerId: params.resultFinalizerId,
+    executionId: ctx.executionId,
+    workflowId: ctx.workflowId,
+    frameId: params.frameId,
+    nodeId: params.nodeId,
+    nodeType: params.delegateNodeType,
+    rawResult,
+    toolObservations: [...(params.toolObservations ?? [])],
+    ...(params.resolvedConfig === undefined
+      ? {}
+      : { economics: buildDelegateEconomics(params.resolvedConfig, durationMs, params.usage) }),
+  };
+  const gatewayResult = await ctx.bus.requestOptional(WorkflowSubjects.finalizeDelegateResult, request, {
+    signal: ctx.signal,
+  });
+  if (gatewayResult.handled) return gatewayResult.data.output;
+
+  // In-process embedders may register a delegate finalizer without booting the
+  // workflow Authority. Remote attempts cannot use this dynamic fallback:
+  // their static transport allowlist admits only the gateway subject.
   const { subjects } = createWorkflowDelegateResultFinalizerNamespace(params.resultFinalizerId);
-  const result = await ctx.bus.request(
-    subjects.finalize,
-    {
-      executionId: ctx.executionId,
-      workflowId: ctx.workflowId,
-      frameId: params.frameId,
-      nodeId: params.nodeId,
-      nodeType: params.delegateNodeType,
-      rawResult,
-      toolObservations: [...(params.toolObservations ?? [])],
-      ...(params.resolvedConfig === undefined
-        ? {}
-        : { economics: buildDelegateEconomics(params.resolvedConfig, durationMs, params.usage) }),
-    },
-    { signal: ctx.signal },
-  );
+  const { finalizerId: _finalizerId, ...finalizerRequest } = request;
+  const result = await ctx.bus.request(subjects.finalize, finalizerRequest, { signal: ctx.signal });
   return result.output;
 }
 

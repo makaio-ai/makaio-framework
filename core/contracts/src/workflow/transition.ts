@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { ArtifactRevision } from '../artifact/schemas.js';
 import { JsonValueSchema } from '../shared/json-value.js';
-import { ExecutionHintsSchema } from './execution-hints.js';
 
 // ─────────────────────────────────────────────────────────────
 // Transition Event Types
@@ -50,8 +49,7 @@ export type TransitionCondition = z.infer<typeof TransitionConditionSchema>;
  * Invocation descriptor for the action to execute when a transition rule fires.
  *
  * `type` selects the registered action handler; `input` supplies the
- * action-specific payload; `executionHints` threads optional infrastructure
- * hints to the execution host.
+ * action-specific payload.
  *
  * Built-in action type:
  * - `'workflow.start'` — start a workflow execution via the bus
@@ -72,11 +70,6 @@ export const TransitionActionInvocationSchema = z.object({
    * action handler at dispatch time.
    */
   input: z.record(z.string(), JsonValueSchema).optional(),
-  /**
-   * Optional execution hints for worker provisioning.
-   * Forwarded to the action handler and ultimately to the bus request.
-   */
-  executionHints: ExecutionHintsSchema.optional(),
 });
 
 export type TransitionActionInvocation = z.infer<typeof TransitionActionInvocationSchema>;

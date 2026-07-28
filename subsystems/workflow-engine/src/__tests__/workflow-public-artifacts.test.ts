@@ -5,6 +5,7 @@ import {
   ArtifactSubjects,
   type ArtifactRevision,
   type IWorkflowRunner,
+  type WorkflowRunnerCompletion,
   type WorkflowStationNode,
   type WorkflowWorkerConfig,
   serializeArtifactRef,
@@ -136,12 +137,12 @@ describe('workflow public artifact subjects', () => {
     const queriedRefs: Array<{ kind: string; ids: string[] }> = [];
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     const workflowRunner: IWorkflowRunner = {
-      async run(config, signal) {
+      async run(config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         if (config.definition === undefined) {
           throw new Error('Definition-backed runner config must include a workflow definition snapshot.');
         }
-        return runWorkflowOrchestrator({
+        const result = await runWorkflowOrchestrator({
           config,
           loaded: {
             definition: config.definition,
@@ -150,6 +151,7 @@ describe('workflow public artifact subjects', () => {
           bus: MakaioBus,
           signal,
         });
+        return { state: 'uncommitted', result };
       },
     };
 

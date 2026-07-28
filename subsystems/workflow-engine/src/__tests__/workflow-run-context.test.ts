@@ -45,7 +45,6 @@ describe('WorkflowRunContext storage round-trip', () => {
         config: {},
         scope: { type: 'global' },
         triggerPayload: {},
-        workspaceRoot: '/workspace',
         suspensionStrategy: 'exit-and-redispatch',
       },
       {
@@ -55,6 +54,43 @@ describe('WorkflowRunContext storage round-trip', () => {
     );
 
     expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
+  });
+
+  it('persists a materializationSpec set by the builder and retrieves it byte-identically', async () => {
+    const materializationSpec = {
+      kind: 'workspace-snapshot' as const,
+      snapshotId: 'snap-builder-99',
+      digest: 'sha256-builder-round-trip',
+      sourcePath: 'workflows/builder-test.ts',
+    };
+
+    const runContext = buildWorkflowRunContext(
+      {
+        executionId: 'exec-rc-builder-mat-spec',
+        workflowId: 'wf-builder-test',
+        coordinatorSessionId: 'session-builder-mat',
+        source: { kind: 'path', path: 'workflows/builder-test.ts' },
+        inputs: {},
+        config: {},
+        scope: { type: 'global' },
+        triggerPayload: {},
+        materializationSpec,
+      },
+      {
+        ...DEFAULT_EXECUTOR_CONFIG,
+        platformDefaults: { cwd: '/workspace' },
+      },
+    );
+
+    expect(runContext.materializationSpec).toEqual(materializationSpec);
+
+    await persistRunContext(runContext);
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      executionId: 'exec-rc-builder-mat-spec',
+    });
+    expect(fetched).not.toBeNull();
+    expect(fetched?.materializationSpec).toEqual(materializationSpec);
   });
 
   /**
@@ -73,7 +109,7 @@ describe('WorkflowRunContext storage round-trip', () => {
       sourceKind === 'definition'
         ? { kind: 'definition' as const, workflowId: 'wf-test' }
         : sourceKind === 'path'
-          ? { kind: 'path' as const, path: '/workspace/workflow.ts' }
+          ? { kind: 'path' as const, path: 'workflow.ts' }
           : { kind: 'source' as const, filename: 'workflow.ts', source: 'export default ...' };
 
     const definitionSnapshot =
@@ -85,18 +121,22 @@ describe('WorkflowRunContext storage round-trip', () => {
       executionId,
       workflowId: 'wf-test',
       source,
+      ...(sourceKind === 'path'
+        ? {
+            materializationSpec: {
+              kind: 'local-directory' as const,
+              workspaceId: 'workspace-test',
+              rootDigest: 'sha256-workspace-test',
+              sourcePath: source.path,
+            },
+          }
+        : {}),
       ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
       inputs: { name: 'value' },
       triggerPayload: { reason: 'manual' },
       scope: { type: 'global' },
       coordinatorSessionId: 'session-coordinator-1',
       cancelSubject: `workflow.${executionId}.cancel`,
-      context: {
-        repoPath: '/workspace',
-        makaioHome: '/home/user/.makaio',
-        os: 'darwin',
-        arch: 'arm64',
-      },
       env: { NODE_ENV: 'test' },
       createdAt: Date.now(),
     });
@@ -118,15 +158,13 @@ describe('WorkflowRunContext storage round-trip', () => {
     expect(fetched?.source).toEqual({ kind: 'definition', workflowId: 'wf-test' });
     expect(fetched?.coordinatorSessionId).toBe('session-coordinator-1');
     expect(fetched?.cancelSubject).toBe(`workflow.${executionId}.cancel`);
-    expect(fetched?.context.os).toBe('darwin');
-    expect(fetched?.context.arch).toBe('arm64');
     expect(fetched?.inputs).toEqual({ name: 'value' });
     expect(fetched?.triggerPayload).toEqual({ reason: 'manual' });
     expect(fetched?.env).toEqual({ NODE_ENV: 'test' });
     expect(fetched?.scope).toEqual({ type: 'global' });
   });
 
-  it('persists non-object inputs and execution hints', async () => {
+  it('persists non-object inputs', async () => {
     const workflow = createWorkflowDefinition({ id: 'wf-test' });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
@@ -134,22 +172,12 @@ describe('WorkflowRunContext storage round-trip', () => {
     const runContext = WorkflowRunContextSchema.parse({
       ...buildRunContext(executionId),
       inputs: null,
-      executionHints: {
-        priority: 'high',
-        requirements: { capabilities: ['docker'] },
-        providers: { 'github-actions': { pool: 'expensive-runner' } },
-      },
     });
 
     await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.inputs).toBeNull();
-    expect(fetched?.executionHints).toEqual({
-      priority: 'high',
-      requirements: { capabilities: ['docker'] },
-      providers: { 'github-actions': { pool: 'expensive-runner' } },
-    });
   });
 
   it('persists dispatch metadata for pause and resume routing', async () => {
@@ -193,7 +221,7 @@ describe('WorkflowRunContext storage round-trip', () => {
     await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
-    expect(fetched?.source).toEqual({ kind: 'path', path: '/workspace/workflow.ts' });
+    expect(fetched?.source).toEqual({ kind: 'path', path: 'workflow.ts' });
   });
 
   it('persists and retrieves an inline-source run context', async () => {
@@ -288,19 +316,96 @@ describe('WorkflowRunContext storage round-trip', () => {
     expect(fetched?.env).toEqual({ NODE_ENV: 'production' });
   });
 
-  it('persists the workerManifest with packages', async () => {
+  it('persists the exact worker contribution identity set', async () => {
     const executionId = 'exec-rc-manifest';
     const runContext = WorkflowRunContextSchema.parse({
       ...buildRunContext(executionId),
       workerManifest: {
-        packages: [{ name: '@acme/tools', importPath: 'node_modules/@acme/tools/dist/server.mjs' }],
+        contributionRefs: [
+          {
+            packageName: '@acme/tools',
+            version: '1.0.0',
+            entrypoint: 'dist/server.mjs',
+            integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uFPNZHzA3w0=',
+          },
+        ],
       },
     });
 
     await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
-    expect(fetched?.workerManifest.packages).toHaveLength(1);
-    expect(fetched?.workerManifest.packages[0]?.name).toBe('@acme/tools');
+    expect(fetched?.workerManifest.contributionRefs).toHaveLength(1);
+    expect(fetched?.workerManifest.contributionRefs[0]?.packageName).toBe('@acme/tools');
+  });
+
+  it('persists a local-directory materialization spec round-trip', async () => {
+    const executionId = 'exec-rc-mat-local';
+    const runContext = WorkflowRunContextSchema.parse({
+      ...buildRunContext(executionId, { source: 'path' }),
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'ws-1',
+        rootDigest: 'sha256-abc123',
+        sourcePath: 'workflow.ts',
+      },
+    });
+
+    await persistRunContext(runContext);
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(fetched?.materializationSpec).toEqual({
+      kind: 'local-directory',
+      workspaceId: 'ws-1',
+      rootDigest: 'sha256-abc123',
+      sourcePath: 'workflow.ts',
+    });
+  });
+
+  it('persists a workspace-snapshot materialization spec round-trip', async () => {
+    const executionId = 'exec-rc-mat-snapshot';
+    const runContext = WorkflowRunContextSchema.parse({
+      ...buildRunContext(executionId, { source: 'path' }),
+      materializationSpec: {
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-42',
+        digest: 'sha256-def456',
+        sourcePath: 'workflow.ts',
+      },
+    });
+
+    await persistRunContext(runContext);
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(fetched?.materializationSpec).toEqual({
+      kind: 'workspace-snapshot',
+      snapshotId: 'snap-42',
+      digest: 'sha256-def456',
+      sourcePath: 'workflow.ts',
+    });
+  });
+
+  it('omits materializationSpec for definition-sourced run contexts', async () => {
+    const executionId = 'exec-rc-no-mat-spec';
+    const runContext = buildRunContext(executionId);
+
+    await persistRunContext(runContext);
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(fetched?.materializationSpec).toBeUndefined();
+  });
+
+  it('rejects absolute sourcePath in a materialization spec', () => {
+    expect(() =>
+      WorkflowRunContextSchema.parse({
+        ...buildRunContext('exec-rc-abs-source-path', { source: 'path' }),
+        materializationSpec: {
+          kind: 'local-directory',
+          workspaceId: 'ws-1',
+          rootDigest: 'sha256-abc',
+          sourcePath: '/absolute/path/workflow.ts',
+        },
+      }),
+    ).toThrow('sourcePath must be relative');
   });
 });

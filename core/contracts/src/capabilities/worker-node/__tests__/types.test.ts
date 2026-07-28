@@ -1,12 +1,38 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { WORKER_NODE_CAPABILITY_ID, WorkerNodeCapabilitiesSchema } from '../index.js';
+import {
+  ALLOCATION_STATES,
+  AllocationInspectionSchema,
+  AllocationStateSchema,
+  MATERIALIZATION_MODES,
+  MaterializationModeSchema,
+  PROVIDER_ALLOCATION_REF_VERSION,
+  WORKER_NODE_CAPABILITY_ID,
+  LocalDirectoryMaterializationSchema,
+  OutcomeAckDecisionSchema,
+  ProviderAllocationRefSchema,
+  WorkerContributionRefSchema,
+  WorkerMaterializationSpecSchema,
+  WorkerNodeCapabilitiesSchema,
+  WorkerNodeRequirementsSchema,
+  WorkspaceSnapshotMaterializationSchema,
+} from '../index.js';
 import { SuspensionStrategySchema } from '../../../worker-node/suspension.js';
 import type { SuspensionStrategy } from '../../../worker-node/suspension.js';
 import type { WorkerNodeCapabilitiesInput } from '../types.js';
 import type {
+  AllocationInspection,
+  AllocationState,
+  IRecoverableWorkerNodeProvider,
   IWorkerNodeProvider,
+  IWorkerNodeRecoveryCapability,
+  OutcomeAckDecision,
+  ProviderAllocationRef,
+  WorkerContributionRef,
+  WorkerMaterializationSpec,
   WorkerNodeCapabilities,
   WorkerNodeHandle,
+  WorkerNodeProvisionRequest,
+  WorkerNodeProvisionResult,
   WorkerNodeRequirements,
 } from '../index.js';
 
@@ -25,6 +51,8 @@ describe('worker-node capability contracts', () => {
       persistentStorage: false,
       customCapabilities: ['workflow.bus-events'],
       suspensionStrategy: 'wait-in-process',
+      supportsRecovery: false,
+      materializationModes: ['local-directory'],
     });
   });
 
@@ -36,6 +64,8 @@ describe('worker-node capability contracts', () => {
       persistentStorage: true,
       customCapabilities: [],
       suspensionStrategy: 'wait-in-process',
+      supportsRecovery: false,
+      materializationModes: ['local-directory'],
     });
     expect(requirements).toEqual({ persistentStorage: true });
   });
@@ -46,6 +76,8 @@ describe('worker-node capability contracts', () => {
       persistentStorage: true,
       customCapabilities: [],
       suspensionStrategy: 'wait-in-process',
+      supportsRecovery: false,
+      materializationModes: ['local-directory'],
     });
   });
 
@@ -57,12 +89,835 @@ describe('worker-node capability contracts', () => {
       displayName: 'Test WorkerNode',
       environment: 'test',
       baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: true }),
-      provision: async (): Promise<WorkerNodeHandle> => {
+      provision: async (): Promise<WorkerNodeProvisionResult> => {
         throw new Error('not used');
       },
     };
 
     expectTypeOf(provider.baseCapabilities.suspensionStrategy).toEqualTypeOf<SuspensionStrategy>();
     expect(provider.baseCapabilities.suspensionStrategy).toBe('wait-in-process');
+  });
+});
+
+describe('WorkerNodeProvisionRequest uses executionAttemptId', () => {
+  it('requires executionAttemptId on provision requests', () => {
+    const request: WorkerNodeProvisionRequest = {
+      executionId: 'exec-1',
+      executionAttemptId: 'attempt-1',
+      environment: 'piscina',
+      workerConfig: {} as WorkerNodeProvisionRequest['workerConfig'],
+      workerManifest: { contributionRefs: [] },
+    };
+
+    expect(request.executionAttemptId).toBe('attempt-1');
+    expect(request.executionId).toBe('exec-1');
+  });
+
+  it('does not have the old nodeId field', () => {
+    expectTypeOf<WorkerNodeProvisionRequest>().not.toHaveProperty('nodeId');
+  });
+});
+
+describe('WorkerNodeHandle is allocation-only', () => {
+  it('carries executionAttemptId instead of nodeId', () => {
+    const handle: WorkerNodeHandle = {
+      executionAttemptId: 'attempt-1',
+      cancel: async () => {},
+      terminate: async () => {},
+      release: async () => {},
+    };
+
+    expect(handle.executionAttemptId).toBe('attempt-1');
+    expectTypeOf<WorkerNodeHandle>().not.toHaveProperty('nodeId');
+  });
+
+  it('does not expose a ready promise', () => {
+    expectTypeOf<WorkerNodeHandle>().not.toHaveProperty('ready');
+  });
+
+  it('does not expose waitForResult', () => {
+    expectTypeOf<WorkerNodeHandle>().not.toHaveProperty('waitForResult');
+  });
+
+  it('exposes cancel, terminate, and release methods', () => {
+    expectTypeOf<WorkerNodeHandle['cancel']>().toEqualTypeOf<(reason?: string) => Promise<void>>();
+    expectTypeOf<WorkerNodeHandle['terminate']>().toEqualTypeOf<() => Promise<void>>();
+    expectTypeOf<WorkerNodeHandle['release']>().toEqualTypeOf<() => Promise<void>>();
+  });
+});
+
+describe('IWorkerNodeProvider provision contract', () => {
+  it('requires AbortSignal as second argument to provision', () => {
+    const provider: IWorkerNodeProvider = {
+      id: 'test.provider',
+      displayName: 'Test Provider',
+      environment: 'test',
+      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false }),
+      provision: async (_request, _signal) => ({
+        allocationRef: {
+          version: PROVIDER_ALLOCATION_REF_VERSION,
+          providerId: 'test.provider',
+          providerData: { machineId: 'machine-1' },
+        },
+        handle: {
+          executionAttemptId: 'attempt-1',
+          cancel: async () => {},
+          terminate: async () => {},
+          release: async () => {},
+        },
+      }),
+    };
+
+    expectTypeOf(provider.provision).parameters.toEqualTypeOf<[WorkerNodeProvisionRequest, AbortSignal]>();
+  });
+
+  it('returns allocationRef and handle from provision', async () => {
+    const provider: IWorkerNodeProvider = {
+      id: 'test.provider',
+      displayName: 'Test Provider',
+      environment: 'test',
+      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false }),
+      provision: async () => ({
+        allocationRef: {
+          version: PROVIDER_ALLOCATION_REF_VERSION,
+          providerId: 'test.provider',
+          providerData: { instanceId: 'i-123' },
+        },
+        handle: {
+          executionAttemptId: 'attempt-1',
+          cancel: async () => {},
+          terminate: async () => {},
+          release: async () => {},
+        },
+      }),
+    };
+
+    const result = await provider.provision(
+      {
+        executionId: 'exec-1',
+        executionAttemptId: 'attempt-1',
+        environment: 'test',
+        workerConfig: {} as WorkerNodeProvisionRequest['workerConfig'],
+        workerManifest: { contributionRefs: [] },
+      },
+      AbortSignal.timeout(5000),
+    );
+
+    expect(result.allocationRef.version).toBe(PROVIDER_ALLOCATION_REF_VERSION);
+    expect(result.allocationRef.providerId).toBe('test.provider');
+    expect(result.handle.executionAttemptId).toBe('attempt-1');
+  });
+
+  it('does not expose resumeExecution', () => {
+    expectTypeOf<IWorkerNodeProvider>().not.toHaveProperty('resumeExecution');
+  });
+});
+
+describe('ProviderAllocationRef', () => {
+  it('validates a well-formed allocation reference', () => {
+    const ref: ProviderAllocationRef = {
+      version: PROVIDER_ALLOCATION_REF_VERSION,
+      providerId: 'fly.machines',
+      providerData: { machineId: 'machine-abc', region: 'iad' },
+    };
+
+    const parsed = ProviderAllocationRefSchema.parse(ref);
+    expect(parsed.version).toBe(1);
+    expect(parsed.providerId).toBe('fly.machines');
+    expect(parsed.providerData).toEqual({ machineId: 'machine-abc', region: 'iad' });
+  });
+
+  it('has version fixed at PROVIDER_ALLOCATION_REF_VERSION', () => {
+    expect(PROVIDER_ALLOCATION_REF_VERSION).toBe(1);
+    expect(() =>
+      ProviderAllocationRefSchema.parse({
+        version: 2,
+        providerId: 'fly',
+        providerData: {},
+      }),
+    ).toThrow();
+  });
+
+  it('rejects missing providerId', () => {
+    expect(() =>
+      ProviderAllocationRefSchema.parse({
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerData: {},
+      }),
+    ).toThrow();
+  });
+
+  it('rejects empty providerId', () => {
+    expect(() =>
+      ProviderAllocationRefSchema.parse({
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: '',
+        providerData: {},
+      }),
+    ).toThrow();
+  });
+
+  it('rejects unknown fields (strict envelope)', () => {
+    expect(() =>
+      ProviderAllocationRefSchema.parse({
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'fly',
+        providerData: {},
+        secretToken: 'should-fail',
+      }),
+    ).toThrow();
+  });
+
+  it('is JSON-serializable', () => {
+    const ref: ProviderAllocationRef = {
+      version: PROVIDER_ALLOCATION_REF_VERSION,
+      providerId: 'github-actions',
+      providerData: { runId: 12345, jobName: 'workflow-worker' },
+    };
+
+    const roundTripped = JSON.parse(JSON.stringify(ref));
+    expect(ProviderAllocationRefSchema.parse(roundTripped)).toEqual(ref);
+  });
+});
+
+describe('OutcomeAckDecision', () => {
+  it('accepts all four ACK decisions', () => {
+    for (const decision of ['accepted', 'duplicate', 'conflict', 'fenced'] as const) {
+      expect(OutcomeAckDecisionSchema.parse(decision)).toBe(decision);
+    }
+  });
+
+  it('rejects unknown decisions', () => {
+    expect(() => OutcomeAckDecisionSchema.parse('rejected')).toThrow();
+    expect(() => OutcomeAckDecisionSchema.parse('retry')).toThrow();
+  });
+
+  it('has a union type matching the four decisions', () => {
+    expectTypeOf<OutcomeAckDecision>().toEqualTypeOf<'accepted' | 'duplicate' | 'conflict' | 'fenced'>();
+  });
+});
+
+describe('WorkerMaterializationSpec', () => {
+  it('validates local-directory materialization', () => {
+    const spec: WorkerMaterializationSpec = {
+      kind: 'local-directory',
+      workspaceId: 'ws-1',
+      rootDigest: 'sha256:abc123',
+      sourcePath: 'src/workflow.ts',
+    };
+
+    const parsed = WorkerMaterializationSpecSchema.parse(spec);
+    expect(parsed).toEqual(spec);
+  });
+
+  it('validates workspace-snapshot materialization', () => {
+    const spec: WorkerMaterializationSpec = {
+      kind: 'workspace-snapshot',
+      snapshotId: 'snap-1',
+      digest: 'sha256:def456',
+      sourcePath: 'src/main',
+    };
+
+    const parsed = WorkerMaterializationSpecSchema.parse(spec);
+    expect(parsed).toEqual(spec);
+  });
+
+  it('rejects unknown materialization kinds', () => {
+    expect(() =>
+      WorkerMaterializationSpecSchema.parse({
+        kind: 'docker-image',
+        image: 'node:22',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects local-directory with missing fields', () => {
+    expect(() =>
+      LocalDirectoryMaterializationSchema.parse({
+        kind: 'local-directory',
+        workspaceId: 'ws-1',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects workspace-snapshot with missing fields', () => {
+    expect(() =>
+      WorkspaceSnapshotMaterializationSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects unknown fields on local-directory (strict)', () => {
+    expect(() =>
+      LocalDirectoryMaterializationSchema.parse({
+        kind: 'local-directory',
+        workspaceId: 'ws-1',
+        rootDigest: 'sha256:abc',
+        sourcePath: 'src/main.ts',
+        extraField: 'should-fail',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects unknown fields on workspace-snapshot (strict)', () => {
+    expect(() =>
+      WorkspaceSnapshotMaterializationSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+        digest: 'sha256:abc',
+        sourcePath: 'src',
+        extraField: 'should-fail',
+      }),
+    ).toThrow();
+  });
+
+  it('has exactly two discriminants', () => {
+    expectTypeOf<WorkerMaterializationSpec['kind']>().toEqualTypeOf<'local-directory' | 'workspace-snapshot'>();
+  });
+});
+
+describe('WorkerContributionRef', () => {
+  it('validates a complete contribution reference', () => {
+    const ref: WorkerContributionRef = {
+      packageName: '@acme/workflow-tools',
+      version: '1.2.3',
+      entrypoint: 'dist/server.mjs',
+      integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+    };
+
+    const parsed = WorkerContributionRefSchema.parse(ref);
+    expect(parsed).toEqual(ref);
+  });
+
+  it('rejects empty packageName', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '',
+        version: '1.0.0',
+        entrypoint: 'dist/server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects empty version', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '',
+        entrypoint: 'dist/server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects empty entrypoint', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: '',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects empty integrity', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: 'dist/server.mjs',
+        integrity: '',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects unknown fields (strict)', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: 'dist/server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+        nodeModulesPath: 'node_modules/@acme/tools',
+      }),
+    ).toThrow();
+  });
+
+  it('has the exact shape with four required string fields', () => {
+    expectTypeOf<WorkerContributionRef>().toEqualTypeOf<{
+      packageName: string;
+      version: string;
+      entrypoint: string;
+      integrity: string;
+    }>();
+  });
+});
+
+describe('WorkerNodeProvisionResult', () => {
+  it('combines allocationRef and handle', () => {
+    const result: WorkerNodeProvisionResult = {
+      allocationRef: {
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'piscina',
+        providerData: { threadId: 42 },
+      },
+      handle: {
+        executionAttemptId: 'attempt-1',
+        cancel: async () => {},
+        terminate: async () => {},
+        release: async () => {},
+      },
+    };
+
+    expect(result.allocationRef.providerId).toBe('piscina');
+    expect(result.handle.executionAttemptId).toBe('attempt-1');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Plan 2 — Provider Recovery Capability
+// ─────────────────────────────────────────────────────────────
+
+describe('AllocationState', () => {
+  it('defines exactly seven allocation states', () => {
+    const expected: AllocationState[] = [
+      'unknown',
+      'provisioning',
+      'ready',
+      'running',
+      'suspended',
+      'terminal',
+      'absent',
+    ];
+
+    for (const state of expected) {
+      expect(AllocationStateSchema.parse(state)).toBe(state);
+    }
+  });
+
+  it('rejects unknown states', () => {
+    expect(() => AllocationStateSchema.parse('starting')).toThrow();
+    expect(() => AllocationStateSchema.parse('paused')).toThrow();
+    expect(() => AllocationStateSchema.parse('')).toThrow();
+  });
+
+  it('exports a constant array of all states', () => {
+    expect(ALLOCATION_STATES).toEqual([
+      'unknown',
+      'provisioning',
+      'ready',
+      'running',
+      'suspended',
+      'terminal',
+      'absent',
+    ]);
+  });
+
+  it('has a type equal to the seven-member union', () => {
+    expectTypeOf<AllocationState>().toEqualTypeOf<
+      'unknown' | 'provisioning' | 'ready' | 'running' | 'suspended' | 'terminal' | 'absent'
+    >();
+  });
+});
+
+describe('AllocationInspection', () => {
+  it('validates a minimal inspection result', () => {
+    const inspection: AllocationInspection = {
+      state: 'running',
+      allocationRef: {
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'fly.machines',
+        providerData: { machineId: 'machine-1' },
+      },
+    };
+
+    const parsed = AllocationInspectionSchema.parse(inspection);
+    expect(parsed.state).toBe('running');
+    expect(parsed.allocationRef.providerId).toBe('fly.machines');
+  });
+
+  it('validates an inspection with provider evidence', () => {
+    const inspection: AllocationInspection = {
+      state: 'terminal',
+      allocationRef: {
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'github-actions',
+        providerData: { runId: 12345, jobName: 'workflow-worker' },
+      },
+      evidence: {
+        exitCode: 1,
+        terminatedAt: '2026-07-23T10:00:00Z',
+        reason: 'OOM killed',
+      },
+    };
+
+    const parsed = AllocationInspectionSchema.parse(inspection);
+    expect(parsed.state).toBe('terminal');
+    expect(parsed.evidence).toEqual({
+      exitCode: 1,
+      terminatedAt: '2026-07-23T10:00:00Z',
+      reason: 'OOM killed',
+    });
+  });
+
+  it('validates an absent allocation', () => {
+    const inspection: AllocationInspection = {
+      state: 'absent',
+      allocationRef: {
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'fly.machines',
+        providerData: { machineId: 'gone-machine' },
+      },
+    };
+
+    const parsed = AllocationInspectionSchema.parse(inspection);
+    expect(parsed.state).toBe('absent');
+    expect(parsed.evidence).toBeUndefined();
+  });
+
+  it('rejects invalid allocation state', () => {
+    expect(() =>
+      AllocationInspectionSchema.parse({
+        state: 'invalid',
+        allocationRef: {
+          version: PROVIDER_ALLOCATION_REF_VERSION,
+          providerId: 'fly',
+          providerData: {},
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects invalid allocation ref', () => {
+    expect(() =>
+      AllocationInspectionSchema.parse({
+        state: 'running',
+        allocationRef: {
+          version: 99,
+          providerId: 'fly',
+          providerData: {},
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('is JSON-serializable', () => {
+    const inspection: AllocationInspection = {
+      state: 'running',
+      allocationRef: {
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'fly.machines',
+        providerData: { machineId: 'm-1', region: 'iad' },
+      },
+      evidence: { startedAt: '2026-07-23T09:00:00Z' },
+    };
+
+    const roundTripped = JSON.parse(JSON.stringify(inspection));
+    expect(AllocationInspectionSchema.parse(roundTripped)).toEqual(inspection);
+  });
+});
+
+describe('IWorkerNodeRecoveryCapability', () => {
+  it('requires attach, inspect, and terminateAllocation together', () => {
+    // Compile-time proof: all three methods are required on the interface
+    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('attach');
+    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('inspect');
+    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('terminateAllocation');
+  });
+
+  it('attach returns a fresh WorkerNodeHandle', () => {
+    expectTypeOf<Awaited<ReturnType<IWorkerNodeRecoveryCapability['attach']>>>().toEqualTypeOf<WorkerNodeHandle>();
+  });
+
+  it('inspect returns an AllocationInspection', () => {
+    expectTypeOf<Awaited<ReturnType<IWorkerNodeRecoveryCapability['inspect']>>>().toEqualTypeOf<AllocationInspection>();
+  });
+
+  it('terminateAllocation returns void', () => {
+    expectTypeOf<Awaited<ReturnType<IWorkerNodeRecoveryCapability['terminateAllocation']>>>().toEqualTypeOf<void>();
+  });
+
+  it('attach takes allocationRef, request, and signal', () => {
+    expectTypeOf<IWorkerNodeRecoveryCapability['attach']>().parameters.toEqualTypeOf<
+      [ProviderAllocationRef, WorkerNodeProvisionRequest, AbortSignal]
+    >();
+  });
+
+  it('inspect takes allocationRef and signal', () => {
+    expectTypeOf<IWorkerNodeRecoveryCapability['inspect']>().parameters.toEqualTypeOf<
+      [ProviderAllocationRef, AbortSignal]
+    >();
+  });
+
+  it('terminateAllocation takes ref and signal', () => {
+    expectTypeOf<IWorkerNodeRecoveryCapability['terminateAllocation']>().parameters.toEqualTypeOf<
+      [ProviderAllocationRef, AbortSignal]
+    >();
+  });
+
+  it('can be implemented as a concrete object', () => {
+    const recovery: IWorkerNodeRecoveryCapability = {
+      attach: async (_ref, _request, _signal) => ({
+        executionAttemptId: 'attempt-1',
+        cancel: async () => {},
+        terminate: async () => {},
+        release: async () => {},
+      }),
+      inspect: async (_ref, _signal) => ({
+        state: 'running' as const,
+        allocationRef: {
+          version: PROVIDER_ALLOCATION_REF_VERSION,
+          providerId: 'fly.machines',
+          providerData: { machineId: 'm-1' },
+        },
+      }),
+      terminateAllocation: async () => {},
+    };
+
+    expect(recovery.attach).toBeDefined();
+    expect(recovery.inspect).toBeDefined();
+    expect(recovery.terminateAllocation).toBeDefined();
+  });
+});
+
+describe('IRecoverableWorkerNodeProvider', () => {
+  it('extends IWorkerNodeProvider with a required recovery property', () => {
+    const provider: IRecoverableWorkerNodeProvider = {
+      id: 'fly.machines',
+      displayName: 'Fly Machines',
+      environment: 'fly',
+      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({
+        persistentStorage: true,
+        supportsRecovery: true,
+      }),
+      provision: async () => ({
+        allocationRef: {
+          version: PROVIDER_ALLOCATION_REF_VERSION,
+          providerId: 'fly.machines',
+          providerData: { machineId: 'm-1' },
+        },
+        handle: {
+          executionAttemptId: 'attempt-1',
+          cancel: async () => {},
+          terminate: async () => {},
+          release: async () => {},
+        },
+      }),
+      recovery: {
+        attach: async (_ref, _request, _signal) => ({
+          executionAttemptId: 'attempt-1',
+          cancel: async () => {},
+          terminate: async () => {},
+          release: async () => {},
+        }),
+        inspect: async (_ref, _signal) => ({
+          state: 'running' as const,
+          allocationRef: {
+            version: PROVIDER_ALLOCATION_REF_VERSION,
+            providerId: 'fly.machines',
+            providerData: { machineId: 'm-1' },
+          },
+        }),
+        terminateAllocation: async () => {},
+      },
+    };
+
+    expect(provider.recovery).toBeDefined();
+    expect(provider.recovery.attach).toBeDefined();
+    expect(provider.recovery.inspect).toBeDefined();
+    expect(provider.recovery.terminateAllocation).toBeDefined();
+  });
+
+  it('is assignable to IWorkerNodeProvider', () => {
+    expectTypeOf<IRecoverableWorkerNodeProvider>().toMatchTypeOf<IWorkerNodeProvider>();
+  });
+
+  it('has recovery as a required property, not optional', () => {
+    // This verifies that IRecoverableWorkerNodeProvider.recovery is not optional.
+    // If recovery were optional, this type assertion would be
+    // IWorkerNodeRecoveryCapability | undefined.
+    expectTypeOf<IRecoverableWorkerNodeProvider['recovery']>().toEqualTypeOf<IWorkerNodeRecoveryCapability>();
+  });
+});
+
+describe('non-recoverable provider shape', () => {
+  it('IWorkerNodeProvider does not require recovery', () => {
+    // A plain IWorkerNodeProvider without recovery must compile
+    const provider: IWorkerNodeProvider = {
+      id: 'piscina',
+      displayName: 'Piscina Local',
+      environment: 'piscina',
+      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({
+        persistentStorage: false,
+      }),
+      provision: async () => ({
+        allocationRef: {
+          version: PROVIDER_ALLOCATION_REF_VERSION,
+          providerId: 'piscina',
+          providerData: {},
+        },
+        handle: {
+          executionAttemptId: 'attempt-1',
+          cancel: async () => {},
+          terminate: async () => {},
+          release: async () => {},
+        },
+      }),
+    };
+
+    expect(provider.id).toBe('piscina');
+    expect(provider.baseCapabilities.supportsRecovery).toBe(false);
+  });
+});
+
+describe('WorkerNodeCapabilities recovery advertisement', () => {
+  it('defaults supportsRecovery to false', () => {
+    const parsed = WorkerNodeCapabilitiesSchema.parse({
+      persistentStorage: false,
+    });
+
+    expect(parsed.supportsRecovery).toBe(false);
+  });
+
+  it('accepts explicit supportsRecovery true', () => {
+    const parsed = WorkerNodeCapabilitiesSchema.parse({
+      persistentStorage: true,
+      supportsRecovery: true,
+    });
+
+    expect(parsed.supportsRecovery).toBe(true);
+  });
+
+  it('accepts explicit supportsRecovery false', () => {
+    const parsed = WorkerNodeCapabilitiesSchema.parse({
+      persistentStorage: false,
+      supportsRecovery: false,
+    });
+
+    expect(parsed.supportsRecovery).toBe(false);
+  });
+});
+
+describe('WorkerNodeRequirements recovery field', () => {
+  it('allows omitting recoverableAllocation', () => {
+    const requirements: WorkerNodeRequirements = {
+      persistentStorage: true,
+    };
+
+    const parsed = WorkerNodeRequirementsSchema.parse(requirements);
+    expect(parsed.recoverableAllocation).toBeUndefined();
+  });
+
+  it('accepts recoverableAllocation true', () => {
+    const requirements: WorkerNodeRequirements = {
+      recoverableAllocation: true,
+    };
+
+    const parsed = WorkerNodeRequirementsSchema.parse(requirements);
+    expect(parsed.recoverableAllocation).toBe(true);
+  });
+
+  it('accepts recoverableAllocation false', () => {
+    const requirements: WorkerNodeRequirements = {
+      recoverableAllocation: false,
+    };
+
+    const parsed = WorkerNodeRequirementsSchema.parse(requirements);
+    expect(parsed.recoverableAllocation).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Plan 3 — Materialization Modes
+// ─────────────────────────────────────────────────────────────
+
+describe('MaterializationMode', () => {
+  it('exports the constant array of supported modes', () => {
+    expect(MATERIALIZATION_MODES).toEqual(['local-directory', 'workspace-snapshot']);
+  });
+
+  it('validates known materialization modes', () => {
+    expect(MaterializationModeSchema.parse('local-directory')).toBe('local-directory');
+    expect(MaterializationModeSchema.parse('workspace-snapshot')).toBe('workspace-snapshot');
+  });
+
+  it('rejects unknown materialization modes', () => {
+    expect(() => MaterializationModeSchema.parse('docker-image')).toThrow();
+  });
+});
+
+describe('WorkerNodeCapabilities materialization modes', () => {
+  it('defaults materializationModes to local-directory', () => {
+    const parsed = WorkerNodeCapabilitiesSchema.parse({
+      persistentStorage: false,
+    });
+
+    expect(parsed.materializationModes).toEqual(['local-directory']);
+  });
+
+  it('accepts explicit materialization modes', () => {
+    const parsed = WorkerNodeCapabilitiesSchema.parse({
+      persistentStorage: true,
+      materializationModes: ['workspace-snapshot'],
+    });
+
+    expect(parsed.materializationModes).toEqual(['workspace-snapshot']);
+  });
+
+  it('accepts multiple materialization modes', () => {
+    const parsed = WorkerNodeCapabilitiesSchema.parse({
+      persistentStorage: true,
+      materializationModes: ['local-directory', 'workspace-snapshot'],
+    });
+
+    expect(parsed.materializationModes).toEqual(['local-directory', 'workspace-snapshot']);
+  });
+
+  it('rejects empty materialization modes array', () => {
+    expect(() =>
+      WorkerNodeCapabilitiesSchema.parse({
+        persistentStorage: false,
+        materializationModes: [],
+      }),
+    ).toThrow();
+  });
+
+  it('rejects unknown materialization mode values', () => {
+    expect(() =>
+      WorkerNodeCapabilitiesSchema.parse({
+        persistentStorage: false,
+        materializationModes: ['docker-image'],
+      }),
+    ).toThrow();
+  });
+});
+
+describe('WorkerNodeRequirements materialization modes', () => {
+  it('allows omitting materializationModes', () => {
+    const parsed = WorkerNodeRequirementsSchema.parse({
+      persistentStorage: true,
+    });
+
+    expect(parsed.materializationModes).toBeUndefined();
+  });
+
+  it('accepts materialization mode requirements', () => {
+    const parsed = WorkerNodeRequirementsSchema.parse({
+      materializationModes: ['workspace-snapshot'],
+    });
+
+    expect(parsed.materializationModes).toEqual(['workspace-snapshot']);
+  });
+
+  it('rejects unknown materialization mode in requirements', () => {
+    expect(() =>
+      WorkerNodeRequirementsSchema.parse({
+        materializationModes: ['s3-bucket'],
+      }),
+    ).toThrow();
   });
 });

@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { ExecutionHintsSchema } from './execution-hints.js';
 import { SuspensionStrategySchema } from '../worker-node/suspension.js';
 import { ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/index.js';
+import { WorkerContributionRefSchema, WorkerMaterializationSpecSchema } from '../capabilities/worker-node/types.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -102,19 +102,6 @@ export const WorkflowWorkerConfigSchema = z.object({
   busUrl: z.string().optional(),
   /** Bus authentication strategy. Defaults to `{ kind: 'none' }` when omitted. */
   busAuth: WorkflowWorkerBusAuthSchema.default({ kind: 'none' }),
-  /** Platform and workspace context for expression resolution and tool access. */
-  context: z.object({
-    /** Absolute path to the active repository root. */
-    repoPath: z.string().min(1),
-    /** Absolute path to the Makaio home directory. */
-    makaioHome: z.string().min(1),
-    /** Host operating system. */
-    os: z.enum(['darwin', 'linux', 'win32']),
-    /** CPU architecture (e.g. `'arm64'`, `'x64'`). */
-    arch: z.string().min(1),
-    /** Active git worktree path, if different from `repoPath`. */
-    worktree: z.string().optional(),
-  }),
   /**
    * Extra environment variables injected into the worker process.
    * Merged with the runtime environment; values are fully resolved strings.
@@ -122,20 +109,49 @@ export const WorkflowWorkerConfigSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
   /** Coordinator session ID that owns this execution. */
   coordinatorSessionId: z.string().min(1),
-  /**
-   * Advisory worker provisioning hints supplied by the start request.
-   * Runners may inspect these values before selecting a concrete execution host.
-   */
-  executionHints: ExecutionHintsSchema.optional(),
   /** Bus subject the worker subscribes to for cancellation signals. */
   cancelSubject: z.string().min(1),
   /** Selected provider suspension behavior for this execution. */
   suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
   /** Process that owns durable terminal state and lifecycle publication. */
   terminalAuthority: z.enum(['worker', 'authority']).optional(),
+  /** Portable workspace reference retained while a worker starts. */
+  materializationSpec: WorkerMaterializationSpecSchema.optional(),
 });
 
 export type WorkflowWorkerConfig = z.infer<typeof WorkflowWorkerConfigSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Worker Runtime Context (ephemeral, worker-local)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Ephemeral realization context produced by the materializer on the worker.
+ *
+ * Contains worker-local absolute paths and platform information. This type
+ * is NEVER persisted as part of {@link WorkflowRunContext} or any durable
+ * record. It exists only for the lifetime of a single worker process and
+ * is constructed from the portable {@link WorkerMaterializationSpec} after
+ * the materializer resolves the workspace on the local filesystem.
+ *
+ * - `workspaceRoot`: absolute path to the realized workspace root on this worker.
+ * - `sourcePath`: absolute path to the workflow source file within the workspace.
+ * - `contributionEntrypoints`: absolute paths to resolved contribution entrypoints.
+ * - `platform`: worker operating system (`darwin`, `linux`, `win32`).
+ * - `arch`: worker CPU architecture (e.g. `arm64`, `x64`).
+ */
+export interface WorkerRuntimeContext {
+  /** Absolute path to the realized workspace root on this worker. */
+  readonly workspaceRoot: string;
+  /** Absolute path to the workflow source file within the workspace. */
+  readonly sourcePath: string;
+  /** Absolute paths to resolved contribution entrypoints in load order. */
+  readonly contributionEntrypoints: readonly string[];
+  /** Worker operating system. */
+  readonly platform: 'darwin' | 'linux' | 'win32';
+  /** Worker CPU architecture (e.g. `'arm64'`, `'x64'`). */
+  readonly arch: string;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Worker Run Result
@@ -320,38 +336,20 @@ export const WorkflowRunResultSchema = z.discriminatedUnion('status', [
  *
  * Fully serializable so it can cross worker-thread, process, container, or
  * remote node boundaries without carrying runtime objects.
- */
-export const WorkerContributionPackageRefSchema = z.object({
-  /** Package name used for diagnostics and installed-package matching. */
-  name: z.string().min(1),
-  /**
-   * Import path for the package's server entrypoint.
-   *
-   * Two formats are accepted:
-   * - **Absolute path** – used as-is (e.g. local-source extensions or
-   *   explicit manifests supplied by the caller).
-   * - **`makaioHome`-relative path** – a path relative to the Makaio home
-   *   directory, e.g. `node_modules/@acme/tools/dist/server.mjs`.  The
-   *   worker loader reconstructs the absolute path from the machine's own
-   *   `makaioHome`, making the manifest portable across machines (local
-   *   Piscina thread, Docker container, GitHub Actions runner, etc.).
-   */
-  importPath: z.string().min(1),
-});
-
-export type WorkerContributionPackageRef = z.infer<typeof WorkerContributionPackageRefSchema>;
-
-/**
- * Serializable manifest declaring worker-local extension packages.
  *
- * The manifest contains concrete import paths, not project-level desired
- * package specs. Product pool dispatch resolves desired project manifests into
- * this worker manifest before provisioning a WorkerNode.
+/**
+ * Serializable manifest declaring the exact worker-local extension packages.
+ *
+ * Product pool dispatch resolves project-level package pins into this exact
+ * identity before provisioning. Materializers verify every ref, and workers
+ * load only the verified worker-local entrypoints returned by materialization.
  */
-export const WorkerContributionManifestSchema = z.object({
-  /** Explicit packages whose server entrypoints are importable in the worker. */
-  packages: z.array(WorkerContributionPackageRefSchema).default([]),
-});
+export const WorkerContributionManifestSchema = z
+  .object({
+    /** Exact package identity and SRI integrity for every worker contribution. */
+    contributionRefs: z.array(WorkerContributionRefSchema),
+  })
+  .strict();
 
 export type WorkerContributionManifest = z.infer<typeof WorkerContributionManifestSchema>;
 
@@ -366,6 +364,26 @@ export interface WorkflowRunnerRunOptions {
    */
   readonly dispatchMetadata?: z.infer<typeof JsonObjectContractSchema>;
 }
+
+// ─────────────────────────────────────────────────────────────
+// Workflow Runner Completion
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Envelope returned by {@link IWorkflowRunner.run} that tells the caller
+ * whether the terminal result has already been durably committed by an
+ * Authority or still needs host-side finalization.
+ *
+ * - `uncommitted`: the runner produced the result but the durable lifecycle
+ *   transition has not been performed. The host executor must finalize or
+ *   park the execution (in-process and Piscina runners).
+ * - `authority-committed`: the Authority outcome RPC has converged canonical
+ *   state. The host executor verifies durable state but must not invoke
+ *   the fallback finalizer (WorkerNode dispatch runners).
+ */
+export type WorkflowRunnerCompletion =
+  | { readonly state: 'uncommitted'; readonly result: WorkflowRunResult }
+  | { readonly state: 'authority-committed'; readonly result: WorkflowRunResult };
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Runner Interface
@@ -390,14 +408,14 @@ export interface IWorkflowRunner {
    * @param signal - AbortSignal for cooperative cancellation.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
    * @param options - Optional per-run controls for dispatch-capable runners.
-   * @returns The execution result with status-specific terminal details.
+   * @returns Completion envelope indicating whether the result needs host finalization.
    */
   run(
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
     options?: WorkflowRunnerRunOptions,
-  ): Promise<WorkflowRunResult>;
+  ): Promise<WorkflowRunnerCompletion>;
 
   /**
    * Release underlying resources (thread pool, processes, connections).

@@ -3,36 +3,12 @@ import type {
   WorkerContributionManifest,
   WorkerNodeDispatch,
   WorkerNodeRequirements,
+  WorkflowRunnerCompletion,
   WorkflowRunnerRunOptions,
-  WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
-
-/**
- * Merge execution-hint capabilities from the worker config into the base
- * requirements supplied at runner construction time.
- *
- * Capabilities are deduplicated so the same tag is never sent twice. When the
- * hint contributes no additional capabilities, the original requirements object
- * is returned unchanged (or `undefined` if none was supplied).
- * @param base - Requirements baked into the runner at construction time.
- * @param config - Worker config that may carry per-execution hint capabilities.
- * @returns Merged requirements, or `undefined` when no requirements apply.
- */
-function mergeRequirements(
-  base: WorkerNodeRequirements | undefined,
-  config: WorkflowWorkerConfig,
-): WorkerNodeRequirements | undefined {
-  const hintCaps = config.executionHints?.requirements?.capabilities ?? [];
-  if (hintCaps.length === 0) {
-    return base;
-  }
-  const baseCaps = base?.customCapabilities ?? [];
-  return {
-    ...base,
-    customCapabilities: [...new Set([...baseCaps, ...hintCaps])],
-  };
-}
+import type { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
+import { runAuthorityDispatchedAttempt } from '@makaio/subsystem-workflow-engine';
 
 /**
  * Construction options for {@link WorkerNodeRunner}.
@@ -45,6 +21,14 @@ export interface WorkerNodeRunnerOptions {
    * Framework code calls through this seam without coupling to any pool.
    */
   readonly dispatch: WorkerNodeDispatch;
+  /**
+   * Execution attempt Authority used to create attempts before dispatch and
+   * wait for committed outcomes after dispatch returns.
+   *
+   * Required for authority-committed completions. When absent, the runner
+   * cannot create attempts or wait for durable outcomes.
+   */
+  readonly authority: ExecutionAttemptAuthority;
   /**
    * Extension contribution manifest forwarded to dispatched workers.
    *
@@ -69,15 +53,24 @@ export interface WorkerNodeRunnerOptions {
  * product-agnostic. Concrete dispatch behavior (e.g. pool selection, provider
  * matching, manifest resolution) lives in the product-owned composition root
  * or `workerPool.dispatch` handler, not here.
+ *
+ * The runner creates an execution attempt through the injected Authority
+ * before dispatch and waits for the committed outcome after dispatch returns.
  */
 export class WorkerNodeRunner implements IWorkflowRunner {
   /**
-   * @param options - Dispatch seam, optional manifest, and optional requirements.
+   * @param options - Dispatch seam, authority, optional manifest, and optional requirements.
    */
   public constructor(private readonly options: WorkerNodeRunnerOptions) {}
 
   /**
    * Execute a complete workflow by delegating to the injected dispatch seam.
+   *
+   * Creates an execution attempt through the Authority before dispatch. After
+   * the dispatch completes (allocation acceptance), waits for the committed
+   * outcome through the Authority's in-process waiter. Returns an
+   * `authority-committed` completion so the host executor skips fallback
+   * finalization.
    *
    * When `manifest` is supplied it takes precedence over the manifest baked into
    * the runner at construction time, enabling per-call contribution sets.
@@ -85,26 +78,40 @@ export class WorkerNodeRunner implements IWorkflowRunner {
    * @param signal - AbortSignal for cooperative cancellation forwarded to the dispatch function.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
    * @param options - Optional per-run controls forwarded to dispatch-capable providers.
-   * @returns The execution result with terminal status and status-specific result fields.
+   * @returns Authority-committed completion after the outcome RPC converges.
    */
-  public run(
+  public async run(
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
     options?: WorkflowRunnerRunOptions,
-  ): Promise<WorkflowRunResult> {
+  ): Promise<WorkflowRunnerCompletion> {
+    // WorkerNodeRunner owns attempt creation and waits for the Authority's
+    // canonical outcome, so dispatched workers must submit rather than
+    // terminalize the workflow execution themselves.
+    const authorityCommittedConfig: WorkflowWorkerConfig = {
+      ...config,
+      terminalAuthority: 'authority',
+    };
+
     const resolvedManifest = manifest ?? this.options.manifest;
-    const resolvedRequirements = mergeRequirements(this.options.requirements, config);
+    const resolvedRequirements = this.options.requirements;
     const dispatchMetadata = options?.dispatchMetadata;
 
-    return this.options.dispatch(
-      {
-        config,
-        ...(resolvedManifest !== undefined && { manifest: resolvedManifest }),
-        ...(resolvedRequirements !== undefined && { requirements: resolvedRequirements }),
-        ...(dispatchMetadata !== undefined && { metadata: dispatchMetadata }),
-      },
-      signal,
-    );
+    return runAuthorityDispatchedAttempt({
+      authority: this.options.authority,
+      executionId: config.executionId,
+      dispatch: (executionAttemptId) =>
+        this.options.dispatch(
+          {
+            executionAttemptId,
+            config: authorityCommittedConfig,
+            ...(resolvedManifest !== undefined && { manifest: resolvedManifest }),
+            ...(resolvedRequirements !== undefined && { requirements: resolvedRequirements }),
+            ...(dispatchMetadata !== undefined && { metadata: dispatchMetadata }),
+          },
+          signal,
+        ),
+    });
   }
 }

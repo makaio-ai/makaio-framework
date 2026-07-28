@@ -6,6 +6,7 @@
   "private": true,
   "exports": {
     ".": "./src/index.ts",
+    "./execution-attempt-repository": "./src/execution-attempt-repository.ts",
     "./package": "./src/package.ts",
     "./workflow-orchestrator": "./src/workflow-orchestrator.ts",
     "./package.json": "./package.json"
@@ -40,6 +41,7 @@
   "publishConfig": {
     "exports": {
       ".": "./dist/index.mjs",
+      "./execution-attempt-repository": "./dist/execution-attempt-repository.mjs",
       "./package": "./dist/package.mjs",
       "./workflow-orchestrator": "./dist/workflow-orchestrator.mjs",
       "./package.json": "./package.json"

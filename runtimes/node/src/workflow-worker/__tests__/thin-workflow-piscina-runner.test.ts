@@ -6,6 +6,7 @@ import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 // Mock PiscinaPoolRunner before importing the class under test.
 const mockPoolRun = vi.fn();
 const mockMessageListeners = new Set<(message: unknown) => void>();
+const mockMaterializeLocalDirectory = vi.fn();
 
 vi.mock('../runtime/piscina-pool-runner.js', () => ({
   PiscinaPoolRunner: class MockPiscinaPoolRunner {
@@ -20,14 +21,19 @@ vi.mock('../runtime/piscina-pool-runner.js', () => ({
   },
 }));
 
+vi.mock('../local-directory-materializer.js', () => ({
+  materializeLocalDirectory: mockMaterializeLocalDirectory,
+}));
+
 // Import after mocking
 const { ThinWorkflowPiscinaRunner } = await import('../thin-workflow-piscina-runner.js');
 
 /**
  * Create a minimal WorkflowWorkerConfig for testing.
+ * @param overrides - Optional config fields to replace in the fixture.
  * @returns A valid WorkflowWorkerConfig stub.
  */
-function makeConfig(): WorkflowWorkerConfig {
+function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWorkerConfig {
   return {
     source: { kind: 'definition', workflowId: 'test-workflow' },
     executionId: 'test-exec',
@@ -36,16 +42,11 @@ function makeConfig(): WorkflowWorkerConfig {
     inputs: {},
     scope: { type: 'global' },
     busAuth: { kind: 'none' },
-    context: {
-      repoPath: '/repo',
-      makaioHome: '/home/.makaio',
-      os: 'linux',
-      arch: 'x64',
-    },
     env: {},
     coordinatorSessionId: 'test-session',
     cancelSubject: 'workflow.cancel.test',
     suspensionStrategy: 'wait-in-process',
+    ...overrides,
   };
 }
 
@@ -56,7 +57,7 @@ function makeConfig(): WorkflowWorkerConfig {
 function makeOptions(): ThinWorkflowPiscinaRunnerOptions {
   return {
     workerEntry: '/path/to/workflow-worker-entry.mjs',
-    manifest: { packages: [] },
+    manifest: { contributionRefs: [] },
   };
 }
 
@@ -92,7 +93,8 @@ function emitPoolMessage(message: unknown): void {
 
 describe('ThinWorkflowPiscinaRunner', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockPoolRun.mockReset();
+    mockMaterializeLocalDirectory.mockReset();
     mockMessageListeners.clear();
   });
 
@@ -112,11 +114,68 @@ describe('ThinWorkflowPiscinaRunner', () => {
     const result = await runner.run(config, signal);
 
     expect(mockPoolRun).toHaveBeenCalledOnce();
-    expect(mockPoolRun).toHaveBeenCalledWith({ config, manifest: options.manifest }, signal);
-    expect(result).toEqual(expectedResult);
+    expect(mockPoolRun).toHaveBeenCalledWith(
+      { config, manifest: options.manifest, contributionEntrypoints: [] },
+      signal,
+    );
+    expect(result).toEqual({ state: 'uncommitted', result: expectedResult });
   });
 
-  it('passes per-call manifest override to pool.run()', async () => {
+  it('materializes a local-directory source and verified contributions before dispatching to Piscina', async () => {
+    const expectedResult = {
+      executionId: 'test-exec',
+      workflowId: 'test-workflow',
+      status: 'completed' as const,
+    };
+    const manifest = {
+      contributionRefs: [
+        {
+          packageName: 'pkg-a',
+          version: '1.0.0',
+          entrypoint: 'dist/worker.mjs',
+          integrity: 'sha384-verified',
+        },
+      ],
+    };
+    const config = makeConfig({
+      source: { kind: 'path', path: 'workflows/example.mjs' },
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'workspace-a',
+        rootDigest: 'sha256-workspace',
+        sourcePath: 'workflows/example.mjs',
+      },
+    });
+    const resolveWorkspaceRoot = vi.fn().mockResolvedValue('/workspace-a');
+    mockMaterializeLocalDirectory.mockResolvedValueOnce({
+      workspaceRoot: '/workspace-a',
+      sourcePath: '/workspace-a/workflows/example.mjs',
+      contributionEntrypoints: ['/workspace-a/node_modules/pkg-a/dist/worker.mjs'],
+      platform: 'linux',
+      arch: 'x64',
+    });
+    mockPoolRun.mockResolvedValueOnce(expectedResult);
+
+    const runner = new ThinWorkflowPiscinaRunner({ ...makeOptions(), resolveWorkspaceRoot });
+    await runner.run(config, new AbortController().signal, manifest);
+
+    expect(mockMaterializeLocalDirectory).toHaveBeenCalledWith(config.materializationSpec, manifest.contributionRefs, {
+      resolveWorkspaceRoot,
+    });
+    expect(mockPoolRun).toHaveBeenCalledWith(
+      {
+        config: {
+          ...config,
+          source: { kind: 'path', path: '/workspace-a/workflows/example.mjs' },
+        },
+        manifest,
+        contributionEntrypoints: ['/workspace-a/node_modules/pkg-a/dist/worker.mjs'],
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('requires a local-directory realization for declared contributions', async () => {
     const expectedResult = {
       executionId: 'test-exec',
       workflowId: 'test-workflow',
@@ -127,13 +186,21 @@ describe('ThinWorkflowPiscinaRunner', () => {
     const runner = new ThinWorkflowPiscinaRunner(makeOptions());
     const config = makeConfig();
     const signal = new AbortController().signal;
-    const perCallManifest = { packages: [{ name: 'pkg-a', importPath: './pkg-a.js' }] };
+    const perCallManifest = {
+      contributionRefs: [
+        {
+          packageName: 'pkg-a',
+          version: '1.0.0',
+          entrypoint: 'pkg-a.js',
+          integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uFPNZHzA3w0=',
+        },
+      ],
+    };
 
-    const result = await runner.run(config, signal, perCallManifest);
-
-    expect(mockPoolRun).toHaveBeenCalledOnce();
-    expect(mockPoolRun).toHaveBeenCalledWith({ config, manifest: perCallManifest }, signal);
-    expect(result).toEqual(expectedResult);
+    await expect(runner.run(config, signal, perCallManifest)).rejects.toThrow(
+      'requires a local-directory materialization spec',
+    );
+    expect(mockPoolRun).not.toHaveBeenCalled();
   });
 
   it('propagates abort signal to pool.run()', async () => {
@@ -144,7 +211,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
     controller.abort();
 
     await expect(runner.run(makeConfig(), controller.signal)).rejects.toThrow('aborted');
-    expect(mockPoolRun).toHaveBeenCalledWith(expect.anything(), controller.signal);
+    expect(mockPoolRun).not.toHaveBeenCalled();
   });
 
   it('propagates pool.run() rejection to caller', async () => {

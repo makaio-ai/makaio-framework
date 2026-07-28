@@ -1,12 +1,63 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   WorkflowRunResultSchema,
   WorkerContributionManifestSchema,
   type WorkflowRunResult,
   type WorkerContributionManifest,
-  type WorkerContributionPackageRef,
+  type WorkerRuntimeContext,
 } from '../worker.js';
-import { WorkflowRunContextSchema, WorkflowWorkerConfigSchema } from '../index.js';
+import { WorkflowRunContextSchema, WorkflowWorkerConfigSchema, type WorkflowRunContext } from '../index.js';
+import {
+  LocalDirectoryMaterializationSchema,
+  WorkerContributionRefSchema,
+  WorkerMaterializationSpecSchema,
+  WorkspaceSnapshotMaterializationSchema,
+} from '../../capabilities/worker-node/index.js';
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Minimal valid WorkflowWorkerConfig without durable context.
+ * @param overrides - Partial fields to override in the config fixture.
+ */
+function minimalWorkerConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    source: { kind: 'definition', workflowId: 'wf-1' },
+    executionId: 'wfx-1',
+    workflowId: 'wf-1',
+    coordinatorSessionId: 'session-1',
+    cancelSubject: 'workflow.wfx-1.cancel',
+    ...overrides,
+  };
+}
+
+/**
+ * Minimal valid WorkflowRunContext without durable context.
+ * @param overrides - Partial fields to override in the run context fixture.
+ */
+function minimalRunContext(overrides: Record<string, unknown> = {}) {
+  return {
+    executionId: 'wfx-1',
+    workflowId: 'wf-1',
+    source: { kind: 'path', path: 'src/workflow.ts' },
+    materializationSpec: {
+      kind: 'local-directory',
+      workspaceId: 'workspace-1',
+      rootDigest: 'sha256-test-workspace',
+      sourcePath: 'src/workflow.ts',
+    },
+    coordinatorSessionId: 'session-1',
+    cancelSubject: 'workflow.wfx-1.cancel',
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowRunResult (unchanged from prior plans)
+// ─────────────────────────────────────────────────────────────
 
 describe('WorkflowRunResult', () => {
   it('models completed results with an optional artifact revision', () => {
@@ -96,49 +147,49 @@ describe('WorkflowRunResult', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────
+// WorkerContributionManifest
+// ─────────────────────────────────────────────────────────────
+
 describe('WorkerContributionManifestSchema', () => {
-  it('validates worker contribution manifests as JSON-safe package refs', () => {
+  const contributionRef = {
+    packageName: '@acme/workflow-tools',
+    version: '1.0.0',
+    entrypoint: 'dist/server.mjs',
+    integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uFPNZHzA3w0=',
+  };
+
+  it('validates worker contribution manifests as exact integrity-bearing refs', () => {
     const manifest = WorkerContributionManifestSchema.parse({
-      packages: [{ name: '@acme/workflow-tools', importPath: '@acme/workflow-tools/server' }],
+      contributionRefs: [contributionRef],
     });
 
-    expect(manifest.packages[0]).toEqual({
-      name: '@acme/workflow-tools',
-      importPath: '@acme/workflow-tools/server',
-    });
+    expect(manifest.contributionRefs).toEqual([contributionRef]);
   });
 
   it('exports manifest types from contracts', () => {
-    const ref: WorkerContributionPackageRef = {
-      name: '@acme/workflow-tools',
-      importPath: '@acme/workflow-tools/server',
-    };
-    const manifest: WorkerContributionManifest = { packages: [ref] };
+    const manifest: WorkerContributionManifest = { contributionRefs: [contributionRef] };
 
-    expect(manifest.packages[0]?.importPath).toBe('@acme/workflow-tools/server');
+    expect(manifest.contributionRefs[0]?.integrity).toBe(contributionRef.integrity);
   });
 
-  it('defaults packages to an empty array when omitted', () => {
-    const manifest = WorkerContributionManifestSchema.parse({});
-    expect(manifest.packages).toEqual([]);
+  it('requires a contribution identity set', () => {
+    expect(() => WorkerContributionManifestSchema.parse({})).toThrow();
   });
 
-  it('rejects package refs with empty name', () => {
+  it('rejects legacy loading paths and malformed integrity', () => {
+    expect(() => WorkerContributionManifestSchema.parse({ packages: [] })).toThrow();
     expect(() =>
       WorkerContributionManifestSchema.parse({
-        packages: [{ name: '', importPath: '@acme/workflow-tools/server' }],
-      }),
-    ).toThrow();
-  });
-
-  it('rejects package refs with empty importPath', () => {
-    expect(() =>
-      WorkerContributionManifestSchema.parse({
-        packages: [{ name: '@acme/workflow-tools', importPath: '' }],
+        contributionRefs: [{ ...contributionRef, integrity: 'not-sri' }],
       }),
     ).toThrow();
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowRunResultSchema
+// ─────────────────────────────────────────────────────────────
 
 describe('WorkflowRunResultSchema', () => {
   it('validates completed results with artifact revisions', () => {
@@ -202,9 +253,25 @@ describe('WorkflowRunResultSchema', () => {
 
   it('rejects top-level output on every result variant', () => {
     for (const payload of [
-      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'completed', output: { ok: true } },
-      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'failed', error: 'failed', output: 'failed' },
-      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'cancelled', output: { reason: 'cancelled' } },
+      {
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'completed',
+        output: { ok: true },
+      },
+      {
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'failed',
+        error: 'failed',
+        output: 'failed',
+      },
+      {
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'cancelled',
+        output: { reason: 'cancelled' },
+      },
       {
         executionId: 'wfx-1',
         workflowId: 'wf-1',
@@ -246,7 +313,10 @@ describe('WorkflowRunResultSchema', () => {
         pausedAtGateId: 'approve',
         pausedAtFrameId: 'frame-approve-1',
       }),
-    ).toMatchObject({ status: 'paused', pausedAtFrameId: 'frame-approve-1' });
+    ).toMatchObject({
+      status: 'paused',
+      pausedAtFrameId: 'frame-approve-1',
+    });
   });
 
   it('rejects paused result without pausedAtGateId', () => {
@@ -286,38 +356,459 @@ describe('WorkflowRunResultSchema', () => {
   });
 });
 
-describe('suspension strategy in WorkflowWorkerConfigSchema and WorkflowRunContextSchema', () => {
-  it('carries selected suspension strategy through worker config and run context', () => {
-    const config = WorkflowWorkerConfigSchema.parse({
-      source: { kind: 'definition', workflowId: 'wf-1' },
-      executionId: 'wfx-1',
-      workflowId: 'wf-1',
-      inputs: {},
-      triggerPayload: {},
-      scope: { type: 'global' },
-      context: { repoPath: '/repo', makaioHome: '/home/.makaio', os: 'linux', arch: 'arm64' },
-      env: {},
-      coordinatorSessionId: 'session-1',
-      cancelSubject: 'workflow.wfx-1.cancel',
-      suspensionStrategy: 'exit-and-redispatch',
-    });
-    const runContext = WorkflowRunContextSchema.parse({
-      executionId: 'wfx-1',
-      workflowId: 'wf-1',
-      source: { kind: 'path', path: '/repo/workflow.ts' },
-      workerManifest: { packages: [] },
-      inputs: {},
-      scope: { type: 'global' },
-      triggerPayload: {},
-      coordinatorSessionId: 'session-1',
-      cancelSubject: 'workflow.wfx-1.cancel',
-      context: { repoPath: '/repo', makaioHome: '/home/.makaio', os: 'linux', arch: 'arm64' },
-      env: {},
-      createdAt: 1,
-      suspensionStrategy: 'exit-and-redispatch',
-    });
+// ─────────────────────────────────────────────────────────────
+// Portable WorkflowWorkerConfig — no Authority-local context
+// ─────────────────────────────────────────────────────────────
+
+describe('portable WorkflowWorkerConfig', () => {
+  it('parses a minimal config without a context field', () => {
+    const config = WorkflowWorkerConfigSchema.parse(minimalWorkerConfig());
+
+    expect(config.executionId).toBe('wfx-1');
+    expect(config.workflowId).toBe('wf-1');
+  });
+
+  it('does not accept a durable context with Authority-local fields', () => {
+    // Providing the old context object should be rejected because the
+    // field no longer exists in the schema.
+    const withContext = {
+      ...minimalWorkerConfig(),
+      context: {
+        repoPath: '/repo',
+        makaioHome: '/home/.makaio',
+        os: 'linux',
+        arch: 'arm64',
+      },
+    };
+    // Zod's default non-strict mode strips unknown fields, so the context
+    // is silently ignored and the parse succeeds. The important contract
+    // is that the parsed output does NOT carry a context property.
+    const parsed = WorkflowWorkerConfigSchema.parse(withContext);
+    expect(parsed).not.toHaveProperty('context');
+  });
+
+  it('carries suspension strategy without durable context', () => {
+    const config = WorkflowWorkerConfigSchema.parse(
+      minimalWorkerConfig({
+        suspensionStrategy: 'exit-and-redispatch',
+      }),
+    );
 
     expect(config.suspensionStrategy).toBe('exit-and-redispatch');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Portable WorkflowRunContext — no Authority-local context
+// ─────────────────────────────────────────────────────────────
+
+describe('portable WorkflowRunContext', () => {
+  it('parses a minimal run context without a context field', () => {
+    const runContext = WorkflowRunContextSchema.parse(minimalRunContext());
+
+    expect(runContext.executionId).toBe('wfx-1');
+    expect(runContext.workflowId).toBe('wf-1');
+  });
+
+  it('does not carry durable repoPath, makaioHome, worktree, os, or arch', () => {
+    const parsed = WorkflowRunContextSchema.parse(minimalRunContext());
+
+    expect(parsed).not.toHaveProperty('context');
+    // Verify the type doesn't have those old fields
+    expectTypeOf<WorkflowRunContext>().not.toHaveProperty('context');
+  });
+
+  it('carries suspension strategy without durable context', () => {
+    const runContext = WorkflowRunContextSchema.parse(
+      minimalRunContext({
+        suspensionStrategy: 'exit-and-redispatch',
+      }),
+    );
+
+    expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
+  });
+
+  it('rejects an Authority-local path before persistence', () => {
+    expect(() =>
+      WorkflowRunContextSchema.parse(minimalRunContext({ source: { kind: 'path', path: '/authority/workflow.ts' } })),
+    ).toThrow(/workspace-relative/);
+  });
+
+  it('requires a matching materialization spec for a path source', () => {
+    expect(() => WorkflowRunContextSchema.parse(minimalRunContext({ materializationSpec: undefined }))).toThrow(
+      /materializationSpec is required/,
+    );
+
+    expect(() =>
+      WorkflowRunContextSchema.parse(
+        minimalRunContext({
+          materializationSpec: {
+            kind: 'local-directory',
+            workspaceId: 'workspace-1',
+            rootDigest: 'sha256-test-workspace',
+            sourcePath: 'different/workflow.ts',
+          },
+        }),
+      ),
+    ).toThrow(/must match source.path/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkerRuntimeContext — ephemeral, worker-local only
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkerRuntimeContext', () => {
+  it('may contain worker-local absolute paths', () => {
+    const runtimeContext: WorkerRuntimeContext = {
+      workspaceRoot: '/tmp/worker-12345/workspace',
+      sourcePath: '/tmp/worker-12345/workspace/src/workflow.ts',
+      contributionEntrypoints: ['/tmp/worker-12345/workspace/packages/tools/dist/server.mjs'],
+      platform: 'linux',
+      arch: 'arm64',
+    };
+
+    expect(runtimeContext.workspaceRoot).toBe('/tmp/worker-12345/workspace');
+    expect(runtimeContext.sourcePath).toMatch(/^\//);
+    expect(runtimeContext.contributionEntrypoints[0]).toMatch(/^\//);
+  });
+
+  it('is NOT part of WorkflowRunContext', () => {
+    // WorkerRuntimeContext must not be a property of WorkflowRunContext.
+    // The ephemeral context is never persisted.
+    expectTypeOf<WorkflowRunContext>().not.toHaveProperty('runtimeContext');
+    expectTypeOf<WorkflowRunContext>().not.toHaveProperty('workerRuntimeContext');
+  });
+
+  it('has the exact ephemeral shape from the plan', () => {
+    expectTypeOf<WorkerRuntimeContext>().toEqualTypeOf<{
+      readonly workspaceRoot: string;
+      readonly sourcePath: string;
+      readonly contributionEntrypoints: readonly string[];
+      readonly platform: 'darwin' | 'linux' | 'win32';
+      readonly arch: string;
+    }>();
+  });
+
+  it('restricts platform to the three supported values', () => {
+    expectTypeOf<WorkerRuntimeContext['platform']>().toEqualTypeOf<'darwin' | 'linux' | 'win32'>();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Materialization spec — portable sourcePath validation
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkerMaterializationSpec sourcePath validation', () => {
+  it('rejects absolute sourcePath on workspace-snapshot', () => {
+    expect(() =>
+      WorkspaceSnapshotMaterializationSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+        digest: 'sha256:abc123',
+        sourcePath: '/absolute/path/to/workflow.ts',
+      }),
+    ).toThrow(/sourcePath must be relative/);
+  });
+
+  it('rejects Windows absolute sourcePath on workspace-snapshot', () => {
+    expect(() =>
+      WorkspaceSnapshotMaterializationSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+        digest: 'sha256:abc123',
+        sourcePath: 'C:\\Users\\repo\\workflow.ts',
+      }),
+    ).toThrow(/sourcePath must be relative/);
+  });
+
+  it('accepts relative sourcePath on workspace-snapshot', () => {
+    const parsed = WorkspaceSnapshotMaterializationSchema.parse({
+      kind: 'workspace-snapshot',
+      snapshotId: 'snap-1',
+      digest: 'sha256:abc123',
+      sourcePath: 'src/workflow.ts',
+    });
+
+    expect(parsed.sourcePath).toBe('src/workflow.ts');
+  });
+
+  it('rejects absolute sourcePath on local-directory', () => {
+    expect(() =>
+      LocalDirectoryMaterializationSchema.parse({
+        kind: 'local-directory',
+        workspaceId: 'ws-1',
+        rootDigest: 'sha256:abc123',
+        sourcePath: '/repo/src/workflow.ts',
+      }),
+    ).toThrow(/sourcePath must be relative/);
+  });
+
+  it('accepts relative sourcePath on local-directory', () => {
+    const parsed = LocalDirectoryMaterializationSchema.parse({
+      kind: 'local-directory',
+      workspaceId: 'ws-1',
+      rootDigest: 'sha256:abc123',
+      sourcePath: 'src/workflow.ts',
+    });
+
+    expect(parsed.sourcePath).toBe('src/workflow.ts');
+  });
+
+  it('rejects empty sourcePath', () => {
+    expect(() =>
+      WorkerMaterializationSpecSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+        digest: 'sha256:abc123',
+        sourcePath: '',
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Contribution ref — entrypoint and integrity validation
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkerContributionRef validation', () => {
+  it('rejects entrypoint paths into node_modules', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: 'node_modules/@acme/tools/dist/server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow(/node_modules/);
+  });
+
+  it('rejects absolute entrypoint paths', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: '/usr/lib/node_modules/@acme/tools/dist/server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow(/package-relative/);
+  });
+
+  it('rejects Windows absolute entrypoint paths', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: 'C:\\packages\\tools\\dist\\server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow(/package-relative/);
+  });
+
+  it('accepts a valid package-relative entrypoint', () => {
+    const ref = WorkerContributionRefSchema.parse({
+      packageName: '@acme/tools',
+      version: '1.0.0',
+      entrypoint: 'dist/server.mjs',
+      integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+    });
+
+    expect(ref.entrypoint).toBe('dist/server.mjs');
+  });
+
+  it('rejects malformed integrity (no SRI prefix)', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: 'dist/server.mjs',
+        integrity: 'not-a-valid-hash',
+      }),
+    ).toThrow(/SRI/);
+  });
+
+  it('rejects integrity with unknown hash algorithm', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: 'dist/server.mjs',
+        integrity: 'md5-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow(/SRI/);
+  });
+
+  it('accepts sha256 integrity', () => {
+    const ref = WorkerContributionRefSchema.parse({
+      packageName: '@acme/tools',
+      version: '1.0.0',
+      entrypoint: 'dist/server.mjs',
+      integrity: 'sha256-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+    });
+
+    expect(ref.integrity).toMatch(/^sha256-/);
+  });
+
+  it('accepts sha384 integrity', () => {
+    const ref = WorkerContributionRefSchema.parse({
+      packageName: '@acme/tools',
+      version: '1.0.0',
+      entrypoint: 'dist/server.mjs',
+      integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uFPNZHzA3w0=',
+    });
+
+    expect(ref.integrity).toMatch(/^sha384-/);
+  });
+
+  it('accepts sha512 integrity', () => {
+    const ref = WorkerContributionRefSchema.parse({
+      packageName: '@acme/tools',
+      version: '1.0.0',
+      entrypoint: 'dist/server.mjs',
+      integrity: 'sha512-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uFPNZHzA3w0nNOvXS/EepIyA6=',
+    });
+
+    expect(ref.integrity).toMatch(/^sha512-/);
+  });
+
+  it('rejects empty integrity', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        entrypoint: 'dist/server.mjs',
+        integrity: '',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects incomplete package identity (missing version)', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        entrypoint: 'dist/server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects incomplete package identity (missing packageName)', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        version: '1.0.0',
+        entrypoint: 'dist/server.mjs',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects incomplete package identity (missing entrypoint)', () => {
+    expect(() =>
+      WorkerContributionRefSchema.parse({
+        packageName: '@acme/tools',
+        version: '1.0.0',
+        integrity: 'sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K',
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Materialization spec — snapshot digest validation
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkerMaterializationSpec digest validation', () => {
+  it('rejects workspace-snapshot with missing digest', () => {
+    expect(() =>
+      WorkspaceSnapshotMaterializationSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+        sourcePath: 'src/workflow.ts',
+        // digest is omitted
+      }),
+    ).toThrow();
+  });
+
+  it('rejects workspace-snapshot with empty digest', () => {
+    expect(() =>
+      WorkspaceSnapshotMaterializationSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+        digest: '',
+        sourcePath: 'src/workflow.ts',
+      }),
+    ).toThrow();
+  });
+
+  it('accepts workspace-snapshot with a non-empty digest', () => {
+    const spec = WorkspaceSnapshotMaterializationSchema.parse({
+      kind: 'workspace-snapshot',
+      snapshotId: 'snap-1',
+      digest: 'sha256:abc123def456',
+      sourcePath: 'src/workflow.ts',
+    });
+
+    expect(spec.digest).toBe('sha256:abc123def456');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Materialization spec — invalid mode
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkerMaterializationSpec mode validation', () => {
+  it('rejects an invalid materialization mode', () => {
+    expect(() =>
+      WorkerMaterializationSpecSchema.parse({
+        kind: 'docker-image',
+        image: 'node:22',
+      }),
+    ).toThrow();
+  });
+
+  it('accepts only local-directory and workspace-snapshot', () => {
+    expect(
+      WorkerMaterializationSpecSchema.parse({
+        kind: 'local-directory',
+        workspaceId: 'ws-1',
+        rootDigest: 'sha256:abc',
+        sourcePath: 'src/main.ts',
+      }),
+    ).toMatchObject({ kind: 'local-directory' });
+
+    expect(
+      WorkerMaterializationSpecSchema.parse({
+        kind: 'workspace-snapshot',
+        snapshotId: 'snap-1',
+        digest: 'sha256:abc',
+        sourcePath: 'src/main.ts',
+      }),
+    ).toMatchObject({ kind: 'workspace-snapshot' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Suspension strategy — portable (no context dependency)
+// ─────────────────────────────────────────────────────────────
+
+describe('suspension strategy in portable config and run context', () => {
+  it('carries suspension strategy through worker config', () => {
+    const config = WorkflowWorkerConfigSchema.parse(
+      minimalWorkerConfig({
+        suspensionStrategy: 'exit-and-redispatch',
+      }),
+    );
+
+    expect(config.suspensionStrategy).toBe('exit-and-redispatch');
+  });
+
+  it('carries suspension strategy through run context', () => {
+    const runContext = WorkflowRunContextSchema.parse(
+      minimalRunContext({
+        suspensionStrategy: 'exit-and-redispatch',
+      }),
+    );
+
     expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
   });
 });

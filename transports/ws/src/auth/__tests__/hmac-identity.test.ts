@@ -123,7 +123,7 @@ describe('HmacAuth — identity-bound mode', () => {
     await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
   });
 
-  it('getReceiveContext returns workflow-execution peer after auth', async () => {
+  it('does not infer peer authorization when no trusted peer resolver is configured', async () => {
     const executionId = 'exec-def-456';
     const secret = 'per-execution-secret-2';
 
@@ -137,16 +137,18 @@ describe('HmacAuth — identity-bound mode', () => {
 
     await runAuthHandshake(serverAuth, clientAuth, socket);
 
-    const ctx = serverAuth.getReceiveContext(socket);
-    expect(ctx).toBeDefined();
-    expect(ctx?.peer).toEqual({ kind: 'workflow-execution', id: executionId, authenticated: true });
+    expect(serverAuth.getReceiveContext(socket)).toBeUndefined();
   });
 
   it('authenticates against the process-local identity secret registry', async () => {
     clearHmacIdentitySecretsForTesting();
-    const executionId = 'exec-registry-1';
+    const attemptId = 'attempt-registry-1';
+    const executionId = 'wfx-registry-1';
     const secret = 'per-execution-registry-secret';
-    registerHmacIdentitySecret(executionId, secret);
+    registerHmacIdentitySecret(attemptId, secret, {
+      peerKind: 'workflow-execution-attempt',
+      claims: { executionId },
+    });
 
     try {
       const serverAuth = new HmacAuth({
@@ -155,15 +157,16 @@ describe('HmacAuth — identity-bound mode', () => {
         resolveSecret: resolveHmacIdentitySecret,
         resolvePeer: resolveHmacIdentityPeer,
       });
-      const clientAuth = new HmacAuth({ secret, identityId: executionId, challengeTimeout: 200 });
+      const clientAuth = new HmacAuth({ secret, identityId: attemptId, challengeTimeout: 200 });
       const socket = makeSocket();
 
       await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
       expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
       expect(serverAuth.getReceiveContext(socket)?.peer).toEqual({
-        kind: 'workflow-execution',
-        id: executionId,
+        kind: 'workflow-execution-attempt',
+        id: attemptId,
         authenticated: true,
+        claims: { executionId },
       });
 
       clearHmacIdentitySecretsForTesting();
@@ -206,11 +209,11 @@ describe('HmacAuth — identity-bound mode', () => {
     clearHmacIdentitySecretsForTesting();
     const identityId = 'shared-identity';
     const secret = 'same-transport-secret';
-    const cleanupWorkflowPeer = registerHmacIdentitySecret(identityId, secret);
+    const cleanupBootstrapPeer = registerHmacIdentitySecret(identityId, secret, { peerKind: 'worker-bootstrap' });
     const cleanupDashboardPeer = registerHmacIdentitySecret(identityId, secret, { peerKind: 'dashboard-session' });
 
     try {
-      cleanupWorkflowPeer();
+      cleanupBootstrapPeer();
 
       expect(resolveHmacIdentitySecret(identityId)).toBe(secret);
       expect(resolveHmacIdentityPeer(identityId)).toEqual({
@@ -248,6 +251,8 @@ describe('HmacAuth — identity-bound mode', () => {
       secret: 'ignored',
       challengeTimeout: 200,
       resolveSecret: (claimedId) => (claimedId === executionId ? secret : null),
+      resolvePeer: (claimedId) =>
+        claimedId === executionId ? { kind: 'test-identity', id: claimedId, authenticated: true } : null,
     });
     const clientAuth = new HmacAuth({ secret, identityId: executionId, challengeTimeout: 200 });
     const socket = makeSocket();

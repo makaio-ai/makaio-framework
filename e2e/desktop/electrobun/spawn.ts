@@ -9,19 +9,23 @@
 
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import { spawnAndDiscoverPort, type SpawnedProcess } from '../../shared/spawn-helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Root of the repository — two levels up from e2e/desktop/. */
-const REPO_ROOT = path.resolve(__dirname, '../../..');
+/** Root of the framework distribution containing this E2E harness. */
+const FRAMEWORK_ROOT = path.resolve(__dirname, '../../..');
 
 /** Absolute path to the Electrobun desktop package root. */
-const ELECTROBUN_ROOT = path.join(REPO_ROOT, 'apps/electrobun');
+const ELECTROBUN_ROOT = path.join(FRAMEWORK_ROOT, 'apps/electrobun');
+
+/** Package-manager workspace root that owns installed executable links. */
+const WORKSPACE_ROOT = resolveWorkspaceRoot(ELECTROBUN_ROOT);
 
 /** Path to the Electrobun executable installed by the root workspace. */
 const ELECTROBUN_BIN = path.join(
-  REPO_ROOT,
+  WORKSPACE_ROOT,
   'node_modules/.bin',
   process.platform === 'win32' ? 'electrobun.cmd' : 'electrobun',
 );

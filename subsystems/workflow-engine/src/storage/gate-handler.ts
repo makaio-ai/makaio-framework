@@ -11,6 +11,7 @@ import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowGateInstance } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
+import { isExecutionBoundAccessAllowed } from '../execution-bound-access.js';
 
 type WorkflowGateInstancesTable = typeof workflowEngineSchema.sqlite.workflowGateInstances;
 type DbGateRow = WorkflowGateInstancesTable['$inferSelect'];
@@ -117,6 +118,9 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
 
   const unsubSetGate = bus.on(WorkflowStorageSubjects.setGateInstance, async (ctx) => {
     const gate = ctx.payload.gate as WorkflowGateInstance;
+    if (!isExecutionBoundAccessAllowed(ctx, gate.executionId)) {
+      throw new Error(`Unauthorized: caller is not permitted to write gates for execution: ${gate.executionId}`);
+    }
     const dbValues = toGateDbValues(gate);
     await serializeDatabaseOperation(db, () =>
       db.insert(workflowGateInstances).values(dbValues).onConflictDoUpdate({
@@ -143,6 +147,9 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
 
   const unsubGetGate = bus.on(WorkflowStorageSubjects.getGateInstance, async (ctx) => {
     const { executionId, nodeId, frameId } = ctx.payload;
+    if (!isExecutionBoundAccessAllowed(ctx, executionId)) {
+      throw new Error(`Unauthorized: caller is not permitted to read gates for execution: ${executionId}`);
+    }
     const predicates = [eq(workflowGateInstances.executionId, executionId), eq(workflowGateInstances.nodeId, nodeId)];
     if (frameId !== undefined) {
       predicates.push(eq(workflowGateInstances.frameId, frameId));

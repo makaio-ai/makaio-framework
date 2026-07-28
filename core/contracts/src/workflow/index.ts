@@ -47,6 +47,7 @@ export {
 export {
   WorkflowDelegateResultFinalizerIdSchema,
   WorkflowDelegateResultFinalizationRequestSchema,
+  WorkflowDelegateResultFinalizationGatewayRequestSchema,
   WorkflowDelegateEconomicsSchema,
   WorkflowDelegateResultFinalizationResponseSchema,
   WorkflowDelegateToolObservationSchema,
@@ -54,6 +55,7 @@ export {
 } from './finalization.js';
 export type {
   WorkflowDelegateResultFinalizationRequest,
+  WorkflowDelegateResultFinalizationGatewayRequest,
   WorkflowDelegateEconomics,
   WorkflowDelegateResultFinalizationResponse,
   WorkflowDelegateToolObservation,
@@ -177,7 +179,7 @@ export { WorkflowNamespace, WorkflowProgressUpdateSchema, WorkflowSchemas, Workf
 export { WorkflowArtifactRefSchema, serializeArtifactRef, parseArtifactRef } from './artifact-ref.js';
 export type { WorkflowArtifactRef } from './artifact-ref.js';
 export { WorkflowRunContextSchema } from './run-context.js';
-export type { WorkflowRunContext } from './run-context.js';
+export type { WorkflowRunContext, WorkflowRunContextSource } from './run-context.js';
 export {
   WorkflowTerminalStatusSchema,
   WorkflowFinalizationIntentSchema,
@@ -209,17 +211,17 @@ export {
   WorkflowWorkerSourceSchema,
   WorkflowWorkerConfigSchema,
   WorkflowRunResultSchema,
-  WorkerContributionPackageRefSchema,
   WorkerContributionManifestSchema,
 } from './worker.js';
 export type {
   WorkflowWorkerBusAuth,
   WorkflowWorkerSource,
   WorkflowWorkerConfig,
+  WorkerRuntimeContext,
   WorkflowRunResult,
+  WorkflowRunnerCompletion,
   WorkflowRunnerRunOptions,
   IWorkflowRunner,
-  WorkerContributionPackageRef,
   WorkerContributionManifest,
 } from './worker.js';
 export {
@@ -304,14 +306,12 @@ export type {
 } from './authoring-exports.js';
 export { defineWorkflowBundle } from './bundle.js';
 export type { WorkflowBundle } from './bundle.js';
-export { ExecutionHintsSchema, ExecutionSourceHintSchema } from './execution-hints.js';
 export {
   TransitionActionInvocationSchema,
   TransitionConditionSchema,
   TransitionEventTypeSchema,
   TransitionRuleDefinitionSchema,
 } from './transition.js';
-export type { ExecutionHints } from './execution-hints.js';
 export type {
   ExtensionTransitionActionsContribution,
   ExtensionTransitionRulesContribution,

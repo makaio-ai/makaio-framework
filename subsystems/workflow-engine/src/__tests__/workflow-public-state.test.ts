@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolve } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
-import { type IWorkflowRunner, type StationHandler, type WorkflowStationNode } from '@makaio/contracts';
+import {
+  type IWorkflowRunner,
+  type StationHandler,
+  type WorkflowRunnerCompletion,
+  type WorkflowStationNode,
+} from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
@@ -11,6 +15,27 @@ import {
   type WorkflowExecutorTestSetup,
 } from './workflow-executor.test-setup.js';
 import { createWorkflowDefinition } from './shared.js';
+
+/**
+ * Register the host seam required to freeze a path-backed test execution.
+ * @param setup - Initialized workflow executor test fixture.
+ * @param snapshotId - Stable snapshot identity asserted by the test.
+ * @param sourcePath - Workspace-relative workflow source path.
+ */
+function registerWorkspaceSnapshotResolver(
+  setup: WorkflowExecutorTestSetup,
+  snapshotId: string,
+  sourcePath: string,
+): void {
+  setup.workflowExecutor.registerWorkflowMaterializationSpecResolver({
+    resolve: async () => ({
+      kind: 'workspace-snapshot',
+      snapshotId,
+      digest: `sha256:${snapshotId}`,
+      sourcePath,
+    }),
+  });
+}
 
 describe('workflow public state subjects', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
@@ -296,8 +321,8 @@ describe('workflow public state subjects', () => {
       return { ok: true };
     };
     const workflowRunner: IWorkflowRunner = {
-      run(config, signal) {
-        return runWorkflowOrchestrator({
+      async run(config, signal): Promise<WorkflowRunnerCompletion> {
+        const result = await runWorkflowOrchestrator({
           config,
           loaded: {
             definition: workflow,
@@ -306,9 +331,11 @@ describe('workflow public state subjects', () => {
           bus: MakaioBus,
           signal,
         });
+        return { state: 'uncommitted', result };
       },
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner });
+    registerWorkspaceSnapshotResolver(setup, 'file-state-workspace', 'workflows/file-state.ts');
 
     const completedPromise = new Promise<string>((resolve) => {
       const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
@@ -326,6 +353,13 @@ describe('workflow public state subjects', () => {
 
     expect(observedState).toEqual({ count: 0 });
     expect(state).toEqual({ executionId, sequence: 0, value: { count: 0 } });
+    expect(runContext?.source).toEqual({ kind: 'path', path: 'workflows/file-state.ts' });
+    expect(runContext?.materializationSpec).toEqual({
+      kind: 'workspace-snapshot',
+      snapshotId: 'file-state-workspace',
+      digest: 'sha256:file-state-workspace',
+      sourcePath: 'workflows/file-state.ts',
+    });
     expect(runContext?.definitionSnapshot?.state).toEqual(workflow.state);
   });
 
@@ -342,8 +376,9 @@ describe('workflow public state subjects', () => {
         name: 'Path Sourced Definition State',
         root: { id: 'path-sourced-definition-state-root', type: 'sequence', nodes: [] },
       }),
-      executionHints: {
-        source: { kind: 'path' as const, path: '.makaio/workflows/path-state.ts' },
+      executableSource: {
+        kind: 'path' as const,
+        path: '.makaio/workflows/path-state.ts',
       },
       state: {
         schema: {
@@ -373,8 +408,8 @@ describe('workflow public state subjects', () => {
       return { ok: true };
     };
     const workflowRunner: IWorkflowRunner = {
-      run(config, signal) {
-        return runWorkflowOrchestrator({
+      async run(config, signal): Promise<WorkflowRunnerCompletion> {
+        const result = await runWorkflowOrchestrator({
           config,
           loaded: {
             definition: loadedWorkflow,
@@ -383,9 +418,11 @@ describe('workflow public state subjects', () => {
           bus: MakaioBus,
           signal,
         });
+        return { state: 'uncommitted', result };
       },
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner });
+    registerWorkspaceSnapshotResolver(setup, 'path-state-workspace', '.makaio/workflows/path-state.ts');
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow: storedWorkflow });
 
     const completedPromise = new Promise<string>((resolve) => {
@@ -404,7 +441,13 @@ describe('workflow public state subjects', () => {
     expect(state).toEqual({ executionId, sequence: 0, value: { count: 7 } });
     expect(runContext?.source).toEqual({
       kind: 'path',
-      path: resolve(process.cwd(), '.makaio/workflows/path-state.ts'),
+      path: '.makaio/workflows/path-state.ts',
+    });
+    expect(runContext?.materializationSpec).toEqual({
+      kind: 'workspace-snapshot',
+      snapshotId: 'path-state-workspace',
+      digest: 'sha256:path-state-workspace',
+      sourcePath: '.makaio/workflows/path-state.ts',
     });
     expect(runContext?.definitionSnapshot?.state).toEqual(loadedWorkflow.state);
   });

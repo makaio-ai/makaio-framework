@@ -25,6 +25,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { installGitHooks } from '../install/install.js';
 
 const tempDirs: string[] = [];
+const TEST_RECEIVER_TIMEOUT_SECONDS = 30;
+const TEST_WRAPPER_COMPLETION_TIMEOUT_MS = (TEST_RECEIVER_TIMEOUT_SECONDS - 1) * 1_000;
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -67,7 +69,11 @@ describe('git-hooks integration', { timeout: 60_000 }, () => {
     // Pre-existing post-commit hook that exits non-zero.
     await fs.writeFile(path.join(repo, '.git', 'hooks', 'post-commit'), '#!/bin/sh\nexit 7\n', { mode: 0o755 });
 
-    await installGitHooks({ repoPath: repo, receiverCommand: [receiver] });
+    await installGitHooks({
+      repoPath: repo,
+      receiverCommand: [receiver],
+      receiverTimeoutSeconds: TEST_RECEIVER_TIMEOUT_SECONDS,
+    });
 
     // Run the installed wrapper directly. Git itself ignores post-commit exit
     // codes (the hook is informational), so we must invoke the wrapper as a
@@ -80,6 +86,9 @@ describe('git-hooks integration', { timeout: 60_000 }, () => {
       cwd: repo,
       reject: false,
       input: '',
+      // A completed receiver must cancel the watchdog and release all
+      // inherited pipes instead of retaining the hook until its full budget.
+      timeout: TEST_WRAPPER_COMPLETION_TIMEOUT_MS,
     });
 
     // The wrapper must exit with the original hook's exit code.
@@ -98,7 +107,11 @@ describe('git-hooks integration', { timeout: 60_000 }, () => {
     const receiver = path.join(repo, 'receiver.sh');
     await fs.writeFile(receiver, `#!/bin/sh\ncat >> ${receiverLog}\nexit 0\n`, { mode: 0o755 });
 
-    await installGitHooks({ repoPath: repo, receiverCommand: [receiver] });
+    await installGitHooks({
+      repoPath: repo,
+      receiverCommand: [receiver],
+      receiverTimeoutSeconds: TEST_RECEIVER_TIMEOUT_SECONDS,
+    });
 
     // Create a commit then amend it; git fires post-rewrite with a rewrite
     // map on stdin: "<old-sha> <new-sha>".

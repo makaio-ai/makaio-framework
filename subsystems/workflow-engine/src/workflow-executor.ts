@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 600, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 130, "skipBlankLines": true, "skipComments": true }] */
+/* eslint max-lines: ["error", { "max": 620, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 130, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
@@ -17,7 +17,13 @@ import { BaseService } from '@makaio/service-base';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
-import { DEFAULT_EXECUTOR_CONFIG, type ActiveRunnerStep, type ExecutorConfig, type ActiveExecution } from './types.js';
+import {
+  DEFAULT_EXECUTOR_CONFIG,
+  type ActiveRunnerStep,
+  type ExecutorConfig,
+  type ActiveExecution,
+  type WorkflowMaterializationSpecResolver,
+} from './types.js';
 import {
   registerWorkflowStorageDelegationHandlers,
   registerWorkflowStateHandlers,
@@ -40,19 +46,15 @@ import {
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
 import { rerunExecution } from './workflow-execution-rerun.js';
 import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
-import { RuntimeContext } from './runtime/runtime-context.js';
+import { RuntimeContext, resolveEphemeralPlatformFields } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
 import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
 import type { NodeOutcome } from './runtime/node-execution.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { validateGateResumeDataForSchema } from './runtime/gate-resume-validation.js';
 import { WorkflowGateTimeoutScheduler } from './workflow-gate-timeout-scheduler.js';
-import {
-  normalizeConfig,
-  normalizeExecutionHints,
-  normalizeStartInput,
-} from './workflow-executor-input-normalization.js';
-import { buildWorkflowRunContext, resolveWorkflowContext } from './workflow-run-context-builder.js';
+import { normalizeConfig, normalizeStartInput } from './workflow-executor-input-normalization.js';
+import { buildWorkflowRunContext } from './workflow-run-context-builder.js';
 import {
   assertDurableResumeFramesPresent,
   isPausedWorkflowExecution,
@@ -61,6 +63,9 @@ import {
   toGateTimeoutPayload,
 } from './workflow-resume-state.js';
 import { registerAuthorityStateBootstrapHandler } from './authority-state-bootstrap.js';
+import { registerOutcomeSubmissionHandler } from './workflow-outcome-submission.js';
+import { registerDelegateResultFinalizationGateway } from './delegate-result-finalization-gateway.js';
+import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 
 /**
  * Core workflow executor service.
@@ -93,6 +98,8 @@ export class WorkflowExecutor extends BaseService {
   private readonly lifecyclePublications = new Map<string, Promise<void>>();
   private readonly publishingLifecycleExecutions = new Set<string>();
   private readonly workflowRunner?: IWorkflowRunner;
+  private readonly executionAttemptAuthority?: ExecutionAttemptAuthority;
+  private readonly materializationSpecResolvers = new Set<WorkflowMaterializationSpecResolver>();
   private triggerTypeRegistry?: IWorkflowTriggerTypeRegistry;
 
   /**
@@ -100,11 +107,18 @@ export class WorkflowExecutor extends BaseService {
    * @param bus - The message bus for communication
    * @param config - Optional partial configuration (merged with defaults)
    * @param workflowRunner - Optional workflow-level runner for isolated execution
+   * @param executionAttemptAuthority - Optional Authority for WorkerNode dispatch runners
    */
-  public constructor(bus: IMakaioBus, config?: Partial<ExecutorConfig>, workflowRunner?: IWorkflowRunner) {
+  public constructor(
+    bus: IMakaioBus,
+    config?: Partial<ExecutorConfig>,
+    workflowRunner?: IWorkflowRunner,
+    executionAttemptAuthority?: ExecutionAttemptAuthority,
+  ) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
     this.workflowRunner = workflowRunner;
+    this.executionAttemptAuthority = executionAttemptAuthority;
     this.gateTimeoutScheduler = new WorkflowGateTimeoutScheduler(bus, (executionId) =>
       this.resumePausedExecution(executionId),
     );
@@ -127,6 +141,17 @@ export class WorkflowExecutor extends BaseService {
    */
   public getTriggerTypeRegistry(): IWorkflowTriggerTypeRegistry | undefined {
     return this.triggerTypeRegistry;
+  }
+
+  /**
+   * Register a host resolver used to freeze workspace materialization before a
+   * path-backed execution is persisted.
+   * @param resolver - Host-owned resolver.
+   * @returns Idempotent cleanup that unregisters this resolver.
+   */
+  public registerWorkflowMaterializationSpecResolver(resolver: WorkflowMaterializationSpecResolver): () => void {
+    this.materializationSpecResolvers.add(resolver);
+    return () => this.materializationSpecResolvers.delete(resolver);
   }
 
   /**
@@ -296,6 +321,16 @@ export class WorkflowExecutor extends BaseService {
         if (active !== undefined) active.workflow = definition;
       }),
     );
+    this.addCleanup(registerDelegateResultFinalizationGateway(this.bus));
+    if (this.executionAttemptAuthority !== undefined) {
+      this.addCleanup(
+        registerOutcomeSubmissionHandler(this.bus, {
+          bus: this.bus,
+          authority: this.executionAttemptAuthority,
+          acceptTerminalResult: (executionId, result) => this.acceptAuthorityRunnerResult(executionId, result),
+        }),
+      );
+    }
     for (const cleanup of registerWorkflowStorageDelegationHandlers(this.bus)) {
       this.addCleanup(cleanup);
     }
@@ -382,7 +417,6 @@ export class WorkflowExecutor extends BaseService {
       executionTasks: this.executionTasks,
       activeExecutions: this.activeExecutions,
       buildFinalizerDeps: () => this.buildFinalizerDeps(),
-      resolveWorkflowContext: (workspaceRoot) => resolveWorkflowContext(this.config, workspaceRoot),
       config: this.config,
     };
   }
@@ -413,6 +447,17 @@ export class WorkflowExecutor extends BaseService {
   }
 
   /**
+   * Derive ephemeral platform fields from the current process environment.
+   *
+   * Delegates to the shared {@link resolveEphemeralPlatformFields} helper
+   * with config-specific overrides for workspace root and Makaio home.
+   * @returns Ephemeral platform fields for the current machine.
+   */
+  private resolveEphemeralPlatformFields() {
+    return resolveEphemeralPlatformFields(this.config.platformDefaults.cwd, this.config.makaioHome);
+  }
+
+  /**
    * Build the {@link StartExecutionDeps} bundle used by {@link startExecution}
    * and {@link startFileExecution}.
    * @returns Start execution dependency bundle.
@@ -429,6 +474,8 @@ export class WorkflowExecutor extends BaseService {
       buildFinalizerDeps: () => this.buildFinalizerDeps(),
       resolveExecutionWorkspaceRoot: (parentSessionId) => this.resolveExecutionWorkspaceRoot(parentSessionId),
       runExecution: (executionId) => this.runExecution(executionId),
+      executionAttemptAuthority: this.executionAttemptAuthority,
+      materializationSpecResolvers: this.materializationSpecResolvers,
     };
   }
 
@@ -442,8 +489,7 @@ export class WorkflowExecutor extends BaseService {
       ctx.setResult(await this.acceptAuthorityRunnerResult(executionId, result as WorkflowRunResult));
     });
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
-      const { workflowId, input, config, parentSessionId, triggerPayload, artifactRef, scope, executionHints } =
-        ctx.payload;
+      const { workflowId, input, config, parentSessionId, triggerPayload, artifactRef, scope } = ctx.payload;
       try {
         const executionId = await startExecution(this.buildStartDeps(), workflowId, {
           input: normalizeStartInput(input),
@@ -451,7 +497,6 @@ export class WorkflowExecutor extends BaseService {
           parentSessionId,
           triggerPayload,
           artifactRef,
-          executionHints: normalizeExecutionHints(executionHints),
           scopeOverride: scope,
         });
         ctx.setResult({ executionId });
@@ -463,18 +508,8 @@ export class WorkflowExecutor extends BaseService {
     });
 
     this.registerHandler(WorkflowSubjects.rerun, async (ctx) => {
-      const {
-        executionId,
-        mode,
-        input,
-        config,
-        parentSessionId,
-        triggerPayload,
-        artifactRef,
-        scope,
-        executionHints,
-        reason,
-      } = ctx.payload;
+      const { executionId, mode, input, config, parentSessionId, triggerPayload, artifactRef, scope, reason } =
+        ctx.payload;
       try {
         const rerunExecutionId = await rerunExecution(this.buildStartDeps(), {
           executionId,
@@ -484,7 +519,6 @@ export class WorkflowExecutor extends BaseService {
           parentSessionId,
           triggerPayload,
           artifactRef,
-          executionHints: normalizeExecutionHints(executionHints),
           scopeOverride: scope,
           reason,
         });
@@ -502,9 +536,10 @@ export class WorkflowExecutor extends BaseService {
           'workflow.runFile requires a workflow runner — configure a ThinWorkflowPiscinaRunner or equivalent.',
         );
       }
-      const { filePath, triggerPayload, scope } = ctx.payload;
+      const { filePath, materializationSpec, triggerPayload, scope } = ctx.payload;
       try {
         const executionId = await startFileExecution(this.buildStartDeps(), filePath, {
+          ...(materializationSpec !== undefined ? { materializationSpec } : {}),
           triggerPayload,
           scopeOverride: scope,
         });
@@ -631,7 +666,7 @@ export class WorkflowExecutor extends BaseService {
           abortController.signal,
           undefined,
           artifactBinding,
-          { context: active.runContext.context, env: active.runContext.env },
+          { context: this.resolveEphemeralPlatformFields(), env: active.runContext.env },
           { runtimeLoopGates: active.runtimeLoopGates },
         );
         assertLoopGateHandlersPresent(active.workflow, active.runtimeLoopGates);

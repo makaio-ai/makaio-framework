@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
 import { WorkerNodeRequirementsSchema } from '../capabilities/worker-node/index.js';
+import { OutcomeAckDecisionSchema, ProviderAllocationRefSchema } from '../capabilities/worker-node/types.js';
 import {
   WorkflowRunResultSchema,
   WorkflowWorkerConfigSchema,
@@ -15,8 +16,8 @@ import {
  * must not leak into the framework lifecycle payload surface.
  */
 const WorkerNodeLifecycleBaseSchema = z.object({
-  /** Unique identifier for this node instance within an execution. */
-  nodeId: z.string().min(1),
+  /** Authority-created attempt identifier for this dispatch. */
+  executionAttemptId: z.string().min(1),
   /** Unique workflow execution identifier. */
   executionId: z.string().min(1),
   /** Execution environment tag (e.g. `'piscina'`, `'process'`). */
@@ -33,6 +34,8 @@ const WorkerNodeLifecycleBaseSchema = z.object({
  * execution without importing a concrete pool service.
  */
 export const WorkerNodeDispatchRequestSchema = z.object({
+  /** Authority-created attempt identifier for this dispatch. */
+  executionAttemptId: z.string().min(1),
   /** Full workflow worker configuration. */
   config: WorkflowWorkerConfigSchema,
   /**
@@ -40,7 +43,7 @@ export const WorkerNodeDispatchRequestSchema = z.object({
    *
    * Omit this field when the dispatch implementation should resolve the
    * applicable manifest itself. Callers that need to force an explicit empty
-   * manifest should pass a manifest with `packages: []`.
+   * manifest should pass a manifest with `contributionRefs: []`.
    */
   manifest: WorkerContributionManifestSchema.optional(),
   /** Optional resource requirements used by the dispatch implementation. */
@@ -51,8 +54,18 @@ export const WorkerNodeDispatchRequestSchema = z.object({
 
 /**
  * Framework-level WorkerNode dispatch response.
+ *
+ * Returns an allocation acknowledgment after the provider has provisioned
+ * a resource and the allocation reference has been persisted. Callers
+ * that need the workflow result must await it through the Authority's
+ * in-process waiter (`waitForOutcome`).
  */
-export const WorkerNodeDispatchResponseSchema = WorkflowRunResultSchema;
+export const WorkerNodeDispatchResponseSchema = z
+  .object({
+    executionAttemptId: z.string().min(1),
+    allocationRef: ProviderAllocationRefSchema,
+  })
+  .strict();
 
 /**
  * WorkerNode lifecycle bus schemas.
@@ -70,6 +83,11 @@ export const WorkerNodeDispatchResponseSchema = WorkflowRunResultSchema;
  * - `lifecycle.failed`       — execution terminated with an error
  * - `lifecycle.terminated`   — node environment has been torn down
  * - `lifecycle.paused`       — node parked at a gate and exited for later resume
+ *
+ * Control subjects:
+ * - `control.attempt-ready`  — worker reports readiness for its attempt
+ * - `control.outcome.submit` — worker submits an execution outcome for durable ACK
+ * - `control.bootstrap.claim`— worker claims execution-scoped bus credentials
  */
 export const WorkerNodeSchemas = {
   /**
@@ -84,29 +102,71 @@ export const WorkerNodeSchemas = {
   },
 
   /**
-   * Worker runtime has connected to the host bus and is ready to receive
-   * control messages. Providers consume this as an internal readiness signal;
-   * WorkerPoolService remains responsible for public lifecycle emission.
+   * Worker reports that it has booted, connected to the bus, and is ready
+   * to execute the workflow for its assigned attempt.
    *
-   * Subject: `worker-node.control.ready`
+   * The Authority and lifecycle emitters consume this to transition the
+   * attempt into the active execution phase.
+   *
+   * Subject: `worker-node.control.attempt-ready`
    * Type: Event
    */
-  'control.ready': z.object({
-    /** Node identifier assigned by the provider and passed to the worker bootstrap. */
-    nodeId: z.string().min(1),
-    /** Workflow execution identifier owned by this worker. */
-    executionId: z.string().min(1),
-    /** Adapter identifiers loaded inside the worker before readiness. */
-    adapters: z.array(z.string().min(1)).default([]),
-  }),
+  'control.attempt-ready': z
+    .object({
+      /** Authority-created attempt identifier. */
+      executionAttemptId: z.string().min(1),
+      /** Workflow execution identifier owned by this worker. */
+      executionId: z.string().min(1),
+      /** Adapter identifiers loaded inside the worker before readiness. */
+      adapters: z.array(z.string().min(1)).default([]),
+    })
+    .strict(),
+
+  /**
+   * Worker submits a terminal workflow outcome for durable acknowledgement.
+   *
+   * The Authority validates the attempt, commits the outcome through the
+   * injected repository, and returns an ACK decision. Workers must not
+   * exit until they receive the ACK.
+   *
+   * Subject: `worker-node.control.outcome.submit`
+   * Type: Request (RPC)
+   */
+  'control.outcome.submit': {
+    request: z
+      .object({
+        /** Authority-created attempt identifier. */
+        executionAttemptId: z.string().min(1),
+        /** Workflow execution identifier. */
+        executionId: z.string().min(1),
+        /** Terminal result produced by the isolated workflow runner. */
+        result: WorkflowRunResultSchema,
+      })
+      .strict()
+      .superRefine((payload, ctx) => {
+        if (payload.result.executionId !== payload.executionId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['result', 'executionId'],
+            message: 'result.executionId must match executionId',
+          });
+        }
+      }),
+    response: z
+      .object({
+        /** Durable ACK decision from the Authority. */
+        decision: OutcomeAckDecisionSchema,
+      })
+      .strict(),
+  },
 
   /**
    * Worker node claims its execution-scoped bus credentials during bootstrap.
    *
-   * The node presents a provider bootstrap credential together with its
-   * execution/node identity. The server validates the credential and pending
-   * claim, then exchanges it for an execution-scoped `busAuthSecret` the node
-   * uses for all subsequent bus communication.
+   * The node authenticates its WebSocket connection as a bootstrap peer, then
+   * presents its execution/attempt identity. The server validates that trusted
+   * transport identity and the durable allocation before exchanging it for an
+   * execution-scoped `busAuthSecret` used for subsequent communication.
    *
    * Subject: `worker-node.control.bootstrap.claim`
    * Type: Request (RPC)
@@ -116,15 +176,8 @@ export const WorkerNodeSchemas = {
       .object({
         /** Unique workflow execution identifier assigned to this worker. */
         executionId: z.string().min(1),
-        /** Node identifier assigned by the provider at dispatch time. */
-        nodeId: z.string().min(1),
-        /**
-         * Provider bootstrap credential presented during claim exchange.
-         *
-         * The host validates this credential and invalidates the pending claim
-         * on use so the exchange cannot be replayed.
-         */
-        bootstrapSecret: z.string().min(1),
+        /** Authority-created attempt identifier. */
+        executionAttemptId: z.string().min(1),
       })
       .strict(),
     response: z
@@ -139,35 +192,6 @@ export const WorkerNodeSchemas = {
       })
       .strict(),
   },
-
-  /**
-   * Worker node reports the terminal result of a workflow execution.
-   *
-   * Emitted after the workflow runner returns so the orchestrator can
-   * materialise the result without waiting for the process to exit.
-   *
-   * Subject: `worker-node.control.result`
-   * Type: Event
-   */
-  'control.result': z
-    .object({
-      /** Node identifier assigned by the provider at dispatch time. */
-      nodeId: z.string().min(1),
-      /** Unique workflow execution identifier owned by this worker. */
-      executionId: z.string().min(1),
-      /** Terminal result produced by the isolated workflow runner. */
-      result: WorkflowRunResultSchema,
-    })
-    .strict()
-    .superRefine((payload, ctx) => {
-      if (payload.result.executionId !== payload.executionId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['result', 'executionId'],
-          message: 'result.executionId must match executionId',
-        });
-      }
-    }),
 
   /**
    * Dispatch has selected a provider; node allocation is in progress.
@@ -251,3 +275,9 @@ export const WorkerNodeSchemas = {
     pausedAtFrameId: z.string().min(1),
   }),
 } satisfies SchemaRecord;
+
+/** Bootstrap coordinates presented by a remote worker. */
+export type WorkerBootstrapClaimRequest = z.infer<(typeof WorkerNodeSchemas)['control.bootstrap.claim']['request']>;
+
+/** Execution-scoped credentials issued after a successful bootstrap claim. */
+export type WorkerBootstrapClaimResponse = z.infer<(typeof WorkerNodeSchemas)['control.bootstrap.claim']['response']>;

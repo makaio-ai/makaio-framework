@@ -1,6 +1,9 @@
 import { createBusNamespace } from '@makaio/core';
 import { WorkerNodeSchemas } from './schemas.js';
 
+/** Well-known restricted transport identity used for worker bootstrap claims. */
+export const WORKER_BOOTSTRAP_IDENTITY_ID = 'worker-bootstrap';
+
 /**
  * WorkerNode bus namespace definition.
  *
@@ -17,7 +20,7 @@ export const WorkerNodeNamespace = createBusNamespace('worker-node', WorkerNodeS
  * @example
  * ```typescript
  * bus.on(WorkerNodeSubjects.lifecycle.ready, (payload) => {
- *   console.log('node ready', payload.nodeId);
+ *   console.log('node ready', payload.executionAttemptId);
  * });
  * ```
  */

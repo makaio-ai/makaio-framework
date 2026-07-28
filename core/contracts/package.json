@@ -24,6 +24,7 @@
     "./common": "./src/common/index.ts",
     "./config": "./src/config/index.ts",
     "./canonical-model": "./src/canonical-model/index.ts",
+    "./capabilities": "./src/capabilities/index.ts",
     "./harness": "./src/harness/index.ts",
     "./host": "./src/host/index.ts",
     "./extension": "./src/extension/index.ts",
@@ -38,6 +39,7 @@
     "./toast": "./src/toast/index.ts",
     "./timeout": "./src/timeout/index.ts",
     "./variant": "./src/variant/index.ts",
+    "./worker-node": "./src/worker-node/index.ts",
     "./platform": "./src/platform/index.ts",
     "./facet": "./src/facet/index.ts",
     "./materialization": "./src/materialization/index.ts",
@@ -62,7 +64,7 @@
     "@types/node": "^24.3.0",
     "@types/react": "^19.2.15",
     "@types/semver": "^7.7.0",
-    "tsx": "^4.23.1"
+    "tsx": "^4.22.3"
   },
   "scripts": {
     "build": "bun build.ts",
@@ -105,6 +107,10 @@
       "./canonical-model": {
         "types": "./dist/canonical-model/index.d.ts",
         "default": "./dist/canonical-model/index.mjs"
+      },
+      "./capabilities": {
+        "types": "./dist/capabilities/index.d.ts",
+        "default": "./dist/capabilities/index.mjs"
       },
       "./harness": {
         "types": "./dist/harness/index.d.ts",
@@ -161,6 +167,10 @@
       "./variant": {
         "types": "./dist/variant/index.d.ts",
         "default": "./dist/variant/index.mjs"
+      },
+      "./worker-node": {
+        "types": "./dist/worker-node/index.d.ts",
+        "default": "./dist/worker-node/index.mjs"
       },
       "./platform": {
         "types": "./dist/platform/index.d.ts",

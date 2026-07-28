@@ -10,8 +10,10 @@
 import type {
   BusBroadcastMessage,
   BusBroadcastResponseMessage,
+  BusEventMessage,
   BusMessage,
   BusReceiveHandler,
+  BusRequestMessage,
   BusResponseMessage,
   BusSubscribeMessage,
   BusUnsubscribeMessage,
@@ -23,6 +25,36 @@ import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry, ClientSubscriptionUpdate } from './client-registry.js';
 import type { TransportReceiveContext } from '@makaio/core';
+import { resolveHmacIdentityAllowedSubjects } from './auth/identity-secret-registry.js';
+
+/**
+ * Bus message types that carry a `namespace` and `subject`.
+ *
+ * Used by the subject-restriction gate to narrow the `BusMessage` union
+ * without guarded `as` casts.
+ */
+type SubjectBearingBusMessage = BusRequestMessage | BusEventMessage | BusBroadcastMessage;
+
+/** Subject restriction resolved for an authenticated peer. */
+interface SubjectRestriction {
+  /** Authenticated peer identity. */
+  readonly peerId: string;
+  /** Subjects the peer may send or advertise. */
+  readonly allowedSubjects: ReadonlySet<string>;
+}
+
+/**
+ * Type guard for bus messages that carry `namespace` and `subject`.
+ *
+ * Narrows the discriminated `BusMessage` union to the three member types
+ * that always have both fields, replacing the previous guarded `as` casts
+ * in the subject-restriction block.
+ * @param message - Inbound bus message.
+ * @returns `true` when the message has `namespace` and `subject` fields.
+ */
+function isSubjectBearingMessage(message: BusMessage): message is SubjectBearingBusMessage {
+  return message.type === 'request' || message.type === 'event' || message.type === 'broadcast';
+}
 
 /**
  * Dependencies injected into each per-socket message handler.
@@ -60,6 +92,67 @@ function isSubscriptionSubjects(value: unknown): value is Record<string, number[
         priorities.every((priority) => typeof priority === 'number' && Number.isFinite(priority)),
     )
   );
+}
+
+/**
+ * Check whether a subscription subject key is a wildcard pattern.
+ *
+ * Wildcard patterns end with `*` (e.g. `adapter.*`, `worker-node:*`, or the
+ * global `*`).
+ * @param subject - Subscription subject key to check.
+ * @returns `true` when the key is a wildcard pattern.
+ */
+function isWildcardPattern(subject: string): boolean {
+  return subject.endsWith('*');
+}
+
+/**
+ * Filter a subscription subjects map against an allowed-subjects list.
+ *
+ * For restricted identities, each subject key is checked:
+ * - Wildcard patterns are allowed only when they appear **verbatim** in the
+ *   allowed list (e.g. `adapter.*` is allowed only if `allowedSubjects`
+ *   contains `adapter.*` literally). This prevents a wildcard from matching
+ *   subjects outside the allow list.
+ * - Exact subjects are allowed when they appear in the allowed list.
+ *
+ * Returns a new subjects map with disallowed entries removed, or `null` when
+ * the filtered map is empty (indicating the entire message should be dropped).
+ * @param subjects - Inbound subscription subjects map.
+ * @param allowedSubjects - The peer's allowed subjects list.
+ * @param debug - Whether to log filtering decisions.
+ * @param peerId - Peer identity for log messages.
+ * @returns Filtered subjects map, or `null` when all subjects were removed.
+ */
+function filterSubscriptionSubjects(
+  subjects: Record<string, number[]>,
+  allowedSubjects: ReadonlySet<string>,
+  debug: boolean,
+  peerId: string,
+): Record<string, number[]> | null {
+  const filtered: Record<string, number[]> = {};
+
+  for (const [subject, priorities] of Object.entries(subjects)) {
+    if (isWildcardPattern(subject)) {
+      // Wildcards are only allowed when they appear verbatim in the allow set.
+      if (allowedSubjects.has(subject)) {
+        filtered[subject] = priorities;
+      } else if (debug) {
+        console.debug(
+          `[ServerTransport] Dropping wildcard subscription ` +
+            `'${subject}': not in allowedSubjects for peer '${peerId}'`,
+        );
+      }
+    } else if (allowedSubjects.has(subject)) {
+      filtered[subject] = priorities;
+    } else if (debug) {
+      console.debug(
+        `[ServerTransport] Dropping subscription subject ` + `'${subject}': not allowed for peer '${peerId}'`,
+      );
+    }
+  }
+
+  return Object.keys(filtered).length > 0 ? filtered : null;
 }
 
 /**
@@ -157,6 +250,149 @@ function handleCorrelationMessage(message: BusMessage, deps: MessageHandlerDeps,
 }
 
 /**
+ * Resolve the current subject restriction for an inbound socket.
+ * @param receiveContext - Authentication-derived receive context.
+ * @returns The peer restriction, or `null` for an unrestricted peer.
+ */
+function resolveSubjectRestriction(receiveContext: TransportReceiveContext | undefined): SubjectRestriction | null {
+  const peerId = receiveContext?.peer?.id;
+  if (peerId === undefined) return null;
+
+  const allowedSubjects = resolveHmacIdentityAllowedSubjects(peerId);
+  return allowedSubjects === null ? null : { peerId, allowedSubjects };
+}
+
+/**
+ * Reject a subject-bearing message that its authenticated peer may not send.
+ * @param message - Inbound bus message.
+ * @param socket - Socket that sent the message.
+ * @param deps - Handler dependencies.
+ * @param restriction - Current peer subject restriction.
+ * @returns `true` when the message was rejected.
+ */
+function rejectDisallowedSubject(
+  message: BusMessage,
+  socket: WebSocketLike,
+  deps: MessageHandlerDeps,
+  restriction: SubjectRestriction | null,
+): boolean {
+  if (restriction === null || !isSubjectBearingMessage(message)) return false;
+
+  const fullSubject = `${message.namespace}.${message.subject}`;
+  if (restriction.allowedSubjects.has(fullSubject)) return false;
+
+  if (message.type === 'request') {
+    deps.sendSafely(
+      socket,
+      JSON.stringify({
+        type: 'response',
+        correlationId: message.correlationId,
+        error: { message: `Subject '${fullSubject}' is not allowed for peer '${restriction.peerId}'` },
+      }),
+    );
+  }
+  if (deps.debug) {
+    console.warn(
+      `[ServerTransport] Dropping ${message.type} to '${fullSubject}': not allowed for peer '${restriction.peerId}'`,
+    );
+  }
+  return true;
+}
+
+/**
+ * Validate and filter a subscription control message for its authenticated peer.
+ * @param message - Inbound subscription control message.
+ * @param restriction - Current peer subject restriction.
+ * @param debug - Whether to log dropped messages.
+ * @returns Effective subjects, or `null` when the message must be dropped.
+ */
+function resolveSubscriptionSubjects(
+  message: BusSubscribeMessage | BusUnsubscribeMessage,
+  restriction: SubjectRestriction | null,
+  debug: boolean,
+): Record<string, number[]> | null {
+  if (!isSubscriptionSubjects(message.subjects)) {
+    if (debug) console.warn(`[ServerTransport] Malformed ${message.type} message: missing subjects record`);
+    return null;
+  }
+  if (restriction === null) return message.subjects;
+
+  const filtered = filterSubscriptionSubjects(message.subjects, restriction.allowedSubjects, debug, restriction.peerId);
+  if (filtered === null && debug) {
+    console.debug(
+      `[ServerTransport] Dropping ${message.type} message: all subjects filtered for peer '${restriction.peerId}'`,
+    );
+  }
+  return filtered;
+}
+
+/**
+ * Route subscription updates through the registry and acknowledge successful dispatch.
+ * @param message - Inbound bus message.
+ * @param socket - Socket that sent the message.
+ * @param deps - Handler dependencies.
+ * @param receiveContext - Authentication-derived receive context.
+ * @param restriction - Current peer subject restriction.
+ * @returns `true` when the message was a subscription control message.
+ */
+async function routeSubscriptionMessage(
+  message: BusMessage,
+  socket: WebSocketLike,
+  deps: MessageHandlerDeps,
+  receiveContext: TransportReceiveContext | undefined,
+  restriction: SubjectRestriction | null,
+): Promise<boolean> {
+  if (message.type !== 'subscribe' && message.type !== 'unsubscribe') return false;
+
+  const subscriptionMessage = message as BusSubscribeMessage | BusUnsubscribeMessage;
+  const subjects = resolveSubscriptionSubjects(subscriptionMessage, restriction, deps.debug);
+  if (subjects === null) return true;
+
+  const updates =
+    subscriptionMessage.type === 'subscribe'
+      ? deps.registry.handleSubscribeMessage(socket, { ...subscriptionMessage, subjects })
+      : deps.registry.handleUnsubscribeMessage(socket, subjects);
+  const handlersApplied = await invokeSubscriptionUpdates(updates, deps.handlers, {
+    debug: deps.debug,
+    receiveContext,
+    logContext: `dispatching ${subscriptionMessage.type}`,
+  });
+  if (handlersApplied && typeof subscriptionMessage.ackId === 'string') {
+    deps.sendSafely(socket, JSON.stringify({ type: 'subscription-ack', ackId: subscriptionMessage.ackId }));
+  }
+  return true;
+}
+
+/**
+ * Forward a client broadcast and deliver it to server-local handlers.
+ * @param message - Inbound bus message.
+ * @param socket - Socket that sent the message.
+ * @param deps - Handler dependencies.
+ * @param receiveContext - Authentication-derived receive context.
+ * @returns `true` when the message was a broadcast.
+ */
+async function routeBroadcastMessage(
+  message: BusMessage,
+  socket: WebSocketLike,
+  deps: MessageHandlerDeps,
+  receiveContext: TransportReceiveContext | undefined,
+): Promise<boolean> {
+  if (message.type !== 'broadcast') return false;
+
+  const broadcastMessage = message as BusBroadcastMessage;
+  if (typeof broadcastMessage.correlationId !== 'string' || typeof broadcastMessage.subject !== 'string') {
+    if (deps.debug) console.warn('[ServerTransport] Malformed broadcast message: missing correlationId or subject');
+    return true;
+  }
+
+  const targetClients = deps.registry.getInterestedClients(broadcastMessage.subject, broadcastMessage.payload, socket);
+  const timeout = deps.normalizeBroadcastTimeout(broadcastMessage.timeout);
+  deps.broadcastAggregator.startClientBroadcast(socket, broadcastMessage, targetClients, deps.sendSafely, timeout);
+  await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext });
+  return true;
+}
+
+/**
  * Route a parsed, authenticated bus message to the appropriate handler.
  *
  * Called after the auth gate and structural validation have passed.
@@ -172,64 +408,18 @@ export async function routeMessage(
   socket: WebSocketLike,
   deps: MessageHandlerDeps,
 ): Promise<void> {
-  const { registry, broadcastAggregator, handlers, normalizeBroadcastTimeout, sendSafely, debug } = deps;
-
   if (handleCorrelationMessage(message, deps, socket)) return;
 
   const receiveContext = deps.auth?.getReceiveContext?.(socket);
+  const restriction = resolveSubjectRestriction(receiveContext);
 
-  // Handle subscription messages.
-  // Track internally for client-level routing AND forward to bus handlers
-  // so the transport registry can populate remoteRequestHandlers for
-  // priority-based dispatch.
-  if (message.type === 'subscribe') {
-    const subscribeMessage = message as BusSubscribeMessage;
-    if (!isSubscriptionSubjects(subscribeMessage.subjects)) {
-      if (debug) console.warn('[ServerTransport] Malformed subscribe message: missing subjects record');
-      return;
-    }
-    const updates = registry.handleSubscribeMessage(socket, subscribeMessage);
-    const handlersApplied = await invokeSubscriptionUpdates(updates, handlers, {
-      debug,
-      receiveContext,
-      logContext: 'dispatching subscribe',
-    });
-    if (handlersApplied && typeof subscribeMessage.ackId === 'string') {
-      sendSafely(socket, JSON.stringify({ type: 'subscription-ack', ackId: subscribeMessage.ackId }));
-    }
+  if (rejectDisallowedSubject(message, socket, deps, restriction)) return;
+  if (message.type === 'subscribe' || message.type === 'unsubscribe') {
+    await routeSubscriptionMessage(message, socket, deps, receiveContext, restriction);
     return;
   }
-
-  if (message.type === 'unsubscribe') {
-    const unsubscribeMessage = message as BusUnsubscribeMessage;
-    if (!isSubscriptionSubjects(unsubscribeMessage.subjects)) {
-      if (debug) console.warn('[ServerTransport] Malformed unsubscribe message: missing subjects record');
-      return;
-    }
-    const updates = registry.handleUnsubscribeMessage(socket, unsubscribeMessage.subjects);
-    const handlersApplied = await invokeSubscriptionUpdates(updates, handlers, {
-      debug,
-      receiveContext,
-      logContext: 'dispatching unsubscribe',
-    });
-    if (handlersApplied && typeof unsubscribeMessage.ackId === 'string') {
-      sendSafely(socket, JSON.stringify({ type: 'subscription-ack', ackId: unsubscribeMessage.ackId }));
-    }
-    return;
-  }
-
-  // Handle broadcast messages: forward to other clients AND invoke local handlers.
-  // Both dispatches are required — local handlers trigger transport-registry processing.
   if (message.type === 'broadcast') {
-    const broadcastMsg = message as BusBroadcastMessage;
-    if (typeof broadcastMsg.correlationId !== 'string' || typeof broadcastMsg.subject !== 'string') {
-      if (debug) console.warn('[ServerTransport] Malformed broadcast message: missing correlationId or subject');
-      return;
-    }
-    const targetClients = registry.getInterestedClients(broadcastMsg.subject, broadcastMsg.payload, socket);
-    const timeout = normalizeBroadcastTimeout(broadcastMsg.timeout);
-    broadcastAggregator.startClientBroadcast(socket, broadcastMsg, targetClients, sendSafely, timeout);
-    await invokeHandlers(message, handlers, { debug, receiveContext });
+    await routeBroadcastMessage(message, socket, deps, receiveContext);
     return;
   }
 
@@ -238,11 +428,15 @@ export async function routeMessage(
   // the source (ServerTransport) to prevent loops. Cross-client forwarding
   // within the same ServerTransport must happen here.
   if (message.type === 'event') {
-    registry.forwardEventToClients(socket, message, sendSafely);
+    deps.registry.forwardEventToClients(socket, message, deps.sendSafely);
+  }
+
+  if (message.type === 'request') {
+    deps.registry.trackRequestOrigin(socket, message);
   }
 
   // Call all registered handlers in parallel.
-  await invokeHandlers(message, handlers, { debug, receiveContext });
+  await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext });
 }
 
 /**

@@ -11,10 +11,15 @@ export type { HmacAuthOptions } from './hmac-auth.js';
 export {
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
+  resolveHmacIdentityAllowedSubjects,
   resolveHmacIdentityPeer,
   resolveHmacIdentitySecret,
+  rotateHmacIdentitySecret,
 } from './identity-secret-registry.js';
-export type { HmacIdentitySecretRegistrationOptions } from './identity-secret-registry.js';
+export type {
+  HmacIdentitySecretRegistrationOptions,
+  HmacIdentitySecretRotationOptions,
+} from './identity-secret-registry.js';
 export { E2EAuth } from './e2e-auth.js';
 export type { E2EAuthOptions } from './e2e-auth.js';
 export { E2ERelayAuth } from './e2e-relay-auth.js';

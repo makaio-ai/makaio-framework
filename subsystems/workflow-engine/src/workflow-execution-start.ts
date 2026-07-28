@@ -1,10 +1,7 @@
 /* eslint max-lines: ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 90, "skipBlankLines": true, "skipComments": true }] */
-import { isAbsolute, resolve } from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
-  WorkflowWorkerSourceSchema,
-  type ExecutionHints,
   type ExecutionLink,
   type IWorkflowRunner,
   type JsonValue,
@@ -19,7 +16,7 @@ import {
 } from '@makaio/contracts';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
-import { type ExecutorConfig, type ActiveExecution } from './types.js';
+import { type ExecutorConfig, type ActiveExecution, type WorkflowMaterializationSpecResolver } from './types.js';
 import { generateId } from './executor-helpers.js';
 import { sanitizeTriggerPayload } from './trigger-payload-sanitizer.js';
 import { type FinalizerDeps } from './workflow-execution-finalizer.js';
@@ -32,7 +29,7 @@ import {
   type RunnerTaskDeps,
 } from './workflow-runner-tasks.js';
 import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
-import { hasExecutionHintWorkerNodeDispatch } from './worker-node-dispatch-runner.js';
+import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 
 /**
  * Dependencies injected into the execution start helpers.
@@ -67,9 +64,8 @@ export interface StartExecutionDeps {
     scope: WorkflowRunContext['scope'];
     triggerPayload: WorkflowRunContext['triggerPayload'];
     artifactRef?: WorkflowRunContext['artifactRef'];
-    executionHints?: WorkflowRunContext['executionHints'];
-    workspaceRoot: string;
     suspensionStrategy?: WorkflowRunContext['suspensionStrategy'];
+    materializationSpec?: WorkflowRunContext['materializationSpec'];
   }): WorkflowRunContext;
   /**
    * Build a {@link RunnerTaskDeps} bundle for the given workflow runner.
@@ -88,6 +84,16 @@ export interface StartExecutionDeps {
    * @param executionId - Target execution identifier.
    */
   runExecution(executionId: string): Promise<void>;
+  /**
+   * Execution attempt Authority for WorkerNode dispatch runners.
+   *
+   * When present, the dispatch runner uses this Authority to create
+   * attempts before dispatch and wait for committed outcomes. When absent,
+   * WorkerNode dispatch is unavailable.
+   */
+  executionAttemptAuthority?: ExecutionAttemptAuthority;
+  /** Host seams that resolve immutable workspace references for path starts. */
+  materializationSpecResolvers: ReadonlySet<WorkflowMaterializationSpecResolver>;
 }
 
 /**
@@ -223,73 +229,123 @@ async function persistExecutionStart(
 }
 
 /**
- * Resolve an optional executable source from merged execution hints.
+ * Resolve the worker source for a definition-backed execution.
  *
- * Generated definitions may exist only as trigger/provenance metadata while
- * their actual runtime lives in a workflow module. A validated source hint lets
- * the generic workflow executor dispatch those definitions through the same
- * worker loading path as `workflow.runFile`, without coupling framework code to
- * any product extension.
- * @param executionHints - Merged definition/request execution hints.
- * @param workspaceRoot - Workspace root used to resolve relative path sources.
- * @returns Worker source override, or `undefined` to use definition-sourced execution.
+ * When the workflow definition declares an `executableSource`, that portable
+ * source descriptor is used directly. Otherwise falls back to the default
+ * `{ kind: 'definition', workflowId }` which loads the workflow by its
+ * registered definition ID at runtime.
+ * @param workflow - The loaded workflow definition.
+ * @param workflowId - The workflow definition ID.
+ * @returns The resolved source descriptor.
  */
-function resolveExecutionHintSource(
-  executionHints: WorkflowRunContext['executionHints'],
-  workspaceRoot: string,
-): WorkflowWorkerSource | undefined {
-  const source = executionHints?.source;
-  if (source === undefined) {
-    return undefined;
-  }
-
-  const parsed = WorkflowWorkerSourceSchema.parse(source);
-  if (parsed.kind === 'path' && !isAbsolute(parsed.path)) {
-    return { ...parsed, path: resolve(workspaceRoot, parsed.path) };
-  }
-  return parsed;
+function resolveDefinitionExecutionSource(workflow: WorkflowDefinition, workflowId: string): WorkflowWorkerSource {
+  return workflow.executableSource ?? { kind: 'definition', workflowId };
 }
 
 /**
- * Resolve the worker source for a definition-backed execution.
- * @param workflowId - The workflow definition ID.
- * @param executionHints - Merged definition/request execution hints.
- * @param workspaceRoot - Workspace root used to resolve relative path sources.
- * @returns The explicit hint source or the default definition source.
+ * Determine whether a runner receives the compiled definition directly.
+ * Path-backed current runs reload their materialized source; explicitly
+ * snapshot-pinned reruns instead execute the persisted definition.
+ * @param source - Execution source selected for the launch.
+ * @param definitionSnapshot - Explicit snapshot requested by the caller.
+ * @returns Whether the runner config should include `definition`.
  */
-function resolveDefinitionExecutionSource(
-  workflowId: string,
-  executionHints: WorkflowRunContext['executionHints'],
-  workspaceRoot: string,
-): WorkflowWorkerSource {
-  return resolveExecutionHintSource(executionHints, workspaceRoot) ?? { kind: 'definition', workflowId };
+function shouldSendDefinitionToRunner(
+  source: WorkflowWorkerSource,
+  definitionSnapshot: WorkflowDefinition | undefined,
+): boolean {
+  return source.kind === 'definition' || definitionSnapshot !== undefined;
 }
 
 /**
  * Ensure source-backed executions can be dispatched by a runner before storage is mutated.
  * @param deps - Shared executor state and callbacks.
  * @param source - Resolved execution source.
- * @param executionHints - Merged definition/request execution hints.
  * @param workflowId - Logical workflow ID for the pending execution.
  * @throws When a path/source execution would otherwise fall back to the in-process scheduler.
  */
 function assertRunnerBackedSourceDispatchAvailable(
   deps: StartExecutionDeps,
   source: WorkflowWorkerSource,
-  executionHints: WorkflowRunContext['executionHints'],
   workflowId: string,
 ): void {
-  if (
-    source.kind === 'definition' ||
-    deps.workflowRunner !== undefined ||
-    hasExecutionHintWorkerNodeDispatch(executionHints)
-  ) {
+  if (source.kind === 'definition' || deps.workflowRunner !== undefined) {
     return;
   }
   throw new WorkflowError(
     WorkflowErrorCode.NOT_EXECUTABLE,
-    `Workflow source execution '${workflowId}' requires a workflow runner or WorkerNode capability requirements.`,
+    `Workflow source execution '${workflowId}' requires a workflow runner.`,
   );
+}
+
+/**
+ * Resolve the immutable workspace reference required by a path-backed start.
+ *
+ * A caller-supplied spec is reserved for replaying an existing durable run
+ * context. Fresh starts resolve through the host seam before storage mutates.
+ * @param deps - Shared executor dependencies.
+ * @param input - Start identity and process-local source information.
+ * @param providedSpec - Existing durable spec supplied by a replay path.
+ * @returns The resolved durable spec, or undefined for non-path sources.
+ */
+async function resolveMaterializationSpec(
+  deps: StartExecutionDeps,
+  input: {
+    executionId: string;
+    workflowId: string;
+    source: WorkflowRunContext['source'];
+    workspaceRoot: string;
+  },
+  providedSpec: WorkflowRunContext['materializationSpec'] | undefined,
+): Promise<WorkflowRunContext['materializationSpec'] | undefined> {
+  if (input.source.kind !== 'path') return undefined;
+  if (providedSpec !== undefined) return providedSpec;
+  for (const resolver of deps.materializationSpecResolvers) {
+    const resolved = await resolver.resolve({
+      executionId: input.executionId,
+      workflowId: input.workflowId,
+      sourcePath: input.source.path,
+      workspaceRoot: input.workspaceRoot,
+    });
+    if (resolved !== undefined) return resolved;
+  }
+  throw new Error('[WorkflowExecutor] path-backed execution requires a resolved materializationSpec');
+}
+
+/** Durable source and immutable workspace reference selected for one start. */
+interface ResolvedDurablePathSource {
+  /** Portable source persisted into the run context. */
+  readonly source: WorkflowRunContext['source'];
+  /** Workspace reference persisted with a path-backed source. */
+  readonly materializationSpec: WorkflowRunContext['materializationSpec'] | undefined;
+}
+
+/**
+ * Resolve the durable source form for a fresh or replayed execution start.
+ * @param deps - Shared executor dependencies.
+ * @param input - Start identity and source information.
+ * @param providedSpec - Existing durable spec supplied by a replay path.
+ * @returns Portable source and immutable workspace reference.
+ */
+async function resolveDurablePathSource(
+  deps: StartExecutionDeps,
+  input: {
+    executionId: string;
+    workflowId: string;
+    source: WorkflowRunContext['source'];
+    workspaceRoot: string;
+  },
+  providedSpec: WorkflowRunContext['materializationSpec'] | undefined,
+): Promise<ResolvedDurablePathSource> {
+  const materializationSpec = await resolveMaterializationSpec(deps, input, providedSpec);
+  return {
+    source:
+      input.source.kind === 'path' && materializationSpec !== undefined
+        ? { kind: 'path', path: materializationSpec.sourcePath }
+        : input.source,
+    materializationSpec,
+  };
 }
 
 /**
@@ -330,64 +386,6 @@ async function loadAndValidateWorkflow(bus: IMakaioBus, workflowId: string): Pro
   return workflow;
 }
 
-/**
- * Merge requirements from two hint sources, unioning capabilities.
- *
- * Capabilities from both sources are deduplicated so no tag is required twice.
- * When neither source contributes requirements, returns `undefined`.
- * @param def - Requirements from the stored workflow definition.
- * @param req - Requirements from the per-call execution start request.
- * @returns Merged requirements, or `undefined` when both are absent.
- */
-function mergeRequirements(
-  def: ExecutionHints['requirements'],
-  req: ExecutionHints['requirements'],
-): ExecutionHints['requirements'] {
-  if (def === undefined && req === undefined) {
-    return undefined;
-  }
-  const caps = [...new Set([...(def?.capabilities ?? []), ...(req?.capabilities ?? [])])];
-  return {
-    ...def,
-    ...req,
-    ...(caps.length > 0 && { capabilities: caps }),
-  };
-}
-
-/**
- * Merge definition-level execution hints with per-call overrides.
- *
- * Merge semantics:
- * - Request values win over definition defaults on all scalar fields.
- * - `requirements.capabilities` arrays are unioned and deduplicated so both
- *   the definition's declared needs and the caller's runtime needs are satisfied.
- * - `providers` records are merged shallowly (request entries override).
- *
- * Returns `undefined` when both sources are absent or empty.
- * @param definitionHints - Hints baked into the stored workflow definition.
- * @param requestHints - Per-call hints supplied by the execution starter.
- * @returns Merged hints, or `undefined` when neither source contributes values.
- */
-export function mergeExecutionHints(
-  definitionHints: ExecutionHints | undefined,
-  requestHints: ExecutionHints | undefined,
-): ExecutionHints | undefined {
-  if (definitionHints === undefined && requestHints === undefined) {
-    return undefined;
-  }
-
-  const requirements = mergeRequirements(definitionHints?.requirements, requestHints?.requirements);
-  const hasProviders = definitionHints?.providers !== undefined || requestHints?.providers !== undefined;
-  const providers = hasProviders ? { ...definitionHints?.providers, ...requestHints?.providers } : undefined;
-
-  return {
-    ...definitionHints,
-    ...requestHints,
-    ...(requirements !== undefined && { requirements }),
-    ...(providers !== undefined && { providers }),
-  };
-}
-
 /** Options accepted by {@link startExecution}. */
 export interface DefinitionStartOptions {
   /** Caller-supplied JSON input value. */
@@ -400,8 +398,6 @@ export interface DefinitionStartOptions {
   readonly triggerPayload?: Record<string, unknown>;
   /** Optional artifact binding reference. */
   readonly artifactRef?: WorkflowRunContext['artifactRef'];
-  /** Optional worker provisioning hints. */
-  readonly executionHints?: WorkflowRunContext['executionHints'];
   /** Optional execution scope override. */
   readonly scopeOverride?: WorkflowExecutionScope;
   /**
@@ -424,15 +420,16 @@ export interface ResolvedDefinitionStartOptions extends DefinitionStartOptions {
   readonly workflow: WorkflowDefinition;
   /**
    * Override for the execution source descriptor.
-   * When omitted, the source is resolved from execution hints or defaults to
-   * `{ kind: 'definition', workflowId }`.
+   * When omitted, defaults to `{ kind: 'definition', workflowId }`.
    */
   readonly executionSource?: WorkflowRunContext['source'];
   /**
    * Override for the definition snapshot stored on the run context.
-   * When omitted, the snapshot is derived from the execution source kind.
+   * When omitted, the Authority-pinned loaded workflow is stored.
    */
   readonly definitionSnapshot?: WorkflowDefinition;
+  /** Portable workspace reference required when `executionSource.kind` is `path`. */
+  readonly materializationSpec?: WorkflowRunContext['materializationSpec'];
 }
 
 /**
@@ -495,20 +492,25 @@ export async function startResolvedDefinitionExecution(
   options: ResolvedDefinitionStartOptions,
 ): Promise<string> {
   const { bus, activeExecutions, executionTasks } = deps;
-  const { workflow, parentSessionId, triggerPayload, artifactRef, executionHints, scopeOverride } = options;
+  const { workflow, parentSessionId, triggerPayload, artifactRef, scopeOverride } = options;
 
   const executionId = generateId('wfx');
   const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
   const boundInputs = bindWorkflowInputs(workflow, options.input === undefined ? {} : options.input);
   const boundConfig = bindWorkflowConfig(workflow, options.config ?? {});
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
-  const mergedExecutionHints = mergeExecutionHints(workflow.executionHints, executionHints);
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
-  const executionSource =
-    options.executionSource ?? resolveDefinitionExecutionSource(workflowId, mergedExecutionHints, workspaceRoot);
-  const definitionSnapshot =
-    options.definitionSnapshot ?? (executionSource.kind === 'definition' ? workflow : undefined);
-  assertRunnerBackedSourceDispatchAvailable(deps, executionSource, mergedExecutionHints, workflowId);
+  const executionSource = options.executionSource ?? resolveDefinitionExecutionSource(workflow, workflowId);
+  // `workflow` was loaded or resolved by the Authority before dispatch. Persist
+  // that exact immutable definition for every definition launch, including
+  // path-backed runners, so remote finalization never trusts worker input.
+  const definitionSnapshot = options.definitionSnapshot ?? workflow;
+  assertRunnerBackedSourceDispatchAvailable(deps, executionSource, workflowId);
+  const { source: durableSource, materializationSpec } = await resolveDurablePathSource(
+    deps,
+    { executionId, workflowId, source: executionSource, workspaceRoot },
+    options.materializationSpec,
+  );
 
   const coordinatorSessionId = await createDefinitionCoordinatorSession(
     bus,
@@ -523,15 +525,14 @@ export async function startResolvedDefinitionExecution(
       executionId,
       workflowId,
       coordinatorSessionId,
-      source: executionSource,
+      source: durableSource,
       ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
       inputs: boundInputs,
       config: boundConfig,
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
       ...(artifactRef !== undefined ? { artifactRef } : {}),
-      ...(mergedExecutionHints !== undefined ? { executionHints: mergedExecutionHints } : {}),
-      workspaceRoot,
+      ...(materializationSpec !== undefined ? { materializationSpec } : {}),
     });
     const execution = seedDefinitionExecution(
       activeExecutions,
@@ -559,7 +560,7 @@ export async function startResolvedDefinitionExecution(
       executionId,
       workflowId,
       workflow,
-      ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
+      ...(shouldSendDefinitionToRunner(executionSource, options.definitionSnapshot) ? { definitionSnapshot } : {}),
       source: executionSource,
       coordinatorSessionId,
       sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
@@ -567,9 +568,8 @@ export async function startResolvedDefinitionExecution(
       boundConfig,
       scope: resolvedScope,
       ...(artifactRef !== undefined ? { artifactRef } : {}),
-      ...(mergedExecutionHints !== undefined ? { executionHints: mergedExecutionHints } : {}),
-      workspaceRoot,
       suspensionStrategy: runContext.suspensionStrategy,
+      ...(materializationSpec !== undefined ? { materializationSpec } : {}),
     });
 
     launched = true;
@@ -650,7 +650,7 @@ async function createFileCoordinatorSession(
  * Only valid when a workflow runner is configured; the caller is responsible
  * for ensuring that precondition before calling this method.
  * @param deps - Shared executor state and callbacks.
- * @param filePath - Absolute path to the workflow TypeScript or JavaScript file.
+ * @param filePath - Worker-local path to the workflow TypeScript or JavaScript file.
  * @param options - Execution options.
  * @returns The new execution ID.
  */
@@ -659,29 +659,39 @@ export async function startFileExecution(
   filePath: string,
   options: Pick<
     DefinitionStartOptions,
-    | 'artifactRef'
-    | 'config'
-    | 'executionHints'
-    | 'executionLinks'
-    | 'input'
-    | 'parentSessionId'
-    | 'scopeOverride'
-    | 'triggerPayload'
-  > = {},
+    'artifactRef' | 'config' | 'executionLinks' | 'input' | 'parentSessionId' | 'scopeOverride' | 'triggerPayload'
+  > & {
+    /**
+     * Portable materialization specification for the path-backed workflow.
+     *
+     * Resolved by the host before persistence. Its source path becomes the
+     * durable reference; `filePath` remains process-local execution input.
+     */
+    readonly materializationSpec?: WorkflowRunContext['materializationSpec'];
+  } = {},
 ): Promise<string> {
   const { bus, activeExecutions, executionTasks } = deps;
-  const { artifactRef, executionHints, parentSessionId, triggerPayload, scopeOverride } = options;
+  const { artifactRef, parentSessionId, triggerPayload, scopeOverride } = options;
   const executionId = generateId('wfx');
   const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
   const boundInputs = options.input === undefined ? {} : options.input;
   const boundConfig = options.config ?? {};
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? { type: 'global' };
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
-  const coordinatorSessionId = await createFileCoordinatorSession(bus, parentSessionId, filePath, workspaceRoot);
+
+  if (deps.workflowRunner === undefined) {
+    throw new Error('[WorkflowExecutor] startFileExecution called without a workflow runner');
+  }
 
   // Ephemeral execution: use the execution ID as workflowId so storage does
   // not require a persisted file/source workflow definition row.
   const workflowId = executionId;
+  const materializationSpec = await resolveMaterializationSpec(
+    deps,
+    { executionId, workflowId, source: { kind: 'path', path: filePath }, workspaceRoot },
+    options.materializationSpec,
+  );
+  const coordinatorSessionId = await createFileCoordinatorSession(bus, parentSessionId, filePath, workspaceRoot);
   const execution: WorkflowExecution = {
     id: executionId,
     workflowId,
@@ -697,26 +707,22 @@ export async function startFileExecution(
 
   let launched = false;
   try {
-    // workflowRunner presence is enforced by the runFile handler before
-    // startFileExecution is called — this guard is a defensive belt-and-suspenders
-    // check that also satisfies the type narrowing without a non-null assertion.
     const { workflowRunner } = deps;
-    if (workflowRunner === undefined) {
-      throw new Error('[WorkflowExecutor] startFileExecution called without a workflow runner');
+    if (materializationSpec === undefined) {
+      throw new Error('[WorkflowExecutor] path-backed execution requires a resolved materializationSpec');
     }
 
     const runContext = deps.buildRunContext({
       executionId,
       workflowId,
       coordinatorSessionId,
-      source: { kind: 'path', path: filePath },
+      source: { kind: 'path', path: materializationSpec.sourcePath },
       inputs: boundInputs,
       config: boundConfig,
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
       ...(artifactRef !== undefined ? { artifactRef } : {}),
-      ...(executionHints !== undefined ? { executionHints } : {}),
-      workspaceRoot,
+      materializationSpec,
     });
     await persistExecutionStart(bus, execution, runContext, undefined, options.executionLinks?.(executionId));
 
@@ -738,9 +744,8 @@ export async function startFileExecution(
       boundInputs,
       boundConfig,
       ...(artifactRef !== undefined ? { artifactRef } : {}),
-      ...(executionHints !== undefined ? { executionHints } : {}),
       scope: resolvedScope,
-      workspaceRoot,
+      materializationSpec,
     });
 
     launched = true;

@@ -72,11 +72,6 @@ describe('TransitionActionRegistry', () => {
           artifactRef,
           scope,
         },
-        executionHints: {
-          priority: 'high',
-          requirements: { isolation: 'container' },
-          providers: { 'github-actions': { pool: 'expensive-runner' } },
-        },
       },
       context,
     );
@@ -87,11 +82,6 @@ describe('TransitionActionRegistry', () => {
       config: { mode: 'fast' },
       artifactRef,
       scope,
-      executionHints: {
-        priority: 'high',
-        requirements: { isolation: 'container' },
-        providers: { 'github-actions': { pool: 'expensive-runner' } },
-      },
       triggerPayload: {
         _transitionRuleId: 'pkg-transition.start',
         _transitionDepth: 2,

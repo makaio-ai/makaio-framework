@@ -105,11 +105,6 @@ async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
  * @returns Workflow worker configuration.
  */
 function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
-  const os =
-    process.platform === 'darwin' || process.platform === 'linux' || process.platform === 'win32'
-      ? process.platform
-      : 'linux';
-
   return {
     source: { kind: 'definition', workflowId: 'wf-entry-integration' },
     definition: {
@@ -126,12 +121,6 @@ function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
     scope: { type: 'global' },
     busUrl,
     busAuth: { kind: 'none' },
-    context: {
-      repoPath: '/tmp',
-      makaioHome: '/tmp/.makaio',
-      os,
-      arch: process.arch,
-    },
     env: {},
     coordinatorSessionId: 'session-entry-integration',
     cancelSubject: 'workflow.cancel.exec-entry-integration',
@@ -184,7 +173,8 @@ describe('runWorkflowInWorker integration', () => {
     try {
       const result = await runWorkflowInWorker({
         config: makeDefinitionConfig(host.busUrl),
-        manifest: { packages: [] },
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
       });
 
       expect(result).toEqual({
@@ -233,7 +223,8 @@ describe('runWorkflowInWorker integration', () => {
       try {
         const result = await runWorkflowInWorker({
           config: makeGateConfig(host.busUrl),
-          manifest: { packages: [] },
+          manifest: { contributionRefs: [] },
+          contributionEntrypoints: [],
         });
 
         expect(result).toEqual({
@@ -274,7 +265,8 @@ describe('runWorkflowInWorker integration', () => {
       try {
         const runPromise = runWorkflowInWorker({
           config: makeGateConfig(host.busUrl),
-          manifest: { packages: [] },
+          manifest: { contributionRefs: [] },
+          contributionEntrypoints: [],
         });
 
         // Wait until the gate is open before sending the cancel event so the

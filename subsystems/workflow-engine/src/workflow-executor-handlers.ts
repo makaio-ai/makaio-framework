@@ -1,6 +1,5 @@
 import type { z } from 'zod';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { BaseMessageContext } from '@makaio/core';
 import {
   JsonPatchOperationSchema,
   EXTERNAL_EXECUTION_ID_PREFIX,
@@ -14,6 +13,7 @@ import { WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { assertWorkflowStateValueMatchesSchema } from './workflow-state-validation.js';
 import { generateId } from './executor-helpers.js';
+import { isExecutionBoundAccessAllowed } from './execution-bound-access.js';
 
 type RegisterExternalExecutionRequest = z.infer<typeof WorkflowSchemas.registerExternalExecution.request>;
 type CompleteExternalExecutionRequest = z.infer<typeof WorkflowSchemas.completeExternalExecution.request>;
@@ -73,36 +73,6 @@ function buildExternalCompletionMetadata(
     return { reason: payload.reason };
   }
   return {};
-}
-
-/**
- * Enforce the trust-boundary rules for execution-bound public RPC subjects.
- *
- * - Local callers are always permitted (hot path, no transport round-trip).
- * - Direct-HMAC callers must present an authenticated `workflow-execution`
- *   peer whose `id === executionId`.
- * - Relay callers must present an encrypted E2E peer whose relay identity is
- *   also bound to `executionId`. Encryption alone is not authorization.
- * - All other remote callers are denied.
- * @param ctx - Incoming message context.
- * @param executionId - The requested execution identifier.
- * @returns `true` when the caller may access the execution-bound resource.
- */
-function isExecutionBoundAccessAllowed(ctx: BaseMessageContext, executionId: string): boolean {
-  if (ctx.origin.local) {
-    return true;
-  }
-  const peer = ctx.transport?.peer;
-  if (peer?.authenticated !== true) {
-    return false;
-  }
-  if (peer.id !== executionId) {
-    return false;
-  }
-  if (peer.kind === 'workflow-execution') {
-    return true;
-  }
-  return peer.kind === 'e2e' && peer.encrypted === true;
 }
 
 /**

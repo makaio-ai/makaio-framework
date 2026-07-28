@@ -91,9 +91,10 @@ export interface HmacAuthOptions {
   /**
    * Server-side peer context resolver for identity-bound mode.
    *
-   * When provided, the authenticated identity is exposed to bus handlers as
-   * this peer context instead of the backward-compatible `workflow-execution`
-   * default. Return `null` when no peer context should be exposed.
+   * Authenticated identities are exposed to bus handlers only through this
+   * trusted resolver. Omitting it authenticates the socket without inventing
+   * authorization semantics from the caller-controlled identity ID. Return
+   * `null` when no peer context should be exposed.
    * @param claimedId - The authenticated `identityId`.
    * @returns Trusted peer context for the authenticated identity, or `null`.
    */
@@ -150,6 +151,15 @@ export class HmacAuth implements TransportAuth {
    * Cleaned up in `cleanupSocket()` when the socket disconnects.
    */
   private serverAuthenticatedPeers = new Map<WebSocketLike, string>();
+
+  /**
+   * Maps each identity-bound socket to the secret it authenticated with.
+   *
+   * Used by {@link isSocketAuthenticated} to detect secret rotation: when the
+   * registry now holds a different secret for the same identity, the socket is
+   * fenced because its handshake credential is stale.
+   */
+  private serverAuthenticatedSecrets = new Map<WebSocketLike, string>();
 
   public constructor(options: HmacAuthOptions) {
     this.secret = options.secret;
@@ -214,6 +224,9 @@ export class HmacAuth implements TransportAuth {
         if (this.constantTimeEqual(signature, expectedSignature)) {
           // Persist the authenticated identity for getReceiveContext().
           this.serverAuthenticatedPeers.set(socket, identityId);
+          // Record the secret used during this handshake so
+          // isSocketAuthenticated can detect post-auth rotation.
+          this.serverAuthenticatedSecrets.set(socket, identitySecret);
         }
       } else {
         // Global-secret mode: use the global shared secret.
@@ -494,11 +507,13 @@ export class HmacAuth implements TransportAuth {
       return undefined;
     }
     const resolvedPeer = this.resolvePeer?.(identityId);
-    if (this.resolvePeer !== undefined && resolvedPeer === null) {
+    if (resolvedPeer === undefined || resolvedPeer === null) {
       return undefined;
     }
-    const peer = resolvedPeer ?? { kind: 'workflow-execution', id: identityId };
-    return { transportName: '', peer: { ...peer, id: peer.id ?? identityId, authenticated: true } };
+    return {
+      transportName: '',
+      peer: { ...resolvedPeer, id: resolvedPeer.id ?? identityId, authenticated: true },
+    };
   }
 
   /**
@@ -525,7 +540,17 @@ export class HmacAuth implements TransportAuth {
       return true;
     }
 
-    if (this.resolveSecret(identityId) === null) {
+    const currentSecret = this.resolveSecret(identityId);
+    if (currentSecret === null) {
+      this.cleanupSocket(socket);
+      return false;
+    }
+
+    // Detect secret rotation: if the registry now holds a different secret
+    // than the one this socket authenticated with, the credential is stale
+    // and the socket must be fenced.
+    const authenticatedSecret = this.serverAuthenticatedSecrets.get(socket);
+    if (authenticatedSecret !== undefined && currentSecret !== authenticatedSecret) {
       this.cleanupSocket(socket);
       return false;
     }
@@ -592,6 +617,7 @@ export class HmacAuth implements TransportAuth {
       pendingEntry.reject(new Error('Socket disconnected during HMAC authentication'));
     }
     this.serverAuthenticatedPeers.delete(socket);
+    this.serverAuthenticatedSecrets.delete(socket);
     this.serverAuthenticatedSockets.delete(socket);
   }
 
@@ -620,6 +646,7 @@ export class HmacAuth implements TransportAuth {
     }
     this.serverPendingResponses.clear();
     this.serverAuthenticatedPeers.clear();
+    this.serverAuthenticatedSecrets.clear();
     this.serverAuthenticatedSockets.clear();
   }
 }

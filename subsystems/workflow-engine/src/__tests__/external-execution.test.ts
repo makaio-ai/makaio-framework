@@ -257,13 +257,12 @@ describe('External execution registration', () => {
     const runContext = WorkflowRunContextSchema.parse({
       executionId: execution.id,
       workflowId: 'wf-engine',
-      source: { kind: 'path', path: '/tmp/test-workflow.ts' },
+      source: { kind: 'source', filename: 'test-workflow.ts', source: 'export default {}' },
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
       coordinatorSessionId: 'session-engine',
       cancelSubject: `workflow.${execution.id}.cancel`,
-      context: { repoPath: '/workspace', makaioHome: '/home/.makaio', os: 'darwin', arch: 'arm64' },
       env: {},
       createdAt: now,
     });

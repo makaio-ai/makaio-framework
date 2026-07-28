@@ -713,25 +713,10 @@ describe('WorkflowDefinitionSchema', () => {
         },
       },
       successFinalizerId: 'factory.success-finalizer',
-      executionHints: {
-        requirements: {
-          capabilities: ['makaio.factory.github-actions'],
-        },
-        providers: {
-          'github-actions': {
-            owner: 'cyberport',
-            repo: 'ai-factory',
-            workflowFile: '.github/workflows/makaio-dispatch.yml',
-            sourceFile: '.makaio/workflows/intake.ts',
-            ref: 'main',
-          },
-        },
-      },
     });
 
     expect(def.source?.kind).toBe('extension');
     expect(def.successFinalizerId).toBe('factory.success-finalizer');
-    expect(def.executionHints?.requirements?.capabilities).toEqual(['makaio.factory.github-actions']);
   });
 
   it('accepts a workflow definition with a state contract', () => {
@@ -1107,13 +1092,11 @@ describe('workflow.start updated payload', () => {
       config: { timeoutMs: 60000 },
       artifactRef: { kind: 'implementation-plan', id: 'art-42' },
       scope: { type: 'global' },
-      executionHints: { priority: 'high' },
     });
     expect(req.workflowId).toBe('wf-1');
     expect(req.input).toEqual({ env: 'production', count: 5 });
     expect(req.config).toEqual({ timeoutMs: 60000 });
     expect(req.artifactRef).toEqual({ kind: 'implementation-plan', id: 'art-42' });
-    expect(req.executionHints).toEqual({ priority: 'high' });
   });
 
   it('accepts start with only workflowId (all new fields optional)', () => {
@@ -1122,7 +1105,6 @@ describe('workflow.start updated payload', () => {
     expect(req.input).toBeUndefined();
     expect(req.config).toBeUndefined();
     expect(req.artifactRef).toBeUndefined();
-    expect(req.executionHints).toBeUndefined();
   });
 
   it('accepts input as any JSON value (not just objects)', () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ContainerAdapterAuthEnvelopeSchema,
   ContainerBootstrapConfigSchema,
@@ -6,6 +6,9 @@ import {
   ContainerIsolatedExecutionTargetSchema,
   ContainerIsolatedSpawnRequestSchema,
   ContainerLocalSpawnRequestSchema,
+  type ContainerIsolatedSpawnRequest,
+  type ContainerLocalSpawnRequest,
+  type SpawnRequest,
 } from '@makaio/services-core/execution-target';
 
 const sessionRuntime = {
@@ -164,6 +167,35 @@ describe('ContainerBootstrapConfigSchema', () => {
     ).toBe(false);
   });
 
+  it('requires container-local workflow identities to be complete', () => {
+    const descriptor = {
+      mode: 'container-local' as const,
+      sessionId: 'session-1',
+      adapter: 'claude-code',
+      repoPath: '/repo',
+      baseBranch: 'main',
+    };
+
+    expect(ContainerLocalSpawnRequestSchema.safeParse(descriptor).success).toBe(true);
+    expect(ContainerLocalSpawnRequestSchema.safeParse({ ...descriptor, executionId: 'execution-1' }).success).toBe(
+      false,
+    );
+    expect(ContainerLocalSpawnRequestSchema.safeParse({ ...descriptor, executionAttemptId: 'attempt-1' }).success).toBe(
+      false,
+    );
+    expect(
+      ContainerLocalSpawnRequestSchema.safeParse({
+        ...descriptor,
+        executionId: 'execution-1',
+        executionAttemptId: 'attempt-1',
+      }).success,
+    ).toBe(true);
+
+    expectTypeOf<
+      Pick<Extract<ContainerLocalSpawnRequest, { executionId: string }>, 'executionId' | 'executionAttemptId'>
+    >().toEqualTypeOf<{ executionId: string; executionAttemptId: string }>();
+  });
+
   it.each([
     'CUSTOM_VAR',
     'MAKAIO_GIT_TOKEN',
@@ -274,6 +306,22 @@ describe('ContainerBootstrapConfigSchema', () => {
       'https://git.example.test/makaio@archive.git',
     ])('accepts credential-free Git remote %s', (repoUrl) => {
       expect(ContainerIsolatedSpawnRequestSchema.safeParse({ ...isolatedDescriptor, repoUrl }).success).toBe(true);
+    });
+
+    it('rejects workflow execution identities structurally', () => {
+      const result = ContainerIsolatedSpawnRequestSchema.safeParse({
+        ...isolatedDescriptor,
+        repoUrl: 'https://git.example.test/makaio.git',
+        executionId: 'execution-1',
+        executionAttemptId: 'attempt-1',
+      });
+
+      expect(result.success).toBe(false);
+      expectTypeOf<Extract<ContainerIsolatedSpawnRequest, { executionId: unknown }>>().toBeNever();
+      expectTypeOf<Extract<ContainerIsolatedSpawnRequest, { executionAttemptId: unknown }>>().toBeNever();
+      expectTypeOf<
+        Extract<SpawnRequest, { mode: 'container-isolated' }>
+      >().toEqualTypeOf<ContainerIsolatedSpawnRequest>();
     });
 
     it.each([

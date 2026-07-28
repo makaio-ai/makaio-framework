@@ -124,6 +124,8 @@ export {
   resolveWorkflowWorkerEntry,
   InProcessWorkflowRunner,
   createIsolatedWorkflowRuntime,
+  runHeadlessWorkflowWorker,
+  OutcomeDeliveryError,
 } from './workflow-worker/index.js';
 export type {
   IWorkflowRunner,
@@ -137,4 +139,13 @@ export type {
   IsolatedWorkflowRuntime,
   WorkflowRuntimeAuthorityConnector,
   WorkflowRuntimeContributionLoader,
+  HeadlessWorkerBootstrapCredentials,
+  HeadlessWorkerBootstrap,
+  HeadlessWorkerBusConnector,
+  HeadlessWorkerMaterializer,
+  HeadlessWorkerContributionLoader,
+  HeadlessWorkerExecutor,
+  HeadlessWorkerPostCommitObserver,
+  HeadlessWorkflowWorkerDeps,
+  HeadlessWorkflowWorkerResult,
 } from './workflow-worker/index.js';

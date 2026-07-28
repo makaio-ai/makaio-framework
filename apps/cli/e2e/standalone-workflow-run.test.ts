@@ -58,12 +58,13 @@ describe('standalone workflow run', { timeout: STANDALONE_RUN_TIMEOUT_MS }, () =
   it('runs a relative workflow file through the embedded runtime when no server is reachable', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-workflow-run-'));
     try {
-      const configPath = path.join(tempRoot, 'makaio.config.mjs');
-      const workflowPath = path.join(tempRoot, 'workflow.mjs');
-      const markerPath = path.join(tempRoot, 'marker.json');
+      const workspacePath = path.join(tempRoot, 'workspace');
+      const configPath = path.join(workspacePath, 'makaio.config.mjs');
+      const workflowPath = path.join(workspacePath, 'workflow.mjs');
+      const markerPath = path.join(workspacePath, 'marker.json');
       const homePath = path.join(tempRoot, '.makaio');
       const dbPath = path.join(tempRoot, 'makaio.db');
-      const contractsLinkPath = path.join(tempRoot, 'node_modules', '@makaio', 'contracts');
+      const contractsLinkPath = path.join(workspacePath, 'node_modules', '@makaio', 'contracts');
 
       await mkdir(path.dirname(contractsLinkPath), { recursive: true });
       await symlink(CONTRACTS_ROOT, contractsLinkPath, process.platform === 'win32' ? 'junction' : 'dir');
@@ -74,7 +75,7 @@ describe('standalone workflow run', { timeout: STANDALONE_RUN_TIMEOUT_MS }, () =
         'tsx',
         [CLI_ENTRY, 'workflow', 'run', './workflow.mjs', '--payload', '{"source":"e2e"}'],
         {
-          cwd: tempRoot,
+          cwd: workspacePath,
           env: {
             ...process.env,
             MAKAIO_BUS_URL: 'ws://127.0.0.1:1/bus',

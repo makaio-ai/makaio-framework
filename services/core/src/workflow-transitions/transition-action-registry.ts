@@ -38,7 +38,7 @@ export const WORKFLOW_START_ACTION_TYPE = 'workflow.start';
 function createWorkflowStartFactory(bus: IMakaioBus): TransitionActionFactory {
   return (): TransitionActionHandler => ({
     async execute(invocation: TransitionActionInvocation, context: TransitionEvaluationContext): Promise<void> {
-      const { input = {}, executionHints } = invocation;
+      const { input = {} } = invocation;
       const { workflowId } = input;
 
       if (typeof workflowId !== 'string' || workflowId.length === 0) {
@@ -58,7 +58,6 @@ function createWorkflowStartFactory(bus: IMakaioBus): TransitionActionFactory {
           _transitionDepth: context._transition.depth,
           _transitionEventType: context._transition.eventType,
         },
-        executionHints,
       });
     },
   });

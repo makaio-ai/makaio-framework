@@ -86,20 +86,17 @@ function mapRunContext(row: DbRunContextRow): WorkflowRunContext {
     triggerPayload: row.triggerPayload as Record<string, unknown>,
     ...(row.artifactRef !== null ? { artifactRef: row.artifactRef } : {}),
     scope: fromScopeColumns(row),
-    ...(row.executionHints !== null
-      ? { executionHints: row.executionHints as WorkflowRunContext['executionHints'] }
-      : {}),
     ...(row.dispatchMetadata !== null
       ? { dispatchMetadata: row.dispatchMetadata as WorkflowRunContext['dispatchMetadata'] }
       : {}),
     cancelSubject: row.cancelSubject,
-    context: row.context,
     env: row.env,
     createdAt: row.createdAt,
     // Fall back to 'wait-in-process' for rows persisted before the suspension_strategy
     // column was introduced (value will be null for those rows).
     suspensionStrategy: row.suspensionStrategy ?? 'wait-in-process',
     ...(row.terminalAuthority !== null ? { terminalAuthority: row.terminalAuthority } : {}),
+    ...(row.materializationSpec !== null ? { materializationSpec: row.materializationSpec } : {}),
   };
 }
 
@@ -122,15 +119,14 @@ function toRunContextDbValues(runContext: WorkflowRunContext): InsertWorkflowRun
     config: (runContext.config ?? {}) as Record<string, JsonValue>,
     triggerPayload: runContext.triggerPayload as Record<string, JsonValue>,
     artifactRef: runContext.artifactRef ?? null,
-    executionHints: runContext.executionHints ?? null,
     dispatchMetadata: runContext.dispatchMetadata ?? null,
     ...scopeColumns,
     cancelSubject: runContext.cancelSubject,
-    context: runContext.context,
     env: runContext.env,
     createdAt: runContext.createdAt,
     suspensionStrategy: runContext.suspensionStrategy,
     terminalAuthority: runContext.terminalAuthority ?? null,
+    materializationSpec: runContext.materializationSpec ?? null,
   };
 }
 

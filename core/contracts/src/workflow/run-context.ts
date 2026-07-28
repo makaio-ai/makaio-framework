@@ -1,10 +1,36 @@
 import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
-import { WorkflowWorkerSourceSchema, WorkerContributionManifestSchema } from './worker.js';
+import { WorkerContributionManifestSchema } from './worker.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { ExecutionHintsSchema } from './execution-hints.js';
 import { SuspensionStrategySchema } from '../worker-node/suspension.js';
+import { WorkerMaterializationSpecSchema } from '../capabilities/worker-node/types.js';
+
+/**
+ * Durable source descriptor for a workflow execution.
+ *
+ * Bootstrap worker configuration may contain a worker-local path. Durable
+ * path sources are instead workspace-relative and acquire their local
+ * realization only through a materialization spec.
+ */
+const WorkflowRunContextSourceSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('path'),
+      path: z
+        .string()
+        .min(1)
+        .refine((path) => !path.startsWith('/') && !/^[A-Za-z]:[/\\]/.test(path), {
+          message: 'path must be workspace-relative (no leading / or drive letter)',
+        }),
+    })
+    .strict(),
+  z.object({ kind: z.literal('source'), filename: z.string().min(1), source: z.string() }).strict(),
+  z.object({ kind: z.literal('definition'), workflowId: z.string().min(1) }).strict(),
+]);
+
+/** Durable source descriptor for a workflow execution. */
+export type WorkflowRunContextSource = z.infer<typeof WorkflowRunContextSourceSchema>;
 
 /**
  * Persisted, per-execution snapshot of the configuration and context needed to
@@ -24,7 +50,7 @@ export const WorkflowRunContextSchema = z
     /** Workflow definition being executed. */
     workflowId: z.string().min(1),
     /** Where to load the workflow from. */
-    source: WorkflowWorkerSourceSchema,
+    source: WorkflowRunContextSourceSchema,
     /**
      * Concrete definition snapshot for `source.kind === 'definition'`.
      *
@@ -33,7 +59,7 @@ export const WorkflowRunContextSchema = z
      */
     definitionSnapshot: WorkflowDefinitionSchema.optional(),
     /** Resolved worker-local contribution packages for this execution. */
-    workerManifest: WorkerContributionManifestSchema.default({ packages: [] }),
+    workerManifest: WorkerContributionManifestSchema.default({ contributionRefs: [] }),
     /** Bound input value. */
     inputs: JsonValueSchema.default({}),
     /** Bound workflow configuration values. */
@@ -51,8 +77,6 @@ export const WorkflowRunContextSchema = z
     artifactRef: WorkflowArtifactRefSchema.optional(),
     /** Coordinator session that owns this execution. */
     coordinatorSessionId: z.string().min(1),
-    /** Advisory worker provisioning hints supplied by the start request. */
-    executionHints: ExecutionHintsSchema.optional(),
     /**
      * Opaque dispatch metadata that must survive pause/resume boundaries.
      *
@@ -63,19 +87,6 @@ export const WorkflowRunContextSchema = z
     dispatchMetadata: JsonObjectContractSchema.optional(),
     /** Bus subject for cancellation signals. */
     cancelSubject: z.string().min(1),
-    /** Platform/workspace context for expression resolution and tool access. */
-    context: z.object({
-      /** Absolute path to the active repository root. */
-      repoPath: z.string().min(1),
-      /** Absolute path to the Makaio home directory. */
-      makaioHome: z.string().min(1),
-      /** Host operating system. */
-      os: z.enum(['darwin', 'linux', 'win32']),
-      /** CPU architecture (e.g. `'arm64'`, `'x64'`). */
-      arch: z.string().min(1),
-      /** Active git worktree path, if different from `repoPath`. */
-      worktree: z.string().optional(),
-    }),
     /** Extra non-secret environment variables. */
     env: z.record(z.string(), z.string()).default({}),
     /** Snapshot creation timestamp (epoch ms). */
@@ -91,6 +102,20 @@ export const WorkflowRunContextSchema = z
     suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
     /** Component that exclusively owns durable terminalization for this execution. */
     terminalAuthority: z.enum(['worker', 'authority']).optional(),
+    /**
+     * Portable materialization specification for path-backed workflows.
+     *
+     * Required when `source.kind === 'path'` — tells the worker how to
+     * obtain its workspace contents without an Authority-local absolute
+     * path. Optional (absent) for `source.kind === 'definition'` and
+     * `source.kind === 'source'` because those self-contained workflows
+     * need no filesystem materialization.
+     *
+     * The host seam supplies a resolved spec at execution start. The spec
+     * is persisted alongside the run context so resumers and redispatchers
+     * can materialize the workspace without re-resolving.
+     */
+    materializationSpec: WorkerMaterializationSpecSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.source.kind === 'definition' && value.definitionSnapshot === undefined) {
@@ -98,6 +123,27 @@ export const WorkflowRunContextSchema = z
         code: z.ZodIssueCode.custom,
         path: ['definitionSnapshot'],
         message: 'definitionSnapshot is required when source.kind is "definition"',
+      });
+    }
+    if (value.source.kind === 'path') {
+      if (value.materializationSpec === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['materializationSpec'],
+          message: 'materializationSpec is required when source.kind is "path"',
+        });
+      } else if (value.materializationSpec.sourcePath !== value.source.path) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['materializationSpec', 'sourcePath'],
+          message: 'materializationSpec.sourcePath must match source.path',
+        });
+      }
+    } else if (value.materializationSpec !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['materializationSpec'],
+        message: 'materializationSpec is only valid when source.kind is "path"',
       });
     }
   });

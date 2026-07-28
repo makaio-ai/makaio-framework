@@ -4,6 +4,7 @@ import type { ExecutionLink, SpanRecord, WorkflowStepType } from '@makaio/contra
 import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
 import { workflowEngineSchema } from './schema.variants.js';
+import { isExecutionBoundAccessAllowed } from '../execution-bound-access.js';
 
 type WorkflowStepSpansTable = typeof workflowEngineSchema.sqlite.workflowStepSpans;
 type WorkflowExecutionLinksTable = typeof workflowEngineSchema.sqlite.workflowExecutionLinks;
@@ -63,6 +64,9 @@ export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () =>
 
   const unsubSetSpan = bus.on(WorkflowStorageSubjects.setSpan, async (ctx) => {
     const { span } = ctx.payload;
+    if (!isExecutionBoundAccessAllowed(ctx, span.executionId)) {
+      throw new Error(`Unauthorized: caller is not permitted to write spans for execution: ${span.executionId}`);
+    }
     await serializeDatabaseOperation(db, () =>
       db
         .insert(workflowStepSpans)

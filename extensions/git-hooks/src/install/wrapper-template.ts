@@ -40,6 +40,12 @@ export interface WrapperTemplateOptions {
    * Shell-quoted before insertion into the wrapper so spaces in paths are safe.
    */
   readonly receiverCommand: readonly string[];
+  /**
+   * Maximum receiver delivery time before the wrapper fails open.
+   *
+   * Defaults to two seconds for installed hooks.
+   */
+  readonly receiverTimeoutSeconds?: number;
 }
 
 /**
@@ -54,13 +60,17 @@ export interface WrapperTemplateOptions {
 export function renderHookWrapper(options: WrapperTemplateOptions): string {
   const receiver = options.receiverCommand.map(shellQuote).join(' ');
   const original = options.originalHook ? shellQuote(options.originalHook) : '';
+  const receiverTimeoutSeconds = options.receiverTimeoutSeconds ?? 2;
+  if (!Number.isSafeInteger(receiverTimeoutSeconds) || receiverTimeoutSeconds < 1) {
+    throw new Error('[git-hooks] Receiver timeout must be a positive integer number of seconds.');
+  }
   return `#!/bin/sh
 # makaio git-hooks wrapper - ${options.hookName}
 set +e
 HOOK_NAME=${shellQuote(options.hookName)}
 STATE_FILE=${shellQuote(options.stateFile)}
 ORIGINAL_HOOK=${original}
-RECEIVER_TIMEOUT_SECONDS=2
+RECEIVER_TIMEOUT_SECONDS=${receiverTimeoutSeconds}
 RECEIVER_KILL_GRACE_SECONDS=1
 TMP_STDIN="$(mktemp "\${TMPDIR:-/tmp}/makaio-git-hook.XXXXXX")" || exit 0
 trap 'rm -f "$TMP_STDIN"' EXIT HUP INT TERM
@@ -74,11 +84,25 @@ fi
   ${receiver} --event "$HOOK_NAME" --state "$STATE_FILE" -- "$@" < "$TMP_STDIN" >/dev/null 2>&1 &
   RECEIVER_PID=$!
   (
-    sleep "$RECEIVER_TIMEOUT_SECONDS"
+    WATCHDOG_SLEEP_PID=
+    stop_watchdog_sleep() {
+      if [ -n "$WATCHDOG_SLEEP_PID" ]; then
+        kill "$WATCHDOG_SLEEP_PID" 2>/dev/null || true
+        WATCHDOG_SLEEP_PID=
+      fi
+    }
+    trap 'stop_watchdog_sleep' EXIT HUP INT TERM
+    sleep "$RECEIVER_TIMEOUT_SECONDS" &
+    WATCHDOG_SLEEP_PID=$!
+    wait "$WATCHDOG_SLEEP_PID" 2>/dev/null || exit 0
+    WATCHDOG_SLEEP_PID=
     kill "$RECEIVER_PID" 2>/dev/null || true
-    sleep "$RECEIVER_KILL_GRACE_SECONDS"
+    sleep "$RECEIVER_KILL_GRACE_SECONDS" &
+    WATCHDOG_SLEEP_PID=$!
+    wait "$WATCHDOG_SLEEP_PID" 2>/dev/null || exit 0
+    WATCHDOG_SLEEP_PID=
     kill -KILL "$RECEIVER_PID" 2>/dev/null || true
-  ) &
+  ) </dev/null >/dev/null 2>&1 &
   RECEIVER_WATCHDOG_PID=$!
   wait "$RECEIVER_PID" 2>/dev/null
   RECEIVER_STATUS=$?

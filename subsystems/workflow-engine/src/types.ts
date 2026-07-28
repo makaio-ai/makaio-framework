@@ -3,6 +3,7 @@ import type {
   StationHandler,
   StepRunnerBusAuth,
   StepRunnerPlatformDefaults,
+  WorkerMaterializationSpec,
   WorkflowDefinition,
   WorkflowExecution,
   WorkflowRunContext,
@@ -40,12 +41,35 @@ export interface ExecutorConfig {
   /**
    * Absolute path to the Makaio data-home directory.
    *
-   * Forwarded to workflow workers as `context.makaioHome` so workers can
-   * locate stored config, keys, and installed extensions. When omitted the
-   * executor derives a default from the `MAKAIO_HOME` environment variable
-   * or `~/.makaio`.
+   * Used by the in-process executor to populate the ephemeral platform
+   * context exposed to station handlers. When omitted the executor derives
+   * a default from the `MAKAIO_HOME` environment variable or `~/.makaio`.
    */
   makaioHome?: string;
+}
+
+/**
+ * Input used by a host to resolve a durable workspace reference for a
+ * path-backed workflow start.
+ */
+export interface WorkflowMaterializationSpecResolution {
+  /** Durable execution identity being created. */
+  readonly executionId: string;
+  /** Definition identity selected for the execution. */
+  readonly workflowId: string;
+  /** Process-local path supplied by the start request or definition. */
+  readonly sourcePath: string;
+  /** Coordinator workspace root selected for the execution. */
+  readonly workspaceRoot: string;
+}
+
+/**
+ * Host seam for resolving an immutable workspace reference before a
+ * path-backed run context is persisted.
+ */
+export interface WorkflowMaterializationSpecResolver {
+  /** Resolve the portable materialization spec for one execution start. */
+  resolve(input: WorkflowMaterializationSpecResolution): Promise<WorkerMaterializationSpec | undefined>;
 }
 
 /**

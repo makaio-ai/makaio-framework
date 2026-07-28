@@ -12,7 +12,32 @@
 
 export { WorkflowExecutor } from './workflow-executor.js';
 export { WorkflowEngineService } from './workflow-engine-service.js';
+export type { WorkflowEngineServiceOptions } from './workflow-engine-service.js';
+export type {
+  WorkflowMaterializationSpecResolution,
+  WorkflowMaterializationSpecResolver,
+} from './types.js';
 export type { WorkflowSuccessFinalizer } from './workflow-execution-finalizer.js';
+export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
+export { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
+export type { AuthorityDispatchRunnerOptions } from './authority-dispatch-runner.js';
+export type {
+  ExecutionAttemptRepository,
+  ExecutionAttemptRecord,
+  RecoverableAttemptRecord,
+  ExecutionAttemptCreate,
+  ExecutionAttemptOutcomeCommit,
+  ExecutionAttemptOutcomeDecision,
+  ExecutionAttemptStatus,
+  ExecutionAttemptSettlementKind,
+  AllocationRefEvolution,
+  AllocationRefEvolutionDecision,
+  InfrastructureFailureDecision,
+  AllocationRecordingDecision,
+  PendingAttemptAbandonmentDecision,
+  ProvisioningClaimDecision,
+  ProvisioningFailureDecision,
+} from './execution-attempt-repository.js';
 export { WorkflowEngineToken, workflowEnginePackage, createWorkflowEnginePackage } from './package.js';
 export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';

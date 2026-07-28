@@ -1,9 +1,31 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { TransportReceiveContext } from '@makaio/core';
 import type { WorkflowDefinition, WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
 import { getValidatedInitialWorkflowState } from './workflow-state-validation.js';
+import { isExecutionBoundAccessAllowed } from './execution-bound-access.js';
+
+/** Product or host hook invoked after immutable authority state is persisted. */
+export type AuthorityStatePersistedHook = (context: {
+  readonly bus: IMakaioBus;
+  readonly executionId: string;
+  readonly definition: WorkflowDefinition;
+  readonly transport: TransportReceiveContext | undefined;
+}) => void | Promise<void>;
+
+const authorityStatePersistedHooks = new Set<AuthorityStatePersistedHook>();
+
+/**
+ * Register a host-provided post-persistence authority-state hook.
+ * @param hook - Callback invoked after a trusted authority snapshot persists.
+ * @returns Idempotent cleanup that unregisters the hook.
+ */
+export function registerAuthorityStatePersistedHook(hook: AuthorityStatePersistedHook): () => void {
+  authorityStatePersistedHooks.add(hook);
+  return () => authorityStatePersistedHooks.delete(hook);
+}
 
 /**
  * Persist state metadata learned only after an authority-owned runner loads its definition.
@@ -63,10 +85,16 @@ async function bootstrapAuthorityLoadedStateSnapshot(
     throw new Error(`Authority bootstrap identity mismatch for '${executionId}'`);
   }
   const storedSnapshot = stored.runContext.definitionSnapshot;
-  if (storedSnapshot !== undefined && !definitionsAreJsonEqual(storedSnapshot, definition)) {
+  if (storedSnapshot === undefined) {
+    await bus.request(WorkflowStorageSubjects.setRunContext, {
+      runContext: { ...stored.runContext, terminalAuthority: 'authority' },
+    });
+    return undefined;
+  }
+  if (!definitionsAreJsonEqual(storedSnapshot, definition)) {
     throw new Error(`Authority bootstrap definition mismatch for '${executionId}'`);
   }
-  const authoritativeDefinition = storedSnapshot ?? definition;
+  const authoritativeDefinition = storedSnapshot;
   await bus.request(WorkflowStorageSubjects.setRunContext, {
     runContext: {
       ...stored.runContext,
@@ -99,20 +127,25 @@ export function registerAuthorityStateBootstrapHandler(
   onPersisted?: (executionId: string, definition: WorkflowDefinition) => void,
 ): () => void {
   return bus.on(WorkflowSubjects.bootstrapAuthorityState, async (ctx) => {
-    const peer = ctx.transport?.peer;
-    const authorized =
-      ctx.origin.local ||
-      ctx.transport === undefined ||
-      (peer?.authenticated === true &&
-        peer.id === ctx.payload.executionId &&
-        (peer.kind === 'workflow-execution' || (peer.kind === 'e2e' && peer.encrypted === true)));
-    if (!authorized) throw new Error('authority state bootstrap is execution-bound');
+    if (!isExecutionBoundAccessAllowed(ctx, ctx.payload.executionId)) {
+      throw new Error('authority state bootstrap is execution-bound');
+    }
     const persistedDefinition = await bootstrapAuthorityLoadedStateSnapshot(
       bus,
       ctx.payload.executionId,
       ctx.payload.definition as WorkflowDefinition,
     );
-    if (persistedDefinition !== undefined) onPersisted?.(ctx.payload.executionId, persistedDefinition);
+    if (persistedDefinition !== undefined) {
+      onPersisted?.(ctx.payload.executionId, persistedDefinition);
+      for (const hook of authorityStatePersistedHooks) {
+        await hook({
+          bus,
+          executionId: ctx.payload.executionId,
+          definition: persistedDefinition,
+          transport: ctx.transport,
+        });
+      }
+    }
     ctx.setResult({ persisted: persistedDefinition !== undefined });
   });
 }

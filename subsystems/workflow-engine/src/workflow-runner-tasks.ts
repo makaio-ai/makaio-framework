@@ -5,6 +5,7 @@ import {
   type SuspensionStrategy,
   type WorkflowDefinition,
   type WorkflowRunContext,
+  type WorkflowRunnerCompletion,
   type WorkflowRunnerRunOptions,
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
@@ -16,6 +17,7 @@ import {
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
   commitExecutionLifecycleTransition,
+  isAcceptedRunnerResultStatus,
 } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
@@ -230,11 +232,6 @@ export interface RunnerTaskDeps {
   activeExecutions: Map<string, ActiveExecution>;
   /** Factory that produces a {@link FinalizerDeps} snapshot from executor state. */
   buildFinalizerDeps: () => FinalizerDeps;
-  /**
-   * Build worker context for an execution workspace.
-   * @param workspaceRoot - Resolved workspace root for this execution.
-   */
-  resolveWorkflowContext: (workspaceRoot: string) => WorkflowWorkerConfig['context'];
   /** Executor configuration. */
   config: ExecutorConfig;
 }
@@ -256,9 +253,9 @@ export interface DefinitionRunnerTaskParams {
   boundInputs: JsonValue;
   boundConfig: Record<string, unknown>;
   artifactRef?: WorkflowWorkerConfig['artifactRef'];
-  executionHints?: WorkflowWorkerConfig['executionHints'];
   scope: WorkflowDefinition['scope'];
-  workspaceRoot: string;
+  /** Portable workspace reference for a path-backed source. */
+  materializationSpec?: WorkflowWorkerConfig['materializationSpec'];
   /**
    * Suspension strategy persisted from the original run context.
    *
@@ -289,9 +286,48 @@ export interface FileRunnerTaskParams {
   boundInputs: JsonValue;
   boundConfig: Record<string, unknown>;
   artifactRef?: WorkflowWorkerConfig['artifactRef'];
-  executionHints?: WorkflowWorkerConfig['executionHints'];
   scope: WorkflowDefinition['scope'];
-  workspaceRoot: string;
+  materializationSpec: NonNullable<WorkflowRunContext['materializationSpec']>;
+}
+
+/**
+ * Handle a runner completion envelope by dispatching based on commitment state.
+ *
+ * - `uncommitted`: the runner produced the result but durable lifecycle
+ *   transition has not been performed. The host executor must finalize
+ *   terminal results or park paused executions.
+ * - `authority-committed`: the Authority outcome RPC has converged canonical
+ *   state. The host executor verifies durable state and releases active
+ *   execution ownership without invoking the fallback finalizer.
+ * @param deps - Runner task dependencies.
+ * @param completion - Completion envelope returned by the runner.
+ */
+async function handleRunnerCompletion(deps: RunnerTaskDeps, completion: WorkflowRunnerCompletion): Promise<void> {
+  const { result } = completion;
+
+  if (completion.state === 'authority-committed') {
+    const { execution } = await deps.buildFinalizerDeps().bus.request(WorkflowStorageSubjects.getExecution, {
+      executionId: result.executionId,
+    });
+    if (
+      !execution ||
+      execution.workflowId !== result.workflowId ||
+      !isAcceptedRunnerResultStatus(execution.status, result.status)
+    ) {
+      throw new Error(`Authority-committed runner result was not durably converged for '${result.executionId}'`);
+    }
+    // The Authority has committed and converged the outcome durably. Release
+    // active execution ownership without running the fallback finalizer.
+    deps.activeExecutions.delete(result.executionId);
+    return;
+  }
+
+  // Uncommitted: host executor owns finalization.
+  if (result.status === 'paused') {
+    await parkExecution(deps, result);
+    return;
+  }
+  await finalizeResolvedRunnerResult(deps, result);
 }
 
 /**
@@ -309,16 +345,14 @@ function buildFileWorkerConfig(deps: RunnerTaskDeps, params: FileRunnerTaskParam
     inputs: params.boundInputs,
     config: params.boundConfig,
     ...(params.artifactRef !== undefined ? { artifactRef: params.artifactRef } : {}),
-    ...(params.executionHints !== undefined ? { executionHints: params.executionHints } : {}),
     scope: params.scope,
     busUrl: deps.config.busUrl,
     busAuth: deps.config.busAuth,
-    context: deps.resolveWorkflowContext(params.workspaceRoot),
     env: deps.config.platformDefaults.env ?? {},
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
     suspensionStrategy: 'wait-in-process',
-    terminalAuthority: 'authority',
+    materializationSpec: params.materializationSpec,
   };
 }
 
@@ -345,12 +379,8 @@ export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerT
 
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal))
-    .then(async (result) => {
-      if (result.status === 'paused') {
-        await parkExecution(deps, result);
-        return;
-      }
-      await finalizeResolvedRunnerResult(deps, result);
+    .then(async (completion) => {
+      await handleRunnerCompletion(deps, completion);
     })
     .catch(async (error: unknown) => {
       if (controller.signal.aborted) {
@@ -403,16 +433,15 @@ function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRun
     inputs: params.boundInputs,
     config: params.boundConfig,
     ...(params.artifactRef !== undefined ? { artifactRef: params.artifactRef } : {}),
-    ...(params.executionHints !== undefined ? { executionHints: params.executionHints } : {}),
     scope: params.scope,
     busUrl: config.busUrl,
     busAuth: config.busAuth,
-    context: deps.resolveWorkflowContext(params.workspaceRoot),
     env: config.platformDefaults.env ?? {},
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
     suspensionStrategy: params.suspensionStrategy ?? 'wait-in-process',
-    terminalAuthority: params.terminalAuthority ?? 'authority',
+    ...(params.terminalAuthority !== undefined && { terminalAuthority: params.terminalAuthority }),
+    ...(params.materializationSpec !== undefined ? { materializationSpec: params.materializationSpec } : {}),
   };
 }
 
@@ -443,12 +472,8 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
 
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
-    .then(async (result) => {
-      if (result.status === 'paused') {
-        await parkExecution(deps, result);
-        return;
-      }
-      await finalizeResolvedRunnerResult(deps, result);
+    .then(async (completion) => {
+      await handleRunnerCompletion(deps, completion);
     })
     .catch(async (error: unknown) => {
       if (controller.signal.aborted) {
@@ -518,9 +543,8 @@ export function buildDefinitionRunnerParamsFromRunContext(
     boundInputs: runContext.inputs,
     boundConfig: runContext.config ?? {},
     ...(runContext.artifactRef !== undefined ? { artifactRef: runContext.artifactRef } : {}),
-    ...(runContext.executionHints !== undefined ? { executionHints: runContext.executionHints } : {}),
     scope: runContext.scope,
-    workspaceRoot: runContext.context.repoPath,
+    ...(runContext.materializationSpec !== undefined ? { materializationSpec: runContext.materializationSpec } : {}),
     suspensionStrategy: runContext.suspensionStrategy,
     terminalAuthority: runContext.terminalAuthority ?? 'authority',
     ...(dispatchMetadata !== undefined ? { dispatchMetadata } : {}),

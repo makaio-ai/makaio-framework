@@ -8,7 +8,7 @@ import { z } from 'zod';
  * - `exit-and-redispatch`: the worker exits and is re-dispatched via a fresh
  *   `provision()` call when the gate resolves; state must be externally persisted.
  * - `exit-and-resume`: the worker exits and is later resumed on its original
- *   provider-managed environment via `resumeExecution()`; requires provider support.
+ *   provider-managed environment via the provider's attach/resume path.
  */
 export const SuspensionStrategySchema = z.enum(['wait-in-process', 'exit-and-redispatch', 'exit-and-resume']);
 

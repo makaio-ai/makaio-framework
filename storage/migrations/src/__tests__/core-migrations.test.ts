@@ -319,6 +319,111 @@ describe('core migrations', () => {
     });
   });
 
+  it('upgrades pre-0030 workflow rows while replacing deprecated execution fields', async () => {
+    const migrations = readMigrations();
+    const migration = splitBeforeMigration(migrations, '0030_remote-worker-execution');
+
+    await withMemoryDatabaseAtMigrations(migration.before, async ({ db, rawSql }) => {
+      await rawSql.run(sql`
+        INSERT INTO workflow_definitions (
+          id, name, description, root, input_schema, config_schema, output_schema,
+          state, artifact, triggers, scope_type, scope_kind, scope_id, created_at,
+          updated_at, canvas_layout, source, success_finalizer_id, execution_hints
+        )
+        VALUES (
+          'workflow-before-0030', 'Workflow before 0030', 'preserved definition',
+          '{"nodes":[]}', '{"type":"object"}', NULL, NULL, 'active', NULL, '[]',
+          'global', '', '', 1000, 1001, NULL, '{"extension":"factory"}', NULL,
+          '{"deprecated":true}'
+        )
+      `);
+      await rawSql.run(sql`
+        INSERT INTO workflow_executions (
+          id, workflow_id, coordinator_session_id, status, inputs, started_at,
+          trigger_payload, scope_type
+        )
+        VALUES (
+          'execution-before-0030', 'workflow-before-0030', 'session-before-0030',
+          'running', '{"task":"upgrade"}', 1002, '{"trigger":"manual"}', 'global'
+        )
+      `);
+      await rawSql.run(sql`
+        INSERT INTO workflow_run_contexts (
+          execution_id, workflow_id, coordinator_session_id, source_kind, source_path,
+          source_filename, source_code, definition_snapshot, worker_manifest, inputs,
+          config, trigger_payload, artifact_ref, execution_hints, dispatch_metadata,
+          scope_type, scope_kind, scope_id, cancel_subject, context, env, created_at,
+          suspension_strategy, terminal_authority
+        )
+        VALUES (
+          'execution-before-0030', 'workflow-before-0030', 'session-before-0030',
+          'definition', '.factory/workflows/upgrade.ts', 'upgrade.ts', 'export default {}',
+          '{"id":"workflow-before-0030"}', '{"packages":[]}', '{"task":"upgrade"}',
+          '{"retries":1}', '{"trigger":"manual"}', '{"kind":"issue"}',
+          '{"deprecated":true}', '{"runner":"github-actions"}', 'global', '', '',
+          'workflow.execution-before-0030.cancel', '{"deprecated":true}',
+          '{"PATH":"/bin"}', 1003, 'none', '{"claimed":true}'
+        )
+      `);
+
+      await applyMigrations(db, [migration.target]);
+
+      const definitionColumns = await rawSql.all<TableColumnInfo>(sql.raw('PRAGMA table_info(workflow_definitions)'));
+      const runContextColumns = await readTableColumns(rawSql, 'workflow_run_contexts');
+      expect(definitionColumns.map(({ name }) => name)).toEqual(
+        expect.arrayContaining(['executable_source', 'requirements']),
+      );
+      expect(definitionColumns.map(({ name }) => name)).not.toContain('execution_hints');
+      expect(runContextColumns.has('execution_hints')).toBe(false);
+      expect(runContextColumns.has('context')).toBe(false);
+      expect(runContextColumns.has('materialization_spec')).toBe(true);
+
+      const definitions = await rawSql.all<{
+        name: string;
+        root: string;
+        source: string | null;
+        executable_source: string | null;
+        requirements: string | null;
+      }>(sql`
+        SELECT name, root, source, executable_source, requirements
+        FROM workflow_definitions
+        WHERE id = 'workflow-before-0030'
+      `);
+      const runContexts = await rawSql.all<{
+        workflow_id: string;
+        source_path: string | null;
+        source_code: string | null;
+        dispatch_metadata: string | null;
+        terminal_authority: string | null;
+        materialization_spec: string | null;
+      }>(sql`
+        SELECT workflow_id, source_path, source_code, dispatch_metadata, terminal_authority, materialization_spec
+        FROM workflow_run_contexts
+        WHERE execution_id = 'execution-before-0030'
+      `);
+
+      expect(definitions).toEqual([
+        {
+          name: 'Workflow before 0030',
+          root: '{"nodes":[]}',
+          source: '{"extension":"factory"}',
+          executable_source: null,
+          requirements: null,
+        },
+      ]);
+      expect(runContexts).toEqual([
+        {
+          workflow_id: 'workflow-before-0030',
+          source_path: '.factory/workflows/upgrade.ts',
+          source_code: 'export default {}',
+          dispatch_metadata: '{"runner":"github-actions"}',
+          terminal_authority: '{"claimed":true}',
+          materialization_spec: null,
+        },
+      ]);
+    });
+  });
+
   it('marks existing workflow frame outputs and gate resume data during migration', async () => {
     const migrations = readMigrations();
     const migration = splitBeforeMigration(migrations, '0006_free_tiger_shark');
