@@ -55,12 +55,6 @@ describe('ContainerBootstrapConfigSchema', () => {
     it('accepts a full normalized payload', () => {
       const result = ContainerBootstrapConfigSchema.safeParse({
         busAuthSecret: 'hmac-secret-abc',
-        relayPeer: { id: 'host-machine-1', signingPublicKey: 'host-signing-public-key' },
-        relayIdentity: {
-          id: 'wfx-1',
-          signingPublicKey: 'worker-signing-public-key',
-          signingPrivateKeyPem: 'worker-signing-private-key',
-        },
         gitToken: 'ghp_token123',
         runtimeEnv: { CUSTOM_VAR: 'private-runtime-value' },
         sessionRuntime,
@@ -69,12 +63,6 @@ describe('ContainerBootstrapConfigSchema', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.busAuthSecret).toBe('hmac-secret-abc');
-        expect(result.data.relayPeer).toEqual({ id: 'host-machine-1', signingPublicKey: 'host-signing-public-key' });
-        expect(result.data.relayIdentity).toEqual({
-          id: 'wfx-1',
-          signingPublicKey: 'worker-signing-public-key',
-          signingPrivateKeyPem: 'worker-signing-private-key',
-        });
         expect(result.data.gitToken).toBe('ghp_token123');
         expect(result.data.runtimeEnv).toEqual({ CUSTOM_VAR: 'private-runtime-value' });
         expect(result.data.sessionRuntime).toEqual(sessionRuntime);
@@ -100,6 +88,25 @@ describe('ContainerBootstrapConfigSchema', () => {
 
     it.each(['credentialEnv', 'providerEnv'])('rejects the legacy %s plaintext map', (field) => {
       expect(ContainerBootstrapConfigSchema.safeParse({ [field]: { KEY: 'secret' } }).success).toBe(false);
+    });
+
+    it('rejects the retired relay handshake material', () => {
+      expect(
+        ContainerBootstrapConfigSchema.safeParse({
+          busAuthSecret: 'hmac-secret-abc',
+          relayPeer: { id: 'host-machine-1', signingPublicKey: 'host-signing-public-key' },
+        }).success,
+      ).toBe(false);
+      expect(
+        ContainerBootstrapConfigSchema.safeParse({
+          busAuthSecret: 'hmac-secret-abc',
+          relayIdentity: {
+            id: 'wfx-1',
+            signingPublicKey: 'worker-signing-public-key',
+            signingPrivateKeyPem: 'worker-signing-private-key',
+          },
+        }).success,
+      ).toBe(false);
     });
 
     it('rejects non-object input', () => {
@@ -284,7 +291,6 @@ describe('ContainerBootstrapConfigSchema', () => {
       mode: 'container-isolated' as const,
       sessionId: 'session-1',
       adapter: 'codex-app-server',
-      busMode: 'relay' as const,
     };
     const isolatedExecutionTarget = {
       id: 'target-1',
@@ -294,7 +300,6 @@ describe('ContainerBootstrapConfigSchema', () => {
       enabled: true,
       createdAt: 0,
       updatedAt: 0,
-      busMode: 'relay' as const,
     };
 
     it.each([
@@ -324,25 +329,11 @@ describe('ContainerBootstrapConfigSchema', () => {
       >().toEqualTypeOf<ContainerIsolatedSpawnRequest>();
     });
 
-    it.each([
-      'ws://relay.example.test/socket',
-      'wss://relay.example.test/socket',
-    ])('accepts credential-free relay URL %s', (relayUrl) => {
-      expect(
-        ContainerIsolatedSpawnRequestSchema.safeParse({
-          ...isolatedDescriptor,
-          repoUrl: 'https://git.example.test/makaio.git',
-          relayUrl,
-        }).success,
-      ).toBe(true);
-    });
-
     it('applies the same credential-free URL contract to persisted execution targets', () => {
       expect(
         ContainerIsolatedExecutionTargetSchema.safeParse({
           ...isolatedExecutionTarget,
           repoUrl: 'ssh://git@git.example.test/makaio.git',
-          relayUrl: 'wss://relay.example.test/socket',
         }).success,
       ).toBe(true);
 
@@ -350,30 +341,29 @@ describe('ContainerBootstrapConfigSchema', () => {
       const result = ContainerIsolatedExecutionTargetSchema.safeParse({
         ...isolatedExecutionTarget,
         repoUrl: `https://user:${secret}@git.example.test/makaio.git`,
-        relayUrl: `wss://relay.example.test/socket?token=${secret}`,
       });
       expect(result.success).toBe(false);
       if (!result.success) expect(JSON.stringify(result.error.issues)).not.toContain(secret);
     });
 
     it.each([
-      ['repoUrl', 'https://git-user:repo-secret-must-not-echo@git.example.test/makaio.git'],
-      ['repoUrl', 'https://git.example.test/makaio.git?token=repo-secret-must-not-echo'],
-      ['repoUrl', 'https:git.example.test/repo-secret-must-not-echo'],
-      ['repoUrl', 'file:///repo-secret-must-not-echo'],
-      ['relayUrl', 'wss://relay-user:relay-secret-must-not-echo@relay.example.test/socket'],
-      ['relayUrl', 'wss://relay.example.test/socket?token=relay-secret-must-not-echo'],
-      ['relayUrl', 'wss:relay.example.test/relay-secret-must-not-echo'],
-      ['relayUrl', 'https://relay.example.test/relay-secret-must-not-echo'],
-    ] as const)('rejects secret-bearing or unsupported public %s without reflecting its value', (field, value) => {
-      const result = ContainerIsolatedSpawnRequestSchema.safeParse({
-        ...isolatedDescriptor,
-        repoUrl: 'https://git.example.test/makaio.git',
-        [field]: value,
-      });
+      'https://git-user:repo-secret-must-not-echo@git.example.test/makaio.git',
+      'https://git.example.test/makaio.git?token=repo-secret-must-not-echo',
+      'https:git.example.test/repo-secret-must-not-echo',
+      'file:///repo-secret-must-not-echo',
+    ])('rejects secret-bearing or unsupported public repoUrl without reflecting its value', (repoUrl) => {
+      const result = ContainerIsolatedSpawnRequestSchema.safeParse({ ...isolatedDescriptor, repoUrl });
 
       expect(result.success).toBe(false);
       if (!result.success) expect(JSON.stringify(result.error.issues)).not.toContain('must-not-echo');
+    });
+
+    it('rejects the retired relay bus coordinates on the public descriptor', () => {
+      const base = { ...isolatedDescriptor, repoUrl: 'https://git.example.test/makaio.git' };
+      expect(ContainerIsolatedSpawnRequestSchema.safeParse({ ...base, busMode: 'relay' }).success).toBe(false);
+      expect(
+        ContainerIsolatedSpawnRequestSchema.safeParse({ ...base, relayUrl: 'wss://relay.example.test/socket' }).success,
+      ).toBe(false);
     });
   });
 

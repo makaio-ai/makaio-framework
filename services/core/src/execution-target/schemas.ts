@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
-import { CredentialFreeGitRemoteSchema, CredentialFreeRelayUrlSchema } from './container-schemas.js';
+import { CredentialFreeGitRemoteSchema } from './container-schemas.js';
 
 // ── Shared base (embedded into each variant, not used standalone) ──
 
@@ -38,7 +38,9 @@ export const ContainerLocalExecutionTargetSchema = ExecutionTargetBaseSchema.ext
 
 // ── Variant: container-isolated ──
 // Self-contained Docker. Clones repo + checks out branch internally.
-// No host filesystem dependency. Works locally or in the cloud.
+// No host filesystem dependency. The container reaches the host bus over
+// `host.docker.internal`; remote container platforms need a provider-owned
+// secret-delivery strategy before they can be targeted.
 
 export const ContainerIsolatedExecutionTargetSchema = ExecutionTargetBaseSchema.extend({
   type: z.literal('container-isolated'),
@@ -46,14 +48,6 @@ export const ContainerIsolatedExecutionTargetSchema = ExecutionTargetBaseSchema.
   image: z.string().optional(),
   /** Extra environment variables. */
   env: z.record(z.string(), z.string()).optional(),
-  /**
-   * Bus connectivity mode.
-   * - 'host': ws://host.docker.internal (container is on local machine)
-   * - 'relay': wss://relay.makaio.dev (container is remote/cloud)
-   */
-  busMode: z.enum(['host', 'relay']),
-  /** Relay URL override for 'relay' mode. */
-  relayUrl: CredentialFreeRelayUrlSchema.optional(),
   /**
    * Git credential mode for cloning inside the container.
    * - 'token': inject GITHUB_TOKEN (or equivalent) as env var

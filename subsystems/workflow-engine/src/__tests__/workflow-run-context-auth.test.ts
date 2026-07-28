@@ -244,7 +244,14 @@ describe('workflow.getRunContext authorization', () => {
     });
   });
 
-  it('allows encrypted relay peers bound to their own execution identity', async () => {
+  // Encryption and peer-id equality are not evidence of an Authority dispatch:
+  // no transport mints an `e2e` identity for a workflow execution, and an `e2e`
+  // peer id carries no allowed-subjects fence. Both are denied, including the
+  // case where the id literally equals the requested execution.
+  it.each([
+    ['whose id equals the requested execution', runContext.executionId],
+    ['bound to a different execution', 'wfx-other'],
+  ])('denies authenticated encrypted e2e peers %s', async (_label, peerId) => {
     const bus = createWorkflowTestBus();
     registerWorkflowStorageDelegationHandlers(bus);
     bus.on(WorkflowStorageSubjects.getRunContext, (ctx) => ctx.setResult({ runContext }));
@@ -253,13 +260,13 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: { kind: 'e2e', id: runContext.executionId, authenticated: true, encrypted: true },
+      peer: { kind: 'e2e', id: peerId, authenticated: true, encrypted: true },
     });
 
     expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
       type: 'response',
       correlationId: `corr-${runContext.executionId}`,
-      result: runContext,
+      error: { message: expect.stringContaining('Unauthorized') },
     });
   });
 
@@ -321,25 +328,6 @@ describe('workflow.getRunContext authorization', () => {
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
       peer: { kind: 'machine', id: 'machine-1', authenticated: true, encrypted: true },
-    });
-
-    expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
-      type: 'response',
-      correlationId: `corr-${runContext.executionId}`,
-      error: { message: expect.stringContaining('Unauthorized') },
-    });
-  });
-
-  it('denies relay peers for a different execution', async () => {
-    const bus = createWorkflowTestBus();
-    registerWorkflowStorageDelegationHandlers(bus);
-    bus.on(WorkflowStorageSubjects.getRunContext, (ctx) => ctx.setResult({ runContext }));
-    const transport = new StubTransport();
-    bus.registerTransport(transport);
-
-    await transport.requestRunContext(runContext.executionId, {
-      transportName: 'remote-workflow',
-      peer: { kind: 'e2e', id: 'wfx-other', authenticated: true, encrypted: true },
     });
 
     expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
@@ -491,16 +479,45 @@ describe('workflow.finalizeDelegateResult authority gateway', () => {
 });
 
 describe('workflow.completeExternalExecution authorization', () => {
-  it('allows an authenticated encrypted relay peer bound to the external execution', async () => {
+  it('allows a local caller to settle an external execution', async () => {
     const bus = createWorkflowTestBus();
     const dbContext = await createTestDbForBus(bus);
     const cleanups = registerWorkflowStorageDelegationHandlers(bus);
-    const executionId = 'wfx-ext-authorized-completion';
+    const executionId = 'wfx-ext-local-completion';
 
     try {
       await bus.request(WorkflowSubjects.registerExternalExecution, {
         executionId,
-        name: 'authorized-external-completion',
+        name: 'local-external-completion',
+        startedAt: 1_000,
+      });
+
+      await expect(
+        bus.request(WorkflowSubjects.completeExternalExecution, {
+          executionId,
+          status: 'completed',
+          completedAt: 1_250,
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await expect(bus.request(WorkflowSubjects.getExecution, { executionId })).resolves.toMatchObject({
+        execution: { status: 'completed', completedAt: 1_250 },
+      });
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+      dbContext.cleanup();
+    }
+  });
+
+  it('denies an authenticated encrypted e2e peer whose id equals the external execution', async () => {
+    const bus = createWorkflowTestBus();
+    const dbContext = await createTestDbForBus(bus);
+    const cleanups = registerWorkflowStorageDelegationHandlers(bus);
+    const executionId = 'wfx-ext-e2e-completion';
+
+    try {
+      await bus.request(WorkflowSubjects.registerExternalExecution, {
+        executionId,
+        name: 'e2e-external-completion',
         startedAt: 1_000,
       });
       const transport = new StubTransport();
@@ -513,10 +530,10 @@ describe('workflow.completeExternalExecution authorization', () => {
       expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
         type: 'response',
         correlationId: `external-complete-corr-${executionId}`,
-        result: { success: true },
+        error: { message: expect.stringContaining('Unauthorized') },
       });
       await expect(bus.request(WorkflowSubjects.getExecution, { executionId })).resolves.toMatchObject({
-        execution: { status: 'completed', completedAt: 1_250 },
+        execution: { status: 'running', completedAt: undefined },
       });
     } finally {
       cleanups.forEach((cleanup) => cleanup());

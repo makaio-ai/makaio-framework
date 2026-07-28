@@ -7,6 +7,7 @@ import {
   type WorkflowDelegateRoleNode,
   type WorkflowDefinition,
 } from '@makaio/contracts';
+import { isExecutionBoundAccessAllowed } from './execution-bound-access.js';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
@@ -73,15 +74,8 @@ export function registerDelegateResultFinalizationGateway(bus: IMakaioBus): () =
  * @param executionId - Requested workflow execution.
  */
 function assertExecutionAttemptPeer(ctx: BaseMessageContext, executionId: string): void {
-  if (ctx.origin.local) return;
-  const peer = ctx.transport?.peer;
-  if (
-    peer?.authenticated !== true ||
-    peer.kind !== 'workflow-execution-attempt' ||
-    peer.claims?.['executionId'] !== executionId
-  ) {
-    throw new Error('delegate result finalization requires its authenticated workflow-execution-attempt peer');
-  }
+  if (isExecutionBoundAccessAllowed(ctx, executionId)) return;
+  throw new Error('delegate result finalization requires its authenticated workflow-execution-attempt peer');
 }
 
 /**

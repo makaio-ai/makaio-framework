@@ -7,6 +7,7 @@ import {
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import type { BaseMessageContext } from '@makaio/core';
+import { resolveExecutionAttemptPeer, type ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
@@ -16,24 +17,11 @@ import { WorkflowSubjects } from './namespace.js';
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Authenticated attempt identity derived from transport peer context.
- *
- * The outcome handler derives identity from the authenticated peer
- * rather than the payload so the worker cannot impersonate another attempt.
- */
-interface ResolvedAttemptIdentity {
-  /** Authority-created attempt identifier (peer.id). */
-  readonly executionAttemptId: string;
-  /** Workflow execution identifier (peer.claims.executionId). */
-  readonly executionId: string;
-}
-
-/**
  * Resolve authenticated attempt identity from bus message context.
  *
- * Remote callers must present an authenticated `workflow-execution-attempt`
- * peer with an `executionId` claim. The identity is derived from the peer
- * context, not the payload, so workers cannot impersonate another attempt.
+ * Remote callers are resolved through the subsystem's shared attempt-peer
+ * derivation, so the identity comes from the authenticated peer rather than
+ * the payload and a worker cannot impersonate another attempt.
  *
  * Local callers (the Authority process itself) are trusted and fall back
  * to the payload identity. This path exists because the executor may accept
@@ -45,7 +33,7 @@ interface ResolvedAttemptIdentity {
 function resolveAttemptIdentity(
   ctx: BaseMessageContext,
   payload: { executionAttemptId: string; executionId: string },
-): ResolvedAttemptIdentity | null {
+): ExecutionAttemptPeerIdentity | null {
   // Local callers (Authority process) are implicitly trusted.
   if (ctx.origin.local) {
     return {
@@ -54,24 +42,7 @@ function resolveAttemptIdentity(
     };
   }
 
-  const peer = ctx.transport?.peer;
-  if (peer?.authenticated !== true) {
-    return null;
-  }
-  if (peer.kind !== 'workflow-execution-attempt') {
-    return null;
-  }
-  const executionAttemptId = peer.id;
-  const executionId = peer.claims?.['executionId'];
-  if (
-    typeof executionAttemptId !== 'string' ||
-    executionAttemptId.length === 0 ||
-    typeof executionId !== 'string' ||
-    executionId.length === 0
-  ) {
-    return null;
-  }
-  return { executionAttemptId, executionId };
+  return resolveExecutionAttemptPeer(ctx);
 }
 
 // ─────────────────────────────────────────────────────────────
