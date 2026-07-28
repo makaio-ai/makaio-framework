@@ -16,6 +16,13 @@
  * symlink creation, credentials are copied into the isolated session directory
  * instead.
  *
+ * The session directory is an ephemeral auth/settings sandbox whose lifetime
+ * is one connector lease — native session state is explicitly out of its
+ * scope. For inheriting policies the `projects/` transcript store is therefore
+ * linked to the durable config source rather than created inside the lease, so
+ * `--resume`/`--fork-session` from any later lease of the same source can find
+ * conversations that earlier leases recorded.
+ *
  * Returns the isolated config environment together with whether native
  * credentials were materialized for the requested inheritance policy.
  * @packageDocumentation
@@ -182,9 +189,58 @@ async function inheritAuthState(
   }
 }
 
+/**
+ * Link the lease's `projects/` transcript store to a durable directory.
+ *
+ * Claude Code writes conversation transcripts to
+ * `$CLAUDE_CONFIG_DIR/projects/<cwd-derived-dir>/<sessionId>.jsonl` and
+ * resolves `--resume`/`--fork-session` against that same store. A transcript
+ * written inside the lease would be deleted with it when the connector closes,
+ * leaving nothing for a successor lease (rehydration, fork child) to resume.
+ * Linking `projects/` out of the lease keeps native session state on the
+ * durable side of the lease boundary: every lease of the same config source
+ * shares one store.
+ * @param sessionDir - Session-scoped config directory (the lease).
+ * @param targetStoreDir - Durable directory that owns transcripts.
+ * @param platform - Host platform; Windows uses a junction so directory links
+ *   need no elevated privilege.
+ */
+async function linkDurableProjectsStore(
+  sessionDir: string,
+  targetStoreDir: string,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  const linkPath = path.join(sessionDir, 'projects');
+  // Resolve once: a relative target would be created against process.cwd()
+  // but dereferenced relative to the link's parent — two different places.
+  const resolvedTargetStoreDir = path.resolve(targetStoreDir);
+  await fs.mkdir(resolvedTargetStoreDir, { recursive: true });
+  // `unlink` never recurses: a stale link is replaced, while a real directory
+  // that unexpectedly holds transcripts fails loudly instead of being deleted.
+  try {
+    await fs.unlink(linkPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  await fs.symlink(resolvedTargetStoreDir, linkPath, platform === 'win32' ? 'junction' : 'dir');
+}
+
 // ---------------------------------------------------------------------------
 // Exported handler
 // ---------------------------------------------------------------------------
+
+/** Optional dependencies for {@link handleClaudeCodeSessionConfigSetup}. */
+export interface ClaudeCodeSessionConfigSetupOptions {
+  /**
+   * Durable directory that owns the linked `projects/` transcript store.
+   *
+   * Defaults to `projects/` under the resolved source config directory, so
+   * transcripts live beside the auth they were recorded with. Injectable so
+   * test harnesses can keep transcripts in a suite-scoped store instead of
+   * the operator's real config home.
+   */
+  projectsStoreDir?: string;
+}
 
 /**
  * Handle `client:claude-code.sessionConfig.setup` by seeding the
@@ -204,16 +260,22 @@ async function inheritAuthState(
  * - `.claude.json` — filtered to auth/onboarding keys for `full` and
  *   `auth-only`; when `projectDir` is provided, only the matching folder trust
  *   marker is added. Other project and cache state is not inherited.
+ * - `projects/` — linked to the durable transcript store for `full` and
+ *   `auth-only`, so native session state survives the lease and stays
+ *   resumable from successor leases. `empty` inheritance deliberately owns no
+ *   durable state: its transcripts die with the lease.
  *
  * This function is intentionally pure with respect to the bus — it receives
  * the already-validated payload and performs local filesystem/keychain
  * operations without exposing credential material as a bus payload.
  * @param payload - Validated setup-delegation payload carrying `sessionDir`,
  *   `baseConfigDir`, and `platform`
+ * @param options - Optional overrides for durable-store placement.
  * @returns Session environment and native-auth materialization status.
  */
 export async function handleClaudeCodeSessionConfigSetup(
   payload: SessionConfigSetupRequest,
+  options?: ClaudeCodeSessionConfigSetupOptions,
 ): Promise<SessionConfigSetupResponse> {
   const { sessionDir, baseConfigDir, platform, configInheritance, projectDir } = payload;
   const sourceConfigDir = resolveSourceConfigDir(sessionDir, baseConfigDir);
@@ -254,6 +316,14 @@ export async function handleClaudeCodeSessionConfigSetup(
     } else {
       await clearClaudeCodeNativeCredentialsForSession({ sessionDir, platform });
     }
+  }
+
+  if (configInheritance !== 'empty') {
+    await linkDurableProjectsStore(
+      sessionDir,
+      options?.projectsStoreDir ?? path.join(sourceConfigDir, 'projects'),
+      platform,
+    );
   }
 
   await handleClaudeCodeConfigPrime({

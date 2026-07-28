@@ -34,6 +34,12 @@ export const ClaudeCodeSessionConfigSchemas = {
    * Dispatched by {@link ClientSessionConfigService} after creating the session
    * directory.  The handler applies `configInheritance` to decide whether to
    * inherit settings plus auth, auth only, or an empty config shell.
+   *
+   * The seeded directory is an auth/settings sandbox scoped to one connector
+   * lease.  Native session state is out of lease scope: for inheriting
+   * policies the handler links the `projects/` transcript store to the
+   * durable config source, so conversations recorded under one lease remain
+   * natively resumable from successor leases.
    */
   'sessionConfig.setup': {
     request: SessionConfigSetupRequestSchema,

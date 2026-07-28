@@ -358,4 +358,97 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
 
     expect(nativeCredentialMockState.clearCalls).toEqual([{ sessionDir, platform: 'darwin' }]);
   });
+
+  it('links the lease projects store to the source config dir', async () => {
+    const sourceDir = await makeTempDir('makaio-claude-source-');
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+
+    await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: sourceDir,
+      platform: 'linux',
+      configInheritance: 'auth-only',
+    });
+
+    await expect(fs.readlink(path.join(sessionDir, 'projects'))).resolves.toBe(path.join(sourceDir, 'projects'));
+    const storeStat = await fs.stat(path.join(sourceDir, 'projects'));
+    expect(storeStat.isDirectory()).toBe(true);
+  });
+
+  it('honors an injected durable projects store dir', async () => {
+    const sourceDir = await makeTempDir('makaio-claude-source-');
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+    const storeDir = path.join(await makeTempDir('makaio-claude-store-'), 'projects-store');
+
+    await handleClaudeCodeSessionConfigSetup(
+      {
+        sessionDir,
+        baseConfigDir: sourceDir,
+        platform: 'linux',
+        configInheritance: 'full',
+      },
+      { projectsStoreDir: storeDir },
+    );
+
+    await expect(fs.readlink(path.join(sessionDir, 'projects'))).resolves.toBe(storeDir);
+  });
+
+  it('empty inheritance owns no durable projects store', async () => {
+    const sourceDir = await makeTempDir('makaio-claude-source-');
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+
+    await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: sourceDir,
+      platform: 'linux',
+      configInheritance: 'empty',
+    });
+
+    await expect(fs.lstat(path.join(sessionDir, 'projects'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('replaces a stale projects link on repeated setup', async () => {
+    const firstSourceDir = await makeTempDir('makaio-claude-source-');
+    const secondSourceDir = await makeTempDir('makaio-claude-source-');
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+
+    await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: firstSourceDir,
+      platform: 'linux',
+      configInheritance: 'auth-only',
+    });
+    await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: secondSourceDir,
+      platform: 'linux',
+      configInheritance: 'auth-only',
+    });
+
+    await expect(fs.readlink(path.join(sessionDir, 'projects'))).resolves.toBe(path.join(secondSourceDir, 'projects'));
+  });
+
+  it('lease removal leaves transcripts in the durable store untouched', async () => {
+    const sourceDir = await makeTempDir('makaio-claude-source-');
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+
+    await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: sourceDir,
+      platform: 'linux',
+      configInheritance: 'auth-only',
+    });
+    // Write a transcript the way the CLI does: through the lease's own path.
+    const transcriptDir = path.join(sessionDir, 'projects', '-repo');
+    await fs.mkdir(transcriptDir, { recursive: true });
+    await fs.writeFile(path.join(transcriptDir, 'session-1.jsonl'), '{}\n', 'utf-8');
+
+    // Same primitive ClientSessionConfigService and the conformance fixture
+    // use for lease teardown — it must remove the link, never traverse it.
+    await fs.rm(sessionDir, { recursive: true, force: true });
+
+    await expect(fs.readFile(path.join(sourceDir, 'projects', '-repo', 'session-1.jsonl'), 'utf-8')).resolves.toBe(
+      '{}\n',
+    );
+  });
 });

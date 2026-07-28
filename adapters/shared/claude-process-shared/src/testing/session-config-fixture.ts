@@ -115,13 +115,22 @@ async function createFixtureState(): Promise<SessionConfigFixtureState> {
         const sessionDir = path.join(root, ctx.payload.clientId, 'sessions', ctx.payload.leaseId);
         try {
           await fs.mkdir(sessionDir, { recursive: true });
-          const setup = await handleClaudeCodeSessionConfigSetup({
-            sessionDir,
-            baseConfigDir: ctx.payload.baseConfigDir ?? sessionDir,
-            projectDir: ctx.payload.projectDir,
-            platform: resolvePlatform(),
-            configInheritance: ctx.payload.configInheritance ?? 'auth-only',
-          });
+          const setup = await handleClaudeCodeSessionConfigSetup(
+            {
+              sessionDir,
+              baseConfigDir: ctx.payload.baseConfigDir ?? sessionDir,
+              projectDir: ctx.payload.projectDir,
+              platform: resolvePlatform(),
+              configInheritance: ctx.payload.configInheritance ?? 'auth-only',
+            },
+            {
+              // Transcripts must outlive individual leases so native
+              // resume/fork works across connector generations, but they must
+              // not land in the operator's real config home — the fixture
+              // root gives them a suite-scoped durable store instead.
+              projectsStoreDir: path.join(root, 'projects-store'),
+            },
+          );
           ctx.setResult({
             sessionDir,
             env: setup.env ?? {},
