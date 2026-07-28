@@ -38,7 +38,7 @@ import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
 import { WorkflowEngineToken } from '@makaio/subsystem-workflow-engine';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
-import { bootMakaioRuntimeCore, type MakaioRuntime } from '../boot.js';
+import { bootMakaioRuntimeCore, createCompositeWorkspaceRootResolver, type MakaioRuntime } from '../boot.js';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
 import { RuntimeSubjects } from '../bus/runtime/namespace.js';
 
@@ -87,6 +87,27 @@ class FakeTransportProvider implements TransportProvider {
     this.disconnectCount += 1;
   }
 }
+
+describe('createCompositeWorkspaceRootResolver', () => {
+  it('prefers a late-bound dynamic root and falls back to the explicit host resolver', async () => {
+    const runnerResolver = vi.fn(async (workspaceId: string) =>
+      workspaceId === 'runner' ? '/runner/workspace' : undefined,
+    );
+    const fallbackResolver = vi.fn(async (workspaceId: string) => `/fallback/${workspaceId}`);
+    const resolveWorkspaceRoot = createCompositeWorkspaceRootResolver(
+      async (workspaceId) => (workspaceId === 'factory' ? '/dynamic/factory' : undefined),
+      runnerResolver,
+      fallbackResolver,
+    );
+
+    await expect(resolveWorkspaceRoot('factory')).resolves.toBe('/dynamic/factory');
+    expect(runnerResolver).not.toHaveBeenCalled();
+    expect(fallbackResolver).not.toHaveBeenCalled();
+    await expect(resolveWorkspaceRoot('runner')).resolves.toBe('/runner/workspace');
+    expect(fallbackResolver).not.toHaveBeenCalled();
+    await expect(resolveWorkspaceRoot('static')).resolves.toBe('/fallback/static');
+  });
+});
 
 /**
  * In-memory config storage for boot seam tests.

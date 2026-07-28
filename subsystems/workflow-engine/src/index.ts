@@ -16,6 +16,7 @@ export type { WorkflowEngineServiceOptions } from './workflow-engine-service.js'
 export type {
   WorkflowMaterializationSpecResolution,
   WorkflowMaterializationSpecResolver,
+  WorkflowWorkspaceRootResolver,
 } from './types.js';
 export type { WorkflowSuccessFinalizer } from './workflow-execution-finalizer.js';
 export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';

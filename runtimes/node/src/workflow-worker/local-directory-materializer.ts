@@ -45,6 +45,7 @@ export class MaterializationError extends Error {
       | 'unknown-workspace'
       | 'containment-violation'
       | 'symlink-escape'
+      | 'unsupported-filesystem-entry'
       | 'digest-mismatch'
       | 'snapshot-id-mismatch'
       | 'source-path-mismatch'
@@ -180,8 +181,55 @@ export async function computeFileDigest(filePath: string, algorithm: string): Pr
   return crypto.createHash(algorithm).update(content).digest('base64');
 }
 
+/** Workspace entries excluded because they are not part of workflow sources. */
+const ROOT_DIGEST_EXCLUDED_ENTRY_NAMES = new Set(['.git', 'node_modules']);
+
+/**
+ * Match reserved digest exclusions without permitting case variants on
+ * case-insensitive filesystems.
+ * @param entryName - One workspace-relative path segment.
+ * @returns Whether the segment names content excluded from the root digest.
+ */
+function isRootDigestExcludedEntryName(entryName: string): boolean {
+  return ROOT_DIGEST_EXCLUDED_ENTRY_NAMES.has(entryName.toLowerCase());
+}
+
+/**
+ * Determine whether a directory entry is an excluded root entry on the
+ * current filesystem.
+ *
+ * Case variants are excluded only when they resolve to the same filesystem
+ * entry as the canonical spelling. On case-sensitive filesystems, names such
+ * as `NODE_MODULES` remain ordinary workspace content and must be hashed.
+ * @param directory - Directory containing the entry.
+ * @param entryName - Name returned by the directory walk.
+ * @returns Whether the entry is an exact exclusion or a filesystem case alias.
+ */
+async function isRootDigestExcludedEntry(directory: string, entryName: string): Promise<boolean> {
+  const canonicalName = entryName.toLowerCase();
+  if (!ROOT_DIGEST_EXCLUDED_ENTRY_NAMES.has(canonicalName)) {
+    return false;
+  }
+  if (entryName === canonicalName) {
+    return true;
+  }
+
+  try {
+    const [entryStats, canonicalStats] = await Promise.all([
+      fs.lstat(path.join(directory, entryName)),
+      fs.lstat(path.join(directory, canonicalName)),
+    ]);
+    return entryStats.dev === canonicalStats.dev && entryStats.ino === canonicalStats.ino;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
 /** Directories excluded because they are not part of a package artifact. */
-const CONTRIBUTION_PACKAGE_EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules']);
+const CONTRIBUTION_PACKAGE_EXCLUDED_DIRECTORIES = ROOT_DIGEST_EXCLUDED_ENTRY_NAMES;
 
 /** Host filesystem metadata excluded from a contribution package digest. */
 const CONTRIBUTION_PACKAGE_EXCLUDED_FILES = new Set(['.DS_Store']);
@@ -257,7 +305,10 @@ export async function computeContributionPackageDigest(packageRoot: string, algo
  *
  * Walks the directory recursively, sorts entries by relative path,
  * and feeds each file's content into the hash. This produces a
- * stable, reproducible digest regardless of filesystem order.
+ * stable, reproducible digest regardless of filesystem order. Git metadata
+ * and dependency directories are excluded, but every other entry must be a
+ * regular file or directory so no unverified filesystem object can affect
+ * workflow execution.
  * @param dirPath - Absolute path to the directory.
  * @param algorithm - Hash algorithm (e.g. `sha256`).
  * @returns SRI-format integrity string (e.g. `sha256-abc123`).
@@ -265,8 +316,6 @@ export async function computeContributionPackageDigest(packageRoot: string, algo
 export async function computeDirectoryDigest(dirPath: string, algorithm: string = 'sha256'): Promise<string> {
   const hash = crypto.createHash(algorithm);
   const entries: string[] = [];
-  const volatileDirectoryNames = new Set(['.git', 'node_modules']);
-
   /**
    * Recursively collect all file paths within a directory.
    * @param dir - Absolute path to the directory to walk.
@@ -277,15 +326,28 @@ export async function computeDirectoryDigest(dirPath: string, algorithm: string 
       const fullPath = path.join(dir, dirent.name);
       // Git stores linked-worktree metadata in a `.git` file rather than a
       // directory. Exclude volatile metadata before inspecting its entry type.
-      if (volatileDirectoryNames.has(dirent.name)) {
+      if (await isRootDigestExcludedEntry(dir, dirent.name)) {
         continue;
       }
       if (dirent.isDirectory()) {
         // Hidden directories may contain workflow sources and must participate in integrity checks.
         await walk(fullPath);
-      } else if (dirent.isFile()) {
-        entries.push(path.relative(dirPath, fullPath));
+        continue;
       }
+      if (dirent.isFile()) {
+        entries.push(path.relative(dirPath, fullPath));
+        continue;
+      }
+      if (dirent.isSymbolicLink()) {
+        throw new MaterializationError(
+          `Workspace root contains a symbolic link: ${path.relative(dirPath, fullPath)}`,
+          'symlink-escape',
+        );
+      }
+      throw new MaterializationError(
+        `Workspace root contains an unsupported filesystem entry: ${path.relative(dirPath, fullPath)}`,
+        'unsupported-filesystem-entry',
+      );
     }
   }
 
@@ -497,6 +559,13 @@ export async function materializeLocalDirectory(
   // Step 3: Verify source path containment
   const absoluteSourcePath = path.resolve(workspaceRoot, spec.sourcePath);
   assertContainedIn(absoluteSourcePath, workspaceRoot, 'Source path');
+  const sourcePathSegments = path.relative(workspaceRoot, absoluteSourcePath).split(path.sep);
+  if (sourcePathSegments.some(isRootDigestExcludedEntryName)) {
+    throw new MaterializationError(
+      `Workflow source path selects excluded workspace content: ${spec.sourcePath}`,
+      'source-path-mismatch',
+    );
+  }
 
   // Step 4: Check for symlink escape
   await assertNoSymlinkEscape(absoluteSourcePath, workspaceRoot, 'Source path', realWorkspaceRoot);

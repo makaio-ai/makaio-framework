@@ -5,7 +5,7 @@ import { BusEventTriggerEvaluator } from './bus-event-trigger-evaluator.js';
 import { CronTriggerEvaluator } from './cron-trigger-evaluator.js';
 import { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { ExecutionAttemptRepository } from './execution-attempt-repository.js';
-import type { ExecutorConfig, WorkflowMaterializationSpecResolver } from './types.js';
+import type { ExecutorConfig, WorkflowMaterializationSpecResolver, WorkflowWorkspaceRootResolver } from './types.js';
 import { WorkflowExecutor } from './workflow-executor.js';
 
 /**
@@ -64,6 +64,7 @@ export class WorkflowEngineService extends BaseService {
   private readonly busEventTriggerEvaluator: BusEventTriggerEvaluator;
   private readonly cronTriggerEvaluator: CronTriggerEvaluator;
   private readonly attemptAuthority: ExecutionAttemptAuthority | undefined;
+  private readonly workspaceRootResolvers = new Set<WorkflowWorkspaceRootResolver>();
 
   /**
    * @param bus - Shared runtime bus.
@@ -167,6 +168,31 @@ export class WorkflowEngineService extends BaseService {
    */
   public registerWorkflowMaterializationSpecResolver(resolver: WorkflowMaterializationSpecResolver): () => void {
     return this.workflowExecutor.registerWorkflowMaterializationSpecResolver(resolver);
+  }
+
+  /**
+   * Register a host-owned workspace-root resolver.
+   * @param resolver - Resolver to consult before the boot-level fallback resolver.
+   * @returns Idempotent cleanup that unregisters this exact resolver.
+   */
+  public registerWorkspaceRootResolver(resolver: WorkflowWorkspaceRootResolver): () => void {
+    this.workspaceRootResolvers.add(resolver);
+    return () => {
+      this.workspaceRootResolvers.delete(resolver);
+    };
+  }
+
+  /**
+   * Resolve a portable workspace identifier through registered host resolvers.
+   * @param workspaceId - Portable workspace identifier from a materialization spec.
+   * @returns The first registered root, or `undefined` when no resolver recognizes the identifier.
+   */
+  public async resolveWorkspaceRoot(workspaceId: string): Promise<string | undefined> {
+    for (const resolver of this.workspaceRootResolvers) {
+      const workspaceRoot = await resolver(workspaceId);
+      if (workspaceRoot !== undefined) return workspaceRoot;
+    }
+    return undefined;
   }
 
   /**
