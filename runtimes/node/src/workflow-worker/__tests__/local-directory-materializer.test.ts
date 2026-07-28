@@ -177,14 +177,32 @@ describe('materializeLocalDirectory', () => {
       // Create a symlink inside the workspace pointing outside
       await fs.symlink(outsideFile, path.join(workspaceRoot, 'workflow.ts'));
 
-      const digest = await computeDirectoryDigest(workspaceRoot);
+      await expect(
+        materializeLocalDirectory(
+          {
+            kind: 'local-directory',
+            workspaceId: 'ws-1',
+            rootDigest: 'sha256-not-reached',
+            sourcePath: 'workflow.ts',
+          },
+          [],
+          { resolveWorkspaceRoot: createResolver('ws-1') },
+        ),
+      ).rejects.toMatchObject({ code: 'symlink-escape' });
+    });
+
+    it('rejects a transitive workflow import that is a symlink', async () => {
+      await writeWorkspaceFile('workflow.ts', `import './helper.ts'; export default {};`);
+      const outsideHelper = path.join(tmpRoot, 'helper.ts');
+      await fs.writeFile(outsideHelper, 'export const helper = true;', 'utf-8');
+      await fs.symlink(outsideHelper, path.join(workspaceRoot, 'helper.ts'));
 
       await expect(
         materializeLocalDirectory(
           {
             kind: 'local-directory',
             workspaceId: 'ws-1',
-            rootDigest: digest,
+            rootDigest: 'sha256-not-reached',
             sourcePath: 'workflow.ts',
           },
           [],
@@ -269,6 +287,28 @@ describe('materializeLocalDirectory', () => {
   });
 
   describe('source file', () => {
+    it.each([
+      '.git/workflow.ts',
+      'node_modules/workflow.ts',
+      'NODE_MODULES/workflow.ts',
+    ])('rejects source paths in excluded %s content', async (sourcePath) => {
+      await writeWorkspaceFile(sourcePath, 'export default {}');
+      const digest = await computeDirectoryDigest(workspaceRoot);
+
+      await expect(
+        materializeLocalDirectory(
+          {
+            kind: 'local-directory',
+            workspaceId: 'ws-1',
+            rootDigest: digest,
+            sourcePath,
+          },
+          [],
+          { resolveWorkspaceRoot: createResolver('ws-1') },
+        ),
+      ).rejects.toMatchObject({ code: 'source-path-mismatch' });
+    });
+
     it('rejects when source file does not exist', async () => {
       await writeWorkspaceFile('other.ts', 'export default {}');
       const digest = await computeDirectoryDigest(workspaceRoot);
@@ -684,6 +724,54 @@ describe('computeDirectoryDigest', () => {
 
     expect(digest1).toBe(digest2);
   });
+
+  it.each([
+    'NODE_MODULES',
+    '.GIT',
+  ])('excludes the case variant %s only when it aliases the canonical filesystem entry', async (entryName) => {
+    await writeWorkspaceFile('workflow.ts', 'export default {}');
+    const digest1 = await computeDirectoryDigest(workspaceRoot);
+
+    await writeWorkspaceFile(`${entryName}/content.txt`, 'content');
+    const digest2 = await computeDirectoryDigest(workspaceRoot);
+
+    const canonicalName = entryName.toLowerCase();
+    let aliasesCanonicalEntry = false;
+    try {
+      const [entryPath, canonicalPath] = await Promise.all([
+        fs.realpath(path.join(workspaceRoot, entryName)),
+        fs.realpath(path.join(workspaceRoot, canonicalName)),
+      ]);
+      aliasesCanonicalEntry = entryPath === canonicalPath;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+
+    expect(digest2 === digest1).toBe(aliasesCanonicalEntry);
+  });
+
+  it('rejects symbolic links outside explicit exclusions', async () => {
+    await writeWorkspaceFile('workflow.ts', 'export default {}');
+    const outsideFile = path.join(tmpRoot, 'outside.ts');
+    await fs.writeFile(outsideFile, 'export const outside = true;', 'utf-8');
+    await fs.symlink(outsideFile, path.join(workspaceRoot, 'helper.ts'));
+
+    await expect(computeDirectoryDigest(workspaceRoot)).rejects.toMatchObject({ code: 'symlink-escape' });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects unsupported filesystem entries outside explicit exclusions',
+    async () => {
+      await writeWorkspaceFile('workflow.ts', 'export default {}');
+      execFileSync('mkfifo', [path.join(workspaceRoot, 'workflow.pipe')]);
+
+      await expect(computeDirectoryDigest(workspaceRoot)).rejects.toMatchObject({
+        code: 'unsupported-filesystem-entry',
+      });
+    },
+  );
 
   it('materializes a linked Git worktree using the primary checkout digest', async () => {
     await writeWorkspaceFile('workflow.ts', 'export default {}');

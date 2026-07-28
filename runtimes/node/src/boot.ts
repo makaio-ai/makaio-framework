@@ -62,7 +62,7 @@ import {
   createSurfaceBindingContributionProcessor,
 } from '@makaio/services-core/materialization';
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
-import { createWorkflowEnginePackage } from '@makaio/subsystem-workflow-engine/package';
+import { createWorkflowEnginePackage, WorkflowEngineToken } from '@makaio/subsystem-workflow-engine/package';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
 import { resolveMakaioHome } from './makaio-config.js';
@@ -129,6 +129,27 @@ export type {
   TransportReadyInfo,
   WorkflowRunnerBootOptions,
 } from './boot-types.js';
+
+/**
+ * Compose dynamic extension workspace roots with an explicit host fallback.
+ * @param resolveDynamicWorkspaceRoot - Late-bound resolver supplied by active extensions.
+ * @param fallbackResolvers - Ordered explicit host resolvers retained as fallbacks.
+ * @returns Resolver that prefers dynamic registrations and falls back to the host resolver.
+ */
+export function createCompositeWorkspaceRootResolver(
+  resolveDynamicWorkspaceRoot: (workspaceId: string) => Promise<string | undefined>,
+  ...fallbackResolvers: ReadonlyArray<CoreBootOptions['piscinaWorkspaceRootResolver']>
+): NonNullable<CoreBootOptions['piscinaWorkspaceRootResolver']> {
+  return async (workspaceId) => {
+    const dynamicRoot = await resolveDynamicWorkspaceRoot(workspaceId);
+    if (dynamicRoot !== undefined) return dynamicRoot;
+    for (const resolver of fallbackResolvers) {
+      const fallbackRoot = await resolver?.(workspaceId);
+      if (fallbackRoot !== undefined) return fallbackRoot;
+    }
+    return undefined;
+  };
+}
 
 /**
  * Build the loopback URL child processes should use to connect to the host bus.
@@ -435,11 +456,22 @@ export async function bootMakaioRuntimeCore(
     }
 
     const platformDefaults = { cwd: process.cwd() };
+    const resolveDynamicPiscinaWorkspaceRoot = async (workspaceId: string): Promise<string | undefined> => {
+      const workflowEngine = coordinator.getExtensionService(WorkflowEngineToken);
+      return workflowEngine?.resolveWorkspaceRoot(workspaceId);
+    };
+    const resolveBuiltInPiscinaWorkspaceRoot = createCompositeWorkspaceRootResolver(
+      resolveDynamicPiscinaWorkspaceRoot,
+      options.piscinaWorkspaceRootResolver,
+    );
+    const resolveWorkflowPiscinaWorkspaceRoot = createCompositeWorkspaceRootResolver(
+      resolveDynamicPiscinaWorkspaceRoot,
+      options.workflowRunner?.mode === 'piscina' ? options.workflowRunner.resolveWorkspaceRoot : undefined,
+      options.piscinaWorkspaceRootResolver,
+    );
     const workflowRunner =
-      options.workflowRunner?.mode === 'piscina' &&
-      options.workflowRunner.resolveWorkspaceRoot === undefined &&
-      options.piscinaWorkspaceRootResolver !== undefined
-        ? { ...options.workflowRunner, resolveWorkspaceRoot: options.piscinaWorkspaceRootResolver }
+      options.workflowRunner?.mode === 'piscina'
+        ? { ...options.workflowRunner, resolveWorkspaceRoot: resolveWorkflowPiscinaWorkspaceRoot }
         : options.workflowRunner;
     const workflowRunnerPackageOptions = createNodeWorkflowRunnerPackageOptions({
       busUrl,
@@ -568,9 +600,7 @@ export async function bootMakaioRuntimeCore(
     const piscinaRunner = new ThinWorkflowPiscinaRunner({
       workerEntry: piscinaWorkerEntry,
       manifest: { contributionRefs: [] },
-      ...(options.piscinaWorkspaceRootResolver !== undefined && {
-        resolveWorkspaceRoot: options.piscinaWorkspaceRootResolver,
-      }),
+      resolveWorkspaceRoot: resolveBuiltInPiscinaWorkspaceRoot,
     });
     const piscinaProvider = new PiscinaThinWorkflowProvider({
       id: BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,

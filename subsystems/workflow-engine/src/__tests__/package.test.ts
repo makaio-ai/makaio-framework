@@ -71,6 +71,22 @@ describe('workflowEnginePackage', () => {
     await created.destroy();
   });
 
+  it('resolves workspace roots through active resolvers in registration order', async () => {
+    const workflowEngine = new WorkflowEngineService(MakaioBus);
+    const firstCleanup = workflowEngine.registerWorkspaceRootResolver(async () => undefined);
+    const secondCleanup = workflowEngine.registerWorkspaceRootResolver(async (workspaceId) =>
+      workspaceId === 'acme/factory' ? '/workspaces/factory' : undefined,
+    );
+
+    expect(await workflowEngine.resolveWorkspaceRoot('acme/factory')).toBe('/workspaces/factory');
+
+    firstCleanup();
+    expect(await workflowEngine.resolveWorkspaceRoot('acme/factory')).toBe('/workspaces/factory');
+
+    secondCleanup();
+    expect(await workflowEngine.resolveWorkspaceRoot('acme/factory')).toBeUndefined();
+  });
+
   it('initializes persisted bus-event triggers through the package service lifecycle', async () => {
     MakaioBus.__resetHandlers?.();
     dbContext = await createTestDb();

@@ -10,6 +10,15 @@ import type {
 } from '@makaio/contracts';
 
 /**
+ * Resolve a portable workspace identifier to an allowed local root directory.
+ *
+ * Returning `undefined` delegates resolution to the next registered resolver.
+ * @param workspaceId - Portable workspace identifier from a materialization spec.
+ * @returns Absolute allowed root, or `undefined` when this resolver does not own the identifier.
+ */
+export type WorkflowWorkspaceRootResolver = (workspaceId: string) => Promise<string | undefined>;
+
+/**
  * Tracks an active runner-managed step for cooperative/hard cancellation.
  * Stored in the `activeRunnerSteps` map keyed by `{executionId}:{stepId}`.
  */
