@@ -1,6 +1,7 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -39,6 +40,11 @@ export const createTestConfig = async (
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: PiSdkAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<PiSdkBus, PiConnector>();
 
   return {
@@ -66,7 +72,7 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (options) => createPiSdkAdapter(options),
+    createAdapter: async (options) => createPiSdkAdapter({ ...options, definitionProviders }),
     adapterName: PiSdkAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: () => connectorRuntimes.closeAll(),

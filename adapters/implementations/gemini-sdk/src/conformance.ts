@@ -1,6 +1,7 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -35,6 +36,11 @@ export const createTestConfig = async (
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: GeminiSdkAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<GeminiConnectorBus, GeminiConnector>();
 
   return {
@@ -60,7 +66,18 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (options) => createGeminiSDKAdapter(options),
+    // No clientId, although the manifest declares the `gemini` client. Presenting
+    // one makes the auth runtime acquire a client config lease over a
+    // non-optional `client.sessionConfig.create` request, so a config may only do
+    // it while owning a fixture that serves that subject — which is why Claude and
+    // Codex pair their clientId with a session-config fixture and this one has
+    // none to pair. Nothing here would earn that cost: this preset binds a
+    // provider-owned method, and `@makaio/client-gemini` registers no
+    // `sessionConfig.setup` handler, so the lease would contribute an empty env.
+    // The unset id stays inert downstream — `clientId` is optional on the agent
+    // event schema, and the client-scoped harness lookup in `connector.ts` falls
+    // back to the adapter-scoped default either way.
+    createAdapter: async (options) => createGeminiSDKAdapter({ ...options, definitionProviders }),
     adapterName: GeminiSdkAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: () => connectorRuntimes.closeAll(),

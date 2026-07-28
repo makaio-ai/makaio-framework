@@ -44,6 +44,10 @@ export {
   type ResolveConformanceTestPresetOptions,
   type ResolvedConformanceTestPreset,
 } from './resolveConformanceTestPreset.js';
+export {
+  resolveConformanceDefinitionProviders,
+  type ResolveConformanceDefinitionProvidersOptions,
+} from './resolveConformanceDefinitionProviders.js';
 export { resolveDisabledNativeTools, type HarnessRequester } from './resolveDisabledNativeTools.js';
 
 // Message formatting utilities

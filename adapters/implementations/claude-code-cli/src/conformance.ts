@@ -1,6 +1,7 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -46,6 +47,11 @@ export const createTestConfig = async (
   });
   const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider);
   const sessionConfigFixture = await acquireClaudeConformanceSessionConfigFixture();
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: ClaudeCodeCliAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<ClaudeCodeCliConnectorBus, ClaudeCliConnector>();
 
   return {
@@ -79,7 +85,15 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (adapterOptions) => createClaudeCliAdapter(adapterOptions),
+    // `anthropic-oauth` binds client-owned auth methods, so the adapter must
+    // present the same client the binding names or the selection is rejected as
+    // belonging to a different client. Presenting it also obliges this config to
+    // own a `client.sessionConfig.create` fixture, which is why the identity is
+    // paired with `acquireClaudeConformanceSessionConfigFixture` above. Declaring a
+    // client in the manifest does not on its own justify presenting one here — see
+    // `ConformanceTestConfig.createAdapter` for the full rule.
+    createAdapter: async (adapterOptions) =>
+      createClaudeCliAdapter({ ...adapterOptions, definitionProviders, clientId: claudeClientDefinition.id }),
     adapterName: ClaudeCodeCliAdapterName,
     testProviderContext,
     cleanup: () => closeClaudeConformanceConnectorRuntimes(() => connectorRuntimes.closeAll(), sessionConfigFixture),

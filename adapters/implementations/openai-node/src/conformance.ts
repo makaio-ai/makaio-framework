@@ -1,6 +1,7 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -36,10 +37,10 @@ export const createTestConfig = async (
     reasoningEffort: 'low',
   });
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<OpenAINodeConnectorBus, OpenAINodeConnector>();
-  const definitionProviders = testPreset.providers.map((definition) => {
-    const declared = adapterDefinition.providers.find((provider) => provider.definitionId === definition.id);
-    if (!declared) throw new Error(`OpenAI conformance provider '${definition.id}' is not declared by the adapter`);
-    return { definition, protocol: declared.protocol, auth: declared.auth };
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: OpenAINodeAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
   });
 
   return {
