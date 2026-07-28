@@ -1,6 +1,7 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -42,6 +43,11 @@ export const createTestConfig = async (
     reasoningEffort: 'low',
   });
   const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider);
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: ClaudeCodeAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
   const sessionConfigFixture = await acquireClaudeConformanceSessionConfigFixture();
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<ClaudeCodeConnectorBus, ClaudeSdkConnector>();
 
@@ -82,7 +88,15 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (options) => createClaudeAdapter(options),
+    // `anthropic-oauth` binds client-owned auth methods, so the adapter must
+    // present the same client the binding names or the selection is rejected as
+    // belonging to a different client. Presenting it also obliges this config to
+    // own a `client.sessionConfig.create` fixture, which is why the identity is
+    // paired with `acquireClaudeConformanceSessionConfigFixture` above. Declaring a
+    // client in the manifest does not on its own justify presenting one here — see
+    // `ConformanceTestConfig.createAdapter` for the full rule.
+    createAdapter: async (options) =>
+      createClaudeAdapter({ ...options, definitionProviders, clientId: claudeClientDefinition.id }),
     adapterName: ClaudeCodeAdapterName,
     testProviderContext,
     cleanup: () => closeClaudeConformanceConnectorRuntimes(() => connectorRuntimes.closeAll(), sessionConfigFixture),

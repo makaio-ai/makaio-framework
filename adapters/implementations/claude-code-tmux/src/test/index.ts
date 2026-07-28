@@ -23,6 +23,7 @@ import {
   ConformanceConnectorRuntimeRegistry,
   type ConformanceTestConfig,
   type CreateConformanceTestConfigOptions,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -258,6 +259,11 @@ export const createTestConfig = async (
     reasoningEffort: 'low',
   });
   const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider);
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: ADAPTER_NAME,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
   const { ClaudeCodeTmuxConnector } = await import('../connector.js');
   const hookBridge = await ensureSharedHookBridge();
   const sessionConfigFixture = await acquireClaudeConformanceSessionConfigFixture();
@@ -322,9 +328,18 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
+    // `anthropic-oauth` binds client-owned auth methods, so the adapter must
+    // present the same client the binding names or the selection is rejected as
+    // belonging to a different client. Presenting it also obliges this config to
+    // own a `client.sessionConfig.create` fixture, which is why the identity is
+    // paired with `acquireClaudeConformanceSessionConfigFixture` above. Declaring a
+    // client in the manifest does not on its own justify presenting one here — see
+    // `ConformanceTestConfig.createAdapter` for the full rule.
     createAdapter: async (adapterOptions) =>
       createClaudeCodeTmuxAdapter({
         ...adapterOptions,
+        definitionProviders,
+        clientId: claudeClientDefinition.id,
         providerConfigDefaults: { tmuxServerName: TEST_TMUX_SERVER_NAME },
       }),
     adapterName: ADAPTER_NAME,

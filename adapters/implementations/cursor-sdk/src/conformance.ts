@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -295,6 +296,12 @@ export const createTestConfig = async (
     reasoningEffort: 'low',
   });
 
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: CursorSdkAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
+
   const transportHandle = await startTestBusTransport();
 
   // Dedicated Cursor project root for this conformance worker. The generic
@@ -346,7 +353,7 @@ export const createTestConfig = async (
       primaryModel: { definitionId: 'cursor', modelName: 'composer-2', reasoningEffort: 'low' },
       secondaryModel: { definitionId: 'cursor', modelName: 'composer-2.5', reasoningEffort: 'low' },
     },
-    createAdapter: async (options) => createCursorSdkAdapter(options),
+    createAdapter: async (options) => createCursorSdkAdapter({ ...options, definitionProviders }),
     adapterName: CursorSdkAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: async () => {

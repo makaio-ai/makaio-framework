@@ -1,6 +1,7 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -33,6 +34,11 @@ export const createTestConfig = async (
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: GitHubCopilotSdkAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<
     GitHubCopilotConnectorBus,
     GitHubCopilotConnector
@@ -63,7 +69,18 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (options) => createGitHubCopilotSDKAdapter(options),
+    // No clientId, although the manifest declares the `github-copilot` client.
+    // Presenting one makes the auth runtime acquire a client config lease over a
+    // non-optional `client.sessionConfig.create` request, so a config may only do
+    // it while owning a fixture that serves that subject — which is why Claude and
+    // Codex pair their clientId with a session-config fixture and this one has
+    // none to pair. Nothing here would earn that cost: this preset binds a
+    // provider-owned method, and `@makaio/client-github-copilot` registers no
+    // `sessionConfig.setup` handler, so the lease would contribute an empty env.
+    // The unset id stays inert downstream — `clientId` is optional on the agent
+    // event schema, and the default harness lookup falls back to the
+    // adapter-scoped default either way.
+    createAdapter: async (options) => createGitHubCopilotSDKAdapter({ ...options, definitionProviders }),
     adapterName: GitHubCopilotSdkAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: () => connectorRuntimes.closeAll(),

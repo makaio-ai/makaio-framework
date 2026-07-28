@@ -5,6 +5,7 @@ import type {
 } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -21,6 +22,7 @@ import { CodexAppServerConnector } from './connector.js';
 import { createCodexAppServerAdapter, CodexAppServerAdapterName } from './adapter.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { CodexAppServerConfig } from './config.js';
+import { clientDefinition as codexClientDefinition } from '@makaio/client-codex';
 import { providerIds, testPresetId } from './provider.js';
 import { adapterDefinition } from './definition.js';
 import {
@@ -41,6 +43,14 @@ async function prepareConformanceAuthRuntime<
   if (!hostPath) throw new Error('Codex conformance requires a non-empty host PATH');
   return { ...prepared, config: { ...prepared.config, env: { ...prepared.config.env, PATH: hostPath } } };
 }
+
+/**
+ * Client identity backing conformance authentication for this adapter.
+ *
+ * Both the connector and the adapter must present the same client, or the
+ * client-owned authentication binding is rejected as belonging to someone else.
+ */
+const CODEX_CONFORMANCE_CLIENT_ID = codexClientDefinition.id;
 
 /**
  * Create a conformance test configuration for the Codex App-Server adapter.
@@ -64,10 +74,10 @@ export const createTestConfig = async (
   });
   const sessionConfigFixture = await acquireCodexConformanceSessionConfigFixture();
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<CodexAppServerBus, CodexAppServerConnector>();
-  const definitionProviders = testPreset.providers.map((definition) => {
-    const declared = adapterDefinition.providers.find((provider) => provider.definitionId === definition.id);
-    if (!declared) throw new Error(`Codex conformance provider '${definition.id}' is not declared by the adapter`);
-    return { definition, protocol: declared.protocol, auth: declared.auth };
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: CodexAppServerAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
   });
 
   return {
@@ -75,7 +85,7 @@ export const createTestConfig = async (
       const config = await CodexAppServerConfig.getConfig({
         ...resolveTestConfig(connectorOptions, bus, testPreset.provider, adapterDefinition.providers),
         providerContextRequired: true,
-        clientId: 'codex',
+        clientId: CODEX_CONFORMANCE_CLIENT_ID,
         globalBus: MakaioBus,
       });
       return connectorRuntimes.create({
@@ -102,6 +112,7 @@ export const createTestConfig = async (
       createCodexAppServerAdapter({
         ...adapterOptions,
         definitionProviders,
+        clientId: CODEX_CONFORMANCE_CLIENT_ID,
         prepareAuthRuntime: prepareConformanceAuthRuntime,
       }),
     adapterName: CodexAppServerAdapterName,

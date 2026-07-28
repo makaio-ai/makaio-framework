@@ -327,6 +327,18 @@ export interface ConformanceTestConfig<
    * **Important**: Each call should return a fresh instance with unique adapterId
    * for test isolation. The factory receives optional init options to allow
    * passing a specific adapterId.
+   *
+   * **Client identity**: a set `clientId` makes `prepareAdapterAuthRuntime`
+   * acquire a client config lease through a non-optional
+   * `client.sessionConfig.create` request, so a config may only present one while
+   * also owning a fixture that serves that subject — otherwise the run fails
+   * before the first API call. Pass it when the client materially participates:
+   * it owns the selected auth binding, or it registers a `sessionConfig.setup`
+   * handler that materializes runtime config. Declaring a client in the adapter
+   * manifest is not on its own a reason to present one here. Production does
+   * resolve the manifest's first client for every client-backed adapter, but for
+   * a client with no `sessionConfig.setup` handler that identity only labels
+   * emitted event metadata and scopes the default harness lookup.
    * @returns Fresh AIAdapter instance configured for orchestration testing
    * @example
    * ```typescript

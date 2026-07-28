@@ -1,6 +1,7 @@
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
 import {
   ConformanceConnectorRuntimeRegistry,
+  resolveConformanceDefinitionProviders,
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
@@ -35,6 +36,11 @@ export const createTestConfig = async (
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
+  const definitionProviders = resolveConformanceDefinitionProviders({
+    adapterName: AnthropicSdkAdapterName,
+    providers: testPreset.providers,
+    adapterProviders: adapterDefinition.providers,
+  });
   const connectorRuntimes = new ConformanceConnectorRuntimeRegistry<AnthropicSdkConnectorBus, AnthropicSdkConnector>();
 
   return {
@@ -61,7 +67,7 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (options) => createAnthropicSdkAdapter({ adapterId: options?.adapterId }),
+    createAdapter: async (options) => createAnthropicSdkAdapter({ adapterId: options?.adapterId, definitionProviders }),
     adapterName: AnthropicSdkAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: () => connectorRuntimes.closeAll(),
