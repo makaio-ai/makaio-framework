@@ -156,8 +156,10 @@ export const ContainerBootstrapConfigSchema = z
   .object({
     /**
      * HMAC secret for authenticating bus WebSocket connections.
-     * Workflow containers receive a per-execution secret; session containers may
-     * receive the host-wide secret when authenticated direct bus access is used.
+     * Workflow containers receive a secret bound to a single execution attempt,
+     * so revoking one attempt leaves other attempts of the same execution
+     * untouched; session containers may receive the host-wide secret when
+     * authenticated direct bus access is used.
      */
     busAuthSecret: z.string().optional(),
     /**
