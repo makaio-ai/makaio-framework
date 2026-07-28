@@ -215,7 +215,13 @@ jobs:
     needs: cache
     if: needs.cache.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Must exceed the fixture-build budgets in launcher-smoke.test.ts (framework
+    # 600s + launcher 120s + hook margin) plus job setup and the sibling desktop
+    # suite. Those budgets are hang-detection ceilings that attribute a timeout
+    # to the named build step; if this outer timeout is smaller, the runner is
+    # killed before that diagnostic can surface. A normal run finishes in a
+    # fraction of this.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
