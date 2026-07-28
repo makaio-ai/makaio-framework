@@ -108,8 +108,15 @@ export const PROVIDER_CREDENTIAL_VARS: Record<ProviderId, Record<string, Credent
   codex: { CODEX_ACCESS_TOKEN: 'access-token' },
 };
 
-/** Provider-owned authentication environment admitted to a native-login child. */
-export const PROVIDER_NATIVE_AUTH_ENV_VARS: Record<ProviderId, readonly string[]> = {
+/**
+ * Isolation variables a native-login lease must publish per provider.
+ *
+ * This is a required minimum, not an admit-list. The client-owned session
+ * config lease is the authority on the environment its child needs, and the
+ * probe delivers that environment as published; the harness only asserts that
+ * the lease actually isolated itself before a networked request is made.
+ */
+export const PROVIDER_REQUIRED_NATIVE_AUTH_ENV_VARS: Record<ProviderId, readonly string[]> = {
   'claude-code': ['CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR'],
   codex: ['CODEX_HOME'],
 };

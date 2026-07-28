@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "provider": "claude-code",
-  "cliVersion": "2.1.143",
+  "cliVersion": "2.1.219",
   "scenarioId": "pre-tool-use-deny",
   "events": [
     {
@@ -30,6 +30,7 @@
         "effort",
         "hook_event_name",
         "permission_mode",
+        "prompt_id",
         "session_id",
         "tool_input",
         "tool_name",

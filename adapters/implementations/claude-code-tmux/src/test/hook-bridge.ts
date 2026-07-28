@@ -23,7 +23,12 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
-import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_PRE_TOOL_USE } from '@makaio/client-claude-code/runtime';
+import {
+  ClaudeCodeClientSubjects,
+  CLAUDE_CODE_HOOK_PRE_TOOL_USE,
+  createDenyEffect,
+  renderClaudeCodeNativeResponse,
+} from '@makaio/client-claude-code/runtime';
 import { isRecord } from '@makaio/utils';
 
 /**
@@ -55,6 +60,15 @@ export interface HookBridgeHandle {
   /** Gracefully close the bridge server. */
   close: () => Promise<void>;
 }
+
+/**
+ * Response body used when the bridge contributes no permission decision.
+ *
+ * An empty JSON object is not the same thing as a native approve: it leaves
+ * the decision entirely to the Claude Code CLI, which is the behavior the
+ * approval path has always had.
+ */
+const NO_DECISION_BODY = '{}';
 
 /** Module-level agent context map: claudeSessionId → AgentContext. */
 const agentContextMap = new Map<string, AgentContext>();
@@ -130,9 +144,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const payload = parseJsonSafe(body);
 
         if (eventName === CLAUDE_CODE_HOOK_PRE_TOOL_USE) {
-          const decision = await handlePreToolUseApproval(payload);
+          const decisionBody = await handlePreToolUseApproval(payload);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(decision));
+          res.end(decisionBody);
           return;
         }
 
@@ -174,15 +188,28 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 }
 
 /**
+ * Render a native Claude Code PreToolUse denial body.
+ *
+ * The native shape is owned by the Claude Code client; rendering through its
+ * renderer keeps this bridge from drifting away from what the client emits at
+ * runtime.
+ * @param reason - Human-readable reason reported to the Claude Code CLI.
+ * @returns Serialized native hook output for the HTTP response body.
+ */
+function renderDenyBody(reason: string): string {
+  return renderClaudeCodeNativeResponse(CLAUDE_CODE_HOOK_PRE_TOOL_USE, [createDenyEffect(reason)]).stdout;
+}
+
+/**
  * Handle a PreToolUse hook by requesting tool approval on the bus.
  *
  * Looks up the agent context from the `session_id` in the payload, emits
  * `AgentSubjects.toolApprove`, and translates the response into the
  * Claude Code hook decision format.
  * @param payload - Raw PreToolUse hook payload from Claude Code.
- * @returns Claude Code hook decision object for stdout.
+ * @returns Serialized Claude Code hook decision body for stdout.
  */
-async function handlePreToolUseApproval(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function handlePreToolUseApproval(payload: Record<string, unknown>): Promise<string> {
   const sessionId = typeof payload.session_id === 'string' ? payload.session_id : undefined;
   const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : '';
   const toolUseId = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : '';
@@ -195,13 +222,7 @@ async function handlePreToolUseApproval(payload: Record<string, unknown>): Promi
   if (!ctx) {
     // Also emit as a regular hook so the turn state machine still advances.
     await emitRawHook(CLAUDE_CODE_HOOK_PRE_TOOL_USE, payload);
-    return {
-      hookSpecificOutput: {
-        hookEventName: CLAUDE_CODE_HOOK_PRE_TOOL_USE,
-        permissionDecision: 'deny',
-        permissionDecisionReason: 'Missing agent context for PreToolUse approval',
-      },
-    };
+    return renderDenyBody('Missing agent context for PreToolUse approval');
   }
 
   // Also emit as a regular hook so the connector's onPreToolUse fires.
@@ -220,25 +241,14 @@ async function handlePreToolUseApproval(payload: Record<string, unknown>): Promi
     });
 
     if (result.action === 'deny') {
-      return {
-        hookSpecificOutput: {
-          hookEventName: CLAUDE_CODE_HOOK_PRE_TOOL_USE,
-          permissionDecision: 'deny',
-          permissionDecisionReason: result.message ?? 'Tool use denied by approval handler',
-        },
-      };
+      return renderDenyBody(result.message ?? 'Tool use denied by approval handler');
     }
 
-    return {};
+    return NO_DECISION_BODY;
   } catch {
-    return {
-      hookSpecificOutput: {
-        hookEventName: CLAUDE_CODE_HOOK_PRE_TOOL_USE,
-        permissionDecision: 'deny',
-        permissionDecisionReason:
-          "Tool approval request failed, make sure that there's a handler registered for AgentSubjects.toolApprove",
-      },
-    };
+    return renderDenyBody(
+      "Tool approval request failed, make sure that there's a handler registered for AgentSubjects.toolApprove",
+    );
   }
 }
 

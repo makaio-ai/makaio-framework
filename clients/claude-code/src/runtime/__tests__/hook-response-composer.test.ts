@@ -416,6 +416,66 @@ describe('composeHookResponse', () => {
     });
   });
 
+  describe('SessionStart', () => {
+    /**
+     * Build a native SessionStart hook payload.
+     * @returns Raw payload shaped like the probe-captured SessionStart event.
+     */
+    function sessionStartPayload() {
+      return {
+        eventName: 'SessionStart',
+        receivedAt: Date.now(),
+        payload: { session_id: 'sess-test-001', source: 'startup' },
+      };
+    }
+
+    it('renders appended context without a permission decision', async () => {
+      const { responseRegistry } = createRegistries();
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'session-context',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'event-name', name: 'SessionStart' }],
+        respond: () => ({ canonicalEffects: [createAppendEffect('repo conventions')] }),
+      });
+
+      const result = await composeHookResponse(responseRegistry, sessionStartPayload());
+
+      expect(JSON.parse(result.stdout)).toEqual({
+        hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'repo conventions' },
+      });
+    });
+
+    it('rejects the contributor when a permission decision cannot be rendered', async () => {
+      const { responseRegistry } = createRegistries();
+      installContributor(responseRegistry, {
+        lane: 'provider',
+        clientId: 'claude-code',
+        contractId: 'claude-code.tool-response',
+        id: 'misplaced-decision',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'event-name', name: 'SessionStart' }],
+        respond: () => ({ providerEnvelope: createApproveEffect() }),
+      });
+
+      const diagnostics: Array<{ contributorId: string; message: string }> = [];
+      const result = await composeHookResponse(responseRegistry, sessionStartPayload(), {
+        onDiagnostics: (entries) => diagnostics.push(...entries),
+      });
+
+      // The envelope is well-formed, so only the event name makes it wrong. The
+      // contract validator sees the event and rejects it there, rather than
+      // letting reduction drop the decision on the floor unannounced.
+      expect(result.stdout).toBe('');
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]!.contributorId).toContain('misplaced-decision');
+      expect(diagnostics[0]!.message).toContain('not renderable');
+    });
+  });
+
   describe('capability selectors', () => {
     it('matches contributors using capability selectors', async () => {
       const { responseRegistry } = createRegistries();
@@ -537,6 +597,22 @@ describe('composeHookResponse', () => {
           context,
         ),
       ).toContain("Unsupported Claude Code PreToolUse effect 'unexpected'");
+    });
+
+    it('accepts an identical decision on a blockable event and rejects it elsewhere', () => {
+      const envelope = { providerEnvelope: createDenyEffect('unsafe') };
+
+      // Same payload, different event: the contract spans blockable and
+      // non-blockable interactions, so shape alone cannot decide validity.
+      expect(claudeCodeToolResponseContract.validate(envelope, { eventName: 'PreToolUse' })).toBe(true);
+      expect(claudeCodeToolResponseContract.validate(envelope, { eventName: 'SessionStart' })).toContain(
+        "Permission decisions are not renderable on 'SessionStart'",
+      );
+    });
+
+    it('still accepts an empty response on an event that renders no decision', () => {
+      expect(claudeCodeToolResponseContract.validate(undefined, { eventName: 'SessionStart' })).toBe(true);
+      expect(claudeCodeToolResponseContract.validate({}, { eventName: 'SessionStart' })).toBe(true);
     });
   });
 });

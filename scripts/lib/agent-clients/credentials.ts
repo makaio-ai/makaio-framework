@@ -11,7 +11,7 @@ import { clearClaudeCodeNativeCredentialsForSession } from '../../../clients/cla
 import { handleClaudeCodeSessionConfigSetup } from '../../../clients/claude-code/src/runtime/session-config-handler.js';
 import { CodexSessionConfigHandler } from '../../../clients/codex/src/runtime/session-config-handler.js';
 import type { CredentialMode, ProviderId } from './types.js';
-import { PROVIDER_CREDENTIAL_VARS } from './types.js';
+import { PROVIDER_CREDENTIAL_VARS, PROVIDER_REQUIRED_NATIVE_AUTH_ENV_VARS } from './types.js';
 
 type SupportedNativePlatform = 'darwin' | 'linux' | 'win32';
 
@@ -28,10 +28,11 @@ function resolveSupportedNativePlatform(platform: NodeJS.Platform): SupportedNat
  * Require the client-owned isolation environment needed by a native-login child.
  * @param provider - Client whose isolation environment is required.
  * @param env - Environment returned by the client-owned setup handler.
+ * @returns The lease environment unchanged; this asserts a minimum, it does not
+ *   filter, because the client owns which variables its child needs.
  */
 function requireNativeLoginEnv(provider: ProviderId, env: Record<string, string> | undefined): Record<string, string> {
-  const required =
-    provider === 'claude-code' ? ['CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR'] : ['CODEX_HOME'];
+  const required = PROVIDER_REQUIRED_NATIVE_AUTH_ENV_VARS[provider];
   if (!env || required.some((name) => env[name] === undefined || env[name]!.length === 0))
     throw new Error(`Native login setup did not return isolated ${provider} environment`);
   return env;

@@ -30,6 +30,7 @@ import { handleClaudeCodeConfigPrime } from './config-prime-handler.js';
 import {
   clearClaudeCodeNativeCredentialsForSession,
   inheritClaudeCodeNativeCredentialsForSession,
+  resolveKeychainAccount,
 } from './native-credentials.js';
 
 /** Claude Code global-state keys needed for auth and non-interactive startup. */
@@ -266,6 +267,18 @@ export async function handleClaudeCodeSessionConfigSetup(
     env: {
       CLAUDE_CONFIG_DIR: sessionDir,
       CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
+      // A lease that materializes credentials must also publish the environment
+      // needed to read them back. Keychain entries for an isolated store are
+      // keyed by this account, and the binary resolves it from USER alone —
+      // without it, auth fails with "Not logged in" against a store that
+      // demonstrably holds valid credentials.
+      //
+      // This is an identity selector, not a credential: it names the account a
+      // Keychain entry was written under and never carries secret material, so
+      // the whole map stays safe to return across the bus. Every consumer must
+      // deliver it verbatim — a consumer that re-declares which keys it accepts
+      // silently reverts this fix and lets the child fall back to ambient USER.
+      ...(platform === 'darwin' && authMaterialized ? { USER: resolveKeychainAccount() } : {}),
     },
     authMaterialized,
   };

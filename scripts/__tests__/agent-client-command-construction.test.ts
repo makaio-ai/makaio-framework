@@ -78,7 +78,7 @@ describe('buildChildEnvironment', () => {
     expect(env.CODEX_ACCESS_TOKEN).toBe('tok');
   });
 
-  it('admits only provider-owned native authentication environment values', () => {
+  it('refuses credential delivery through the native authentication environment', () => {
     const env = buildChildEnvironment({
       provider: 'claude-code',
       credentialMode: 'native-login',
@@ -88,14 +88,49 @@ describe('buildChildEnvironment', () => {
         CLAUDE_CONFIG_DIR: '/wrong/config',
         CLAUDE_SECURESTORAGE_CONFIG_DIR: '/tmp/probe-config',
         ANTHROPIC_API_KEY: 'must-not-pass',
-        UNRELATED_SECRET: 'must-not-pass',
+        CLAUDE_CODE_OAUTH_TOKEN: 'must-not-pass',
       },
+      parentEnv: {},
     });
 
     expect(env.CLAUDE_CONFIG_DIR).toBe('/tmp/probe-config');
     expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe('/tmp/probe-config');
     expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
-    expect(env).not.toHaveProperty('UNRELATED_SECRET');
+    expect(env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('delivers the lease-published keychain account when the parent environment has no USER', () => {
+    const env = buildChildEnvironment({
+      provider: 'claude-code',
+      credentialMode: 'native-login',
+      configIsolationEnvVar: 'CLAUDE_CONFIG_DIR',
+      tempConfigDir: '/tmp/probe-config',
+      nativeAuthEnv: {
+        CLAUDE_CONFIG_DIR: '/tmp/probe-config',
+        CLAUDE_SECURESTORAGE_CONFIG_DIR: '/tmp/probe-config',
+        USER: 'lease-account',
+      },
+      parentEnv: { PATH: '/usr/bin' },
+    });
+
+    expect(env.USER).toBe('lease-account');
+  });
+
+  it('prefers the lease-published keychain account over a sanitized parent USER', () => {
+    const env = buildChildEnvironment({
+      provider: 'claude-code',
+      credentialMode: 'native-login',
+      configIsolationEnvVar: 'CLAUDE_CONFIG_DIR',
+      tempConfigDir: '/tmp/probe-config',
+      nativeAuthEnv: {
+        CLAUDE_CONFIG_DIR: '/tmp/probe-config',
+        CLAUDE_SECURESTORAGE_CONFIG_DIR: '/tmp/probe-config',
+        USER: 'lease-account',
+      },
+      parentEnv: { PATH: '/usr/bin', USER: 'sanitized-runner' },
+    });
+
+    expect(env.USER).toBe('lease-account');
   });
 });
 

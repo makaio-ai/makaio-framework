@@ -3,8 +3,8 @@
  *
  * Subscribes to `client:claude-code.hook.received` events and translates them
  * into normalized `client.session.*` observed-semantics emissions.  Also
- * registers a request handler on `client:claude-code.hook.handle` for
- * request-mode hook events (e.g. `PreToolUse`) that need a response.  Raw events
+ * registers a request handler on `client:claude-code.hook.handle` for every
+ * hook event the client definition declares response capabilities for.  Raw events
  * that do not map to the v1 set (Notification, MCPServerStart, etc.) are
  * silently ignored — they remain observable in `client:claude-code.*` for
  * consumers that care about Claude-specific extras.
@@ -136,9 +136,10 @@ const SESSION_IDENTITY_CACHE_CAP = MANAGED_SESSION_CAP;
  * Also handles the three `wiring.*` request subjects for listing, applying,
  * and removing the Makaio hook wiring entries.
  *
- * Also handles the `hook.handle` request subject for request-mode hook events
- * (e.g. `PreToolUse`), returning a {@link ClientHookHandleResponse} that the
- * CLI bridge forwards to the client binary as its stdout.
+ * Also handles the `hook.handle` request subject for every event the client
+ * definition declares response capabilities for, returning a
+ * {@link ClientHookHandleResponse} that the CLI bridge forwards to the client
+ * binary as its stdout.
  *
  * Instantiate via the runtime package and call `init()` once per process.
  */
@@ -527,13 +528,11 @@ export class ClaudeCodeClientService extends BaseService {
   /**
    * Register the `hook.handle` request handler.
    *
-   * The handler receives request-mode hook payloads (e.g. `PreToolUse`) and
-   * returns a {@link ClientHookHandleResponse} that the CLI bridge writes to
-   * stdout so the client binary can read it.
+   * The handler receives request-mode hook payloads and returns a
+   * {@link ClientHookHandleResponse} that the CLI bridge writes to stdout so
+   * the client binary can read it.
    *
-   * Dispatches to a per-event handler via {@link handleHookRequest}.
-   * Events with no dedicated handler return the no-op default response
-   * (`exitCode: 0, stdout: '', stderr: ''`).
+   * Composition happens in {@link handleHookRequest}.
    *
    * Extracted from {@link onInit} to keep the init method within the
    * max-lines-per-function lint threshold.
@@ -557,40 +556,23 @@ export class ClaudeCodeClientService extends BaseService {
   }
 
   /**
-   * Dispatch a raw hook handle payload to the appropriate per-event handler.
+   * Compose the terminal response for a request-mode hook payload.
    *
-   * Returns the no-op default response for any event without a dedicated
-   * handler.  This keeps the dispatch table minimal and future-proof: new
-   * request-mode events can add a handler branch without touching the
-   * registration plumbing.
+   * Which events are request-capable is declared once, in the client
+   * definition's `responseCapabilities`: it decides whether the managed hook
+   * command is `hook handle` or `hook received`, and
+   * {@link composeHookResponse} resolves the same declaration again when
+   * matching contributors. A per-event dispatch table here would be a second,
+   * independently maintained copy of that gate, so this method stays generic
+   * and lets the declaration govern.
+   *
+   * Falls back to the no-op passthrough when no hook response registry is
+   * available (backward-compatible test mode).
    * @param payload - Raw hook payload delivered on `client:claude-code.hook.handle`.
    * @param options - Request-scoped deadline and signal from the bus context.
    * @returns Response to forward to the client binary via stdout.
    */
   private async handleHookRequest(
-    payload: RawClientHookPayload,
-    options?: ComposeHookResponseOptions,
-  ): Promise<ClientHookHandleResponse> {
-    switch (payload.eventName) {
-      case 'PreToolUse':
-        return this.handlePreToolUse(payload, options);
-      default:
-        return { exitCode: 0, stdout: '', stderr: '' };
-    }
-  }
-
-  /**
-   * Handle a `PreToolUse` request-mode hook via the hook response composer.
-   *
-   * When the hook response registry is available, delegates to
-   * {@link composeHookResponse} which orchestrates contributor collection
-   * and effect reduction.  Falls back to the no-op passthrough when the
-   * registry is not available (backward-compatible test mode).
-   * @param payload - Raw `PreToolUse` hook payload.
-   * @param options - Request-scoped deadline and signal from the bus context.
-   * @returns Composed response, or no-op when no registry is available.
-   */
-  private async handlePreToolUse(
     payload: RawClientHookPayload,
     options?: ComposeHookResponseOptions,
   ): Promise<ClientHookHandleResponse> {

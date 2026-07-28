@@ -146,12 +146,28 @@ describe('native probe driver', () => {
     expect(scenarioEffects).toEqual(sourceEffects);
   });
 
-  it('keeps every non-PreToolUse Claude event explicitly unobserved', () => {
-    const scenarios = getManifest('claude-code').scenarios.filter(
-      (scenario) => scenario.expectedEvents[0]?.eventName !== 'PreToolUse',
-    );
-    expect(scenarios).toHaveLength(8);
-    expect(scenarios.every((scenario) => scenario.candidateExpectedStatus === 'unobserved')).toBe(true);
+  it.each([
+    'claude-code',
+    'codex',
+  ] as const)('%s only attempts a response where the definition declares one', (provider) => {
+    for (const scenario of getManifest(provider).scenarios) {
+      const event = scenario.expectedEvents[0]!;
+      const declaresCapabilities = event.responseCapabilities.length > 0;
+      // An event the definition gives no response capabilities cannot be
+      // asked to produce one: it may only be observed, never injected into.
+      if (!declaresCapabilities) {
+        expect({ id: scenario.id, mode: event.mode, sentinelEffect: scenario.sentinelEffect }).toEqual({
+          id: scenario.id,
+          mode: 'event',
+          sentinelEffect: undefined,
+        });
+        expect(scenario.candidateExpectedStatus).not.toBe('supported');
+        continue;
+      }
+      // Conversely, a declared capability must travel on the request lane.
+      expect({ id: scenario.id, mode: event.mode }).toEqual({ id: scenario.id, mode: 'request' });
+      expect([...event.responseCapabilities]).toEqual(expect.arrayContaining([...scenario.sourceExpectedEffects]));
+    }
   });
 
   it('uses an unapproved-tool negative control to make Claude approve evidence causal', () => {

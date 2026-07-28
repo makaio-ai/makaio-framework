@@ -29,11 +29,35 @@ export const clientDefinition = createClientDefinition({
   description: 'Anthropic Claude Code CLI — an agentic coding assistant',
   binary: {
     name: 'claude',
-    supportedVersions: '^2.1.143',
+    // Detection range, deliberately wider than the managed pin below. The pin
+    // is the version every declared capability was probed against; it governs
+    // what this client may *claim*, not which binaries it refuses to drive. A
+    // 2.1.x binary a user already has predates the evidence for newer response
+    // capabilities but still runs every event this client dispatches, so it is
+    // accepted. The next major may change the hook surface and is not.
+    //
+    // Widening the range is only safe while every capability declared below is
+    // older than the floor, because wiring is derived statically:
+    // `deriveHookEventTransportMode` reads `responseCapabilities` alone and has
+    // no access to the detected version, so declaring a capability here installs
+    // `hook handle` for *every* accepted binary. The floor is set to keep that
+    // true rather than to match the pin. Per the upstream changelog, SessionStart
+    // shipped in 1.0.62 and `hookSpecificOutput` was already its extension point
+    // by 2.1.152 (`reloadSkills`, `sessionTitle`); `additionalContext` is
+    // announced there per event as each one gained it — UserPromptSubmit 1.0.59,
+    // PreToolUse 2.1.9, Stop/SubagentStop 2.1.163 — and no such entry exists for
+    // SessionStart anywhere in 2.x, because injecting startup context is what the
+    // hook was introduced to do. So `context.append` on SessionStart predates
+    // this floor across the whole range.
+    //
+    // A future capability that is *not* range-wide cannot be declared here as-is:
+    // raise this floor to that capability's first supporting version, because
+    // there is no per-capability version gate to fall back on.
+    supportedVersions: '^2.1.0',
   },
   managedInstall: {
     type: 'signed-binary-bucket',
-    version: '2.1.143',
+    version: '2.1.219',
     config: {
       baseUrl: 'https://downloads.claude.ai/claude-code-releases',
       manifestPathTemplate: '{version}/manifest.json',
@@ -140,7 +164,11 @@ export const clientDefinition = createClientDefinition({
     supportsSupervisorLaunch: false,
     supportsManagedBinary: true,
     hookEvents: [
-      { name: 'SessionStart', frameworkSubject: 'client.session.started' },
+      {
+        name: 'SessionStart',
+        frameworkSubject: 'client.session.started',
+        responseCapabilities: ['context.append'],
+      },
       {
         name: 'UserPromptSubmit',
         frameworkSubject: 'client.session.userPrompt.submitted',

@@ -38,11 +38,27 @@ describe('first-party managed binary pins', () => {
     expect(contribution?.binary?.version).toBe(definition.managedInstall?.version);
   });
 
-  it('accepts compatible Claude Code 2.x binaries without widening to the next major', () => {
+  it('accepts the whole Claude Code minor line the pin sits on but not the next major', () => {
     const supportedVersions = claudeCodeDefinition.binary!.supportedVersions;
+    const [major, minor, patch] = claudeCodeDefinition.managedInstall!.version.split('.').map(Number) as [
+      number,
+      number,
+      number,
+    ];
 
-    expect(satisfies('2.1.143', supportedVersions)).toBe(true);
-    expect(satisfies('2.1.185', supportedVersions)).toBe(true);
-    expect(satisfies('3.0.0', supportedVersions)).toBe(false);
+    // Detection range and evidence pin answer different questions. The pin is
+    // what every declared capability was probed against; this range is only
+    // which binaries the client will drive. Binaries older than the pin lack
+    // the newest response capabilities but run every dispatched event, so
+    // refusing them would strand users on a working install.
+    expect(satisfies(`${major}.${minor}.${patch}`, supportedVersions)).toBe(true);
+    expect(satisfies(`${major}.${minor}.${patch - 1}`, supportedVersions)).toBe(true);
+    expect(satisfies(`${major}.${minor}.${patch + 1}`, supportedVersions)).toBe(true);
+    expect(satisfies(`${major}.${minor + 1}.0`, supportedVersions)).toBe(true);
+
+    // Below the floor minor and across the major boundary the hook surface is
+    // no longer the one this client encodes.
+    expect(satisfies(`${major}.${minor - 1}.0`, supportedVersions)).toBe(false);
+    expect(satisfies(`${major + 1}.0.0`, supportedVersions)).toBe(false);
   });
 });

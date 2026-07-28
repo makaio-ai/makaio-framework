@@ -1,0 +1,7 @@
+{
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "cwd": "/workspace",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

@@ -12,7 +12,11 @@ const nativeCredentialMockState = vi.hoisted(() => ({
 
 // Native credential inheritance has its own real-filesystem coverage; this
 // handler suite mocks the platform boundary to focus on config materialization.
-vi.mock('../native-credentials.js', () => ({
+// Only the two side-effecting entry points are stubbed — `resolveKeychainAccount`
+// is pure and stays real, so the account the lease publishes is the account it
+// would have written under.
+vi.mock('../native-credentials.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../native-credentials.js')>()),
   inheritClaudeCodeNativeCredentialsForSession: vi.fn(
     async (request: { sourceConfigDir: string; sessionDir: string; platform: NodeJS.Platform }) => {
       nativeCredentialMockState.inheritCalls.push(request);
@@ -26,6 +30,7 @@ vi.mock('../native-credentials.js', () => ({
   ),
 }));
 
+import { resolveKeychainAccount } from '../native-credentials.js';
 import { handleClaudeCodeSessionConfigSetup } from '../session-config-handler.js';
 
 describe('handleClaudeCodeSessionConfigSetup', () => {
@@ -82,9 +87,12 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     expect(sessionSettings).toMatchObject({ theme: 'dark', env: { DISABLE_AUTOUPDATER: '1' } });
     // Native source is never modified by the session setup.
     await expect(fs.readFile(path.join(nativeConfigDir, 'settings.json'), 'utf-8')).resolves.toBe('{"theme":"dark"}');
+    // A darwin lease that materialized credentials must also publish the
+    // Keychain account they were written under; the binary has no fallback.
     expect(result.env).toEqual({
       CLAUDE_CONFIG_DIR: sessionDir,
       CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
+      USER: resolveKeychainAccount(),
     });
     expect(result.authMaterialized).toBe(true);
   });

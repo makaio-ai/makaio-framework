@@ -194,4 +194,44 @@ describe('resolveCredentialMode', () => {
     if (!configDir) throw new Error('Missing fake native config directory');
     await expect(fs.access(configDir)).rejects.toThrow();
   });
+
+  it('spawns scenarios with the identity published by the native lease', async () => {
+    let scenarioEnv: Record<string, string> | undefined;
+    const runScenario = async (params: { env: Record<string, string> }): Promise<never> => {
+      scenarioEnv = params.env;
+      throw new Error('fake scenario failure');
+    };
+
+    await expect(
+      runProbe(
+        {
+          provider: 'claude-code',
+          credentialMode: 'native-login',
+          updateFixtures: false,
+          maxScenarios: 1,
+          maxWallClockSeconds: 1,
+        },
+        {
+          executablePath: '/fake/claude',
+          nativeLoginLeaseFactory: {
+            prepare: async (params) => ({
+              env: {
+                CLAUDE_CONFIG_DIR: params.configDir,
+                CLAUDE_SECURESTORAGE_CONFIG_DIR: params.configDir,
+                USER: 'lease-published-account',
+              },
+              authMaterialized: true,
+              teardown: async () => undefined,
+            }),
+          },
+          validateBinaryVersion: async ({ pinnedVersion }) => ({ valid: true, pinnedVersion }),
+          runScenario,
+        },
+      ),
+    ).rejects.toThrow('fake scenario failure');
+
+    // The Keychain account the lease wrote under must reach the child, whatever
+    // the harness process itself has in USER.
+    expect(scenarioEnv?.USER).toBe('lease-published-account');
+  });
 });
