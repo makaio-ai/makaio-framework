@@ -30,9 +30,9 @@ type NativeLocalityKind = NativeLocalityVerdict['kind'];
 /**
  * Extract a pre-evaluated native locality kind from an agent record.
  *
- * `MakaioSessionAgent` does not own machine-locality fields. The cold
- * rehydrate path cannot re-evaluate machine identity from storage, so this
- * helper only reads an already-computed verdict if a host-tier caller has
+ * `MakaioSessionAgent` does not own machine-locality fields. The rehydrate
+ * paths cannot re-evaluate machine identity from storage, so this helper
+ * only reads an already-computed verdict if a host-tier caller has
  * attached one to the POJO before it reaches the adapter.
  *
  * Absence is not proof of locality. Callers must treat `undefined` the same
@@ -50,6 +50,36 @@ function resolveNativeLocalityKind(persisted: MakaioSessionAgent): NativeLocalit
     }
   }
   return undefined;
+}
+
+/**
+ * Resolve the provider session to native-resume, honoring the rehydrate RPC
+ * contract shared by the warm and cold paths.
+ *
+ * Priority:
+ * 1. Explicit `resumeAdapterSessionId` from the RPC caller (service layer
+ *    evaluated locality and decided native resume is safe).
+ * 2. A pre-evaluated locality verdict stamped onto the persisted agent
+ *    record by a host-tier caller (fallback for callers that cannot pass
+ *    the field via the RPC payload).
+ *
+ * `adapterSessionId` alone is an identity marker and never implies resume:
+ * promoting it to a resume target unconditionally would native-resume
+ * foreign or degraded provider sessions. When neither source confirms
+ * native locality the caller is responsible for injecting history on the
+ * first send (typically via the orchestrator's dead-agent recovery path).
+ * @param rpcResumeId - Explicit resume target from the RPC payload, if any
+ * @param persistedLocalityKind - Locality verdict from the persisted record, if any
+ * @param identitySessionId - Identity-marker session ID used as the resume target when the verdict confirms native locality
+ * @returns Resume target, or `undefined` when native resume is not confirmed
+ */
+function resolveEffectiveResumeId(
+  rpcResumeId: string | undefined,
+  persistedLocalityKind: NativeLocalityKind | undefined,
+  identitySessionId: string | undefined,
+): string | undefined {
+  if (rpcResumeId !== undefined) return rpcResumeId;
+  return persistedLocalityKind === 'native' ? identitySessionId : undefined;
 }
 
 /**
@@ -119,7 +149,7 @@ export class AgentRehydrationManager<
     const rehydratePromise = (async (): Promise<void> => {
       const entry = this.registry.get(agentId);
       if (entry) {
-        await this.rehydrateRegisteredAgent(agentId, entry, { adapterSessionId, cwd, model });
+        await this.rehydrateRegisteredAgent(agentId, entry, { adapterSessionId, rpcResumeId, cwd, model });
         return;
       }
       await this.rehydrateFromStorage(agentId, { adapterSessionId, rpcResumeId, cwd, model });
@@ -179,31 +209,28 @@ export class AgentRehydrationManager<
             providerConfigId: persisted.providerConfigId,
           })
         : undefined;
-    // Determine whether to native-resume the provider session.
-    //
-    // Priority:
-    // 1. Explicit `resumeAdapterSessionId` from the RPC caller (service
-    //    layer evaluated locality and decided native resume is safe).
-    // 2. A pre-evaluated locality verdict stamped onto the persisted agent
-    //    record by a host-tier caller (fallback for callers that cannot
-    //    pass the field via the RPC payload).
-    //
-    // When neither source confirms native locality the adapter creates a
-    // fresh connector. The service layer is then responsible for ensuring
-    // the first send carries injected history (typically via the
-    // orchestrator's dead-agent recovery path).
     const resolvedAdapterSessionId = adapterSessionId ?? persisted.adapterSessionId;
-    const callerResumeId = rpcResumeId ?? undefined;
-    const persistedLocalityKind = resolveNativeLocalityKind(persisted);
-    const allowNativeResume = callerResumeId !== undefined || persistedLocalityKind === 'native';
-    const effectiveResumeId = callerResumeId ?? (allowNativeResume ? resolvedAdapterSessionId : undefined);
+    const effectiveResumeId = resolveEffectiveResumeId(
+      rpcResumeId,
+      resolveNativeLocalityKind(persisted),
+      resolvedAdapterSessionId,
+    );
 
+    // A resumed generation's identity is the session it resumes — a divergent
+    // identity marker would seed the connector with the old ID and leave the
+    // claimed resume ID dangling after registry.set() clears only the
+    // confirmed identity. A fresh generation mints its own provider identity
+    // instead: pinning a used session ID on a fresh start collides with the
+    // provider's durable session store (claude CLI: "Session ID already in
+    // use").
     const agentCreationRequest: AgentCreationOptions = {
       model: model ?? persisted.model,
       cwd: cwd ?? persisted.cwd,
       allowedDirectories: persisted.allowedDirectories,
-      adapterSessionId: resolvedAdapterSessionId,
-      ...(effectiveResumeId !== undefined && { resumeAdapterSessionId: effectiveResumeId }),
+      ...(effectiveResumeId !== undefined && {
+        adapterSessionId: effectiveResumeId,
+        resumeAdapterSessionId: effectiveResumeId,
+      }),
       ...(providerContext !== undefined && { providerContext }),
       ...(mcpSessionContext !== undefined && { mcpSessionContext }),
     };
@@ -226,8 +253,30 @@ export class AgentRehydrationManager<
       adapterSessionId: recoveredAdapterSessionId,
       usage: restoredUsage,
     });
-    if (cwd !== undefined || model !== undefined) {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId, cwd, model });
+    if (effectiveResumeId !== undefined && effectiveResumeId !== recoveredAdapterSessionId) {
+      // The provider confirmed a different session than the claimed resume
+      // target (lazy-confirming connectors fall back to the persisted ID) —
+      // release the claim explicitly so the session does not stay locked.
+      this.registry.releaseAdapterSessionClaim(effectiveResumeId);
+    }
+    // Persist the confirmed identity when it moved (fresh rehydrates mint a
+    // new provider session): the agent.started reconciliation is write-once
+    // and never replaces a stale stored ID, and a later restartAgents native
+    // verdict would resume the abandoned provider thread from storage.
+    //
+    // Deliberately agent-row only: the session-row identity is host-tier
+    // state the adapter does not own, and its currency is a service-tier
+    // seam shared with every other provider-session movement (rotation-mode
+    // turns move the provider session on every send). Updating it from one
+    // producer here would leave the general staleness class in place.
+    const adapterSessionIdMoved = recoveredAdapterSessionId !== persisted.adapterSessionId;
+    if (cwd !== undefined || model !== undefined || adapterSessionIdMoved) {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
+        agentId,
+        cwd,
+        model,
+        ...(adapterSessionIdMoved && { adapterSessionId: recoveredAdapterSessionId }),
+      });
     }
     await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
   }
@@ -317,6 +366,11 @@ export class AgentRehydrationManager<
 
   /**
    * Rehydrate an agent that is still present in the in-memory registry.
+   *
+   * Applies the same native-resume gate as the cold path: the caller's
+   * explicit `resumeAdapterSessionId` wins, a host-tier locality verdict on
+   * the stored record is the fallback, and without either the replacement
+   * connector starts fresh (identity marker forwarded, no provider resume).
    * @param agentId - Agent identifier being rehydrated
    * @param entry - Active registry entry for the agent
    * @param runtime - Runtime overrides from the rehydrate request
@@ -324,27 +378,89 @@ export class AgentRehydrationManager<
   private async rehydrateRegisteredAgent(
     agentId: string,
     entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
-    runtime: { adapterSessionId?: string; cwd?: string; model?: string },
+    runtime: { adapterSessionId?: string; rpcResumeId?: string; cwd?: string; model?: string },
   ): Promise<void> {
     const nativeSessionId = runtime.adapterSessionId ?? entry.adapterSessionId;
-    await entry.agent.swapConnector({
-      cwd: runtime.cwd,
-      model: runtime.model,
-      adapterSessionId: nativeSessionId,
-      resumeAdapterSessionId: nativeSessionId,
-    });
-    const refreshedAdapterSessionId = await entry.agent.getAdapterSessionId();
-    if (refreshedAdapterSessionId) {
-      entry.adapterSessionId = refreshedAdapterSessionId;
+    const effectiveResumeId = resolveEffectiveResumeId(
+      runtime.rpcResumeId,
+      await this.resolvePersistedLocalityKind(agentId),
+      nativeSessionId,
+    );
+    // Same claim discipline as the cold path when the resume target is not
+    // the session this entry already owns: without the claim, a stale RPC
+    // payload could attach this live agent to another live agent's provider
+    // conversation. The entry's own session needs no claim — the registry
+    // already advertises this agent as its occupant.
+    const foreignResumeId = effectiveResumeId !== entry.adapterSessionId ? effectiveResumeId : undefined;
+    if (foreignResumeId !== undefined && !this.registry.claimAdapterSession(foreignResumeId)) {
+      throw new Error(`Provider session ${foreignResumeId} is already claimed by another in-flight rehydrate or start`);
     }
-    if (runtime.cwd !== undefined || runtime.model !== undefined) {
+    const previousAdapterSessionId = entry.adapterSessionId;
+    try {
+      // The resume key is always present: an explicit `undefined` overrides
+      // the agent config's start-time resume target, so a non-native
+      // rehydrate really produces a fresh connector instead of inheriting a
+      // stale resume. A resumed generation carries the resume target as its
+      // identity; a fresh replacement mints a new provider session ID
+      // (lifecycle-manager default) because pinning a used ID collides with
+      // the provider's durable session store (claude CLI: "Session ID
+      // already in use").
+      //
+      // After a fresh swap the caller owns history injection on the next
+      // send — the same contract the RPC schema documents for cold
+      // rehydration. The adapter cannot decide what history the service
+      // wants injected, and no production caller warm-rehydrates without a
+      // resume decision today (restartAgents defers non-native agents to
+      // dead-agent recovery, which builds the recovery context itself).
+      await entry.agent.swapConnector({
+        cwd: runtime.cwd,
+        model: runtime.model,
+        ...(effectiveResumeId !== undefined && { adapterSessionId: effectiveResumeId }),
+        resumeAdapterSessionId: effectiveResumeId,
+      });
+      const refreshedAdapterSessionId = await entry.agent.getAdapterSessionId();
+      if (refreshedAdapterSessionId) {
+        entry.adapterSessionId = refreshedAdapterSessionId;
+      }
+    } finally {
+      // Released after the entry update so occupancy of the resumed session
+      // stays continuous on success; on failure the claim simply frees up.
+      if (foreignResumeId !== undefined) {
+        this.registry.releaseAdapterSessionClaim(foreignResumeId);
+      }
+    }
+    // Persist the confirmed identity when it moved (fresh replacements mint
+    // a new provider session): the agent.started reconciliation is
+    // write-once and never replaces a stale stored ID, and a later
+    // restartAgents native verdict would resume the abandoned provider
+    // thread from storage.
+    const movedAdapterSessionId =
+      entry.adapterSessionId !== previousAdapterSessionId ? entry.adapterSessionId : undefined;
+    if (runtime.cwd !== undefined || runtime.model !== undefined || movedAdapterSessionId !== undefined) {
       await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
         agentId,
         cwd: runtime.cwd,
         model: runtime.model,
+        ...(movedAdapterSessionId !== undefined && { adapterSessionId: movedAdapterSessionId }),
       });
     }
     await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+  }
+
+  /**
+   * Read the host-tier locality verdict for a registered agent from storage.
+   *
+   * The warm path holds no persisted record, so the verdict fallback of the
+   * shared native-resume gate needs its own lookup. Resolution is
+   * best-effort: a missing storage handler or record simply yields no
+   * verdict, which the gate treats as non-native.
+   * @param agentId - Agent identifier being rehydrated
+   * @returns The locality verdict kind, or `undefined` when locality is not confirmed
+   */
+  private async resolvePersistedLocalityKind(agentId: string): Promise<NativeLocalityKind | undefined> {
+    const result = await this.globalBus.requestOptional(AgentStorageSubjects.get, { agentId });
+    if (!result.handled || !result.data.agent) return undefined;
+    return resolveNativeLocalityKind(result.data.agent);
   }
 
   /**

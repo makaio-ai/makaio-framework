@@ -118,11 +118,12 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * Uses create-before-close pattern with rollback to preserve availability.
    * @param configOverrides - Optional runtime override fields
    * @param beforeCommit - Final guard after replacement initialization and before publication
+   * @returns The replacement's provider-confirmed session ID, when it has one
    */
   public async swapConnector(
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const currentRuntime = this.config.getConnectorRuntime();
     const currentConnector = currentRuntime.connector;
     if (currentConnector.getProcessingState() !== 'idle') {
@@ -140,6 +141,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
     }
     this.runWiringCleanups(oldWiringCleanups);
     await this.closePreviousRuntime(currentRuntime);
+    return confirmedAdapterSessionId;
   }
 
   /**
@@ -160,9 +162,10 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       ...(configOverrides !== undefined &&
         'reasoningEffort' in configOverrides && { reasoningEffort: configOverrides.reasoningEffort }),
       adapterSessionId: configOverrides?.adapterSessionId ?? crypto.randomUUID(),
-      ...(configOverrides?.resumeAdapterSessionId !== undefined && {
-        resumeAdapterSessionId: configOverrides.resumeAdapterSessionId,
-      }),
+      ...(configOverrides !== undefined &&
+        'resumeAdapterSessionId' in configOverrides && {
+          resumeAdapterSessionId: configOverrides.resumeAdapterSessionId,
+        }),
     });
 
     const fullConfig = await this.config.configFactory(configInput);

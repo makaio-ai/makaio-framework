@@ -499,7 +499,13 @@ export type AgentConnectorConfigOverrides = Partial<{
   model: string;
   providerContext: ProviderContext;
   adapterSessionId: string;
-  resumeAdapterSessionId: string;
+  /**
+   * Provider session the replacement generation should native-resume. Key
+   * presence (not value) selects this over the agent config's start-time
+   * resume target, so an explicit `undefined` builds a fresh connector
+   * instead of silently re-resuming a stale start directive.
+   */
+  resumeAdapterSessionId: string | undefined;
   mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
   /**
    * Target reasoning effort for the replacement generation. Key presence (not
