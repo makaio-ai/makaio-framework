@@ -11,53 +11,16 @@
  * - adapterSessionId query-param shim is applied before MCP dispatch
  *   (param → x-adapter-session-id header, observable via resolveContextOverrides)
  * - close() is idempotent (two awaited calls, no throw)
- * - onclose fires exactly once after handle.close()
+ * - onclose fires exactly once after handle.close() (endpoint-level, not per client)
  * - startHttpMcpServer existing behaviour is unchanged (regression net)
  */
 
-import * as http from 'node:http';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import type { ToolExecutionContextOverrides } from '@makaio/contracts';
 import { createHttpMcpHandler, startHttpMcpServer } from '../server.js';
-import { createClient, registerEmptyToolList } from './helpers.js';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Start a plain node:http server that mounts the given handler at every path,
- * and resolves to the assigned port.
- * @param handler - Request handler to mount.
- * @returns Object with the bound port and a stop function.
- */
-async function mountHandler(
-  handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
-): Promise<{ port: number; stop: () => Promise<void> }> {
-  const httpServer = http.createServer(handler);
-  const port = await new Promise<number>((resolve, reject) => {
-    httpServer.once('error', reject);
-    httpServer.listen(0, '127.0.0.1', () => {
-      const addr = httpServer.address();
-      if (!addr || typeof addr === 'string') {
-        reject(new Error('Unexpected address format'));
-        return;
-      }
-      resolve(addr.port);
-    });
-  });
-
-  return {
-    port,
-    stop: () =>
-      new Promise<void>((resolve, reject) => {
-        httpServer.closeAllConnections();
-        httpServer.close((err) => (err ? reject(err) : resolve()));
-      }),
-  };
-}
+import { createClient, mountHandler, registerEmptyToolList } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -194,6 +157,31 @@ describe('createHttpMcpHandler', () => {
     expect(onclose).toHaveBeenCalledTimes(1);
   });
 
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])('rejects invalid idleTimeoutMs %s', async (idleTimeoutMs) => {
+    await expect(createHttpMcpHandler(createBusInstance(), { idleTimeoutMs })).rejects.toThrow(
+      'idleTimeoutMs must be a positive finite number of milliseconds',
+    );
+  });
+
+  it.each([
+    0,
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])('rejects invalid sweepIntervalMs %s', async (sweepIntervalMs) => {
+    await expect(createHttpMcpHandler(createBusInstance(), { sweepIntervalMs })).rejects.toThrow(
+      'sweepIntervalMs must be a positive finite number of milliseconds',
+    );
+  });
+
+  it('rejects a sweepIntervalMs beyond the timer ceiling', async () => {
+    // Only the sweep interval is handed to a timer, so only it carries the
+    // 32-bit delay ceiling on top of the shared positive-finite contract.
+    await expect(createHttpMcpHandler(createBusInstance(), { sweepIntervalMs: 2_147_483_648 })).rejects.toThrow(
+      'sweepIntervalMs must be no greater than 2147483647 milliseconds',
+    );
+  });
+
   it('exposes a contextRegistry that can register and retrieve agent context', async () => {
     const bus = createBusInstance();
     const cleanup = registerEmptyToolList(bus);
@@ -228,7 +216,7 @@ describe('createHttpMcpHandler', () => {
 // ---------------------------------------------------------------------------
 
 describe('startHttpMcpServer (regression)', () => {
-  it('invokes the transport onclose hook exactly once when the handle closes', async () => {
+  it('invokes the endpoint onclose hook exactly once when the handle closes', async () => {
     const bus = createBusInstance();
     const onclose = vi.fn();
 

@@ -10,7 +10,9 @@ export {
   ADAPTER_SESSION_ID_HEADER,
   ADAPTER_SESSION_ID_PARAM,
   createMcpServer,
-  createMcpRequestHandler,
+} from './create-mcp-server.js';
+
+export {
   createHttpMcpHandler,
   startHttpMcpServer,
   startMcpServer,
@@ -31,6 +33,18 @@ export {
 } from './server.js';
 
 export { createFetchMcpHandler, type FetchMcpHandlerHandle } from './fetch-handler.js';
+
+export { createMcpEndpoint, type CreateMcpTransport, type McpEndpoint } from './mcp-endpoint.js';
+
+export {
+  McpTransportRegistry,
+  type CreateMcpSession,
+  type McpCreateFailureResult,
+  type McpRouteRequest,
+  type McpRouteResult,
+  type McpSessionHooks,
+  type McpTransportRegistryOptions,
+} from './mcp-transport-registry.js';
 
 export type { McpAgentContext } from '@makaio/contracts';
 

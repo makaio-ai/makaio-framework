@@ -10,6 +10,7 @@
  * Scenarios covered:
  * - Session registration returns a positive port number
  * - Re-registering on the same bus always returns the same singleton port
+ * - One client terminating its MCP session does not restart the bridge
  * - Session unregistration succeeds without error
  * - Unregistering an unknown session is a no-op (no throw)
  * - `requestOptional` returns `{ handled: false }` after the service is destroyed
@@ -121,6 +122,43 @@ describe('McpServerBridgeService', () => {
       );
 
       expect(r1.port).toBe(r2.port);
+    });
+
+    it('keeps serving on the same port after a client terminates its MCP session', async () => {
+      const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({ tools: [], toolsets: [] });
+      });
+
+      try {
+        const first = await bus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({ adapterSessionId: 'terminating-session' }),
+        );
+
+        const { client, transport } = await createMcpClient(first.port, 'terminating-session');
+        // An explicit DELETE ends one client's MCP protocol session. It must not
+        // be mistaken for the endpoint closing: doing so tears down the bridge
+        // and rebinds a new port, stranding every adapter still pointed at the
+        // old one.
+        await transport.terminateSession();
+        await client.close();
+
+        const second = await bus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({ adapterSessionId: 'surviving-session' }),
+        );
+        expect(second.port).toBe(first.port);
+
+        const survivor = await createMcpClient(second.port, 'surviving-session');
+        try {
+          await expect(survivor.client.listTools()).resolves.toBeDefined();
+        } finally {
+          await survivor.client.close();
+          await survivor.transport.close();
+        }
+      } finally {
+        cleanupList();
+      }
     });
 
     it('concurrent registrations coalesce on a single server instance', async () => {
