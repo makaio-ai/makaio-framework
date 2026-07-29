@@ -28,24 +28,80 @@ export type TransactionCallback<T> = Parameters<LibSQLTransactionExecutor>[0] ex
   : never;
 
 /**
+ * Keyed store of in-flight operation tails.
+ *
+ * Declared structurally so a caller may choose the keyspace its identity
+ * actually lives in: both `Map` and `WeakMap` satisfy it, so a caller keyed on
+ * an object holds no strong reference to it, while a caller keyed on a derived
+ * value (a file path, a connection identity) still gets a queue.
+ * @typeParam TKey - Identity operations are serialized against.
+ */
+export interface OperationTailStore<TKey> {
+  /**
+   * Read the tail currently queued for a key.
+   * @param key - Identity to read.
+   * @returns The queued tail, or `undefined` when nothing is in flight.
+   */
+  get(key: TKey): Promise<void> | undefined;
+  /**
+   * Publish the new tail for a key.
+   * @param key - Identity to write.
+   * @param tail - Tail that resolves once the newly queued work has finished.
+   */
+  set(key: TKey, tail: Promise<void>): unknown;
+  /**
+   * Drop a key whose queue has drained.
+   * @param key - Identity to forget.
+   */
+  delete(key: TKey): unknown;
+}
+
+/**
+ * Run work as the only in-flight operation for a key.
+ *
+ * The queue is a chain of tails: each caller reads the tail currently
+ * published for its key, publishes its own, and waits for the one it read.
+ * A rejected predecessor is absorbed rather than propagated, because a failed
+ * operation still releases the queue for the next one. The key is dropped only
+ * when the tail still published is the one this call wrote, so a successor
+ * that already queued behind it is never orphaned.
+ *
+ * The guarantee is process-local: two processes over one database do not share
+ * a store and must coordinate through the database itself.
+ * @param tails - Store holding the in-flight tail per key.
+ * @param key - Identity this work must not overlap other work on.
+ * @param work - Async work to run once the queue reaches it.
+ * @returns Whatever `work` resolves to.
+ * @typeParam TKey - Identity operations are serialized against.
+ * @typeParam TResult - Result type produced by the work.
+ */
+export async function serializeByKey<TKey, TResult>(
+  tails: OperationTailStore<TKey>,
+  key: TKey,
+  work: () => Promise<TResult>,
+): Promise<TResult> {
+  const previousTail = tails.get(key) ?? Promise.resolve();
+  const release = Promise.withResolvers<void>();
+  const nextTail = previousTail.catch(() => undefined).then(() => release.promise);
+  tails.set(key, nextTail);
+
+  await previousTail.catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    release.resolve();
+    if (tails.get(key) === nextTail) tails.delete(key);
+  }
+}
+
+/**
  * Serialize one database operation with transactions using the same handle.
  * @param db - Makaio database instance.
  * @param operation - Async database work that must not overlap a transaction.
  * @returns Result returned by the operation.
  */
 export async function serializeDatabaseOperation<T>(db: MakaioDatabase, operation: () => Promise<T>): Promise<T> {
-  const previousTail = operationTails.get(db) ?? Promise.resolve();
-  const release = Promise.withResolvers<void>();
-  const nextTail = previousTail.catch(() => undefined).then(() => release.promise);
-  operationTails.set(db, nextTail);
-
-  await previousTail.catch(() => undefined);
-  try {
-    return await operation();
-  } finally {
-    release.resolve();
-    if (operationTails.get(db) === nextTail) operationTails.delete(db);
-  }
+  return serializeByKey(operationTails, db, operation);
 }
 
 /**

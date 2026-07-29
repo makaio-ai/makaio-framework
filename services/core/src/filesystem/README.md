@@ -38,7 +38,7 @@ const listing = await MakaioBus.request(FileSystemSubjects.listDirectory, {
 });
 
 // Cleanup
-fsService.destroy();
+await fsService.destroy();
 ```
 
 ## Architecture Principles

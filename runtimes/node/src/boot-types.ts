@@ -621,6 +621,15 @@ export interface MakaioRuntime {
 
   /**
    * Shut down all services in reverse startup order.
+   *
+   * Every step is attempted even when an earlier one fails, and the failures
+   * are then reported together. A host that owns process termination must
+   * treat the rejection as an unclean exit — something the runtime started is
+   * still holding resources it could not release — rather than logging it and
+   * exiting as if the drain had completed.
+   * @returns Promise that settles once every step has been attempted, resolving
+   *   on success and rejecting with an AggregateError when any step fails.
+   * @throws An AggregateError when any shutdown step failed.
    */
   shutdown(): Promise<void>;
 }

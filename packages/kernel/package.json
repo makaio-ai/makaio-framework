@@ -20,6 +20,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
+    "@makaio/utils": "workspace:*",
     "zod": "4.4.3"
   },
   "scripts": {

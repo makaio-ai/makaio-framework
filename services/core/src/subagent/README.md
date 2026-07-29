@@ -73,7 +73,7 @@ const subagentService = new SubagentService(MakaioBus);
 await subagentService.init();
 
 // Later: cleanup
-subagentService.destroy();
+await subagentService.destroy();
 ```
 
 ### Custom Constraints

@@ -7,6 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./execution-attempt-repository": "./src/execution-attempt-repository.ts",
+    "./provider-operation": "./src/provider-operation.ts",
+    "./testing": "./src/testing/index.ts",
+    "./testing/sqlite": "./src/testing/sqlite.ts",
     "./package": "./src/package.ts",
     "./workflow-orchestrator": "./src/workflow-orchestrator.ts",
     "./package.json": "./package.json"
@@ -21,6 +24,7 @@
     "@makaio/storage-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
     "@makaio/storage-handlers": "workspace:*",
+    "@makaio/utils": "workspace:*",
     "ajv": "^8.18.0",
     "croner": "^9.0.0",
     "drizzle-orm": "0.45.2",
@@ -42,6 +46,9 @@
     "exports": {
       ".": "./dist/index.mjs",
       "./execution-attempt-repository": "./dist/execution-attempt-repository.mjs",
+      "./provider-operation": "./dist/provider-operation.mjs",
+      "./testing": "./dist/testing/index.mjs",
+      "./testing/sqlite": "./dist/testing/sqlite.mjs",
       "./package": "./dist/package.mjs",
       "./workflow-orchestrator": "./dist/workflow-orchestrator.mjs",
       "./package.json": "./package.json"

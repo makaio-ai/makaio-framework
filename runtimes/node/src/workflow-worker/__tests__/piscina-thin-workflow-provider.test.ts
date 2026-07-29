@@ -1,14 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { WorkerContributionManifest, WorkflowWorkerConfig } from '@makaio/contracts';
+import type {
+  WorkerContributionManifest,
+  WorkerNodeCapabilities,
+  WorkflowRunResult,
+  WorkflowWorkerConfig,
+} from '@makaio/contracts';
 import {
-  BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
   PROVIDER_ALLOCATION_REF_VERSION,
   ProviderAllocationRefSchema,
   WorkerNodeNamespace,
   WorkerNodeSubjects,
 } from '@makaio/contracts';
-import { PiscinaThinWorkflowProvider } from '../piscina-thin-workflow-provider.js';
+import { PiscinaThinWorkflowProvider, type ReadinessAwareWorkflowRunner } from '../piscina-thin-workflow-provider.js';
+import { createWorkflowWorkerReadyMessage, type WorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 import { makeWorkerConfig } from './fixtures.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -43,25 +48,55 @@ function makeProvisionRequest(
     environment: 'piscina' as const,
     workerConfig: makeWorkerConfig(),
     workerManifest: overrides?.workerManifest ?? { contributionRefs: [] },
+    provisioningStartedAt: '2026-07-27T10:00:00.000Z',
   };
 }
 
+/** Terminal result the default runner fake settles with. */
+const COMPLETED_RESULT: WorkflowRunResult = {
+  executionId: 'wfx-1',
+  workflowId: 'workflow-1',
+  status: 'completed',
+};
+
+/** Behaviour a runner fake may override for one test. */
+interface RunnerBehaviour {
+  /**
+   * Produce the run's terminal result promise.
+   * @param config - Worker configuration the provider passed through.
+   * @param signal - Cancellation signal the provider wired to the handle.
+   * @param manifest - Per-call contribution manifest the provider forwarded.
+   * @returns Promise settling with the workflow result.
+   */
+  readonly result?: (
+    config: WorkflowWorkerConfig,
+    signal: AbortSignal,
+    manifest?: WorkerContributionManifest,
+  ) => Promise<WorkflowRunResult>;
+  /** Post-composition readiness signal. Defaults to one that never settles. */
+  readonly ready?: Promise<WorkflowWorkerReadyMessage>;
+}
+
 /**
- * Create a test runner that resolves immediately with a completed result.
- * @returns A fake IWorkflowRunner.
+ * Create the readiness-aware runner fake this provider requires.
+ *
+ * The provider drives its runner only through `runWithReadiness`, so the fakes
+ * exercise the same seam production wires rather than a second code path.
+ * @param behaviour - Optional per-test result and readiness overrides.
+ * @returns Runner fake with a spy on `runWithReadiness`.
  */
-function makeCompletedRunner() {
-  return {
-    run: vi.fn().mockResolvedValue({
-      state: 'uncommitted' as const,
-      result: {
-        executionId: 'wfx-1',
-        workflowId: 'workflow-1',
-        status: 'completed',
-      },
+function makeRunner(behaviour?: RunnerBehaviour) {
+  const runWithReadiness = vi.fn(
+    (config: WorkflowWorkerConfig, signal: AbortSignal, manifest?: WorkerContributionManifest) => ({
+      result: behaviour?.result?.(config, signal, manifest) ?? Promise.resolve(COMPLETED_RESULT),
+      ready: behaviour?.ready ?? new Promise<WorkflowWorkerReadyMessage>(() => undefined),
     }),
-    dispose: vi.fn(),
+  );
+  const runner: ReadinessAwareWorkflowRunner & { runWithReadiness: typeof runWithReadiness } = {
+    run: vi.fn(),
+    runWithReadiness,
   };
+  return runner;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -72,7 +107,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   // ── Identity and capabilities ─────────────────────────────
 
   it('exposes the correct environment constant', () => {
-    const runner = { run: vi.fn() };
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -84,7 +119,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   });
 
   it('uses default base capabilities when none provided', () => {
-    const runner = { run: vi.fn() };
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -99,7 +134,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   });
 
   it('explicitly advertises supportsRecovery: false', () => {
-    const runner = { run: vi.fn() };
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -110,8 +145,30 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect(provider.baseCapabilities.supportsRecovery).toBe(false);
   });
 
+  it('keeps supportsRecovery false for an untyped caller that asks for it', () => {
+    // Writing `baseCapabilities: { supportsRecovery: true }` inline is a
+    // compile error: the option type omits the key, so a typed caller is told
+    // it is asking for something untrue rather than having the value quietly
+    // dropped. Overrides that arrive as an already-built value — from plain
+    // JavaScript, or across a config boundary — are not literals and are not
+    // rejected, so the runtime pin is the only thing left holding the line.
+    const overridesFromUntypedCaller: Partial<WorkerNodeCapabilities> = { supportsRecovery: true };
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-1',
+      displayName: 'Piscina',
+      runner: makeRunner(),
+      bus: createTestBus(),
+      baseCapabilities: overridesFromUntypedCaller,
+    });
+
+    // Worker threads die with the process that provisioned them, so there is
+    // nothing to recover and no recovery capability to call.
+    expect(provider.baseCapabilities.supportsRecovery).toBe(false);
+    expect('recovery' in provider).toBe(false);
+  });
+
   it('does not expose a recovery property', () => {
-    const runner = { run: vi.fn() };
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -123,7 +180,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   });
 
   it('merges custom base capability overrides onto the local defaults', () => {
-    const runner = { run: vi.fn() };
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -143,7 +200,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   // ── Allocation reference conformance ──────────────────────
 
   it('returns a validated ProviderAllocationRef with the correct version and provider ID', async () => {
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -154,7 +211,9 @@ describe('PiscinaThinWorkflowProvider', () => {
     const { allocationRef } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
 
     expect(allocationRef.version).toBe(PROVIDER_ALLOCATION_REF_VERSION);
-    expect(allocationRef.providerId).toBe(BUILT_IN_THIN_WORKFLOW_PROVIDER_ID);
+    // The reference names the instance that created it, so two providers of
+    // this class in one process stay distinguishable.
+    expect(allocationRef.providerId).toBe('piscina-default');
     expect(allocationRef.providerData).toMatchObject({
       executionAttemptId: 'attempt-1',
     });
@@ -164,7 +223,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   });
 
   it('embeds the executionAttemptId in the allocation ref providerData', async () => {
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -182,10 +241,25 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
   });
 
+  it('does not start a runner that cannot return a valid allocation response', async () => {
+    const runner = makeRunner();
+    const provider = new PiscinaThinWorkflowProvider({
+      // The allocation-reference contract rejects empty provider IDs.
+      id: '',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    await expect(provider.provision(makeProvisionRequest(), new AbortController().signal)).rejects.toThrow();
+
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
+  });
+
   // ── Handle shape conformance ──────────────────────────────
 
   it('returns a handle with executionAttemptId matching the request', async () => {
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -202,7 +276,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   });
 
   it('handle exposes cancel, terminate, and release but NOT ready or waitForResult', async () => {
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -222,19 +296,11 @@ describe('PiscinaThinWorkflowProvider', () => {
   it('emits attempt-ready only after the runner reports post-composition readiness', async () => {
     const bus = createTestBus();
     const emit = vi.spyOn(bus, 'emit');
-    let resolveReady!: (value: { executionId: string; cancelSubject: string; adapters: readonly string[] }) => void;
-    const ready = new Promise<{ executionId: string; cancelSubject: string; adapters: readonly string[] }>(
-      (resolve) => {
-        resolveReady = resolve;
-      },
-    );
-    const runner = {
-      run: vi.fn(),
-      runWithReadiness: vi.fn().mockReturnValue({
-        ready,
-        result: new Promise(() => undefined),
-      }),
-    };
+    let resolveReady!: (value: WorkflowWorkerReadyMessage) => void;
+    const ready = new Promise<WorkflowWorkerReadyMessage>((resolve) => {
+      resolveReady = resolve;
+    });
+    const runner = makeRunner({ ready, result: () => new Promise<never>(() => {}) });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-ready',
       displayName: 'Piscina',
@@ -246,11 +312,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     await provider.provision(request, new AbortController().signal);
     expect(emit).not.toHaveBeenCalledWith(WorkerNodeSubjects.control['attempt-ready'], expect.anything());
 
-    resolveReady({
-      executionId: request.executionId,
-      cancelSubject: request.workerConfig.cancelSubject,
-      adapters: ['tools'],
-    });
+    resolveReady(createWorkflowWorkerReadyMessage(request.executionId, request.workerConfig.cancelSubject, ['tools']));
     await vi.waitFor(() =>
       expect(emit).toHaveBeenCalledWith(WorkerNodeSubjects.control['attempt-ready'], {
         executionAttemptId: request.executionAttemptId,
@@ -262,12 +324,12 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('release resolves without affecting the runner', async () => {
     let capturedSignal: AbortSignal | undefined;
-    const runner = {
-      run: vi.fn().mockImplementation((_config: WorkflowWorkerConfig, signal: AbortSignal) => {
+    const runner = makeRunner({
+      result: (_config, signal) => {
         capturedSignal = signal;
         return new Promise<never>(() => {});
-      }),
-    };
+      },
+    });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -286,8 +348,8 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   // ── Cooperative provision cancellation ────────────────────
 
-  it('rejects provision when the signal is already aborted', async () => {
-    const runner = makeCompletedRunner();
+  it('rejects provision with the caller signal own abort reason', async () => {
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -295,15 +357,16 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
+    const reason = new Error('pre-aborted');
     const controller = new AbortController();
-    controller.abort(new Error('pre-aborted'));
+    controller.abort(reason);
 
-    await expect(provider.provision(makeProvisionRequest(), controller.signal)).rejects.toThrow('pre-aborted');
-    expect(runner.run).not.toHaveBeenCalled();
+    await expect(provider.provision(makeProvisionRequest(), controller.signal)).rejects.toBe(reason);
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
   });
 
-  it('rejects provision with string abort reason', async () => {
-    const runner = makeCompletedRunner();
+  it('rethrows a non-Error abort reason unchanged instead of flattening it', async () => {
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -314,18 +377,63 @@ describe('PiscinaThinWorkflowProvider', () => {
     const controller = new AbortController();
     controller.abort('cancelled by caller');
 
-    await expect(provider.provision(makeProvisionRequest(), controller.signal)).rejects.toThrow('cancelled by caller');
-    expect(runner.run).not.toHaveBeenCalled();
+    await expect(provider.provision(makeProvisionRequest(), controller.signal)).rejects.toBe('cancelled by caller');
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
+  });
+
+  it('does not start the runner when cancellation arrives as the forwarder is attached', async () => {
+    const runner = makeRunner();
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-1',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+    const reason = new Error('cancelled while attaching');
+    const controller = new AbortController();
+    const addEventListener = controller.signal.addEventListener.bind(controller.signal);
+    vi.spyOn(controller.signal, 'addEventListener').mockImplementation((type, listener, options) => {
+      addEventListener(type, listener, options);
+      if (type === 'abort') controller.abort(reason);
+    });
+
+    await expect(provider.provision(makeProvisionRequest(), controller.signal)).rejects.toBe(reason);
+
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
+  });
+
+  it('never reports cancellation as a provision outcome', async () => {
+    const runner = makeRunner();
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-1',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    const reason = new Error('cancelled before provisioning');
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    // Settling either way is captured so a resolved outcome is a visible
+    // failure rather than an unasserted pass.
+    const settled = await provider
+      .provision(makeProvisionRequest(), controller.signal)
+      .then((outcome) => ({ status: 'resolved' as const, value: outcome }))
+      .catch((error: unknown) => ({ status: 'rejected' as const, value: error }));
+
+    expect(settled).toEqual({ status: 'rejected', value: reason });
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
   });
 
   it('propagates caller signal abort to the underlying runner during execution', async () => {
     let capturedSignal: AbortSignal | undefined;
-    const runner = {
-      run: vi.fn().mockImplementation((_config: WorkflowWorkerConfig, signal: AbortSignal) => {
+    const runner = makeRunner({
+      result: (_config, signal) => {
         capturedSignal = signal;
         return new Promise<never>(() => {});
-      }),
-    };
+      },
+    });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -341,16 +449,41 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect(capturedSignal?.aborted).toBe(true);
   });
 
+  it('aborts a started runner when post-dispatch setup fails before a handle is returned', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const setupError = new Error('runner omitted its readiness promise');
+    const runner = makeRunner();
+    vi.mocked(runner.runWithReadiness).mockImplementation((_config, signal) => {
+      capturedSignal = signal;
+      return {
+        result: new Promise<WorkflowRunResult>(() => undefined),
+        get ready(): Promise<WorkflowWorkerReadyMessage> {
+          throw setupError;
+        },
+      };
+    });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-1',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    await expect(provider.provision(makeProvisionRequest(), new AbortController().signal)).rejects.toBe(setupError);
+
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
   // ── Handle cancel/terminate ───────────────────────────────
 
   it('aborts the underlying runner when cancel is called', async () => {
     let capturedSignal: AbortSignal | undefined;
-    const runner = {
-      run: vi.fn().mockImplementation((_config: WorkflowWorkerConfig, signal: AbortSignal) => {
+    const runner = makeRunner({
+      result: (_config, signal) => {
         capturedSignal = signal;
         return new Promise<never>(() => {});
-      }),
-    };
+      },
+    });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -367,12 +500,12 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('aborts the underlying runner when terminate is called', async () => {
     let capturedSignal: AbortSignal | undefined;
-    const runner = {
-      run: vi.fn().mockImplementation((_config: WorkflowWorkerConfig, signal: AbortSignal) => {
+    const runner = makeRunner({
+      result: (_config, signal) => {
         capturedSignal = signal;
         return new Promise<never>(() => {});
-      }),
-    };
+      },
+    });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -388,11 +521,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   });
 
   it('cancel resolves after dispatching abort without waiting for runner settlement', async () => {
-    const runner = {
-      run: vi.fn().mockImplementation((_config: WorkflowWorkerConfig, _signal: AbortSignal) => {
-        return new Promise<never>(() => {});
-      }),
-    };
+    const runner = makeRunner({ result: () => new Promise<never>(() => {}) });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -414,23 +543,12 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('forwards the request workerManifest to the runner as a per-call manifest', async () => {
     let capturedManifest: WorkerContributionManifest | undefined;
-    const runner = {
-      run: vi
-        .fn()
-        .mockImplementation(
-          (_config: WorkflowWorkerConfig, _signal: AbortSignal, manifest?: WorkerContributionManifest) => {
-            capturedManifest = manifest;
-            return Promise.resolve({
-              state: 'uncommitted' as const,
-              result: {
-                executionId: 'wfx-1',
-                workflowId: 'workflow-1',
-                status: 'completed',
-              },
-            });
-          },
-        ),
-    };
+    const runner = makeRunner({
+      result: (_config, _signal, manifest) => {
+        capturedManifest = manifest;
+        return Promise.resolve(COMPLETED_RESULT);
+      },
+    });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -456,7 +574,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   // ── Attempt correlation ───────────────────────────────────
 
   it('correlates handle and allocationRef to the same executionAttemptId', async () => {
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -478,7 +596,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   // ── Provider starts the runner ────────────────────────────
 
   it('starts the underlying runner on provision', async () => {
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -488,7 +606,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     await provider.provision(makeProvisionRequest(), new AbortController().signal);
 
-    expect(runner.run).toHaveBeenCalledOnce();
+    expect(runner.runWithReadiness).toHaveBeenCalledOnce();
   });
 
   // ── Outcome submission ────────────────────────────────────
@@ -501,7 +619,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       ctx.setResult({ decision: 'accepted' });
     });
 
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -535,9 +653,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       ctx.setResult({ decision: 'accepted' });
     });
 
-    const runner = {
-      run: vi.fn().mockRejectedValue(new Error('workflow exploded')),
-    };
+    const runner = makeRunner({ result: () => Promise.reject(new Error('workflow exploded')) });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -576,7 +692,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       ctx.setResult({ decision: 'accepted' });
     });
 
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -603,7 +719,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     const bus = createTestBus();
     // No handler registered — bus.request will reject on every attempt.
 
-    const runner = makeCompletedRunner();
+    const runner = makeRunner();
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
@@ -615,7 +731,13 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { handle } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const observerError = new Error('observer failed');
+    const laterObserver = vi.fn();
+    handle.observeInfrastructureConclusion?.(() => {
+      throw observerError;
+    });
+    handle.observeInfrastructureConclusion?.(laterObserver);
 
     // Allow the fire-and-forget retry chain to exhaust and log.
     await vi.waitFor(
@@ -628,6 +750,11 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[PiscinaThinWorkflowProvider] Failed to submit outcome'),
       expect.anything(),
+    );
+    expect(laterObserver).toHaveBeenCalledOnce();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[PiscinaThinWorkflowProvider] Infrastructure-conclusion observer failed:',
+      observerError,
     );
 
     consoleSpy.mockRestore();

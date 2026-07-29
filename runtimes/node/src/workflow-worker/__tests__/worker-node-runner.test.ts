@@ -6,8 +6,8 @@ import type {
   WorkflowRunResult,
 } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
-import type { ExecutionAttemptRepository } from '@makaio/subsystem-workflow-engine';
 import { WorkerNodeRunner } from '../worker-node-runner.js';
+import { createInMemoryAttemptRepository, makeBeginProvisioningInput } from '@makaio/subsystem-workflow-engine/testing';
 import { makeWorkerConfig } from './fixtures.js';
 
 const TEST_ALLOCATION_REF: ProviderAllocationRef = {
@@ -16,76 +16,8 @@ const TEST_ALLOCATION_REF: ProviderAllocationRef = {
   providerData: {},
 };
 
-// ─────────────────────────────────────────────────────────────
-// Test Authority Fixture
-// ─────────────────────────────────────────────────────────────
-
-function createTestRepository(): ExecutionAttemptRepository {
-  const attempts = new Map<string, { executionAttemptId: string; executionId: string }>();
-  const outcomes = new Map<string, WorkflowRunResult>();
-  const active = new Map<string, string>();
-  const allocatedAttempts = new Set<string>();
-
-  return {
-    async createAttempt(input) {
-      attempts.set(input.executionAttemptId, input);
-      active.set(input.executionId, input.executionAttemptId);
-      return {
-        executionAttemptId: input.executionAttemptId,
-        executionId: input.executionId,
-        status: 'pending' as const,
-        allocationRef: null,
-        createdAt: new Date().toISOString(),
-      };
-    },
-    async beginProvisioning() {
-      return { kind: 'started' as const };
-    },
-    async recordAllocation(executionAttemptId) {
-      allocatedAttempts.add(executionAttemptId);
-      return { kind: 'recorded' as const };
-    },
-    async recordProvisioningFailure() {
-      return { kind: 'recorded' as const };
-    },
-    async getActiveAttempt(executionId, executionAttemptId) {
-      if (active.get(executionId) !== executionAttemptId) return null;
-      const a = attempts.get(executionAttemptId);
-      if (!a) return null;
-      return {
-        ...a,
-        status: 'pending' as const,
-        allocationRef: null,
-        createdAt: new Date().toISOString(),
-      };
-    },
-    async commitOutcome(input) {
-      const prior = outcomes.get(input.executionAttemptId);
-      if (prior) {
-        if (JSON.stringify(prior) === JSON.stringify(input.result)) {
-          return { kind: 'duplicate', outcome: prior };
-        }
-        return { kind: 'conflict' };
-      }
-      const activeId = active.get(input.executionId);
-      if (activeId !== input.executionAttemptId) {
-        return { kind: 'fenced' };
-      }
-      outcomes.set(input.executionAttemptId, input.result);
-      return { kind: 'accepted', outcome: input.result };
-    },
-    async abandonPendingAttempt(executionAttemptId) {
-      if (allocatedAttempts.has(executionAttemptId)) return { kind: 'allocated' };
-      return { kind: 'abandoned' };
-    },
-    async recordInfrastructureFailure() {
-      return { kind: 'recorded' };
-    },
-  };
-}
-
 function createTestAuthority(): ExecutionAttemptAuthority {
-  return new ExecutionAttemptAuthority(createTestRepository());
+  return new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
 }
 
 describe('WorkerNodeRunner', () => {
@@ -246,7 +178,7 @@ describe('WorkerNodeRunner', () => {
 
   it('abandons the durable pending attempt when dispatch rejects', async () => {
     const abandonPendingAttempt = vi.fn().mockResolvedValue({ kind: 'abandoned' as const });
-    const repository = createTestRepository();
+    const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority({ ...repository, abandonPendingAttempt });
     const runner = new WorkerNodeRunner({
       dispatch: vi.fn().mockRejectedValue(new Error('dispatch failed')),
@@ -262,8 +194,11 @@ describe('WorkerNodeRunner', () => {
     const runner = new WorkerNodeRunner({
       authority,
       dispatch: async (request) => {
-        await authority.beginProvisioning(request.executionAttemptId, 'wfx-1');
-        await authority.recordAllocation(request.executionAttemptId, TEST_ALLOCATION_REF);
+        const begun = await authority.beginProvisioning(
+          makeBeginProvisioningInput(request.executionAttemptId, 'wfx-1'),
+        );
+        if (begun.kind !== 'started') throw new Error(`expected provisioning to start, got '${begun.kind}'`);
+        await authority.recordAllocation({ claim: begun.claim, allocationRef: TEST_ALLOCATION_REF });
         queueMicrotask(async () => {
           const result: WorkflowRunResult = {
             executionId: 'wfx-1',
@@ -365,7 +300,7 @@ describe('WorkerNodeRunner', () => {
 
   it('waits for the Authority outcome after cancellation instead of inferring infrastructure failure', async () => {
     const recordInfrastructureFailure = vi.fn().mockResolvedValue({ kind: 'recorded' as const });
-    const repository = createTestRepository();
+    const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority({ ...repository, recordInfrastructureFailure });
     let dispatchStarted!: () => void;
     const dispatchStartedPromise = new Promise<void>((resolve) => {

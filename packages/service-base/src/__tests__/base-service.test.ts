@@ -40,6 +40,43 @@ class DestroyFailureService extends BaseService {
   }
 }
 
+class DestroyHookFailureService extends BaseService {
+  public readonly steps: string[] = [];
+
+  public constructor() {
+    super(createBusInstance());
+  }
+
+  protected override onInit(): void {
+    this.addCleanup(() => {
+      this.steps.push('cleanup-1');
+      throw new Error('cleanup-1-failure');
+    });
+    this.addCleanup(() => {
+      this.steps.push('cleanup-2');
+    });
+  }
+
+  protected override onDestroy(): void {
+    this.steps.push('on-destroy');
+    throw new Error('on-destroy-failure');
+  }
+}
+
+class ReusableService extends BaseService {
+  public readonly steps: string[] = [];
+
+  public constructor() {
+    super(createBusInstance());
+  }
+
+  protected override onInit(): void {
+    this.addCleanup(() => {
+      this.steps.push('cleanup');
+    });
+  }
+}
+
 class AsyncDestroyService extends BaseService {
   public readonly steps: string[] = [];
   private resolveCleanup?: () => void;
@@ -141,16 +178,87 @@ describe('BaseService lifecycle', () => {
     expect(consoleSpy).toHaveBeenCalled();
   });
 
-  it('continues destroy cleanups after errors and resets initialized', async () => {
+  it('continues destroy cleanups after errors, resets initialized, and rejects', async () => {
     const service = new DestroyFailureService();
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await service.init();
 
-    await service.destroy();
+    const rejection = await service.destroy().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
     expect(service.steps).toEqual(['cleanup-1', 'cleanup-2']);
     expect(service.initialized).toBe(false);
-    expect(consoleSpy).toHaveBeenCalled();
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).errors.map((error: Error) => error.message)).toEqual(['cleanup-1-failure']);
+  });
+
+  it('aggregates an onDestroy failure with cleanup failures after running every cleanup', async () => {
+    const service = new DestroyHookFailureService();
+    await service.init();
+
+    const rejection = await service.destroy().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(service.steps).toEqual(['on-destroy', 'cleanup-1', 'cleanup-2']);
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).errors.map((error: Error) => error.message)).toEqual([
+      'on-destroy-failure',
+      'cleanup-1-failure',
+    ]);
+  });
+
+  it('delivers the same teardown rejection to concurrent destroy callers', async () => {
+    const service = new DestroyFailureService();
+    await service.init();
+
+    const first = service.destroy();
+    const second = service.destroy();
+    const [firstError, secondError] = await Promise.all([
+      first.catch((error: unknown) => error),
+      second.catch((error: unknown) => error),
+    ]);
+
+    expect(firstError).toBeInstanceOf(AggregateError);
+    expect(secondError).toBe(firstError);
+    expect(service.steps).toEqual(['cleanup-1', 'cleanup-2']);
+  });
+
+  it('rejects a retried teardown with the failure of the first instead of reporting it clean', async () => {
+    const service = new DestroyFailureService();
+    await service.init();
+
+    const firstError = await service.destroy().catch((error: unknown) => error);
+    const retryError = await service.destroy().catch((error: unknown) => error);
+
+    expect(firstError).toBeInstanceOf(AggregateError);
+    expect(retryError).toBe(firstError);
+    // The retry shares the one teardown rather than re-running cleanups that
+    // already released whatever they could.
+    expect(service.steps).toEqual(['cleanup-1', 'cleanup-2']);
+  });
+
+  it('refuses to re-initialize a service whose teardown failed', async () => {
+    const service = new DestroyFailureService();
+    await service.init();
+    const teardownError = await service.destroy().catch((error: unknown) => error);
+
+    await expect(service.init()).rejects.toBe(teardownError);
+    expect(service.initialized).toBe(false);
+  });
+
+  it('tears down again after a clean teardown and a fresh init', async () => {
+    const service = new ReusableService();
+
+    await service.init();
+    await service.destroy();
+    await service.init();
+    await service.destroy();
+
+    expect(service.steps).toEqual(['cleanup', 'cleanup']);
+    expect(service.initialized).toBe(false);
   });
 
   it('awaits async destroy cleanups and stays idempotent while teardown is in flight', async () => {

@@ -1,5 +1,6 @@
 export { ConfigSchema, type Config, type RelayConfig } from './config-schema.js';
 export {
+  CREDENTIAL_REF_PREFIXES,
   CredentialRefSchema,
   buildStoredCredentialRef,
   parseStoredCredentialRef,

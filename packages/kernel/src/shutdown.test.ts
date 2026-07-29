@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createShutdownSequence } from './shutdown.js';
 
 describe('createShutdownSequence', () => {
@@ -24,6 +24,7 @@ describe('createShutdownSequence', () => {
 
   it('runs subsequent steps even when an earlier step throws', async () => {
     const executed: string[] = [];
+    const failure = new Error('step 2 failed');
 
     const shutdown = createShutdownSequence([
       () => {
@@ -31,14 +32,14 @@ describe('createShutdownSequence', () => {
       },
       () => {
         executed.push('step-2');
-        throw new Error('step 2 failed');
+        throw failure;
       },
       () => {
         executed.push('step-3');
       },
     ]);
 
-    await expect(shutdown()).resolves.toBeUndefined();
+    await expect(shutdown()).rejects.toBeInstanceOf(AggregateError);
     expect(executed).toEqual(['step-1', 'step-2', 'step-3']);
   });
 
@@ -121,19 +122,45 @@ describe('createShutdownSequence', () => {
     await expect(shutdown()).resolves.toBeUndefined();
   });
 
-  it('logs a warning for each failing step without rethrowing', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('reports every failed step in one aggregate', async () => {
+    const first = new Error('first cleanup failed');
+    const second = new Error('second cleanup failed');
 
-    const error = new Error('cleanup failed');
     const shutdown = createShutdownSequence([
       () => {
-        throw error;
+        throw first;
+      },
+      () => {},
+      () => {
+        throw second;
       },
     ]);
 
-    await shutdown();
+    const rejection = await shutdown().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
-    expect(warnSpy).toHaveBeenCalledWith('[shutdown]', error);
-    warnSpy.mockRestore();
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).errors).toEqual([first, second]);
+    expect((rejection as AggregateError).message).toBe('Shutdown completed with 2 of 3 steps failing');
+  });
+
+  it('rejects every caller of a failed sequence with the same aggregate', async () => {
+    const shutdown = createShutdownSequence([
+      () => {
+        throw new Error('cleanup failed');
+      },
+    ]);
+
+    const first = shutdown();
+    const second = shutdown();
+    const [firstError, secondError] = await Promise.all([
+      first.catch((error: unknown) => error),
+      second.catch((error: unknown) => error),
+    ]);
+
+    expect(firstError).toBeInstanceOf(AggregateError);
+    expect(secondError).toBe(firstError);
   });
 });

@@ -66,7 +66,7 @@ await svc.destroy(); // unsubscribes all handlers, runs cleanups
 |--------|-------------|
 | `BaseService` (abstract class) | Base with lifecycle guards and cleanup tracking |
 | `init()` | Initialize the service; subsequent calls are no-ops |
-| `destroy()` | Tear down the service and unsubscribe all handlers; idempotent |
+| `destroy()` | Tear down the service and unsubscribe all handlers; idempotent. Attempts every cleanup, then rejects with one `AggregateError` if any failed — always await it or catch it. A failed teardown is retained, so retries and later `init()` calls share the rejection |
 | `initialized` | `true` after `init()` completes and before `destroy()` |
 | `registerHandler(subject, handler)` | Subscribe to a bus subject; auto-unsubscribed on destroy |
 | `addCleanup(fn)` | Enqueue an arbitrary cleanup function for teardown |

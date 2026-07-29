@@ -18,7 +18,8 @@
     "tsdown": "0.22.0"
   },
   "dependencies": {
-    "@makaio/bus-core": "workspace:*"
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/utils": "workspace:*"
   },
   "inlinedDependencies": {
     "type-fest": "5.3.1"

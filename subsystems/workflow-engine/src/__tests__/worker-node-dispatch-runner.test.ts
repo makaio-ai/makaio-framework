@@ -7,7 +7,7 @@ import { hasWorkerNodeDispatchRequirements, createWorkerNodeDispatchRunner } fro
 import { launchDefinitionExecutionTask } from '../workflow-definition-dispatch.js';
 import type { StartExecutionDeps } from '../workflow-execution-start.js';
 import type { DefinitionRunnerTaskParams } from '../workflow-runner-tasks.js';
-import { createInMemoryAttemptRepository } from './fixtures/in-memory-attempt-repository.js';
+import { beginTestProvisioning, createInMemoryAttemptRepository } from '../testing/index.js';
 
 function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerNodeDispatchRunner>>['run']>[0] {
   return {
@@ -135,7 +135,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     const authority = new ExecutionAttemptAuthority(repository);
     const localFailure = new Error('provider cleanup requires recovery');
     const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
-      await authority.beginProvisioning(ctx.payload.executionAttemptId, ctx.payload.config.executionId);
+      await beginTestProvisioning(authority, ctx.payload.executionAttemptId, ctx.payload.config.executionId);
       authority.rejectAndDiscardWaiter(ctx.payload.executionAttemptId, localFailure);
       throw localFailure;
     });
@@ -169,8 +169,12 @@ describe('createWorkerNodeDispatchRunner', () => {
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
     const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
-      await authority.beginProvisioning(ctx.payload.executionAttemptId, ctx.payload.config.executionId);
-      await authority.recordAllocation(ctx.payload.executionAttemptId, TEST_ALLOCATION_REF);
+      const claim = await beginTestProvisioning(
+        authority,
+        ctx.payload.executionAttemptId,
+        ctx.payload.config.executionId,
+      );
+      await authority.recordAllocation({ claim, allocationRef: TEST_ALLOCATION_REF });
       queueMicrotask(async () => {
         const result: WorkflowRunResult = {
           executionId: ctx.payload.config.executionId,

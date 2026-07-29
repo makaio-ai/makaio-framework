@@ -39,8 +39,10 @@ import type { MessagePortTransportOptions } from './types.js';
  * Extended transport interface with subscription management and readiness
  * signalling.
  *
- * The extended methods mirror the contract first established by
- * `WorkerTransport` in `@makaio/services/window-coordinator/bus`.
+ * The extended methods mirror the contract established by host transports that
+ * bridge a bus across a worker boundary: subscriptions are forwarded to the
+ * remote peer, and readiness is signalled once the initial subscribe
+ * synchronization has completed.
  */
 export interface MessagePortTransport extends BusTransport {
   /**

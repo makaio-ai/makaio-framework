@@ -23,13 +23,15 @@ import type { ContributionProcessor, ExtensionEntry } from './types.js';
  * because teardown must be symmetric — if an extension passed the filter at
  * activation time that state is now gone, and a processor that registered
  * side-effects must still clean them up. Stopped processors run in reverse
- * registration order so teardown mirrors activation. Errors during stopped
- * processing are logged but never thrown — shutdown must not be blocked.
+ * registration order so teardown mirrors activation. Every stopped processor
+ * runs even when one fails; their errors are returned to the lifecycle owner
+ * so it can finish cleanup and report the incomplete teardown.
  * @param processors - Registration-ordered list of processors to invoke.
  * @param contextHost - Coordinator surface used to build per-extension contexts.
  * @param name - Extension name used in log messages.
  * @param entry - Extension entry for context resolution.
  * @param action - Whether the extension just became active or was stopped.
+ * @returns Collected teardown failures for `stopped`; an empty array for `activated`.
  */
 export async function runContributionProcessors(
   processors: ReadonlyArray<ContributionProcessor>,
@@ -37,12 +39,13 @@ export async function runContributionProcessors(
   name: string,
   entry: ExtensionEntry,
   action: 'activated' | 'stopped',
-): Promise<void> {
+): Promise<unknown[]> {
   if (action === 'activated') {
     await runActivatedProcessors(processors, contextHost, name, entry);
-  } else {
-    await runStoppedProcessors(processors, name);
+    return [];
   }
+
+  return runStoppedProcessors(processors, name);
 }
 
 /**
@@ -90,20 +93,28 @@ async function runActivatedProcessors(
 }
 
 /**
- * Run contribution processors for a stopped extension (best-effort).
+ * Run contribution processors for a stopped extension.
  *
  * Processors run in reverse registration order so teardown mirrors activation.
- * Errors are caught and logged — shutdown must not be blocked.
+ * Errors are collected while subsequent processors continue to run.
  * @param processors - Registration-ordered list of processors to invoke.
  * @param name - Extension name used in log messages.
+ * @returns Failures raised by stopped processors, in invocation order.
  */
-async function runStoppedProcessors(processors: ReadonlyArray<ContributionProcessor>, name: string): Promise<void> {
+async function runStoppedProcessors(
+  processors: ReadonlyArray<ContributionProcessor>,
+  name: string,
+): Promise<unknown[]> {
+  const failures: unknown[] = [];
+
   for (const processor of [...processors].reverse()) {
     if (!processor.processStopped) continue;
     try {
       await processor.processStopped(name);
     } catch (err) {
-      console.error(`[ExtensionCoordinator] Contribution processor error (stopped) for "${name}":`, err);
+      failures.push(err);
     }
   }
+
+  return failures;
 }

@@ -25,7 +25,8 @@ import {
   type WorkerNodeDispatch,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { ExecutionAttemptAuthority, type ExecutionAttemptRepository } from '@makaio/subsystem-workflow-engine';
+import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
+import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -599,31 +600,8 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
 // ---------------------------------------------------------------------------
 
 describe('workflow-level runner boot composition', () => {
-  /**
-   * Minimal in-memory repository fixture for boot-composition tests.
-   *
-   * These tests verify runner wiring, not repository behavior. The
-   * repository returns plausible records so that the Authority can
-   * create attempts and commit outcomes through the normal path.
-   */
-  const stubRepository: ExecutionAttemptRepository = {
-    createAttempt: (input) =>
-      Promise.resolve({
-        executionAttemptId: input.executionAttemptId,
-        executionId: input.executionId,
-        status: 'pending',
-        allocationRef: null,
-        createdAt: new Date().toISOString(),
-      }),
-    beginProvisioning: () => Promise.resolve({ kind: 'started' as const }),
-    recordAllocation: () => Promise.resolve({ kind: 'recorded' as const }),
-    recordProvisioningFailure: () => Promise.resolve({ kind: 'recorded' as const }),
-    getActiveAttempt: () => Promise.resolve(null),
-    commitOutcome: (input) => Promise.resolve({ kind: 'accepted', outcome: input.result }),
-    abandonPendingAttempt: () => Promise.resolve({ kind: 'abandoned' }),
-    recordInfrastructureFailure: () => Promise.resolve({ kind: 'recorded' }),
-  };
-  const stubAuthority = new ExecutionAttemptAuthority(stubRepository);
+  // These tests verify runner wiring, not repository behavior.
+  const stubAuthority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
 
   it('returns undefined when no runner is configured', () => {
     const runner = createNodeWorkflowRunner({

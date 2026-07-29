@@ -16,10 +16,7 @@ import {
   type WorkflowExecutorTestSetup,
 } from './workflow-executor.test-setup.js';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
-import {
-  createInMemoryAttemptRepository,
-  type InMemoryAttemptRepository,
-} from './fixtures/in-memory-attempt-repository.js';
+import { createInMemoryAttemptRepository, type InMemoryAttemptRepository } from '../testing/index.js';
 
 describe('authority runner result acceptance', () => {
   let setup: WorkflowExecutorTestSetup | undefined;

@@ -35,6 +35,10 @@ import { ElectronNotificationProvider } from './providers/electron-notification-
 import { createElectronRestartHandler } from './restart-handler.js';
 import { createElectronForegroundRequestController } from './foreground-requests.js';
 import {
+  closeElectronServerInfrastructure as closeServers,
+  closeElectronServerInfrastructureAfterStartupFailure as closeServersAfterStartupFailure,
+} from './server-infrastructure-shutdown.js';
+import {
   buildDesktopBaseRuntimeOptions,
   createElectronBootContext,
   IS_DEV,
@@ -116,24 +120,17 @@ export function startApp() {
    * Centralises the cleanup pattern used by the boot-failure catch, the
    * graceful `before-quit` handler, and the fatal-startup catch so they
    * stay in sync.
+   * @param preserveStartupFailure - Log cleanup failures instead of replacing a causal startup error.
    */
-  async function closeServerInfrastructure(): Promise<void> {
+  async function closeServerInfrastructure(preserveStartupFailure = false): Promise<void> {
     // Idempotent — null after first call so double-invocation from
     // overlapping shutdown paths does not close already-closed resources.
     const closeVite = viteClose;
     viteClose = null;
-    if (closeVite) {
-      await closeVite().catch((err: unknown) => {
-        console.warn('[electron] Vite close error:', err);
-      });
-    }
-
     const server = httpServer;
     httpServer = null;
-    if (server?.listening) {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    const closeInfrastructure = preserveStartupFailure ? closeServersAfterStartupFailure : closeServers;
+    await closeInfrastructure({ closeVite, server });
   }
 
   // ── Window creation helper ────────────────────────────────────────────────
@@ -301,7 +298,7 @@ export function startApp() {
       })
       .catch((err: unknown) => {
         // Release the port before the error window shows.
-        return closeServerInfrastructure().then(() => {
+        return closeServerInfrastructure(true).then(() => {
           showBootErrorWindow(err);
           return null;
         });
@@ -424,9 +421,15 @@ export function startApp() {
       if (shutdownPromise) return;
 
       shutdownPromise = (async () => {
+        // The exit status is the only channel a supervisor reads, so a runtime
+        // that could not release everything it started must not leave behind a
+        // status that says the drain completed.
+        let exitCode = 0;
+
         try {
           if (windowManager) await saveWindowSession(MakaioBus, windowManager, WINDOW_SESSION_SCOPE);
         } catch (err: unknown) {
+          exitCode = 1;
           console.warn('[electron] Failed to save window session:', err);
         }
 
@@ -434,7 +437,8 @@ export function startApp() {
           const runtime = await bootPromise;
           if (runtime) await runtime.shutdown();
         } catch (err: unknown) {
-          console.error('[electron] Error during runtime shutdown:', err);
+          exitCode = 1;
+          console.error('[electron] Runtime shutdown did not complete cleanly:', err);
         }
 
         // Defensive: individual cleanup failures must not prevent subsequent
@@ -443,6 +447,7 @@ export function startApp() {
           try {
             cleanup();
           } catch (cleanupErr: unknown) {
+            exitCode = 1;
             console.warn('[electron] Bus handler cleanup error:', cleanupErr);
           }
         }
@@ -450,12 +455,18 @@ export function startApp() {
         try {
           destroyTray();
         } catch (trayErr: unknown) {
+          exitCode = 1;
           console.warn('[electron] Tray teardown error:', trayErr);
         }
 
-        await closeServerInfrastructure();
+        try {
+          await closeServerInfrastructure();
+        } catch (err: unknown) {
+          exitCode = 1;
+          console.error('[electron] Server infrastructure shutdown did not complete cleanly:', err);
+        }
 
-        app.exit(0);
+        app.exit(exitCode);
       })();
     });
 
@@ -604,7 +615,7 @@ export function startApp() {
           console.warn('[electron] Bus handler cleanup error:', cleanupErr);
         }
       }
-      await closeServerInfrastructure();
+      await closeServerInfrastructure(true);
 
       showBootErrorWindow(err);
     });

@@ -17,13 +17,12 @@ import {
   SubagentSubjects,
   createClientDefinition,
 } from '@makaio/contracts';
-import type { ProviderAllocationRef, WorkflowDelegateAgentNode, WorkflowRunResult } from '@makaio/contracts';
+import type { ProviderAllocationRef, WorkflowDelegateAgentNode } from '@makaio/contracts';
 import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ClientStorageSubjects, ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { ExecutionAttemptAuthority, WorkflowExecutor } from '@makaio/subsystem-workflow-engine';
-import type { ExecutionAttemptRepository } from '@makaio/subsystem-workflow-engine';
 import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
 import { WorkflowStorageSubjects } from '../../../../../subsystems/workflow-engine/src/storage/namespace.js';
 import {
@@ -35,6 +34,7 @@ import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { createIsolatedWorkflowRuntime } from '../isolated-workflow-runtime.js';
 import { WorkerNodeRunner } from '../worker-node-runner.js';
+import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
 import {
   createDeterministicAdapterContribution,
   type DeterministicAdapterCapture,
@@ -45,71 +45,6 @@ const testAllocationRef: ProviderAllocationRef = {
   providerId: 'test-provider',
   providerData: {},
 };
-
-/**
- * Create a minimal in-memory execution attempt repository for integration tests.
- * @returns An ExecutionAttemptRepository backed by Maps.
- */
-function createIntegrationRepository(): ExecutionAttemptRepository {
-  const attempts = new Map<string, { executionAttemptId: string; executionId: string }>();
-  const outcomes = new Map<string, WorkflowRunResult>();
-  const active = new Map<string, string>();
-
-  return {
-    async createAttempt(input) {
-      attempts.set(input.executionAttemptId, input);
-      active.set(input.executionId, input.executionAttemptId);
-      return {
-        executionAttemptId: input.executionAttemptId,
-        executionId: input.executionId,
-        status: 'pending' as const,
-        allocationRef: null,
-        createdAt: new Date().toISOString(),
-      };
-    },
-    async beginProvisioning() {
-      return { kind: 'started' as const };
-    },
-    async recordAllocation() {
-      return { kind: 'recorded' as const };
-    },
-    async recordProvisioningFailure() {
-      return { kind: 'recorded' as const };
-    },
-    async getActiveAttempt(executionId, executionAttemptId) {
-      if (active.get(executionId) !== executionAttemptId) return null;
-      const a = attempts.get(executionAttemptId);
-      if (!a) return null;
-      return {
-        ...a,
-        status: 'pending' as const,
-        allocationRef: null,
-        createdAt: new Date().toISOString(),
-      };
-    },
-    async commitOutcome(input) {
-      const prior = outcomes.get(input.executionAttemptId);
-      if (prior) {
-        if (JSON.stringify(prior) === JSON.stringify(input.result)) {
-          return { kind: 'duplicate', outcome: prior };
-        }
-        return { kind: 'conflict' };
-      }
-      const activeId = active.get(input.executionId);
-      if (activeId !== input.executionAttemptId) {
-        return { kind: 'fenced' };
-      }
-      outcomes.set(input.executionAttemptId, input.result);
-      return { kind: 'accepted', outcome: input.result };
-    },
-    async abandonPendingAttempt() {
-      return { kind: 'abandoned' as const };
-    },
-    async recordInfrastructureFailure() {
-      return { kind: 'recorded' as const };
-    },
-  };
-}
 
 describe('authority WorkerNode finalization integration', () => {
   const cleanups: Array<() => Promise<void> | void> = [];
@@ -210,7 +145,7 @@ describe('authority WorkerNode finalization integration', () => {
         readyEvents.push(ctx.payload);
       }),
     );
-    const authority = new ExecutionAttemptAuthority(createIntegrationRepository());
+    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
     let resolveDispatchComplete!: (executionId: string) => void;
     const dispatchComplete = new Promise<string>((resolve) => {
       resolveDispatchComplete = resolve;

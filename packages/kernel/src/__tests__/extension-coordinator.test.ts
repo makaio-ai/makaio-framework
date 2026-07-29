@@ -651,7 +651,7 @@ describe('ExtensionCoordinator', () => {
     await coordinator.shutdown();
   });
 
-  // 13. Shutdown continues even when destroy throws
+  // 13. Shutdown continues even when destroy throws, and reports it afterwards
   it('continues shutdown even when a destroy throws', async () => {
     const shutdownOrder: string[] = [];
 
@@ -684,13 +684,108 @@ describe('ExtensionCoordinator', () => {
     coordinator.load(packages);
     await coordinator.startAll();
 
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await coordinator.shutdown();
-    consoleSpy.mockRestore();
+    const rejection = await coordinator.shutdown().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
     // c and a should still have shut down despite b throwing
     expect(shutdownOrder).toContain('c');
     expect(shutdownOrder).toContain('a');
+    // …and the host must not be told the drain completed.
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).message).toContain('b');
+    expect((rejection as AggregateError).errors).toHaveLength(1);
+  });
+
+  it('reports a storage cleanup failure to the host after stopping every extension', async () => {
+    const shutdownOrder: string[] = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      db: {},
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      makePackage('storage-failing', {
+        create: (ctx) => makeMockService(ctx.bus),
+        storage: {
+          registerHandlers: () => () => {
+            throw new Error('storage cleanup failed');
+          },
+        },
+      }),
+      makePackage('storage-dependent', {
+        dependencies: [dep('storage-failing')],
+        create: (ctx) =>
+          makeMockService(ctx.bus, undefined, () => {
+            shutdownOrder.push('storage-dependent');
+          }),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const rejection = await coordinator.shutdown().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(shutdownOrder).toEqual(['storage-dependent']);
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).message).toContain('storage-failing');
+  });
+
+  it('reports a failed disable as unsuccessful and records the teardown error', async () => {
+    const persisted: Array<{ name: string; enabled: boolean }> = [];
+    const enabledChanged = Promise.withResolvers<{ name: string; enabled: boolean }>();
+    bus.on(ExtensionSubjects.enabledChanged, (ctx) => {
+      enabledChanged.resolve({ name: ctx.payload.name, enabled: ctx.payload.enabled });
+    });
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      db: {},
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async (name, enabled) => {
+        persisted.push({ name, enabled });
+      },
+    });
+    coordinator.registerContributionProcessor({
+      processActivated: async () => undefined,
+      processStopped: async () => {
+        throw new Error('contribution teardown failed');
+      },
+    });
+    coordinator.load([
+      makePackage('unclean-disable', {
+        create: (ctx) =>
+          makeMockService(ctx.bus, undefined, () => {
+            throw new Error('teardown failed');
+          }),
+        storage: {
+          registerHandlers: () => () => {
+            throw new Error('storage cleanup failed');
+          },
+        },
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'unclean-disable', enabled: false });
+    consoleSpy.mockRestore();
+
+    expect(result.success).toBe(false);
+    // The extension really is stopped, so the requested state is persisted…
+    expect(persisted).toEqual([{ name: 'unclean-disable', enabled: false }]);
+    const info = coordinator.list()[0];
+    expect(info?.state).toBe('stopped');
+    expect(info?.error).toContain('teardown failed');
+    expect(info?.error).toContain('contribution teardown failed');
+    expect(info?.error).toContain('storage cleanup failed');
+    // …and the change is announced, because the flag really did change: a
+    // second window that kept showing this extension as enabled would be the
+    // only thing left claiming it is still running.
+    await expect(enabledChanged.promise).resolves.toEqual({ name: 'unclean-disable', enabled: false });
+
+    await coordinator.shutdown();
   });
 
   // 14. Window registration during load
@@ -832,11 +927,15 @@ describe('ExtensionCoordinator', () => {
     ).rejects.toThrow('persist failed');
 
     expect(enabledChanged).not.toHaveBeenCalled();
+    expect(coordinator.list().find((entry) => entry.name === 'persist-fails')).toMatchObject({
+      state: 'active',
+      enabled: true,
+    });
 
     await coordinator.shutdown();
   });
 
-  it('retries persistEnabled on same-state setEnabled calls after a persistence failure', async () => {
+  it('retries a toggle after persistence fails without mutating runtime state', async () => {
     const persisted: boolean[] = [];
     let failFirstPersist = true;
     const coordinator = new ExtensionCoordinator(bus, {
@@ -865,8 +964,49 @@ describe('ExtensionCoordinator', () => {
       enabled: false,
     });
 
-    expect(retryResult.success).toBe(false);
+    expect(retryResult.success).toBe(true);
     expect(persisted).toEqual([false, false]);
+
+    await coordinator.shutdown();
+  });
+
+  it('reports a successful lifecycle recovery when the enabled preference is already true', async () => {
+    const events: Array<{ name: string; enabled: boolean }> = [];
+    let initAttempts = 0;
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([
+      makePackage('lifecycle-recovery', {
+        create: (ctx) =>
+          makeMockService(ctx.bus, () => {
+            initAttempts += 1;
+            if (initAttempts === 1) throw new Error('initial startup failure');
+          }),
+      }),
+    ]);
+    await coordinator.startAll();
+    expect(coordinator.list().find((entry) => entry.name === 'lifecycle-recovery')).toMatchObject({
+      state: 'failed',
+      enabled: true,
+    });
+
+    bus.on(ExtensionSubjects.enabledChanged, (ctx) => {
+      events.push({ name: ctx.payload.name, enabled: ctx.payload.enabled });
+    });
+
+    const retryResult = await bus.request(ExtensionSubjects.setEnabled, {
+      name: 'lifecycle-recovery',
+      enabled: true,
+    });
+
+    expect(retryResult.success).toBe(true);
+    expect(coordinator.list().find((entry) => entry.name === 'lifecycle-recovery')).toMatchObject({
+      state: 'active',
+      enabled: true,
+    });
+    expect(events).toContainEqual({ name: 'lifecycle-recovery', enabled: true });
 
     await coordinator.shutdown();
   });
@@ -1058,8 +1198,14 @@ describe('ExtensionCoordinator', () => {
   });
 
   it('rejects disable when active dependents still require the package', async () => {
+    const persisted: Array<{ name: string; enabled: boolean }> = [];
+    const enabledChanged = vi.fn();
+    bus.on(ExtensionSubjects.enabledChanged, enabledChanged);
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async (name, enabled) => {
+        persisted.push({ name, enabled });
+      },
     });
 
     coordinator.load([
@@ -1079,6 +1225,11 @@ describe('ExtensionCoordinator', () => {
       state: 'active',
       enabled: true,
     });
+    expect(persisted).toEqual([
+      { name: 'dep', enabled: false },
+      { name: 'dep', enabled: true },
+    ]);
+    expect(enabledChanged).not.toHaveBeenCalled();
 
     await coordinator.shutdown();
   });

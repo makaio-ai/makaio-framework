@@ -1,17 +1,36 @@
-import type { ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
+import type { WorkflowRunResult } from '@makaio/contracts';
 import type {
+  AllocationRecordingDecision,
   AllocationRefEvolution,
   AllocationRefEvolutionDecision,
+  AllocationTerminationDecision,
+  BeginProvisioningInput,
+  DiscoveredAllocationDecision,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
+  ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
+  HandoffProviderOperationInput,
   InfrastructureFailureDecision,
-  AllocationRecordingDecision,
   PendingAttemptAbandonmentDecision,
+  ProvisionerIncarnationLossDecision,
+  ProvisioningAbsenceDecision,
   ProvisioningClaimDecision,
-  ProvisioningFailureDecision,
+  RecordAllocationInput,
+  RecordAllocationTerminatedInput,
+  RecordInfrastructureFailureInput,
+  RecordProviderOperationUncertaintyInput,
+  RecordProvisionerIncarnationLostInput,
+  RecordProvisioningAbsentInput,
   RecoverableAttemptRecord,
+  RenewProviderOperationClaimInput,
+  TakeOverProviderOperationInput,
 } from './execution-attempt-repository.js';
+import type {
+  ProviderOperationClaimDecision,
+  ProviderOperationMutationDecision,
+  ProviderOperationOwnershipRecord,
+} from './provider-operation.js';
 import { buildDeferred, type Deferred } from './runtime/deferred.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -46,8 +65,13 @@ type OutcomeWaiter = Deferred<WorkflowRunResult, Error>;
  * - idempotent workflow-state convergence for both `accepted` and `duplicate`.
  *
  * Delegates:
- * - durable attempt creation, allocation recording, and outcome commit
- *   decisions to the injected {@link ExecutionAttemptRepository}.
+ * - durable attempt creation, provider-operation ownership, allocation
+ *   recording, and outcome commit decisions to the injected
+ *   {@link ExecutionAttemptRepository}.
+ *
+ * The Authority never invents controller identity, lease policy, or fencing
+ * tokens, and never chooses a provider operation's obligation. It passes the
+ * host-owned claim context through and reports the repository's decision.
  *
  * **Waiter settlement invariant:** waiters settle only on converged
  * outcomes (via {@link settleOutcome}) or on definitive rejection
@@ -105,47 +129,149 @@ export class ExecutionAttemptAuthority {
    * Claim durable ownership of provider provisioning for an active attempt.
    *
    * Delegates directly to the repository immediately before a provider call.
-   * @param executionAttemptId - The attempt about to start provisioning.
-   * @param executionId - Workflow execution identifier for fence checking.
+   * A `started` decision is the sole authorization for that call, and it
+   * carries the claim every subsequent provider-side record must present.
+   * @param input - Attempt identity, immutable provider binding, and initial claim context.
    * @returns The durable provisioning ownership decision.
    */
-  public async beginProvisioning(executionAttemptId: string, executionId: string): Promise<ProvisioningClaimDecision> {
-    return this.repository.beginProvisioning(executionAttemptId, executionId);
+  public async beginProvisioning(input: BeginProvisioningInput): Promise<ProvisioningClaimDecision> {
+    return this.repository.beginProvisioning(input);
   }
 
   /**
-   * Record the provider allocation reference for an active provisioning attempt.
-   * @param executionAttemptId - The attempt that received the allocation.
-   * @param allocationRef - Validated, JSON-safe provider allocation reference.
+   * Read the current provider operation for an attempt.
+   * @param executionAttemptId - Attempt whose operation to read.
+   * @returns The ownership record, or `null` when provisioning never began.
+   */
+  public async getProviderOperation(executionAttemptId: string): Promise<ProviderOperationOwnershipRecord | null> {
+    return this.repository.getProviderOperation(executionAttemptId);
+  }
+
+  /**
+   * Extend the lease of a currently held provider operation.
+   * @param input - Current claim and the new lease deadline.
+   * @returns The durable claim decision.
+   */
+  public async renewProviderOperationClaim(
+    input: RenewProviderOperationClaimInput,
+  ): Promise<ProviderOperationClaimDecision> {
+    return this.repository.renewProviderOperationClaim(input);
+  }
+
+  /**
+   * Take ownership of an unowned or lease-expired provider operation.
+   * @param input - Attempt identity, requesting owner, observation time, and lease deadline.
+   * @returns The durable claim decision.
+   */
+  public async takeOverProviderOperation(
+    input: TakeOverProviderOperationInput,
+  ): Promise<ProviderOperationClaimDecision> {
+    return this.repository.takeOverProviderOperation(input);
+  }
+
+  /**
+   * Release a held provider operation without resolving it.
+   *
+   * The attempt keeps its durable state and stays remediable, so the local
+   * waiter is left untouched: handoff transfers control, it does not answer
+   * the workflow.
+   * @param input - Claim being released and optional bounded release evidence.
+   * @returns The durable mutation decision.
+   */
+  public async handoffProviderOperation(
+    input: HandoffProviderOperationInput,
+  ): Promise<ProviderOperationMutationDecision> {
+    return this.repository.handoffProviderOperation(input);
+  }
+
+  /**
+   * Record that a provider observation stayed inconclusive.
+   *
+   * Non-terminal by construction: the waiter stays pending because the
+   * attempt still has no canonical answer.
+   * @param input - Claim and bounded evidence describing the retained uncertainty.
+   * @returns The durable mutation decision.
+   */
+  public async recordProviderOperationUncertainty(
+    input: RecordProviderOperationUncertaintyInput,
+  ): Promise<ProviderOperationMutationDecision> {
+    return this.repository.recordProviderOperationUncertainty(input);
+  }
+
+  /**
+   * Record the provider allocation reference for a claimed operation.
+   * @param input - Claim and the validated allocation reference.
    * @returns The durable allocation ownership decision.
    */
-  public async recordAllocation(
-    executionAttemptId: string,
-    allocationRef: ProviderAllocationRef,
-  ): Promise<AllocationRecordingDecision> {
-    return this.repository.recordAllocation(executionAttemptId, allocationRef);
+  public async recordAllocation(input: RecordAllocationInput): Promise<AllocationRecordingDecision> {
+    return this.repository.recordAllocation(input);
   }
 
   /**
-   * Record a provider failure that occurred while provisioning an attempt.
+   * Record positively proven absence of any allocation for the attempt.
    *
-   * A recorded failure is terminal, so its waiter is rejected and removed.
-   * @param executionAttemptId - Provisioning attempt whose provider call failed.
-   * @param executionId - Workflow execution identifier.
-   * @returns The durable provisioning-failure decision.
+   * A recorded absence settles the attempt as `abandoned`, so its waiter is
+   * rejected and removed. The bounded evidence is durable in the operation
+   * record; the local error only mirrors it for the in-process caller.
+   * @param input - Claim, owning execution, and bounded absence evidence.
+   * @returns The durable absence decision.
    */
-  public async recordProvisioningFailure(
-    executionAttemptId: string,
-    executionId: string,
-  ): Promise<ProvisioningFailureDecision> {
-    const decision = await this.repository.recordProvisioningFailure(executionAttemptId, executionId);
+  public async recordProvisioningAbsent(input: RecordProvisioningAbsentInput): Promise<ProvisioningAbsenceDecision> {
+    const decision = await this.repository.recordProvisioningAbsent(input);
     if (decision.kind === 'recorded') {
-      this.rejectAndDiscardWaiter(
-        executionAttemptId,
-        new Error(`Attempt '${executionAttemptId}' provider provisioning failed before allocation was recorded`),
+      this.rejectWaiterWith(
+        input.claim.executionAttemptId,
+        () =>
+          new Error(
+            `Attempt '${input.claim.executionAttemptId}' provisioning produced no allocation: ` +
+              `${input.evidence.source} reported '${input.evidence.summary}'`,
+          ),
       );
     }
     return decision;
+  }
+
+  /**
+   * Close pre-allocation debt on proof that a provisioner incarnation is gone.
+   *
+   * A recorded loss settles the attempt as `abandoned`, so its waiter is
+   * rejected and removed. The bounded proof evidence is durable in the
+   * operation record; the local error only mirrors it for the in-process
+   * caller.
+   * @param input - Claim, owning execution, and the provisioner loss proof.
+   * @returns The durable provisioner-loss decision.
+   */
+  public async recordProvisionerIncarnationLost(
+    input: RecordProvisionerIncarnationLostInput,
+  ): Promise<ProvisionerIncarnationLossDecision> {
+    const decision = await this.repository.recordProvisionerIncarnationLost(input);
+    if (decision.kind === 'recorded') {
+      const { evidence, provisionerIncarnationId } = input.proof;
+      this.rejectWaiterWith(
+        input.claim.executionAttemptId,
+        () =>
+          new Error(
+            `Attempt '${input.claim.executionAttemptId}' lost the provisioner incarnation ` +
+              `'${provisionerIncarnationId}' its allocation was bound to: ` +
+              `${evidence.source} reported '${evidence.summary}'`,
+          ),
+      );
+    }
+    return decision;
+  }
+
+  /**
+   * Record that a known allocation was confirmed terminated.
+   *
+   * Advances the operation to terminal convergence without settling the
+   * attempt, so the waiter stays pending until a canonical answer exists.
+   * @param input - Claim and bounded evidence supporting the termination.
+   * @returns The durable termination decision.
+   */
+  public async recordAllocationTerminated(
+    input: RecordAllocationTerminatedInput,
+  ): Promise<AllocationTerminationDecision> {
+    return this.repository.recordAllocationTerminated(input);
   }
 
   /**
@@ -243,10 +369,25 @@ export class ExecutionAttemptAuthority {
    * @param error - Local failure delivered to the current-process waiter.
    */
   public rejectAndDiscardWaiter(executionAttemptId: string, error: Error): void {
+    this.rejectWaiterWith(executionAttemptId, () => error);
+  }
+
+  /**
+   * Reject and remove a waiter with an error built only if one is waiting.
+   *
+   * Every durable transition that rejects a waiter is also the transition a
+   * remediating process runs after a restart, where by definition no waiter
+   * from the original dispatch survives. Building the `Error` — and capturing
+   * a stack for it — before looking would make that the common case, and it is
+   * the case where the error is never delivered to anyone.
+   * @param executionAttemptId - Attempt whose local waiter must be rejected.
+   * @param describeFailure - Builds the failure, called only when a waiter exists.
+   */
+  private rejectWaiterWith(executionAttemptId: string, describeFailure: () => Error): void {
     const waiter = this.waiters.get(executionAttemptId);
     if (waiter === undefined) return;
     void waiter.promise.catch(() => undefined);
-    waiter.reject(error);
+    waiter.reject(describeFailure());
     this.waiters.delete(executionAttemptId);
   }
 
@@ -257,17 +398,13 @@ export class ExecutionAttemptAuthority {
   /**
    * Whether the injected repository supports recovery operations.
    *
-   * Returns `true` when the repository implements `getAttemptWithAllocation`,
-   * `evolveAllocationRef`, and `getRecoverableAttempts`. Callers should check this before invoking
-   * recovery methods.
-   * @returns `true` when the repository implements all recovery operations.
+   * Recovery is one indivisible capability on the port, so this is one
+   * presence check rather than four: a repository either carries the
+   * {@link ExecutionAttemptRecoveryOperations} object or it does not.
+   * @returns `true` when the repository exposes its recovery operations.
    */
   public get supportsRecovery(): boolean {
-    return (
-      typeof this.repository.getAttemptWithAllocation === 'function' &&
-      typeof this.repository.evolveAllocationRef === 'function' &&
-      typeof this.repository.getRecoverableAttempts === 'function'
-    );
+    return this.repository.recovery !== undefined;
   }
 
   /**
@@ -279,12 +416,23 @@ export class ExecutionAttemptAuthority {
    * @returns The attempt record, or `null` if no such attempt exists.
    */
   public async getAttemptWithAllocation(executionAttemptId: string): Promise<ExecutionAttemptRecord | null> {
-    this.assertRecoverySupport('getAttemptWithAllocation');
-    return this.repository.getAttemptWithAllocation!(executionAttemptId);
+    return this.requireRecovery('getAttemptWithAllocation').getAttemptWithAllocation(executionAttemptId);
   }
 
   /**
-   * Compare-and-set update of the allocation reference for an active attempt.
+   * Record an allocation that provider discovery found for the attempt.
+   *
+   * Delegates to the repository's `recordDiscoveredAllocation` operation.
+   * Throws when the repository does not support recovery.
+   * @param input - Claim and the discovered allocation reference.
+   * @returns The durable discovered-allocation decision.
+   */
+  public async recordDiscoveredAllocation(input: RecordAllocationInput): Promise<DiscoveredAllocationDecision> {
+    return this.requireRecovery('recordDiscoveredAllocation').recordDiscoveredAllocation(input);
+  }
+
+  /**
+   * Compare-and-set update of the allocation reference for a claimed attempt.
    *
    * Validates that `currentRef` and `nextRef` share the same `providerId`
    * before delegating to the repository. Provider identity must not change
@@ -293,7 +441,7 @@ export class ExecutionAttemptAuthority {
    * @returns The evolution decision.
    */
   public async evolveAllocationRef(input: AllocationRefEvolution): Promise<AllocationRefEvolutionDecision> {
-    this.assertRecoverySupport('evolveAllocationRef');
+    const recovery = this.requireRecovery('evolveAllocationRef');
 
     if (input.currentRef.providerId !== input.nextRef.providerId) {
       throw new Error(
@@ -304,7 +452,7 @@ export class ExecutionAttemptAuthority {
       );
     }
 
-    return this.repository.evolveAllocationRef!(input);
+    return recovery.evolveAllocationRef(input);
   }
 
   /**
@@ -313,11 +461,10 @@ export class ExecutionAttemptAuthority {
    * Delegates to the repository's `getRecoverableAttempts` operation.
    * Throws when the repository does not support recovery.
    * @param executionId - Workflow execution identifier.
-   * @returns Allocated, non-settled attempts eligible for recovery.
+   * @returns Allocated, non-settled attempts eligible for recovery, oldest first.
    */
   public async getRecoverableAttempts(executionId: string): Promise<readonly RecoverableAttemptRecord[]> {
-    this.assertRecoverySupport('getRecoverableAttempts');
-    return this.repository.getRecoverableAttempts!(executionId);
+    return this.requireRecovery('getRecoverableAttempts').getRecoverableAttempts(executionId);
   }
 
   /**
@@ -326,23 +473,22 @@ export class ExecutionAttemptAuthority {
    * Delegates the durable decision to the repository. When the failure is
    * recorded, rejects the in-process waiter (if any) so runners observe
    * the infrastructure failure immediately.
-   * @param executionAttemptId - The attempt that suffered infrastructure failure.
-   * @param executionId - Workflow execution identifier.
+   * @param input - Claim and the owning execution.
    * @returns The infrastructure failure decision.
    */
   public async recordInfrastructureFailure(
-    executionAttemptId: string,
-    executionId: string,
+    input: RecordInfrastructureFailureInput,
   ): Promise<InfrastructureFailureDecision> {
-    const decision = await this.repository.recordInfrastructureFailure(executionAttemptId, executionId);
+    const decision = await this.repository.recordInfrastructureFailure(input);
 
     if (decision.kind === 'recorded') {
-      this.rejectAndDiscardWaiter(
-        executionAttemptId,
-        new Error(
-          `Attempt '${executionAttemptId}' suffered infrastructure failure: ` +
-            `the provider allocation terminated without an acknowledged outcome`,
-        ),
+      this.rejectWaiterWith(
+        input.claim.executionAttemptId,
+        () =>
+          new Error(
+            `Attempt '${input.claim.executionAttemptId}' suffered infrastructure failure: ` +
+              `the provider allocation terminated without an acknowledged outcome`,
+          ),
       );
     }
 
@@ -374,18 +520,20 @@ export class ExecutionAttemptAuthority {
   // ─────────────────────────────────────────────────────────
 
   /**
-   * Assert that the injected repository supports recovery operations.
+   * Obtain the repository's recovery operations, or refuse the call.
    * @param operation - The recovery operation being attempted.
+   * @returns The repository's recovery operations.
    * @throws When the repository does not implement recovery operations.
    */
-  private assertRecoverySupport(operation: string): void {
-    if (!this.supportsRecovery) {
+  private requireRecovery(operation: string): ExecutionAttemptRecoveryOperations {
+    const { recovery } = this.repository;
+    if (recovery === undefined) {
       throw new Error(
-        `Recovery operation '${operation}' requires a repository that ` +
-          `implements recovery operations (getAttemptWithAllocation, ` +
-          `evolveAllocationRef, getRecoverableAttempts). The injected repository does not support recovery.`,
+        `Recovery operation '${operation}' requires a repository that exposes ` +
+          `recovery operations. The injected repository does not support recovery.`,
       );
     }
+    return recovery;
   }
 
   /**

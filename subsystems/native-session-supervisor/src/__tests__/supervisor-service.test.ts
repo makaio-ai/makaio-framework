@@ -123,9 +123,14 @@ describe('SupervisorService', () => {
   });
 
   afterEach(async () => {
-    await service.destroy();
-    storageCleanup?.();
-    dbClose();
+    // Storage handlers and the database are released even when teardown fails,
+    // so one unclean shutdown cannot leak registrations into the next test.
+    try {
+      await service.destroy();
+    } finally {
+      storageCleanup?.();
+      dbClose();
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -211,14 +216,19 @@ describe('SupervisorService', () => {
 
     it('materializes a client profile into launch env when requested', async () => {
       let observedSessionConfigRequest: unknown;
-      const unsubscribe = MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
-        observedSessionConfigRequest = ctx.payload;
-        ctx.setResult({
-          sessionDir: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
-          env: { CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile' },
-          authMaterialized: false,
-        });
-      });
+      const cleanups = [
+        MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+          observedSessionConfigRequest = ctx.payload;
+          ctx.setResult({
+            sessionDir: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
+            env: { CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile' },
+            authMaterialized: false,
+          });
+        }),
+        // The lease this launch takes is released while its owner can still
+        // answer, so the suite's teardown is not left holding one.
+        MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => ctx.setResult({ success: true })),
+      ];
 
       let launchedSupervisorSessionId: string;
       try {
@@ -234,8 +244,12 @@ describe('SupervisorService', () => {
             clientProfileName: 'work',
           },
         ));
+
+        await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+          supervisorSessionId: launchedSupervisorSessionId,
+        });
       } finally {
-        unsubscribe();
+        for (const cleanup of cleanups) cleanup();
       }
 
       expect(observedSessionConfigRequest).toEqual({
@@ -767,7 +781,7 @@ describe('SupervisorService', () => {
     });
 
     it('records an exit that arrives before launch registration finishes', async () => {
-      let releaseStorageSet: () => void;
+      let releaseStorageSet: (() => void) | undefined;
       const storageSetGate = new Promise<void>((resolve) => {
         releaseStorageSet = resolve;
       });
@@ -780,24 +794,28 @@ describe('SupervisorService', () => {
         { priority: 100 },
       );
 
-      const launchPromise = MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-      });
+      try {
+        const launchPromise = MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+        });
 
-      const mockProcess = await waitForValue(getLastProcess);
-      mockProcess._fireExit(0);
+        const mockProcess = await waitForValue(getLastProcess);
+        mockProcess._fireExit(0);
 
-      releaseStorageSet!();
-      const { supervisorSessionId } = await launchPromise;
-      removeStorageGate();
+        releaseStorageSet?.();
+        const { supervisorSessionId } = await launchPromise;
 
-      await vi.waitFor(() => {
-        const runtime = service.getRegistry().getBySupervisorId(supervisorSessionId);
-        expect(runtime?.status).toBe('exited');
-      });
+        await vi.waitFor(() => {
+          const runtime = service.getRegistry().getBySupervisorId(supervisorSessionId);
+          expect(runtime?.status).toBe('exited');
+        });
+      } finally {
+        releaseStorageSet?.();
+        removeStorageGate();
+      }
     });
   });
 });

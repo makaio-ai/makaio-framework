@@ -103,8 +103,10 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
    * Destroy all five sub-services in parallel.
    *
    * Uses {@link Promise.allSettled} to guarantee every cleanup runs even when
-   * one rejects. Any rejections are logged for observability — matching the
-   * secondary-failure logging pattern used by {@link init}.
+   * one rejects, then reports every rejection together. Reporting is not
+   * optional: the caller owns process teardown and must be able to tell an
+   * incomplete drain from a completed one.
+   * @throws An AggregateError when any sub-service failed to tear down.
    */
   public async destroy(): Promise<void> {
     const results = await Promise.allSettled([
@@ -115,8 +117,11 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
       this.sessionConfigService.destroy(),
     ]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    for (const failure of failures) {
-      console.warn('[ClientsCoreService] destroy failure:', failure.reason);
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        'ClientsCoreService failed to tear down cleanly',
+      );
     }
   }
 }

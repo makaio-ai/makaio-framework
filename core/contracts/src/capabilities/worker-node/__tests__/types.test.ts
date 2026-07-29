@@ -1,17 +1,27 @@
+import { z } from 'zod';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ALLOCATION_STATES,
   AllocationInspectionSchema,
   AllocationStateSchema,
+  BoundedRecoveryEvidenceSchema,
+  ProviderAllocationRefError,
+  boundedProviderEvidence,
+  createAllocationRefCodec,
   MATERIALIZATION_MODES,
   MaterializationModeSchema,
   PROVIDER_ALLOCATION_REF_VERSION,
+  PROVISIONING_DISCOVERY_KINDS,
+  ProvisioningDiscoverySchema,
+  RECOVERY_EVIDENCE_LIMITS,
+  WORKER_NODE_ALLOCATION_LIFETIMES,
   WORKER_NODE_CAPABILITY_ID,
   LocalDirectoryMaterializationSchema,
   OutcomeAckDecisionSchema,
   ProviderAllocationRefSchema,
   WorkerContributionRefSchema,
   WorkerMaterializationSpecSchema,
+  WorkerNodeAllocationLifetimeSchema,
   WorkerNodeCapabilitiesSchema,
   WorkerNodeRequirementsSchema,
   WorkspaceSnapshotMaterializationSchema,
@@ -22,19 +32,29 @@ import type { WorkerNodeCapabilitiesInput } from '../types.js';
 import type {
   AllocationInspection,
   AllocationState,
+  BoundedRecoveryEvidence,
   IRecoverableWorkerNodeProvider,
   IWorkerNodeProvider,
   IWorkerNodeRecoveryCapability,
   OutcomeAckDecision,
   ProviderAllocationRef,
+  ProvisioningDiscovery,
   WorkerContributionRef,
   WorkerMaterializationSpec,
+  WorkerNodeAllocationLifetime,
   WorkerNodeCapabilities,
   WorkerNodeHandle,
+  WorkerNodeProvisionOutcome,
   WorkerNodeProvisionRequest,
-  WorkerNodeProvisionResult,
   WorkerNodeRequirements,
 } from '../index.js';
+
+/** Bounded evidence fixture reused by outcome and discovery assertions. */
+const EVIDENCE: BoundedRecoveryEvidence = {
+  source: 'fly.machines',
+  summary: 'Validation rejected the request before any remote call was made.',
+  observedAt: '2026-07-23T10:00:00Z',
+};
 
 describe('worker-node capability contracts', () => {
   it('uses the stable worker-node capability id', () => {
@@ -88,8 +108,9 @@ describe('worker-node capability contracts', () => {
       id: 'test.worker-node',
       displayName: 'Test WorkerNode',
       environment: 'test',
+      allocationLifetime: 'provisioner-process-bound',
       baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: true }),
-      provision: async (): Promise<WorkerNodeProvisionResult> => {
+      provision: async (): Promise<WorkerNodeProvisionOutcome> => {
         throw new Error('not used');
       },
     };
@@ -107,6 +128,7 @@ describe('WorkerNodeProvisionRequest uses executionAttemptId', () => {
       environment: 'piscina',
       workerConfig: {} as WorkerNodeProvisionRequest['workerConfig'],
       workerManifest: { contributionRefs: [] },
+      provisioningStartedAt: '2026-07-23T10:00:00Z',
     };
 
     expect(request.executionAttemptId).toBe('attempt-1');
@@ -115,6 +137,13 @@ describe('WorkerNodeProvisionRequest uses executionAttemptId', () => {
 
   it('does not have the old nodeId field', () => {
     expectTypeOf<WorkerNodeProvisionRequest>().not.toHaveProperty('nodeId');
+  });
+
+  it('requires the provisioning instant a bounded remote search is floored at', () => {
+    // A clock-derived stand-in computes a floor that can exclude the attempt's
+    // own allocation, so the field carries no `undefined` for a caller to
+    // substitute one into.
+    expectTypeOf<WorkerNodeProvisionRequest['provisioningStartedAt']>().toEqualTypeOf<string>();
   });
 });
 
@@ -152,8 +181,10 @@ describe('IWorkerNodeProvider provision contract', () => {
       id: 'test.provider',
       displayName: 'Test Provider',
       environment: 'test',
+      allocationLifetime: 'provider-managed',
       baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false }),
       provision: async (_request, _signal) => ({
+        kind: 'allocated' as const,
         allocationRef: {
           version: PROVIDER_ALLOCATION_REF_VERSION,
           providerId: 'test.provider',
@@ -176,8 +207,10 @@ describe('IWorkerNodeProvider provision contract', () => {
       id: 'test.provider',
       displayName: 'Test Provider',
       environment: 'test',
+      allocationLifetime: 'provider-managed',
       baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false }),
       provision: async () => ({
+        kind: 'allocated' as const,
         allocationRef: {
           version: PROVIDER_ALLOCATION_REF_VERSION,
           providerId: 'test.provider',
@@ -199,10 +232,13 @@ describe('IWorkerNodeProvider provision contract', () => {
         environment: 'test',
         workerConfig: {} as WorkerNodeProvisionRequest['workerConfig'],
         workerManifest: { contributionRefs: [] },
+        provisioningStartedAt: '2026-07-23T10:00:00Z',
       },
       AbortSignal.timeout(5000),
     );
 
+    expect(result.kind).toBe('allocated');
+    if (result.kind !== 'allocated') throw new Error('expected an allocated outcome');
     expect(result.allocationRef.version).toBe(PROVIDER_ALLOCATION_REF_VERSION);
     expect(result.allocationRef.providerId).toBe('test.provider');
     expect(result.handle.executionAttemptId).toBe('attempt-1');
@@ -277,6 +313,124 @@ describe('ProviderAllocationRef', () => {
 
     const roundTripped = JSON.parse(JSON.stringify(ref));
     expect(ProviderAllocationRefSchema.parse(roundTripped)).toEqual(ref);
+  });
+});
+
+describe('createAllocationRefCodec', () => {
+  const ProviderDataSchema = z.object({ machineId: z.string().min(1), region: z.string().optional() }).strict();
+
+  it('round-trips everything it builds', () => {
+    const codec = createAllocationRefCodec('test.allocator', ProviderDataSchema);
+
+    const ref = codec.build({ machineId: 'machine-1', region: 'iad' });
+
+    expect(ref).toEqual({
+      version: PROVIDER_ALLOCATION_REF_VERSION,
+      providerId: 'test.allocator',
+      providerData: { machineId: 'machine-1', region: 'iad' },
+    });
+    expect(ProviderAllocationRefSchema.parse(ref)).toEqual(ref);
+    expect(codec.parse(ref)).toEqual({ machineId: 'machine-1', region: 'iad' });
+  });
+
+  it('rejects provider data its own schema rejects, rather than emitting an unparseable ref', () => {
+    const codec = createAllocationRefCodec('test.allocator', ProviderDataSchema);
+
+    expect(() => codec.build({ machineId: '' })).toThrow();
+  });
+
+  it('rejects provider-schema output that cannot cross the JSON envelope boundary', () => {
+    const codec = createAllocationRefCodec(
+      'test.allocator',
+      z.object({ machineId: z.string(), callback: z.function() }),
+    );
+
+    expect(() => codec.build({ machineId: 'machine-1', callback: () => undefined })).toThrow();
+  });
+
+  it('rejects a reference whose envelope version is not the current one', () => {
+    const codec = createAllocationRefCodec('test.allocator', ProviderDataSchema);
+    const nextVersionRef = {
+      ...codec.build({ machineId: 'machine-1' }),
+      version: 999 as number,
+    } as ProviderAllocationRef;
+
+    expect(() => codec.parse(nextVersionRef)).toThrow(ProviderAllocationRefError);
+  });
+
+  it('rejects a reference owned by a different provider', () => {
+    const codec = createAllocationRefCodec('test.allocator', ProviderDataSchema);
+
+    expect(() =>
+      codec.parse({
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'other.allocator',
+        providerData: { machineId: 'machine-1' },
+      }),
+    ).toThrow(ProviderAllocationRefError);
+  });
+
+  it('rejects malformed provider data before any dereference', () => {
+    const codec = createAllocationRefCodec('test.allocator', ProviderDataSchema);
+
+    expect(() =>
+      codec.parse({
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'test.allocator',
+        providerData: { machineId: 42 },
+      }),
+    ).toThrow(ProviderAllocationRefError);
+  });
+
+  it('refuses a provider identity that could never appear in a reference', () => {
+    expect(() => createAllocationRefCodec('', ProviderDataSchema)).toThrow();
+  });
+});
+
+describe('boundedProviderEvidence', () => {
+  it('returns evidence the durable schema accepts', () => {
+    const evidence = boundedProviderEvidence('test.allocator', 'pre-request-rejection', 'nothing was created');
+
+    expect(BoundedRecoveryEvidenceSchema.parse(evidence)).toEqual(evidence);
+    expect(evidence.code).toBe('pre-request-rejection');
+  });
+
+  it('omits the code when the observation carries none', () => {
+    const evidence = boundedProviderEvidence('test.allocator', undefined, 'the allocation ended');
+
+    expect(evidence.code).toBeUndefined();
+    expect('code' in evidence).toBe(false);
+  });
+
+  it('clamps an over-long summary instead of rejecting it', () => {
+    const evidence = boundedProviderEvidence(
+      'test.allocator',
+      undefined,
+      'x'.repeat(RECOVERY_EVIDENCE_LIMITS.summary * 2),
+    );
+
+    expect(evidence.summary).toHaveLength(RECOVERY_EVIDENCE_LIMITS.summary);
+    expect(evidence.summary.endsWith('…')).toBe(true);
+  });
+
+  it('does not split a surrogate pair at the clamp boundary', () => {
+    const prefix = 'x'.repeat(RECOVERY_EVIDENCE_LIMITS.summary - 2);
+    const evidence = boundedProviderEvidence('test.allocator', undefined, `${prefix}😀trailing`);
+
+    expect(evidence.summary).toBe(`${prefix}…`);
+    expect(evidence.summary).not.toContain('\ud83d');
+  });
+
+  it('leaves a summary at exactly the bound untouched', () => {
+    const summary = 'x'.repeat(RECOVERY_EVIDENCE_LIMITS.summary);
+
+    expect(boundedProviderEvidence('test.allocator', undefined, summary).summary).toBe(summary);
+  });
+
+  it('reports an over-long source rather than silently reshaping it', () => {
+    expect(() =>
+      boundedProviderEvidence('x'.repeat(RECOVERY_EVIDENCE_LIMITS.source + 1), undefined, 'observed'),
+    ).toThrow();
   });
 });
 
@@ -457,9 +611,127 @@ describe('WorkerContributionRef', () => {
   });
 });
 
-describe('WorkerNodeProvisionResult', () => {
-  it('combines allocationRef and handle', () => {
-    const result: WorkerNodeProvisionResult = {
+describe('WorkerNodeAllocationLifetime', () => {
+  it('exports the constant array of the two lifetimes', () => {
+    expect(WORKER_NODE_ALLOCATION_LIFETIMES).toEqual(['provisioner-process-bound', 'provider-managed']);
+  });
+
+  it('validates both lifetimes', () => {
+    expect(WorkerNodeAllocationLifetimeSchema.parse('provisioner-process-bound')).toBe('provisioner-process-bound');
+    expect(WorkerNodeAllocationLifetimeSchema.parse('provider-managed')).toBe('provider-managed');
+  });
+
+  it('rejects unknown lifetimes', () => {
+    expect(() => WorkerNodeAllocationLifetimeSchema.parse('ephemeral')).toThrow();
+    expect(() => WorkerNodeAllocationLifetimeSchema.parse('')).toThrow();
+  });
+
+  it('has a type equal to the two-member union', () => {
+    expectTypeOf<WorkerNodeAllocationLifetime>().toEqualTypeOf<'provisioner-process-bound' | 'provider-managed'>();
+  });
+
+  it('is a direct provider property with no default', () => {
+    expectTypeOf<IWorkerNodeProvider>().toHaveProperty('allocationLifetime');
+    expectTypeOf<IWorkerNodeProvider['allocationLifetime']>().toEqualTypeOf<WorkerNodeAllocationLifetime>();
+  });
+
+  it('is not placement capability, requirement, or inspection data', () => {
+    expectTypeOf<WorkerNodeCapabilities>().not.toHaveProperty('allocationLifetime');
+    expectTypeOf<WorkerNodeRequirements>().not.toHaveProperty('allocationLifetime');
+    expectTypeOf<AllocationInspection>().not.toHaveProperty('allocationLifetime');
+    expect(WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false })).not.toHaveProperty('allocationLifetime');
+  });
+});
+
+describe('BoundedRecoveryEvidence', () => {
+  it('validates minimal bounded evidence', () => {
+    const parsed = BoundedRecoveryEvidenceSchema.parse(EVIDENCE);
+    expect(parsed).toEqual(EVIDENCE);
+  });
+
+  it('accepts an optional stable provider classification code', () => {
+    const parsed = BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, code: 'invalid-workflow-file' });
+    expect(parsed.code).toBe('invalid-workflow-file');
+  });
+
+  it('accepts an offset ISO timestamp', () => {
+    const parsed = BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: '2026-07-23T12:00:00+02:00' });
+    expect(parsed.observedAt).toBe('2026-07-23T12:00:00+02:00');
+  });
+
+  it('accepts the millisecond precision produced by Date.toISOString', () => {
+    const parsed = BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: '2026-07-27T10:30:00.000Z' });
+    expect(parsed.observedAt).toBe('2026-07-27T10:30:00.000Z');
+    // The form every provider actually emits must stay valid.
+    expect(() =>
+      BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: new Date().toISOString() }),
+    ).not.toThrow();
+  });
+
+  it('rejects an overlong timestamp', () => {
+    // ISO 8601 allows an unbounded fractional-second component, so without an
+    // explicit length bound this shape would not be bounded at all.
+    const overlong = `2026-07-27T10:30:00.${'0'.repeat(RECOVERY_EVIDENCE_LIMITS.observedAt)}Z`;
+    expect(overlong.length).toBeGreaterThan(RECOVERY_EVIDENCE_LIMITS.observedAt);
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: overlong })).toThrow();
+  });
+
+  it('rejects overlong fields', () => {
+    expect(() =>
+      BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, summary: 'x'.repeat(RECOVERY_EVIDENCE_LIMITS.summary + 1) }),
+    ).toThrow();
+    expect(() =>
+      BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, source: 'x'.repeat(RECOVERY_EVIDENCE_LIMITS.source + 1) }),
+    ).toThrow();
+    expect(() =>
+      BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, code: 'x'.repeat(RECOVERY_EVIDENCE_LIMITS.code + 1) }),
+    ).toThrow();
+  });
+
+  it('accepts fields at exactly the bound', () => {
+    const parsed = BoundedRecoveryEvidenceSchema.parse({
+      ...EVIDENCE,
+      summary: 'x'.repeat(RECOVERY_EVIDENCE_LIMITS.summary),
+    });
+    expect(parsed.summary).toHaveLength(RECOVERY_EVIDENCE_LIMITS.summary);
+  });
+
+  it('rejects empty fields', () => {
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, summary: '' })).toThrow();
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, source: '' })).toThrow();
+  });
+
+  it('rejects invalid ISO timestamps', () => {
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: 'yesterday' })).toThrow();
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: '2026-07-23' })).toThrow();
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: '2026-13-01T10:00:00Z' })).toThrow();
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, observedAt: Date.now() })).toThrow();
+  });
+
+  it('rejects unbounded diagnostic payloads as extra fields', () => {
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, stack: 'Error: boom\n at x' })).toThrow();
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, providerResponse: { body: 'raw' } })).toThrow();
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, credentials: 'token' })).toThrow();
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ ...EVIDENCE, errors: [new Error('boom')] })).toThrow();
+  });
+
+  it('rejects missing required fields', () => {
+    expect(() => BoundedRecoveryEvidenceSchema.parse({ source: 'fly.machines' })).toThrow();
+    expect(() =>
+      BoundedRecoveryEvidenceSchema.parse({ source: 'fly.machines', summary: 'gone', observedAt: undefined }),
+    ).toThrow();
+  });
+
+  it('is JSON-serializable', () => {
+    const roundTripped: unknown = JSON.parse(JSON.stringify(EVIDENCE));
+    expect(BoundedRecoveryEvidenceSchema.parse(roundTripped)).toEqual(EVIDENCE);
+  });
+});
+
+describe('WorkerNodeProvisionOutcome', () => {
+  it('carries the allocation reference and handle when allocated', () => {
+    const outcome: WorkerNodeProvisionOutcome = {
+      kind: 'allocated',
       allocationRef: {
         version: PROVIDER_ALLOCATION_REF_VERSION,
         providerId: 'piscina',
@@ -473,8 +745,107 @@ describe('WorkerNodeProvisionResult', () => {
       },
     };
 
-    expect(result.allocationRef.providerId).toBe('piscina');
-    expect(result.handle.executionAttemptId).toBe('attempt-1');
+    if (outcome.kind !== 'allocated') throw new Error('expected an allocated outcome');
+    expect(outcome.allocationRef.providerId).toBe('piscina');
+    expect(outcome.handle.executionAttemptId).toBe('attempt-1');
+  });
+
+  it('carries only bounded evidence when confirmed absent', () => {
+    const outcome: WorkerNodeProvisionOutcome = { kind: 'confirmed-absent', evidence: EVIDENCE };
+
+    if (outcome.kind !== 'confirmed-absent') throw new Error('expected a confirmed-absent outcome');
+    expect(outcome.evidence).toEqual(EVIDENCE);
+    expectTypeOf(outcome).not.toHaveProperty('allocationRef');
+    expectTypeOf(outcome).not.toHaveProperty('handle');
+  });
+
+  it('has exactly two discriminants', () => {
+    expectTypeOf<WorkerNodeProvisionOutcome['kind']>().toEqualTypeOf<'allocated' | 'confirmed-absent'>();
+  });
+
+  it('is the provision return type', () => {
+    expectTypeOf<Awaited<ReturnType<IWorkerNodeProvider['provision']>>>().toEqualTypeOf<WorkerNodeProvisionOutcome>();
+  });
+});
+
+describe('ProvisioningDiscovery', () => {
+  it('exports the three discovery kinds', () => {
+    expect(PROVISIONING_DISCOVERY_KINDS).toEqual(['found', 'confirmed-absent', 'unknown']);
+    expectTypeOf<ProvisioningDiscovery['kind']>().toEqualTypeOf<'found' | 'confirmed-absent' | 'unknown'>();
+  });
+
+  it('validates a found allocation', () => {
+    const discovery: ProvisioningDiscovery = {
+      kind: 'found',
+      allocationRef: {
+        version: PROVIDER_ALLOCATION_REF_VERSION,
+        providerId: 'github-actions',
+        providerData: { runId: 12345 },
+      },
+    };
+
+    expect(ProvisioningDiscoverySchema.parse(discovery)).toEqual(discovery);
+  });
+
+  it('validates confirmed absence with bounded evidence', () => {
+    const discovery: ProvisioningDiscovery = { kind: 'confirmed-absent', evidence: EVIDENCE };
+    expect(ProvisioningDiscoverySchema.parse(discovery)).toEqual(discovery);
+  });
+
+  it('validates retained uncertainty with bounded evidence', () => {
+    const discovery: ProvisioningDiscovery = { kind: 'unknown', evidence: EVIDENCE };
+    expect(ProvisioningDiscoverySchema.parse(discovery)).toEqual(discovery);
+  });
+
+  it('rejects unknown discovery kinds', () => {
+    expect(() => ProvisioningDiscoverySchema.parse({ kind: 'absent', evidence: EVIDENCE })).toThrow();
+    expect(() => ProvisioningDiscoverySchema.parse({ kind: 'maybe', evidence: EVIDENCE })).toThrow();
+  });
+
+  it('rejects a found result without a valid allocation reference', () => {
+    expect(() => ProvisioningDiscoverySchema.parse({ kind: 'found' })).toThrow();
+    expect(() =>
+      ProvisioningDiscoverySchema.parse({
+        kind: 'found',
+        allocationRef: { version: 99, providerId: 'fly', providerData: {} },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects absence or uncertainty without bounded evidence', () => {
+    expect(() => ProvisioningDiscoverySchema.parse({ kind: 'confirmed-absent' })).toThrow();
+    expect(() => ProvisioningDiscoverySchema.parse({ kind: 'unknown' })).toThrow();
+    expect(() =>
+      ProvisioningDiscoverySchema.parse({ kind: 'unknown', evidence: { ...EVIDENCE, observedAt: 'not-a-date' } }),
+    ).toThrow();
+  });
+
+  it('rejects unknown fields on every member (strict)', () => {
+    expect(() =>
+      ProvisioningDiscoverySchema.parse({
+        kind: 'found',
+        allocationRef: {
+          version: PROVIDER_ALLOCATION_REF_VERSION,
+          providerId: 'fly',
+          providerData: {},
+        },
+        evidence: EVIDENCE,
+      }),
+    ).toThrow();
+    expect(() =>
+      ProvisioningDiscoverySchema.parse({ kind: 'confirmed-absent', evidence: EVIDENCE, rawResponse: {} }),
+    ).toThrow();
+    expect(() => ProvisioningDiscoverySchema.parse({ kind: 'unknown', evidence: EVIDENCE, stack: 'boom' })).toThrow();
+  });
+
+  it('never carries a handle — discovery is side-effect-free', () => {
+    expectTypeOf<Extract<ProvisioningDiscovery, { kind: 'found' }>>().not.toHaveProperty('handle');
+  });
+
+  it('is JSON-serializable', () => {
+    const discovery: ProvisioningDiscovery = { kind: 'unknown', evidence: EVIDENCE };
+    const roundTripped: unknown = JSON.parse(JSON.stringify(discovery));
+    expect(ProvisioningDiscoverySchema.parse(roundTripped)).toEqual(discovery);
   });
 });
 
@@ -622,11 +993,37 @@ describe('AllocationInspection', () => {
 });
 
 describe('IWorkerNodeRecoveryCapability', () => {
-  it('requires attach, inspect, and terminateAllocation together', () => {
-    // Compile-time proof: all three methods are required on the interface
+  it('requires discovery, attach, inspect, and terminateAllocation together', () => {
+    // Compile-time proof: all four methods are required on the interface
+    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('discoverProvisioning');
     expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('attach');
     expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('inspect');
     expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('terminateAllocation');
+  });
+
+  it('rejects partial recovery capabilities', () => {
+    // Each of these omits exactly one member of the coherent capability and
+    // must therefore not satisfy the interface.
+    expectTypeOf<
+      Omit<IWorkerNodeRecoveryCapability, 'discoverProvisioning'>
+    >().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
+    expectTypeOf<Omit<IWorkerNodeRecoveryCapability, 'attach'>>().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
+    expectTypeOf<Omit<IWorkerNodeRecoveryCapability, 'inspect'>>().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
+    expectTypeOf<
+      Omit<IWorkerNodeRecoveryCapability, 'terminateAllocation'>
+    >().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
+  });
+
+  it('discoverProvisioning takes the provision request and a signal', () => {
+    expectTypeOf<IWorkerNodeRecoveryCapability['discoverProvisioning']>().parameters.toEqualTypeOf<
+      [WorkerNodeProvisionRequest, AbortSignal]
+    >();
+  });
+
+  it('discoverProvisioning returns a ProvisioningDiscovery', () => {
+    expectTypeOf<
+      Awaited<ReturnType<IWorkerNodeRecoveryCapability['discoverProvisioning']>>
+    >().toEqualTypeOf<ProvisioningDiscovery>();
   });
 
   it('attach returns a fresh WorkerNodeHandle', () => {
@@ -647,27 +1044,28 @@ describe('IWorkerNodeRecoveryCapability', () => {
     >();
   });
 
-  it('inspect takes allocationRef and signal', () => {
+  it('inspect takes allocationRef, request, and signal', () => {
     expectTypeOf<IWorkerNodeRecoveryCapability['inspect']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, AbortSignal]
+      [ProviderAllocationRef, WorkerNodeProvisionRequest, AbortSignal]
     >();
   });
 
-  it('terminateAllocation takes ref and signal', () => {
+  it('terminateAllocation takes ref, request, and signal', () => {
     expectTypeOf<IWorkerNodeRecoveryCapability['terminateAllocation']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, AbortSignal]
+      [ProviderAllocationRef, WorkerNodeProvisionRequest, AbortSignal]
     >();
   });
 
   it('can be implemented as a concrete object', () => {
     const recovery: IWorkerNodeRecoveryCapability = {
+      discoverProvisioning: async (_request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
       attach: async (_ref, _request, _signal) => ({
         executionAttemptId: 'attempt-1',
         cancel: async () => {},
         terminate: async () => {},
         release: async () => {},
       }),
-      inspect: async (_ref, _signal) => ({
+      inspect: async (_ref, _request, _signal) => ({
         state: 'running' as const,
         allocationRef: {
           version: PROVIDER_ALLOCATION_REF_VERSION,
@@ -675,9 +1073,10 @@ describe('IWorkerNodeRecoveryCapability', () => {
           providerData: { machineId: 'm-1' },
         },
       }),
-      terminateAllocation: async () => {},
+      terminateAllocation: async (_ref, _request, _signal) => {},
     };
 
+    expect(recovery.discoverProvisioning).toBeDefined();
     expect(recovery.attach).toBeDefined();
     expect(recovery.inspect).toBeDefined();
     expect(recovery.terminateAllocation).toBeDefined();
@@ -690,11 +1089,13 @@ describe('IRecoverableWorkerNodeProvider', () => {
       id: 'fly.machines',
       displayName: 'Fly Machines',
       environment: 'fly',
+      allocationLifetime: 'provider-managed',
       baseCapabilities: WorkerNodeCapabilitiesSchema.parse({
         persistentStorage: true,
         supportsRecovery: true,
       }),
       provision: async () => ({
+        kind: 'allocated' as const,
         allocationRef: {
           version: PROVIDER_ALLOCATION_REF_VERSION,
           providerId: 'fly.machines',
@@ -708,13 +1109,14 @@ describe('IRecoverableWorkerNodeProvider', () => {
         },
       }),
       recovery: {
+        discoverProvisioning: async (_request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
         attach: async (_ref, _request, _signal) => ({
           executionAttemptId: 'attempt-1',
           cancel: async () => {},
           terminate: async () => {},
           release: async () => {},
         }),
-        inspect: async (_ref, _signal) => ({
+        inspect: async (_ref, _request, _signal) => ({
           state: 'running' as const,
           allocationRef: {
             version: PROVIDER_ALLOCATION_REF_VERSION,
@@ -722,11 +1124,12 @@ describe('IRecoverableWorkerNodeProvider', () => {
             providerData: { machineId: 'm-1' },
           },
         }),
-        terminateAllocation: async () => {},
+        terminateAllocation: async (_ref, _request, _signal) => {},
       },
     };
 
     expect(provider.recovery).toBeDefined();
+    expect(provider.recovery.discoverProvisioning).toBeDefined();
     expect(provider.recovery.attach).toBeDefined();
     expect(provider.recovery.inspect).toBeDefined();
     expect(provider.recovery.terminateAllocation).toBeDefined();
@@ -751,10 +1154,12 @@ describe('non-recoverable provider shape', () => {
       id: 'piscina',
       displayName: 'Piscina Local',
       environment: 'piscina',
+      allocationLifetime: 'provisioner-process-bound',
       baseCapabilities: WorkerNodeCapabilitiesSchema.parse({
         persistentStorage: false,
       }),
       provision: async () => ({
+        kind: 'allocated' as const,
         allocationRef: {
           version: PROVIDER_ALLOCATION_REF_VERSION,
           providerId: 'piscina',
