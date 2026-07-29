@@ -8,6 +8,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
   AgentSubjects,
+  ClientSubjects,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
   SessionSubjects,
@@ -19,9 +20,12 @@ import type { KernelMakaioExtension } from '@makaio/kernel';
 import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { defineTool, defineToolset, toolSuccess } from '@makaio/tools-core';
 import { SessionStorageSubjects } from '@makaio/services-core/session/storage/namespace';
+import { CLIDetectionSubjects } from '@makaio/services-core/cli-detection/namespace';
+import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { registerMemorySessionStorage } from '../../../../../services/core/src/session/storage/memory-handler.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
+import { CLI_DETECTION_PACKAGE_NAME } from '../../cli-detection/package.js';
 import { createIsolatedWorkflowRuntime } from '../isolated-workflow-runtime.js';
 
 /** Build the read-only empty adapter repository required by the runtime seam. */
@@ -211,6 +215,22 @@ describe('createIsolatedWorkflowRuntime integration', () => {
         toolsets: [readOnlyFilesystemToolset],
       });
       expect(observedContext).toEqual([{ cwd, makaioHome: '/runtime-makaio-home', machineId: 'isolated-worker-1' }]);
+      const packageNames = runtime.coordinator.list().map((pkg) => pkg.name);
+      expect(packageNames).toEqual(expect.arrayContaining([CLI_DETECTION_PACKAGE_NAME, ClientsCoreToken.name]));
+      expect(packageNames.indexOf(CLI_DETECTION_PACKAGE_NAME)).toBeLessThan(
+        packageNames.indexOf(ClientsCoreToken.name),
+      );
+      const missingBinary = `makaio-isolated-cli-detection-missing-${crypto.randomUUID()}`;
+      await expect(runtime.bus.request(CLIDetectionSubjects.scan, { binaries: [missingBinary] })).resolves.toEqual({
+        results: [{ binary: missingBinary, found: false }],
+      });
+      await expect(
+        runtime.bus.request(ClientSubjects.scan, {
+          targets: [{ clientId: 'missing-client', binaryName: missingBinary }],
+        }),
+      ).resolves.toEqual({
+        results: [{ clientId: 'missing-client', found: false }],
+      });
       expect(runtimeBootConfigured).toHaveBeenCalledOnce();
       expect(processedExtensions).toContain('test-client-contribution');
       await authority.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });

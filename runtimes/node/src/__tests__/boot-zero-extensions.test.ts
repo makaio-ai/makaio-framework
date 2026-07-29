@@ -14,6 +14,7 @@ import {
   type Config,
 } from '@makaio/contracts';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
+import { ClientSubjects } from '@makaio/contracts/client';
 import type { IConfigStorage } from '@makaio/core';
 import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
 import { ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
@@ -38,7 +39,9 @@ import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
 import { WorkflowEngineToken } from '@makaio/subsystem-workflow-engine';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
+import { CLIDetectionSubjects } from '@makaio/services-core/cli-detection/namespace';
 import { bootMakaioRuntimeCore, createCompositeWorkspaceRootResolver, type MakaioRuntime } from '../boot.js';
+import { CLI_DETECTION_PACKAGE_NAME } from '../cli-detection/package.js';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
 import { RuntimeSubjects } from '../bus/runtime/namespace.js';
 
@@ -56,6 +59,7 @@ vi.mock('node:os', async () => {
 
 const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
   'preferences-storage',
+  CLI_DETECTION_PACKAGE_NAME,
   ClientsCoreToken.name,
   createPackageManagerPackage().name,
   AdapterSubsystemToken.name,
@@ -383,6 +387,23 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
     expect(new Set(loadedPackageNames)).toStrictEqual(EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES);
     expect(new Set(activePackageNames)).toStrictEqual(EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES);
     expect(runtime.trayEntries).toEqual([]);
+
+    const missingBinary = `makaio-cli-detection-missing-${crypto.randomUUID()}`;
+    await expect(runtime.bus.request(CLIDetectionSubjects.scan, { binaries: [missingBinary] })).resolves.toEqual({
+      results: [{ binary: missingBinary, found: false }],
+    });
+    await expect(
+      runtime.bus.request(ClientSubjects.scan, {
+        targets: [{ clientId: 'missing-client', binaryName: missingBinary }],
+      }),
+    ).resolves.toEqual({
+      results: [
+        {
+          clientId: 'missing-client',
+          found: false,
+        },
+      ],
+    });
 
     await runtime.shutdown();
     runtime = undefined;

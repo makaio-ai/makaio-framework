@@ -45,7 +45,6 @@
       "@makaio/extension-subagent": ["./extensions/subagent/src/index.ts"],
       "@makaio/providers": ["./packages/providers/src/index.ts"],
       "@makaio/services/settings/namespace": ["./services/core/src/settings/namespace.ts"],
-      "@makaio/services/cli-detection/namespace": ["./services/core/src/cli-detection/namespace.ts"],
       "@makaio/services-core": ["./services/core/src/index.ts"],
       "@makaio/services-core/*": ["./services/core/src/*/index.ts"],
       "@makaio/services-core/cli-detection/namespace": ["./services/core/src/cli-detection/namespace.ts"],

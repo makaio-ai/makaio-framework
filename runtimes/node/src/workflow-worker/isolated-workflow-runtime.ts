@@ -19,6 +19,7 @@ import {
   prepareAdapterRuntime,
   type PrepareAdapterRuntimeInput,
 } from '../compose-adapter-runtime.js';
+import { cliDetectionPackage } from '../cli-detection/package.js';
 import {
   registerExtensionBootContributions,
   shouldLoadDefaultSessionOrchestrator,
@@ -170,6 +171,7 @@ export async function createIsolatedWorkflowRuntime(
       ...(shouldLoadDefaultSessionOrchestrator(contributedPackages) ? [sessionOrchestratorPackage] : []),
       createSubagentServicePackage(LOCAL_RUNTIME_SNAPSHOT_PRIORITY),
       toolRegistryPackage,
+      cliDetectionPackage,
       clientsCorePackage,
       ...contributedPackages,
     ];
