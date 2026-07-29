@@ -167,6 +167,16 @@ export const ArtifactViewAffordanceDeclarationSchema = z.discriminatedUnion('kin
   EntryAffordanceBaseSchema.extend({
     /** Optional display title for the entry (declaration policy, not caller-controlled). */
     title: z.string().min(1).optional(),
+    /**
+     * Relation type a host-scoped collection container traverses from an
+     * entry member back to the host artifact that owns the collection.
+     *
+     * Like `title` and inline's `as`, this is declaration policy — it tells
+     * the container how to resolve its host, not the caller how to select
+     * the affordance. Requests keep selecting by `via`/`collection` only,
+     * and the matcher stays untouched.
+     */
+    hostRelation: z.string().min(1).optional(),
   }).superRefine(requireExactlyOneEntryTarget('affordance')),
 ]);
 
