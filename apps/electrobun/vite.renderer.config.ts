@@ -6,11 +6,13 @@ import { serviceBrowserExportsPlugin } from '../../scripts/lib/vite-service-brow
 import { viteExtensionDevPlugin } from '../../scripts/lib/vite-extension-dev-plugin.js';
 import {
   discoverExtensionBrowserBuildInputs,
+  discoverExtensionBrowserPrebundleDependencies,
   discoverExtensionBrowserRuntimeDevEntries,
 } from '../../scripts/lib/discover-extension-browser-dev-entries.js';
 import { viteImportMapPlugin } from '../../scripts/lib/vite-import-map-plugin.js';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import {
+  buildSharedRendererOptimizeDeps,
   sharedRendererAliases,
   sharedRendererDedupe,
   sharedRendererRoot,
@@ -155,6 +157,7 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
 
   // In build mode, require an explicit bus URL; do not bake a localhost fallback into production.
   const resolvedBusUrl = config.busUrl ?? (command === 'serve' ? `ws://localhost:${config.devPort}/bus` : '');
+  const htmlEntry = fileURLToPath(new URL('./index.html', import.meta.url));
   const plugins = await createPlugins(command, config);
 
   return {
@@ -180,7 +183,7 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
         // available to ExtensionBrowserLoader after production tree-shaking.
         preserveEntrySignatures: 'strict',
         input: {
-          main: fileURLToPath(new URL('./index.html', import.meta.url)),
+          main: htmlEntry,
           ...discoverExtensionBrowserBuildInputs(config.repoRoot),
         },
         output: {
@@ -209,23 +212,15 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
         // Stub server-only packages to prevent Node.js code from being bundled
       },
     },
-    optimizeDeps: {
-      exclude: [
-        '@makaio/core',
-        '@makaio/bus-core',
-        '@makaio/web-components',
-        '@makaio/ui-kernel',
-        '@makaio/ui-components',
-        '@makaio/ui-hooks',
-        '@makaio/ui-views',
-        // Server-only packages that should never be bundled for browser
-        '@libsql/client',
-        'libsql',
-        '@makaio/storage-drizzle',
-        'drizzle-orm',
-        'drizzle-orm/libsql',
-        'drizzle-orm/sqlite-core',
-      ],
-    },
+    // The include list front-loads dependency optimization to server start.
+    // Without it, dependencies reachable only through excluded workspace
+    // packages or extension middleware sources are discovered mid-boot, and
+    // Vite's "optimized dependencies changed" reload can crash native webview
+    // wrappers while the host window is loading. Extension dependencies are
+    // aggregated from descriptor-declared `prebundleDependencies`.
+    optimizeDeps: buildSharedRendererOptimizeDeps({
+      htmlEntry,
+      discoveredInclude: discoverExtensionBrowserPrebundleDependencies(config.repoRoot),
+    }),
   };
 }

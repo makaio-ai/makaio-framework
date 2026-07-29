@@ -10,6 +10,7 @@ import {
   discoverExtensionBrowserBuildEntries,
   discoverExtensionBrowserBuildInputs,
   discoverExtensionBrowserDevEntries,
+  discoverExtensionBrowserPrebundleDependencies,
   discoverExtensionBrowserRuntimeDevEntries,
 } from './discover-extension-browser-dev-entries.js';
 
@@ -57,9 +58,15 @@ describe('discoverExtensionBrowserDevEntries', () => {
    * @param cwd - Temporary workspace root.
    * @param name - Descriptor name and directory name.
    * @param browser - Optional browser entrypoint.
+   * @param prebundleDependencies - Optional raw `prebundleDependencies` value.
    * @returns Absolute descriptor root path.
    */
-  function writeProductExtensionDescriptor(cwd: string, name: string, browser?: true | string): string {
+  function writeProductExtensionDescriptor(
+    cwd: string,
+    name: string,
+    browser?: true | string,
+    prebundleDependencies?: unknown,
+  ): string {
     const descriptorRoot = join(cwd, 'host/extensions', name);
     mkdirSync(join(descriptorRoot, 'src'), { recursive: true });
     writeFileSync(join(descriptorRoot, 'src/browser.ts'), 'export default {};\n');
@@ -72,6 +79,7 @@ describe('discoverExtensionBrowserDevEntries', () => {
           version: '1.0.0',
           makaio: { framework: '>=0.1.0' },
           entrypoints: browser === undefined ? { server: true } : { browser },
+          ...(prebundleDependencies !== undefined ? { prebundleDependencies } : {}),
         },
         null,
         2,
@@ -371,6 +379,51 @@ describe('discoverExtensionBrowserDevEntries', () => {
     const entries = discoverExtensionBrowserDevEntries(cwd);
 
     expect(entries).toEqual([]);
+  });
+
+  it('aggregates and deduplicates descriptor-declared prebundle dependencies', () => {
+    const cwd = makeTempDir();
+    writeConfig(cwd);
+    writeProductExtensionDescriptor(cwd, 'first-ext', true, ['react-use', 'elkjs']);
+    writeProductExtensionDescriptor(cwd, 'second-ext', true, ['elkjs', 'shiki']);
+    writeProductExtensionDescriptor(cwd, 'undeclared-ext', true);
+
+    expect(discoverExtensionBrowserPrebundleDependencies(cwd)).toEqual(['react-use', 'elkjs', 'shiki']);
+  });
+
+  it('returns an empty array when no descriptor declares prebundle dependencies', () => {
+    const cwd = makeTempDir();
+    writeConfig(cwd);
+    writeProductExtensionDescriptor(cwd, 'makaio-dev', true);
+
+    expect(discoverExtensionBrowserPrebundleDependencies(cwd)).toEqual([]);
+  });
+
+  it('skips descriptors whose prebundle dependencies are not non-blank strings', () => {
+    const cwd = makeTempDir();
+    writeConfig(cwd);
+    writeProductExtensionDescriptor(cwd, 'broken-ext', true, ['react-use', 42]);
+    writeProductExtensionDescriptor(cwd, 'blank-ext', true, ['   ']);
+    writeProductExtensionDescriptor(cwd, 'valid-ext', true, ['shiki']);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(discoverExtensionBrowserPrebundleDependencies(cwd)).toEqual(['shiki']);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    for (const call of warnSpy.mock.calls) {
+      expect(String(call[1])).toContain('descriptor.prebundleDependencies must be an array of non-blank strings');
+    }
+  });
+
+  it('skips descriptors declaring prebundle dependencies without a browser entrypoint', () => {
+    const cwd = makeTempDir();
+    writeConfig(cwd);
+    writeProductExtensionDescriptor(cwd, 'server-only-ext', undefined, ['react-use']);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(discoverExtensionBrowserPrebundleDependencies(cwd)).toEqual([]);
+    expect(String(warnSpy.mock.calls[0]?.[1])).toContain(
+      'descriptor.prebundleDependencies requires a browser entrypoint',
+    );
   });
 
   it('skips descriptors whose browser entry escapes the extension directory', () => {
