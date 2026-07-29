@@ -69,6 +69,7 @@ import { resolveMakaioHome } from './makaio-config.js';
 import { preferencesStoragePackage } from '@makaio/preferences/package';
 import { createClientsCorePackage } from '@makaio/subsystem-client';
 import { createNodeClientBinaryStrategyDependencies } from './client-binary-strategy-dependencies.js';
+import { cliDetectionPackage } from './cli-detection/package.js';
 import { activateAdapterRuntimeIdentity, prepareAdapterRuntime } from './compose-adapter-runtime.js';
 import { tryImport } from './optional-package.js';
 import { registerRuntimeHandlers } from './register-runtime-handlers.js';
@@ -438,6 +439,7 @@ export async function bootMakaioRuntimeCore(
 
     const frameworkPackages = [
       preferencesStoragePackage,
+      cliDetectionPackage,
       createClientsCorePackage({
         definitions: clientDefinitions,
         strategyDependencies: options.clientBinaryStrategyDependencies,
