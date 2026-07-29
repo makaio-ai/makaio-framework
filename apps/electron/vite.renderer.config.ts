@@ -6,11 +6,13 @@ import { serviceBrowserExportsPlugin } from '../../scripts/lib/vite-service-brow
 import { viteExtensionDevPlugin } from '../../scripts/lib/vite-extension-dev-plugin.js';
 import {
   discoverExtensionBrowserBuildInputs,
+  discoverExtensionBrowserPrebundleDependencies,
   discoverExtensionBrowserRuntimeDevEntries,
 } from '../../scripts/lib/discover-extension-browser-dev-entries.js';
 import { viteImportMapPlugin } from '../../scripts/lib/vite-import-map-plugin.js';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import {
+  buildSharedRendererOptimizeDeps,
   sharedRendererAliases,
   sharedRendererDedupe,
   sharedRendererRoot,
@@ -121,12 +123,13 @@ async function createPlugins(command: ConfigEnv['command'], hostConfig: Renderer
 
 /**
  * Build renderer Rollup inputs from framework entries and descriptor browser entries.
+ * @param htmlEntry - Absolute path to the renderer HTML entry.
  * @param cwd - Workspace root used for descriptor-driven browser discovery.
  * @returns Rollup input map for renderer build.
  */
-function buildRendererInputs(cwd: string): Record<string, string> {
+function buildRendererInputs(htmlEntry: string, cwd: string): Record<string, string> {
   return {
-    main: fileURLToPath(new URL('./index.html', import.meta.url)),
+    main: htmlEntry,
     ...discoverExtensionBrowserBuildInputs(cwd),
   };
 }
@@ -167,6 +170,7 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
 
   // In build mode, require an explicit bus URL; do not bake a localhost fallback into production.
   const resolvedBusUrl = hostConfig.busUrl ?? (command === 'serve' ? `ws://localhost:${hostConfig.devPort}/bus` : '');
+  const htmlEntry = fileURLToPath(new URL('./index.html', import.meta.url));
   const plugins = await createPlugins(command, hostConfig);
 
   return {
@@ -187,7 +191,7 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
       cssCodeSplit: false,
       rollupOptions: {
         preserveEntrySignatures: 'strict',
-        input: buildRendererInputs(hostConfig.repoRoot),
+        input: buildRendererInputs(htmlEntry, hostConfig.repoRoot),
         output: {
           entryFileNames(chunkInfo: { name: string }) {
             // Extension entries get stable paths — loaded via dynamic import at
@@ -214,23 +218,15 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
         // Stub server-only packages to prevent Node.js code from being bundled
       },
     },
-    optimizeDeps: {
-      exclude: [
-        '@makaio/core',
-        '@makaio/bus-core',
-        '@makaio/web-components',
-        '@makaio/ui-kernel',
-        '@makaio/ui-components',
-        '@makaio/ui-hooks',
-        '@makaio/ui-views',
-        // Server-only packages that should never be bundled for browser
-        '@libsql/client',
-        'libsql',
-        '@makaio/storage-drizzle',
-        'drizzle-orm',
-        'drizzle-orm/libsql',
-        'drizzle-orm/sqlite-core',
-      ],
-    },
+    // The include list front-loads dependency optimization to server start.
+    // Without it, dependencies reachable only through excluded workspace
+    // packages or extension middleware sources are discovered mid-boot, and
+    // Vite's "optimized dependencies changed" reload can crash native webview
+    // wrappers while the host window is loading. Extension dependencies are
+    // aggregated from descriptor-declared `prebundleDependencies`.
+    optimizeDeps: buildSharedRendererOptimizeDeps({
+      htmlEntry,
+      discoveredInclude: discoverExtensionBrowserPrebundleDependencies(hostConfig.repoRoot),
+    }),
   };
 }

@@ -250,6 +250,32 @@ describe('ExtensionDescriptorSchema', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('accepts prebundleDependencies alongside a browser entrypoint', () => {
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      entrypoints: { server: true, browser: true },
+      prebundleDependencies: ['react-use', 'shiki'],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects blank prebundleDependencies entries', () => {
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      entrypoints: { server: true, browser: true },
+      prebundleDependencies: ['   '],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects prebundleDependencies without a browser entrypoint', () => {
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      prebundleDependencies: ['react-use'],
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('legacy field rejection', () => {

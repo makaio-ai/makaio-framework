@@ -18,6 +18,10 @@ import { BootSubjects, ExtensionSubjects, KernelSubjects } from '@makaio/kernel'
 import type { SpawnedProcess } from '../shared/spawn-helpers.js';
 import { connectTestBus, waitForBoot, waitForRuntimeReady, waitForUiReady } from '../shared/bus-helpers.js';
 import { resolveFreeLoopbackPort } from '../shared/free-port.js';
+import {
+  attributeMidBootDependencyReoptimization,
+  expectNoMidBootDependencyReoptimization,
+} from '../shared/vite-optimizer-guard.js';
 
 /** Start function supplied by a host-specific desktop launcher. */
 export type StartMakaioDevDesktopHost = (options: {
@@ -193,7 +197,7 @@ export async function runMakaioDevDesktopSmoke(options: MakaioDevDesktopSmokeOpt
   let hostExited = false;
 
   try {
-    host = await startHost({
+    const startedHost = await startHost({
       timeoutMs: STARTUP_TIMEOUT_MS,
       env: {
         HOME: e2eTmpDir,
@@ -203,50 +207,61 @@ export async function runMakaioDevDesktopSmoke(options: MakaioDevDesktopSmokeOpt
         MAKAIO_PORT: String(hostPort),
       },
     });
-    console.info('[desktop-e2e:%s] Host started, bus port: %d', hostLabel, host.port);
-    expect(host.port).toBe(hostPort);
+    host = startedHost;
+    console.info('[desktop-e2e:%s] Host started, bus port: %d', hostLabel, startedHost.port);
+    expect(startedHost.port).toBe(hostPort);
 
-    bus = await connectDesktopBus(host.port, hostLabel);
-    console.info('[desktop-e2e:%s] Bus connected on port %d', hostLabel, host.port);
+    bus = await connectDesktopBus(startedHost.port, hostLabel);
+    console.info('[desktop-e2e:%s] Bus connected on port %d', hostLabel, startedHost.port);
 
-    const uiReadyPromise = waitForUiReady(bus, expectedUiSurface, WINDOW_TIMEOUT_MS);
+    // A mid-boot re-optimization reloads the renderer and can crash the
+    // webview, which makes the boot/wait sequence below time out before the
+    // success-path drift guard runs. Attribute such failures from the
+    // captured host output so the drift diagnostic survives the error path.
+    try {
+      const uiReadyPromise = waitForUiReady(bus, expectedUiSurface, WINDOW_TIMEOUT_MS);
 
-    const bootPayload = await waitForBoot(bus, STARTUP_TIMEOUT_MS);
-    expect(Number.isFinite(bootPayload.totalDurationMs)).toBe(true);
-    expect(bootPayload.totalDurationMs).toBeGreaterThanOrEqual(0);
-    expectOnlyAllowedFailedServices(bootPayload.failedServices, allowedFailedServices, hostLabel);
+      const bootPayload = await waitForBoot(bus, STARTUP_TIMEOUT_MS);
+      expect(Number.isFinite(bootPayload.totalDurationMs)).toBe(true);
+      expect(bootPayload.totalDurationMs).toBeGreaterThanOrEqual(0);
+      expectOnlyAllowedFailedServices(bootPayload.failedServices, allowedFailedServices, hostLabel);
 
-    const bootState = await bus.request(BootSubjects.getState, {});
-    expect(bootState.complete).toBe(true);
-    expect(bootState.completedCount).toBe(bootState.totalCount);
-    expect(bootState.totalCount).toBeGreaterThan(0);
-    expectOnlyAllowedFailedServices(bootState.failedServices, allowedFailedServices, hostLabel);
+      const bootState = await bus.request(BootSubjects.getState, {});
+      expect(bootState.complete).toBe(true);
+      expect(bootState.completedCount).toBe(bootState.totalCount);
+      expect(bootState.totalCount).toBeGreaterThan(0);
+      expectOnlyAllowedFailedServices(bootState.failedServices, allowedFailedServices, hostLabel);
 
-    const { ready, machineId } = await waitForRuntimeReady(bus, STARTUP_TIMEOUT_MS);
-    expect(ready).toBe(true);
-    expect(machineId.length).toBeGreaterThan(0);
+      const { ready, machineId } = await waitForRuntimeReady(bus, STARTUP_TIMEOUT_MS);
+      expect(ready).toBe(true);
+      expect(machineId.length).toBeGreaterThan(0);
 
-    const runtimeProbe = await bus.request(KernelSubjects.isReady, {});
-    expect(runtimeProbe.ready).toBe(true);
-    expect(runtimeProbe.machineId).toBe(machineId);
+      const runtimeProbe = await bus.request(KernelSubjects.isReady, {});
+      expect(runtimeProbe.ready).toBe(true);
+      expect(runtimeProbe.machineId).toBe(machineId);
 
-    const extResp = await bus.request(ExtensionSubjects.list, {});
-    const { extensions } = extResp as { extensions: Array<{ name: string; state: string }> };
-    expect(extensions.find((extension) => extension.name === expectedExtensionName)?.state).toBe('active');
+      const extResp = await bus.request(ExtensionSubjects.list, {});
+      const { extensions } = extResp as { extensions: Array<{ name: string; state: string }> };
+      expect(extensions.find((extension) => extension.name === expectedExtensionName)?.state).toBe('active');
 
-    const openedWindow = await waitForWindowRegistration(bus, expectedRegistrationId, hostLabel);
-    expect(openedWindow.registrationId).toBe(expectedRegistrationId);
-    expect(openedWindow.windowId).toBeGreaterThan(0);
+      const openedWindow = await waitForWindowRegistration(bus, expectedRegistrationId, hostLabel);
+      expect(openedWindow.registrationId).toBe(expectedRegistrationId);
+      expect(openedWindow.windowId).toBeGreaterThan(0);
 
-    const { windows } = await bus.request(HostSubjects.window.list, {});
-    expect(windows.length).toBeGreaterThanOrEqual(1);
-    const mainWindow = windows.find((window) => window.registrationId === expectedRegistrationId);
-    expect(mainWindow).toBeDefined();
-    expect(mainWindow!.windowId).toBe(openedWindow.windowId);
+      const { windows } = await bus.request(HostSubjects.window.list, {});
+      expect(windows.length).toBeGreaterThanOrEqual(1);
+      const mainWindow = windows.find((window) => window.registrationId === expectedRegistrationId);
+      expect(mainWindow).toBeDefined();
+      expect(mainWindow!.windowId).toBe(openedWindow.windowId);
 
-    const uiReady = await uiReadyPromise;
-    expect(uiReady.surface).toBe(expectedUiSurface);
-    expect(uiReady.timestamp).toBeGreaterThan(0);
+      const uiReady = await uiReadyPromise;
+      expect(uiReady.surface).toBe(expectedUiSurface);
+      expect(uiReady.timestamp).toBeGreaterThan(0);
+    } catch (error) {
+      attributeMidBootDependencyReoptimization(error, startedHost.getOutput(), hostLabel);
+    }
+
+    expectNoMidBootDependencyReoptimization(startedHost.getOutput(), hostLabel);
 
     await bus.request(HostSubjects.app.shutdown, {});
     bus.disconnect();

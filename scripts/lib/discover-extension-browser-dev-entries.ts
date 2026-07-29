@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { transformSync } from 'esbuild';
 import { minimatch } from 'minimatch';
+import { isRecord, readExtensionDescriptor, type ExtensionDescriptor } from './extension-descriptor-metadata.js';
 import type { ExtensionDevEntry } from './vite-extension-dev-plugin.js';
 
 const MAKAIO_CONFIG_FILE_ENV = 'MAKAIO_CONFIG_FILE';
@@ -36,17 +37,6 @@ interface ParsedMakaioConfig {
     readonly include: readonly string[];
     /** Exclude glob filters matched against descriptor names. */
     readonly exclude: readonly string[];
-  };
-}
-
-/** Minimal descriptor shape needed for browser entry discovery. */
-interface ExtensionDescriptor {
-  /** Descriptor name used in runtime extension URLs. */
-  readonly name: string;
-  /** Surface entrypoint declarations. */
-  readonly entrypoints?: {
-    /** Browser entrypoint declaration. */
-    readonly browser?: true | string;
   };
 }
 
@@ -293,6 +283,27 @@ export function discoverExtensionBrowserBuildEntries(cwd = process.cwd()): Brows
   return discoverSelectedRoots(cwd).flatMap(
     ({ descriptorRoot }) => buildBrowserBuildEntryForDescriptorRoot(descriptorRoot) ?? [],
   );
+}
+
+/**
+ * Synchronously aggregate descriptor-declared browser prebundle dependencies.
+ *
+ * Extensions declare the bare npm specifiers their browser bundle's import
+ * closure reaches via `prebundleDependencies` in `descriptor.json`. Host Vite
+ * configs pass the aggregate to the shared optimizeDeps builder so extension
+ * dependencies are optimized at server start instead of being discovered
+ * mid-session — without the host enumerating extension-owned dependencies.
+ * @param cwd - Working directory for config lookup. Defaults to `process.cwd()`.
+ * @returns Deduplicated bare specifiers in descriptor discovery order.
+ */
+export function discoverExtensionBrowserPrebundleDependencies(cwd = process.cwd()): string[] {
+  const specifiers = new Set<string>();
+  for (const { descriptor } of discoverSelectedRoots(cwd)) {
+    for (const specifier of descriptor.prebundleDependencies ?? []) {
+      specifiers.add(specifier);
+    }
+  }
+  return [...specifiers];
 }
 
 /**
@@ -617,60 +628,6 @@ function discoverDescriptorRootsRecursively(root: string): string[] {
 }
 
 /**
- * Read and validate a descriptor in the supplied descriptor root.
- * @param descriptorRoot - Absolute directory containing `descriptor.json`.
- * @returns Valid extension descriptor, or `undefined` when invalid.
- */
-function readExtensionDescriptor(descriptorRoot: string): ExtensionDescriptor | undefined {
-  const descriptorPath = path.join(descriptorRoot, 'descriptor.json');
-  try {
-    const raw = JSON.parse(fs.readFileSync(descriptorPath, 'utf-8')) as unknown;
-    return parseExtensionDescriptor(raw);
-  } catch (error) {
-    console.warn(
-      `[extensions] Skipping invalid descriptor at ${descriptorPath}:`,
-      error instanceof Error ? error.message : error,
-    );
-    return undefined;
-  }
-}
-
-/**
- * Parse the descriptor fields needed for browser entry discovery.
- * @param raw - Raw descriptor JSON.
- * @returns Parsed descriptor.
- */
-function parseExtensionDescriptor(raw: unknown): ExtensionDescriptor {
-  if (!isRecord(raw)) throw new Error('descriptor must be an object');
-  const name = raw['name'];
-  if (typeof name !== 'string' || name.length === 0) throw new Error('descriptor.name must be a non-empty string');
-  const entrypoints = raw['entrypoints'];
-  if (entrypoints === undefined) return { name };
-  if (!isRecord(entrypoints)) throw new Error('descriptor.entrypoints must be an object');
-
-  const browser = entrypoints['browser'];
-  if (browser === undefined) return { name, entrypoints: {} };
-  if (browser !== true && typeof browser !== 'string') {
-    throw new Error('descriptor.entrypoints.browser must be true or a string');
-  }
-  if (typeof browser === 'string' && !isSafeEntrypointStem(browser)) {
-    throw new Error(`descriptor.entrypoints.browser is not a contained entrypoint stem: ${browser}`);
-  }
-  return { name, entrypoints: { browser } };
-}
-
-/**
- * Check whether a descriptor entrypoint stem is path-contained by construction.
- * @param stem - Entrypoint stem from descriptor metadata.
- * @returns Whether the stem can be resolved below the extension root.
- */
-function isSafeEntrypointStem(stem: string): boolean {
-  if (stem.length === 0 || path.isAbsolute(stem)) return false;
-  const normalized = stem.replaceAll(path.win32.sep, path.posix.sep);
-  return !normalized.split('/').some((segment) => segment === '..' || segment.length === 0);
-}
-
-/**
  * Build the source dev URL for a descriptor browser entry.
  * @param descriptorName - Descriptor name.
  * @param sourceAbsPath - Resolved browser source path.
@@ -704,15 +661,6 @@ function statSync(filePath: string): fs.Stats | undefined {
   } catch {
     return undefined;
   }
-}
-
-/**
- * Check whether a value is a string-keyed object.
- * @param value - Value to inspect.
- * @returns Whether the value is a record.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

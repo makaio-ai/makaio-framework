@@ -166,6 +166,22 @@ export interface ExtensionDescriptorBase extends ExtensionManifest {
   readonly config?: {
     readonly defaults?: Readonly<Record<string, unknown>>;
   };
+  /**
+   * Bare npm specifiers reachable from the browser entrypoint's import graph
+   * that host dev servers must pre-bundle eagerly.
+   *
+   * Extension browser sources are served through dev middleware outside the
+   * host's dependency-scanner entry, so npm dependencies first reached when the
+   * extension loads would otherwise be discovered mid-session — forcing a full
+   * renderer reload that can crash native webview wrappers during host boot.
+   * Declaring them here lets the host front-load their optimization to server
+   * start without the host enumerating extension-owned dependencies.
+   *
+   * Declare only browser-safe dependencies of the browser bundle's import
+   * closure; server-only dependencies must never appear here. Requires a
+   * `browser` entrypoint.
+   */
+  readonly prebundleDependencies?: readonly string[];
 }
 
 /**
@@ -242,6 +258,7 @@ export function isDetachedDescriptor(descriptor: ExtensionDescriptor): descripto
  * Enforces execution-mode invariants via `superRefine`:
  * - `execution === 'detached'` requires `transport`; `entrypoints` is optional.
  * - All other modes (including the default embedded mode) require `entrypoints`.
+ * - `prebundleDependencies` requires a `browser` entrypoint.
  *
  * Note: `satisfies z.ZodType<ExtensionDescriptor>` is intentionally omitted
  * because `superRefine` wraps the schema in `ZodEffects`, which is incompatible
@@ -258,12 +275,23 @@ export const ExtensionDescriptorSchema = ExtensionManifestSchema.extend({
   entrypoints: ExtensionEntrypointsSchema.optional(),
   execution: z.enum(['embedded', 'detached']).optional(),
   transport: DetachedTransportSchema.optional(),
+  prebundleDependencies: z
+    .array(z.string().regex(/\S/, 'prebundleDependencies entries must not be blank'))
+    .readonly()
+    .optional(),
   config: z
     .object({
       defaults: z.record(z.string(), z.unknown()).optional(),
     })
     .optional(),
 }).superRefine((descriptor, ctx) => {
+  if (descriptor.prebundleDependencies !== undefined && descriptor.entrypoints?.browser === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'prebundleDependencies requires a browser entrypoint',
+      path: ['prebundleDependencies'],
+    });
+  }
   if (descriptor.execution === 'detached') {
     if (descriptor.transport === undefined) {
       ctx.addIssue({
