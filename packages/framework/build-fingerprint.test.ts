@@ -129,6 +129,25 @@ describe('framework dist freshness', () => {
     });
   });
 
+  it('rejects stamped dist output after the bundled model registry seed changes', () => {
+    withTempWorkspace((workspaceRoot) => {
+      execFileSync('git', ['init'], { cwd: workspaceRoot, stdio: 'ignore' });
+      const registryPath = join(workspaceRoot, 'static/model-registry.yaml');
+      mkdirSync(join(workspaceRoot, 'static'), { recursive: true });
+      writeFileSync(registryPath, 'updatedAt: old\n');
+      execFileSync('git', ['add', 'static/model-registry.yaml'], {
+        cwd: workspaceRoot,
+        stdio: 'ignore',
+      });
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir });
+
+      writeFileSync(registryPath, 'updatedAt: new\n');
+
+      expect(isFrameworkDistFresh({ workspaceRoot, distDir })).toBe(false);
+    });
+  });
+
   it(
     'fingerprints staged Git input larger than the child-process default buffer',
     () => {

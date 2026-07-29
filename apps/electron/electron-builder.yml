@@ -101,7 +101,7 @@ extraResources:
     to: install-cli.sh
   - from: resources/makaio-launcher.sh
     to: makaio-launcher.sh
-  - from: ../../../static/model-registry.yaml
+  - from: ../../static/model-registry.yaml
     to: static/model-registry.yaml
 
 # In a yarn workspace all deps are hoisted to the workspace root — skip

@@ -27,6 +27,7 @@ const FRAMEWORK_BUILD_INPUT_PATHS = [
   'runtimes',
   'sdks',
   'services',
+  'static',
   'storage',
   'subsystems',
   'transports',

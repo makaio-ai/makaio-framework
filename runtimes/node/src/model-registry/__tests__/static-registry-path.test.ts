@@ -15,7 +15,7 @@ describe('resolveStaticModelRegistryPath', () => {
 
   it('returns the static model registry path when running from a source checkout', () => {
     const root = mkdtempWorkspace();
-    const registryPath = path.join(root, 'static', 'model-registry.yaml');
+    const registryPath = path.join(root, 'framework', 'static', 'model-registry.yaml');
     mkdirSync(path.dirname(registryPath), { recursive: true });
     writeFileSync(registryPath, '{}\n', 'utf-8');
 
@@ -25,11 +25,32 @@ describe('resolveStaticModelRegistryPath', () => {
     expect(resolveStaticModelRegistryPath(packageDir)).toBe(registryPath);
   });
 
+  it('returns the static model registry path from a package-root checkout', () => {
+    const root = path.join(os.tmpdir(), `makaio-static-registry-${crypto.randomUUID()}`);
+    tempDirs.push(root);
+    const packageDir = path.join(root, 'runtimes', 'node', 'src');
+    const registryPath = path.join(root, 'static', 'model-registry.yaml');
+    mkdirSync(packageDir, { recursive: true });
+    mkdirSync(path.dirname(registryPath), { recursive: true });
+    writeFileSync(path.join(root, 'package.json'), '{}\n', 'utf-8');
+    writeFileSync(registryPath, '{}\n', 'utf-8');
+
+    expect(resolveStaticModelRegistryPath(packageDir)).toBe(registryPath);
+  });
+
   it('returns undefined outside a source checkout', () => {
     const packagedDist = path.join(mkdtempWorkspace(), 'Test.app', 'Contents', 'Resources', 'app.asar', 'dist');
     mkdirSync(packagedDist, { recursive: true });
 
     expect(resolveStaticModelRegistryPath(packagedDist)).toBeUndefined();
+  });
+
+  it('ignores a directory at the expected registry path', () => {
+    const root = mkdtempWorkspace();
+    const registryPath = path.join(root, 'framework', 'static', 'model-registry.yaml');
+    mkdirSync(registryPath, { recursive: true });
+
+    expect(resolveStaticModelRegistryPath(path.join(root, 'framework', 'runtimes', 'node', 'src'))).toBeUndefined();
   });
 
   function mkdtempWorkspace(): string {

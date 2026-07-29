@@ -13,7 +13,7 @@ import { collectUnexpectedRuntimeMigrationFiles } from './runtime-migration-asse
 export interface FrameworkDistIssue {
   /**
    * Exports-map key, dist import specifier, forbidden Postgres literal or SQL
-   * marker, or migration chain directory the issue is about.
+   * marker, migration chain directory, or runtime asset the issue is about.
    */
   readonly exportKey: string;
   readonly kind:
@@ -23,7 +23,9 @@ export interface FrameworkDistIssue {
     | 'migration-journal-mismatch'
     | 'missing-export-target'
     | 'missing-migration-chain'
+    | 'missing-runtime-asset'
     | 'postgres-code-in-dist'
+    | 'runtime-asset-not-file'
     | 'undeclared-dist-dependency'
     | 'unexported-dist-specifier';
   readonly message: string;
@@ -53,6 +55,13 @@ export interface FrameworkDistResult {
  * first boot.
  */
 export const BUNDLED_MIGRATION_CHAINS: readonly string[] = ['dist/drizzle'];
+
+/**
+ * Runtime assets every framework distribution must ship, relative to the
+ * package root. These paths are consumed directly by built runtime modules,
+ * so exports-map verification cannot prove their presence.
+ */
+export const BUNDLED_RUNTIME_ASSETS = ['dist/runtime-node/static/model-registry.yaml'] as const;
 
 /**
  * Import specifiers that must never appear in built framework dist modules.
@@ -134,6 +143,11 @@ export interface VerifyFrameworkDistOptions {
    * {@link BUNDLED_MIGRATION_CHAINS}.
    */
   readonly migrationChains?: readonly string[];
+  /**
+   * Runtime assets (relative to the package root) that must be regular files.
+   * Defaults to {@link BUNDLED_RUNTIME_ASSETS}.
+   */
+  readonly runtimeAssets?: readonly string[];
 }
 
 type ExportValue = string | Readonly<Record<string, unknown>>;
@@ -216,10 +230,11 @@ const DECLARATION_TARGET_PATTERN = /\.d\.[cm]?ts$/;
  *    driver-loading literals that defeat import-specifier scans, or
  *    engine-exclusive SQL markers. The Postgres engine ships exclusively
  *    with `@makaio/storage-pg`.
- * 5. Every bundled migration chain ships with a journal that matches its
+ * 5. Every required runtime asset exists as a regular file.
+ * 6. Every bundled migration chain ships with a journal that matches its
  *    `.sql` migration files and contains no source-only Drizzle artifacts.
  * @param frameworkRoot - Absolute path to the `@makaio/framework` package root.
- * @param options - Optional overrides for the verified migration chains.
+ * @param options - Optional overrides for required runtime assets and migration chains.
  * @returns Verification result with all missing or unsafe targets.
  */
 export function verifyFrameworkDist(
@@ -290,9 +305,40 @@ export function verifyFrameworkDist(
     ...Object.keys(manifest.optionalDependencies ?? {}),
   ]);
   const scannedModules = checkDistImports(root, new Set(Object.keys(exportsMap)), declaredDependencies, issues);
+  checkRuntimeAssets(root, options.runtimeAssets ?? BUNDLED_RUNTIME_ASSETS, issues);
   checkMigrationChains(root, options.migrationChains ?? BUNDLED_MIGRATION_CHAINS, issues);
 
   return { checkedTargets, scannedModules, issues, ok: issues.length === 0 };
+}
+
+/**
+ * Verifies that runtime-owned non-module assets exist as regular files.
+ * @param root - Absolute framework package root.
+ * @param runtimeAssets - Asset paths relative to the package root.
+ * @param issues - Issue sink to append findings to.
+ */
+function checkRuntimeAssets(root: string, runtimeAssets: readonly string[], issues: FrameworkDistIssue[]): void {
+  for (const asset of runtimeAssets) {
+    const assetPath = resolve(root, asset);
+    if (!existsSync(assetPath)) {
+      issues.push({
+        exportKey: asset,
+        kind: 'missing-runtime-asset',
+        message: `Framework runtime asset "${asset}" is missing from the distribution`,
+        target: asset,
+      });
+      continue;
+    }
+
+    if (!statSync(assetPath).isFile()) {
+      issues.push({
+        exportKey: asset,
+        kind: 'runtime-asset-not-file',
+        message: `Framework runtime asset "${asset}" is not a regular file`,
+        target: asset,
+      });
+    }
+  }
 }
 
 /**

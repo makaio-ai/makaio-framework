@@ -81,7 +81,7 @@ const packageCopyEntries = {
     'node_modules/@makaio/framework/package.json',
   [toPackageRelativeCopySource(path.join(WORKSPACE_ROOT, 'node_modules', 'zod'))]: 'node_modules/zod',
   [toPackageRelativeCopySource(path.join(WORKSPACE_ROOT, 'node_modules', 'drizzle-orm'))]: 'node_modules/drizzle-orm',
-  [toPackageRelativeCopySource(path.join(WORKSPACE_ROOT, 'static', 'model-registry.yaml'))]:
+  [toPackageRelativeCopySource(path.join(PACKAGE_SET_ROOT, 'static', 'model-registry.yaml'))]:
     'Resources/app/dist/static/model-registry.yaml',
 } as const;
 
