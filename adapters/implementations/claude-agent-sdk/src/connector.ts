@@ -158,13 +158,20 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       // Emit SDK events through connector for proper metadata injection
       emitSdkEvent: async (msg) => {
         this.logLowLevelEvent(msg);
-        // Sync adapterSessionId from Session before emitting to ensure correct metadata
-        // This handles the case where system.init arrives before start() returns
-        if (this.session) {
-          const currentSessionId = await this.session.getAdapterSessionId();
-          if (currentSessionId !== this.adapterSessionId) {
-            this.adapterSessionId = currentSessionId;
-          }
+        // Sync adapterSessionId from Session before emitting to ensure correct metadata.
+        // This handles the case where system.init arrives before start() returns.
+        //
+        // Must use the non-blocking getConfirmedSessionId(): the session drains
+        // the SDK message stream serially and emits every message it cannot
+        // route through here. Claude Code emits pre-init traffic (operational
+        // `system` subtypes such as hook lifecycle records, and top-level types
+        // the client does not model yet) BEFORE system.init. Awaiting the
+        // blocking getAdapterSessionId() on such a message parks the drain on a
+        // promise that only system.init can settle — which that same drain is
+        // the only thing able to deliver. The turn then never starts.
+        const confirmedSessionId = this.session?.getConfirmedSessionId();
+        if (confirmedSessionId !== undefined && confirmedSessionId !== this.adapterSessionId) {
+          this.adapterSessionId = confirmedSessionId;
         }
         const sdkEventPayload = stripSdkMetadata(msg);
         if (!sdkEventPayload) {

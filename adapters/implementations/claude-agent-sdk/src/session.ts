@@ -29,52 +29,18 @@ type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { even
 /**
  * Session for Claude SDK query lifecycle management.
  *
- * Manages a single SDK query instance across multiple turns:
- * - Creates and maintains query instance
- * - Coordinates turn creation and lifecycle
- * - Handles message injection via AsyncQuerySource
+ * Each query generation owns its source and session-ID deferred. A terminal
+ * result marks the drain; every other retirement disowns the generation and
+ * rejects its unconfirmed session-ID waiters. Queue processing prevents new
+ * turns after close and completes queued handles with the closing error.
  *
- * Key design decisions:
- * - Session persists query across turns (preserves prompt cache)
- * - Turn handles state machine for individual messages
- * - Queue processing delegates to processQueue()
+ * Terminal results mark their generation handled before awaiting finalizers,
+ * so close cannot time out while completion hooks run. Every other terminal
+ * path clears the query and source before any signal can trigger reuse.
  *
- * ## Query drain/ownership contract
- *
- * Every exit path of a query's consumption loop must satisfy:
- * 1. **Drain signalling:** `markHandled` on the drain BEFORE awaiting turn
- *    finalizers, so slow `onTurnComplete` hooks cannot race the 250 ms
- *    drain timeout in `close()`. The mark is gated on the turn actually
- *    accepting the result (i.e., `!turn.isExpectingInterruptResult()`):
- *    an absorbed interrupt result must not satisfy the drain while the
- *    resumed message handle is still incomplete.
- * 2. **Unconditional disown:** {@link disownActiveQuery} clears
- *    `queryInstance`/`source` on ALL paths (iterator error regardless of
- *    turn state, close/abort, schema rotation) before any signal that can
- *    trigger reuse via {@link ensureQueryForResponseSchema}.
- *
- * ## Shutdown vs queue processing invariant
- *
- * Once `close()` or `abort()` begins, no new turn may start.
- * {@link processQueue} refuses to dequeue or start turns when
- * `this.closing` is `true`, and drains all remaining queued handles
- * with an error outcome so that callers awaiting
- * `waitForCompletion()` resolve deterministically instead of hanging.
- *
- * A dequeued handle that has entered {@link startNewTurn} either
- * starts its turn before `close()` begins, or is completed with
- * the closing error at every await point where `close()` can
- * interleave (schema rotation, query creation, MCP registration).
- * This is enforced by {@link BaseConnectorSession.completeHandleIfClosing},
- * which rechecks `this.closing` after each awaited setup step and completes
- * the handle with the same error contract used by
- * {@link rejectQueuedHandles}.
- *
- * This prevents a race where the drain window in `close()` accepts a
- * terminal result, the turn transitions to `turn_finished`, and the
- * connector's `turn_finished` listener calls `processQueue()` to start
- * a queued follow-up — which would create a new SDK query after the
- * caller has already closed the session.
+ * Once close begins, setup rechecks the shared closing state after each await.
+ * A dequeued handle therefore either starts before shutdown or completes with
+ * the same interruption contract as handles that remain queued.
  */
 export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionConfig> {
   private queryInstance?: Query;
@@ -244,18 +210,34 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /**
    * Detach the active query from session routing before async teardown awaits.
    * Part of the drain/ownership contract: MUST be called on every exit path.
+   * @param retirementError - Terminal error exposed to unconfirmed session-ID waiters.
    * @returns Query instance that was active before detaching, when present.
    */
-  private disownActiveQuery(): Query | undefined {
+  private disownActiveQuery(retirementError?: Error): Query | undefined {
     const activeQuery = this.queryInstance;
-    if (activeQuery) {
+    if (activeQuery || this.source) {
       this.queryGeneration += 1;
+      if (!this.confirmedSessionId) {
+        this.rejectDeferredSessionId(
+          retirementError ?? new Error('Claude query retired before session ID was confirmed'),
+        );
+      }
     }
     this.source?.complete();
     this.source = undefined;
     this.queryInstance = undefined;
     this.consumptionStarted = false;
     return activeQuery;
+  }
+
+  /**
+   * Reject a session-ID deferred even when the public waiter attaches later.
+   * @param error - Terminal cause for session-ID waiters.
+   * @param deferredSessionId - Deferred owned by the retiring generation.
+   */
+  private rejectDeferredSessionId(error: Error, deferredSessionId = this.deferredSessionId): void {
+    void deferredSessionId.getPromise().catch(() => undefined);
+    deferredSessionId.reject(error);
   }
 
   /**
@@ -268,35 +250,43 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       throw new Error('createToolApprovalHandler not set - initialize() must be called first');
     }
 
-    this.source = new AsyncQuerySource<SdkSDKUserMessage>();
-
-    // Priority: predetermined (swap) > resume (recovery) > generate new
-    this.sessionId = this.config.predeterminedSessionId ?? resumeSessionId ?? crypto.randomUUID();
-    this.confirmedSessionId = false;
-    this.deferredSessionId = new DeferredPromise<string>();
-
-    // One-shot: consume fork directive on first read so a schema rotation
-    // before system.init cannot re-fork the source session.
+    const source = new AsyncQuerySource<SdkSDKUserMessage>();
+    const sessionId = this.config.predeterminedSessionId ?? resumeSessionId ?? crypto.randomUUID();
+    const deferredSessionId = new DeferredPromise<string>();
     const forkDirective = resumeSessionId === undefined ? this.config.nativeFork : undefined;
+    const awaitingForkConfirmation = forkDirective !== undefined;
+    let queryInstance: Query;
+    try {
+      const queryOptions = buildQueryOptions({
+        sessionId,
+        resumeAdapterSessionId: resumeSessionId,
+        nativeFork: forkDirective,
+        config: this.config,
+        lifecycle: this.lifecycle,
+        createToolApprovalHandler: this.createToolApprovalHandler,
+        mcpServerPort: this.mcpServerPort,
+        responseSchema,
+      });
+      queryInstance = query({ prompt: source, options: queryOptions });
+    } catch (error) {
+      const constructionError = error instanceof Error ? error : new Error(String(error));
+      source.complete();
+      if (!this.confirmedSessionId) {
+        this.sessionId = undefined;
+        this.deferredSessionId = deferredSessionId;
+        this.awaitingForkConfirmation = false;
+        this.rejectDeferredSessionId(constructionError, deferredSessionId);
+      }
+      throw constructionError;
+    }
+
+    this.source = source;
+    this.sessionId = sessionId;
+    this.confirmedSessionId = false;
+    this.deferredSessionId = deferredSessionId;
+    this.awaitingForkConfirmation = awaitingForkConfirmation;
     if (forkDirective) this.config.nativeFork = undefined;
-    this.awaitingForkConfirmation = forkDirective !== undefined;
-
-    const queryOptions = buildQueryOptions({
-      sessionId: this.sessionId,
-      resumeAdapterSessionId: resumeSessionId,
-      nativeFork: forkDirective,
-      config: this.config,
-      lifecycle: this.lifecycle,
-      createToolApprovalHandler: this.createToolApprovalHandler,
-      mcpServerPort: this.mcpServerPort,
-      responseSchema,
-    });
-
-    this.queryInstance = query({
-      prompt: this.source,
-      options: queryOptions,
-    });
-
+    this.queryInstance = queryInstance;
     const queryGeneration = ++this.queryGeneration;
     this.activeResponseSchemaKey = this.getResponseSchemaKey(responseSchema);
     this.consumptionStarted = false;
@@ -466,6 +456,11 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
             console.error('Session: error handling SDK message, skipping:', (msg as { type?: unknown }).type, error);
           }
         }
+        const eofOutcome = this.closing ? 'interrupted' : 'ended';
+        await this.handleConsumptionError(
+          new Error(`Claude query ${eofOutcome} before terminal result`),
+          queryGeneration,
+        );
       } catch (error) {
         // Iterator-level errors (transport failure, SDK crash) must complete
         // the active handle: otherwise callers wait forever for a result that
@@ -485,6 +480,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    */
   private async handleConsumptionError(error: unknown, queryGeneration: number): Promise<void> {
     if (queryGeneration !== this.queryGeneration) return;
+    const normalizedError = error instanceof Error ? error : new Error(String(error));
 
     // Force-close this generation so (a) the drain deferred resolves and
     // (b) hasHandled() returns true, preventing any late SDK result that
@@ -496,12 +492,11 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     // Disown unconditionally: whether the turn is incomplete, already
     // completed, or absent, the dead query must be detached so that the next
     // message triggers a fresh query via ensureQueryForResponseSchema.
-    this.disownActiveQuery();
+    this.disownActiveQuery(normalizedError);
 
     const turn = this.currentTurn;
     if (!turn || turn.isCompleted()) return;
 
-    const normalizedError = error instanceof Error ? error : new Error(String(error));
     const result = { outcome: 'error' as const, error: normalizedError };
     const handle = turn.getMessageHandle();
     if (handle) {
@@ -542,9 +537,13 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       // Defense-in-depth: already consumed at first read in createQuery, but
       // clear again so the invariant holds even if the read path changes.
       this.config.nativeFork = undefined;
-      // Replace the deferred so any cached promise reference resolves to the
-      // confirmed ID, not the preliminary local UUID (mirrors CLI session).
-      this.deferredSessionId = new DeferredPromise<string>();
+      // Resolve the live deferred instead of replacing it. A query rotation
+      // installs a fresh, unresolved deferred (see createQuery), and callers
+      // such as the connector's sendMessage() capture its promise before
+      // system.init arrives. Replacing the instance here would leave those
+      // captured promises pending forever — the turn then hangs until the
+      // caller's send timeout fires. Resolving an already-settled deferred is
+      // a no-op, so the eager local-ID resolve from initialize() stays benign.
       this.deferredSessionId.resolve(sdkMessage.session_id);
     }
 

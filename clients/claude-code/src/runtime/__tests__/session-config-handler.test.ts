@@ -88,11 +88,13 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
     // Native source is never modified by the session setup.
     await expect(fs.readFile(path.join(nativeConfigDir, 'settings.json'), 'utf-8')).resolves.toBe('{"theme":"dark"}');
     // A darwin lease that materialized credentials must also publish the
-    // Keychain account they were written under; the binary has no fallback.
+    // Keychain account and home directory they were written under; the binary
+    // requires both USER and HOME to resolve credentials from an isolated store.
     expect(result.env).toEqual({
       CLAUDE_CONFIG_DIR: sessionDir,
       CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
       USER: resolveKeychainAccount(),
+      HOME: homeDir,
     });
     expect(result.authMaterialized).toBe(true);
   });

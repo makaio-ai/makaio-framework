@@ -28,15 +28,7 @@ import type { OptionalResult } from '@makaio/core';
 // ---------------------------------------------------------------------------
 
 const queryHarness = vi.hoisted(() => {
-  const query = vi.fn(() => ({
-    interrupt: vi.fn(async () => undefined),
-    close: vi.fn(() => undefined),
-    setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
-    setMaxThinkingTokens: vi.fn(async () => undefined),
-    async *[Symbol.asyncIterator]() {
-      // No messages — the consumption loop simply awaits the next push.
-    },
-  }));
+  const query = vi.fn(() => createIdleQueryMock());
 
   return {
     query,
@@ -56,6 +48,7 @@ import type { ClaudeCodeConnectorBus } from '../namespace/index.js';
 import { ClaudeCodeAgent } from '../agent.js';
 import { ClaudeSdkConnector } from '../connector.js';
 import type { ClaudeAgentConfig } from '../types/index.js';
+import { createIdleQueryMock } from './idle-query-mock.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

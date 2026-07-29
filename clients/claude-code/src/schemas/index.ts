@@ -214,6 +214,10 @@ export type { EnrichedSDKMessage, SDKMessage } from './sdk-message.js';
 export { SDKRateLimitEventMessageSchema, SDKRateLimitInfoSchema } from './rate-limit-event.js';
 export type { SDKRateLimitEventMessage, SDKRateLimitInfo } from './rate-limit-event.js';
 
+// Diagnostic-only command lifecycle event
+export { SDKCommandLifecycleMessageSchema } from './command-lifecycle.js';
+export type { SDKCommandLifecycleMessage } from './command-lifecycle.js';
+
 // Claude Code status line payload schema
 export {
   ClaudeCodeStatuslineRawPayloadSchema,

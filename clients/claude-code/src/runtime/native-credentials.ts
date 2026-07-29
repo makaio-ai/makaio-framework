@@ -124,9 +124,9 @@ export function buildClaudeCodeCredentialsKeychainService(configDir?: string): s
  * Resolve the Keychain account name Claude Code uses for credential storage.
  *
  * Exported because a session lease must publish the account it wrote under.
- * The `claude` binary resolves this account from `USER` alone and has no
- * `os.userInfo()` fallback when reading an isolated credential store, so a
- * lease that materializes credentials without also publishing the account
+ * The `claude` binary resolves isolated credentials using both the `USER`
+ * account and the leased `HOME` location. Publishing the account is therefore
+ * one half of the session environment contract; omitting either selector
  * produces an entry the binary cannot find.
  * @returns OS account name used for the Keychain entry.
  */
