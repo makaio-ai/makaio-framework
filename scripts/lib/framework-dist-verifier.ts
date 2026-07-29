@@ -32,6 +32,10 @@ export interface FrameworkDistIssue {
 
 /** Result returned by {@link verifyFrameworkDist}. */
 export interface FrameworkDistResult {
+  /**
+   * Number of local exports-map targets verified on disk. Declaration
+   * targets exempted by `expectDeclarations: false` are not counted.
+   */
   readonly checkedTargets: number;
   /** Number of built `.mjs` modules scanned for self-import specifiers. */
   readonly scannedModules: number;
@@ -115,6 +119,15 @@ export const POSTGRES_DIST_LITERAL_ALLOWLIST: readonly PostgresLiteralAllowlistE
 /** Options for {@link verifyFrameworkDist}. */
 export interface VerifyFrameworkDistOptions {
   /**
+   * Whether exports-map declaration targets (`.d.ts` / `.d.mts` / `.d.cts`)
+   * must exist on disk. Defaults to true. Set to false only when verifying a
+   * runtime-only distribution built without declaration emission; exempted
+   * targets are not counted as checked, and every other check — runtime
+   * export targets, self-import and bare-external scans, Postgres bans, and
+   * migration chains — still runs in full.
+   */
+  readonly expectDeclarations?: boolean;
+  /**
    * Bundled migration chain directories (relative to the package root) that
    * must contain a `meta/_journal.json` whose entries each resolve to an
    * existing `<tag>.sql` file in the chain. Defaults to
@@ -179,9 +192,17 @@ function isLocalFileTarget(target: string): boolean {
 }
 
 /**
+ * Matches exports-map declaration targets (`.d.ts`, `.d.mts`, `.d.cts`) —
+ * the only targets a runtime-only distribution legitimately omits.
+ */
+const DECLARATION_TARGET_PATTERN = /\.d\.[cm]?ts$/;
+
+/**
  * Verifies the integrity of the `@makaio/framework` distribution:
  *
- * 1. Every local exports-map target exists on disk inside the package root.
+ * 1. Every local exports-map target exists on disk inside the package root
+ *    (declaration targets only when `expectDeclarations` is not disabled for
+ *    a runtime-only distribution).
  * 2. Every `@makaio/framework/*` self-import specifier in built `dist/` modules
  *    resolves through the exports map (built entries resolve self-imports via
  *    the consumer's installed copy, so an unexported specifier crashes the
@@ -210,13 +231,13 @@ export function verifyFrameworkDist(
   const manifest = readJson(resolve(root, 'package.json')) as FrameworkPackageManifest;
   const exportsMap = normalizePackageExports(manifest.exports);
   const issues: FrameworkDistIssue[] = [];
+  const expectDeclarations = options.expectDeclarations ?? true;
   let checkedTargets = 0;
 
   for (const [exportKey, exportValue] of Object.entries(exportsMap)) {
     for (const target of collectExportTargets(exportValue)) {
       if (!isLocalFileTarget(target)) continue;
 
-      checkedTargets += 1;
       const resolvedTarget = resolve(root, target);
 
       if (resolvedTarget !== root && !resolvedTarget.startsWith(rootPrefix)) {
@@ -228,6 +249,13 @@ export function verifyFrameworkDist(
         });
         continue;
       }
+
+      // Runtime-only distributions omit declaration files by design; the
+      // containment check above still applies, only the on-disk existence
+      // check is exempted (and the target is not counted as checked).
+      if (!expectDeclarations && DECLARATION_TARGET_PATTERN.test(target)) continue;
+
+      checkedTargets += 1;
 
       let stat: ReturnType<typeof statSync> | undefined;
       try {

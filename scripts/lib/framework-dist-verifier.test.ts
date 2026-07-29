@@ -113,6 +113,55 @@ describe('verifyFrameworkDist', () => {
     ]);
   });
 
+  it('passes a runtime-only dist without declaration files when declarations are not expected', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: {
+        './core': {
+          types: './dist/core/index.d.mts',
+          default: './dist/core/index.mjs',
+        },
+      },
+    });
+    writeBuiltFile(join(root, 'dist/core/index.mjs'));
+
+    const result = verifyFrameworkDist(root, { expectDeclarations: false, migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+    // Only the runtime target counts as checked; the exempted declaration
+    // target does not.
+    expect(result.checkedTargets).toBe(1);
+    expect(result.scannedModules).toBe(1);
+  });
+
+  it('still reports missing runtime targets and escaping declaration targets without expected declarations', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: {
+        './core': {
+          types: '../outside/index.d.mts',
+          default: './dist/core/index.mjs',
+        },
+      },
+    });
+
+    const result = verifyFrameworkDist(root, { expectDeclarations: false, migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: './core',
+        kind: 'export-target-outside-root',
+        target: '../outside/index.d.mts',
+      }),
+      expect.objectContaining({
+        exportKey: './core',
+        kind: 'missing-export-target',
+        target: './dist/core/index.mjs',
+      }),
+    ]);
+  });
+
   it('rethrows non-missing stat failures while checking export targets', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), {
