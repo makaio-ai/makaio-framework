@@ -346,6 +346,26 @@ describe('ArtifactViewAffordanceDeclarationSchema', () => {
     });
   });
 
+  it('accepts entry with hostRelation (declaration policy)', () => {
+    const result = ArtifactViewAffordanceDeclarationSchema.safeParse({
+      kind: 'entry',
+      via: 'workstream-dashboard',
+      hostRelation: 'belongs-to',
+    });
+    expect(result.success).toBe(true);
+    if (result.success && result.data.kind === 'entry') {
+      expect(result.data.hostRelation).toBe('belongs-to');
+      expect(result.data.via).toBe('workstream-dashboard');
+    }
+  });
+
+  it('hostRelation without via or collection still fails the exactly-one-target refine', () => {
+    rejected(ArtifactViewAffordanceDeclarationSchema, {
+      kind: 'entry',
+      hostRelation: 'belongs-to',
+    });
+  });
+
   it('multiple entry declarations are legal', () => {
     // An artifact kind may declare multiple entry affordances
     const entries = [
@@ -427,6 +447,18 @@ describe('ArtifactViewAffordanceRequestSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect((result.data as Record<string, unknown>).title).toBeUndefined();
+    }
+  });
+
+  it('entry request does NOT carry hostRelation (declaration-only)', () => {
+    const result = ArtifactViewAffordanceRequestSchema.safeParse({
+      kind: 'entry',
+      via: 'dashboard',
+      hostRelation: 'belongs-to',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as Record<string, unknown>).hostRelation).toBeUndefined();
     }
   });
 
