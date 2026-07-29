@@ -64,6 +64,12 @@ export interface FrameworkDistBuildStamp {
   readonly fingerprint: string;
   /** ISO timestamp for diagnostics only. Freshness is based on fingerprint. */
   readonly builtAt: string;
+  /**
+   * Whether the dist ships type declarations (`.d.mts`). Runtime-only builds
+   * (declaration emission skipped) record false so the dist never satisfies
+   * a full-distribution freshness check.
+   */
+  readonly declarations: boolean;
 }
 
 /** Options for checking framework dist freshness. */
@@ -116,17 +122,29 @@ export function computeFrameworkDistFingerprint(workspaceRoot = WORKSPACE_ROOT):
   return hash.digest('hex');
 }
 
+/** Options for writing the framework dist build stamp. */
+export interface FrameworkDistBuildStampOptions extends FrameworkDistFreshnessOptions {
+  /**
+   * Whether the assembled dist includes type declarations. Defaults to true;
+   * runtime-only builds must pass false so the stamped dist is never
+   * mistaken for a full distribution.
+   */
+  readonly declarations?: boolean;
+}
+
 /**
  * Write a fresh framework dist stamp into the given dist directory.
- * @param options - Workspace and dist paths used for stamp generation.
+ * @param options - Workspace and dist paths used for stamp generation, plus
+ * whether the dist ships type declarations.
  * @returns Stamp object written to disk.
  */
-export function writeFrameworkDistBuildStamp(options: FrameworkDistFreshnessOptions = {}): FrameworkDistBuildStamp {
+export function writeFrameworkDistBuildStamp(options: FrameworkDistBuildStampOptions = {}): FrameworkDistBuildStamp {
   const distDir = options.distDir ?? DIST_DIR;
   const stamp: FrameworkDistBuildStamp = {
     version: STAMP_VERSION,
     fingerprint: computeFrameworkDistFingerprint(options.workspaceRoot ?? WORKSPACE_ROOT),
     builtAt: new Date().toISOString(),
+    declarations: options.declarations ?? true,
   };
 
   mkdirSync(distDir, { recursive: true });
@@ -161,6 +179,13 @@ export function isFrameworkDistFresh(options: FrameworkDistFreshnessOptions = {}
     return false;
   }
 
+  // A runtime-only dist (declarations skipped at build time) is incomplete
+  // by design and must never pass as a fresh full distribution, even when
+  // its fingerprint matches the current inputs.
+  if (!stamp.declarations) {
+    return false;
+  }
+
   return stamp.fingerprint === computeFrameworkDistFingerprint(workspaceRoot);
 }
 
@@ -182,6 +207,8 @@ function readFrameworkDistBuildStamp(distDir: string): FrameworkDistBuildStamp |
       version: STAMP_VERSION,
       fingerprint: parsed.fingerprint,
       builtAt: typeof parsed.builtAt === 'string' ? parsed.builtAt : '',
+      // Stamps written before the field existed were always full builds.
+      declarations: parsed.declarations !== false,
     };
   } catch (error) {
     if (isNodeNotFoundError(error) || error instanceof SyntaxError) {

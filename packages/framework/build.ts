@@ -5,6 +5,8 @@
  * directly into `./dist/` matching the package `exports` layout.
  * Set `MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT` to assemble an isolated package copy
  * for concurrent consumers without mutating this package's normal output.
+ * Set `MAKAIO_FRAMEWORK_BUILD_SKIP_DTS` for a faster runtime-only build
+ * without type declarations.
  *
  * Usage:
  *   tsx build.ts                  (from packages/framework/)
@@ -49,6 +51,20 @@ const DIST = join(OUTPUT_PACKAGE_DIR, 'dist');
 
 /** Runtime-only distribution — `dist/` minus type declarations (`.d.mts`). */
 const LIB = join(OUTPUT_PACKAGE_DIR, 'lib');
+
+/**
+ * Skip type-declaration emission (`.d.mts`) across all build stages.
+ *
+ * Set `MAKAIO_FRAMEWORK_BUILD_SKIP_DTS=1` (or `true`) when the consumer only
+ * executes the built `.mjs` output and never type-checks against the
+ * distribution — e.g. smoke tests that boot the bundled runtime. Declaration
+ * generation dominates cold build time, so skipping it keeps such builds
+ * fast. The resulting dist is verified without declaration targets, and its
+ * build stamp records it as runtime-only so a generic dist freshness check
+ * never mistakes it for a full distribution.
+ */
+const SKIP_DTS =
+  process.env['MAKAIO_FRAMEWORK_BUILD_SKIP_DTS'] === '1' || process.env['MAKAIO_FRAMEWORK_BUILD_SKIP_DTS'] === 'true';
 
 const BUS_PACKAGES = new Set(['@makaio/bus-core']);
 const REACT_PACKAGES = new Set(['@makaio/ui-hooks', '@makaio/ui-components', '@makaio/ui-views']);
@@ -155,6 +171,13 @@ const configs: Array<UserConfig & { name: string }> = [
   },
 ];
 
+/**
+ * Stage configs with the runtime-only override applied. `dts: false` must
+ * replace every stage's declaration setting — including the bus stage's
+ * `dts: { eager: true }` — so no stage spawns a declaration compiler.
+ */
+const stageConfigs = SKIP_DTS ? configs.map((config) => ({ ...config, dts: false })) : configs;
+
 // ---------------------------------------------------------------------------
 // Build execution
 // ---------------------------------------------------------------------------
@@ -177,7 +200,7 @@ try {
     rmSync(DIST, { recursive: true });
   }
 
-  for (const config of configs) {
+  for (const config of stageConfigs) {
     const { name, ...tsdownConfig } = config;
     const stageDir = join(stageRoot, name);
     const entryCount = Object.keys(tsdownConfig.entry as Record<string, string>).length;
@@ -238,7 +261,9 @@ writeFileSync(
   'utf8',
 );
 
-writeFrameworkDistBuildStamp({ workspaceRoot: FRAMEWORK_ROOT, distDir: DIST });
+// A runtime-only dist records `declarations: false` so a generic freshness
+// check never serves it where a full distribution is expected.
+writeFrameworkDistBuildStamp({ workspaceRoot: FRAMEWORK_ROOT, distDir: DIST, declarations: !SKIP_DTS });
 
 // ---------------------------------------------------------------------------
 // Verify the assembled distribution
@@ -248,8 +273,10 @@ writeFrameworkDistBuildStamp({ workspaceRoot: FRAMEWORK_ROOT, distDir: DIST });
 // self-imports a subpath the exports map does not expose, a built module
 // imports a bare external the manifest does not declare, or a bundled
 // migration chain is missing or inconsistent. These defects only surface at
-// a consumer's boot otherwise.
-const verification = verifyFrameworkDist(OUTPUT_PACKAGE_DIR);
+// a consumer's boot otherwise. A runtime-only build skips declaration
+// emission, so only exports-map declaration targets are exempted — every
+// runtime check still runs in full.
+const verification = verifyFrameworkDist(OUTPUT_PACKAGE_DIR, { expectDeclarations: !SKIP_DTS });
 if (!verification.ok) {
   console.error('[build] framework distribution verification failed:');
   for (const issue of verification.issues) {
@@ -262,4 +289,6 @@ console.info(
 );
 
 const totalElapsed = ((performance.now() - totalStart) / 1000).toFixed(1);
-console.info(`\n[build] Framework distribution built in ${totalElapsed}s`);
+console.info(
+  `\n[build] Framework distribution built in ${totalElapsed}s${SKIP_DTS ? ' (runtime-only, declarations skipped)' : ''}`,
+);

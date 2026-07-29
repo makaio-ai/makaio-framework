@@ -91,6 +91,25 @@ describe('framework dist freshness', () => {
     });
   });
 
+  it('rejects a runtime-only stamped dist even when the fingerprint matches', () => {
+    withTempWorkspace((workspaceRoot) => {
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
+      mkdirSync(join(distDir, 'contracts'), { recursive: true });
+      writeFileSync(join(distDir, 'contracts/index.mjs'), 'export const FrameworkContractNamespaces = [];\n');
+
+      // A build with skipped declaration emission stamps itself runtime-only.
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir, declarations: false });
+
+      expect(
+        isFrameworkDistFresh({
+          workspaceRoot,
+          distDir,
+          requiredFiles: ['contracts/index.mjs'],
+        }),
+      ).toBe(false);
+    });
+  });
+
   it('rejects stamped dist output without git metadata after source input changes', () => {
     withTempWorkspace((workspaceRoot) => {
       const distDir = join(workspaceRoot, 'packages/framework/dist');

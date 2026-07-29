@@ -51,7 +51,8 @@ const REQUIRED_FRAMEWORK_FILES = ['contracts/index.mjs', 'utils/workspace-packag
  * speed: a warm developer machine assembles the framework in well under a
  * minute, while a cold, contended CI runner has been observed an order of
  * magnitude slower. Sizing them for hang detection keeps machine speed out of
- * the pass/fail decision.
+ * the pass/fail decision. The framework step builds runtime-only (declaration
+ * emission skipped), so its budget is generous even on a cold runner.
  */
 const FRAMEWORK_BUILD_BUDGET_MS = 600_000;
 const LAUNCHER_BUILD_BUDGET_MS = 120_000;
@@ -80,10 +81,17 @@ const TEST_ENV: NodeJS.ProcessEnv = {
 describe('CLI launcher smoke test', () => {
   beforeAll(() => {
     try {
+      // The launcher only executes runtime `.mjs` output — nothing here
+      // type-checks against the fixture — so declaration emission, the
+      // dominant cold-build cost, is skipped for the framework build.
       runBuildStep('framework runtime package', 'yarn', ['run', '-T', 'build:framework'], {
         budgetMs: FRAMEWORK_BUILD_BUDGET_MS,
         cwd: WORKSPACE_ROOT,
-        env: { ...process.env, MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT: FRAMEWORK_PACKAGE_ROOT },
+        env: {
+          ...process.env,
+          MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT: FRAMEWORK_PACKAGE_ROOT,
+          MAKAIO_FRAMEWORK_BUILD_SKIP_DTS: '1',
+        },
       });
       runBuildStep('electrobun launcher bundle', 'bun', ['run', 'build.ts'], {
         budgetMs: LAUNCHER_BUILD_BUDGET_MS,
