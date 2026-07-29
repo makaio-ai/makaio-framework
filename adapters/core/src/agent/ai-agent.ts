@@ -161,6 +161,15 @@ export abstract class AIAgent<
     this.availableModels = config.availableModels;
     const setLastKnownAdapterSessionId = (adapterSessionId: string | undefined) => {
       this.lastKnownAdapterSessionId = adapterSessionId;
+      // A pending resume target, once set, tracks the live provider-confirmed
+      // continuation. The generation that consumed (or suppressed) the target
+      // confirms its own session here; re-pointing the config keeps later
+      // swaps without an explicit resume key on the current thread instead of
+      // re-arming the stale start-time target. Agents born without a target
+      // keep their fresh-swap semantics (the guard never introduces one).
+      if (adapterSessionId !== undefined && this.config.resumeAdapterSessionId !== undefined) {
+        this.config.resumeAdapterSessionId = adapterSessionId;
+      }
     };
     this.payloadEmitter = createAgentPayloadEmitter({
       globalBus: this.globalBus,

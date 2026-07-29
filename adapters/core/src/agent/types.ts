@@ -409,6 +409,22 @@ export interface ConnectorSendMessageOptions extends AgentSendMessageOptions {
    * is not surfaced as a new user message.
    */
   internalRetry?: boolean;
+  /**
+   * Caller decision on provider-native session resume for this dispatch.
+   *
+   * The turn pipeline sets this from the agent's native-resume decision. When
+   * `false`, the connector MUST NOT arm its pending start-time resume target
+   * (`resumeAdapterSessionId`) for this dispatch: the caller has replaced the
+   * provider thread with injected `messageHistory`, so natively resuming would
+   * double the conversation context. Honoring connectors discard the
+   * unconsumed resume target and mint a fresh provider session instead.
+   *
+   * When `true` or absent, the connector applies its default resume behavior.
+   * The flag never affects a connector's continuity of its own
+   * provider-confirmed session (intra-generation multi-turn), and it does not
+   * cancel an approved `nativeFork` directive — fork is a separate contract.
+   */
+  useNativeResume?: boolean;
 }
 
 /**

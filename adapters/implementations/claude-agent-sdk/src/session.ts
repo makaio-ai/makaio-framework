@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 740 }] */
+/* eslint max-lines: ["error", { "max": 780 }] */
 import type { Query, SDKUserMessage as SdkSDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage, SDKUserMessage } from '@makaio/client-claude-code';
@@ -327,6 +327,46 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
+   * Discard the unconsumed start-time resume target when the caller decided
+   * against native resume for this dispatch (`useNativeResume === false`).
+   *
+   * One-shot, mirroring the nativeFork consumption invariant: the caller has
+   * replaced the provider thread with injected history, so a later query
+   * creation must not fall back to the stale target either. Only the pending
+   * start-time target is affected — once `system.init` confirms this
+   * generation's own session, rotations resume it regardless of the flag.
+   * @param handle - Message handle carrying the caller's native-resume decision
+   * @returns True when a resume-armed query is live and must be rotated fresh
+   */
+  private suppressStartResumeIfRequested(handle: MessageHandle): boolean {
+    if (handle.useNativeResume !== false) return false;
+    if (this.confirmedSessionId || this.config.resumeAdapterSessionId === undefined) return false;
+    const discarded = this.config.resumeAdapterSessionId;
+    this.config.resumeAdapterSessionId = undefined;
+    if (this.config.predeterminedSessionId === discarded) {
+      // A resumed generation's identity is the session it resumes. When the
+      // resume is suppressed, the fresh query must not pin that identity —
+      // it collides with the provider's durable session store ("Session ID
+      // already in use").
+      this.config.predeterminedSessionId = undefined;
+    }
+    return this.queryInstance !== undefined;
+  }
+
+  /**
+   * Replace the active query with a fresh one (no provider resume), following
+   * the drain/ownership contract shared with {@link ensureQueryForResponseSchema}.
+   * @param responseSchema - Optional per-turn response schema descriptor for the new query.
+   */
+  private async rotateToFreshQuery(responseSchema?: ResponseSchemaDescriptor): Promise<void> {
+    const oldQuery = this.disownActiveQuery();
+    oldQuery?.close();
+    this.unregisterMcpContext();
+    await this.createQuery(undefined, responseSchema);
+    await this.refreshMcpContext();
+  }
+
+  /**
    * Process messages from the queue (new turn or immediate injection).
    * Serializes via a re-run flag so concurrent calls are not silently dropped.
    *
@@ -375,7 +415,16 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     const schemaKey = this.getResponseSchemaKey(handle.responseSchema);
     const pausedTurnNeedsSchemaRotation = this.currentTurn?.isPaused() && this.activeResponseSchemaKey !== schemaKey;
     if (!this.currentTurn || this.currentTurn.isCompleted() || pausedTurnNeedsSchemaRotation) {
-      await this.ensureQueryForResponseSchema(handle.responseSchema);
+      if (this.suppressStartResumeIfRequested(handle)) {
+        // The active query was armed with the start-time resume target before
+        // the caller's per-dispatch decision could be observed (initialize()
+        // creates the query eagerly). Rotate to a fresh query so the provider
+        // does not natively resume a thread the caller replaced with injected
+        // history.
+        await this.rotateToFreshQuery(handle.responseSchema);
+      } else {
+        await this.ensureQueryForResponseSchema(handle.responseSchema);
+      }
       // Recheck: close() may have started during schema rotation / query
       // creation / MCP registration. The handle is dequeued and unreachable
       // by rejectQueuedHandles — complete it here instead of proceeding.
