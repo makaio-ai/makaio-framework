@@ -134,6 +134,30 @@ describe('boot model registry sources', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('resolves the framework-owned workspace seed before the bundled fallback', async () => {
+    const workspaceRoot = path.join(tmpDir, 'workspace');
+    const frameworkRoot = path.join(workspaceRoot, 'framework');
+    const srcDir = path.join(frameworkRoot, 'runtimes', 'node', 'src');
+    const cwd = path.join(tmpDir, 'consumer');
+    await fs.promises.mkdir(srcDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(workspaceRoot, 'package.json'),
+      JSON.stringify({ private: true, workspaces: ['framework/*'] }),
+      'utf-8',
+    );
+    await fs.promises.writeFile(
+      path.join(frameworkRoot, 'package.json'),
+      JSON.stringify({ private: true, workspaces: ['runtimes/*'] }),
+      'utf-8',
+    );
+
+    expect(resolveBundledSeedPaths(srcDir, cwd)).toEqual([
+      path.resolve(cwd, 'static/model-registry.yaml'),
+      path.resolve(frameworkRoot, 'static/model-registry.yaml'),
+      path.resolve(srcDir, 'static/model-registry.yaml'),
+    ]);
+  });
 });
 
 /**

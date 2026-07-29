@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { verifyFrameworkDist } from './framework-dist-verifier.js';
+import { BUNDLED_RUNTIME_ASSETS, verifyFrameworkDist } from './framework-dist-verifier.js';
 
 /**
  * Writes a JSON file.
@@ -59,6 +59,7 @@ describe('verifyFrameworkDist', () => {
   function makeTempDir(): string {
     const dir = mkdtempSync(join(tmpdir(), 'framework-dist-'));
     tempDirs.push(dir);
+    writeBuiltFile(join(dir, BUNDLED_RUNTIME_ASSETS[0]));
     return dir;
   }
 
@@ -469,6 +470,39 @@ describe('verifyFrameworkDist', () => {
     const result = verifyFrameworkDist(root, { migrationChains: [] });
 
     expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('reports a missing required runtime asset', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    rmSync(join(root, BUNDLED_RUNTIME_ASSETS[0]));
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: BUNDLED_RUNTIME_ASSETS[0],
+        kind: 'missing-runtime-asset',
+        target: BUNDLED_RUNTIME_ASSETS[0],
+      }),
+    ]);
+  });
+
+  it('reports a required runtime asset that is not a regular file', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    rmSync(join(root, BUNDLED_RUNTIME_ASSETS[0]));
+    mkdirSync(join(root, BUNDLED_RUNTIME_ASSETS[0]), { recursive: true });
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: BUNDLED_RUNTIME_ASSETS[0],
+        kind: 'runtime-asset-not-file',
+        target: BUNDLED_RUNTIME_ASSETS[0],
+      }),
+    ]);
   });
 
   it('verifies the default bundled migration chain when no override is given', () => {

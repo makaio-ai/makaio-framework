@@ -231,6 +231,10 @@ try {
 // `StorageEngine.migrations.resolveSourceChainDir`.
 copyRuntimeMigrationChain(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle'), join(DIST, 'drizzle'));
 
+const runtimeNodeStaticDir = join(DIST, 'runtime-node', 'static');
+mkdirSync(runtimeNodeStaticDir, { recursive: true });
+copyFileSync(join(FRAMEWORK_ROOT, 'static', 'model-registry.yaml'), join(runtimeNodeStaticDir, 'model-registry.yaml'));
+
 // ---------------------------------------------------------------------------
 // Assemble runtime-only lib/ (dist/ minus type declarations)
 // ---------------------------------------------------------------------------
@@ -272,8 +276,8 @@ writeFrameworkDistBuildStamp({ workspaceRoot: FRAMEWORK_ROOT, distDir: DIST, dec
 // Fail the build when an exports-map target is missing, a built module
 // self-imports a subpath the exports map does not expose, a built module
 // imports a bare external the manifest does not declare, or a bundled
-// migration chain is missing or inconsistent. These defects only surface at
-// a consumer's boot otherwise. A runtime-only build skips declaration
+// migration chain or required runtime asset is missing or inconsistent.
+// These defects only surface at a consumer's boot otherwise. A runtime-only build skips declaration
 // emission, so only exports-map declaration targets are exempted — every
 // runtime check still runs in full.
 const verification = verifyFrameworkDist(OUTPUT_PACKAGE_DIR, { expectDeclarations: !SKIP_DTS });
@@ -285,7 +289,7 @@ if (!verification.ok) {
   process.exit(1);
 }
 console.info(
-  `[build] distribution verified (${verification.checkedTargets} export targets, ${verification.scannedModules} modules scanned, migration chains ok)`,
+  `[build] distribution verified (${verification.checkedTargets} export targets, ${verification.scannedModules} modules scanned, runtime assets and migration chains ok)`,
 );
 
 const totalElapsed = ((performance.now() - totalStart) / 1000).toFixed(1);

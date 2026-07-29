@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import * as path from 'node:path';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 
@@ -13,8 +13,18 @@ import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
  */
 export function resolveStaticModelRegistryPath(baseDir: string): string | undefined {
   try {
-    const registryPath = path.resolve(resolveWorkspaceRoot(baseDir), 'static/model-registry.yaml');
-    return existsSync(registryPath) ? registryPath : undefined;
+    const workspaceRoot = resolveWorkspaceRoot(baseDir);
+    const registryPaths = [
+      path.resolve(workspaceRoot, 'framework/static/model-registry.yaml'),
+      path.resolve(workspaceRoot, 'static/model-registry.yaml'),
+    ];
+    return registryPaths.find((registryPath) => {
+      try {
+        return statSync(registryPath).isFile();
+      } catch {
+        return false;
+      }
+    });
   } catch {
     return undefined;
   }
