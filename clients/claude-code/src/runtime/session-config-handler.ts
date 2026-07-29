@@ -339,16 +339,22 @@ export async function handleClaudeCodeSessionConfigSetup(
       CLAUDE_SECURESTORAGE_CONFIG_DIR: sessionDir,
       // A lease that materializes credentials must also publish the environment
       // needed to read them back. Keychain entries for an isolated store are
-      // keyed by this account, and the binary resolves it from USER alone —
-      // without it, auth fails with "Not logged in" against a store that
-      // demonstrably holds valid credentials.
+      // keyed by the account and home directory; the binary requires both USER
+      // and HOME to resolve credentials from an isolated store — without either,
+      // auth fails with "Not logged in" against a store that demonstrably holds
+      // valid credentials. Verified empirically against claude CLI 2.1.219 on
+      // darwin: env -i with only CLAUDE_CODE_ENTRYPOINT=sdk-ts and USER=<user>
+      // fails to resolve credentials, while additionally passing HOME=<home>
+      // succeeds.
       //
-      // This is an identity selector, not a credential: it names the account a
-      // Keychain entry was written under and never carries secret material, so
-      // the whole map stays safe to return across the bus. Every consumer must
-      // deliver it verbatim — a consumer that re-declares which keys it accepts
-      // silently reverts this fix and lets the child fall back to ambient USER.
-      ...(platform === 'darwin' && authMaterialized ? { USER: resolveKeychainAccount() } : {}),
+      // Both are identity/location selectors, not credentials: USER names the
+      // account a Keychain entry was written under, and HOME is the directory
+      // root the binary anchors its config resolution to. Neither carries secret
+      // material, so the whole map stays safe to return across the bus. Every
+      // consumer must deliver it verbatim — a consumer that re-declares which
+      // keys it accepts silently reverts this fix and lets the child fall back
+      // to ambient USER and HOME.
+      ...(platform === 'darwin' && authMaterialized ? { USER: resolveKeychainAccount(), HOME: os.homedir() } : {}),
     },
     authMaterialized,
   };

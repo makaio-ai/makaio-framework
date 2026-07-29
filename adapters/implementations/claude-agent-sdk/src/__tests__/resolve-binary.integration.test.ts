@@ -10,21 +10,14 @@ import type { OptionalResult } from '@makaio/core';
 import { ClaudeCodeConnectorNamespace } from '../namespace/index.js';
 import { ClaudeSdkConnector } from '../connector.js';
 import type { ClaudeAgentConfig } from '../types/index.js';
+import { createIdleQueryMock } from './idle-query-mock.js';
 
 const capturedOptions: Options[] = [];
 
 const queryHarness = vi.hoisted(() => ({
   query: vi.fn((opts: { prompt: unknown; options: Options }) => {
     capturedOptions.push(opts.options);
-    return {
-      interrupt: vi.fn(async () => undefined),
-      close: vi.fn(() => undefined),
-      setMcpServers: vi.fn(async () => ({ added: [], removed: [], errors: {} })),
-      setMaxThinkingTokens: vi.fn(async () => undefined),
-      async *[Symbol.asyncIterator]() {
-        // Initialization does not consume messages.
-      },
-    };
+    return createIdleQueryMock();
   }),
 }));
 
