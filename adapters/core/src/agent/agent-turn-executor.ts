@@ -213,6 +213,7 @@ export class AgentTurnExecutor {
         turnId: payload.turnId,
         messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
         cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
+        useNativeResume,
         turnContext: buildStructuredOutputTurnContext(
           hookResult.sessionContext?.turnContext,
           payload.responseSchema,
@@ -268,6 +269,7 @@ export class AgentTurnExecutor {
         messageId: options?.messageId,
         messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
         cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
+        useNativeResume,
         turnContext: buildStructuredOutputTurnContext(
           hookResult.sessionContext?.turnContext,
           responseSchema,

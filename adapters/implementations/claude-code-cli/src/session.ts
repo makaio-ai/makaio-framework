@@ -105,14 +105,16 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
 
   /**
    * Resolve resume/session IDs for the next CLI turn.
+   * @param handle - Message handle driving the turn (carries the caller's native-resume decision)
    * @param mergedContent - Optional merged content from immediate-mode supersede
    * @returns Session identity values for turn startup
    */
-  private resolveTurnSessionIdentity(mergedContent?: string[]): TurnSessionIdentity {
+  private resolveTurnSessionIdentity(handle: MessageHandle, mergedContent?: string[]): TurnSessionIdentity {
     const isImmediateRestart = mergedContent !== undefined && mergedContent.length > 0;
     if (isImmediateRestart) {
       this.resetForImmediateRestart();
     }
+    this.suppressStartResumeIfRequested(handle);
 
     const resumeId = isImmediateRestart
       ? undefined
@@ -123,6 +125,44 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       resumeId,
       sessionIdForMcp: resumeId ?? this.sessionId!,
     };
+  }
+
+  /**
+   * Discard the unconsumed start-time resume target when the caller decided
+   * against native resume for this dispatch (`useNativeResume === false`).
+   *
+   * One-shot, mirroring the nativeFork consumption invariant: the caller has
+   * replaced the provider thread with injected history, so a later turn must
+   * not fall back to the stale target either. Only the pending start-time
+   * target is affected — once `system.init` confirms this generation's own
+   * session, multi-turn continuity resumes it regardless of the flag.
+   * @param handle - Message handle carrying the caller's native-resume decision
+   */
+  private suppressStartResumeIfRequested(handle: MessageHandle): void {
+    if (handle.useNativeResume !== false) return;
+    if (this.confirmedSessionId || this.config.resumeAdapterSessionId === undefined) return;
+    const discarded = this.config.resumeAdapterSessionId;
+    this.config.resumeAdapterSessionId = undefined;
+    if (this.sessionId === discarded) {
+      // Identity was seeded from the resume target: mint a fresh ID so the
+      // `--session-id` pin does not collide with the provider's durable
+      // session store ("Session ID already in use").
+      this.rotateSessionIdentity();
+    }
+  }
+
+  /**
+   * Mint a fresh local session identity and pre-resolve it for consumers.
+   *
+   * Drops the stale MCP routing entry first: any registration made under the
+   * previous identity (e.g. by a turn whose `system.init` never arrived) must
+   * not keep routing approvals to an ID no future turn will use.
+   */
+  private rotateSessionIdentity(): void {
+    this.unregisterMcpSession();
+    this.sessionId = globalThis.crypto.randomUUID();
+    this.deferredSessionId = new DeferredPromise<string>();
+    this.deferredSessionId.resolve(this.sessionId);
   }
 
   /**
@@ -232,12 +272,8 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * Reset session identity for immediate-mode restart after superseding a live subprocess.
    */
   private resetForImmediateRestart(): void {
-    // Drop stale MCP routing entry for the superseded subprocess/session.
-    this.unregisterMcpSession();
     this.confirmedSessionId = false;
-    this.sessionId = globalThis.crypto.randomUUID();
-    this.deferredSessionId = new DeferredPromise<string>();
-    this.deferredSessionId.resolve(this.sessionId);
+    this.rotateSessionIdentity();
   }
 
   /**
@@ -320,7 +356,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * @returns `false` when the turn was skipped due to shutdown; `void` otherwise
    */
   public async startTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
-    const { resumeId, sessionIdForMcp } = this.resolveTurnSessionIdentity(mergedContent);
+    const { resumeId, sessionIdForMcp } = this.resolveTurnSessionIdentity(handle, mergedContent);
     // Fork directive only applies on the initial CLI invocation: rotations resume the fork child
     // via the confirmed session ID rather than re-forking the source session.
     const nativeFork = resumeId === undefined ? this.config.nativeFork : undefined;

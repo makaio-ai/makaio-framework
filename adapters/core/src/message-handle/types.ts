@@ -90,6 +90,13 @@ export interface MessageHandleOptions {
    * handle pair by this value.
    */
   turnId?: string;
+  /**
+   * Caller decision on provider-native session resume for this dispatch.
+   * When `false`, the session layer must not arm its pending start-time
+   * resume target for the turn this handle drives (see
+   * `ConnectorSendMessageOptions.useNativeResume` for the full contract).
+   */
+  useNativeResume?: boolean;
 }
 
 /**

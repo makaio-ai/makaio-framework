@@ -264,6 +264,26 @@ describe('AIAgent.swapConnector', () => {
     expect(observedResumeIds).toEqual(['start-time-resume', 'resumed-session', 'test-session-id']);
   });
 
+  it('re-points a pending resume target at the provider-confirmed session of a keyless swap', async () => {
+    const observedResumeIds: Array<string | undefined> = [];
+    agent = createSwapTestAgent((config) => new MockConnector(config.model, config.cwd), {
+      resumeAdapterSessionId: 'start-time-resume',
+      onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
+    });
+    await agent.init();
+
+    // A mutation swap without a resume key consumes the still-pending
+    // start-time target; its replacement confirms 'test-session-id'. The
+    // pending target must track that confirmed continuation so the next
+    // keyless swap continues the live thread — not the stale target the
+    // provider has already rotated away from (or that a suppressed turn
+    // abandoned).
+    await agent.testSwapConnector({ model: 'test-model-2' });
+    await agent.testSwapConnector({ cwd: '/test/cwd2' });
+
+    expect(observedResumeIds).toEqual(['start-time-resume', 'start-time-resume', 'test-session-id']);
+  });
+
   it('rejects when connector is processing', async () => {
     const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
       const connector = new MockConnector(config.model, config.cwd);

@@ -81,6 +81,58 @@ describe('AgentTurnExecutor', () => {
     );
   });
 
+  it.each([
+    { decision: false, description: 'forwards useNativeResume: false so connectors suppress native resume' },
+    { decision: true, description: 'forwards useNativeResume: true so connectors keep default resume behavior' },
+  ])('$description', async ({ decision }) => {
+    const sendMessage = vi.fn(
+      async () =>
+        new MessageHandle(
+          'm-resume',
+          {
+            role: 'user',
+            blocks: [{ type: 'text', content: 'hello' }],
+          },
+          'enqueue',
+        ),
+    );
+    const start = vi.fn(async () => ({
+      adapterSessionId: 'adapter-session-1',
+      agentId: 'agent-1',
+      messageHandle: new MessageHandle(
+        'm-resume-start',
+        { role: 'user', blocks: [{ type: 'text', content: 'hello' }] },
+        'enqueue',
+      ),
+    }));
+    const connector: Partial<AIAgentConnector> = {
+      cwd: '/tmp',
+      sendMessage: sendMessage as AIAgentConnector['sendMessage'],
+      start: start as AIAgentConnector['start'],
+    };
+    const executor = new AgentTurnExecutor({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      globalBus: {} as IMakaioBus,
+      getConnector: () => connector as AIAgentConnector,
+      shouldUseNativeResume: () => decision,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
+      onMessageHandle: async () => {},
+    });
+
+    await executor.executeSendMessage({
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      message: 'hello',
+      messageId: 'm-resume',
+    });
+    expect(sendMessage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ useNativeResume: decision }));
+
+    await executor.executeStart('hello', { messageId: 'm-resume-start' }, undefined);
+    expect(start).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ useNativeResume: decision }));
+  });
+
   it('injects structuredOutput turnContext when adapter lacks native capability', async () => {
     const sendMessage = vi.fn(
       async () =>
