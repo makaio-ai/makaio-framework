@@ -269,7 +269,11 @@ export async function serve(options: ServeOptions): Promise<void> {
       try {
         await runtime.shutdown();
       } catch (err) {
-        console.error('[serve] Error during runtime shutdown:', err);
+        // The exit status is the only channel a supervisor reads, so a runtime
+        // that could not release everything it started must not leave behind a
+        // status that says the drain completed.
+        process.exitCode = 1;
+        console.error('[serve] Runtime shutdown did not complete cleanly:', err);
       } finally {
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       }

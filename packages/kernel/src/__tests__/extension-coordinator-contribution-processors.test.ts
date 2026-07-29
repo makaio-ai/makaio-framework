@@ -253,15 +253,13 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     expect(callOrder).toEqual(['second', 'first']);
   });
 
-  it('treats stopped processor errors as best-effort during disable cleanup', async () => {
+  it('reports stopped processor errors after completing disable cleanup', async () => {
     const bus = createBusInstance();
     const events: string[] = [];
     const coordinator = new ExtensionCoordinator(bus, {
       db: {},
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
     coordinator.registerContributionProcessor({
       processActivated: async () => undefined,
       processStopped: async () => {
@@ -284,20 +282,13 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     ]);
     await coordinator.startAll();
 
-    try {
-      const disabled = await coordinator.handleSetEnabled('feature', false);
-      const info = coordinator.list().find((entry) => entry.name === 'feature');
+    const disabled = await coordinator.handleSetEnabled('feature', false);
+    const info = coordinator.list().find((entry) => entry.name === 'feature');
 
-      expect(disabled).toBe(true);
-      expect(info?.state).toBe('stopped');
-      expect(events).toEqual(['processor-failed', 'service-destroyed', 'storage-cleaned']);
-      expect(consoleError).toHaveBeenCalledWith(
-        '[ExtensionCoordinator] Contribution processor error (stopped) for "feature":',
-        expect.any(Error),
-      );
-    } finally {
-      consoleError.mockRestore();
-    }
+    expect(disabled).toBe(false);
+    expect(info?.state).toBe('stopped');
+    expect(info?.error).toContain('stopped processor failed');
+    expect(events).toEqual(['processor-failed', 'service-destroyed', 'storage-cleaned']);
   });
 
   it('transitions active entries to stopped during shutdown and does not stop contributions twice', async () => {
@@ -338,6 +329,76 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     expect(info?.state).toBe('stopped');
     expect(stopped).toHaveBeenCalledTimes(1);
     expect(events).toEqual(['processor-stopped', 'service-destroyed', 'storage-cleaned']);
+  });
+
+  it('reports stopped processor errors after completing shutdown cleanup', async () => {
+    const bus = createBusInstance();
+    const events: string[] = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      db: {},
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.registerContributionProcessor({
+      processActivated: async () => undefined,
+      processStopped: async () => {
+        events.push('processor-failed');
+        throw new Error('shutdown processor failed');
+      },
+    });
+    coordinator.load([
+      pkg('feature', {
+        create: (ctx) => new TrackingService(ctx.bus, events),
+        storage: {
+          registerHandlers: () => () => {
+            events.push('storage-cleaned');
+          },
+        },
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const rejection = await coordinator.shutdown().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    const info = coordinator.list().find((entry) => entry.name === 'feature');
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: 'shutdown processor failed' }),
+    ]);
+    expect(info?.state).toBe('stopped');
+    expect(events).toEqual(['processor-failed', 'service-destroyed', 'storage-cleaned']);
+  });
+
+  it('reports RPC cleanup errors after completing extension shutdown', async () => {
+    const bus = createBusInstance();
+    const events: string[] = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      pkg('feature', {
+        create: () => ({
+          destroy: () => {
+            events.push('service-destroyed');
+          },
+        }),
+      }),
+    ]);
+    await coordinator.startAll();
+    const rpcCleanups = Reflect.get(coordinator, 'rpcCleanups') as Array<() => void>;
+    rpcCleanups.push(() => {
+      events.push('rpc-cleanup-failed');
+      throw new Error('RPC cleanup failed');
+    });
+
+    const rejection = await coordinator.shutdown().catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect((rejection as AggregateError).errors).toEqual([expect.objectContaining({ message: 'RPC cleanup failed' })]);
+    expect(events).toEqual(['rpc-cleanup-failed', 'service-destroyed']);
   });
 
   it('removed processor is not called after cleanup function is invoked', async () => {

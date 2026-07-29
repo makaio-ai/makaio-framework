@@ -53,6 +53,7 @@ import { createAutoLaunchController } from './auto-launch-controller.js';
 import { registerBusHandlers } from './bus-handlers.js';
 import { openInitialWindows } from './initial-windows.js';
 import { createElectrobunRestartHandler } from './restart-handler.js';
+import { shutdownElectrobun } from './shutdown-cleanup.js';
 import {
   buildDesktopBaseRuntimeOptions,
   createElectrobunBootContext,
@@ -117,54 +118,34 @@ let viteClose: (() => Promise<void>) | null = null;
  * Tear down bus handlers, runtime, tray, and Vite dev server.
  *
  * Centralises the cleanup pattern used by the graceful shutdown handlers so
- * they stay in sync. Safe to call multiple times — idempotent after first call.
+ * they stay in sync.
  * @param destroyTray - Tray teardown callback invoked during shutdown.
  */
 async function shutdownGracefully(destroyTray: (() => void) | null): Promise<void> {
-  if (windowManager) {
-    try {
-      await saveWindowSession(MakaioBus, windowManager, WINDOW_SESSION_SCOPE);
-    } catch (err: unknown) {
-      console.warn('[electrobun] Failed to save window session:', err);
-    }
-    try {
-      // Native window teardown is best-effort after the session is saved; a
-      // close failure must not skip runtime, bus, tray, or Vite cleanup.
-      windowManager.closeAllWindows();
-    } catch (err: unknown) {
-      console.warn('[electrobun] Failed to close windows during shutdown:', err);
-    }
-  }
+  const manager = windowManager;
+  const closeViteServer = viteClose;
+  await shutdownElectrobun({
+    saveWindowSession: manager ? () => saveWindowSession(MakaioBus, manager, WINDOW_SESSION_SCOPE) : null,
+    // Native window teardown is best-effort after the session is saved.
+    closeWindows: manager ? () => manager.closeAllWindows() : null,
+    shutdownRuntime: async () => (await bootPromise)?.shutdown(),
+    busHandlerCleanups,
+    destroyTray,
+    closeVite: closeViteServer
+      ? async () => {
+          const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
+          await Promise.race([closeViteServer(), timeout]);
+        }
+      : null,
+  });
+}
 
-  try {
-    const runtime = await bootPromise;
-    if (runtime) await runtime.shutdown();
-  } catch (err: unknown) {
-    console.error('[electrobun] Error during runtime shutdown:', err);
-  }
-
-  // Defensive: individual cleanup failures must not prevent subsequent teardown.
-  for (const cleanup of busHandlerCleanups) {
-    try {
-      cleanup();
-    } catch (cleanupErr: unknown) {
-      console.warn('[electrobun] Bus handler cleanup error:', cleanupErr);
-    }
-  }
-
-  try {
-    destroyTray?.();
-  } catch (trayErr: unknown) {
-    console.warn('[electrobun] Tray teardown error:', trayErr);
-  }
-  try {
-    if (viteClose) {
-      const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
-      await Promise.race([viteClose(), timeout]);
-    }
-  } catch (viteErr: unknown) {
-    console.warn('[electrobun] Vite close error:', viteErr);
-  }
+/**
+ * Report a startup-path cleanup failure before the process exits.
+ * @param error - Aggregated or individual shutdown failure.
+ */
+function logStartupCleanupFailure(error: unknown): void {
+  console.error('[electrobun] Startup cleanup did not complete cleanly:', error);
 }
 
 // ── Window creation helper ────────────────────────────────────────────────────
@@ -366,7 +347,7 @@ function openDefaultWindow(): number {
 
     const runtime = await bootPromise;
     if (!runtime) {
-      await shutdownGracefully(null);
+      await shutdownGracefully(null).catch(logStartupCleanupFailure);
       console.error('[electrobun] Boot failed — exiting.');
       process.exit(1);
     }
@@ -400,9 +381,11 @@ function openDefaultWindow(): number {
       return shutdownGracefully(destroyTray)
         .catch((err: unknown) => {
           console.error('[electrobun] Shutdown error:', err);
+          process.exitCode = 1;
         })
         .finally(() => {
-          process.exit(0);
+          // No argument: an unclean teardown already set `process.exitCode`.
+          process.exit();
         });
     };
 
@@ -539,7 +522,7 @@ function openDefaultWindow(): number {
     process.stdout.write(`MAKAIO_BUS_URL=${busUrl}\n`);
   } catch (err: unknown) {
     console.error('[electrobun] Fatal startup error:', err);
-    await shutdownGracefully(null);
+    await shutdownGracefully(null).catch(logStartupCleanupFailure);
     process.exit(1);
   }
 })();

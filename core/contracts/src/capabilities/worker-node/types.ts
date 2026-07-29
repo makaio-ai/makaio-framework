@@ -54,6 +54,119 @@ export const ProviderAllocationRefSchema = z
 export type ProviderAllocationRef = z.infer<typeof ProviderAllocationRefSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Bounded Recovery Evidence
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Maximum lengths enforced on every {@link BoundedRecoveryEvidence} field.
+ *
+ * Recovery evidence is durable and is replicated into diagnostics, so its
+ * size must be bounded at the contract boundary rather than by convention.
+ */
+export const RECOVERY_EVIDENCE_LIMITS = {
+  /** Maximum length of the producing component identifier. */
+  source: 128,
+  /** Maximum length of the stable provider classification code. */
+  code: 64,
+  /** Maximum length of the human-readable summary. */
+  summary: 512,
+  /**
+   * Maximum length of the observation timestamp.
+   *
+   * ISO 8601 permits an unbounded fractional-second component, so the
+   * timestamp needs an explicit length bound of its own. This limit accepts
+   * every realistic encoding — millisecond `Z` form, numeric offsets, and
+   * nanosecond precision — while keeping the field bounded.
+   */
+  observedAt: 64,
+} as const;
+
+/**
+ * Zod schema for bounded, durable, non-secret recovery evidence.
+ *
+ * Evidence explains why a provider reached a definite conclusion about an
+ * allocation. It is deliberately narrow and strict: it carries a producing
+ * component, a short summary, an observation timestamp, and an optional
+ * stable classification code — nothing else.
+ *
+ * The strict object shape rejects the payloads that make durable evidence
+ * unsafe or unbounded: stack traces, raw provider responses, credentials,
+ * and nested error collections. Callers that hold such data must reduce it
+ * to a summary before it can cross this boundary.
+ */
+export const BoundedRecoveryEvidenceSchema = z
+  .object({
+    /** Identifier of the component that observed the evidence (e.g. a provider ID). */
+    source: z.string().min(1).max(RECOVERY_EVIDENCE_LIMITS.source),
+    /** Short, human-readable, non-secret explanation of what was observed. */
+    summary: z.string().min(1).max(RECOVERY_EVIDENCE_LIMITS.summary),
+    /** ISO 8601 timestamp, with `Z` or a numeric offset, of the observation. */
+    observedAt: z.iso.datetime({ offset: true }).max(RECOVERY_EVIDENCE_LIMITS.observedAt),
+    /** Optional stable, machine-readable provider classification code. */
+    code: z.string().min(1).max(RECOVERY_EVIDENCE_LIMITS.code).optional(),
+  })
+  .strict();
+
+/**
+ * Bounded, durable, non-secret evidence supporting a definite provider
+ * conclusion.
+ *
+ * Only evidence in this shape may be persisted. The shape carries no field
+ * for stacks, raw provider responses, credentials, or aggregated error
+ * members, and the strict object rejects them as extra keys. It cannot
+ * inspect the contents of `summary`: keeping that text short, non-secret,
+ * and free of stack or response fragments is the producing provider's
+ * obligation.
+ */
+export type BoundedRecoveryEvidence = z.infer<typeof BoundedRecoveryEvidenceSchema>;
+
+/**
+ * Stable classification code for evidence explaining that a lookup could not
+ * prove exhaustiveness.
+ *
+ * Providers set this as {@link BoundedRecoveryEvidence.code} when a discovery
+ * search could not be bounded, so neither absence nor cardinality may be
+ * concluded from it. It carries no claim about whether candidates matched: a
+ * search that cannot be completed proves nothing in either direction, and a
+ * match observed during one is still a lower bound rather than a count.
+ *
+ * Consumers branch on this value rather than on a copied string literal.
+ */
+export const EXHAUSTIVE_SEARCH_UNAVAILABLE_CODE = 'exhaustive-search-unavailable' as const;
+
+/**
+ * Stable classification code for evidence explaining that a bounded search
+ * matched no allocation.
+ *
+ * Distinct from {@link EXHAUSTIVE_SEARCH_UNAVAILABLE_CODE}: the search itself
+ * completed, and the empty result is the observation. Whether that observation
+ * proves absence is the provider's judgement, not this code's — a provider
+ * whose remote listing becomes visible only after the request that created an
+ * allocation is acknowledged must still report `unknown`, because an empty
+ * result and a not-yet-visible allocation are indistinguishable to it.
+ */
+export const NO_ALLOCATION_OBSERVED_CODE = 'no-allocation-observed' as const;
+
+/**
+ * Stable classification code for evidence explaining that more than one
+ * candidate allocation carried the attempt's identity.
+ *
+ * Discovery cannot name a single allocation in that case, so it retains
+ * uncertainty instead of picking one of the candidates.
+ */
+export const AMBIGUOUS_ALLOCATION_MATCH_CODE = 'ambiguous-allocation-match' as const;
+
+/**
+ * Stable classification code for evidence explaining that a provision request
+ * was rejected before any remote request could be issued.
+ *
+ * This is the only situation in which a provider can positively prove that no
+ * allocation exists for an attempt, so it is also the only code that may
+ * accompany a {@link WorkerNodeConfirmedAbsentOutcome}.
+ */
+export const PRE_REQUEST_REJECTION_CODE = 'pre-request-rejection' as const;
+
+// ─────────────────────────────────────────────────────────────
 // Allocation State And Inspection
 // ─────────────────────────────────────────────────────────────
 
@@ -326,8 +439,8 @@ export const WorkerNodeCapabilitiesSchema = z.object({
    *
    * Providers that advertise `true` must implement
    * {@link IRecoverableWorkerNodeProvider} and expose a
-   * {@link IWorkerNodeRecoveryCapability} object with `attach`, `inspect`,
-   * and `terminateAllocation` methods.
+   * {@link IWorkerNodeRecoveryCapability} object with `discoverProvisioning`,
+   * `attach`, `inspect`, and `terminateAllocation` methods.
    *
    * Defaults to `false`. Non-recoverable providers (e.g. Piscina) leave
    * this at the default.
@@ -419,6 +532,23 @@ export interface WorkerNodeProvisionRequest {
   readonly workerConfig: WorkflowWorkerConfig;
   /** Extension contribution manifest resolved for this worker. */
   readonly workerManifest: WorkerContributionManifest;
+  /**
+   * Non-secret ISO 8601 instant, with `Z` or a numeric offset, at which
+   * provisioning for this attempt began.
+   *
+   * Providers that must bound a remote search use it as that search's lower
+   * bound. A bound derived from the observer's clock cannot serve the same
+   * purpose: an attempt older than a rolling window computes a floor that
+   * excludes its own allocation, so the search can never observe it and the
+   * attempt never converges.
+   *
+   * Required, because there is no honest substitute. Only a caller that can
+   * read the attempt's durable record knows this instant, and a caller that
+   * cannot read it cannot construct a provision request at all — a clock-
+   * derived stand-in would reintroduce exactly the floor this field exists to
+   * replace.
+   */
+  readonly provisioningStartedAt: string;
   /** Opaque metadata forwarded from the dispatch caller. */
   readonly metadata?: z.infer<typeof JsonObjectContractSchema>;
 }
@@ -430,13 +560,26 @@ export interface WorkerNodeProvisionRequest {
 /**
  * Definite terminal infrastructure evidence reported by a provider.
  *
- * This is deliberately not a workflow result. Consumers use it only to race
- * the Authority's durable outcome decision when the allocation can no longer
- * produce an acknowledged worker outcome.
+ * This is deliberately not a workflow result. Consumers use it only to end the
+ * allocation's durable lifecycle when it can no longer produce an acknowledged
+ * worker outcome.
+ *
+ * The evidence is {@link BoundedRecoveryEvidence} rather than free text because
+ * a consumer that ends an allocation on this signal has to make that ending
+ * durable, and only bounded evidence may be persisted. A conclusion whose
+ * explanation could not cross that boundary would leave the consumer unable to
+ * record why the allocation ended.
  */
 export interface WorkerNodeInfrastructureConclusion {
-  /** Human-readable provider evidence describing the terminal allocation. */
-  readonly message: string;
+  /**
+   * Bounded, durable, non-secret evidence describing the terminal allocation.
+   *
+   * Authored by the reporting provider, exactly like the evidence backing a
+   * `confirmed-absent` provision outcome, and subject to the same obligation:
+   * keeping the summary short, non-secret, and free of stack or raw response
+   * fragments is the provider's own responsibility.
+   */
+  readonly evidence: BoundedRecoveryEvidence;
 }
 
 /**
@@ -491,6 +634,22 @@ export interface WorkerNodeHandle {
    * @returns Cleanup function that stops observing the provider signal.
    */
   observeInfrastructureConclusion?(observer: (conclusion: WorkerNodeInfrastructureConclusion) => void): () => void;
+  /**
+   * Observe a refined allocation reference for this allocation.
+   *
+   * Providers expose this only when an allocation's identity becomes more
+   * precise after provisioning returned — for example when a hosted runner's
+   * run identity is only discoverable once the run has been queued.
+   *
+   * The provider reports the refined reference; it never persists it. Durable
+   * allocation state belongs to the caller that owns the attempt's provider
+   * operation, because that write is claim-fenced and the provider holds no
+   * claim. If the provider already refined the reference before registration,
+   * it replays the latest reference to this observer synchronously.
+   * @param observer - Callback invoked with each refined allocation reference.
+   * @returns Cleanup function that stops observing the provider signal.
+   */
+  observeAllocationRefEvolution?(observer: (nextRef: ProviderAllocationRef) => void): () => void;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -498,11 +657,39 @@ export interface WorkerNodeHandle {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Result returned by {@link IWorkerNodeProvider.provision}.
+ * Ordered constant array of every allocation lifetime a provider may declare.
  *
- * Contains the validated allocation reference and an infrastructure handle.
+ * Source of truth for {@link WorkerNodeAllocationLifetimeSchema} and the
+ * {@link WorkerNodeAllocationLifetime} union.
  */
-export interface WorkerNodeProvisionResult {
+export const WORKER_NODE_ALLOCATION_LIFETIMES = ['provisioner-process-bound', 'provider-managed'] as const;
+
+/**
+ * Zod schema for the lifetime of allocations created by a provider.
+ *
+ * - `provisioner-process-bound`: the allocation cannot outlive the process
+ *   that provisioned it. When that process is gone, so is the allocation.
+ * - `provider-managed`: the allocation lives in provider-owned infrastructure
+ *   and survives the loss of the provisioning process, so it must be
+ *   rediscovered and converged rather than assumed gone.
+ */
+export const WorkerNodeAllocationLifetimeSchema = z.enum(WORKER_NODE_ALLOCATION_LIFETIMES);
+
+/**
+ * Lifetime of allocations created by a provider.
+ *
+ * This is a direct, intrinsic property of the provider implementation. It is
+ * not placement capability data, it is never matched against dispatch
+ * requirements, and it has no default: every provider states it explicitly.
+ */
+export type WorkerNodeAllocationLifetime = z.infer<typeof WorkerNodeAllocationLifetimeSchema>;
+
+/**
+ * Outcome of a provision attempt that created a provider allocation.
+ */
+export interface WorkerNodeAllocatedOutcome {
+  /** Discriminant for an accepted allocation. */
+  readonly kind: 'allocated';
   /** Versioned, JSON-safe, non-secret allocation reference. */
   readonly allocationRef: ProviderAllocationRef;
   /** Infrastructure-only handle for the provisioned allocation. */
@@ -510,10 +697,37 @@ export interface WorkerNodeProvisionResult {
 }
 
 /**
+ * Outcome of a provision attempt the provider positively knows created
+ * nothing.
+ */
+export interface WorkerNodeConfirmedAbsentOutcome {
+  /** Discriminant for a provider-confirmed absence of any allocation. */
+  readonly kind: 'confirmed-absent';
+  /** Bounded, durable, non-secret evidence supporting the absence claim. */
+  readonly evidence: BoundedRecoveryEvidence;
+}
+
+/**
+ * Outcome returned by {@link IWorkerNodeProvider.provision}.
+ *
+ * Only these two results are conclusions. `confirmed-absent` is a positive
+ * claim a provider may make only when it knows no allocation can exist —
+ * typically because the request was rejected before any remote side effect
+ * could occur.
+ *
+ * Everything else is ambiguous and must be reported by rejecting: an untyped
+ * throw, a transport error, a timeout, or an empty remote listing never
+ * establish absence. Cancellation is rethrown rather than reported as an
+ * outcome.
+ */
+export type WorkerNodeProvisionOutcome = WorkerNodeAllocatedOutcome | WorkerNodeConfirmedAbsentOutcome;
+
+/**
  * Capability provider that can provision one-shot workflow execution nodes.
  *
  * Implementations must extend {@link ICapabilityProvider} and declare the
- * execution `environment` tag used to match dispatch requirements.
+ * execution `environment` tag used to match dispatch requirements, plus the
+ * {@link WorkerNodeAllocationLifetime} of the allocations they create.
  *
  * Provisioning accepts a cancellation signal from its first async operation.
  * The returned handle controls allocation lifecycle only; readiness and
@@ -522,19 +736,27 @@ export interface WorkerNodeProvisionResult {
 export interface IWorkerNodeProvider extends ICapabilityProvider {
   /** Environment tag advertised to dispatch selectors (e.g. `'piscina'`, `'process'`). */
   readonly environment: string;
+  /**
+   * Lifetime of every allocation this provider creates.
+   *
+   * Declared directly on the provider because it governs how a lost
+   * provisioner is converged, not where a workflow may be placed.
+   */
+  readonly allocationLifetime: WorkerNodeAllocationLifetime;
   /** Capabilities supported by this provider instance after schema defaults are applied. */
   readonly baseCapabilities: WorkerNodeCapabilities;
   /**
    * Provision a new isolated execution node for the given request.
    *
-   * Resolves once the provider has accepted the execution request and
-   * created a resource allocation. The returned result contains a validated
-   * allocation reference and an infrastructure-only handle.
+   * Resolves once the provider has reached a conclusion: either an accepted
+   * allocation with a validated reference and infrastructure-only handle, or
+   * a positively confirmed absence supported by bounded evidence. Ambiguous
+   * failures reject instead of resolving.
    * @param request - Full provision request containing worker config and manifest.
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
-   * @returns Allocation reference and infrastructure handle.
+   * @returns Allocated reference and handle, or confirmed absence with bounded evidence.
    */
-  provision(request: WorkerNodeProvisionRequest, signal: AbortSignal): Promise<WorkerNodeProvisionResult>;
+  provision(request: WorkerNodeProvisionRequest, signal: AbortSignal): Promise<WorkerNodeProvisionOutcome>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -542,18 +764,99 @@ export interface IWorkerNodeProvider extends ICapabilityProvider {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Ordered constant array of every provisioning discovery result kind.
+ *
+ * Source of truth for {@link ProvisioningDiscoverySchema} and the
+ * {@link ProvisioningDiscovery} union.
+ */
+export const PROVISIONING_DISCOVERY_KINDS = ['found', 'confirmed-absent', 'unknown'] as const;
+
+/**
+ * Zod schema for the result of an exhaustive, side-effect-free lookup for an
+ * allocation that may already exist for an execution attempt.
+ *
+ * Discovery answers one question: does an allocation for this attempt exist?
+ * It has exactly three honest answers:
+ *
+ * - `found`: exactly one allocation matched, and its reference is returned.
+ * - `confirmed-absent`: the search was exhaustive and no allocation exists.
+ * - `unknown`: the search could not establish either — for example because
+ *   more than one candidate matched, or exhaustiveness could not be proven.
+ *
+ * Provider API and transport failures reject instead of resolving, and
+ * cancellation is rethrown. An empty remote listing on its own is `unknown`,
+ * never `confirmed-absent`.
+ *
+ * Discovery never returns a handle: it observes, it does not allocate.
+ */
+export const ProvisioningDiscoverySchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      /** Discriminant for a unique matched allocation. */
+      kind: z.literal('found'),
+      /** Validated reference to the single discovered allocation. */
+      allocationRef: ProviderAllocationRefSchema,
+    })
+    .strict(),
+  z
+    .object({
+      /** Discriminant for a proven absence of any allocation. */
+      kind: z.literal('confirmed-absent'),
+      /** Bounded, durable, non-secret evidence supporting the absence claim. */
+      evidence: BoundedRecoveryEvidenceSchema,
+    })
+    .strict(),
+  z
+    .object({
+      /** Discriminant for retained uncertainty. */
+      kind: z.literal('unknown'),
+      /** Bounded, durable, non-secret evidence describing what blocked a conclusion. */
+      evidence: BoundedRecoveryEvidenceSchema,
+    })
+    .strict(),
+]);
+
+/**
+ * Result of an exhaustive, side-effect-free lookup for an allocation that may
+ * already exist for an execution attempt.
+ *
+ * Only `confirmed-absent` closes pre-allocation uncertainty. `unknown`
+ * preserves it.
+ */
+export type ProvisioningDiscovery = z.infer<typeof ProvisioningDiscoverySchema>;
+
+/**
  * Coherent recovery capability for providers that support allocation recovery.
  *
- * Recovery is one indivisible capability: a provider implements all three
- * operations (`attach`, `inspect`, `terminateAllocation`) or none. Partial
- * implementation is a type error because all three are required members of
- * this interface.
+ * Recovery is one indivisible capability: a provider implements all four
+ * operations (`discoverProvisioning`, `attach`, `inspect`,
+ * `terminateAllocation`) or none. Partial implementation is a type error
+ * because all four are required members of this interface.
  *
+ * - `discoverProvisioning` is exhaustive, side-effect-free lookup by attempt.
  * - `attach` is same-attempt controller recovery, never workflow resume.
  * - `inspect` reports infrastructure evidence, never canonical workflow truth.
  * - `terminateAllocation` is idempotent; already absent is success.
  */
 export interface IWorkerNodeRecoveryCapability {
+  /**
+   * Search provider infrastructure for an allocation belonging to an attempt.
+   *
+   * Used when an allocation reference was never durably recorded, so the
+   * only identity available is the attempt itself. The search must be
+   * side-effect-free: it never creates, starts, stops, or deletes provider
+   * resources, and it never dispatches work.
+   *
+   * Absence may be reported only when the search was exhaustive. Anything
+   * less — an ambiguous match, an unbounded listing, or a partial scan —
+   * resolves as `unknown`. Provider API and transport failures reject, and
+   * cancellation is rethrown.
+   * @param request - Original provision request identifying the attempt to search for.
+   * @param signal - AbortSignal for cooperative cancellation of the discovery operation.
+   * @returns Discovered allocation, proven absence, or retained uncertainty.
+   */
+  discoverProvisioning(request: WorkerNodeProvisionRequest, signal: AbortSignal): Promise<ProvisioningDiscovery>;
+
   /**
    * Re-attach to an existing allocation for the same attempt.
    *
@@ -583,10 +886,15 @@ export interface IWorkerNodeRecoveryCapability {
    * success or failure. The returned {@link AllocationInspection} includes
    * the allocation state and optional non-secret provider evidence.
    * @param allocationRef - Validated allocation reference to inspect.
+   * @param request - Freshly resolved provision request for the same attempt.
    * @param signal - AbortSignal for cooperative cancellation of the inspect operation.
    * @returns Infrastructure state and optional evidence for the allocation.
    */
-  inspect(allocationRef: ProviderAllocationRef, signal: AbortSignal): Promise<AllocationInspection>;
+  inspect(
+    allocationRef: ProviderAllocationRef,
+    request: WorkerNodeProvisionRequest,
+    signal: AbortSignal,
+  ): Promise<AllocationInspection>;
 
   /**
    * Terminate a provider allocation by its reference.
@@ -595,9 +903,14 @@ export interface IWorkerNodeRecoveryCapability {
    * succeeds without error. Providers must not throw when asked to terminate
    * a resource that no longer exists.
    * @param allocationRef - Validated allocation reference to terminate.
+   * @param request - Freshly resolved provision request for the same attempt.
    * @param signal - AbortSignal for cooperative cancellation of the terminate operation.
    */
-  terminateAllocation(allocationRef: ProviderAllocationRef, signal: AbortSignal): Promise<void>;
+  terminateAllocation(
+    allocationRef: ProviderAllocationRef,
+    request: WorkerNodeProvisionRequest,
+    signal: AbortSignal,
+  ): Promise<void>;
 }
 
 /**
@@ -609,10 +922,10 @@ export interface IWorkerNodeRecoveryCapability {
  * implement this interface.
  *
  * The `recovery` property is required, not optional, so that omitting any
- * of the three recovery methods is a compile-time type error.
+ * of the four recovery methods is a compile-time type error.
  */
 export interface IRecoverableWorkerNodeProvider extends IWorkerNodeProvider {
-  /** Coherent recovery capability containing attach, inspect, and terminateAllocation. */
+  /** Coherent recovery capability containing discovery, attach, inspect, and termination. */
   readonly recovery: IWorkerNodeRecoveryCapability;
 }
 

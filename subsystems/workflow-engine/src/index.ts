@@ -22,7 +22,15 @@ export type { WorkflowSuccessFinalizer } from './workflow-execution-finalizer.js
 export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 export { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 export type { AuthorityDispatchRunnerOptions } from './authority-dispatch-runner.js';
+export {
+  DuplicateExecutionAttemptError,
+  EXECUTION_ATTEMPT_STATUSES,
+  EXECUTION_ATTEMPT_SETTLEMENT_KINDS,
+  sameAllocationRef,
+  sameWorkflowResult,
+} from './execution-attempt-repository.js';
 export type {
+  ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   ExecutionAttemptRecord,
   RecoverableAttemptRecord,
@@ -33,12 +41,36 @@ export type {
   ExecutionAttemptSettlementKind,
   AllocationRefEvolution,
   AllocationRefEvolutionDecision,
-  InfrastructureFailureDecision,
   AllocationRecordingDecision,
+  AllocationTerminationDecision,
+  BeginProvisioningInput,
+  DiscoveredAllocationDecision,
+  HandoffProviderOperationInput,
+  InfrastructureFailureDecision,
   PendingAttemptAbandonmentDecision,
+  ProvisionerIncarnationLossDecision,
+  ProvisioningAbsenceDecision,
   ProvisioningClaimDecision,
-  ProvisioningFailureDecision,
+  RecordAllocationInput,
+  RecordAllocationTerminatedInput,
+  RecordInfrastructureFailureInput,
+  RecordProviderOperationUncertaintyInput,
+  RecordProvisionerIncarnationLostInput,
+  RecordProvisioningAbsentInput,
+  RenewProviderOperationClaimInput,
+  TakeOverProviderOperationInput,
 } from './execution-attempt-repository.js';
+export { PROVIDER_OPERATION_OBLIGATIONS } from './provider-operation.js';
+export type {
+  InitialProviderOperationClaimContext,
+  InitialProviderOperationClaimContextSource,
+  ProcessBoundProvisionerLossProof,
+  ProviderOperationClaim,
+  ProviderOperationClaimDecision,
+  ProviderOperationMutationDecision,
+  ProviderOperationObligation,
+  ProviderOperationOwnershipRecord,
+} from './provider-operation.js';
 export { WorkflowEngineToken, workflowEnginePackage, createWorkflowEnginePackage } from './package.js';
 export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';
@@ -54,8 +86,4 @@ export {
   workflowExecutionStateDual,
   workflowExecutionStateEventsDual,
 } from './storage/schema.js';
-export {
-  initializeWorkflowState,
-  getWorkflowState,
-  patchWorkflowState,
-} from './storage/state-handler.js';
+export { initializeWorkflowState, getWorkflowState, patchWorkflowState } from './storage/state-handler.js';

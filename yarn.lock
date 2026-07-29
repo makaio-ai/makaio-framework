@@ -5457,6 +5457,7 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
+    "@makaio/utils": "workspace:*"
     tsdown: "npm:0.22.0"
     zod: "npm:4.4.3"
   languageName: unknown
@@ -5825,6 +5826,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
+    "@makaio/utils": "workspace:*"
     tsdown: "npm:0.22.0"
   languageName: unknown
   linkType: soft
@@ -6135,6 +6137,7 @@ __metadata:
     "@makaio/storage-handlers": "workspace:*"
     "@makaio/storage-migrations": "workspace:*"
     "@makaio/test-utils": "workspace:*"
+    "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     ajv: "npm:^8.18.0"
     croner: "npm:^9.0.0"

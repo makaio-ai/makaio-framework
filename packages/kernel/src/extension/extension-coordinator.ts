@@ -313,28 +313,54 @@ export class ExtensionCoordinator {
   /**
    * Shut down all active packages in reverse dependency order.
    *
-   * Calls each package's service `destroy()` method (if any). Errors are
-   * logged but do not stop remaining packages from shutting down.
+   * Calls each package's service `destroy()` method (if any). A teardown
+   * failure does not stop remaining packages from shutting down, but it is
+   * reported: once every package has been stopped, all failures are thrown
+   * together so the caller can treat termination as unclean.
    *
    * Safe to call even if {@link startAll} was never called.
+   * @throws An AggregateError when any package failed to shut down cleanly.
    */
   public async shutdown(): Promise<void> {
     // Signal all active packages to cancel long-running operations before
     // their services are destroyed.
     this.shutdownController.abort();
 
+    const failures: unknown[] = [];
+    let extensionShutdownSummary: string | undefined;
     for (const cleanup of this.rpcCleanups) {
-      cleanup();
+      try {
+        cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
     }
     this.rpcCleanups = [];
     this.warningActionMap.clear();
 
-    await shutdownExtensions({
-      entries: this.entries,
-      loadOrder: this.loadOrder,
-      contributionProcessors: this.contributionProcessors,
-      contextHost: this.createExtensionContextHost(),
-    });
+    try {
+      await shutdownExtensions({
+        entries: this.entries,
+        loadOrder: this.loadOrder,
+        contributionProcessors: this.contributionProcessors,
+        contextHost: this.createExtensionContextHost(),
+      });
+    } catch (error) {
+      if (error instanceof AggregateError) {
+        extensionShutdownSummary = error.message;
+        failures.push(...error.errors);
+      } else {
+        failures.push(error);
+      }
+    }
+
+    if (failures.length > 0) {
+      const summary = extensionShutdownSummary === undefined ? '' : `; ${extensionShutdownSummary}`;
+      throw new AggregateError(
+        failures,
+        `Extension coordinator shutdown failed with ${failures.length} error(s)${summary}`,
+      );
+    }
   }
 
   /**

@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createDatabaseClient, type DatabaseClient } from '../client';
 import { brandDatabase, getRawSqlExecutor } from '../raw-sql';
-import { executeTransaction, serializeDatabaseOperation } from '../transaction';
+import { executeTransaction, serializeByKey, serializeDatabaseOperation } from '../transaction';
 
 describe('executeTransaction', () => {
   let openClients: DatabaseClient[] = [];
@@ -173,6 +173,41 @@ describe('executeTransaction', () => {
     release.resolve();
     await Promise.all([transaction, projection]);
     expect(events).toEqual(['transaction:start', 'transaction:end', 'projection:start', 'projection:end']);
+  });
+
+  it('serializes by a caller-chosen key and releases the queue after a failure', async () => {
+    // The primitive backing `serializeDatabaseOperation`, exercised on the
+    // keyspace a caller supplies rather than on a database handle: a caller
+    // whose identity is derived (a file path, a connection identity) needs the
+    // same queue, and a failed member must not wedge it.
+    const tails = new Map<string, Promise<void>>();
+    const events: string[] = [];
+    const release = Promise.withResolvers<void>();
+
+    const failing = serializeByKey(tails, 'shared', async () => {
+      events.push('first:start');
+      await release.promise;
+      events.push('first:end');
+      throw new Error('first failed');
+    });
+    const follower = serializeByKey(tails, 'shared', async () => {
+      events.push('second:start');
+    });
+    // A different key is a different queue, so it is not held behind the first.
+    const independent = serializeByKey(tails, 'other', async () => {
+      events.push('other:ran');
+    });
+
+    await independent;
+    expect(events).toEqual(['first:start', 'other:ran']);
+
+    release.resolve();
+    await expect(failing).rejects.toThrow('first failed');
+    await follower;
+
+    expect(events).toEqual(['first:start', 'other:ran', 'first:end', 'second:start']);
+    // Both queues drained, so neither key is retained.
+    expect(tails.size).toBe(0);
   });
 });
 

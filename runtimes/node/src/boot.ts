@@ -678,7 +678,9 @@ export async function bootMakaioRuntimeCore(
     };
   } catch (err) {
     console.error('[boot] Startup failed — rolling back started resources', err);
-    // Roll back in reverse order, mirroring createShutdownSequence error tolerance.
+    // Roll back in reverse order. The startup failure is what the caller asked
+    // about, so the secondary failures of unwinding a half-built runtime are
+    // reported rather than substituted for it.
     for (const step of [...shutdownSteps].reverse()) {
       try {
         await step();

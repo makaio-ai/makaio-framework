@@ -112,6 +112,31 @@ export interface PluginTestDbConfig {
 }
 
 /**
+ * Close a database opened by a setup path without replacing the setup failure.
+ * @param setupError - Failure that made the partially initialized database unusable.
+ * @param close - Connection cleanup to attempt.
+ * @param cleanupFiles - Optional temp-file cleanup owned by this failed setup.
+ * @returns Never returns.
+ * @throws The setup error, or an AggregateError when cleanup also fails.
+ */
+async function rejectDatabaseSetup(
+  setupError: unknown,
+  close: () => void | Promise<void>,
+  cleanupFiles?: () => void,
+): Promise<never> {
+  const failures = [setupError];
+  try {
+    await close();
+  } catch (closeError) {
+    failures.push(closeError);
+  } finally {
+    cleanupFiles?.();
+  }
+  if (failures.length === 1) throw setupError;
+  throw new AggregateError(failures, 'Database setup and cleanup both failed');
+}
+
+/**
  * Creates a temporary SQLite database for testing.
  * @param name - Service name for temp file naming
  * @returns Object with db, dbPath, close, and cleanup
@@ -123,16 +148,89 @@ export async function createTempDb(name: string): Promise<TestDbContext> {
   try {
     await rawSql.run(sql`SELECT 1`);
   } catch (err) {
-    await close();
-    try {
-      fs.unlinkSync(dbPath);
-    } catch {
-      // Ignore cleanup errors
-    }
-    throw err;
+    await rejectDatabaseSetup(err, close, () => removeDatabaseFiles(dbPath));
   }
   const cleanup = createDbCleanup(() => {}, close, dbPath);
   return { db, dbPath, exec: (query) => rawSql.run(query), close, cleanup };
+}
+
+/**
+ * One temporary database file that independent connections can be opened on.
+ *
+ * It exists for suites about restart: a component that is torn down and rebuilt
+ * against the same durable state must be rebuilt against a *new connection*, or
+ * the suite proves only that one JavaScript object still agrees with itself.
+ * Handing out connections rather than a single handle is what makes that the
+ * default rather than something each suite has to remember.
+ */
+export interface RestartableTestDb {
+  /** Absolute path of the single file every connection is opened on. */
+  readonly dbPath: string;
+  /**
+   * Open one more independent connection to that file.
+   *
+   * Each call returns a separate connection with its own transaction state, so
+   * two handles see each other's writes only once they are committed.
+   * @returns A newly opened handle to the shared database file.
+   */
+  connect(): Promise<MakaioDatabase>;
+  /**
+   * Close every connection handed out and remove the database files.
+   * @returns Promise that settles once all connections are closed.
+   */
+  close(): Promise<void>;
+}
+
+/**
+ * Create a temporary SQLite database that survives its connections.
+ *
+ * Unlike {@link createTempDb} this hands out no initial handle: a caller states
+ * how many independent connections it wants by calling
+ * {@link RestartableTestDb.connect}, which is the whole point when the suite is
+ * about what survives a restart.
+ *
+ * Nothing is opened here: the file is created by the first
+ * {@link RestartableTestDb.connect}, which is also where a driver problem
+ * surfaces.
+ * @param name - Service name used in the temporary file name.
+ * @returns The shared store, its path, and its teardown.
+ */
+export function createRestartableTempDb(name: string): RestartableTestDb {
+  const dbPath = path.join(os.tmpdir(), `makaio-${name}-test-${crypto.randomUUID()}.db`);
+  const closers: Array<() => void | Promise<void>> = [];
+  let closePromise: Promise<void> | undefined;
+
+  const close = (): Promise<void> =>
+    (closePromise ??= (async () => {
+      // Drain before awaiting so repeated teardown shares this complete run.
+      const results = await Promise.allSettled(closers.splice(0).map((closeConnection) => closeConnection()));
+      removeDatabaseFiles(dbPath);
+      const failures = results.filter((result) => result.status === 'rejected');
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          `Failed to close ${failures.length} restartable test database connections`,
+        );
+      }
+    })());
+
+  const connect = async (): Promise<MakaioDatabase> => {
+    const client = await createDatabaseClient({ url: `file:${dbPath}` });
+    // Proves the connection is usable before a caller builds anything on it,
+    // so a driver failure surfaces here rather than inside a transition.
+    try {
+      await getRawSqlExecutor(client.db).run(sql`SELECT 1`);
+    } catch (error) {
+      // The shared file may already back live connections, so this failed
+      // connection closes only itself and leaves store-level file cleanup to
+      // `close()`.
+      await rejectDatabaseSetup(error, client.close);
+    }
+    closers.push(client.close);
+    return client.db;
+  };
+
+  return { dbPath, connect, close };
 }
 
 /**
@@ -154,13 +252,7 @@ export async function createPluginTestDb(config: PluginTestDbConfig): Promise<Pl
       await rawSql.run(schema);
     }
   } catch (err) {
-    await closeDb();
-    try {
-      fs.unlinkSync(dbPath);
-    } catch {
-      // Ignore cleanup errors
-    }
-    throw err;
+    await rejectDatabaseSetup(err, closeDb, () => removeDatabaseFiles(dbPath));
   }
 
   const clearData = async (): Promise<void> => {
@@ -176,11 +268,10 @@ export async function createPluginTestDb(config: PluginTestDbConfig): Promise<Pl
   const close = async (): Promise<void> => {
     // Awaiting tolerates both synchronous and asynchronous driver teardown and
     // always yields a microtask before the file is unlinked.
-    await closeDb();
     try {
-      fs.unlinkSync(dbPath);
-    } catch {
-      // Ignore cleanup errors (file may already be deleted)
+      await closeDb();
+    } finally {
+      removeDatabaseFiles(dbPath);
     }
   };
 
@@ -266,23 +357,51 @@ export async function createPgBrandedTestDb(): Promise<PgBrandedTestDbContext> {
 }
 
 /**
+ * Delete a temp database and every sidecar file SQLite created beside it.
+ *
+ * A connection in WAL mode leaves a `-wal` and a `-shm` file next to the
+ * database, so removing only the `.db` file leaks two files per run. The
+ * sidecars are normally already gone after a clean close; the unlinks are
+ * therefore best-effort, exactly like the database file's own.
+ * @param dbPath - Path to the temp database file
+ */
+function removeDatabaseFiles(dbPath: string): void {
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      fs.unlinkSync(`${dbPath}${suffix}`);
+    } catch {
+      // Ignore cleanup failures; the file may never have existed.
+    }
+  }
+}
+
+/**
  * Creates cleanup function for test database.
  * @param handlerCleanup - Storage handler cleanup function
  * @param close - Function to close the database connection. Must close synchronously
- *   (true for all SQLite drivers) — the temp file is unlinked immediately after the
+ *   (true for all SQLite drivers) — the temp files are unlinked immediately after the
  *   call, so clients whose close resolves asynchronously must use an awaited teardown
  *   such as {@link PluginTestDbContext.close} instead.
  * @param dbPath - Path to temp database file
- * @returns Cleanup function that closes connection and deletes temp file
+ * @returns Cleanup function that closes the connection and deletes the temp files
  */
 export function createDbCleanup(handlerCleanup: () => void, close: () => void, dbPath: string): () => void {
   return () => {
-    handlerCleanup();
-    close();
+    const failures: unknown[] = [];
     try {
-      fs.unlinkSync(dbPath);
-    } catch {
-      // Ignore cleanup failures
+      handlerCleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      close();
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      removeDatabaseFiles(dbPath);
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `Test database cleanup failed with ${failures.length} error(s)`);
     }
   };
 }
@@ -335,8 +454,11 @@ export function usePluginStorageTestLifecycle(
   });
 
   afterEach(() => {
-    handlerCleanup?.();
-    handlerCleanup = undefined;
+    try {
+      handlerCleanup?.();
+    } finally {
+      handlerCleanup = undefined;
+    }
   });
 
   afterAll(async () => {

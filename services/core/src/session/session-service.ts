@@ -47,7 +47,7 @@ import { TurnStorageSubjects } from './turns/index.js';
  * const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
  *
  * // Cleanup when done
- * sessionService.destroy();
+ * await sessionService.destroy();
  * ```
  */
 export class MakaioSessionService extends BaseService {

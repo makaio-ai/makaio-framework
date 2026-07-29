@@ -136,7 +136,7 @@ export class WorkflowExecutor extends BaseService {
    * Retrieve the registry set via {@link setTriggerTypeRegistry}.
    *
    * The composition root calls this after boot to wire
-   * `setWorkflowTriggerTypeRegistry` from `@makaio/kernel-core`.
+   * `setWorkflowTriggerTypeRegistry` from `@makaio/kernel`.
    * @returns The trigger type registry, or `undefined` if not yet set.
    */
   public getTriggerTypeRegistry(): IWorkflowTriggerTypeRegistry | undefined {

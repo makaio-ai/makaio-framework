@@ -22,24 +22,45 @@ export interface ExtensionShutdownHost {
  * destroyed so extension-owned services remain available while contributions
  * unregister. Services are then destroyed before storage handlers are removed,
  * allowing destroy hooks to flush through registered storage seams.
+ *
+ * A teardown failure never stops the run: every remaining extension is still
+ * shut down. It is also never swallowed. All failures are reported together
+ * once the last extension has been stopped, so the host that owns process
+ * termination learns that the drain was incomplete instead of being told it
+ * finished.
  * @param host - Coordinator state required to shut down extensions.
+ * @throws An AggregateError when any contribution stop, service destroy, or storage cleanup failed.
  */
 export async function shutdownExtensions(host: ExtensionShutdownHost): Promise<void> {
   const reversed = [...host.loadOrder].reverse();
+  const failures: unknown[] = [];
+  const unclean: string[] = [];
 
   for (const name of reversed) {
     const entry = host.entries.get(name);
     if (!entry) continue;
 
+    let entryFailed = false;
     if (entry.state === 'active') {
-      await runContributionProcessors(host.contributionProcessors, host.contextHost, name, entry, 'stopped');
+      const contributionFailures = await runContributionProcessors(
+        host.contributionProcessors,
+        host.contextHost,
+        name,
+        entry,
+        'stopped',
+      );
+      if (contributionFailures.length > 0) {
+        entryFailed = true;
+        failures.push(...contributionFailures);
+      }
     }
 
     if (entry.service) {
       try {
         await entry.service.destroy?.();
       } catch (err) {
-        console.error(`[ExtensionCoordinator] Error during shutdown of "${name}":`, err);
+        entryFailed = true;
+        failures.push(err);
       } finally {
         entry.service = undefined;
       }
@@ -49,14 +70,21 @@ export async function shutdownExtensions(host: ExtensionShutdownHost): Promise<v
       try {
         entry.storageCleanup();
       } catch (err) {
-        console.error(`[ExtensionCoordinator] Storage cleanup error for "${name}":`, err);
+        entryFailed = true;
+        failures.push(err);
       } finally {
         entry.storageCleanup = undefined;
       }
     }
 
+    if (entryFailed) unclean.push(name);
+
     if (entry.state === 'active') {
       transitionPackageEntry(host.contextHost.bus, entry, 'stopped');
     }
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Extensions failed to shut down cleanly: ${unclean.join(', ')}`);
   }
 }

@@ -5,10 +5,18 @@ import { MakaioBus } from '@makaio/bus-core';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { WorkflowEngineService } from '../workflow-engine-service.js';
 import type { ExecutionAttemptRepository } from '../execution-attempt-repository.js';
+import type { ProviderOperationClaim } from '../provider-operation.js';
 import {
+  TEST_OWNER_ID,
+  TEST_PROVIDER_ID,
+  TEST_PROVISIONER_INCARNATION_ID,
+  beginTestProvisioning,
   createInMemoryAttemptRepository,
+  leaseAt,
+  makeBeginProvisioningInput,
+  makeEvidence,
   type InMemoryAttemptRepository,
-} from './fixtures/in-memory-attempt-repository.js';
+} from '../testing/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Test Helpers
@@ -42,7 +50,7 @@ function makePausedResult(executionId: string): WorkflowRunResult {
 }
 
 function makeAllocationRef(
-  providerId: string = 'test-provider',
+  providerId: string = TEST_PROVIDER_ID,
   data: Record<string, unknown> = { machineId: 'machine-1' },
 ): ProviderAllocationRef {
   return {
@@ -53,15 +61,30 @@ function makeAllocationRef(
 }
 
 /**
+ * Advance a claimed operation to `terminal-convergence`.
+ *
+ * The infrastructure-failure settlement is reachable only from there, so a
+ * test about that settlement records the confirmed termination which precedes
+ * it instead of asserting a transition the port does not offer.
+ * @param authority - Authority under test.
+ * @param claim - Claim authorizing the record.
+ * @throws When the termination is not recorded.
+ */
+async function terminateAllocation(authority: ExecutionAttemptAuthority, claim: ProviderOperationClaim): Promise<void> {
+  const decision = await authority.recordAllocationTerminated({ claim, evidence: makeEvidence() });
+  if (decision.kind !== 'recorded') throw new Error(`Expected termination to record, got '${decision.kind}'`);
+}
+
+/**
  * Create a "correlated" allocation ref with additional run/job identity,
- * simulating GitHub Actions run correlation after dispatch.
+ * simulating hosted-runner correlation after dispatch.
  * @param providerId - Provider identifier.
  * @param runId - Correlated run identifier.
  * @param jobId - Correlated job identifier.
  * @returns Evolved allocation reference with correlation data.
  */
 function makeCorrelatedAllocationRef(
-  providerId: string = 'test-provider',
+  providerId: string = TEST_PROVIDER_ID,
   runId: string = 'run-123',
   jobId: string = 'job-456',
 ): ProviderAllocationRef {
@@ -69,6 +92,48 @@ function makeCorrelatedAllocationRef(
     version: PROVIDER_ALLOCATION_REF_VERSION,
     providerId,
     providerData: { machineId: 'machine-1', runId, jobId },
+  };
+}
+
+/**
+ * Build a repository that implements only the required port surface.
+ *
+ * Used to prove that recovery operations are gated rather than assumed.
+ * @returns A repository without any recovery operation.
+ */
+function createMinimalRepository(): ExecutionAttemptRepository {
+  const claim: ProviderOperationClaim = {
+    executionAttemptId: 'attempt-1',
+    generation: 1,
+    ownerId: TEST_OWNER_ID,
+    token: 'token-1',
+    leaseExpiresAt: leaseAt(60_000),
+  };
+  return {
+    createAttempt: async (input) => ({
+      executionAttemptId: input.executionAttemptId,
+      executionId: input.executionId,
+      status: 'pending' as const,
+      allocationRef: null,
+      createdAt: new Date().toISOString(),
+      providerId: null,
+      allocationLifetime: null,
+      provisionerIncarnationId: null,
+    }),
+    beginProvisioning: async () => ({ kind: 'started' as const, claim }),
+    getProviderOperation: async () => null,
+    renewProviderOperationClaim: async () => ({ kind: 'not-found' as const }),
+    takeOverProviderOperation: async () => ({ kind: 'not-found' as const }),
+    handoffProviderOperation: async () => ({ kind: 'not-found' as const }),
+    recordProviderOperationUncertainty: async () => ({ kind: 'not-found' as const }),
+    recordAllocation: async () => ({ kind: 'recorded' as const }),
+    recordProvisioningAbsent: async () => ({ kind: 'recorded' as const }),
+    recordProvisionerIncarnationLost: async () => ({ kind: 'not-found' as const }),
+    recordAllocationTerminated: async () => ({ kind: 'recorded' as const }),
+    recordInfrastructureFailure: async () => ({ kind: 'not-found' as const }),
+    getActiveAttempt: async () => null,
+    commitOutcome: async () => ({ kind: 'fenced' as const }),
+    abandonPendingAttempt: async () => ({ kind: 'fenced' as const }),
   };
 }
 
@@ -116,12 +181,21 @@ describe('ExecutionAttemptAuthority', () => {
       );
     });
 
-    it('returns a record with status pending and no allocation', async () => {
+    it('returns a record with status pending, no allocation, and no provider binding', async () => {
       const attempt = await authority.createAttempt('exec-1');
 
       expect(attempt.status).toBe('pending');
       expect(attempt.allocationRef).toBeNull();
+      expect(attempt.providerId).toBeNull();
+      expect(attempt.allocationLifetime).toBeNull();
+      expect(attempt.provisionerIncarnationId).toBeNull();
       expect(attempt.createdAt).toBeTruthy();
+    });
+
+    it('opens no provider operation before provisioning begins', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toBeNull();
     });
 
     it('installs an in-process waiter that can be awaited', async () => {
@@ -133,6 +207,360 @@ describe('ExecutionAttemptAuthority', () => {
   });
 
   // ─────────────────────────────────────────────────────────
+  // Single Atomic Provisioning Authorization
+  // ─────────────────────────────────────────────────────────
+
+  describe('provisioning authorization', () => {
+    it('authorizes exactly one provider call per attempt', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const input = makeBeginProvisioningInput(attempt.executionAttemptId, 'exec-1');
+
+      const first = await authority.beginProvisioning(input);
+      const second = await authority.beginProvisioning(input);
+
+      expect(first.kind).toBe('started');
+      expect(second).toEqual({ kind: 'already-provisioning' });
+    });
+
+    it('opens the operation at generation 1 with the provisioning-resolution obligation', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      expect(claim.generation).toBe(1);
+      expect(claim.ownerId).toBe(TEST_OWNER_ID);
+      expect(claim.token).toBeTruthy();
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        generation: 1,
+        ownerId: TEST_OWNER_ID,
+        token: claim.token,
+        obligation: 'provisioning-resolution',
+        failureCount: 0,
+        lastFailure: null,
+      });
+    });
+
+    it('binds provider, lifetime, and provisioner incarnation atomically with the first begin', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        status: 'provisioning',
+        providerId: TEST_PROVIDER_ID,
+        allocationLifetime: 'provider-managed',
+        provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
+      });
+    });
+
+    it('keeps the provider binding immutable when a second begin names a different provider', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      const second = await authority.beginProvisioning(
+        makeBeginProvisioningInput(attempt.executionAttemptId, 'exec-1', {
+          providerId: 'other-provider',
+          allocationLifetime: 'provisioner-process-bound',
+          provisionerIncarnationId: 'provisioner-incarnation-2',
+        }),
+      );
+
+      expect(second).toEqual({ kind: 'already-provisioning' });
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        providerId: TEST_PROVIDER_ID,
+        allocationLifetime: 'provider-managed',
+        provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
+      });
+    });
+
+    it('denies a superseded attempt a new provider call', async () => {
+      const attempt1 = await authority.createAttempt('exec-1');
+      await authority.createAttempt('exec-1');
+
+      await expect(
+        authority.beginProvisioning(makeBeginProvisioningInput(attempt1.executionAttemptId, 'exec-1')),
+      ).resolves.toEqual({ kind: 'fenced' });
+    });
+
+    it('reports not-found for an attempt that was never created', async () => {
+      await expect(
+        authority.beginProvisioning(makeBeginProvisioningInput('nonexistent-attempt', 'exec-1')),
+      ).resolves.toEqual({ kind: 'not-found' });
+    });
+
+    it('denies a new provider call once the attempt is allocated', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const allocationRef = makeAllocationRef();
+      await authority.recordAllocation({ claim, allocationRef });
+
+      await expect(
+        authority.beginProvisioning(makeBeginProvisioningInput(attempt.executionAttemptId, 'exec-1')),
+      ).resolves.toEqual({ kind: 'allocated', allocationRef });
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // Claim Lifecycle
+  // ─────────────────────────────────────────────────────────
+
+  describe('provider operation claim lifecycle', () => {
+    it('renews a lease for the current token without changing generation or token', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const nextLease = leaseAt(120_000);
+
+      const decision = await authority.renewProviderOperationClaim({ claim, leaseExpiresAt: nextLease });
+
+      expect(decision).toEqual({
+        kind: 'claimed',
+        claim: { ...claim, leaseExpiresAt: nextLease },
+      });
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        generation: 1,
+        token: claim.token,
+        leaseExpiresAt: nextLease,
+      });
+    });
+
+    it('refuses renewal for a superseded token', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      await expect(
+        authority.renewProviderOperationClaim({
+          claim: { ...claim, token: 'forged-token' },
+          leaseExpiresAt: leaseAt(120_000),
+        }),
+      ).resolves.toEqual({ kind: 'stale' });
+    });
+
+    it('refuses takeover while the lease is still held', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', {
+        leaseExpiresAt: leaseAt(60_000),
+      });
+
+      await expect(
+        authority.takeOverProviderOperation({
+          executionAttemptId: attempt.executionAttemptId,
+          ownerId: 'controller-incarnation-2',
+          observedAt: new Date().toISOString(),
+          leaseExpiresAt: leaseAt(60_000),
+        }),
+      ).resolves.toEqual({ kind: 'stale' });
+    });
+
+    it('allows takeover after expiry and issues a new generation and token', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const original = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', {
+        leaseExpiresAt: leaseAt(-1_000),
+      });
+
+      const decision = await authority.takeOverProviderOperation({
+        executionAttemptId: attempt.executionAttemptId,
+        ownerId: 'controller-incarnation-2',
+        observedAt: new Date().toISOString(),
+        leaseExpiresAt: leaseAt(60_000),
+      });
+
+      expect(decision.kind).toBe('claimed');
+      if (decision.kind !== 'claimed') throw new Error('expected takeover to succeed');
+      expect(decision.claim.generation).toBe(original.generation + 1);
+      expect(decision.claim.token).not.toBe(original.token);
+      expect(decision.claim.ownerId).toBe('controller-incarnation-2');
+    });
+
+    it('fences the previous claim immediately after takeover', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const original = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', {
+        leaseExpiresAt: leaseAt(-1_000),
+      });
+      await authority.takeOverProviderOperation({
+        executionAttemptId: attempt.executionAttemptId,
+        ownerId: 'controller-incarnation-2',
+        observedAt: new Date().toISOString(),
+        leaseExpiresAt: leaseAt(60_000),
+      });
+
+      await expect(
+        authority.recordAllocation({ claim: original, allocationRef: makeAllocationRef() }),
+      ).resolves.toEqual({ kind: 'stale' });
+      expect(repository.attempts.get(attempt.executionAttemptId)?.allocationRef).toBeNull();
+    });
+
+    it('preserves generation and obligation on handoff while clearing ownership', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+
+      await expect(authority.handoffProviderOperation({ claim })).resolves.toEqual({ kind: 'recorded' });
+
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        generation: claim.generation,
+        obligation: 'allocation-control',
+        ownerId: null,
+        token: null,
+        leaseExpiresAt: null,
+      });
+    });
+
+    it('fences the handed-off claim and lets takeover claim immediately', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', {
+        leaseExpiresAt: leaseAt(600_000),
+      });
+      await authority.handoffProviderOperation({ claim });
+
+      await expect(authority.recordProviderOperationUncertainty({ claim, evidence: makeEvidence() })).resolves.toEqual({
+        kind: 'stale',
+      });
+
+      const decision = await authority.takeOverProviderOperation({
+        executionAttemptId: attempt.executionAttemptId,
+        ownerId: 'controller-incarnation-2',
+        observedAt: new Date().toISOString(),
+        leaseExpiresAt: leaseAt(60_000),
+      });
+      expect(decision.kind).toBe('claimed');
+      if (decision.kind !== 'claimed') throw new Error('expected takeover to succeed');
+      expect(decision.claim.generation).toBe(claim.generation + 1);
+      expect(decision.claim.token).not.toBe(claim.token);
+    });
+
+    it('records handoff evidence durably without counting it as a failure', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const evidence = makeEvidence({ summary: 'controller shutting down', code: 'handoff' });
+
+      await authority.handoffProviderOperation({ claim, evidence });
+
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        failureCount: 0,
+        lastFailure: evidence,
+      });
+    });
+
+    it('reports resolved for claim operations once the attempt has settled', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        makeCompletedResult('exec-1'),
+      );
+      authority.settleOutcome(attempt.executionAttemptId, decision);
+
+      await expect(authority.renewProviderOperationClaim({ claim, leaseExpiresAt: leaseAt(60_000) })).resolves.toEqual({
+        kind: 'resolved',
+      });
+      await expect(
+        authority.takeOverProviderOperation({
+          executionAttemptId: attempt.executionAttemptId,
+          ownerId: 'controller-incarnation-2',
+          observedAt: new Date().toISOString(),
+          leaseExpiresAt: leaseAt(60_000),
+        }),
+      ).resolves.toEqual({ kind: 'resolved' });
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // Repository-Owned Obligation Transitions
+  // ─────────────────────────────────────────────────────────
+
+  describe('operation obligation transitions', () => {
+    it('advances to allocation-control when an allocation is recorded', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        obligation: 'allocation-control',
+      });
+    });
+
+    it('advances to terminal-convergence when a known allocation is confirmed terminated', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+      const evidence = makeEvidence({ summary: 'allocation confirmed terminated', code: 'terminated' });
+
+      await expect(authority.recordAllocationTerminated({ claim, evidence })).resolves.toEqual({ kind: 'recorded' });
+
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        obligation: 'terminal-convergence',
+        failureCount: 0,
+        lastFailure: evidence,
+      });
+      expect(repository.attempts.get(attempt.executionAttemptId)?.settlementKind).toBeNull();
+    });
+
+    it('reports a current claim with no allocation as not-allocated, not stale', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      // The claim is current; there is simply nothing to terminate. Saying
+      // `stale` here would tell a caller its authority was gone and make it
+      // re-read instead of proving absence.
+      await expect(authority.recordAllocationTerminated({ claim, evidence: makeEvidence() })).resolves.toEqual({
+        kind: 'not-allocated',
+      });
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        obligation: 'provisioning-resolution',
+      });
+    });
+
+    it('retains the current obligation and increments failures on uncertainty', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const evidence = makeEvidence({ summary: 'provider request timed out', code: 'timeout' });
+
+      await expect(authority.recordProviderOperationUncertainty({ claim, evidence })).resolves.toEqual({
+        kind: 'recorded',
+      });
+      await authority.recordProviderOperationUncertainty({ claim, evidence });
+
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        obligation: 'provisioning-resolution',
+        failureCount: 2,
+        lastFailure: evidence,
+      });
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        status: 'provisioning',
+        settlementKind: null,
+      });
+    });
+
+    it('persists bounded evidence as a structured record rather than a message string', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const evidence = makeEvidence({ code: 'quota-exceeded' });
+
+      await authority.recordProviderOperationUncertainty({ claim, evidence });
+
+      const operation = await authority.getProviderOperation(attempt.executionAttemptId);
+      expect(operation?.lastFailure).toEqual({
+        source: evidence.source,
+        summary: evidence.summary,
+        observedAt: evidence.observedAt,
+        code: 'quota-exceeded',
+      });
+    });
+
+    it('rejects evidence that exceeds the bounded contract limits', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      await expect(
+        authority.recordProviderOperationUncertainty({
+          claim,
+          evidence: makeEvidence({ summary: 'x'.repeat(513) }),
+        }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────
   // Allocation Recording
   // ─────────────────────────────────────────────────────────
 
@@ -140,28 +568,131 @@ describe('ExecutionAttemptAuthority', () => {
     it('records the allocation reference through the repository', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const allocationRef = makeAllocationRef();
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
 
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      await expect(authority.recordAllocation({ claim, allocationRef })).resolves.toEqual({ kind: 'recorded' });
 
       const stored = repository.attempts.get(attempt.executionAttemptId);
       expect(stored?.allocationRef).toEqual(allocationRef);
       expect(stored?.status).toBe('allocated');
+      expect(stored?.claimable).toBe(true);
     });
 
-    it('cannot record an allocation after provisioning failure settles the attempt', async () => {
+    it('treats an identical re-record as a duplicate and a different one as a conflict', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const allocationRef = makeAllocationRef();
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef });
+
+      await expect(authority.recordAllocation({ claim, allocationRef })).resolves.toEqual({
+        kind: 'duplicate',
+        allocationRef,
+      });
+      await expect(
+        authority.recordAllocation({ claim, allocationRef: makeAllocationRef(TEST_PROVIDER_ID, { machineId: 'm2' }) }),
+      ).resolves.toEqual({ kind: 'conflict', allocationRef });
+    });
+
+    it('reports not-found for a claim on an attempt that was never created', async () => {
+      await expect(
+        authority.recordAllocation({
+          claim: {
+            executionAttemptId: 'nonexistent-attempt',
+            generation: 1,
+            ownerId: TEST_OWNER_ID,
+            token: 'token-1',
+            leaseExpiresAt: leaseAt(60_000),
+          },
+          allocationRef: makeAllocationRef(),
+        }),
+      ).resolves.toEqual({ kind: 'not-found' });
+    });
+
+    it('cannot record an allocation after proven absence settles the attempt', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const waiter = authority.waitForOutcome(attempt.executionAttemptId);
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
 
-      await expect(authority.recordProvisioningFailure(attempt.executionAttemptId, 'exec-1')).resolves.toEqual({
-        kind: 'recorded',
-      });
-      await expect(waiter).rejects.toThrow('provider provisioning failed');
-      await expect(authority.recordAllocation(attempt.executionAttemptId, makeAllocationRef())).resolves.toEqual({
-        kind: 'already-settled',
+      await expect(
+        authority.recordProvisioningAbsent({ claim, executionId: 'exec-1', evidence: makeEvidence() }),
+      ).resolves.toEqual({ kind: 'recorded' });
+      await expect(waiter).rejects.toThrow('produced no allocation');
+      await expect(authority.recordAllocation({ claim, allocationRef: makeAllocationRef() })).resolves.toEqual({
+        kind: 'resolved',
         allocationRef: null,
       });
+    });
+
+    it('never makes a discovered allocation bootstrap-claimable', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const allocationRef = makeAllocationRef();
+
+      await expect(authority.recordDiscoveredAllocation({ claim, allocationRef })).resolves.toEqual({
+        kind: 'recorded',
+      });
+
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        status: 'allocated',
+        allocationRef,
+        claimable: false,
+      });
+      await expect(authority.getRecoverableAttempts('exec-1')).resolves.toHaveLength(0);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // Proven Pre-Allocation Absence
+  // ─────────────────────────────────────────────────────────
+
+  describe('proven provisioning absence', () => {
+    it('settles the attempt as abandoned and closes the operation with durable evidence', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const evidence = makeEvidence({ code: 'rejected-before-side-effect' });
+
+      await authority.recordProvisioningAbsent({ claim, executionId: 'exec-1', evidence });
+      await expect(waiter).rejects.toThrow('produced no allocation');
+
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        status: 'settled',
+        settlementKind: 'abandoned',
+        claimable: false,
+      });
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        obligation: 'provisioning-resolution',
+        ownerId: null,
+        token: null,
+        leaseExpiresAt: null,
+        lastFailure: evidence,
+      });
+    });
+
+    it('refuses to terminalize an attempt whose allocation won the race', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const allocationRef = makeAllocationRef();
+      await authority.recordAllocation({ claim, allocationRef });
+
+      await expect(
+        authority.recordProvisioningAbsent({ claim, executionId: 'exec-1', evidence: makeEvidence() }),
+      ).resolves.toEqual({ kind: 'allocated', allocationRef });
+      expect(repository.attempts.get(attempt.executionAttemptId)?.settlementKind).toBeNull();
+    });
+
+    it('refuses a stale claim', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      await expect(
+        authority.recordProvisioningAbsent({
+          claim: { ...claim, generation: claim.generation + 1 },
+          executionId: 'exec-1',
+          evidence: makeEvidence(),
+        }),
+      ).resolves.toEqual({ kind: 'stale' });
+      expect(repository.attempts.get(attempt.executionAttemptId)?.settlementKind).toBeNull();
     });
   });
 
@@ -181,8 +712,8 @@ describe('ExecutionAttemptAuthority', () => {
 
     it('keeps an allocated attempt out of the pending abandonment transition', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, makeAllocationRef());
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       await expect(authority.abandonPendingAttempt(attempt.executionAttemptId, 'exec-1')).resolves.toEqual({
         kind: 'allocated',
@@ -192,7 +723,7 @@ describe('ExecutionAttemptAuthority', () => {
 
     it('keeps a provisioning attempt out of the pending abandonment transition', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
+      await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
 
       await expect(authority.abandonPendingAttempt(attempt.executionAttemptId, 'exec-1')).resolves.toEqual({
         kind: 'provisioning',
@@ -270,6 +801,46 @@ describe('ExecutionAttemptAuthority', () => {
 
       expect(decision).toEqual({ kind: 'accepted', outcome: result });
     });
+
+    it('accepts a worker outcome regardless of who owns the provider operation', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', {
+        leaseExpiresAt: leaseAt(-1_000),
+      });
+      await authority.takeOverProviderOperation({
+        executionAttemptId: attempt.executionAttemptId,
+        ownerId: 'controller-incarnation-2',
+        observedAt: new Date().toISOString(),
+        leaseExpiresAt: leaseAt(60_000),
+      });
+
+      const result = makeCompletedResult('exec-1');
+      await expect(authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result)).resolves.toEqual({
+        kind: 'accepted',
+        outcome: result,
+      });
+    });
+
+    it('closes the provider operation when the attempt settles', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        makeCompletedResult('exec-1'),
+      );
+      authority.settleOutcome(attempt.executionAttemptId, decision);
+
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        ownerId: null,
+        token: null,
+        leaseExpiresAt: null,
+      });
+      await expect(authority.recordProviderOperationUncertainty({ claim, evidence: makeEvidence() })).resolves.toEqual({
+        kind: 'resolved',
+      });
+    });
   });
 
   // ─────────────────────────────────────────────────────────
@@ -326,6 +897,58 @@ describe('ExecutionAttemptAuthority', () => {
       expect(conflictDecision).toEqual({ kind: 'conflict' });
 
       await expect(waiterPromise).rejects.toThrow('conflict');
+    });
+
+    it('returns conflict for an outcome that lost the terminal race to an infrastructure failure', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+      await terminateAllocation(authority, claim);
+
+      // Drain the waiter the infrastructure failure rejects.
+      const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
+      await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
+        kind: 'recorded',
+      });
+      await expect(waiterPromise).rejects.toThrow('infrastructure failure');
+
+      // The late worker outcome lost; it may not rewrite the settlement.
+      const lateDecision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        makeCompletedResult('exec-1'),
+      );
+
+      expect(lateDecision).toEqual({ kind: 'conflict' });
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        status: 'settled',
+        settlementKind: 'infrastructure-failure',
+      });
+      expect(repository.committedOutcomes.has(attempt.executionAttemptId)).toBe(false);
+    });
+
+    it('returns conflict for an outcome that lost the terminal race to proven absence', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+
+      const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
+      await expect(
+        authority.recordProvisioningAbsent({ claim, executionId: 'exec-1', evidence: makeEvidence() }),
+      ).resolves.toEqual({ kind: 'recorded' });
+      await expect(waiterPromise).rejects.toThrow();
+
+      const lateDecision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        makeCompletedResult('exec-1'),
+      );
+
+      expect(lateDecision).toEqual({ kind: 'conflict' });
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        status: 'settled',
+        settlementKind: 'abandoned',
+      });
+      expect(repository.committedOutcomes.has(attempt.executionAttemptId)).toBe(false);
     });
   });
 
@@ -434,6 +1057,28 @@ describe('ExecutionAttemptAuthority', () => {
       // After explicit settlement the waiter is removed.
       expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeUndefined();
     });
+
+    it('leaves the waiter pending on handoff and on uncertainty', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+
+      await authority.recordProviderOperationUncertainty({ claim, evidence: makeEvidence() });
+      await authority.handoffProviderOperation({ claim });
+
+      expect(waiter).toBeDefined();
+      let settled = false;
+      void waiter?.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+    });
   });
 
   // ─────────────────────────────────────────────────────────
@@ -449,19 +1094,10 @@ describe('ExecutionAttemptAuthority', () => {
 
       // Only then can allocation be recorded
       const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef });
 
       expect(repository.attempts.get(attempt.executionAttemptId)?.allocationRef).toEqual(allocationRef);
-    });
-
-    it('allocation recording fails for an attempt that was never created', async () => {
-      const allocationRef = makeAllocationRef();
-
-      await expect(authority.recordAllocation('nonexistent-attempt', allocationRef)).resolves.toEqual({
-        kind: 'fenced',
-        allocationRef: null,
-      });
     });
   });
 
@@ -476,23 +1112,7 @@ describe('ExecutionAttemptAuthority', () => {
     });
 
     it('reports no recovery support for a minimal repository', () => {
-      const minimalRepo: ExecutionAttemptRepository = {
-        createAttempt: async (input) => ({
-          executionAttemptId: input.executionAttemptId,
-          executionId: input.executionId,
-          status: 'pending' as const,
-          allocationRef: null,
-          createdAt: new Date().toISOString(),
-        }),
-        beginProvisioning: async () => ({ kind: 'started' as const }),
-        recordAllocation: async () => ({ kind: 'recorded' as const }),
-        recordProvisioningFailure: async () => ({ kind: 'recorded' as const }),
-        getActiveAttempt: async () => null,
-        commitOutcome: async () => ({ kind: 'fenced' as const }),
-        abandonPendingAttempt: async () => ({ kind: 'fenced' as const }),
-        recordInfrastructureFailure: async () => ({ kind: 'fenced' as const }),
-      };
-      const minimalAuthority = new ExecutionAttemptAuthority(minimalRepo);
+      const minimalAuthority = new ExecutionAttemptAuthority(createMinimalRepository());
 
       expect(minimalAuthority.supportsRecovery).toBe(false);
     });
@@ -506,8 +1126,8 @@ describe('ExecutionAttemptAuthority', () => {
     it('looks up an attempt with its allocation data by attempt ID', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef });
 
       const found = await authority.getAttemptWithAllocation(attempt.executionAttemptId);
 
@@ -524,9 +1144,8 @@ describe('ExecutionAttemptAuthority', () => {
 
     it('returns a settled attempt (unlike getActiveAttempt)', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
       const result = makeCompletedResult('exec-1');
       const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
       authority.settleOutcome(attempt.executionAttemptId, decision);
@@ -542,8 +1161,8 @@ describe('ExecutionAttemptAuthority', () => {
     it('returns a superseded attempt', async () => {
       const attempt1 = await authority.createAttempt('exec-1');
       const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt1.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt1.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt1.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef });
 
       // Supersede with a new attempt
       await authority.createAttempt('exec-1');
@@ -576,12 +1195,12 @@ describe('ExecutionAttemptAuthority', () => {
     it('evolves the allocation ref when CAS check passes', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const initialRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, initialRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: initialRef });
 
       const evolvedRef = makeCorrelatedAllocationRef();
       const decision = await authority.evolveAllocationRef({
-        executionAttemptId: attempt.executionAttemptId,
+        claim,
         executionId: 'exec-1',
         currentRef: initialRef,
         nextRef: evolvedRef,
@@ -597,55 +1216,57 @@ describe('ExecutionAttemptAuthority', () => {
     it('rejects evolution when currentRef does not match stored ref (stale)', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const initialRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, initialRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: initialRef });
 
-      const staleRef = makeAllocationRef('test-provider', {
+      const staleRef = makeAllocationRef(TEST_PROVIDER_ID, {
         machineId: 'wrong-machine',
       });
-      const evolvedRef = makeCorrelatedAllocationRef();
 
       const decision = await authority.evolveAllocationRef({
-        executionAttemptId: attempt.executionAttemptId,
+        claim,
         executionId: 'exec-1',
         currentRef: staleRef,
-        nextRef: evolvedRef,
+        nextRef: makeCorrelatedAllocationRef(),
       });
 
-      expect(decision.kind).toBe('stale');
-      if (decision.kind === 'stale') {
-        expect(decision.storedRef).toEqual(initialRef);
-      }
+      expect(decision).toEqual({ kind: 'stale', storedRef: initialRef });
 
       // Verify the stored ref was NOT updated
       const stored = repository.attempts.get(attempt.executionAttemptId);
       expect(stored!.allocationRef).toEqual(initialRef);
     });
 
-    it('rejects evolution for a fenced attempt', async () => {
-      const attempt1 = await authority.createAttempt('exec-1');
+    it('rejects evolution presented with a superseded claim', async () => {
+      const attempt = await authority.createAttempt('exec-1');
       const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt1.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt1.executionAttemptId, allocationRef);
-
-      // Supersede with a new attempt
-      await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', {
+        leaseExpiresAt: leaseAt(-1_000),
+      });
+      await authority.recordAllocation({ claim, allocationRef });
+      await authority.takeOverProviderOperation({
+        executionAttemptId: attempt.executionAttemptId,
+        ownerId: 'controller-incarnation-2',
+        observedAt: new Date().toISOString(),
+        leaseExpiresAt: leaseAt(60_000),
+      });
 
       const decision = await authority.evolveAllocationRef({
-        executionAttemptId: attempt1.executionAttemptId,
+        claim,
         executionId: 'exec-1',
         currentRef: allocationRef,
         nextRef: makeCorrelatedAllocationRef(),
       });
 
-      expect(decision.kind).toBe('fenced');
+      expect(decision).toEqual({ kind: 'stale', storedRef: allocationRef });
     });
 
     it('rejects evolution for an attempt without an allocation', async () => {
       const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
 
       const decision = await authority.evolveAllocationRef({
-        executionAttemptId: attempt.executionAttemptId,
+        claim,
         executionId: 'exec-1',
         currentRef: makeAllocationRef(),
         nextRef: makeCorrelatedAllocationRef(),
@@ -657,14 +1278,19 @@ describe('ExecutionAttemptAuthority', () => {
     it('rejects evolution when provider identity changes', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const initialRef = makeAllocationRef('provider-a');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, initialRef);
+      // The attempt is bound to the provider its reference names: a
+      // mismatched pair there is a caller bug of its own, and this test is
+      // about the evolution rather than about the initial record.
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', {
+        providerId: 'provider-a',
+      });
+      await authority.recordAllocation({ claim, allocationRef: initialRef });
 
       // Try to evolve to a different provider — the Authority rejects
       // before delegating to the repository.
       await expect(
         authority.evolveAllocationRef({
-          executionAttemptId: attempt.executionAttemptId,
+          claim,
           executionId: 'exec-1',
           currentRef: initialRef,
           nextRef: makeAllocationRef('provider-b'),
@@ -675,13 +1301,13 @@ describe('ExecutionAttemptAuthority', () => {
     it('supports sequential evolutions (CAS chain)', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const ref1 = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, ref1);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: ref1 });
 
       // First evolution: dispatch -> run correlation
-      const ref2 = makeCorrelatedAllocationRef('test-provider', 'run-1', 'job-1');
+      const ref2 = makeCorrelatedAllocationRef(TEST_PROVIDER_ID, 'run-1', 'job-1');
       const d1 = await authority.evolveAllocationRef({
-        executionAttemptId: attempt.executionAttemptId,
+        claim,
         executionId: 'exec-1',
         currentRef: ref1,
         nextRef: ref2,
@@ -689,9 +1315,9 @@ describe('ExecutionAttemptAuthority', () => {
       expect(d1.kind).toBe('evolved');
 
       // Second evolution: run -> full job correlation
-      const ref3 = makeCorrelatedAllocationRef('test-provider', 'run-1', 'job-2');
+      const ref3 = makeCorrelatedAllocationRef(TEST_PROVIDER_ID, 'run-1', 'job-2');
       const d2 = await authority.evolveAllocationRef({
-        executionAttemptId: attempt.executionAttemptId,
+        claim,
         executionId: 'exec-1',
         currentRef: ref2,
         nextRef: ref3,
@@ -712,8 +1338,8 @@ describe('ExecutionAttemptAuthority', () => {
     it('lists allocated non-settled attempts for an execution', async () => {
       const attempt = await authority.createAttempt('exec-1');
       const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef });
 
       const recoverable = await authority.getRecoverableAttempts('exec-1');
 
@@ -723,6 +1349,9 @@ describe('ExecutionAttemptAuthority', () => {
       expect(recoverable[0].status).toBe('allocated');
       expect(recoverable[0].claimable).toBe(true);
       expect(recoverable[0].settlementKind).toBeNull();
+      expect(recoverable[0].providerId).toBe(TEST_PROVIDER_ID);
+      expect(recoverable[0].allocationLifetime).toBe('provider-managed');
+      expect(recoverable[0].provisionerIncarnationId).toBe(TEST_PROVISIONER_INCARNATION_ID);
     });
 
     it('excludes pending attempts (no allocation)', async () => {
@@ -734,9 +1363,8 @@ describe('ExecutionAttemptAuthority', () => {
 
     it('excludes settled attempts (outcome committed)', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       const result = makeCompletedResult('exec-1');
       const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
@@ -748,14 +1376,14 @@ describe('ExecutionAttemptAuthority', () => {
 
     it('excludes attempts settled by infrastructure failure', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+      await terminateAllocation(authority, claim);
 
       // Drain the waiter rejection from recordInfrastructureFailure.
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
 
-      await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
+      await authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' });
 
       await expect(waiterPromise).rejects.toThrow('infrastructure failure');
 
@@ -765,8 +1393,8 @@ describe('ExecutionAttemptAuthority', () => {
 
     it('excludes paused (settled) attempts', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      const allocationRef = makeAllocationRef();
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       const pausedResult = makePausedResult('exec-1');
       const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', pausedResult);
@@ -783,8 +1411,8 @@ describe('ExecutionAttemptAuthority', () => {
 
     it('returns empty for a different execution', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, makeAllocationRef());
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       const recoverable = await authority.getRecoverableAttempts('exec-2');
       expect(recoverable).toHaveLength(0);
@@ -798,105 +1426,120 @@ describe('ExecutionAttemptAuthority', () => {
   describe('confirmed infrastructure failure', () => {
     it('records an infrastructure failure for an allocated attempt', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      const allocationRef = makeAllocationRef();
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, allocationRef);
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+      await terminateAllocation(authority, claim);
 
       // Drain the waiter.
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
 
-      const decision = await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
+      const decision = await authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' });
 
       expect(decision.kind).toBe('recorded');
       await expect(waiterPromise).rejects.toThrow('infrastructure failure');
 
-      // Verify the record was updated
+      // Verify the record was updated and the operation closed.
       const stored = repository.attempts.get(attempt.executionAttemptId);
       expect(stored!.status).toBe('settled');
       expect(stored!.settlementKind).toBe('infrastructure-failure');
       expect(stored!.claimable).toBe(false);
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        ownerId: null,
+        token: null,
+      });
     });
 
-    it('rejects the in-process waiter on infrastructure failure', async () => {
+    it('returns resolved for a previously committed outcome', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, makeAllocationRef());
-
-      const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
-      expect(waiterPromise).toBeDefined();
-
-      await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
-
-      await expect(waiterPromise).rejects.toThrow('provider allocation terminated');
-
-      // Waiter should be cleaned up
-      expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeUndefined();
-    });
-
-    it('returns already-settled for a previously committed outcome', async () => {
-      const attempt = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, makeAllocationRef());
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       const result = makeCompletedResult('exec-1');
       const outcomeDecision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
       authority.settleOutcome(attempt.executionAttemptId, outcomeDecision);
 
-      const failureDecision = await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
-
-      expect(failureDecision.kind).toBe('already-settled');
+      await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
+        kind: 'resolved',
+      });
     });
 
-    it('returns already-settled for a previously recorded infrastructure failure', async () => {
+    it('returns resolved for a previously recorded infrastructure failure', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, makeAllocationRef());
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+      await terminateAllocation(authority, claim);
 
       // Drain the waiter from the first failure.
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
 
-      await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
+      await authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' });
       await expect(waiterPromise).rejects.toThrow('infrastructure failure');
 
       // Second call is idempotent
-      const decision = await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
-      expect(decision.kind).toBe('already-settled');
+      await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
+        kind: 'resolved',
+      });
     });
 
-    it('returns fenced for a superseded attempt', async () => {
+    it('keeps a superseded attempt remediable without reactivating it', async () => {
       const attempt1 = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt1.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt1.executionAttemptId, makeAllocationRef());
+      const claim = await beginTestProvisioning(authority, attempt1.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+      await terminateAllocation(authority, claim);
 
       // Supersede
-      await authority.createAttempt('exec-1');
+      const attempt2 = await authority.createAttempt('exec-1');
 
-      const decision = await authority.recordInfrastructureFailure(attempt1.executionAttemptId, 'exec-1');
-
-      expect(decision.kind).toBe('fenced');
+      await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
+        kind: 'recorded',
+      });
+      expect(repository.attempts.get(attempt1.executionAttemptId)).toMatchObject({
+        status: 'settled',
+        settlementKind: 'infrastructure-failure',
+        claimable: false,
+      });
+      // The active-attempt pointer is untouched by remediation.
+      expect(repository.activeAttempts.get('exec-1')).toBe(attempt2.executionAttemptId);
     });
 
-    it('returns not-allocated for a pending attempt', async () => {
+    it('refuses to settle an allocation whose termination was never confirmed', async () => {
       const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
-      const decision = await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
+      await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
+        kind: 'not-terminated',
+      });
 
-      expect(decision.kind).toBe('not-allocated');
+      // A refused settlement changes nothing a runner could observe: the
+      // attempt still owns its allocation and its waiter stays open.
+      expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
+        status: 'allocated',
+        settlementKind: null,
+      });
+      await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+        obligation: 'allocation-control',
+        ownerId: TEST_OWNER_ID,
+      });
     });
 
-    it('does not reject waiter when decision is not recorded', async () => {
+    it('returns not-allocated for an attempt that never received an allocation', async () => {
       const attempt = await authority.createAttempt('exec-1');
-      await authority.beginProvisioning(attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation(attempt.executionAttemptId, makeAllocationRef());
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
 
-      const result = makeCompletedResult('exec-1');
-      const outcomeDecision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
-      authority.settleOutcome(attempt.executionAttemptId, outcomeDecision);
+      await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
+        kind: 'not-allocated',
+      });
+    });
 
-      // Waiter already settled. Infrastructure failure returns
-      // already-settled but does not try to reject a missing waiter.
-      const decision = await authority.recordInfrastructureFailure(attempt.executionAttemptId, 'exec-1');
-      expect(decision.kind).toBe('already-settled');
+    it('returns not-found when the execution does not own the attempt', async () => {
+      const attempt = await authority.createAttempt('exec-1');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
+      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
+
+      await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-other' })).resolves.toEqual({
+        kind: 'not-found',
+      });
     });
   });
 
@@ -906,35 +1549,32 @@ describe('ExecutionAttemptAuthority', () => {
 
   describe('recovery operation rejection without support', () => {
     let minimalAuthority: ExecutionAttemptAuthority;
+    const claim: ProviderOperationClaim = {
+      executionAttemptId: 'attempt-1',
+      generation: 1,
+      ownerId: TEST_OWNER_ID,
+      token: 'token-1',
+      leaseExpiresAt: leaseAt(60_000),
+    };
 
     beforeEach(() => {
-      const minimalRepo: ExecutionAttemptRepository = {
-        createAttempt: async (input) => ({
-          executionAttemptId: input.executionAttemptId,
-          executionId: input.executionId,
-          status: 'pending' as const,
-          allocationRef: null,
-          createdAt: new Date().toISOString(),
-        }),
-        beginProvisioning: async () => ({ kind: 'started' as const }),
-        recordAllocation: async () => ({ kind: 'recorded' as const }),
-        recordProvisioningFailure: async () => ({ kind: 'recorded' as const }),
-        getActiveAttempt: async () => null,
-        commitOutcome: async () => ({ kind: 'fenced' as const }),
-        abandonPendingAttempt: async () => ({ kind: 'fenced' as const }),
-        recordInfrastructureFailure: async () => ({ kind: 'fenced' as const }),
-      };
-      minimalAuthority = new ExecutionAttemptAuthority(minimalRepo);
+      minimalAuthority = new ExecutionAttemptAuthority(createMinimalRepository());
     });
 
     it('throws on getAttemptWithAllocation', async () => {
       await expect(minimalAuthority.getAttemptWithAllocation('attempt-1')).rejects.toThrow('does not support recovery');
     });
 
+    it('throws on recordDiscoveredAllocation', async () => {
+      await expect(
+        minimalAuthority.recordDiscoveredAllocation({ claim, allocationRef: makeAllocationRef() }),
+      ).rejects.toThrow('does not support recovery');
+    });
+
     it('throws on evolveAllocationRef', async () => {
       await expect(
         minimalAuthority.evolveAllocationRef({
-          executionAttemptId: 'attempt-1',
+          claim,
           executionId: 'exec-1',
           currentRef: makeAllocationRef(),
           nextRef: makeCorrelatedAllocationRef(),
@@ -947,8 +1587,8 @@ describe('ExecutionAttemptAuthority', () => {
     });
 
     it('uses infrastructure settlement without requiring recovery queries', async () => {
-      await expect(minimalAuthority.recordInfrastructureFailure('attempt-1', 'exec-1')).resolves.toEqual({
-        kind: 'fenced',
+      await expect(minimalAuthority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
+        kind: 'not-found',
       });
     });
   });

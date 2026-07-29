@@ -1,24 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { ExecutionAttemptAuthority, type ExecutionAttemptRepository } from '@makaio/subsystem-workflow-engine';
+import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
 import { createNodeWorkflowRunnerPackageOptions } from '../node-workflow-runner-factory.js';
+import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
 
 /**
- * Minimal deterministic repository fixture for construction gate tests.
+ * Repository fixture for construction gate tests.
  *
  * These tests verify that the factory enforces the construction gate;
  * they do not exercise repository behavior.
  */
-const stubRepository: ExecutionAttemptRepository = {
-  createAttempt: () => Promise.reject(new Error('stub')),
-  beginProvisioning: () => Promise.reject(new Error('stub')),
-  recordAllocation: () => Promise.reject(new Error('stub')),
-  recordProvisioningFailure: () => Promise.reject(new Error('stub')),
-  getActiveAttempt: () => Promise.reject(new Error('stub')),
-  commitOutcome: () => Promise.reject(new Error('stub')),
-  abandonPendingAttempt: () => Promise.reject(new Error('stub')),
-  recordInfrastructureFailure: () => Promise.reject(new Error('stub')),
-};
+const stubRepository = createInMemoryAttemptRepository();
 
 describe('createNodeWorkflowRunnerPackageOptions construction gates', () => {
   const baseParams = {

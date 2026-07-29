@@ -1,19 +1,38 @@
 import { z } from 'zod';
 
 /**
- * Credential reference resolved at runtime by the active credential provider.
+ * Scheme prefix of every supported credential-reference format.
  *
- * Supported formats:
+ * Credential references are resolved at runtime by the active credential
+ * provider. Supported formats:
  * - `keychain:<service>:<account>` - OS-backed secure store
  * - `env:<VAR_NAME>` - Environment variable
  * - `file:<path>` - File path
  * - `stored:providerConfig:<configId>:<key>` - ConfigId-keyed credential store
  *   (resolved via `CredentialSubjects.get({ configId })`)
+ *
+ * These prefixes are the format's public vocabulary, so consumers that have to
+ * name a scheme — diagnostics, resolvers, documentation — read them from here
+ * rather than restating them. {@link CredentialRefSchema} remains the sole
+ * authority on whether a given string is a valid reference.
  */
-const ENV_REF_PREFIX = 'env:';
-const FILE_REF_PREFIX = 'file:';
-const KEYCHAIN_REF_PREFIX = 'keychain:';
-const STORED_REF_PREFIX = 'stored:providerConfig:';
+export const CREDENTIAL_REF_PREFIXES = {
+  /** Environment-variable reference prefix. */
+  env: 'env:',
+  /** File-path reference prefix. */
+  file: 'file:',
+  /** OS keychain reference prefix. */
+  keychain: 'keychain:',
+  /** Provider-config-keyed credential store reference prefix. */
+  stored: 'stored:providerConfig:',
+} as const;
+
+const {
+  env: ENV_REF_PREFIX,
+  file: FILE_REF_PREFIX,
+  keychain: KEYCHAIN_REF_PREFIX,
+  stored: STORED_REF_PREFIX,
+} = CREDENTIAL_REF_PREFIXES;
 
 /**
  * Parse a stored provider-config credential ref without branding the input.

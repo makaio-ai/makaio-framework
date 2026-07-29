@@ -1,3 +1,4 @@
+import { getErrorString } from '@makaio/utils';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import { ServiceSkipError } from '../service-skip-error.js';
 import {
@@ -50,30 +51,74 @@ export interface ToggleHost extends ExtensionContextHost {
 /**
  * Handle the `kernel:extension.setEnabled` RPC by enabling or disabling an extension.
  *
- * Delegates to {@link enableExtension} or {@link disableExtension} based on the
- * requested state, then persists the new value and emits the bus event.
+ * Persists a changed preference before delegating to {@link enableExtension}
+ * or {@link disableExtension}, so persistence failure cannot leave runtime
+ * state ahead of durable state. A transition rejected without changing the
+ * runtime flag rolls the preference back.
+ *
+ * A disable that reached `stopped` but failed to tear the service down still
+ * persists the requested state — the extension is stopped — and still announces
+ * it, while reporting failure and leaving the teardown error on the entry. A
+ * transition that was rejected outright changes nothing and announces nothing.
  * @param host - Coordinator surface providing shared state.
  * @param name - Name of the extension to toggle.
  * @param enabled - `true` to enable, `false` to disable.
- * @returns `true` on success, `false` when the state machine rejects the transition.
+ * @returns `true` on success, `false` when the transition was rejected or completed uncleanly.
  */
 export async function handleSetEnabled(host: ToggleHost, name: string, enabled: boolean): Promise<boolean> {
   const entry = host.entries.get(name);
   if (!entry) return false;
 
-  const success = enabled ? await enableExtension(host, name, entry) : await disableExtension(host, name, entry);
-  const stateMatchesRequest = entry.enabled === enabled;
-  if (!success && !stateMatchesRequest) return false;
+  const wasEnabled = entry.enabled;
+  const preferenceChanged = enabled !== wasEnabled;
+  if (preferenceChanged) {
+    await host.persistEnabled?.(name, enabled);
+  }
 
-  await host.persistEnabled?.(name, enabled);
+  let transitionSucceeded: boolean;
+  try {
+    transitionSucceeded = enabled
+      ? await enableExtension(host, name, entry)
+      : await disableExtension(host, name, entry);
+  } catch (transitionError: unknown) {
+    if (preferenceChanged && host.persistEnabled) {
+      try {
+        await host.persistEnabled(name, wasEnabled);
+      } catch (rollbackError: unknown) {
+        throw new AggregateError(
+          [transitionError, rollbackError],
+          `Extension "${name}" transition and preference rollback both failed`,
+        );
+      }
+    }
+    throw transitionError;
+  }
 
-  if (!success) return false;
+  // A rejected transition that made no runtime change restores its prior
+  // persisted flag. A successful failed/skipped → active recovery can leave the
+  // already-enabled preference unchanged, while an unclean accepted transition
+  // can change the flag (for example active → stopped) despite returning false.
+  // Both accepted cases must remain observable.
+  const enabledStateChanged = entry.enabled !== wasEnabled;
+  if (!enabledStateChanged && !transitionSucceeded) {
+    if (preferenceChanged) {
+      await host.persistEnabled?.(name, wasEnabled);
+    }
+    return false;
+  }
 
+  // The requested lifecycle transition was accepted, so every observer of the
+  // toggle learns its effective preference. This also refreshes consumers after
+  // a failed/skipped → active recovery whose preference was already enabled.
+  // Teardown cleanliness travels the three channels that already carry it —
+  // this function's result, `entry.error`, and the `stopped` transition — rather
+  // than being expressed by withholding this event and leaving a second window
+  // showing a stopped extension as enabled.
   void host.bus.emit(ExtensionSubjects.enabledChanged, { name, enabled }).catch((err: unknown) => {
     console.error(`[ExtensionCoordinator] enabledChanged emit failed for "${name}":`, err);
   });
 
-  return true;
+  return transitionSucceeded;
 }
 
 /**
@@ -121,7 +166,7 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
         entry.storageCleanup = cleanup;
       }
     } catch (err) {
-      entry.error = err instanceof Error ? err.message : String(err);
+      entry.error = getErrorString(err);
       console.error(`[ExtensionCoordinator] Extension "${name}" storage re-registration failed:`, err);
       transitionPackageEntry(host.bus, entry, 'failed');
       return false;
@@ -148,7 +193,7 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
         transitionPackageEntry(host.bus, entry, 'skipped');
         return false;
       }
-      entry.error = err instanceof Error ? err.message : String(err);
+      entry.error = getErrorString(err);
       console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, err);
       transitionPackageEntry(host.bus, entry, 'failed');
       return false;
@@ -165,7 +210,7 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
     // rolled back previously-invoked processors before re-throwing.
     await cleanupFailedEnable(name, entry.service, storageCleanup, entry);
     entry.service = undefined;
-    entry.error = err instanceof Error ? err.message : String(err);
+    entry.error = getErrorString(err);
     console.error(`[ExtensionCoordinator] Extension "${name}" contribution processing failed:`, err);
     transitionPackageEntry(host.bus, entry, 'failed');
     return false;
@@ -183,10 +228,15 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
  *
  * Stops contribution processors, destroys the service, unregisters storage
  * handlers, and transitions to `stopped`.
+ *
+ * Teardown is completed even when the service fails to destroy — the extension
+ * really is stopped and must not be left claiming otherwise — but the failure
+ * is recorded on the entry and reported as an unsuccessful disable rather than
+ * presented as a clean stop.
  * @param host - Coordinator surface providing shared state.
  * @param name - Extension name (used for log messages).
  * @param entry - Mutable runtime entry for the extension.
- * @returns `true` when the extension reaches `stopped`, `false` otherwise.
+ * @returns `true` when the extension reaches `stopped` cleanly, `false` otherwise.
  */
 async function disableExtension(host: ToggleHost, name: string, entry: ExtensionEntry): Promise<boolean> {
   if (entry.state !== 'active') return false;
@@ -208,12 +258,21 @@ async function disableExtension(host: ToggleHost, name: string, entry: Extension
   entry.enabled = false;
   entry.error = undefined;
 
-  await runContributionProcessors(host.contributionProcessors, host, name, entry, 'stopped');
+  const teardownFailures: unknown[] = [];
+  try {
+    teardownFailures.push(
+      ...(await runContributionProcessors(host.contributionProcessors, host, name, entry, 'stopped')),
+    );
+  } catch (err) {
+    teardownFailures.push(err);
+    console.error(`[ExtensionCoordinator] Contribution processor error during disable of "${name}":`, err);
+  }
 
   if (entry.service) {
     try {
       await entry.service.destroy?.();
     } catch (err) {
+      teardownFailures.push(err);
       console.error(`[ExtensionCoordinator] Error during disable destroy of "${name}":`, err);
     } finally {
       entry.service = undefined;
@@ -224,10 +283,20 @@ async function disableExtension(host: ToggleHost, name: string, entry: Extension
     try {
       entry.storageCleanup();
     } catch (err) {
+      teardownFailures.push(err);
       console.error(`[ExtensionCoordinator] Storage cleanup error during disable of "${name}":`, err);
     } finally {
       entry.storageCleanup = undefined;
     }
+  }
+
+  if (teardownFailures.length > 0) {
+    const detail = teardownFailures.map((failure) => getErrorString(failure)).join('; ');
+    const teardownError = new AggregateError(
+      teardownFailures,
+      `Extension "${name}" disabled with ${teardownFailures.length} teardown failure(s): ${detail}`,
+    );
+    entry.error = getErrorString(teardownError);
   }
 
   transitionPackageEntry(host.bus, entry, 'stopped');
@@ -242,7 +311,7 @@ async function disableExtension(host: ToggleHost, name: string, entry: Extension
     console.error(`[ExtensionCoordinator] warnings.changed emit failed for "${name}":`, err);
   }
 
-  return true;
+  return teardownFailures.length === 0;
 }
 
 /**
