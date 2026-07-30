@@ -14,6 +14,7 @@ import {
   type TestAdapter,
   createTestAdapter,
   MockConnector,
+  TestAgent,
   type TestBus,
   type BaseAgentConnectorConfig,
 } from './shared.js';
@@ -97,6 +98,17 @@ describe('AIAdapter - fork idle start', () => {
     // Persisted agent record must have undefined adapterSessionId
     expect(persistedAgent).toBeDefined();
     expect(persistedAgent!.adapterSessionId).toBeUndefined();
+
+    const activeAgent = adapter.getAgent(startResult.agentId);
+    expect(activeAgent).toBeDefined();
+    if (!activeAgent) throw new Error('Expected active agent handle');
+    expect(activeAgent.adapterSessionId).toBeUndefined();
+    expect(activeAgent.agent).toBeInstanceOf(TestAgent);
+
+    const listedAgent = adapter.getActiveAgents()[0];
+    expect(listedAgent).toBeDefined();
+    if (!listedAgent) throw new Error('Expected listed agent handle');
+    expect(listedAgent.adapterSessionId).toBeUndefined();
   });
 
   it('returns without hanging when no initialMessage is provided', async () => {
