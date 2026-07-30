@@ -1,4 +1,4 @@
-# @makaio/services/git-service
+# @makaio/framework/git
 
 Unified git service providing bus-backed git queries plus `.git` change monitoring layered on the runtime file-watcher service.
 
@@ -45,8 +45,8 @@ declare module '@makaio/bus-core' {
 
 1. **Initialize the service**
    ```ts
-   import { MakaioBus } from '@makaio/bus-core';
-   import { GitService } from '@makaio/services/git-service';
+   import { MakaioBus } from '@makaio/framework/bus';
+   import { GitService } from '@makaio/framework/git';
 
    const gitService = new GitService(MakaioBus);
    await gitService.init();
@@ -56,8 +56,8 @@ declare module '@makaio/bus-core' {
 
 2. **Make requests via bus**
    ```ts
-   import { MakaioBus } from '@makaio/bus-core';
-   import { GitSubjects } from '@makaio/contracts';
+   import { MakaioBus } from '@makaio/framework/bus';
+   import { GitSubjects } from '@makaio/framework/contracts';
 
    // Get current branch
    const branch = await MakaioBus.request(GitSubjects.getBranch, {});

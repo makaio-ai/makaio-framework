@@ -6,8 +6,8 @@
  *   server cannot be forced to retain pending aggregation state indefinitely.
  * - `setupClientConnection` — handles the full per-socket lifecycle: auth,
  *   subscription-sync, event listeners, and cleanup on close.
- * - `routeRequestToClients` — priority-ordered fan-out for server-initiated
- *   requests, retrying clients in descending priority until one responds.
+ * - `routeRequestToClients` — subscription-gated fan-out for server-initiated
+ *   requests, retrying matching clients in connection order.
  *
  * Keeping this logic out of `ServerTransport` lets the transport class focus on
  * the `BusTransport` contract while this module owns connection mechanics.
@@ -182,12 +182,12 @@ export interface RequestRoutingDeps {
 }
 
 /**
- * Send a server-initiated request to all connected clients in priority order,
- * retrying until one handles it.
+ * Send a server-initiated request to interested connected clients, retrying
+ * in connection order until one handles it.
  *
- * Routing considers only clients authorized for the request subject. Among
- * those eligible clients, subscriptions influence ordering but do not gate
- * request correctness.
+ * Routing considers only clients that advertised a matching request handler
+ * and remain authorized for the request subject. A request received from a
+ * client is never routed back to that origin socket.
  *
  * Each retry uses a unique correlation ID so stale responses or timeouts from
  * earlier attempts cannot settle the currently active attempt.
@@ -204,21 +204,14 @@ export async function routeRequestToClients(
 ): Promise<unknown> {
   const { registry, correlations } = deps;
   const fullSubject = `${requestMsg.namespace}.${requestMsg.subject}`;
+  const origin = registry.getRequestOrigin(requestMsg.correlationId);
+  const interestedClients = registry.getInterestedRequestClients(fullSubject, requestMsg.payload, origin);
 
-  const eligibleClients = registry.getEligibleRequestClients(fullSubject);
-  const prioritizedClients = eligibleClients
-    .map((client) => ({
-      client,
-      priority: registry.getRequestRoutingPriority(client, fullSubject, requestMsg.payload),
-    }))
-    .sort((left, right) => right.priority - left.priority)
-    .map(({ client }) => client);
-
-  if (prioritizedClients.length === 0) {
+  if (interestedClients.length === 0) {
     throw new NoHandlerError(fullSubject);
   }
 
-  for (const [attemptIndex, targetClient] of prioritizedClients.entries()) {
+  for (const [attemptIndex, targetClient] of interestedClients.entries()) {
     // Each retry must have a unique correlation ID so stale responses/timeouts
     // from earlier attempts cannot settle the currently active attempt.
     const attemptCorrelationId = `${requestMsg.correlationId}:attempt-${attemptIndex + 1}`;

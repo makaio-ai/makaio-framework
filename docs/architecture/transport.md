@@ -120,6 +120,31 @@ The WebSocket transport is duck-typed — it works with the browser's native
 | `E2ERelayAuth` | E2E via relay server (browser-to-machine through cloud) |
 | `DispatchingAuth` | Hot-swaps between auth strategies at runtime |
 
+#### Workflow Execution Attempt Access
+
+Node hosts can provision the canonical restricted identity for a remote workflow
+execution attempt through the public runtime API:
+
+```ts
+import { registerWorkflowExecutionBusSecret } from '@makaio/framework/runtime-node/workflow-execution-bus-access';
+
+const registration = registerWorkflowExecutionBusSecret({
+  executionAttemptId,
+  executionId,
+  secret: providerDeliveredSecret,
+});
+```
+
+The registration uses peer kind `workflow-execution-attempt`, attaches
+`executionId` as an authenticated claim, and defaults to the framework's
+execution-attempt subject set. Call `registration.cleanup()` when the attempt
+ends to revoke that exact secret.
+
+`allowedSubjects` is an authorization boundary: it restricts the messages and
+subscription patterns the peer may send. It does not advertise request-handler
+interest. A remote attempt receives a server-routed request only after it has
+also advertised a matching request subscription.
+
 ### MessagePort Transport
 
 **Package:** `../transports/message-channel/`
@@ -265,10 +290,10 @@ registry layer; otherwise a stale subscription snapshot could silently drop a
 valid responder and produce an incomplete result array.
 
 `ServerTransport` adds per-client filtering inside a WebSocket server transport:
-event fan-out and server-initiated broadcast fan-out use each client's
-subscriptions and payload filters. Server-initiated requests are not filtered
-out; clients are tried in subscription-priority order, and a `NoHandlerError` or
-timeout advances to the next client.
+event, broadcast, and request delivery use each client's subscriptions and
+payload filters. Requests require an explicit matching subscription, never
+route back to their origin socket, and retry matching clients in connection
+order when a `NoHandlerError` or timeout occurs.
 
 ## Priority-Cursor Dispatch
 

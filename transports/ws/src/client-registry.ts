@@ -14,7 +14,12 @@ import type {
   SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
-import { DEFAULT_REQUEST_TIMEOUT_MS, shouldReceiveMessage, getSubjectFromBusMessage } from '@makaio/bus-core';
+import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  getSubjectFromBusMessage,
+  matchesSubscription,
+  shouldReceiveMessage,
+} from '@makaio/bus-core';
 import type { WebSocketLike } from './types.js';
 
 /**
@@ -300,45 +305,6 @@ export class ClientRegistry {
   }
 
   /**
-   * Compute request routing priority for a client.
-   *
-   * Priority only orders clients that have already passed request eligibility.
-   * - 2: client has subscriptions and the subject/filter matches
-   * - 1: client has no subscriptions declared (default catch-all mode)
-   * - 0: client has subscriptions but the current request does not match
-   * @param client - Target client
-   * @param fullSubject - Full request subject (`namespace.subject`)
-   * @param payload - Request payload
-   * @returns Priority score (higher is preferred)
-   */
-  public getRequestRoutingPriority(client: WebSocketLike, fullSubject: string, payload: unknown): number {
-    const subs = this.clientSubscriptions.get(client);
-    if (!subs || subs.size === 0) {
-      return 1;
-    }
-    return this.clientWantsMessage(client, fullSubject, payload) ? 2 : 0;
-  }
-
-  /**
-   * Collect ready clients that are authorized to receive a request subject.
-   *
-   * Eligibility is distinct from request priority: subscriptions influence
-   * ordering among eligible clients, but cannot authorize a socket to receive
-   * a subject outside its live identity restriction.
-   * @param subject - Full request subject (`namespace.subject`)
-   * @returns Eligible clients in connection order
-   */
-  public getEligibleRequestClients(subject: string): WebSocketLike[] {
-    const result: WebSocketLike[] = [];
-    for (const client of this.clients) {
-      if (!this.isReadyAndAuthenticated(client)) continue;
-      if (!this.isSubjectAllowedForClient(client, subject)) continue;
-      result.push(client);
-    }
-    return result;
-  }
-
-  /**
    * Associate an accepted inbound request with its requesting socket.
    *
    * The association is single-use and lasts until the request's propagated
@@ -366,6 +332,19 @@ export class ClientRegistry {
       }, remainingLifetime);
     }
     this.requestOrigins.set(correlationId, origin);
+  }
+
+  /**
+   * Read the requesting socket without consuming its response route.
+   *
+   * Request forwarding uses this to avoid routing a request back to the peer
+   * that submitted it. The entry remains live until the correlated response,
+   * cancellation, deadline, or socket removal consumes it.
+   * @param correlationId - Request correlation identifier.
+   * @returns Originating socket, or `undefined` when the request originated locally.
+   */
+  public getRequestOrigin(correlationId: string): WebSocketLike | undefined {
+    return this.requestOrigins.get(correlationId)?.socket;
   }
 
   /**
@@ -414,6 +393,28 @@ export class ClientRegistry {
       result.push(client);
     }
     return result;
+  }
+
+  /**
+   * Collect clients that advertised a matching request handler.
+   *
+   * Unlike event delivery, requests never use the no-subscription catch-all
+   * behavior. A socket is a request target only when its current subscription
+   * and payload filter match; identity subject restrictions remain an
+   * additional authorization gate.
+   * @param subject - Full request subject.
+   * @param payload - Request payload used for subscription filter matching.
+   * @param exclude - Optional origin socket that must not receive its own request.
+   * @returns Interested, authorized request targets in connection order.
+   */
+  public getInterestedRequestClients(subject: string, payload: unknown, exclude?: WebSocketLike): WebSocketLike[] {
+    return this.getInterestedClients(subject, payload, exclude).filter((client) => {
+      const subscriptions = this.clientSubscriptionState.get(client);
+      if (!subscriptions) return false;
+      return [...subscriptions].some(
+        ([pattern, state]) => state.priorities.length > 0 && matchesSubscription(subject, pattern),
+      );
+    });
   }
 
   // ---------------------------------------------------------------------------
