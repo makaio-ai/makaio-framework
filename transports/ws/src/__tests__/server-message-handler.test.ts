@@ -1152,7 +1152,7 @@ describe('outbound socketAuthChecker on forwarding', () => {
     expect(closeSpy).not.toHaveBeenCalled();
   });
 
-  it('keeps request eligibility separate from subscription priority', () => {
+  it('excludes expired sockets from interested request targets', () => {
     const expiredSocket = new MockWebSocket();
     const registry = new ClientRegistry({
       debug: false,
@@ -1166,9 +1166,7 @@ describe('outbound socketAuthChecker on forwarding', () => {
       deliveryClasses: {},
     });
 
-    const priority = registry.getRequestRoutingPriority(expiredSocket, 'test.subject', {});
-    expect(priority).toBe(2);
-    expect(registry.getEligibleRequestClients('test.subject')).toEqual([]);
+    expect(registry.getInterestedRequestClients('test.subject', {})).toEqual([]);
   });
 });
 

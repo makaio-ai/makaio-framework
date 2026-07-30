@@ -492,6 +492,10 @@
       "types": "./dist/runtime-node/bus/runtime/namespace.d.mts",
       "default": "./dist/runtime-node/bus/runtime/namespace.mjs"
     },
+    "./runtime-node/workflow-execution-bus-access": {
+      "types": "./dist/runtime-node/workflow-execution-bus-access.d.mts",
+      "default": "./dist/runtime-node/workflow-execution-bus-access.mjs"
+    },
     "./runtime-node/workflow-worker": {
       "types": "./dist/runtime-node/workflow-worker/index.d.mts",
       "default": "./dist/runtime-node/workflow-worker/index.mjs"

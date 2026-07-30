@@ -68,6 +68,17 @@ function makeAuth(
   };
 }
 
+function subscribeClient(client: MockWebSocket, subject: string, filter?: Record<string, unknown>): void {
+  client.receiveMessage(
+    JSON.stringify({
+      type: 'subscribe',
+      subjects: { [subject]: [0] },
+      deliveryClasses: { [subject]: 'relayable' },
+      ...(filter !== undefined && { filters: { [subject]: filter } }),
+    }),
+  );
+}
+
 describe('Server mode behavior', () => {
   it('excludes subject-restricted clients from server-initiated request targets', async () => {
     const identityId = 'restricted-request-target';
@@ -86,6 +97,8 @@ describe('Server mode behavior', () => {
     try {
       await transport.connect();
       wss.simulateConnection(restrictedClient);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      subscribeClient(restrictedClient, 'worker-node.control.outcome.submit');
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       await expect(
@@ -372,6 +385,9 @@ describe('Server mode behavior', () => {
       wss.simulateConnection(client1);
       wss.simulateConnection(client2);
       await new Promise((resolve) => setTimeout(resolve, 50));
+      subscribeClient(client1, 'dialog.confirm');
+      subscribeClient(client2, 'dialog.confirm');
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       const request: BusRequestMessage = {
         type: 'request',
@@ -430,6 +446,9 @@ describe('Server mode behavior', () => {
       wss.simulateConnection(client1);
       wss.simulateConnection(client2);
       await new Promise((resolve) => setTimeout(resolve, 50));
+      subscribeClient(client1, 'dialog.confirm');
+      subscribeClient(client2, 'dialog.confirm');
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       const request: BusRequestMessage = {
         type: 'request',
@@ -569,23 +588,25 @@ describe('Server mode behavior', () => {
     }
   });
 
-  it('sends requests to clients regardless of subscription state', async () => {
+  it('does not route requests to unmatched or event-only subscriptions', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({ websocket: wss });
 
     try {
       await transport.connect();
 
-      const client = new MockWebSocket();
-      wss.simulateConnection(client);
+      const unmatchedClient = new MockWebSocket();
+      const eventOnlyClient = new MockWebSocket();
+      wss.simulateConnection(unmatchedClient);
+      wss.simulateConnection(eventOnlyClient);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // Subscribe to a DIFFERENT subject — request should still reach this client
-      client.receiveMessage(
+      subscribeClient(unmatchedClient, 'dialog.other');
+      eventOnlyClient.receiveMessage(
         JSON.stringify({
           type: 'subscribe',
-          subjects: { 'dialog.other': [] },
-          deliveryClasses: { 'dialog.other': 'relayable' },
+          subjects: { 'dialog.confirm': [] },
+          deliveryClasses: { 'dialog.confirm': 'relayable' },
         }),
       );
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -599,47 +620,30 @@ describe('Server mode behavior', () => {
         messageId: 'req-unfiltered',
       };
 
-      const responsePromise = transport.send(request);
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(client.sentMessages).toHaveLength(1);
-      const dispatched = JSON.parse(client.sentMessages[0]);
-      client.receiveMessage(
-        JSON.stringify({
-          type: 'response',
-          correlationId: dispatched.correlationId,
-          result: { selectedOptionId: 'allow' },
-        }),
-      );
-
-      await expect(responsePromise).resolves.toEqual({ selectedOptionId: 'allow' });
+      await expect(transport.send(request)).rejects.toThrow(NoHandlerError);
+      expect(unmatchedClient.sentMessages).toHaveLength(0);
+      expect(eventOnlyClient.sentMessages).toHaveLength(0);
     } finally {
       await transport.disconnect();
     }
   });
 
-  it('prioritizes matching subscriptions before catch-all clients for requests', async () => {
+  it('routes requests only when subject and payload filter match', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({ websocket: wss });
 
     try {
       await transport.connect();
 
-      const catchAllClient = new MockWebSocket();
+      const filteredOutClient = new MockWebSocket();
       const matchingClient = new MockWebSocket();
 
-      // Connect catch-all first so insertion order alone would pick it.
-      wss.simulateConnection(catchAllClient);
+      wss.simulateConnection(filteredOutClient);
       wss.simulateConnection(matchingClient);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      matchingClient.receiveMessage(
-        JSON.stringify({
-          type: 'subscribe',
-          subjects: { 'dialog.confirm': [] },
-          deliveryClasses: { 'dialog.confirm': 'relayable' },
-        }),
-      );
+      subscribeClient(filteredOutClient, 'dialog.confirm', { title: 'Different title' });
+      subscribeClient(matchingClient, 'dialog.confirm', { title: 'Tool approval' });
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       const request: BusRequestMessage = {
@@ -655,7 +659,7 @@ describe('Server mode behavior', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(matchingClient.sentMessages).toHaveLength(1);
-      expect(catchAllClient.sentMessages).toHaveLength(0);
+      expect(filteredOutClient.sentMessages).toHaveLength(0);
 
       const dispatched = JSON.parse(matchingClient.sentMessages[0]);
       matchingClient.receiveMessage(
@@ -667,6 +671,61 @@ describe('Server mode behavior', () => {
       );
 
       await expect(responsePromise).resolves.toEqual({ selectedOptionId: 'allow' });
+    } finally {
+      await transport.disconnect();
+    }
+  });
+
+  it('never routes an inbound request back to its origin socket', async () => {
+    const wss = new MockWebSocketServer();
+    const transport = new ServerTransport({ websocket: wss });
+    transport.onReceive(async (message) => {
+      if (message.type !== 'request') return;
+      const result = await transport.send(message);
+      await transport.send({ type: 'response', correlationId: message.correlationId, result });
+    });
+
+    try {
+      await transport.connect();
+
+      const origin = new MockWebSocket();
+      const handler = new MockWebSocket();
+      wss.simulateConnection(origin);
+      wss.simulateConnection(handler);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      subscribeClient(origin, 'dialog.confirm');
+      subscribeClient(handler, 'dialog.confirm');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      origin.receiveMessage(
+        JSON.stringify({
+          type: 'request',
+          namespace: 'dialog',
+          subject: 'confirm',
+          payload: { title: 'Tool approval' },
+          correlationId: 'corr-origin-exclusion',
+          messageId: 'req-origin-exclusion',
+        } satisfies BusRequestMessage),
+      );
+
+      await vi.waitFor(() => expect(handler.sentMessages).toHaveLength(1));
+      expect(origin.sentMessages).toHaveLength(0);
+
+      const dispatched = JSON.parse(handler.sentMessages[0]);
+      handler.receiveMessage(
+        JSON.stringify({
+          type: 'response',
+          correlationId: dispatched.correlationId,
+          result: { selectedOptionId: 'allow' },
+        }),
+      );
+
+      await vi.waitFor(() => expect(origin.sentMessages).toHaveLength(1));
+      expect(JSON.parse(origin.sentMessages[0])).toEqual({
+        type: 'response',
+        correlationId: 'corr-origin-exclusion',
+        result: { selectedOptionId: 'allow' },
+      });
     } finally {
       await transport.disconnect();
     }
@@ -746,6 +805,8 @@ describe('Server mode behavior', () => {
       const client = new MockWebSocket();
       wss.simulateConnection(client);
       await new Promise((resolve) => setTimeout(resolve, 50));
+      subscribeClient(client, 'dialog.confirm');
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       const request: BusRequestMessage = {
         type: 'request',

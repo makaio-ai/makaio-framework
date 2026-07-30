@@ -199,8 +199,8 @@ export class ServerTransport implements BusTransport {
    * Returns array of results from all handlers that responded.
    * - **Events/Other**: Broadcasts to all interested clients. Returns delivery status boolean.
    *
-   * For requests, routing considers only clients authorized for the subject;
-   * subscriptions order eligible clients but do not decide eligibility.
+   * For requests, routing considers only clients with matching subscriptions
+   * that remain authorized for the subject.
    * For events, subscription-based filtering is applied for efficiency.
    * @param message - The bus message to send
    * @param timeout - Correlation timeout in milliseconds; `0` means no automatic timeout

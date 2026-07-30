@@ -49,7 +49,7 @@ import { resolveInvalidationRoot } from './invalidation-root.js';
  * @example
  * ```typescript
  * import { MakaioBus } from '@makaio/bus-core';
- * import { GitService } from '@makaio/services-core/git';
+ * import { GitService } from '@makaio/framework/git';
  * import { GitSubjects } from '@makaio/services-core/git/namespace';
  *
  * // Initialize the service
