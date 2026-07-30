@@ -6,6 +6,7 @@
  * the common logic.
  */
 
+import { devNull } from 'node:os';
 import { removeTestRunnerAffix } from './test-runner-contract.js';
 
 export type TestCategory = 'unit' | 'ui' | 'integration' | 'adapters';
@@ -157,10 +158,50 @@ export const FORKS_REQUIRED_FILES: string[] = [
 ];
 
 /**
- * Git subsystem tests spawn real git subprocesses and temporary repositories.
- * Run them in a serial forks project to avoid cross-file process contention.
+ * Git subsystem tests spawn real git subprocesses against per-test temporary
+ * repositories. Run them in a dedicated project so subprocess-heavy
+ * files stay out of the broad thread-pool shards.
  */
 export const GIT_SERIAL_TEST_GLOBS = ['subsystems/git/src/**/*.test.ts'];
+
+/**
+ * Environment for the git test lane.
+ *
+ * Neutralizes the developer's global/system git configuration (LFS filters,
+ * exclude files, fsmonitor, and similar machine-specific behavior) so test
+ * repositories behave identically on every machine. Disables git's fsync
+ * calls and detached auto-maintenance: hundreds of short-lived test repos
+ * otherwise spawn background `git maintenance` processes that contend on
+ * repository locks and the temp filesystem.
+ */
+export const GIT_TEST_ENV: Record<string, string> = {
+  GIT_CONFIG_GLOBAL: devNull,
+  GIT_CONFIG_SYSTEM: devNull,
+  GIT_TEST_FSYNC: '0',
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'maintenance.auto',
+  GIT_CONFIG_VALUE_0: 'false',
+  GIT_CONFIG_KEY_1: 'gc.auto',
+  GIT_CONFIG_VALUE_1: '0',
+};
+
+/**
+ * Vitest group order for the git test lane.
+ *
+ * The lane exists so subprocess-heavy files stay out of the broad thread-pool
+ * shards, but the full-suite plan selects every project in one Vitest process —
+ * which would schedule the lane's git subprocesses alongside the broad shards
+ * again, undoing the separation. Hundreds of concurrent `git` processes starve
+ * other suites that shell out to git on a short budget, and those suites then
+ * fail on timing rather than on behavior.
+ *
+ * A non-default `sequence.groupOrder` makes the lane its own Vitest group, so
+ * it runs after group 0 within the same process. That keeps the single-process
+ * plan's startup and memory win while restoring the isolation the lane was
+ * created for, and it frees the lane to choose its own worker budget
+ * independently of the run-wide one.
+ */
+export const GIT_TEST_GROUP_ORDER = 1;
 
 /**
  * Infers the test category from a file's name suffix.
@@ -173,10 +214,24 @@ export function inferCategory(filePath: string): TestCategory {
   return 'unit';
 }
 
+/** Project name of the framework lane for tests requiring process isolation. */
+export const FORKS_REQUIRED_PROJECT_NAME = 'forks-required';
+
+/** Project name of the framework lane for git subprocess tests. */
+export const GIT_SERIAL_PROJECT_NAME = 'git-serial';
+
 /**
  * Project names for Vitest projects that are defined inline in the framework
  * vitest config but are not part of the standard shard table.
  * These projects handle special execution requirements (process isolation,
- * serial execution) that the shard-based projects cannot express.
+ * a pinned git environment) that the shard-based projects cannot express.
+ *
+ * `framework/vitest.config.ts`, the shard-coverage validator, and the
+ * full-suite scheduler all name these projects through the constants above, so
+ * a rename propagates to every consumer instead of silently splitting the
+ * scheduler's view from the config's.
  */
-export const FRAMEWORK_SPECIAL_PROJECT_NAMES: readonly string[] = ['forks-required', 'git-serial'];
+export const FRAMEWORK_SPECIAL_PROJECT_NAMES: readonly string[] = [
+  FORKS_REQUIRED_PROJECT_NAME,
+  GIT_SERIAL_PROJECT_NAME,
+];

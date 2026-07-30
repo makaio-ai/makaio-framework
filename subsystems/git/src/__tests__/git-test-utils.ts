@@ -50,23 +50,72 @@ export async function configureTestGit(repoPath: string, name = 'Test User', ema
 }
 
 /**
+ * Lazily initialized template repositories, cloned per test via `fs.cp`.
+ *
+ * Test repositories are created hundreds of times per run; spawning
+ * `git init` + configuration + commit subprocesses for each one dominates the
+ * git lane's wall clock because process spawning serializes at the OS level.
+ * Copying a fully prepared template costs no subprocess at all.
+ */
+const templatePromises = new Map<string, Promise<string>>();
+
+/**
+ * Build (once per process) a template repository for a given shape.
+ * @param key - Cache key identifying the template shape.
+ * @param build - Populates the template repository at the given path.
+ * @returns Absolute path to the template repository.
+ */
+function getTemplateRepo(key: string, build: (repoPath: string) => Promise<void>): Promise<string> {
+  let template = templatePromises.get(key);
+  if (!template) {
+    template = (async () => {
+      const repoPath = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `git-test-template-${key}-`)));
+      await build(repoPath);
+      return repoPath;
+    })();
+    templatePromises.set(key, template);
+  }
+  return template;
+}
+
+/**
+ * Materialize a fresh repository from a template.
+ * @param key - Template cache key.
+ * @param build - Template builder used on first materialization.
+ * @param prefix - Temp directory prefix for the per-test copy.
+ * @returns A {@link TestRepo} backed by a private copy of the template.
+ */
+async function cloneTemplateRepo(
+  key: string,
+  build: (repoPath: string) => Promise<void>,
+  prefix: string,
+): Promise<TestRepo> {
+  const template = await getTemplateRepo(key, build);
+  const repoPath = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
+  await fs.cp(template, repoPath, { recursive: true });
+  return {
+    repoPath,
+    git: simpleGit(repoPath),
+    cleanup: () => fs.rm(repoPath, { recursive: true, force: true }),
+  };
+}
+
+/**
  * Create a temporary git repository.
  *
  * The repo is initialized and configured but has no commits.
  * @param prefix - Temp directory prefix (default: 'git-test-')
  * @returns A {@link TestRepo} with an empty, initialized repository
  */
-export async function createTestRepo(prefix = 'git-test-'): Promise<TestRepo> {
-  const repoPath = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
-  const git = simpleGit(repoPath);
-  await git.init(['--initial-branch=main']);
-  await configureTestGit(repoPath);
-
-  return {
-    repoPath,
-    git,
-    cleanup: () => fs.rm(repoPath, { recursive: true, force: true }),
-  };
+export function createTestRepo(prefix = 'git-test-'): Promise<TestRepo> {
+  return cloneTemplateRepo(
+    'empty',
+    async (repoPath) => {
+      await simpleGit(repoPath).init(['--initial-branch=main']);
+      await configureTestGit(repoPath);
+    },
+    prefix,
+  );
 }
 
 /**
@@ -76,12 +125,19 @@ export async function createTestRepo(prefix = 'git-test-'): Promise<TestRepo> {
  * @param prefix - Temp directory prefix (default: 'git-test-')
  * @returns A {@link TestRepo} with one commit
  */
-export async function createTestRepoWithCommit(prefix = 'git-test-'): Promise<TestRepo> {
-  const repo = await createTestRepo(prefix);
-  await fs.writeFile(path.join(repo.repoPath, 'base.txt'), 'base\n');
-  await repo.git.add('base.txt');
-  await repo.git.commit('initial');
-  return repo;
+export function createTestRepoWithCommit(prefix = 'git-test-'): Promise<TestRepo> {
+  return cloneTemplateRepo(
+    'one-commit',
+    async (repoPath) => {
+      const git = simpleGit(repoPath);
+      await git.init(['--initial-branch=main']);
+      await configureTestGit(repoPath);
+      await fs.writeFile(path.join(repoPath, 'base.txt'), 'base\n');
+      await git.add('base.txt');
+      await git.commit('initial');
+    },
+    prefix,
+  );
 }
 
 /**

@@ -1,3 +1,5 @@
 **/node_modules
 **/dist
 **/coverage
+# Agent-session worktrees are full nested checkouts; never format them.
+.claude/worktrees

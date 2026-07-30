@@ -14,6 +14,9 @@ import { execFileSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   FORKS_REQUIRED_FILES,
+  FORKS_REQUIRED_PROJECT_NAME,
+  FRAMEWORK_SPECIAL_PROJECT_NAMES,
+  GIT_SERIAL_PROJECT_NAME,
   GIT_SERIAL_TEST_GLOBS,
   frameworkShards,
   inferCategory,
@@ -21,9 +24,31 @@ import {
   type TestCategory,
 } from './lib/vitest-categories.js';
 import { isBunTestFile, isTestFile } from './lib/test-runner-contract.js';
+import {
+  heapNodeOptions,
+  runFullSuite,
+  type FullSuiteBatchContext,
+  type FullSuitePlanConfig,
+} from './lib/full-suite-runner.js';
 
 const SCRIPT_DIR = import.meta.dirname;
 const FRAMEWORK_ROOT = resolve(SCRIPT_DIR, '..');
+const BUN_TEST_BATCH_NAME = 'bun';
+
+/** Framework project tables for the shared full-suite orchestration. */
+const FRAMEWORK_SUITE_CONFIG: FullSuitePlanConfig = {
+  broadProjects: Object.keys(frameworkShards),
+  broadBatchSize: 2,
+  specialProjects: FRAMEWORK_SPECIAL_PROJECT_NAMES,
+  // Both sides intentionally read the same constant. This workspace's Vitest
+  // config names its special projects through FORKS_REQUIRED_PROJECT_NAME and
+  // GIT_SERIAL_PROJECT_NAME, so scheduler/config drift is prevented by
+  // construction rather than detected at run time. The plan-level guard still
+  // does real work for a workspace that maintains its scheduled list separately
+  // from the declaration, which is why the field stays on the shared contract.
+  declaredSpecialProjects: FRAMEWORK_SPECIAL_PROJECT_NAMES,
+  bunBatchName: BUN_TEST_BATCH_NAME,
+};
 
 /**
  * Checks whether an argument looks like a test file path.
@@ -55,10 +80,10 @@ function resolveTest(inputPath: string): ResolvedTest | null {
   const relativePath = normalizeFilePath(inputPath);
   const category = inferCategory(relativePath);
   if (FORKS_REQUIRED_FILES.includes(relativePath)) {
-    return { category, shard: 'forks-required', relativePath };
+    return { category, shard: FORKS_REQUIRED_PROJECT_NAME, relativePath };
   }
   if (GIT_SERIAL_TEST_GLOBS.some((glob) => relativePath.startsWith(glob.replace('/**/*.test.ts', '/')))) {
-    return { category, shard: 'git-serial', relativePath };
+    return { category, shard: GIT_SERIAL_PROJECT_NAME, relativePath };
   }
   const shard = resolveShardForFile(relativePath, frameworkShards);
   if (!shard) return null;
@@ -92,18 +117,47 @@ function runBunTests(filePaths: string[], options: string[] = []): void {
   });
 }
 
-/** Runs the full framework-only test suite with all categories enabled. */
-function runFullSuiteFrameworkOnly(): void {
-  runVitest([], FRAMEWORK_ROOT, { MAKAIO_TEST_CATEGORIES: 'unit,ui,integration' });
-  runBunTests([]);
+/**
+ * Execute one framework plan batch in a child process.
+ * @param projects - Projects executed by the batch.
+ * @param context - Batch execution context from the shared runner.
+ */
+async function executeFrameworkBatch(projects: readonly string[], context: FullSuiteBatchContext): Promise<void> {
+  if (projects[0] === BUN_TEST_BATCH_NAME) {
+    runBunTests([]);
+    return;
+  }
+  const nodeOptions = heapNodeOptions(context, process.env.NODE_OPTIONS);
+  runVitest(
+    [
+      ...projects.flatMap((project) => ['--project', project]),
+      ...(context.maxWorkers ? ['--maxWorkers', String(context.maxWorkers)] : []),
+    ],
+    FRAMEWORK_ROOT,
+    {
+      MAKAIO_TEST_CATEGORIES: 'unit,ui,integration',
+      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
+    },
+  );
+}
+
+/**
+ * Runs the full framework-only test suite with all categories enabled.
+ * @returns Exit status of the full-suite plan.
+ */
+function runFullSuiteFrameworkOnly(): Promise<number> {
+  return runFullSuite({
+    config: FRAMEWORK_SUITE_CONFIG,
+    executeBatch: executeFrameworkBatch,
+  });
 }
 
 /** Runs the requested framework tests. */
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
-    runFullSuiteFrameworkOnly();
+    process.exitCode = await runFullSuiteFrameworkOnly();
     return;
   }
 
@@ -139,7 +193,7 @@ function main(): void {
 }
 
 try {
-  main();
+  await main();
 } catch (err) {
   console.error(err);
   process.exit(1);

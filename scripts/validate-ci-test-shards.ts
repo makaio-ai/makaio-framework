@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { frameworkShards, FRAMEWORK_SPECIAL_PROJECT_NAMES } from './lib/vitest-categories.js';
+import { frameworkShards, FRAMEWORK_SPECIAL_PROJECT_NAMES, GIT_SERIAL_PROJECT_NAME } from './lib/vitest-categories.js';
 import { checkShardCoverage, extractShardsFromWorkflowYaml } from './lib/ci-shard-coverage.js';
 
 const frameworkRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,11 +30,11 @@ const projectNames: string[] = [...Object.keys(frameworkShards), ...FRAMEWORK_SP
  * Each entry must be justified below.
  */
 const intentionallyUnclaimed: readonly string[] = [
-  // git-serial: Uses a dedicated serial forks pool to avoid cross-file git
-  // process contention. Not yet wired into the CI shard matrix — these tests
-  // do not run in CI at the time of writing. Add to .github/workflows/ci.yml
-  // test_shards when the team decides CI coverage is required.
-  'git-serial',
+  // git-serial: Dedicated lane for git subprocess tests. Not yet wired
+  // into the CI shard matrix — these tests do not run in CI at the time of
+  // writing. Add to .github/workflows/ci.yml test_shards when the team decides
+  // CI coverage is required.
+  GIT_SERIAL_PROJECT_NAME,
 ];
 
 const issues = checkShardCoverage({ projectNames, claimedShards, intentionallyUnclaimed });

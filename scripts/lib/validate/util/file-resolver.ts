@@ -6,6 +6,16 @@ import type { ValidateOptions } from '../types.js';
 const VALIDATION_FILE_PATTERN = '**/*.{ts,tsx,js,jsx,cjs,mjs,cts,mts,json,jsonc,css,scss}';
 
 /**
+ * Patterns that must never be validated, regardless of .gitignore state.
+ *
+ * Agent-session worktrees under `.claude/worktrees` are full nested checkouts;
+ * traversing them multiplies the validated surface by the number of worktrees.
+ * They are hard-ignored here because relying on .gitignore alone has proven
+ * fragile.
+ */
+const HARD_IGNORE_PATTERNS = ['**/node_modules/**', '**/.claude/worktrees/**'];
+
+/**
  * Resolves files to validate based on options.
  *
  * Expands directories and glob patterns into a flat list of absolute file paths,
@@ -39,17 +49,17 @@ export async function resolveFiles(options: ValidateOptions): Promise<string[]> 
     }
 
     // Use globby to expand all patterns
-    // Only ignore node_modules for performance - let each tool handle its own ignores
+    // Only apply the hard ignores for safety - let each tool handle its own ignores
     return globby(patterns, {
-      ignore: ['**/node_modules/**'],
+      ignore: HARD_IGNORE_PATTERNS,
       absolute: true,
     });
   }
 
   const pattern = options.glob || VALIDATION_FILE_PATTERN;
-  // Respect .gitignore for sensible defaults; keep node_modules as fallback
+  // Respect .gitignore for sensible defaults; keep the hard ignores as fallback
   return globby(pattern, {
-    ignore: ['**/node_modules/**'],
+    ignore: HARD_IGNORE_PATTERNS,
     gitignore: true,
     absolute: true,
   });
