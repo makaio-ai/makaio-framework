@@ -175,6 +175,7 @@ export {
 // AI Adapter base class
 export { AIAdapter } from './adapter/index.js';
 export type {
+  ActiveAgentHandle,
   AIAdapterConfig,
   AIAdapterConstructorConfig,
   AgentRuntimeCreationResult,

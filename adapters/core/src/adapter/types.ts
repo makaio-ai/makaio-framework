@@ -119,6 +119,19 @@ export interface AgentUsageTotals {
   totalCalls: number;
 }
 
+/**
+ * In-process handle for an active agent and its registry-owned session metadata.
+ * @typeParam TAgent - Live agent implementation exposed to local callers
+ */
+export interface ActiveAgentHandle<TAgent = AIAgent> {
+  /** Live agent instance with its prototype and runtime state intact. */
+  readonly agent: TAgent;
+  /** Makaio session ID associated with the registry entry. */
+  readonly sessionId: string;
+  /** Provider-specific session ID, unavailable until the provider confirms it. */
+  readonly adapterSessionId: string | undefined;
+}
+
 /** Result from creating an agent runtime. */
 export interface AgentRuntimeCreationResult {
   cleanup: () => void;

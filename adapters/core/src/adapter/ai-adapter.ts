@@ -7,7 +7,7 @@ import type { AIAgentConfig } from '../agent/types.js';
 import type { ConfigFactoryInput } from './ai-adapter-config.js';
 import type { AdapterProviderDefinition, PlatformDefaults } from '../types/index.js';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { AgentCreationOptions, AIAdapterConstructorConfig } from './types.js';
+import type { ActiveAgentHandle, AgentCreationOptions, AIAdapterConstructorConfig } from './types.js';
 import { ActiveAgentRegistry } from './agent-registry.js';
 import { AgentRehydrationManager } from './ai-adapter-rehydration.js';
 import { handleInfer } from './ai-adapter-infer.js';
@@ -408,17 +408,18 @@ export abstract class AIAdapter<
   protected async onClose(): Promise<void> {}
 
   /**
-   * Get an agent by ID with session info.
+   * Get a live agent and its registry-owned session metadata.
    * @param agentId - Agent identifier
-   * @returns Agent with session info, or undefined if not found
+   * @returns Active agent handle, or undefined if not found
    */
-  public getAgent(agentId: string): (TAgent & { sessionId: string; adapterSessionId: string }) | undefined {
+  public getAgent(agentId: string): ActiveAgentHandle<TAgent> | undefined {
     const entry = this.registry.get(agentId);
     if (!entry) return undefined;
-    return Object.assign({}, entry.agent, {
+    return {
+      agent: entry.agent,
       sessionId: entry.sessionId,
       adapterSessionId: entry.adapterSessionId,
-    }) as TAgent & { sessionId: string; adapterSessionId: string };
+    };
   }
 
   /**
@@ -434,15 +435,14 @@ export abstract class AIAdapter<
 
   /**
    * Get all active agents managed by this adapter.
-   * @returns Array of active agents with session info
+   * @returns Active agent handles
    */
-  public getActiveAgents(): Array<TAgent & { sessionId: string; adapterSessionId: string }> {
-    return Array.from(this.registry.values()).map((entry) =>
-      Object.assign({}, entry.agent, {
-        sessionId: entry.sessionId,
-        adapterSessionId: entry.adapterSessionId,
-      }),
-    ) as Array<TAgent & { sessionId: string; adapterSessionId: string }>;
+  public getActiveAgents(): Array<ActiveAgentHandle<TAgent>> {
+    return Array.from(this.registry.values()).map((entry) => ({
+      agent: entry.agent,
+      sessionId: entry.sessionId,
+      adapterSessionId: entry.adapterSessionId,
+    }));
   }
 
   /**

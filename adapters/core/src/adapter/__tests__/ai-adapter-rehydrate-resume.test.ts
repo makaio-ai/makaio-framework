@@ -3,7 +3,7 @@ import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, type NativeLocalityVerdict } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
-import { createTestAdapter, MockConnector, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
+import { createTestAdapter, MockConnector, TestAgent, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
 import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
 describe('AIAdapter.handleRehydrateAgent native resume context', () => {
@@ -589,7 +589,17 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     // session).
     const rehydrated = adapter.getAgent('agent-clean');
     expect(rehydrated).toBeDefined();
-    expect(rehydrated?.adapterSessionId).toBe('mock-adapter-session-id');
+    if (!rehydrated) throw new Error('Expected rehydrated agent handle');
+    expect(rehydrated.adapterSessionId).toBe('mock-adapter-session-id');
+    expect(rehydrated.agent).toBeInstanceOf(TestAgent);
+    await expect(rehydrated.agent.getAdapterSessionId()).resolves.toBe('mock-adapter-session-id');
+
+    const activeAgents = adapter.getActiveAgents();
+    expect(activeAgents).toHaveLength(1);
+    const activeAgent = activeAgents[0];
+    if (!activeAgent) throw new Error('Expected active agent handle');
+    expect(activeAgent.agent).toBe(rehydrated.agent);
+    await expect(activeAgent.agent.getAdapterSessionId()).resolves.toBe('mock-adapter-session-id');
 
     // Because the provider confirmed a different identity, the claimed
     // resume target has no live writer anymore and must be released — a
