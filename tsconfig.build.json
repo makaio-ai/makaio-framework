@@ -1,0 +1,79 @@
+{
+  // Declaration-emit project for the aggregated framework distribution build.
+  //
+  // `tsconfig.json` is a type-checking project (`noEmit`), so it cannot drive
+  // declaration emit. This project extends it rather than restating compiler
+  // options so the `paths` map — the single source of truth for resolving
+  // workspace sources — stays in one place.
+  //
+  // Keep this file at the workspace root: the declaration bundler derives the
+  // emit `rootDir` from the project file's directory, and every source file the
+  // distribution inlines must live under that root to be resolvable.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmit": false
+  },
+  "include": ["./**/*"],
+  // Narrowed to the sources the distribution can inline. This list is scoped by
+  // emit reachability, not by the type-checking exclusions in `tsconfig.json`:
+  // declaration emit for a file no distribution entry reaches is wasted work,
+  // and files outside the published surface emit portability diagnostics that
+  // are irrelevant to the distribution. Over-narrowing fails loudly — the
+  // declaration bundler aborts when an entry's graph reaches a source file with
+  // no emitted declaration — so this stays a safe optimization.
+  //
+  // Deliberately broad-include + exclude-list, NOT an include-list of public
+  // roots: the required set is the transitive emit-reachability closure of the
+  // distribution entries, not the public subpath list — `clients/claude-code`
+  // is reached through the entry graph despite not being a public subpath
+  // (excluding it aborts the build). An include-list drifts silently toward
+  // under-inclusion as sources move; an exclude-list drifts toward a few
+  // seconds of extra emit, and any cut that goes too deep fails the build
+  // loudly.
+  //
+  // Closure criterion: this list is best-effort, not exhaustive. Residual
+  // unreachable files cost milliseconds of emit each; the list is complete
+  // enough once a flagged build stays green and stage times plateau. Chasing
+  // every last stray root buys nothing measurable and each cut must be
+  // re-proven against transitive reachability — stop extending it unless a
+  // whole tree with real emit weight shows up.
+  "exclude": [
+    "**/node_modules/**/*",
+    "**/dist/**/*",
+    "**/__tests__/**/*",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "./packages/framework/lib/**/*",
+    "./apps/**/*",
+    "./docs/**/*",
+    "./e2e/**/*",
+    "./scripts/**/*",
+    // Package trees no distribution entry graph reaches: adapter/extension
+    // implementations ship as their own packages, and tooling/codegen trees
+    // are not published surface. Verified empirically per the loud-failure
+    // guarantee above.
+    "./adapters/implementations/**/*",
+    "./build-tooling/**/*",
+    "./extensions/**/*",
+    "./platforms/**/*",
+    "./providers/**/*",
+    "./sdks/**/*",
+    "./static/**/*",
+    "./storage/pg/**/*",
+    "./storage/conformance/**/*",
+    "./subsystems/native-session-supervisor/**/*",
+    "./packages/setup/**/*",
+    // Package-local build/config scripts are tooling, never entry-reachable.
+    "**/build.ts",
+    "**/drizzle.config.ts",
+    "**/tsdown.config.ts",
+    "**/vitest.config.ts",
+    "**/vite.config.ts",
+    // Workspace-root tooling configs (lint, test, docs). No distribution entry
+    // lives at the workspace root, so nothing published can reach them.
+    "./*.mjs",
+    "./*.ts"
+  ]
+}

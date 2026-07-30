@@ -16,12 +16,34 @@ function writeJson(filePath: string, value: Record<string, unknown>): void {
 
 /**
  * Writes a built file fixture.
+ *
+ * Defaults to a module with an actual export rather than an empty file or a
+ * bare `export {};` marker: the verifier rejects declaration targets that
+ * declare no API surface — and counts the surface-free module marker as
+ * nothing — so a lesser fixture would assert the wrong thing everywhere a
+ * test only cares that a target exists.
  * @param filePath - Absolute file path to write.
  * @param content - Optional file content.
  */
-function writeBuiltFile(filePath: string, content = ''): void {
+function writeBuiltFile(filePath: string, content = 'export const fixture = 0;\n'): void {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content);
+}
+
+/**
+ * Writes a package.json whose exports map carries the `./core` declaration +
+ * runtime target pair used by the declaration-surface tests.
+ * @param root - Temp package root to write into.
+ */
+function writeCoreExportsFixture(root: string): void {
+  writeJson(join(root, 'package.json'), {
+    exports: {
+      './core': {
+        types: './dist/core/index.d.mts',
+        default: './dist/core/index.mjs',
+      },
+    },
+  });
 }
 
 /**
@@ -92,14 +114,7 @@ describe('verifyFrameworkDist', () => {
 
   it('reports missing built export targets', () => {
     const root = makeTempDir();
-    writeJson(join(root, 'package.json'), {
-      exports: {
-        './core': {
-          types: './dist/core/index.d.mts',
-          default: './dist/core/index.mjs',
-        },
-      },
-    });
+    writeCoreExportsFixture(root);
     writeBuiltFile(join(root, 'dist/core/index.mjs'));
 
     const result = verifyFrameworkDist(root, { migrationChains: [] });
@@ -116,14 +131,7 @@ describe('verifyFrameworkDist', () => {
 
   it('passes a runtime-only dist without declaration files when declarations are not expected', () => {
     const root = makeTempDir();
-    writeJson(join(root, 'package.json'), {
-      exports: {
-        './core': {
-          types: './dist/core/index.d.mts',
-          default: './dist/core/index.mjs',
-        },
-      },
-    });
+    writeCoreExportsFixture(root);
     writeBuiltFile(join(root, 'dist/core/index.mjs'));
 
     const result = verifyFrameworkDist(root, { expectDeclarations: false, migrationChains: [] });
@@ -611,5 +619,343 @@ describe('verifyFrameworkDist', () => {
         target: 'dist/drizzle/meta/_journal.json',
       }),
     ]);
+  });
+
+  it('reports declaration targets with no API surface that would resolve as untyped modules', () => {
+    const root = makeTempDir();
+    writeCoreExportsFixture(root);
+    writeBuiltFile(join(root, 'dist/core/index.d.mts'), '');
+    writeBuiltFile(join(root, 'dist/core/index.mjs'));
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: './core',
+        kind: 'declaration-target-without-surface',
+        target: './dist/core/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('reports comments-only declaration targets, which a size check would accept', () => {
+    const root = makeTempDir();
+    writeCoreExportsFixture(root);
+    writeBuiltFile(join(root, 'dist/core/index.d.mts'), '//#region src/index.ts\n\n//#endregion\n');
+    writeBuiltFile(join(root, 'dist/core/index.mjs'));
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: './core',
+        kind: 'declaration-target-without-surface',
+        target: './dist/core/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('reports declaration targets holding only the bare module marker export {};', () => {
+    // `export {};` makes the file a module but exposes no API — the exact
+    // shape a declaration-backend regression emits, and one both a size check
+    // and a raw keyword grep would accept.
+    const root = makeTempDir();
+    writeCoreExportsFixture(root);
+    writeBuiltFile(join(root, 'dist/core/index.d.mts'), '// bundled by tsgo\nexport {};\n');
+    writeBuiltFile(join(root, 'dist/core/index.mjs'));
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: './core',
+        kind: 'declaration-target-without-surface',
+        target: './dist/core/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('accepts empty runtime targets — only declaration targets must declare a surface', () => {
+    const root = makeTempDir();
+    writeCoreExportsFixture(root);
+    writeBuiltFile(join(root, 'dist/core/index.d.mts'));
+    writeBuiltFile(join(root, 'dist/core/index.mjs'), '');
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('exempts surface-free declaration targets from a runtime-only dist', () => {
+    const root = makeTempDir();
+    writeCoreExportsFixture(root);
+    writeBuiltFile(join(root, 'dist/core/index.d.mts'), '');
+    writeBuiltFile(join(root, 'dist/core/index.mjs'));
+
+    const result = verifyFrameworkDist(root, { expectDeclarations: false, migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('reports workspace imports that survived into a self-contained declaration bundle', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '^4.0.0' } });
+    writeBuiltFile(
+      join(root, 'dist/bus/index.d.mts'),
+      [
+        'import { z } from "zod";',
+        'import { BusNamespace } from "@makaio/core";',
+        'export { BusNamespace, z };',
+        '',
+      ].join('\n'),
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: '@makaio/core',
+        kind: 'unbundled-declaration-import',
+        target: 'dist/bus/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('reports workspace imports wrapped across multiple lines in a declaration bundle', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    writeBuiltFile(
+      join(root, 'dist/bus/index.d.mts'),
+      ['import {', '  BusNamespace,', '  ScopedBus,', '} from "@makaio/core";', 'export { BusNamespace };', ''].join(
+        '\n',
+      ),
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: '@makaio/core',
+        kind: 'unbundled-declaration-import',
+        target: 'dist/bus/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('reports workspace references left as inline import() type queries', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    writeBuiltFile(
+      join(root, 'dist/bus/index.d.mts'),
+      'export type SubjectRef = import("@makaio/core").SubjectDefinition;\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: '@makaio/core',
+        kind: 'unbundled-declaration-import',
+        target: 'dist/bus/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('accepts workspace specifiers in a declaration bundle outside import position', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '^4.0.0' } });
+    writeBuiltFile(
+      join(root, 'dist/bus/index.d.mts'),
+      [
+        'import { z } from "zod";',
+        '/**',
+        ' * Use `localSubject()` from `@makaio/core` to create these.',
+        ' * @example',
+        " * import { localSubject } from '@makaio/core';",
+        ' * type Doc = import("@makaio/core").SubjectDefinition;',
+        ' */',
+        'declare const marker: z.ZodType;',
+        "declare module '@makaio/contracts' {",
+        '  interface Registry {',
+        '    marker: typeof marker;',
+        '  }',
+        '}',
+        'export { marker };',
+        '',
+      ].join('\n'),
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('allows self-imports of the published package that the exports map exposes', () => {
+    // Chunk declarations legitimately reference sibling subpaths through the
+    // package's own name — consumers resolve those through the exports map.
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      name: '@makaio/framework',
+      exports: {
+        './core': './dist/core/index.mjs',
+        './contracts': './dist/contracts/index.mjs',
+      },
+    });
+    writeBuiltFile(join(root, 'dist/core/index.mjs'));
+    writeBuiltFile(join(root, 'dist/contracts/index.mjs'));
+    writeBuiltFile(
+      join(root, 'dist/chunk-abc.d.mts'),
+      'import { Namespace } from "@makaio/framework/core";\nexport type Ref = import("@makaio/framework/contracts").Marker;\nexport { Namespace };\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('reports declaration imports of externals the manifest does not declare', () => {
+    // The runtime bundle may inline a package's code while its types stay
+    // external — the type-only edge never reaches the runtime import scan,
+    // so this scan is the only check standing between an unresolvable type
+    // import and a shipped distribution.
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    writeBuiltFile(
+      join(root, 'dist/ui-views/index.d.mts'),
+      'export type Layout = import("react-grid-layout").Layout;\nimport { EventEmitter } from "node:events";\nexport { EventEmitter };\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    // The node: builtin needs no declaration; only the bare external is flagged.
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: 'react-grid-layout',
+        kind: 'undeclared-dist-dependency',
+        target: 'dist/ui-views/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('reports import-equals declaration references to undeclared externals', () => {
+    // `import Foo = require("…")` is legal declaration output (typically
+    // `.d.cts`) and resolves its specifier like any import statement.
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    writeBuiltFile(
+      join(root, 'dist/legacy/index.d.cts'),
+      'import Layout = require("react-grid-layout");\nexport { Layout };\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: 'react-grid-layout',
+        kind: 'undeclared-dist-dependency',
+        target: 'dist/legacy/index.d.cts',
+      }),
+    ]);
+  });
+
+  it('reports reference-types directives naming undeclared externals', () => {
+    // TypeScript resolves `/// <reference types="…" />` while loading the
+    // declaration, exactly like an import — but the directive is a line
+    // comment, so it must be collected before comment stripping.
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    writeBuiltFile(
+      join(root, 'dist/client/index.d.mts'),
+      '/// <reference types="vite/client" />\nexport const fixture = 0;\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: 'vite',
+        kind: 'undeclared-dist-dependency',
+        target: 'dist/client/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('accepts declaration imports of externals declared as peer dependencies', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: {},
+      peerDependencies: { 'react-grid-layout': '^1.4.4' },
+    });
+    writeBuiltFile(
+      join(root, 'dist/ui-views/index.d.mts'),
+      'export type Layout = import("react-grid-layout").Layout;\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('reports declaration self-imports of subpaths the exports map does not expose', () => {
+    // The bundler rewrites cross-entry type imports to the entry's umbrella
+    // subpath whether or not that subpath is public; a type-only edge never
+    // reaches the runtime self-import scan, so the declaration scan must
+    // validate the rewrite target against the exports map itself.
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { name: '@makaio/framework', exports: {} });
+    writeBuiltFile(
+      join(root, 'dist/adapter-subsystem/index.d.mts'),
+      'import { AvailableAdapter } from "@makaio/framework/services/settings";\nexport { AvailableAdapter };\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: './services/settings',
+        kind: 'unexported-dist-specifier',
+        target: 'dist/adapter-subsystem/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('reports workspace imports in any shipped declaration file, not only curated bundles', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { name: '@makaio/framework', exports: {} });
+    writeBuiltFile(
+      join(root, 'dist/adapters/claude/index.d.mts'),
+      'export { ClaudeClient } from "@makaio/client-claude-code";\n',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: '@makaio/client-claude-code',
+        kind: 'unbundled-declaration-import',
+        target: 'dist/adapters/claude/index.d.mts',
+      }),
+    ]);
+  });
+
+  it('skips the self-contained declaration bundle scan for a runtime-only dist', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    writeBuiltFile(join(root, 'dist/bus/index.d.mts'), 'export { BusNamespace } from "@makaio/core";\n');
+
+    const result = verifyFrameworkDist(root, { expectDeclarations: false, migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
   });
 });

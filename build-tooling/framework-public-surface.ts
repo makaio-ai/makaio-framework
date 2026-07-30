@@ -180,8 +180,17 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
  * this list is only for build helpers that are not package-owned.
  */
 export const FRAMEWORK_NON_WORKSPACE_BUILD_INPUT_PATHS = [
+  'scripts/lib/framework-dist-declarations.ts',
   'scripts/lib/framework-dist-verifier.ts',
   'scripts/lib/runtime-migration-assets.ts',
+  // Root TypeScript configs shape the distribution's compilation and
+  // declaration output (tsconfig.build.json scopes tsgo declaration
+  // emission; the others are extended by it and by every package build).
+  // They are dist build-stamp inputs, so a change to any of them changes
+  // the published artifact and must map to the framework package here.
+  'tsconfig.build.base.json',
+  'tsconfig.build.json',
+  'tsconfig.json',
 ] as const;
 
 /** Source migration chain copied into the framework runtime distribution. */
