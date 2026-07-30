@@ -4,9 +4,14 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { builtinModules } from 'node:module';
 import { join, relative, resolve, sep } from 'node:path';
 import { normalizePackageExports, type PackageExportsField } from '../../build-tooling/package-exports.js';
+import {
+  checkDeclarationImports,
+  checkDeclarationSurface,
+  DECLARATION_TARGET_PATTERN,
+  toBarePackageName,
+} from './framework-dist-declarations.js';
 import { collectUnexpectedRuntimeMigrationFiles } from './runtime-migration-assets.js';
 
 /** A framework dist verification finding. */
@@ -17,6 +22,7 @@ export interface FrameworkDistIssue {
    */
   readonly exportKey: string;
   readonly kind:
+    | 'declaration-target-without-surface'
     | 'export-target-not-file'
     | 'export-target-outside-root'
     | 'migration-chain-extra-file'
@@ -26,6 +32,7 @@ export interface FrameworkDistIssue {
     | 'missing-runtime-asset'
     | 'postgres-code-in-dist'
     | 'runtime-asset-not-file'
+    | 'unbundled-declaration-import'
     | 'undeclared-dist-dependency'
     | 'unexported-dist-specifier';
   readonly message: string;
@@ -154,6 +161,7 @@ type ExportValue = string | Readonly<Record<string, unknown>>;
 
 interface FrameworkPackageManifest {
   dependencies?: Readonly<Record<string, string>>;
+  name?: string;
   exports?: PackageExportsField;
   optionalDependencies?: Readonly<Record<string, string>>;
   peerDependencies?: Readonly<Record<string, string>>;
@@ -206,17 +214,12 @@ function isLocalFileTarget(target: string): boolean {
 }
 
 /**
- * Matches exports-map declaration targets (`.d.ts`, `.d.mts`, `.d.cts`) —
- * the only targets a runtime-only distribution legitimately omits.
- */
-const DECLARATION_TARGET_PATTERN = /\.d\.[cm]?ts$/;
-
-/**
  * Verifies the integrity of the `@makaio/framework` distribution:
  *
- * 1. Every local exports-map target exists on disk inside the package root
- *    (declaration targets only when `expectDeclarations` is not disabled for
- *    a runtime-only distribution).
+ * 1. Every local exports-map target exists on disk inside the package root, and
+ *    every declaration target declares an API surface (declaration targets are
+ *    checked only when `expectDeclarations` is not disabled for a runtime-only
+ *    distribution).
  * 2. Every `@makaio/framework/*` self-import specifier in built `dist/` modules
  *    resolves through the exports map (built entries resolve self-imports via
  *    the consumer's installed copy, so an unexported specifier crashes the
@@ -230,11 +233,15 @@ const DECLARATION_TARGET_PATTERN = /\.d\.[cm]?ts$/;
  *    driver-loading literals that defeat import-specifier scans, or
  *    engine-exclusive SQL markers. The Postgres engine ships exclusively
  *    with `@makaio/storage-pg`.
- * 5. Every required runtime asset exists as a regular file.
- * 6. Every bundled migration chain ships with a journal that matches its
+ * 5. Every declaration bundle that must inline its workspace types carries no
+ *    surviving workspace import, so consumers never resolve a specifier that
+ *    only exists inside the workspace.
+ * 6. Every required runtime asset exists as a regular file.
+ * 7. Every bundled migration chain ships with a journal that matches its
  *    `.sql` migration files and contains no source-only Drizzle artifacts.
  * @param frameworkRoot - Absolute path to the `@makaio/framework` package root.
- * @param options - Optional overrides for required runtime assets and migration chains.
+ * @param options - Optional overrides for required runtime assets, migration
+ * chains, and self-contained declaration bundles.
  * @returns Verification result with all missing or unsafe targets.
  */
 export function verifyFrameworkDist(
@@ -242,11 +249,45 @@ export function verifyFrameworkDist(
   options: VerifyFrameworkDistOptions = {},
 ): FrameworkDistResult {
   const root = resolve(frameworkRoot);
-  const rootPrefix = `${root}${sep}`;
   const manifest = readJson(resolve(root, 'package.json')) as FrameworkPackageManifest;
   const exportsMap = normalizePackageExports(manifest.exports);
   const issues: FrameworkDistIssue[] = [];
   const expectDeclarations = options.expectDeclarations ?? true;
+  const checkedTargets = checkExportTargets(root, exportsMap, expectDeclarations, issues);
+
+  const declaredDependencies = new Set([
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}),
+    ...Object.keys(manifest.optionalDependencies ?? {}),
+  ]);
+  const exportKeys = new Set(Object.keys(exportsMap));
+  const scannedModules = checkDistImports(root, exportKeys, declaredDependencies, issues);
+  if (expectDeclarations) {
+    checkDeclarationImports(root, manifest.name, exportKeys, declaredDependencies, issues);
+  }
+  checkRuntimeAssets(root, options.runtimeAssets ?? BUNDLED_RUNTIME_ASSETS, issues);
+  checkMigrationChains(root, options.migrationChains ?? BUNDLED_MIGRATION_CHAINS, issues);
+
+  return { checkedTargets, scannedModules, issues, ok: issues.length === 0 };
+}
+
+/**
+ * Verifies every local exports-map target: containment inside the package root,
+ * on-disk existence as a regular file, and — for declaration targets — that the
+ * file declares an API surface at all.
+ * @param root - Absolute framework package root.
+ * @param exportsMap - Normalized exports map.
+ * @param expectDeclarations - Whether declaration targets must exist on disk.
+ * @param issues - Issue sink to append findings to.
+ * @returns Number of local targets verified on disk.
+ */
+function checkExportTargets(
+  root: string,
+  exportsMap: Readonly<Record<string, ExportValue>>,
+  expectDeclarations: boolean,
+  issues: FrameworkDistIssue[],
+): number {
+  const rootPrefix = `${root}${sep}`;
   let checkedTargets = 0;
 
   for (const [exportKey, exportValue] of Object.entries(exportsMap)) {
@@ -271,44 +312,55 @@ export function verifyFrameworkDist(
       if (!expectDeclarations && DECLARATION_TARGET_PATTERN.test(target)) continue;
 
       checkedTargets += 1;
-
-      let stat: ReturnType<typeof statSync> | undefined;
-      try {
-        stat = statSync(resolvedTarget);
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-        issues.push({
-          exportKey,
-          kind: 'missing-export-target',
-          message: `Framework export "${exportKey}" points at missing built file "${target}"`,
-          target,
-        });
-        continue;
-      }
-
-      if (!stat.isFile()) {
-        issues.push({
-          exportKey,
-          kind: 'export-target-not-file',
-          message: `Framework export "${exportKey}" points at a non-file target "${target}"`,
-          target,
-        });
-      }
+      checkExportTargetFile(exportKey, target, resolvedTarget, issues);
     }
   }
 
-  const declaredDependencies = new Set([
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-    ...Object.keys(manifest.optionalDependencies ?? {}),
-  ]);
-  const scannedModules = checkDistImports(root, new Set(Object.keys(exportsMap)), declaredDependencies, issues);
-  checkRuntimeAssets(root, options.runtimeAssets ?? BUNDLED_RUNTIME_ASSETS, issues);
-  checkMigrationChains(root, options.migrationChains ?? BUNDLED_MIGRATION_CHAINS, issues);
+  return checkedTargets;
+}
 
-  return { checkedTargets, scannedModules, issues, ok: issues.length === 0 };
+/**
+ * Verifies a single contained exports-map target on disk.
+ * @param exportKey - Exports-map key the target belongs to.
+ * @param target - Target path as written in the exports map.
+ * @param resolvedTarget - Absolute path the target resolves to.
+ * @param issues - Issue sink to append findings to.
+ */
+function checkExportTargetFile(
+  exportKey: string,
+  target: string,
+  resolvedTarget: string,
+  issues: FrameworkDistIssue[],
+): void {
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(resolvedTarget);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+    issues.push({
+      exportKey,
+      kind: 'missing-export-target',
+      message: `Framework export "${exportKey}" points at missing built file "${target}"`,
+      target,
+    });
+    return;
+  }
+
+  if (!stat.isFile()) {
+    issues.push({
+      exportKey,
+      kind: 'export-target-not-file',
+      message: `Framework export "${exportKey}" points at a non-file target "${target}"`,
+      target,
+    });
+    return;
+  }
+
+  if (!DECLARATION_TARGET_PATTERN.test(target)) return;
+
+  checkDeclarationSurface(exportKey, target, resolvedTarget, issues);
 }
 
 /**
@@ -348,32 +400,6 @@ function checkRuntimeAssets(root: string, runtimeAssets: readonly string[], issu
  * inlined library code.
  */
 const IMPORT_SPECIFIER_PATTERN = /(?<!\.)\b(?:from|import|require)\s*\(?\s*["'`]([^"'`\n]+)["'`]/g;
-
-/** Node builtin module names importable without the `node:` prefix. */
-const NODE_BUILTIN_MODULES: ReadonlySet<string> = new Set(builtinModules);
-
-/**
- * Validates the package-name part of a bare specifier. Anything minification
- * noise produces (template fragments, code excerpts) fails this shape check.
- */
-const BARE_PACKAGE_NAME_PATTERN = /^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/;
-
-/**
- * Extracts the package name from a bare external import specifier.
- * @param specifier - Import specifier found in a built module.
- * @returns The package name, or `undefined` when the specifier is relative,
- * absolute, a runtime builtin, or not a valid package specifier.
- */
-function toBarePackageName(specifier: string): string | undefined {
-  if (specifier.startsWith('.') || specifier.startsWith('/')) return undefined;
-  if (specifier.startsWith('node:') || specifier.startsWith('bun:')) return undefined;
-
-  const segments = specifier.split('/');
-  const packageName = specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
-  if (!BARE_PACKAGE_NAME_PATTERN.test(packageName)) return undefined;
-  if (NODE_BUILTIN_MODULES.has(packageName)) return undefined;
-  return packageName;
-}
 
 /**
  * Scans built `dist/` modules for `@makaio/framework/*` self-import specifiers

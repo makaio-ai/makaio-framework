@@ -34,6 +34,10 @@ const FRAMEWORK_BUILD_INPUT_PATHS = [
   'ui',
   'package.json',
   'tsconfig.build.base.json',
+  // Controls tsgo declaration emission (MAKAIO_FRAMEWORK_BUILD_TSGO_DTS);
+  // its include/exclude scope changes declaration output, so it must
+  // invalidate the dist stamp like the other tsconfigs.
+  'tsconfig.build.json',
   'tsconfig.json',
   'yarn.lock',
 ] as const;
@@ -71,6 +75,14 @@ export interface FrameworkDistBuildStamp {
    * a full-distribution freshness check.
    */
   readonly declarations: boolean;
+  /**
+   * TypeScript backend that emitted the declarations. The experimental tsgo
+   * backend produces artifact-equivalent but not byte-identical output, so a
+   * tsgo-stamped dist never satisfies a default-backend freshness check —
+   * mirroring how a runtime-only dist never satisfies a full one. The
+   * canonical `tsc` output satisfies either expectation.
+   */
+  readonly declarationBackend: 'tsc' | 'tsgo';
 }
 
 /** Options for checking framework dist freshness. */
@@ -81,6 +93,12 @@ export interface FrameworkDistFreshnessOptions {
   readonly distDir?: string;
   /** Dist-relative files that must exist for the caller's runtime path. */
   readonly requiredFiles?: readonly string[];
+  /**
+   * Declaration backend the caller would build with. Defaults to `tsc`. A
+   * tsgo-stamped dist is fresh only for a tsgo caller; a tsc-stamped dist
+   * satisfies both (see {@link FrameworkDistBuildStamp.declarationBackend}).
+   */
+  readonly declarationBackend?: 'tsc' | 'tsgo';
 }
 
 /**
@@ -131,6 +149,10 @@ export interface FrameworkDistBuildStampOptions extends FrameworkDistFreshnessOp
    * mistaken for a full distribution.
    */
   readonly declarations?: boolean;
+  /**
+   * Declaration backend that emitted this dist. Defaults to `tsc`.
+   */
+  readonly declarationBackend?: 'tsc' | 'tsgo';
 }
 
 /**
@@ -146,6 +168,7 @@ export function writeFrameworkDistBuildStamp(options: FrameworkDistBuildStampOpt
     fingerprint: computeFrameworkDistFingerprint(options.workspaceRoot ?? WORKSPACE_ROOT),
     builtAt: new Date().toISOString(),
     declarations: options.declarations ?? true,
+    declarationBackend: options.declarationBackend ?? 'tsc',
   };
 
   mkdirSync(distDir, { recursive: true });
@@ -187,6 +210,12 @@ export function isFrameworkDistFresh(options: FrameworkDistFreshnessOptions = {}
     return false;
   }
 
+  // An experimental-backend dist must never masquerade as the canonical one;
+  // the canonical tsc dist satisfies either expectation.
+  if (stamp.declarationBackend === 'tsgo' && (options.declarationBackend ?? 'tsc') !== 'tsgo') {
+    return false;
+  }
+
   return stamp.fingerprint === computeFrameworkDistFingerprint(workspaceRoot);
 }
 
@@ -210,6 +239,8 @@ function readFrameworkDistBuildStamp(distDir: string): FrameworkDistBuildStamp |
       builtAt: typeof parsed.builtAt === 'string' ? parsed.builtAt : '',
       // Stamps written before the field existed were always full builds.
       declarations: parsed.declarations !== false,
+      // Stamps written before the field existed were always tsc-emitted.
+      declarationBackend: parsed.declarationBackend === 'tsgo' ? 'tsgo' : 'tsc',
     };
   } catch (error) {
     if (isNodeNotFoundError(error) || error instanceof SyntaxError) {

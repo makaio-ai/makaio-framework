@@ -110,6 +110,31 @@ describe('framework dist freshness', () => {
     });
   });
 
+  it('rejects a tsgo-stamped dist for a default-backend caller even when the fingerprint matches', () => {
+    withTempWorkspace((workspaceRoot) => {
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
+      mkdirSync(join(distDir, 'contracts'), { recursive: true });
+      writeFileSync(join(distDir, 'contracts/index.mjs'), 'export const FrameworkContractNamespaces = [];\n');
+
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir, declarationBackend: 'tsgo' });
+
+      expect(isFrameworkDistFresh({ workspaceRoot, distDir })).toBe(false);
+      // The same dist satisfies a caller that would itself build with tsgo.
+      expect(isFrameworkDistFresh({ workspaceRoot, distDir, declarationBackend: 'tsgo' })).toBe(true);
+    });
+  });
+
+  it('accepts a canonical tsc-stamped dist for a tsgo caller', () => {
+    withTempWorkspace((workspaceRoot) => {
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
+      mkdirSync(distDir, { recursive: true });
+
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir });
+
+      expect(isFrameworkDistFresh({ workspaceRoot, distDir, declarationBackend: 'tsgo' })).toBe(true);
+    });
+  });
+
   it('rejects stamped dist output without git metadata after source input changes', () => {
     withTempWorkspace((workspaceRoot) => {
       const distDir = join(workspaceRoot, 'packages/framework/dist');

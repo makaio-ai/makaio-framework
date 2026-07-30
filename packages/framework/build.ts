@@ -6,7 +6,8 @@
  * Set `MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT` to assemble an isolated package copy
  * for concurrent consumers without mutating this package's normal output.
  * Set `MAKAIO_FRAMEWORK_BUILD_SKIP_DTS` for a faster runtime-only build
- * without type declarations.
+ * without type declarations, or `MAKAIO_FRAMEWORK_BUILD_TSGO_DTS` to emit
+ * declarations through `tsgo` instead of the in-process TypeScript compiler.
  *
  * Usage:
  *   tsx build.ts                  (from packages/framework/)
@@ -53,6 +54,16 @@ const DIST = join(OUTPUT_PACKAGE_DIR, 'dist');
 const LIB = join(OUTPUT_PACKAGE_DIR, 'lib');
 
 /**
+ * Read a boolean build-mode environment flag.
+ * @param name - Environment variable name.
+ * @returns Whether the variable is set to `1` or `true`.
+ */
+function isBuildFlagEnabled(name: string): boolean {
+  const value = process.env[name];
+  return value === '1' || value === 'true';
+}
+
+/**
  * Skip type-declaration emission (`.d.mts`) across all build stages.
  *
  * Set `MAKAIO_FRAMEWORK_BUILD_SKIP_DTS=1` (or `true`) when the consumer only
@@ -63,8 +74,32 @@ const LIB = join(OUTPUT_PACKAGE_DIR, 'lib');
  * build stamp records it as runtime-only so a generic dist freshness check
  * never mistakes it for a full distribution.
  */
-const SKIP_DTS =
-  process.env['MAKAIO_FRAMEWORK_BUILD_SKIP_DTS'] === '1' || process.env['MAKAIO_FRAMEWORK_BUILD_SKIP_DTS'] === 'true';
+const SKIP_DTS = isBuildFlagEnabled('MAKAIO_FRAMEWORK_BUILD_SKIP_DTS');
+
+/**
+ * Emit type declarations through `tsgo` instead of the in-process TypeScript
+ * compiler.
+ *
+ * Set `MAKAIO_FRAMEWORK_BUILD_TSGO_DTS=1` (or `true`) to swap the declaration
+ * bundler's TypeScript backend for `tsgo`. Declaration emit dominates cold
+ * build time — the bundler drives a single serial in-process TypeScript
+ * program across every stage entry — and `tsgo` emits the same per-file
+ * declarations natively before the bundler links them.
+ *
+ * Opt-in while the backend is experimental: the emitted declarations are
+ * bundled and verified identically either way, so a defect surfaces as a
+ * distribution verification failure rather than as a silently degraded API
+ * surface. Ignored when {@link SKIP_DTS} is set, which emits no declarations
+ * at all.
+ */
+const TSGO_DTS = isBuildFlagEnabled('MAKAIO_FRAMEWORK_BUILD_TSGO_DTS');
+
+/**
+ * Declaration-emit project for `tsgo`. The declaration bundler derives tsgo's
+ * emit `rootDir` from this file's directory, so it must sit at the workspace
+ * root for cross-package inlined sources to resolve.
+ */
+const TSGO_DTS_TSCONFIG = join(FRAMEWORK_ROOT, 'tsconfig.build.json');
 
 const BUS_PACKAGES = new Set(['@makaio/bus-core']);
 const REACT_PACKAGES = new Set(['@makaio/ui-hooks', '@makaio/ui-components', '@makaio/ui-views']);
@@ -172,11 +207,34 @@ const configs: Array<UserConfig & { name: string }> = [
 ];
 
 /**
- * Stage configs with the runtime-only override applied. `dts: false` must
- * replace every stage's declaration setting — including the bus stage's
- * `dts: { eager: true }` — so no stage spawns a declaration compiler.
+ * Resolve a stage's declaration setting from the build-mode flags.
+ *
+ * A runtime-only build must replace every stage's declaration setting —
+ * including the bus stage's `dts: { eager: true }` — so no stage spawns a
+ * declaration compiler. The `tsgo` backend instead extends each stage's own
+ * setting, preserving stage-specific declaration behaviour, and pins the
+ * declaration project so the bundler emits from a project that declares
+ * declaration output. A stage that opts out of declarations keeps that setting:
+ * choosing a declaration backend must never turn emission on.
+ * @param dts - The stage preset's declaration setting.
+ * @returns The declaration setting the stage builds with.
  */
-const stageConfigs = SKIP_DTS ? configs.map((config) => ({ ...config, dts: false })) : configs;
+function resolveStageDts(dts: UserConfig['dts']): UserConfig['dts'] {
+  if (SKIP_DTS) return false;
+  if (!TSGO_DTS || !dts) {
+    // Pin the default path to the TypeScript backend explicitly. The pinned
+    // toolchain never infers tsgo (rolldown-plugin-dts 0.25.0 defaults
+    // `tsgo: false`; tsdown 0.22.0 forwards these options opaquely), but
+    // newer tsdown releases infer the generator from an installed
+    // @typescript/native-preview — which the workspace root declares. The
+    // build stamp records the backend, so the default build must never
+    // drift onto tsgo through a dependency upgrade.
+    return typeof dts === 'object' ? { ...dts, tsgo: false } : dts === true ? { tsgo: false } : dts;
+  }
+  return { ...(typeof dts === 'object' ? dts : {}), tsconfig: TSGO_DTS_TSCONFIG, tsgo: true };
+}
+
+const stageConfigs = configs.map((config) => ({ ...config, dts: resolveStageDts(config.dts) }));
 
 // ---------------------------------------------------------------------------
 // Build execution
@@ -266,8 +324,15 @@ writeFileSync(
 );
 
 // A runtime-only dist records `declarations: false` so a generic freshness
-// check never serves it where a full distribution is expected.
-writeFrameworkDistBuildStamp({ workspaceRoot: FRAMEWORK_ROOT, distDir: DIST, declarations: !SKIP_DTS });
+// check never serves it where a full distribution is expected; likewise a
+// tsgo-emitted dist records its backend so it never masquerades as the
+// canonical tsc distribution.
+writeFrameworkDistBuildStamp({
+  workspaceRoot: FRAMEWORK_ROOT,
+  distDir: DIST,
+  declarations: !SKIP_DTS,
+  declarationBackend: TSGO_DTS ? 'tsgo' : 'tsc',
+});
 
 // ---------------------------------------------------------------------------
 // Verify the assembled distribution
@@ -293,6 +358,9 @@ console.info(
 );
 
 const totalElapsed = ((performance.now() - totalStart) / 1000).toFixed(1);
-console.info(
-  `\n[build] Framework distribution built in ${totalElapsed}s${SKIP_DTS ? ' (runtime-only, declarations skipped)' : ''}`,
-);
+const buildModeNote = SKIP_DTS
+  ? ' (runtime-only, declarations skipped)'
+  : TSGO_DTS
+    ? ' (declarations emitted via tsgo)'
+    : '';
+console.info(`\n[build] Framework distribution built in ${totalElapsed}s${buildModeNote}`);
