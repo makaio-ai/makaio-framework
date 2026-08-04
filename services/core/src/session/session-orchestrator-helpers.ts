@@ -9,7 +9,7 @@ export { extractTextContent, convertToSessionBlock, normalizeToBlocks } from './
 export { getOrCreateSession, resolveTargetAgents, findTurnByAgent } from './utils/session-utils.js';
 export { buildTurnInitiator } from './utils/turn-initiator.js';
 export { resolveAdapterId, resolveModelCapabilities, resolveExecutionTarget } from './utils/resolution.js';
-export { buildRecoveryContext } from './utils/recovery-context.js';
+export { buildRecoveryContext, buildPlannedRecoveryContext } from './utils/recovery-context.js';
 export {
   type RecoveryConfig,
   ensureAgentCwd,

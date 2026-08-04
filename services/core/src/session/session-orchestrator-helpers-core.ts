@@ -13,4 +13,4 @@
 export { extractTextContent, convertToSessionBlock, normalizeToBlocks } from './utils/message-utils.js';
 export { getOrCreateSession, resolveTargetAgents, findTurnByAgent } from './utils/session-utils.js';
 export { buildTurnInitiator } from './utils/turn-initiator.js';
-export { buildRecoveryContext } from './utils/recovery-context.js';
+export { buildRecoveryContext, buildPlannedRecoveryContext } from './utils/recovery-context.js';

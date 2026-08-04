@@ -96,6 +96,8 @@ export type {
 } from './artifact/index.js';
 export { defineArtifactLifecycleHooks } from './artifact/index.js';
 export type {
+  AfterArtifactHookContext,
+  AfterArtifactHookRegistration,
   ArtifactDraft,
   ArtifactDraftPatch,
   ArtifactHookFilter,
@@ -103,8 +105,6 @@ export type {
   ArtifactLifecycleHookEvent,
   ArtifactLifecycleHookRegistration,
   ArtifactLifecycleSemanticEvent,
-  ArtifactReactionHookContext,
-  ArtifactReactionHookRegistration,
   BeforeArtifactHookContext,
   BeforeArtifactHookRegistration,
 } from './artifact/index.js';
@@ -754,6 +754,7 @@ export {
   StructuredOutputValidationErrorSchema,
   StructuredOutputValidationSchema,
   StructuredOutputValidationStatusSchema,
+  zodSchemaToJsonRecord,
 } from './shared/index.js';
 export type {
   ContentSource,
@@ -1087,7 +1088,6 @@ export {
   ManualWorkflowTrigger,
   station,
   WebhookWorkflowTrigger,
-  zodSchemaToJsonRecord,
 } from './workflow/index.js';
 export type {
   AgentConfig,
@@ -1531,3 +1531,21 @@ export {
   SubjectTelemetrySubjects,
 } from './telemetry/index.js';
 export type { SubjectTelemetryAttributeValue, SubjectTelemetryFact } from './telemetry/index.js';
+export {
+  createReactionRuleRef,
+  defineReaction,
+  ReactionDescriptorSchema,
+  ReactionOutcomeSchema,
+} from './reaction/index.js';
+export type {
+  DefineReactionOptions,
+  ExtensionReactionsContribution,
+  ReactionContributionContext,
+  ReactionDefinition,
+  ReactionDescriptor,
+  ReactionExecutionContext,
+  ReactionHandler,
+  ReactionInvocationId,
+  ReactionOutcome,
+  ReactionRuleRef,
+} from './reaction/index.js';

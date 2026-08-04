@@ -1,4 +1,5 @@
 {
+  "name": "@makaio/framework-scripts",
   "private": true,
   "type": "module",
   "scripts": {

@@ -36,8 +36,8 @@ import {
   delegateToAgent as buildDelegateAgentNode,
   delegateToRole as buildDelegateRoleNode,
   extractStandaloneHandlers,
-  zodSchemaToJsonRecord,
 } from './authoring-node-factories.js';
+import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 
 // ─────────────────────────────────────────────────────────────
 // Internal helpers

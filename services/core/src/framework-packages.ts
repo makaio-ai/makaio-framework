@@ -17,6 +17,7 @@ import {
 } from './materialization/packages.js';
 import { CapabilityService } from './capability/capability-service.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
+import { reactionRegistryPackage } from './reaction/packages.js';
 import type { IModelRegistryFetcher } from './model-registry/types.js';
 import { ModelRegistryService } from './model-registry/model-registry-service.js';
 import { ObservedSessionIngestionService } from './session/observed-session-ingestion.js';
@@ -84,6 +85,8 @@ export const GitToken = extensionToken<GitService>('git');
 export { SubagentServiceToken };
 /** Artifact-domain token and package (defined in the artifact domain module). */
 export { ArtifactSchemaRegistryToken, artifactSchemaRegistryPackage };
+/** Reaction-domain package (defined in the reaction domain module). */
+export { reactionRegistryPackage };
 /** Materialization-domain tokens and packages (defined in the materialization domain module). */
 export {
   ArtifactViewBuilderRegistryToken,
@@ -339,6 +342,7 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   canonicalModelPackage,
   frameworkShellWindowPackage,
   workflowBlockRegistryPackage,
+  reactionRegistryPackage,
   transitionPipelinePackage,
   gitPackage,
   fileSystemPackage,

@@ -63,7 +63,6 @@ Non-workspace directories that are still important context include:
 - `docs/subjects/` for generated bus subject reference.
 - `sdks/manifest/` and `sdks/conformance/` for SDK protocol generation and cross-language fixtures.
 - `.agents/policies/` for area-specific rules.
-- `scripts/` for repo validation, generation, and development automation.
 
 ## Workspace Layering
 
@@ -362,6 +361,7 @@ Read [`.agents/policies/sdks.md`](../.agents/policies/sdks.md) before SDK work. 
 Read [`.agents/policies/build-tooling.md`](../.agents/policies/build-tooling.md) before changing validation, bundling, or
 Vite/tsdown helpers.
 
-| Path            | Package                 | Description                                             |
-| --------------- | ----------------------- | ------------------------------------------------------- |
-| `build-tooling` | `@makaio/build-tooling` | Shared Vite/tsdown configs for extensions and adapters. |
+| Path            | Package                    | Description                                                      |
+| --------------- | -------------------------- | ---------------------------------------------------------------- |
+| `build-tooling` | `@makaio/build-tooling`    | Shared Vite/tsdown configs for extensions and adapters.          |
+| `scripts`       | `@makaio/framework-scripts` | Private repository validation, generation, and development tools. |

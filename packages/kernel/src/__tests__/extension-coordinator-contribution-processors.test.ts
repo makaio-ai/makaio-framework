@@ -401,6 +401,136 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     expect(events).toEqual(['rpc-cleanup-failed', 'service-destroyed']);
   });
 
+  it('serializes a disable admitted while activation is still pending', async () => {
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
+    const activationStarted = Promise.withResolvers<void>();
+    const releaseActivation = Promise.withResolvers<void>();
+    const stopped = vi.fn<NonNullable<ContributionProcessor['processStopped']>>().mockResolvedValue(undefined);
+
+    coordinator.registerContributionProcessor({
+      processActivated: async () => {
+        activationStarted.resolve();
+        await releaseActivation.promise;
+      },
+      processStopped: stopped,
+    });
+    coordinator.load([pkg('feature')]);
+
+    const starting = coordinator.startAll();
+    await activationStarted.promise;
+    const disabling = coordinator.handleSetEnabled('feature', false);
+
+    releaseActivation.resolve();
+    await starting;
+    await expect(disabling).resolves.toBe(true);
+
+    expect(coordinator.list().find((entry) => entry.name === 'feature')?.state).toBe('stopped');
+    expect(stopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes shutdown terminal immediately while waiting for admitted activation', async () => {
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
+    const activationStarted = Promise.withResolvers<void>();
+    const releaseActivation = Promise.withResolvers<void>();
+    const stopped = vi.fn<NonNullable<ContributionProcessor['processStopped']>>().mockResolvedValue(undefined);
+    let extensionSignal: AbortSignal | undefined;
+
+    coordinator.registerContributionProcessor({
+      processActivated: async () => {
+        activationStarted.resolve();
+        await releaseActivation.promise;
+      },
+      processStopped: stopped,
+    });
+    coordinator.load([
+      pkg('feature', {
+        create: (ctx) => {
+          extensionSignal = ctx.signal;
+          return new NoopService(ctx.bus);
+        },
+      }),
+    ]);
+
+    const starting = coordinator.startAll();
+    await activationStarted.promise;
+    const shuttingDown = coordinator.shutdown();
+
+    expect(extensionSignal?.aborted).toBe(true);
+    expect(stopped).not.toHaveBeenCalled();
+    await expect(coordinator.handleSetEnabled('feature', false)).resolves.toBe(false);
+
+    releaseActivation.resolve();
+    await starting;
+    await expect(shuttingDown).resolves.toBeUndefined();
+
+    expect(coordinator.list().find((entry) => entry.name === 'feature')?.state).toBe('stopped');
+    expect(stopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one failing shutdown when an abort listener re-enters synchronously', async () => {
+    const bus = createBusInstance();
+    const destroy = vi.fn(async () => {
+      throw new Error('destroy failed');
+    });
+    const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
+    let reentrantShutdown: Promise<void> | undefined;
+
+    coordinator.load([
+      pkg('feature', {
+        create: (ctx) => {
+          ctx.signal.addEventListener('abort', () => {
+            reentrantShutdown = coordinator.shutdown();
+          });
+          return { destroy };
+        },
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const shutdown = coordinator.shutdown();
+    expect(reentrantShutdown).toBeDefined();
+    expect(reentrantShutdown).toBe(shutdown);
+
+    const [firstFailure, reentrantFailure] = await Promise.all([
+      shutdown.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+      reentrantShutdown!.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+    ]);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(firstFailure).toBeInstanceOf(AggregateError);
+    expect(reentrantFailure).toBe(firstFailure);
+  });
+
+  it('continues processing admitted lifecycle work after an earlier toggle fails', async () => {
+    const bus = createBusInstance();
+    let persistenceCalls = 0;
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async () => {
+        persistenceCalls += 1;
+        if (persistenceCalls === 1) throw new Error('persistence unavailable');
+      },
+    });
+    coordinator.load([pkg('feature')]);
+    await coordinator.startAll();
+
+    const failedDisable = coordinator.handleSetEnabled('feature', false);
+    const laterDisable = coordinator.handleSetEnabled('feature', false);
+
+    await expect(failedDisable).rejects.toThrow('persistence unavailable');
+    await expect(laterDisable).resolves.toBe(true);
+    expect(persistenceCalls).toBe(2);
+    expect(coordinator.list().find((entry) => entry.name === 'feature')?.state).toBe('stopped');
+  });
+
   it('removed processor is not called after cleanup function is invoked', async () => {
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });

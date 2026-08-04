@@ -985,6 +985,32 @@ describe('execution attempt repository contract (without write-lock isolation)',
 });
 
 describe('execution attempt repository contract (failed rollback)', () => {
+  it('releases transaction ownership after a commit failure is rolled back', async () => {
+    const inner = openConnection();
+    let rejectCommit = true;
+    const repository = await createSqliteAttemptRepository(
+      handleOver({
+        async run(query: SQL): Promise<{ rowsAffected: number }> {
+          if (rejectCommit && /^\s*COMMIT\b/i.test(statementText(query))) {
+            rejectCommit = false;
+            throw new Error('the driver refused to commit');
+          }
+          return inner.run(query);
+        },
+        async all<TRow extends Record<string, unknown>>(query: SQL): Promise<TRow[]> {
+          return inner.all<TRow>(query);
+        },
+      }),
+    );
+
+    await expect(
+      repository.createAttempt({ executionId: 'busy-exec', executionAttemptId: 'busy-attempt' }),
+    ).rejects.toThrow('the driver refused to commit');
+    await expect(
+      repository.createAttempt({ executionId: 'next-exec', executionAttemptId: 'next-attempt' }),
+    ).resolves.toMatchObject({ executionAttemptId: 'next-attempt' });
+  });
+
   it('retires the repository instead of reusing a connection it cannot roll back', async () => {
     const inner = openConnection();
     let refuseRollback = false;

@@ -43,6 +43,7 @@
     "./platform": "./src/platform/index.ts",
     "./facet": "./src/facet/index.ts",
     "./materialization": "./src/materialization/index.ts",
+    "./reaction": "./src/reaction/index.ts",
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -183,6 +184,10 @@
       "./materialization": {
         "types": "./dist/materialization/index.d.ts",
         "default": "./dist/materialization/index.mjs"
+      },
+      "./reaction": {
+        "types": "./dist/reaction/index.d.ts",
+        "default": "./dist/reaction/index.mjs"
       },
       "./package.json": "./package.json"
     }

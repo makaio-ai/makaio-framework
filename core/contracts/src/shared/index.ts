@@ -6,6 +6,7 @@ export {
   JsonSchemaRecordSchema,
   type JsonValue,
 } from './json-value.js';
+export { zodSchemaToJsonRecord } from './zod-json-schema.js';
 
 /**
  * Content source for binary data or external resources.
