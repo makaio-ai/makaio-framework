@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
-import type { ImportStatus, ImportUpsertRequest } from '@makaio/contracts/session';
+import type { ImportStatus, ImportUpsertRequest, SessionStorageRebindObservedRequest } from '@makaio/contracts/session';
 import { SessionStorageSubjects } from './namespace.js';
 import { kindToBranchKind } from '../import/lineage-utils.js';
 import { createMonotonicClock } from './monotonic-clock.js';
@@ -320,6 +320,53 @@ function countImportStatuses(sessions: IMakaioSession[]): ImportStatusCounts {
 }
 
 /**
+ * Look up a session by the `(source, adapterSessionId)` import identity.
+ *
+ * Mirrors the unique index the SQL backends conflict on, so both backends
+ * resolve the same row for the same identity.
+ * @param store - In-memory session store
+ * @param source - Source tool identity
+ * @param externalSessionId - External tool's session identifier
+ * @returns The matching session, or `undefined`
+ */
+function findByImportIdentity(
+  store: Map<string, IMakaioSession>,
+  source: string,
+  externalSessionId: string,
+): IMakaioSession | undefined {
+  return Array.from(store.values()).find(
+    (session) => session.adapterSessionId === externalSessionId && session.source === source,
+  );
+}
+
+/**
+ * Apply the locality columns an observed rebind request supplies.
+ *
+ * Mirrors the Drizzle handler's `buildRebindObservedSet`: absent fields are
+ * left untouched rather than cleared, and `machineId` overwrites (the machine
+ * running the continuation owns the provider-native session store).
+ * @param session - Existing session being rebound
+ * @param payload - Rebind request payload
+ * @returns Names of the session properties the continuation reported
+ */
+function applyRebindObservedLocality(session: IMakaioSession, payload: SessionStorageRebindObservedRequest): string[] {
+  const changedProperties: string[] = [];
+  if (payload.cwd !== undefined) {
+    session.targetWorkingDirectory = payload.cwd;
+    changedProperties.push('targetWorkingDirectory');
+  }
+  if (payload.logFilePath !== undefined) {
+    session.logFilePath = payload.logFilePath;
+    changedProperties.push('logFilePath');
+  }
+  if (payload.machineId !== undefined) {
+    session.machineId = payload.machineId ?? undefined;
+    changedProperties.push('machineId');
+  }
+  return changedProperties;
+}
+
+/**
  * Emit import status lifecycle events for memory storage.
  * @param bus - Bus instance
  * @param session - Updated imported session
@@ -345,6 +392,35 @@ function emitMemoryImportStatusChanged(bus: IMakaioBus, session: IMakaioSession,
 }
 
 /**
+ * Register the in-memory `storage:session.rebindObserved` handler.
+ *
+ * A rebind is deliberately not an import: it refreshes runtime/locality fields
+ * of a session that already exists and reports a modeled `'not-found'` instead
+ * of inventing a row for an identity storage has never seen.
+ * @param bus - Bus instance
+ * @param store - In-memory session store
+ * @returns Cleanup function
+ */
+function registerMemoryRebindObservedHandler(bus: IMakaioBus, store: Map<string, IMakaioSession>): () => void {
+  return bus.on(SessionStorageSubjects.rebindObserved, (ctx) => {
+    const payload = ctx.payload;
+    const session = findByImportIdentity(store, payload.source, payload.externalSessionId);
+    if (!session) {
+      ctx.setResult({ outcome: 'not-found' });
+      return;
+    }
+
+    const changedProperties = applyRebindObservedLocality(session, payload);
+    ctx.setResult({ outcome: 'rebound', sessionId: session.sessionId });
+    if (changedProperties.length > 0) {
+      void bus
+        .emit(SessionSubjects.updated, { sessionId: session.sessionId, changedProperties })
+        .catch((err) => console.error('[SessionStorage] Failed to emit session.updated:', err));
+    }
+  });
+}
+
+/**
  * Register in-memory import-specific session storage handlers.
  * @param deps - Handler dependencies
  * @returns Cleanup functions for import handlers
@@ -354,9 +430,7 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
   return [
     bus.on(SessionStorageSubjects.importUpsert, (ctx) => {
       const payload = ctx.payload;
-      const existing = Array.from(store.values()).find((session) => {
-        return session.adapterSessionId === payload.externalSessionId && session.source === payload.source;
-      });
+      const existing = findByImportIdentity(store, payload.source, payload.externalSessionId);
       const discoveredAt = nextDiscoveredAt();
       const created = existing === undefined;
       const session = existing ?? createImportedSession(payload, crypto.randomUUID(), discoveredAt);
@@ -374,6 +448,7 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
       emitMemoryImportUpsertLifecycle(bus, session, created);
       ctx.setResult({ sessionId: session.sessionId, created });
     }),
+    registerMemoryRebindObservedHandler(bus, store),
     bus.on(SessionStorageSubjects.getByLogFilePath, async (ctx) => {
       const session = Array.from(store.values()).find((candidate) => candidate.logFilePath === ctx.payload.logFilePath);
       if (!session) {

@@ -278,6 +278,68 @@ export const ImportUpsertRequestSchema = z.discriminatedUnion('kind', [
 
 export type ImportUpsertRequest = z.infer<typeof ImportUpsertRequestSchema>;
 
+// ─── Observed rebind schemas ────────────────────────────────────────────────
+
+/**
+ * Request payload for `storage:session.rebindObserved`.
+ *
+ * A rebind is the write a *continuation* of an already known external session
+ * produces: the provider session keeps its identity, but the runtime observing
+ * it may sit in a different working directory, on a different machine, or write
+ * to a different transcript file. Only those runtime/locality facts are
+ * refreshed. Origin identity (`source`, `adapterSessionId`), lineage,
+ * `importStatus`, lifecycle `status`, `createdAt`, metadata and content are
+ * deliberately out of reach — a continuation is not an import and must never
+ * be able to rewrite what an import owns.
+ *
+ * Every locality field is optional and `undefined` means "unchanged": the
+ * observing runtime reports what it knows, and absence of evidence must not
+ * erase a stored value.
+ */
+export const SessionStorageRebindObservedRequestSchema = z.object({
+  /** External tool's session identifier (matched against `adapterSessionId`). */
+  externalSessionId: z.string(),
+  /** Source tool identity — the second half of the import identity key. */
+  source: z.string(),
+  /** Working directory the continuation runs in. */
+  cwd: z.string().optional(),
+  /** Absolute path the continuation writes its transcript to. */
+  logFilePath: z.string().optional(),
+  /**
+   * Stable runtime machine identity that owns the provider-native session store.
+   *
+   * Unlike the import upsert's fill-once merge, a rebind *overwrites*: the
+   * machine running the continuation is the machine that now owns that store.
+   * `null` relinquishes ownership, `undefined` leaves it unchanged.
+   */
+  machineId: MachineIdFieldSchema,
+});
+
+export type SessionStorageRebindObservedRequest = z.infer<typeof SessionStorageRebindObservedRequestSchema>;
+
+/**
+ * Result of `storage:session.rebindObserved`.
+ *
+ * `'not-found'` is a modeled outcome, not a failure and not an implicit
+ * create: a continuation of a session storage has never seen carries no
+ * trustworthy creation time, lineage or content, so storage reports the miss
+ * and leaves session creation to the import path that does.
+ */
+export const SessionStorageRebindObservedResponseSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    /** An existing row was rebound to the observing runtime. */
+    outcome: z.literal('rebound'),
+    /** Makaio session ID of the rebound row. */
+    sessionId: z.string(),
+  }),
+  z.object({
+    /** No row exists for the `(source, externalSessionId)` identity. */
+    outcome: z.literal('not-found'),
+  }),
+]);
+
+export type SessionStorageRebindObservedResult = z.infer<typeof SessionStorageRebindObservedResponseSchema>;
+
 export { ImportStatusSchema, type ImportStatus } from './schemas/primitives.js';
 
 /**
@@ -480,6 +542,21 @@ export const SessionStorageNamespace = createContractStorageNamespace('session',
         /** Whether a new session record was created during this call. */
         created: z.boolean(),
       }),
+    },
+
+    /**
+     * Rebind an already known observed session to the runtime that just
+     * continued it (resume/compact).
+     *
+     * Refreshes runtime/locality columns only and reports a miss instead of
+     * creating a row — see {@link SessionStorageRebindObservedRequestSchema}.
+     *
+     * Subject: `storage:session.rebindObserved`
+     * Type: Request (RPC)
+     */
+    rebindObserved: {
+      request: SessionStorageRebindObservedRequestSchema,
+      response: SessionStorageRebindObservedResponseSchema,
     },
 
     /**

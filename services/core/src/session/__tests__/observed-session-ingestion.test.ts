@@ -11,6 +11,11 @@
  * - hook-first registration through `storage:session.importUpsert`
  *   (source = importer adapter name, importStatus 'tracking', metadata,
  *   cwd/logFilePath enrichment, idempotency on repeat)
+ * - continuations (`startMode` resume/compact) rebind through
+ *   `storage:session.rebindObserved` instead: locality follows the continuing
+ *   runtime, import data stays put, and an unknown session is left for the
+ *   transcript import to create — unless a metadata-only policy means no
+ *   import will ever come, in which case it degrades to registration
  * - targeted import trigger on `client.session.turn.completed`
  *   (importFile + 'live' marker, importSession fallback without a path)
  * - AC8: adapter-managed sessions are suppressed; non-adapter runtime
@@ -30,11 +35,8 @@ import {
 import type { ClientRuntimeSourceLayer } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { registerMemorySessionStorage } from '../storage/memory-handler.js';
-import {
-  LogImportTriggerSubjects,
-  MANAGED_SESSION_CAP,
-  ObservedSessionIngestionService,
-} from '../observed-session-ingestion.js';
+import { LogImportTriggerSubjects } from '../log-import-trigger-subjects.js';
+import { MANAGED_SESSION_CAP, ObservedSessionIngestionService } from '../observed-session-ingestion.js';
 import {
   registerObservedSessionIngestionPolicyProvider,
   type IObservedSessionIngestionPolicyProvider,
@@ -434,21 +436,6 @@ describe('ObservedSessionIngestionService', () => {
     expect(session?.parentExternalSessionId).toBeUndefined();
   });
 
-  it('registers as root when startMode is resume', async () => {
-    stubLogImportSeams();
-
-    await emitSessionStarted({
-      adapterSessionId: 'resume-root-1',
-      startMode: 'resume',
-      cwd: '/repo',
-    });
-
-    const session = await getObservedSession('resume-root-1');
-    expect(session).not.toBeNull();
-    // Resume does not create fork lineage
-    expect(session?.branchKind).toBeUndefined();
-  });
-
   it('registers as root when startMode is clear', async () => {
     stubLogImportSeams();
 
@@ -464,19 +451,160 @@ describe('ObservedSessionIngestionService', () => {
     expect(session?.branchKind).toBeUndefined();
   });
 
-  it('registers as root when startMode is compact', async () => {
+  // -------------------------------------------------------------------------
+  // Continuations (resume / compact) rebind instead of registering
+  // -------------------------------------------------------------------------
+
+  it.each([
+    'resume',
+    'compact',
+  ] as const)('rebinds locality without touching import data when startMode is %s', async (startMode) => {
     stubLogImportSeams();
 
     await emitSessionStarted({
-      adapterSessionId: 'compact-root-1',
-      startMode: 'compact',
+      adapterSessionId: 'continued-1',
+      startMode: 'fresh',
       cwd: '/repo',
+      transcriptPath: '/logs/repo/continued-1.jsonl',
+      machineId: 'machine-a',
+      metadata: { keep: true },
+    });
+    const registered = await getObservedSession('continued-1');
+    expect(registered?.importStatus).toBe('tracking');
+
+    await emitSessionStarted({
+      adapterSessionId: 'continued-1',
+      startMode,
+      observedAt: 9_000,
+      cwd: '/worktree',
+      transcriptPath: '/logs/worktree/continued-1.jsonl',
+      machineId: 'machine-b',
+      metadata: { keep: false, added: 1 },
     });
 
-    const session = await getObservedSession('compact-root-1');
+    const continued = await getObservedSession('continued-1');
+    expect(continued?.sessionId).toBe(registered?.sessionId);
+    // Locality follows the continuing runtime …
+    expect(continued?.targetWorkingDirectory).toBe('/worktree');
+    expect(continued?.logFilePath).toBe('/logs/worktree/continued-1.jsonl');
+    expect(continued?.machineId).toBe('machine-b');
+    // … while origin, lineage, import lifecycle, creation time and content
+    // stay owned by the registration/import path.
+    expect(continued?.createdAt).toBe(1_000);
+    expect(continued?.branchKind).toBeUndefined();
+    expect(continued?.parentExternalSessionId).toBeUndefined();
+    expect(continued?.importStatus).toBe('tracking');
+    expect(continued?.metadata).toEqual({ keep: true });
+  });
+
+  it.each([
+    'resume',
+    'compact',
+  ] as const)('does not register a session for a %s of an unknown external session', async (startMode) => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      adapterSessionId: 'unknown-continued-1',
+      startMode,
+      cwd: '/repo',
+      transcriptPath: '/logs/unknown-continued-1.jsonl',
+    });
+
+    expect(await getObservedSession('unknown-continued-1')).toBeNull();
+    const { sessions } = await MakaioBus.request(SessionStorageSubjects.listImported, {});
+    expect(sessions).toEqual([]);
+  });
+
+  it('leaves an unknown continuation to the transcript import when policy tracks content', async () => {
+    stubLogImportSeams();
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+      id: 'tracking-policy',
+      displayName: 'Tracking policy',
+      decideObservedSessionIngestion: () => ({ importStatus: 'tracking' }),
+    });
+
+    await emitSessionStarted({
+      adapterSessionId: 'tracked-continued-1',
+      startMode: 'resume',
+      cwd: '/repo',
+      transcriptPath: '/logs/tracked-continued-1.jsonl',
+    });
+
+    expect(await getObservedSession('tracked-continued-1')).toBeNull();
+    const { sessions } = await MakaioBus.request(SessionStorageSubjects.listImported, {});
+    expect(sessions).toEqual([]);
+  });
+
+  it('registers an unknown continuation as metadata-only when policy never imports its content', async () => {
+    const { importFileRequests, importSessionRequests } = stubLogImportSeams();
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+      id: 'discovered-policy',
+      displayName: 'Discovered policy',
+      decideObservedSessionIngestion: () => ({ importStatus: 'discovered' }),
+    });
+
+    await emitSessionStarted({
+      adapterSessionId: 'private-continued-1',
+      startMode: 'resume',
+      observedAt: 7_000,
+      cwd: '/private',
+      transcriptPath: '/logs/private-continued-1.jsonl',
+      machineId: 'machine-a',
+      metadata: { title: 'metadata only' },
+    });
+
+    // Without the policy consultation this session would vanish entirely: the
+    // rebind finds nothing and the metadata-only policy stops every later
+    // content import from creating the row.
+    const session = await getObservedSession('private-continued-1');
     expect(session).not.toBeNull();
-    // Compact does not create fork lineage
+    expect(session?.importStatus).toBe('discovered');
+    expect(session?.status).toBe('discovered');
+    expect(session?.clientId).toBe(CLIENT_ID);
+    expect(session?.targetWorkingDirectory).toBe('/private');
+    expect(session?.logFilePath).toBe('/logs/private-continued-1.jsonl');
+    expect(session?.machineId).toBe('machine-a');
+    expect(session?.metadata).toEqual({ title: 'metadata only' });
     expect(session?.branchKind).toBeUndefined();
+
+    // Still metadata-only: no content import is triggered for it.
+    await emitTurnCompleted({
+      adapterSessionId: 'private-continued-1',
+      transcriptPath: '/logs/private-continued-1.jsonl',
+    });
+    expect(importFileRequests).toEqual([]);
+    expect(importSessionRequests).toEqual([]);
+  });
+
+  it('does not promote a watcher-discovered session to tracking on resume', async () => {
+    stubLogImportSeams();
+
+    // Watcher discovery: no client identity, plain 'discovered' import status.
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      kind: 'root',
+      parentAdapterSessionId: null,
+      forkPointMessageId: null,
+      externalSessionId: 'discovered-1',
+      source: ADAPTER_NAME,
+      cwd: '/repo',
+      startedAt: 500,
+    });
+
+    await emitSessionStarted({
+      adapterSessionId: 'discovered-1',
+      startMode: 'resume',
+      cwd: '/worktree',
+    });
+
+    const session = await getObservedSession('discovered-1');
+    expect(session?.sessionId).toBe(sessionId);
+    expect(session?.targetWorkingDirectory).toBe('/worktree');
+    // A continuation carries no import verdict: it neither claims the row for
+    // hook-observed policy (clientId) nor promotes its lifecycle.
+    expect(session?.clientId).toBeUndefined();
+    expect(session?.importStatus).toBe('discovered');
+    expect(session?.status).toBe('discovered');
+    expect(session?.createdAt).toBe(500);
   });
 
   it('does not reactivate a closed observed session on repeated live start observations', async () => {
