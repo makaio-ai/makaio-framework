@@ -2,6 +2,8 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { ArtifactSubjects } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import type {
+  AfterArtifactHookContext,
+  AfterArtifactHookRegistration,
   ArtifactDraft,
   ArtifactDraftPatch,
   ArtifactHookFilter,
@@ -9,8 +11,6 @@ import type {
   ArtifactLifecycleHookRegistration,
   ArtifactObservation,
   ArtifactProjectionPolicy,
-  ArtifactReactionHookContext,
-  ArtifactReactionHookRegistration,
   ArtifactRef,
   ArtifactRelationTarget,
   ArtifactRevision,
@@ -69,7 +69,7 @@ export interface RunAfterInput {
    * The observation that was just appended.
    *
    * Present only for {@link ArtifactLifecycleHookRegistry.runAfterObservationAdded}.
-   * Forwarded to {@link ArtifactReactionHookContext.observation} so that
+   * Forwarded to {@link AfterArtifactHookContext.observation} so that
    * `afterObservationAdded` hooks can inspect the observation without an
    * additional bus round-trip.
    */
@@ -79,7 +79,7 @@ export interface RunAfterInput {
   /** Effective projection policy for this artifact kind. */
   readonly projectionPolicy: ArtifactProjectionPolicy;
   /**
-   * Skip the default provider projection tier while preserving custom reactions.
+   * Skip the default provider projection tier while preserving custom after hooks.
    *
    * The lifecycle writer sets this when a before-hook called
    * `skipMaterialization()`. Hooks at priority `>= 0` still run; hooks at
@@ -88,7 +88,7 @@ export interface RunAfterInput {
   readonly skipDefaultProjection?: boolean;
   /**
    * Metadata bag propagated from the paired before-hook run.
-   * A mutable `Map` is accepted but exposed as read-only to reaction hooks.
+   * A mutable `Map` is accepted but exposed as read-only to after hooks.
    */
   readonly meta: Map<string, unknown>;
 }
@@ -168,23 +168,23 @@ function selectBeforeHooks(
 }
 
 /**
- * Select and sort reaction hooks matching a given event type and artifact.
+ * Select and sort after-hooks matching a given event type and artifact.
  *
  * Hooks are returned in descending priority order (highest first).
  * @param hooks - Full flat list of registered hooks.
- * @param event - Reaction hook event type to match.
+ * @param event - After-hook event type to match.
  * @param artifact - Artifact being processed, used for filter evaluation.
- * @returns Sorted array of matching reaction hook registrations.
+ * @returns Sorted array of matching after-hook registrations.
  */
 function selectAfterHooks(
   hooks: readonly ArtifactLifecycleHookRegistration<IMakaioBus>[],
   event: 'afterCreate' | 'afterRevise' | 'afterStatusChanged' | 'afterObservationAdded',
   artifact: ArtifactRevision,
-): ArtifactReactionHookRegistration<IMakaioBus>[] {
+): AfterArtifactHookRegistration<IMakaioBus>[] {
   return (
     hooks.filter(
       (h) => h.event === event && matchesFilter(h.filter, artifact),
-    ) as ArtifactReactionHookRegistration<IMakaioBus>[]
+    ) as AfterArtifactHookRegistration<IMakaioBus>[]
   ).sort((a, b) => effectivePriority(b) - effectivePriority(a));
 }
 
@@ -237,7 +237,7 @@ function mergeBack(original: ArtifactRevision, draft: ArtifactDraft): ArtifactRe
  * Each call to {@link registerHooks} returns a cleanup function that removes
  * exactly the hooks registered in that call.
  *
- * The bus is accepted at construction time so that reaction hook contexts can
+ * The bus is accepted at construction time so that after-hook contexts can
  * issue RPC calls (e.g. `ArtifactSubjects.resolve`) during hook execution.
  */
 export class ArtifactLifecycleHookRegistry extends BaseService {
@@ -413,37 +413,38 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
   // --------------------------------------------------------------------------
 
   /**
-   * Run all `afterCreate` reaction hooks for a newly created artifact.
+   * Run all `afterCreate` after hooks for a newly created artifact.
    *
    * Hooks run in descending priority order (highest first). Any hook may call
-   * {@link ArtifactReactionHookContext.preventDefault} to suppress subsequent
-   * lower-priority hooks. Errors thrown by individual hooks are caught and
-   * logged; they never propagate to the caller.
-   * @param input - Reaction context fields for the completed create.
+   * {@link AfterArtifactHookContext.preventDefault} to suppress subsequent
+   * hooks in the negative-priority default-projection tier. Hooks at priority
+   * `>= 0` still run. Errors thrown by individual hooks are caught and logged;
+   * they never propagate to the caller.
+   * @param input - After-hook context fields for the completed create.
    */
   public async runAfterCreate(input: RunAfterInput): Promise<void> {
     await this.runAfterHooks('afterCreate', 'created', input);
   }
 
   /**
-   * Run all `afterRevise` reaction hooks for a revised artifact.
-   * @param input - Reaction context fields for the completed revise.
+   * Run all `afterRevise` after hooks for a revised artifact.
+   * @param input - After-hook context fields for the completed revise.
    */
   public async runAfterRevise(input: RunAfterInput): Promise<void> {
     await this.runAfterHooks('afterRevise', 'revised', input);
   }
 
   /**
-   * Run all `afterStatusChanged` reaction hooks.
-   * @param input - Reaction context fields for the status change.
+   * Run all `afterStatusChanged` after hooks.
+   * @param input - After-hook context fields for the status change.
    */
   public async runAfterStatusChanged(input: RunAfterInput): Promise<void> {
     await this.runAfterHooks('afterStatusChanged', 'status-changed', input);
   }
 
   /**
-   * Run all `afterObservationAdded` reaction hooks.
-   * @param input - Reaction context fields for the observation.
+   * Run all `afterObservationAdded` after hooks.
+   * @param input - After-hook context fields for the observation.
    */
   public async runAfterObservationAdded(input: RunAfterInput): Promise<void> {
     await this.runAfterHooks('afterObservationAdded', 'observation-added', input);
@@ -453,11 +454,11 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
    * Shared implementation for after-hook pipelines.
    * @param event - The specific after-hook event type.
    * @param semanticEvent - The semantic event name passed to hook contexts.
-   * @param input - Reaction context fields.
+   * @param input - After-hook context fields.
    */
   private async runAfterHooks(
     event: 'afterCreate' | 'afterRevise' | 'afterStatusChanged' | 'afterObservationAdded',
-    semanticEvent: ArtifactReactionHookContext['semanticEvent'],
+    semanticEvent: AfterArtifactHookContext['semanticEvent'],
     input: RunAfterInput,
   ): Promise<void> {
     const { artifact, previous, observation, kindRegistration, projectionPolicy, skipDefaultProjection, meta } = input;
@@ -473,7 +474,7 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
       // always run regardless of preventDefault state.
       if (defaultPrevented && (hook.priority ?? 0) < 0) continue;
 
-      const ctx: ArtifactReactionHookContext<IMakaioBus> = {
+      const ctx: AfterArtifactHookContext<IMakaioBus> = {
         event,
         semanticEvent,
         artifact,

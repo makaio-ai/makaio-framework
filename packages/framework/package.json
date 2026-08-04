@@ -148,6 +148,10 @@
       "types": "./dist/contracts/materialization/index.d.mts",
       "default": "./dist/contracts/materialization/index.mjs"
     },
+    "./contracts/reaction": {
+      "types": "./dist/contracts/reaction/index.d.mts",
+      "default": "./dist/contracts/reaction/index.mjs"
+    },
     "./contracts/native-session-supervisor": {
       "types": "./dist/contracts/native-session-supervisor/index.d.mts",
       "default": "./dist/contracts/native-session-supervisor/index.mjs"

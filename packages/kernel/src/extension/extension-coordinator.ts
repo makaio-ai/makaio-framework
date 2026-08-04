@@ -50,6 +50,9 @@ import { startExtensionEntry } from './extension-start-runner.js';
  * Non-critical failures are isolated so remaining extensions continue to start.
  * Critical extension failures abort boot because the host declared them mandatory.
  *
+ * Lifecycle transitions are serialized. Extension lifecycle callbacks must not
+ * await another coordinator lifecycle call, because it waits in the same lane.
+ *
  * During {@link load}, window manifests are registered into
  * {@link windowRegistry}, tray entries are collected into {@link trayEntries},
  * and CLI contributions are collected into {@link cliContributions}. Static
@@ -84,6 +87,10 @@ export class ExtensionCoordinator {
   private loadOrder: string[] = [];
   private loaded = false;
   private started = false;
+  private shutdownRequested = false;
+  private shutdownPromise: Promise<void> | undefined;
+  /** FIFO lane for lifecycle transitions that mutate extension entries. */
+  private lifecycleTail: Promise<void> = Promise.resolve();
   private rpcCleanups: Array<() => void> = [];
   private readonly contributionProcessors: ContributionProcessor[] = [];
 
@@ -190,6 +197,9 @@ export class ExtensionCoordinator {
     packages: ReadonlyArray<KernelMakaioExtension>,
     configDefaults?: ReadonlyMap<string, Readonly<Record<string, unknown>>>,
   ): void {
+    if (this.shutdownRequested) {
+      throw new Error('ExtensionCoordinator.load() called after shutdown(). The coordinator is terminal.');
+    }
     if (this.loaded) {
       throw new Error(
         'ExtensionCoordinator.load() called twice. ' +
@@ -258,6 +268,9 @@ export class ExtensionCoordinator {
    *   critical package fails.
    */
   public async startAll(): Promise<void> {
+    if (this.shutdownRequested) {
+      throw new Error('ExtensionCoordinator.startAll() called after shutdown(). The coordinator is terminal.');
+    }
     if (!this.loaded) {
       throw new Error('ExtensionCoordinator.startAll() called before load(). Call load() first.');
     }
@@ -269,6 +282,11 @@ export class ExtensionCoordinator {
     }
     this.started = true;
 
+    await this.enqueueLifecycle(() => this.startAllInLifecycleLane());
+  }
+
+  /** Run the admitted startup transition in the coordinator lifecycle lane. */
+  private async startAllInLifecycleLane(): Promise<void> {
     const bootProgress = new BootProgressObserver(this.bus, this.loadOrder.length);
     this.rpcCleanups.push(() => bootProgress.dispose());
 
@@ -319,13 +337,31 @@ export class ExtensionCoordinator {
    * together so the caller can treat termination as unclean.
    *
    * Safe to call even if {@link startAll} was never called.
+   * @returns A promise that settles after every admitted transition and teardown complete.
    * @throws An AggregateError when any package failed to shut down cleanly.
    */
-  public async shutdown(): Promise<void> {
+  public shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+
+    // Teardown must never overtake admitted lifecycle work: contribution
+    // factories and service initialization can still own resources until that
+    // work settles. Hosts may impose a hard process-exit deadline, while this
+    // coordinator signals cooperative cancellation and preserves serialization.
+    // Mark terminal and reserve the sole teardown promise before aborting.
+    // Abort listeners run synchronously and can re-enter shutdown().
+    this.shutdownRequested = true;
+    const shutdownPromise = this.enqueueLifecycle(() => this.shutdownInLifecycleLane());
+    this.shutdownPromise = shutdownPromise;
     // Signal all active packages to cancel long-running operations before
-    // their services are destroyed.
+    // their services are destroyed. The queued callback cannot begin until the
+    // current turn completes, so this still precedes teardown.
     this.shutdownController.abort();
 
+    return shutdownPromise;
+  }
+
+  /** Run shutdown after every lifecycle transition admitted before shutdown. */
+  private async shutdownInLifecycleLane(): Promise<void> {
     const failures: unknown[] = [];
     let extensionShutdownSummary: string | undefined;
     for (const cleanup of this.rpcCleanups) {
@@ -495,29 +531,53 @@ export class ExtensionCoordinator {
    * @returns `true` on success, `false` when the state machine rejects.
    */
   public async handleSetEnabled(name: string, enabled: boolean): Promise<boolean> {
-    return handleSetEnabledImpl(
-      {
-        bus: this.bus,
-        db: this.db,
-        entries: this.entries,
-        extensionContextBase: this.extensionContextBase,
-        loadConfig: this.loadConfig,
-        signal: this.shutdownController.signal,
-        hasActiveExtension: (n: string): boolean => this.hasActiveExtension(n),
-        persistEnabled: this.persistEnabled,
-        contributionProcessors: this.contributionProcessors,
-        getExtensionService: <T>(n: string) => this.getExtensionService<T>(n),
-        runHealthCheck: (n) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
-        emitWarningsForEntry: (n, entry) =>
-          emitWarningsForEntry(
-            { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap },
-            n,
-            entry,
-          ),
-      },
-      name,
-      enabled,
+    if (this.shutdownRequested) return false;
+
+    return await this.enqueueLifecycle(() =>
+      handleSetEnabledImpl(
+        {
+          bus: this.bus,
+          db: this.db,
+          entries: this.entries,
+          extensionContextBase: this.extensionContextBase,
+          loadConfig: this.loadConfig,
+          signal: this.shutdownController.signal,
+          hasActiveExtension: (n: string): boolean => this.hasActiveExtension(n),
+          persistEnabled: this.persistEnabled,
+          contributionProcessors: this.contributionProcessors,
+          getExtensionService: <T>(n: string) => this.getExtensionService<T>(n),
+          runHealthCheck: (n) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
+          emitWarningsForEntry: (n, entry) =>
+            emitWarningsForEntry(
+              { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap },
+              n,
+              entry,
+            ),
+        },
+        name,
+        enabled,
+      ),
     );
+  }
+
+  /**
+   * Schedule a lifecycle transition after every previously admitted transition.
+   *
+   * The tail recovers from failures so one rejected operation cannot strand
+   * later shutdown or toggle work behind a rejected promise.
+   * @param operation - Lifecycle transition to run exclusively.
+   * @returns The operation's result.
+   */
+  private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.lifecycleTail.then(
+      () => operation(),
+      () => operation(),
+    );
+    this.lifecycleTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   /**

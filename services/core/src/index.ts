@@ -140,6 +140,8 @@ export {
 export { FacetNamespaceRegistry, createFacetNamespaceContributionProcessor } from './facet/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
 export { createWorkflowBlockContributionProcessor, WorkflowBlockRegistry } from './workflow-blocks/index.js';
+export { createReactionContributionProcessor, ReactionRegistry, ReactionRegistryToken } from './reaction/index.js';
+export type { ReactionContributionProcessorOptions, ReactionInvocationInput } from './reaction/index.js';
 export {
   createTransitionContributionProcessor,
   TransitionActionRegistry,
@@ -229,6 +231,7 @@ export {
   FacetNamespaceRegistryToken,
   frameworkCorePackages,
   ModelRegistryToken,
+  reactionRegistryPackage,
   sessionBridgePackage,
   SessionBridgeToken,
   sessionOrchestratorPackage,

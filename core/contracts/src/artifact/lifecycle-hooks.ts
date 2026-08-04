@@ -16,7 +16,7 @@ import type { ArtifactProjectionPolicy } from '../materialization/schemas.js';
  * after a write operation completes.
  *
  * These are the observable outcomes of artifact mutations and are used by
- * reaction hooks and projection policies alike.
+ * after hooks and projection policies alike.
  */
 export type ArtifactLifecycleSemanticEvent = 'created' | 'revised' | 'status-changed' | 'observation-added';
 
@@ -26,7 +26,7 @@ export type ArtifactLifecycleSemanticEvent = 'created' | 'revised' | 'status-cha
  * - `beforeCreate` / `beforeRevise` — synchronous guards that can reject or
  *   patch the draft before it is persisted.
  * - `afterCreate` / `afterRevise` / `afterStatusChanged` / `afterObservationAdded` —
- *   reaction hooks that run after a successful write.
+ *   after hooks that run once a write has succeeded.
  */
 export type ArtifactLifecycleHookEvent =
   | 'beforeCreate'
@@ -127,12 +127,13 @@ export interface BeforeArtifactHookContext<TBus extends MakaioBusLike = MakaioBu
  * Context object supplied to `afterCreate`, `afterRevise`, `afterStatusChanged`,
  * and `afterObservationAdded` hooks.
  *
- * Reaction hooks run after a successful write and may call
- * {@link preventDefault} to suppress default post-write side-effects
- * (e.g. bus event emission or provider sync).
+ * After hooks run once a write has succeeded and may call
+ * {@link preventDefault} to suppress later hooks in the negative-priority
+ * default-projection tier. Hooks at priority `>= 0` and host-side bus
+ * emissions outside the hook registry are unaffected.
  * @typeParam TBus - Concrete bus type supplied by the host runtime.
  */
-export interface ArtifactReactionHookContext<TBus extends MakaioBusLike = MakaioBusLike> {
+export interface AfterArtifactHookContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Specific hook-trigger event. */
   readonly event: 'afterCreate' | 'afterRevise' | 'afterStatusChanged' | 'afterObservationAdded';
   /**
@@ -167,10 +168,10 @@ export interface ArtifactReactionHookContext<TBus extends MakaioBusLike = Makaio
    */
   readonly meta: ReadonlyMap<string, unknown>;
   /**
-   * Prevent default post-write side-effects for this event.
+   * Suppress later hooks in the negative-priority default-projection tier.
    *
-   * When called, the artifact service will skip its built-in bus emission
-   * and/or provider projection step for this semantic event.
+   * Hooks at priority `>= 0` still run. This does not suppress host-side bus
+   * emissions or other work performed outside the after-hook registry.
    */
   preventDefault(): void;
   /**
@@ -219,9 +220,7 @@ export interface BeforeArtifactHookRegistration<TBus extends MakaioBusLike = Mak
   /**
    * Numeric priority for ordering hooks of the same event.
    *
-   * Higher numbers run first. Defaults to `0` when absent. For reaction
-   * hooks, negative priorities form the default-projection tier that can be
-   * skipped by `preventDefault()`.
+   * Higher numbers run first. Defaults to `0` when absent.
    */
   readonly priority?: number;
   /**
@@ -233,13 +232,13 @@ export interface BeforeArtifactHookRegistration<TBus extends MakaioBusLike = Mak
 
 /**
  * Registration record for an `afterCreate`, `afterRevise`, `afterStatusChanged`,
- * or `afterObservationAdded` reaction hook.
+ * or `afterObservationAdded` after hook.
  *
- * Reaction hooks run after a successful write and may perform side-effects such
+ * After hooks run once a write has succeeded and may perform side-effects such
  * as emitting additional bus events or triggering external provider syncs.
  * @typeParam TBus - Concrete bus type supplied by the host runtime.
  */
-export interface ArtifactReactionHookRegistration<TBus extends MakaioBusLike = MakaioBusLike> {
+export interface AfterArtifactHookRegistration<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Stable identifier for this hook. Dot-namespaced by convention, e.g. `'planner.notify-owner'`. */
   readonly id: string;
   /** The lifecycle event this hook is triggered by. */
@@ -260,9 +259,9 @@ export interface ArtifactReactionHookRegistration<TBus extends MakaioBusLike = M
   readonly priority?: number;
   /**
    * Hook implementation.
-   * @param ctx - Full reaction context for the completed artifact write.
+   * @param ctx - Full after-hook context for the completed artifact write.
    */
-  readonly handler: (ctx: ArtifactReactionHookContext<TBus>) => void | Promise<void>;
+  readonly handler: (ctx: AfterArtifactHookContext<TBus>) => void | Promise<void>;
 }
 
 /**
@@ -271,7 +270,7 @@ export interface ArtifactReactionHookRegistration<TBus extends MakaioBusLike = M
  */
 export type ArtifactLifecycleHookRegistration<TBus extends MakaioBusLike = MakaioBusLike> =
   | BeforeArtifactHookRegistration<TBus>
-  | ArtifactReactionHookRegistration<TBus>;
+  | AfterArtifactHookRegistration<TBus>;
 
 /**
  * A named, immutable container of artifact lifecycle hook registrations.

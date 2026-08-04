@@ -270,7 +270,6 @@ export {
   WebhookWorkflowTrigger,
 } from './authoring-exports.js';
 export { defineWorkflow } from './authoring.js';
-export { zodSchemaToJsonRecord } from './authoring-node-factories.js';
 export type {
   AgentConfig,
   ArtifactBindingOptions,

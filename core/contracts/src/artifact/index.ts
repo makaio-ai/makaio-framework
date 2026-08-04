@@ -53,6 +53,8 @@ export type {
 } from './kind-definition.js';
 export { defineArtifactLifecycleHooks } from './lifecycle-hooks.js';
 export type {
+  AfterArtifactHookContext,
+  AfterArtifactHookRegistration,
   ArtifactDraft,
   ArtifactDraftPatch,
   ArtifactHookFilter,
@@ -60,8 +62,6 @@ export type {
   ArtifactLifecycleHookEvent,
   ArtifactLifecycleHookRegistration,
   ArtifactLifecycleSemanticEvent,
-  ArtifactReactionHookContext,
-  ArtifactReactionHookRegistration,
   BeforeArtifactHookContext,
   BeforeArtifactHookRegistration,
 } from './lifecycle-hooks.js';

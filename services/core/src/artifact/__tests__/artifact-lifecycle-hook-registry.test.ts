@@ -110,7 +110,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     ).rejects.toThrow(ArtifactLifecycleHookRejectedError);
   });
 
-  it('lets reaction hooks prevent lower-priority default projection', async () => {
+  it('lets after hooks prevent lower-priority default projection', async () => {
     const bus = createBusInstance();
     const registry = new ArtifactLifecycleHookRegistry(bus);
     const defaultProjection = vi.fn();
@@ -147,7 +147,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     expect(defaultProjection).not.toHaveBeenCalled();
   });
 
-  it('lets callers skip default projection without suppressing custom reactions', async () => {
+  it('lets callers skip default projection without suppressing custom after hooks', async () => {
     const bus = createBusInstance();
     const registry = new ArtifactLifecycleHookRegistry(bus);
     const defaultProjection = vi.fn();
@@ -179,7 +179,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     expect(defaultProjection).not.toHaveBeenCalled();
   });
 
-  it('logs reaction hook errors and continues with later hooks', async () => {
+  it('logs after-hook errors and continues with later hooks', async () => {
     const bus = createBusInstance();
     const registry = new ArtifactLifecycleHookRegistry(bus);
     const laterHook = vi.fn();
@@ -190,7 +190,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
         event: 'afterCreate',
         priority: 10,
         handler: () => {
-          throw new Error('reaction failed');
+          throw new Error('after hook failed');
         },
       },
       {

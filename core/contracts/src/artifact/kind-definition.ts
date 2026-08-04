@@ -3,8 +3,7 @@ import type { ArtifactContextSelector } from './context-selectors.js';
 import type { ArtifactKindRegistration, ArtifactRevision, ArtifactScope } from './schemas.js';
 import type { ArtifactProjectionPolicy } from '../materialization/schemas.js';
 import type { ArtifactLifecycleHookDefinition } from './lifecycle-hooks.js';
-
-type JsonSchemaObject = Record<string, unknown>;
+import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 
 /**
  * Definition of an artifact kind with live Zod schemas for compile-time
@@ -180,22 +179,6 @@ interface DefineArtifactKindOptions<TData extends Record<string, unknown>, TScop
 }
 
 /**
- * Converts a live Zod schema to a plain JSON Schema object.
- *
- * The `$schema` dialect marker is stripped so the resulting object can be
- * embedded directly in a registration payload without triggering
- * schema-dialect validation in consumers.
- * @param schema - The Zod schema to convert.
- * @returns A plain JSON Schema object without a `$schema` key.
- */
-function toJsonSchemaObject(schema: z.ZodType): JsonSchemaObject {
-  const { $schema: _, ...jsonSchema } = z.toJSONSchema(schema) as JsonSchemaObject & {
-    $schema?: unknown;
-  };
-  return jsonSchema;
-}
-
-/**
  * Creates an artifact kind definition with live Zod schemas and a
  * serializable registration.
  *
@@ -230,9 +213,9 @@ export function defineArtifactKind<TData extends Record<string, unknown>, TScope
       kind: options.kind,
       description: options.description,
       schemaVersion: options.schemaVersion,
-      dataSchema: toJsonSchemaObject(options.dataSchema),
-      ...(options.scopeSchema ? { scopeSchema: toJsonSchemaObject(options.scopeSchema) } : {}),
-      ...(options.observationSchema ? { observationSchema: toJsonSchemaObject(options.observationSchema) } : {}),
+      dataSchema: zodSchemaToJsonRecord(options.dataSchema),
+      ...(options.scopeSchema ? { scopeSchema: zodSchemaToJsonRecord(options.scopeSchema) } : {}),
+      ...(options.observationSchema ? { observationSchema: zodSchemaToJsonRecord(options.observationSchema) } : {}),
       ...(options.discriminator !== undefined
         ? {
             discriminator:

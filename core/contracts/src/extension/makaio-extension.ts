@@ -23,6 +23,7 @@ import type { ExtensionWorkflowBlocksContribution } from './contributions/workfl
 import type { AnyArtifactKindDefinition } from '../artifact/index.js';
 import type { ArtifactLifecycleHookRegistration } from '../artifact/lifecycle-hooks.js';
 import type { FacetNamespaceDefinition } from '../facet/index.js';
+import type { ExtensionReactionsContribution } from '../reaction/index.js';
 import type { SurfaceBindingDefinition } from '../materialization/definition.js';
 import type { ExtensionArtifactViewBuildersContribution } from '../materialization/view-builder.js';
 import type {
@@ -514,6 +515,21 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * declares surface bindings.
    */
   readonly surfaceBindings?: ExtensionSurfaceBindingsContribution;
+
+  /**
+   * Reaction factory contributed by this extension.
+   *
+   * When present, the runtime calls `createReactions(ctx)` during extension
+   * activation and registers the returned {@link ReactionDefinition}s with the
+   * Reaction registry. Reactions are namespaced `<extension-name>.<reaction-name>`;
+   * the registry enforces the prefix at contribution time.
+   *
+   * Reaction definitions carry live Zod parameter schemas and trusted
+   * handlers — they are runtime values and must never be included in
+   * serializable descriptor metadata. Descriptor metadata may advertise a
+   * Reaction for discovery, but only this executable surface installs it.
+   */
+  readonly reactions?: ExtensionReactionsContribution<THostContext>;
 
   // ---------------------------------------------------------------------------
   // Transition Pipeline contribution surfaces

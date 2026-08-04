@@ -52,6 +52,7 @@ import {
   createArtifactKindContributionProcessor,
   createArtifactLifecycleHookContributionProcessor,
   createFacetNamespaceContributionProcessor,
+  createReactionContributionProcessor,
   createToolContributionProcessor,
   createTransitionContributionProcessor,
   createWorkflowBlockContributionProcessor,
@@ -541,6 +542,11 @@ export async function bootMakaioRuntimeCore(
     coordinator.registerContributionProcessor(createToolContributionProcessor());
     coordinator.registerContributionProcessor(createWorkflowBlockContributionProcessor());
     coordinator.registerContributionProcessor(createTransitionContributionProcessor());
+    coordinator.registerContributionProcessor(
+      createReactionContributionProcessor({
+        forEachActiveExtension: (callback) => coordinator.forEachActiveExtension(callback),
+      }),
+    );
     if (options.routeGraphBuilder) {
       coordinator.registerContributionProcessor(createHttpContributionProcessor(options.routeGraphBuilder));
     }

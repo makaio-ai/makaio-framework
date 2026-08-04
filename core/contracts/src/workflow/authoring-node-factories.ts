@@ -1,5 +1,4 @@
-import { z } from 'zod';
-import type { JsonValue } from '../shared/json-value.js';
+import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 import type {
   WorkflowDelegateAgentNode,
   WorkflowDelegateRoleNode,
@@ -51,25 +50,6 @@ export const standaloneHandlers = new WeakMap<object, StationHandler>();
  * in the serializable node shape.
  */
 export const standaloneLoopGates = new WeakMap<object, LoopGateHandler>();
-
-// ─────────────────────────────────────────────────────────────
-// Schema helper
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Converts a Zod schema to a JSON Schema record compatible with
- * `JsonSchemaRecordSchema`.
- *
- * Uses Zod v4's built-in `z.toJSONSchema()` and strips the `$schema` key so
- * the result is a plain JSON Schema document without the meta-schema pointer.
- * @param schema - Any Zod schema to convert
- * @returns A `Record<string, JsonValue>` suitable for storage in a workflow definition
- */
-export function zodSchemaToJsonRecord(schema: z.ZodTypeAny): Record<string, JsonValue> {
-  const raw = z.toJSONSchema(schema) as Record<string, JsonValue>;
-  const { $schema: _dropped, ...rest } = raw;
-  return rest;
-}
 
 // ─────────────────────────────────────────────────────────────
 // Standalone Handler Extraction

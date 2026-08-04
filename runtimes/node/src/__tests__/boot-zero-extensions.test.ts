@@ -9,6 +9,7 @@ import {
   ConfigSchema,
   ConfigSubjects,
   defineArtifactKind,
+  defineReaction,
   MessageStorageSubjects,
   SessionSubjects,
   type Config,
@@ -26,6 +27,7 @@ import {
   ArtifactLifecycleHookRegistryToken,
   frameworkCorePackages,
   ModelRegistryToken,
+  ReactionRegistryToken,
   SessionOrchestratorToken,
 } from '@makaio/services-core';
 import {
@@ -553,6 +555,58 @@ export default [bootPackage, targetPackage];
     });
 
     expect(transitionActionCount).toBe(1);
+  });
+
+  it('registers and invokes reactions contributed by a non-product extension during boot', async () => {
+    const transport = new FakeTransportProvider();
+    let receivedMessage: string | undefined;
+    const pkg: KernelMakaioExtension = {
+      name: 'reaction-fixture',
+      displayName: 'Reaction Fixture',
+      version: '1.0.0',
+      reactions: {
+        createReactions: () => [
+          defineReaction({
+            kind: 'reaction-fixture.record-message',
+            description: 'Records a message supplied by the reaction invocation test.',
+            parameterSchema: z.object({ message: z.string() }),
+            handler: async (parameters) => {
+              receivedMessage = parameters.message;
+            },
+          }),
+        ],
+      },
+    };
+    const descriptor: DiscoveredExtension = {
+      descriptor: {
+        name: 'reaction-fixture',
+        displayName: 'Reaction Fixture',
+        version: '1.0.0',
+        makaio: { framework: '>=1.0.0' },
+        entrypoints: { server: true },
+      },
+      extensionPath: tempHome,
+      source: 'local',
+      preloadedModule: { default: pkg },
+    };
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      discovery: new ExplicitDescriptorDiscovery([descriptor]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    const registry = runtime.coordinator.getExtensionService(ReactionRegistryToken);
+    expect(registry).toBeDefined();
+
+    await expect(
+      registry!.invoke(
+        'reaction-fixture.record-message',
+        { message: 'reaction invoked' },
+        { eventKind: 'test.reaction', eventPayload: {}, hostContext: {} },
+      ),
+    ).resolves.toEqual({ success: true });
+    expect(receivedMessage).toBe('reaction invoked');
   });
 
   it('ignores persisted-disabled runtime owners before framework package selection and runtime boot', async () => {
