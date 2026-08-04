@@ -1,4 +1,9 @@
-import type { IMakaioSession, MakaioSessionAgent } from '@makaio/contracts';
+import {
+  resolveResumableAdapterSessionId,
+  type AdapterSessionCurrencySnapshot,
+  type IMakaioSession,
+  type MakaioSessionAgent,
+} from '@makaio/contracts';
 
 /**
  * The provider session a resume operation may legitimately target right now.
@@ -26,6 +31,48 @@ export interface SessionResumeIdentity {
 }
 
 /**
+ * Row fields that carry a currency trias, as the storage records optionally
+ * spell them.
+ *
+ * Session rows and agent rows carry the same three facts under the same names;
+ * both leave them absent until something writes them. Declared once so the two
+ * readers below cannot drift into resolving one row differently from the other.
+ */
+type OptionalCurrencyFields = {
+  adapterSessionId?: string | undefined;
+  currentAdapterSessionId?: string | undefined;
+  currentAdapterSessionIdState?: AdapterSessionCurrencySnapshot['currentAdapterSessionIdState'];
+};
+
+/**
+ * Read a row's currency trias as the total value the resolver expects.
+ *
+ * Absent state is `'inherited'`: rows written before the currency pair existed,
+ * and rows the in-memory backend created, never moved.
+ * @param row - Session or agent record whose currency is being read
+ * @returns The row's currency trias with absent halves normalized
+ */
+function toCurrencySnapshot(row: OptionalCurrencyFields): AdapterSessionCurrencySnapshot {
+  return {
+    adapterSessionId: row.adapterSessionId ?? null,
+    currentAdapterSessionId: row.currentAdapterSessionId ?? null,
+    currentAdapterSessionIdState: row.currentAdapterSessionIdState ?? 'inherited',
+  };
+}
+
+/**
+ * Project a currency trias onto the resume identity its owner may target.
+ * @param currency - Currency trias of a session or agent row
+ * @returns Resume identity implied by that currency
+ */
+function resumeIdentityFromCurrency(currency: AdapterSessionCurrencySnapshot): SessionResumeIdentity {
+  return {
+    adapterSessionId: resolveResumableAdapterSessionId(currency) ?? undefined,
+    movedUnconfirmed: currency.currentAdapterSessionIdState === 'moved',
+  };
+}
+
+/**
  * Resolve the tri-state resume currency of a session row.
  *
  * | `currentAdapterSessionIdState` | resume currency                         |
@@ -34,71 +81,79 @@ export interface SessionResumeIdentity {
  * | `'confirmed'`                 | `session.currentAdapterSessionId`       |
  * | `'moved'`                     | none — degrade to fresh-with-history    |
  *
- * Absent state is treated as `'inherited'`: rows written before the currency
- * pair existed, and rows created by the in-memory storage backend, never moved.
+ * **Compress children are never a resume source.** Provider-side compaction is
+ * in place — same provider session ID, same transcript — so the row that
+ * carries the provider identity is the lineage root, and the compress children
+ * the transcript importer synthesizes carry no currency at all. Passing one here
+ * therefore resolves to "nothing resumable", which is the correct answer for
+ * that row: the conversation lives on its root. A caller holding a compress
+ * child resolves the root first; this function deliberately does not, because it
+ * takes a row and not a bus, and a lineage walk hidden behind a pure projection
+ * would be a storage read no caller asked for.
  * @param session - Session record loaded from storage
  * @returns Resolved resume identity for this session
  */
 export function resolveSessionResumeIdentity(session: IMakaioSession): SessionResumeIdentity {
-  switch (session.currentAdapterSessionIdState) {
-    case 'confirmed':
-      return { adapterSessionId: session.currentAdapterSessionId, movedUnconfirmed: false };
-    case 'moved':
-      return { adapterSessionId: undefined, movedUnconfirmed: true };
-    default:
-      return { adapterSessionId: session.adapterSessionId, movedUnconfirmed: false };
-  }
+  return resumeIdentityFromCurrency(toCurrencySnapshot(session));
 }
 
 /**
  * Resolve the resume currency that applies to one agent of a session.
  *
- * Session-row currency is **lead-owned**: only the session's designated lead
- * agent may move it (see the lead-agent-ownership rule in
- * `registerAdapterSessionCurrencyHandler`). So the row's currency — including a
- * `'moved'` state — is a statement about the lead's provider conversation, not
- * about the session as a whole. A member agent runs its own provider thread and
- * carries its own identity on the agent row, so resolving the session row for a
- * member would degrade an agent whose provider conversation is still intact.
+ * Currency is **agent-owned**: the ownership seam settles it onto the agent row
+ * and mirrors it onto the session row only while the agent is the designated
+ * lead. So an agent whose currency has been settled answers this question by
+ * itself, and the session row is consulted only as a legacy fallback — for rows
+ * written before the agent row could carry currency at all.
  *
- * | agent                          | resume currency                     |
- * |--------------------------------|-------------------------------------|
- * | designated lead                | {@link resolveSessionResumeIdentity}|
- * | member                         | `agent.adapterSessionId`            |
- * | any, while no lead is named    | {@link resolveSessionResumeIdentity}|
+ * | # | Agent                                                | Resume currency     |
+ * |---|------------------------------------------------------|---------------------|
+ * | 1 | has settled currency (`currencyFence > 0`)            | its own currency    |
+ * | 2 | unsettled, and the session names it as lead          | the session row     |
+ * | 3 | unsettled, no lead named, session was imported       | the session row     |
+ * | 4 | anything else                                        | its own currency    |
  *
- * The third row is deliberate fail-safe attribution, not an oversight: the
- * currency handler can only have written the row's state while the writing agent
- * *was* the named lead, so an absent `leadAgentId` (lead removed, or the
- * still-open `startAgent` designation window — TODO(#1140)) leaves the state
- * unattributable. Applying it to every agent then over-degrades rather than
- * resuming a provider session that may have been abandoned.
+ * Why each branch:
+ *
+ * 1. A non-zero `currencyFence` is evidence that the ownership seam has written
+ *    this row. From that point the agent row is at least as fresh as the session
+ *    row, because the session mirror is written *from* it, in the same
+ *    transaction.
+ * 2. An unsettled agent the session names as lead: the pre-Wave-2 currency
+ *    handler recorded the lead's movement on the session row *while this agent
+ *    was the named lead*, so the row's state — including a `'moved'` — is
+ *    attributable to exactly this agent.
+ * 3. The only "no lead" fallback that survives. An imported session that never
+ *    had a lead carries provider identity from the import itself, attributable
+ *    to no other agent because there is none.
+ * 4. Everything else resolves from its **own** currency and origin. A blanket
+ *    no-lead fallback would hand a member the *lead's* provider conversation.
  *
  * Membership is keyed on `session.leadAgentId` rather than the agent row's
- * `role` column, because `leadAgentId` is the exact designation the currency
- * writer gates on. Keying on `role` would let the reader and the writer disagree
- * about who owns the row.
- *
- * A member's own movements are **not** represented here, because they are not
- * represented anywhere: the movement seam's only persistent consumer is the
- * session row, and `agent.adapterSessionId` is write-once, so a member's
- * unconfirmed movement is dropped rather than recorded.
- * TODO(#1140): a member that rotated its provider session in the process that
- * went down therefore still resumes its last confirmed ID. That gap is not
- * introduced or widened here — it applies identically whenever the lead did not
- * happen to move — but closing it needs the agent row to carry its own currency
- * pair (column plus per-dialect migration), i.e. the same "one owner for
- * currency writes" lifecycle decision #1140 already blocks on.
+ * `role` column, because `leadAgentId` is the exact designation the seam gates
+ * its session mirror on. Keying on `role` would let the reader and the writer
+ * disagree about who owns the row.
  * @param session - Session record loaded from storage
- * @param agent - Agent record whose resume currency is being resolved
+ * @param agent - Agent record whose resume currency is being resolved; its
+ *   currency fields decide branch 1, so a caller must not narrow them away
  * @returns Resolved resume identity for this agent
  */
 export function resolveAgentResumeIdentity(
   session: IMakaioSession,
-  agent: Pick<MakaioSessionAgent, 'agentId' | 'adapterSessionId'>,
+  agent: Pick<
+    MakaioSessionAgent,
+    'agentId' | 'adapterSessionId' | 'currentAdapterSessionId' | 'currentAdapterSessionIdState' | 'currencyFence'
+  >,
 ): SessionResumeIdentity {
-  if (session.leadAgentId === undefined || session.leadAgentId === agent.agentId) {
+  const agentSettled = (agent.currencyFence ?? 0) > 0;
+  if (agentSettled) {
+    return resumeIdentityFromCurrency(toCurrencySnapshot(agent));
+  }
+  if (session.leadAgentId === agent.agentId) {
     return resolveSessionResumeIdentity(session);
   }
-  return { adapterSessionId: agent.adapterSessionId, movedUnconfirmed: false };
+  if (session.leadAgentId === undefined && session.isImported === true) {
+    return resolveSessionResumeIdentity(session);
+  }
+  return resumeIdentityFromCurrency(toCurrencySnapshot(agent));
 }

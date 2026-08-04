@@ -450,6 +450,9 @@ describe('registerAttachHandler - native locality', () => {
               context.setResult({
                 success: false,
                 message: `Provider session ${payloadAdapterSessionId} is already claimed`,
+                // The refusal fires before anything reaches the provider, which
+                // is what the production adapter stamps at the same site.
+                dispatch: 'not-dispatched',
               });
               return;
             }

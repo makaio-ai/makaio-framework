@@ -3,10 +3,14 @@
  *
  * Common helpers used across multiple test suites (orchestrator, logger, handlers).
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
 import type { MakaioSessionEvent, MakaioSessionAgent, IMakaioSession } from '@makaio/contracts';
 import { SessionEventStorageSubjects } from '../session-events/namespace.js';
+import { registerMemoryAgentStorage } from '../storage/agent-memory-handler.js';
+import { registerMemorySessionStorage } from '../storage/memory-handler.js';
+import { createSessionStorageMemoryState } from '../storage/memory-store.js';
+import { registerMemorySessionOwnershipStorage } from '../storage/ownership-memory-handler.js';
 
 // =============================================================================
 // Common Test Utilities
@@ -27,6 +31,48 @@ export function resetBusHandlers(): void {
  */
 export function waitForAsync(ms = 10): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Let every queued bus round-trip drain.
+ *
+ * For assertions about what a *pending* request has **not** done yet: a single
+ * `waitForAsync` covers one hop, while a send or a restart walks several
+ * storage round-trips before it reaches the step under test — and an assertion
+ * that fires too early passes for the wrong reason.
+ * @returns Promise resolving once the queue is idle.
+ */
+export async function settleEventLoop(): Promise<void> {
+  for (let tick = 0; tick < 20; tick += 1) await waitForAsync(1);
+}
+
+// =============================================================================
+// Real Storage Backends
+// =============================================================================
+
+/**
+ * Register the session, agent and ownership memory backends over **one** state.
+ *
+ * They share a store because the ownership handler reads and writes the very
+ * session and agent rows the other two own: a reservation verifies the
+ * `(agent, session)` pair, a designation is a compare-and-swap on the session
+ * row, and a settlement mirrors onto it. Registered over separate stores, every
+ * ownership operation reports `not-found` instead — the failure this helper
+ * exists to make unrepeatable.
+ *
+ * Composes with `registerMockStorageHandlers({ omit: ['agent', 'session'] })`:
+ * request handlers form one chain, so a stub registered for those groups would
+ * answer ahead of the backend under test.
+ * @param bus - Bus the backends are registered on.
+ * @returns Cleanup functions, one per registered backend.
+ */
+export function registerMemorySessionBackends(bus: IMakaioBus): Array<() => void> {
+  const state = createSessionStorageMemoryState();
+  return [
+    registerMemorySessionStorage(bus, state),
+    registerMemoryAgentStorage(bus, state),
+    registerMemorySessionOwnershipStorage(bus, state),
+  ];
 }
 
 // =============================================================================

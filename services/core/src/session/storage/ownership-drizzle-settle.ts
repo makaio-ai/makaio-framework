@@ -12,7 +12,7 @@
  * landed on zero rows.
  * @packageDocumentation
  */
-import { and, eq, isNull, lte, not, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, lte, ne, not, sql, type SQL } from 'drizzle-orm';
 import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { SessionOwnershipSettleCurrencyRequest, SessionOwnershipSettleCurrencyResult } from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
@@ -33,7 +33,10 @@ import {
  * Everything that may refuse the write is a condition of the statement itself,
  * so no other process can commit a takeover between the moment authority is
  * established and the moment it is used:
- * - the agent is the named one and still carries the revision the caller read;
+ * - the agent is the named one, is not `disposed`, and still carries the
+ *   revision the caller read. `disposed` is absorbing for ownership: a removed
+ *   agent's currency may not move again, no matter which generation asks, and a
+ *   status read a statement earlier is the read-then-write this seam removes;
  * - a `held` claim of that exact generation, owned by that agent *and filed
  *   under the session that agent is currently in*, exists;
  * - the caller's fence is not below the one that already governs the currency;
@@ -75,6 +78,7 @@ function buildSettlePredicate(
 
   return and(
     eq(agents.agentId, payload.agentId),
+    ne(agents.status, 'disposed'),
     eq(agents.revision, payload.expectedRevision),
     lte(agents.currencyFence, payload.fence),
     sql`exists (select 1 from ${adapterSessionClaims} where ${and(
@@ -97,6 +101,9 @@ function buildSettlePredicate(
  * outranked, an unchanged target is idempotent, and anything left is a lost race
  * within the generation.
  *
+ * A removed agent is `agent-disposed` and is decided before any of it: the
+ * refusal is about the agent, not about the caller's authority over it.
+ *
  * A claim filed under another session is `not-owner` rather than `superseded`:
  * nothing outranked it, it simply stopped being an ownership of this agent.
  *
@@ -110,11 +117,16 @@ function buildSettlePredicate(
  * @param payload - Settle request.
  * @returns The outcome to report.
  */
-function classifyRefusedSettle(
+export function classifyRefusedSettle(
   claim: ClaimRow | undefined,
   agent: AgentRow,
   payload: SessionOwnershipSettleCurrencyRequest,
 ): SessionOwnershipSettleCurrencyResult {
+  // Asked before authority, because it is not a statement about authority: a
+  // removed agent's currency may not move again regardless of which generation
+  // presents itself, and reporting `not-owner` would invite the caller to go
+  // looking for a generation that would work.
+  if (agent.status === 'disposed') return { outcome: 'agent-disposed' };
   if (
     claim === undefined ||
     claim.agentId !== payload.agentId ||
@@ -157,7 +169,7 @@ function classifyRefusedSettle(
  * @param payload - Settle request.
  * @returns The modeled refusal to report.
  */
-async function classifySettleRefusal(
+export async function classifySettleRefusal(
   tx: OwnershipTransaction,
   tables: OwnershipTables,
   payload: SessionOwnershipSettleCurrencyRequest,
@@ -220,12 +232,86 @@ async function touchClaimGeneration(
 }
 
 /**
- * Write an agent's currency under a claim generation.
+ * The settle's own statements: the guarded agent UPDATE and the session mirror.
  *
- * Write-first: the guarded agent UPDATE carries the whole guard, so a takeover
+ * Extracted from {@link runSettleCurrency} because `settleMovement` performs the
+ * same act after a claims phase of its own — and must perform it *identically*.
+ * Duplicating the predicate would let the two operations drift into disagreeing
+ * about what authority is, which is the one thing this aggregate may not be
+ * ambiguous about.
+ *
+ * It takes an open transaction rather than a database handle: both callers have
+ * already opened one, and both need these statements to be atomic with
+ * everything they did before them. It also assumes the agent row is already
+ * locked and the caller's generation already taken — every ordering guarantee
+ * this seam has comes from statements the callers run first.
+ *
+ * Write-first: the guarded UPDATE carries the whole guard, so a takeover
  * committed by another process cannot slip between authority and write. Reads
  * only run when that write matched nothing, and then only to name which of the
  * modeled refusals it was.
+ *
+ * The session mirror is guarded the same way — its predicate repeats the lead
+ * designation instead of reading it first — and `sessionSnapshotUpdated` is
+ * derived from the rows that statement affected.
+ * @param tx - Open transaction, with the agent row already locked.
+ * @param tables - Dialect-resolved session storage tables.
+ * @param payload - The currency write to perform, under the caller's generation.
+ * @returns The modeled settle outcome.
+ */
+export async function runSettleStatements(
+  tx: OwnershipTransaction,
+  tables: OwnershipTables,
+  payload: SessionOwnershipSettleCurrencyRequest,
+): Promise<SessionOwnershipSettleCurrencyResult> {
+  const { agents, sessions } = tables;
+  const { target } = payload;
+
+  const [updated] = await tx
+    .update(agents)
+    .set({
+      currentAdapterSessionId: target.currentAdapterSessionId,
+      currentAdapterSessionIdState: target.currentAdapterSessionIdState,
+      currencyFence: payload.fence,
+      revision: payload.expectedRevision + 1,
+      lastActivityAt: Date.now(),
+    })
+    .where(buildSettlePredicate(tables, payload))
+    .returning();
+
+  if (updated === undefined) return classifySettleRefusal(tx, tables, payload);
+
+  // The pair is **resolved onto the session row's own terms, not copied** —
+  // the same translation the lead designation publishes, for the same reason:
+  // `inherited` points at the reading row's *own* origin, and a lead's origin
+  // is generally not its session's, so copying the target verbatim would make
+  // the session resolve to its own origin instead of the lead's. Reading the
+  // pair back out of the agents row rather than off `target` is what makes
+  // that possible, and it is sound because this statement follows the agent
+  // UPDATE inside one transaction: its correlated subqueries see the currency
+  // just settled.
+  const mirrored = await tx
+    .update(sessions)
+    .set({ ...buildLeadCurrencyMirror(tables, payload.agentId) })
+    .where(and(eq(sessions.sessionId, updated.sessionId), eq(sessions.leadAgentId, payload.agentId)))
+    .returning({ sessionId: sessions.sessionId });
+
+  return {
+    outcome: 'settled',
+    revision: payload.expectedRevision + 1,
+    currency: { adapterSessionId: updated.adapterSessionId ?? null, ...target },
+    sessionSnapshotUpdated: mirrored.length > 0,
+  };
+}
+
+/**
+ * Write an agent's currency under a claim generation.
+ *
+ * The single-step primitive: one generation, one currency write, no claim
+ * lifecycle. `settleMovement` is what production callers use; this stays because
+ * it is the narrowest way to exercise the interleavings between a settle and a
+ * concurrent claim, takeover or release, and those are the interleavings the
+ * whole aggregate rests on.
  *
  * The transaction opens on `lockAgentAllocation` — a write, so write-first still
  * holds — because the guard alone cannot order this settle against a concurrent
@@ -254,10 +340,6 @@ async function touchClaimGeneration(
  * takeover locks only its taker's — so the two meet on the claim row alone,
  * which both take *after* their agents row. There is no cycle to deadlock on.
  *
- * The session mirror is guarded the same way — its predicate repeats the lead
- * designation instead of reading it first — and `sessionSnapshotUpdated` is
- * derived from the rows that statement affected.
- *
  * **Not covered by a race test, deliberately.** The takeover interleaving spans
  * two transactions, but the window it closes is *between two statements inside
  * this one*. Nothing on the bus surface can suspend a caller there, so a test
@@ -273,16 +355,13 @@ export async function runSettleCurrency(
   payload: SessionOwnershipSettleCurrencyRequest,
 ): Promise<SessionOwnershipSettleCurrencyResult> {
   const tables = resolveSchema(db, sessionStorageSchema);
-  const { agents, sessions } = tables;
-  const { target } = payload;
-  const now = Date.now();
 
   return executeTransaction(db, async (tx): Promise<SessionOwnershipSettleCurrencyResult> => {
     // **Zero rows locked is terminal here**: no agent row exists, which is the
     // settle's own `not-found`. Reporting it straight from the lock is the same
     // verdict the guarded UPDATE below would reach through its classifying read,
     // one statement earlier.
-    if (!(await lockAgentAllocation(tx, tables, payload.agentId))) return { outcome: 'not-found' };
+    if ((await lockAgentAllocation(tx, tables, payload.agentId)) === undefined) return { outcome: 'not-found' };
 
     // **Zero rows touched is terminal here**: no live claim carries the caller's
     // token, so the guarded UPDATE's authority `exists` could not have matched
@@ -293,46 +372,6 @@ export async function runSettleCurrency(
       return classifySettleRefusal(tx, tables, payload);
     }
 
-    // TODO(#1140): Wave 2 — the settled columns below are already authoritative
-    // storage state, but nothing reads them yet: `resolveAgentResumeIdentity`
-    // and `planAgentRecovery` still resume a restarted member from
-    // `agents.adapter_session_id`. The SessionService ownership authority
-    // (reserveStart / settleMovement / reconcile) is what makes these the
-    // resume identity's input; this PR is the storage foundation it lands on.
-    const [updated] = await tx
-      .update(agents)
-      .set({
-        currentAdapterSessionId: target.currentAdapterSessionId,
-        currentAdapterSessionIdState: target.currentAdapterSessionIdState,
-        currencyFence: payload.fence,
-        revision: payload.expectedRevision + 1,
-        lastActivityAt: now,
-      })
-      .where(buildSettlePredicate(tables, payload))
-      .returning();
-
-    if (updated === undefined) return classifySettleRefusal(tx, tables, payload);
-
-    // The pair is **resolved onto the session row's own terms, not copied** —
-    // the same translation the lead designation publishes, for the same reason:
-    // `inherited` points at the reading row's *own* origin, and a lead's origin
-    // is generally not its session's, so copying the target verbatim would make
-    // the session resolve to its own origin instead of the lead's. Reading the
-    // pair back out of the agents row rather than off `target` is what makes
-    // that possible, and it is sound because this statement follows the agent
-    // UPDATE inside one transaction: its correlated subqueries see the currency
-    // just settled.
-    const mirrored = await tx
-      .update(sessions)
-      .set({ ...buildLeadCurrencyMirror(tables, payload.agentId) })
-      .where(and(eq(sessions.sessionId, updated.sessionId), eq(sessions.leadAgentId, payload.agentId)))
-      .returning({ sessionId: sessions.sessionId });
-
-    return {
-      outcome: 'settled',
-      revision: payload.expectedRevision + 1,
-      currency: { adapterSessionId: updated.adapterSessionId ?? null, ...target },
-      sessionSnapshotUpdated: mirrored.length > 0,
-    };
+    return runSettleStatements(tx, tables, payload);
   });
 }

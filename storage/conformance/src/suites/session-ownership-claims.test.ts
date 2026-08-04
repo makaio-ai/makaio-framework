@@ -20,9 +20,10 @@
  * Suites are discovered by filename; no index registration is required.
  */
 import { afterAll, beforeAll, it, expect } from 'vitest';
+import { sql } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createBusInstance } from '@makaio/bus-core';
-import { SessionOwnershipStorageSubjects } from '@makaio/contracts';
+import { SessionOwnershipStorageSubjects, type AdapterSessionClaimRecord } from '@makaio/contracts';
 import {
   registerDrizzleSessionStorage,
   registerDrizzleAgentStorage,
@@ -30,9 +31,26 @@ import {
   SessionStorageSubjects,
   AgentStorageSubjects,
 } from '@makaio/services-core/session';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { describeStorageConformance } from '../harness/env.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
 import type { SiblingClient } from '../harness/config.js';
+
+/**
+ * Read the claim row a *keyed* acquisition must have taken.
+ *
+ * The response's `claim` is nullable because a **keyless** reservation takes no
+ * row at all — it designates a lead and nothing else. Every acquisition in this
+ * suite names a provider session, so a null here is a broken contract rather
+ * than a case to branch on, and failing loudly beats an optional chain that
+ * quietly asserts nothing.
+ * @param claim - The claim the response carried.
+ * @returns The same claim, known to exist.
+ */
+function requireClaim(claim: AdapterSessionClaimRecord | null): AdapterSessionClaimRecord {
+  if (claim === null) throw new Error('a keyed acquisition reported no claim row');
+  return claim;
+}
 
 // ---------------------------------------------------------------------------
 // Suite
@@ -98,7 +116,12 @@ describeStorageConformance('session-ownership-claims', (config) => {
 
     // busB only needs the ownership handler — fixture data written through
     // busA (ctx.db) is visible here because both buses address the same store.
-    cleanupB = [registerDrizzleSessionOwnershipStorage(busB, sibling?.db ?? ctx.db)];
+    // The session handler joins busB for the claim-vs-delete race: the delete
+    // has to run on the *other* connection for the lock orders to meet.
+    cleanupB = [
+      registerDrizzleSessionOwnershipStorage(busB, sibling?.db ?? ctx.db),
+      registerDrizzleSessionStorage(busB, sibling?.db ?? ctx.db),
+    ];
   });
 
   afterAll(async () => {
@@ -239,7 +262,7 @@ describeStorageConformance('session-ownership-claims', (config) => {
     });
     expect(initialResult.outcome).toBe('claimed');
     if (initialResult.outcome !== 'claimed') return;
-    const previousFence = initialResult.claim.fence;
+    const previousFence = requireClaim(initialResult.claim).fence;
 
     const takeoverTokenA = crypto.randomUUID();
     const takeoverTokenB = crypto.randomUUID();
@@ -311,11 +334,13 @@ describeStorageConformance('session-ownership-claims', (config) => {
     expect(claimB.outcome).toBe('claimed');
     if (claimA.outcome !== 'claimed' || claimB.outcome !== 'claimed') return;
 
-    expect(claimA.claim.fence).not.toBe(claimB.claim.fence);
+    const fenceA = requireClaim(claimA.claim).fence;
+    const fenceB = requireClaim(claimB.claim).fence;
+    expect(fenceA).not.toBe(fenceB);
 
     // Strictly ordered, and allocated one after the other rather than both from
     // the same starting point.
-    const fences = [claimA.claim.fence, claimB.claim.fence].sort((left, right) => left - right);
+    const fences = [fenceA, fenceB].sort((left, right) => left - right);
     expect(fences[1]).toBe(fences[0]! + 1);
 
     // The stored rows agree — the assertions above must not rest on what the
@@ -343,7 +368,7 @@ describeStorageConformance('session-ownership-claims', (config) => {
     });
     expect(claimResult.outcome).toBe('claimed');
     if (claimResult.outcome !== 'claimed') return;
-    const fence = claimResult.claim.fence;
+    const fence = requireClaim(claimResult.claim).fence;
 
     // Both processes settle from revision=0 simultaneously, with different targets.
     const [settleA, settleB] = await Promise.all([
@@ -392,5 +417,121 @@ describeStorageConformance('session-ownership-claims', (config) => {
     const readResult = await busA.request(SessionOwnershipStorageSubjects.read, { agentId });
     expect(readResult.ownership?.currency.currentAdapterSessionId).toBe(winnerCurrencyId);
     expect(readResult.ownership?.revision).toBe(winner.revision);
+  });
+
+  // ── Case 5: concurrent movements onto one successor key ──────────────────
+
+  it('two agents moving onto one successor key: one settled, one already-claimed, and the loser wrote nothing', async () => {
+    const first = await seedFixtures();
+    const second = await seedFixtures();
+    const machineId = `machine-movement-${crypto.randomUUID()}`;
+    const adapterId = `adapter-movement-${crypto.randomUUID()}`;
+    const providerSessionId = `prov-movement-${crypto.randomUUID()}`;
+
+    /**
+     * Build a confirmed movement onto the contested key.
+     * @param fixture - The agent and session moving onto it.
+     * @returns The movement request.
+     */
+    const movementFor = (fixture: { sessionId: string; agentId: string }) => ({
+      machineId,
+      adapterId,
+      adapterName: 'race-adapter',
+      sessionId: fixture.sessionId,
+      agentId: fixture.agentId,
+      expectedRevision: 0,
+      movement: { kind: 'confirmed' as const, providerSessionId, claimToken: crypto.randomUUID() },
+    });
+
+    // The movement is one transaction — acquire, settle, retire, mirror — so a
+    // loser must leave *nothing*: not a claim row, and not a settled currency.
+    const [resultA, resultB] = await Promise.all([
+      busA.request(SessionOwnershipStorageSubjects.settleMovement, movementFor(first)),
+      busB.request(SessionOwnershipStorageSubjects.settleMovement, movementFor(second)),
+    ]);
+
+    const outcomes = [resultA.outcome, resultB.outcome].sort();
+    expect(outcomes).toEqual(['already-claimed', 'settled']);
+
+    const listed = await busA.request(SessionOwnershipStorageSubjects.listClaims, {
+      machineId,
+      adapterId,
+      providerSessionId,
+    });
+    expect(listed.claims).toHaveLength(1);
+
+    const winnerAgentId = resultA.outcome === 'settled' ? first.agentId : second.agentId;
+    const loserAgentId = resultA.outcome === 'settled' ? second.agentId : first.agentId;
+    expect(listed.claims[0]!.agentId).toBe(winnerAgentId);
+
+    // The loser was told about the row that actually survived …
+    const loser = resultA.outcome === 'already-claimed' ? resultA : resultB;
+    if (loser.outcome !== 'already-claimed') return;
+    expect(loser.holder.claimToken).toBe(listed.claims[0]!.claimToken);
+
+    // … and its own agent row is exactly as it was: the settle rolled back with
+    // the acquisition it could not complete.
+    const loserOwnership = await busA.request(SessionOwnershipStorageSubjects.read, { agentId: loserAgentId });
+    expect(loserOwnership.ownership?.revision).toBe(0);
+    expect(loserOwnership.ownership?.currencyFence).toBe(0);
+    expect(loserOwnership.ownership?.currency.currentAdapterSessionIdState).toBe('inherited');
+    expect(loserOwnership.ownership?.claims).toHaveLength(0);
+
+    const winnerOwnership = await busA.request(SessionOwnershipStorageSubjects.read, { agentId: winnerAgentId });
+    expect(winnerOwnership.ownership?.currency.currentAdapterSessionId).toBe(providerSessionId);
+  });
+  // ── Case: the session delete's lock order ────────────────────────────────
+
+  it('a session delete takes `agents` before `sessions`, so a concurrent ownership act cannot deadlock', async () => {
+    // Postgres only, and deliberately hand-built. Every ownership operation
+    // locks `agents` → `adapter_session_claims` → `sessions`; a bare
+    // `DELETE FROM sessions` inverts that, taking the session row first and
+    // reaching the other two through the foreign-key cascade. The cycle only
+    // closes while an ownership transaction is *holding* its agents lock and
+    // still wants the session row — a window microseconds wide that firing the
+    // two operations concurrently does not reliably hit. So the ownership side
+    // is staged statement by statement, with its lock genuinely held, which is
+    // the only way to assert a lock order rather than hope for a collision.
+    // SQLite has no row locks and cannot express the hazard at all.
+    if (config.dialect !== 'postgres' || sibling === undefined) return;
+    const { sessionId, agentId } = await seedFixtures();
+
+    await getRawSqlExecutor(getCtx().db).withSession(async (session) => {
+      await session.run(sql`BEGIN`);
+      try {
+        // `lockAgentAllocation`, by hand: the first statement of every ownership
+        // transaction, and the lock the delete must not be holding a session row
+        // while it waits for.
+        await session.all(sql`SELECT agent_id FROM agents WHERE agent_id = ${agentId} FOR UPDATE`);
+
+        const deletion = busB.request(SessionStorageSubjects.delete, { sessionId });
+        // The delete must be *blocked on the agents row* before the sessions
+        // phase runs, or the two never overlap and the test proves nothing.
+        // Asserted rather than slept for: a delete that has already finished
+        // would make everything below pass vacuously.
+        const pending = Symbol('pending');
+        const raced = await Promise.race([
+          deletion.then(() => 'completed' as const),
+          new Promise<typeof pending>((resolve) => setTimeout(() => resolve(pending), 250)),
+        ]);
+        expect(raced).toBe(pending);
+
+        // The sessions phase of the ownership transaction. Under the inverted
+        // order this statement is the second half of the cycle and Postgres kills
+        // one of the two with a deadlock error that no caller retries.
+        await session.run(sql`UPDATE sessions SET last_activity_at = last_activity_at WHERE session_id = ${sessionId}`);
+        await session.run(sql`COMMIT`);
+        await deletion;
+      } catch (error) {
+        // The pinned connection goes back to the pool, so an open transaction
+        // may never be left on it — a failed assertion here would otherwise
+        // wedge every suite that borrows the connection next.
+        await session.run(sql`ROLLBACK`);
+        throw error;
+      }
+    });
+
+    const session = await busA.request(SessionStorageSubjects.get, { sessionId });
+    expect(session.session).toBeNull();
   });
 });

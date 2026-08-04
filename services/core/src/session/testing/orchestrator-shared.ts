@@ -188,7 +188,9 @@ export function registerStartAgentHandler(
   return MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
     const { adapterId, initialMessage } = ctx.payload;
     const sessionId = ctx.payload.sessionId ?? `session-${crypto.randomUUID().slice(0, 8)}`;
-    const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
+    // A caller-supplied identity is the agent's, exactly as production: its row
+    // was persisted before the dispatch, and the adapter adopts it.
+    const agentId = ctx.payload.agentId ?? `agent-${crypto.randomUUID().slice(0, 8)}`;
     const messageId = initialMessage ? `msg-${crypto.randomUUID().slice(0, 8)}` : undefined;
     const adapterSessionId = `adapter-session-${sessionId}`;
     onStart?.({ adapterId, sessionId, initialMessage });
@@ -213,7 +215,9 @@ export function registerStartAgentHandler(
  */
 export function registerFailingStartAgentHandler(errorMessage: string): UnsubscribeFunction {
   return MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
-    ctx.setResult({ success: false as const, message: errorMessage });
+    // Modeled as a refusal: a stub never reaches a provider, so a caller that
+    // releases on this outcome must see the pre-dispatch disposition.
+    ctx.setResult({ success: false as const, dispatch: 'not-dispatched' as const, message: errorMessage });
   });
 }
 
@@ -335,7 +339,7 @@ export function registerCapturingStartAgentHandler(
   >();
   const startAgentUnsub = MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
     capture.payload = ctx.payload as Record<string, unknown>;
-    const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
+    const agentId = ctx.payload.agentId ?? `agent-${crypto.randomUUID().slice(0, 8)}`;
     const messageId = ctx.payload.initialMessage ? `msg-${crypto.randomUUID().slice(0, 8)}` : undefined;
     const adapterSessionId = `adapter-session-${sessionId}`;
 

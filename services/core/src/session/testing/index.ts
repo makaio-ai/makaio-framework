@@ -21,20 +21,28 @@ export {
   installMessagesFtsTestSchema,
 } from './storage-test-schema.js';
 
+/** Groups a test can leave out because it serves those rows from a real backend. */
+export type MockStorageHandlerGroup = 'agent' | 'session';
+
 /**
  * Register mock storage handlers for framework-core storage subjects.
- * Covers turns, messages, routing, adapters, agents, and session context.
- * Required for tests that use turn/message storage without a real database.
+ *
+ * Covers turns, messages, routing, adapters, agents, and session context. A test
+ * that composes a real memory backend for part of that surface omits the
+ * corresponding group rather than registering both: request handlers form one
+ * chain, so a stub registered first would answer for the backend under test.
+ * @param options - Carries `omit`: the storage groups this test serves itself.
  * @returns Unsubscribe function to clean up handlers
  */
-export function registerMockStorageHandlers(): () => void {
+export function registerMockStorageHandlers(options?: { omit?: readonly MockStorageHandlerGroup[] }): () => void {
+  const omit = new Set(options?.omit ?? []);
   const unsubs: Array<() => void> = [];
   registerTurnHandlers(unsubs);
   registerMessageHandlers(unsubs);
   registerRoutingHandlers(unsubs);
   registerAdapterHandlers(unsubs);
-  registerAgentHandlers(unsubs);
-  registerSessionContextHandlers(unsubs);
+  if (!omit.has('agent')) registerAgentHandlers(unsubs);
+  if (!omit.has('session')) registerSessionContextHandlers(unsubs);
   return () => unsubs.forEach((u) => u());
 }
 
@@ -134,6 +142,15 @@ function registerTurnHandlers(unsubs: Array<() => void>): void {
  * @param unsubs - Array to collect cleanup functions
  */
 function registerMessageHandlers(unsubs: Array<() => void>): void {
+  // Individual message reads (session-context assembly), grouped with the rest
+  // of the message surface: a test that serves messages from a real backend
+  // omits one group and gets all of it, rather than finding this one stub still
+  // answering ahead of the backend under test.
+  unsubs.push(
+    MakaioBus.on(MessageStorageSubjects.get, (ctx) => {
+      ctx.setResult({ message: null });
+    }),
+  );
   const messagesByTurn = new Map<string | null, SessionMessage[]>();
 
   unsubs.push(
@@ -252,13 +269,6 @@ function registerSessionContextHandlers(unsubs: Array<() => void>): void {
   unsubs.push(
     MakaioBus.on(SessionEventStorageSubjects.getEvents, (ctx) => {
       ctx.setResult({ events: [], nextCursor: null, totalCount: 0 });
-    }),
-  );
-
-  // buildSessionContext fetches individual messages by ID
-  unsubs.push(
-    MakaioBus.on(MessageStorageSubjects.get, (ctx) => {
-      ctx.setResult({ message: null });
     }),
   );
 

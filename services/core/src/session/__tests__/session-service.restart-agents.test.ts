@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, SessionSubjects, type MakaioSessionAgent } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  SessionOwnershipStorageSubjects,
+  SessionSubjects,
+  type MakaioSessionAgent,
+} from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
-import { registerMemoryAgentStorage } from '../storage/agent-memory-handler.js';
-import { registerMemorySessionStorage } from '../storage/memory-handler.js';
 import { MakaioSessionService } from '../session-service.js';
-import { createTestAgent } from './shared.js';
+import { createTestAgent, registerMemorySessionBackends } from './shared.js';
 
 /**
  * Registers shared adapter runtime stubs for tests that exercise the
@@ -43,23 +46,21 @@ function registerRuntimeIdentityAndCapabilities(bus: IMakaioBus, machineId: stri
 describe('MakaioSessionService - restartAgents', () => {
   let bus: IMakaioBus;
   let service: MakaioSessionService;
-  let agentStorageCleanup: () => void;
-  let sessionStorageCleanup: () => void;
+  let storageCleanups: Array<() => void> = [];
 
   const MACHINE_ID = 'test-machine';
 
   beforeEach(async () => {
     bus = createBusInstance();
-    agentStorageCleanup = registerMemoryAgentStorage(bus);
-    sessionStorageCleanup = registerMemorySessionStorage(bus);
-    service = new MakaioSessionService(bus);
+    storageCleanups = registerMemorySessionBackends(bus);
+    service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
     await service.init();
   });
 
   afterEach(() => {
     service.destroy();
-    sessionStorageCleanup();
-    agentStorageCleanup();
+    for (let index = storageCleanups.length - 1; index >= 0; index -= 1) storageCleanups[index]?.();
+    storageCleanups = [];
   });
 
   it('rehydrates each persisted session agent through adapter.rehydrateAgent', async () => {
@@ -196,21 +197,19 @@ describe('MakaioSessionService - restartAgents', () => {
 describe('MakaioSessionService - restartAgents with locality', () => {
   let bus: IMakaioBus;
   let service: MakaioSessionService;
-  let agentStorageCleanup: () => void;
-  let sessionStorageCleanup: () => void;
+  let storageCleanups: Array<() => void> = [];
 
   beforeEach(async () => {
     bus = createBusInstance();
-    agentStorageCleanup = registerMemoryAgentStorage(bus);
-    sessionStorageCleanup = registerMemorySessionStorage(bus);
-    service = new MakaioSessionService(bus);
+    storageCleanups = registerMemorySessionBackends(bus);
+    service = new MakaioSessionService(bus, { machineId: 'ownership-machine' });
     await service.init();
   });
 
   afterEach(() => {
     service.destroy();
-    sessionStorageCleanup();
-    agentStorageCleanup();
+    for (let index = storageCleanups.length - 1; index >= 0; index -= 1) storageCleanups[index]?.();
+    storageCleanups = [];
   });
 
   it('passes resumeAdapterSessionId when locality evaluates as native', async () => {
@@ -320,18 +319,13 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const machineId = 'local-machine-moved';
     const runtimeCleanup = registerRuntimeIdentityAndCapabilities(bus, machineId);
     await createSessionWithLocality(bus, sessionId, machineId, 'provider-session-xyz');
-    await bus.request(SessionStorageSubjects.update, {
-      sessionId,
-      currentAdapterSessionIdState: 'moved',
-      currentAdapterSessionId: null,
-    });
     await persistAgent(bus, 'agent-moved', sessionId, {
       adapterId: 'stale-adapter-moved',
       adapterName: 'test-adapter',
     });
-    // Only the lead may move session-row currency, so the `moved` state is a
-    // statement about this agent's provider conversation.
-    await designateLeadAgent(bus, sessionId, 'agent-moved');
+    // Only the lead's settlement reaches the session row, so the `moved` state
+    // is a statement about this agent's provider conversation.
+    await markSessionCurrencyMoved(bus, sessionId, 'agent-moved');
 
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
@@ -360,11 +354,6 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const machineId = 'local-machine-moved-multi';
     const runtimeCleanup = registerRuntimeIdentityAndCapabilities(bus, machineId);
     await createSessionWithLocality(bus, sessionId, machineId, 'provider-session-lead');
-    await bus.request(SessionStorageSubjects.update, {
-      sessionId,
-      currentAdapterSessionIdState: 'moved',
-      currentAdapterSessionId: null,
-    });
     await persistAgent(bus, 'agent-moved-lead', sessionId, {
       adapterId: 'stale-adapter-lead',
       adapterName: 'test-adapter',
@@ -384,7 +373,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
       adapterName: 'test-adapter',
       adapterSessionId: undefined,
     });
-    await designateLeadAgent(bus, sessionId, 'agent-moved-lead');
+    await markSessionCurrencyMoved(bus, sessionId, 'agent-moved-lead');
 
     const rehydrateRequests: Array<{ agentId: string; resumeAdapterSessionId?: string }> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
@@ -410,19 +399,17 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     runtimeCleanup();
   });
 
-  it('degrades every agent when moved currency cannot be attributed to a lead', async () => {
-    // With no designated lead the `moved` state is unattributable: it was
-    // written while *some* agent held the designation. Over-degrading is the
-    // fail-safe reading — the alternative resumes a possibly abandoned thread.
+  it('degrades only the agent that settled the moved currency, never its unrelated peers', async () => {
+    // With no designated lead the session row's `moved` state is unattributable
+    // — but the agent that settled it carries the same state on its own row, so
+    // the degrade lands exactly where the evidence is. A peer whose currency was
+    // never settled resolves from its own origin instead: applying the departed
+    // lead's state to it would degrade an intact provider conversation, and
+    // resolving the session row for it would hand it the lead's conversation.
     const sessionId = 'session-moved-currency-no-lead';
     const machineId = 'local-machine-moved-no-lead';
     const runtimeCleanup = registerRuntimeIdentityAndCapabilities(bus, machineId);
     await createSessionWithLocality(bus, sessionId, machineId, 'provider-session-lead');
-    await bus.request(SessionStorageSubjects.update, {
-      sessionId,
-      currentAdapterSessionIdState: 'moved',
-      currentAdapterSessionId: null,
-    });
     await persistAgent(bus, 'agent-orphan-a', sessionId, {
       adapterId: 'stale-adapter-a',
       adapterName: 'test-adapter',
@@ -431,20 +418,28 @@ describe('MakaioSessionService - restartAgents with locality', () => {
       adapterId: 'stale-adapter-b',
       adapterName: 'test-adapter',
     });
+    // The lead that wrote the `moved` state is then removed, which is how a row
+    // ends up carrying currency it can no longer attribute to anyone.
+    await markSessionCurrencyMoved(bus, sessionId, 'agent-orphan-a', { clearLead: true });
 
-    const rehydrateRequests: Array<Record<string, unknown>> = [];
+    const rehydrateRequests: Array<{ agentId: string; resumeAdapterSessionId?: string }> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
-      rehydrateRequests.push(ctx.payload);
+      rehydrateRequests.push({
+        agentId: ctx.payload.agentId,
+        resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
+      });
       ctx.setResult({});
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
 
+    // The deferred agent keeps its stale adapterId; the natively rehydrated one
+    // is re-stamped to the freshly resolved instance.
     expect(result.results).toEqual([
       { agentId: 'agent-orphan-a', adapterId: 'stale-adapter-a', success: true },
-      { agentId: 'agent-orphan-b', adapterId: 'stale-adapter-b', success: true },
+      { agentId: 'agent-orphan-b', adapterId: 'current-test-adapter', success: true },
     ]);
-    expect(rehydrateRequests).toHaveLength(0);
+    expect(rehydrateRequests).toEqual([{ agentId: 'agent-orphan-b', resumeAdapterSessionId: 'native-agent-orphan-b' }]);
     runtimeCleanup();
   });
 
@@ -660,6 +655,40 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     expect(rehydrateRequests).toHaveLength(0);
   });
 
+  it('reports failure for an agent whose session row cannot be read', async () => {
+    const sessionId = 'session-row-missing';
+    const machineId = 'local-machine-row-missing';
+    // Agent record without a session row: locality cannot be evaluated, there is
+    // no conversation to project, and the send-path recovery can never reach the
+    // agent (it resolves targets from the session row's agents). An orphan is a
+    // failure the caller must see, not a deferred success.
+    await persistAgent(bus, 'agent-orphan', sessionId, {
+      adapterId: 'adapter-orphan',
+      adapterName: 'test-adapter',
+    });
+
+    bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
+      ctx.setResult({ adapterId: `current-${ctx.payload.adapterName}` });
+    });
+    const rehydrateRequests: Array<Record<string, unknown>> = [];
+    bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      rehydrateRequests.push(ctx.payload);
+      ctx.setResult({});
+    });
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
+
+    expect(result.results).toEqual([
+      {
+        agentId: 'agent-orphan',
+        adapterId: 'adapter-orphan',
+        success: false,
+        error: 'Session row could not be read; agent has no reachable recovery path',
+      },
+    ]);
+    expect(rehydrateRequests).toHaveLength(0);
+  });
+
   it('payload machineId overrides runtime identity', async () => {
     const sessionId = 'session-override';
     const payloadMachineId = 'payload-machine';
@@ -730,11 +759,77 @@ async function createSessionWithLocality(
 }
 
 /**
+ * Move a session's currency to `'moved'` through the ownership seam.
+ *
+ * The seam is the only writer of the currency pair on either row, so a fixture
+ * has to produce this state the way production does: designate the agent as
+ * lead inside a reserving transaction, then settle its currency to `'moved'` —
+ * which mirrors onto the session row precisely because the agent leads.
+ *
+ * With `clearLead`, the designation is dropped afterwards, leaving the row in
+ * the shape a lead removal leaves it in: `'moved'` currency the session can no
+ * longer attribute to any agent. The snapshot deliberately stands (the
+ * alternative — falling back to the row's own origin — advertises a resume
+ * target the departed lead had already abandoned).
+ * @param bus - Test bus instance
+ * @param sessionId - Session whose currency moves
+ * @param agentId - Agent whose provider conversation was abandoned
+ * @param options - `clearLead` drops the designation after settling
+ */
+async function markSessionCurrencyMoved(
+  bus: IMakaioBus,
+  sessionId: string,
+  agentId: string,
+  options?: { clearLead?: boolean },
+): Promise<void> {
+  const claimToken = crypto.randomUUID();
+  const claim = await bus.request(SessionOwnershipStorageSubjects.claim, {
+    machineId: 'currency-fixture-machine',
+    adapterId: 'currency-fixture-adapter',
+    adapterName: 'test-adapter',
+    providerSessionId: `abandoned-${agentId}`,
+    sessionId,
+    agentId,
+    claimToken,
+    designateLead: { expectedLeadAgentId: null },
+  });
+  if (claim.outcome !== 'claimed' || claim.claim === null) {
+    throw new Error(`Currency fixture could not claim for ${agentId}: ${claim.outcome}`);
+  }
+
+  const settled = await bus.request(SessionOwnershipStorageSubjects.settleCurrency, {
+    agentId,
+    claimToken,
+    fence: claim.claim.fence,
+    expectedRevision: 0,
+    target: { currentAdapterSessionId: null, currentAdapterSessionIdState: 'moved' },
+  });
+  if (settled.outcome !== 'settled' || !settled.sessionSnapshotUpdated) {
+    throw new Error(`Currency fixture could not settle for ${agentId}: ${settled.outcome}`);
+  }
+
+  if (options?.clearLead !== true) return;
+  const cleared = await bus.request(SessionOwnershipStorageSubjects.claim, {
+    machineId: 'currency-fixture-machine',
+    adapterId: 'currency-fixture-adapter',
+    adapterName: 'test-adapter',
+    providerSessionId: null,
+    sessionId,
+    agentId,
+    claimToken: crypto.randomUUID(),
+    designateLead: { expectedLeadAgentId: agentId, clear: true },
+  });
+  if (cleared.outcome !== 'claimed') {
+    throw new Error(`Currency fixture could not clear the lead of ${sessionId}: ${cleared.outcome}`);
+  }
+}
+
+/**
  * Designate a session's lead agent.
  *
  * `session.leadAgentId` — not the agent row's `role` column — is the designation
- * the adapter-session currency handler gates its writes on, so it is also what
- * decides whose provider conversation the session row's currency describes.
+ * the ownership seam gates its session-row mirror on, so it is also what decides
+ * whose provider conversation the session row's currency describes.
  * @param bus - Test bus instance
  * @param sessionId - Session identifier
  * @param agentId - Agent to designate as lead
@@ -742,10 +837,22 @@ async function createSessionWithLocality(
 async function designateLeadAgent(bus: IMakaioBus, sessionId: string, agentId: string): Promise<void> {
   const { session } = await bus.request(SessionSubjects.get, { sessionId });
   if (!session) throw new Error(`Session not found: ${sessionId}`);
-  await bus.request(SessionStorageSubjects.set, {
+  // Through the keyless reserving transaction, because that is the designation's
+  // only writer: a whole-record `set` carries no expectation, so both backends
+  // preserve the stored value across it.
+  const designated = await bus.request(SessionOwnershipStorageSubjects.claim, {
+    machineId: 'lead-fixture-machine',
+    adapterId: 'lead-fixture-adapter',
+    adapterName: 'test-adapter',
+    providerSessionId: null,
     sessionId,
-    session: { ...session, leadAgentId: agentId },
+    agentId,
+    claimToken: crypto.randomUUID(),
+    designateLead: { expectedLeadAgentId: session.leadAgentId ?? null },
   });
+  if (designated.outcome !== 'claimed') {
+    throw new Error(`Lead fixture could not designate ${agentId}: ${designated.outcome}`);
+  }
 }
 
 /**

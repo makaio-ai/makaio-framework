@@ -9,11 +9,13 @@ import {
 } from '@makaio/contracts';
 import type { PipelineStep } from '../../session-editor/types.js';
 import { resolveRuntimeProviderContext } from '../../provider-context/index.js';
-import { resolveAdapterId } from './resolution.js';
+import { resolveLiveAdapterId } from './resolution.js';
 import { getFullConversation } from '../context/get-full-conversation.js';
 import { convertSessionMessage } from '../context/convert-session-message.js';
 import { executePipeline } from '../session-editor/pipeline-executor.js';
 import { recoveryPlanResumeTarget, type RecoveryPlan } from '../recovery-plan.js';
+import { runExclusiveStart } from '../ownership/in-flight-starts.js';
+import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 
 /**
  * Configuration for recovering dead agents during liveness verification.
@@ -145,6 +147,12 @@ export async function ensureAgentModel(
  *
  * The caller's `recoveryConfig.plan` applies to every agent recovered in this
  * batch and must be the same plan the caller feeds to its history assembly.
+ *
+ * The **adapter instance is resolved per agent**, inside the loop, and not once
+ * for the batch: a batch may span adapters, and a persisted `adapterId` goes
+ * stale across a runtime restart or failover. Resolving per agent is what keeps
+ * each rehydrate addressed to the live instance that actually owns that agent's
+ * adapter, and keeps a single unresolvable adapter from deciding the batch.
  * @param bus - Bus instance
  * @param agents - Agents to verify
  * @param recoveryConfig - Configuration for recovering dead agents, including the shared recovery plan
@@ -168,8 +176,11 @@ export async function verifyAndRecoverAgents(
       // Agent is alive
       verifiedAgents.push(agent);
     } else {
-      // Agent is dead, recover it via connector swap
-      const recovered = await recoverAgent(bus, agent, recoveryConfig);
+      // Agent is dead, recover it via connector swap — into the live instance
+      // resolved for THIS agent, inside the loop, since a batch may span
+      // adapters.
+      const liveAdapterId = await resolveLiveAdapterId(bus, agent);
+      const recovered = await recoverAgent(bus, agent, recoveryConfig, liveAdapterId);
       verifiedAgents.push(recovered);
       recoveredAgentIds.add(recovered.agentId);
     }
@@ -210,32 +221,84 @@ export async function buildRecoveryContextWithPipeline(
  *
  * Context delivery happens via the normal sendMessage path that follows
  * recovery (same handler invocation). No staging needed.
+ *
+ * **The adapter instance is an input, never resolved here.** The ownership key
+ * is `(machine, adapter instance, provider session)`, so a caller that reserves
+ * ownership before recovering must reserve against the very instance the
+ * rehydrate is dispatched to. Resolving internally would put the reservation and
+ * the dispatch in two different namespaces whenever the persisted ID went stale.
+ *
+ * The dispatch runs inside the in-flight-start seam, so a concurrent consumer
+ * that finds this agent mid-recovery joins the attempt instead of starting a
+ * second lifecycle for the same identity. A joined call dispatched nothing, so
+ * it takes the adapter instance from the **stored agent row** — the attempt that
+ * did run is the only thing that can say which instance the agent now lives on,
+ * and re-stamping this caller's own input would advertise a binding that never
+ * happened.
  * @param bus - Bus instance
- * @param deadAgent - The dead agent to recover
+ * @param deadAgent - The dead agent to recover; its `adapterId` is re-stamped to the instance the
+ *   attempt actually used
  * @param recoveryConfig - Configuration for the recovered connector
+ * @param adapterId - Live adapter instance to rehydrate into, resolved by the caller for THIS agent
  * @returns Same agent reference — identity preserved
  */
 export async function recoverAgent(
   bus: IMakaioBus,
   deadAgent: MakaioSessionAgent,
   recoveryConfig: RecoveryConfig,
+  adapterId: string,
 ): Promise<MakaioSessionAgent> {
-  // Re-resolve adapter instance ID by adapterName on every recovery attempt.
-  // Persisted adapter IDs can be stale after runtime restart/failover.
-  const resolvedAdapterId = await resolveAdapterId(bus, deadAgent.adapterName).catch(() => deadAgent.adapterId);
+  const start = runExclusiveStart(deadAgent.agentId, () =>
+    dispatchAgentRehydrate(bus, deadAgent, recoveryConfig, adapterId),
+  );
+  await start.settled;
 
+  if (!start.joined) {
+    deadAgent.adapterId = adapterId;
+    // Persisted, not only mutated in memory. The agent now lives on this
+    // instance, and the row is what every later reader consults — including the
+    // movement observer, which drops an announcement whose instance the row does
+    // not name. Leaving the row on the previous instance would make the
+    // replacement connector's own movements unrecordable.
+    await bus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId: deadAgent.agentId, adapterId });
+    return deadAgent;
+  }
+  const stored = await bus.requestOptional(AgentStorageSubjects.get, { agentId: deadAgent.agentId });
+  const row = stored.handled ? stored.data.agent : null;
+  // An unreadable row leaves the caller's view untouched rather than guessing:
+  // the previous binding is at least one this process once observed, while the
+  // joiner's input is one nothing ever dispatched to.
+  if (row !== null) deadAgent.adapterId = row.adapterId;
+  return deadAgent;
+}
+
+/**
+ * Dispatch one rehydrate, without entering the in-flight-start seam.
+ *
+ * Split out from {@link recoverAgent} for callers that own the seam entry
+ * themselves because they have durable work — a reservation, a runtime write, a
+ * settlement — that has to sit inside the *same* attempt. Entering twice would
+ * make the inner call join its own outer entry and wait for a promise that is
+ * waiting on it.
+ * @param bus - Bus instance
+ * @param deadAgent - The dead agent being recovered
+ * @param recoveryConfig - Configuration for the recovered connector
+ * @param adapterId - Live adapter instance to rehydrate into
+ */
+export async function dispatchAgentRehydrate(
+  bus: IMakaioBus,
+  deadAgent: MakaioSessionAgent,
+  recoveryConfig: RecoveryConfig,
+  adapterId: string,
+): Promise<void> {
   // Only the plan's resume target puts the replacement connector into
   // native-resume mode; the rehydrate RPC carries no identity marker.
   const resumeAdapterSessionId = recoveryPlanResumeTarget(recoveryConfig.plan);
-
   await bus.request(AdapterSubjects.rehydrateAgent, {
-    adapterId: resolvedAdapterId,
+    adapterId,
     agentId: deadAgent.agentId,
     cwd: recoveryConfig.cwd,
     model: recoveryConfig.model ?? deadAgent.model,
     ...(resumeAdapterSessionId !== undefined && { resumeAdapterSessionId }),
   });
-
-  deadAgent.adapterId = resolvedAdapterId;
-  return deadAgent;
 }

@@ -591,7 +591,7 @@ Type: Event
 | `parentAdapterSessionId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `source` | `string` | yes |
-| `startMode` | `"fork" \| "resume" \| "fresh" \| "compact" \| "clear" \| undefined` | no |
+| `startMode` | `"clear" \| "fork" \| "resume" \| "fresh" \| "compact" \| undefined` | no |
 | `transcriptPath` | `string \| undefined` | no |
 
 ### <a id="client.session.tool.post"></a>`client.session.tool.post` (event)

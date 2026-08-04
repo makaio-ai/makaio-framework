@@ -90,7 +90,7 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       client_id TEXT,
       compression_mode TEXT,
       role TEXT NOT NULL CHECK (role IN ('lead', 'member')),
-      status TEXT NOT NULL CHECK (status IN ('idle', 'active', 'dead', 'disposed')),
+      status TEXT NOT NULL CHECK (status IN ('starting', 'idle', 'active', 'dead', 'disposed')),
       created_at INTEGER NOT NULL,
       last_activity_at INTEGER NOT NULL
     )

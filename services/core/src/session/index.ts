@@ -6,7 +6,21 @@
  */
 
 // Session service
-export { MakaioSessionService } from './session-service.js';
+export { MakaioSessionService, type MakaioSessionServiceOptions } from './session-service.js';
+
+// Session-ownership authority (five bus operations, one durable act each) plus
+// the process-local start and settle seams every start path goes through.
+export {
+  assessClaimOwner,
+  enqueueAgentSettle,
+  mintClaimToken,
+  peekInFlightStart,
+  registerAdapterSessionMovementObserver,
+  registerSessionOwnershipAuthority,
+  runExclusiveStart,
+  type InFlightStart,
+  type SessionOwnershipAuthorityDeps,
+} from './ownership/index.js';
 
 // Framework-core session handlers (slim set; host handlers registered separately)
 export { registerCoreSessionServiceHandlers } from './session-service-handlers-core.js';

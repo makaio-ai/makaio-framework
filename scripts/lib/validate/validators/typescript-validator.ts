@@ -77,6 +77,13 @@ function parseTsgoDiagnostics(output: string): TsgoDiagnostic[] {
  * Spawns tsgo --noEmit for the given tsconfig and returns all diagnostics.
  * Stdout is piped and parsed; stderr is inherited for debug visibility.
  *
+ * `--pretty false` is **required, not cosmetic**: {@link parseTsgoDiagnostics}
+ * reads the flat `file(line,col): error TSxxxx: message` form, and a tsgo build
+ * that formats prettily on a pipe (colour codes, a summary table) matches none
+ * of it — so every diagnostic parses away to nothing and the run reports clean.
+ * A type checker that cannot fail is worse than none, so the format the parser
+ * depends on is pinned here rather than inherited from the terminal.
+ *
  * tsgo uses exit code 0 for clean checks and exit code 2 when diagnostics
  * are found. Stdout is always parsed regardless of exit code — even crashes
  * may emit partial diagnostics worth capturing. Only spawn failures (the
@@ -106,7 +113,7 @@ function runTsgoCheck(tsgoPath: string, tsConfigFile: string, verbose = false): 
       }
     };
 
-    const child = spawn(tsgoPath, ['--noEmit', '--project', tsConfigFile], {
+    const child = spawn(tsgoPath, ['--noEmit', '--pretty', 'false', '--project', tsConfigFile], {
       cwd: process.cwd(),
       shell: process.platform === 'win32',
       stdio: ['ignore', 'pipe', 'inherit'],

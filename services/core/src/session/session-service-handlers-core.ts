@@ -1,19 +1,15 @@
 import { TimeoutError, type IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, SessionSubjects, type IMakaioSession } from '@makaio/contracts';
+import { SessionSubjects, type IMakaioSession, type OwnershipTopology } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turn/namespace.js';
 import { SessionEventStorageSubjects } from './session-events/namespace.js';
 import { SessionStorageSubjects } from './storage/namespace.js';
-import { AgentStorageSubjects } from './storage/agent-namespace.js';
 import {
   registerAdapterSessionIdReconciliationHandler,
   registerAgentAddedHandler,
   registerAgentRemovedHandler,
 } from './session-service-agent-handlers.js';
-import { registerAdapterSessionCurrencyHandler } from './session-adapter-session-currency-handler.js';
-import { recoverAgent } from './utils/agent-recovery.js';
-import { evaluateNativeLocality } from './native-locality.js';
-import { resolveAgentResumeIdentity } from './session-resume-identity.js';
-import { AdapterRuntimeSubjects } from '../adapter-runtime/namespace.js';
+import { registerAdapterSessionMovementObserver, registerSessionOwnershipAuthority } from './ownership/index.js';
+import { registerRestartAgentsHandler } from './handlers/restart-agents.js';
 
 /**
  * Dependencies required to register the framework-core session service handlers.
@@ -25,6 +21,20 @@ import { AdapterRuntimeSubjects } from '../adapter-runtime/namespace.js';
 interface CoreSessionServiceHandlerDeps {
   /** The event bus used for handler registration and storage dispatch. */
   bus: IMakaioBus;
+  /**
+   * Machine identity the ownership authority owns claims under.
+   *
+   * Injected by the composition root, never resolved through the bus: an
+   * ownership decision must not depend on whether the adapter runtime's
+   * identity handler happened to register first. Absent, every
+   * identity-dependent ownership operation declines instead of guessing.
+   */
+  machineId?: string;
+  /**
+   * How many runtime processes may own claims on this machine. Defaults to
+   * `'shared-machine'` — the reading no host can be wrong about.
+   */
+  topology?: OwnershipTopology;
 }
 
 /**
@@ -32,7 +42,8 @@ interface CoreSessionServiceHandlerDeps {
  * `session.create`, `session.get`, `session.list`, `session.turn.await`,
  * `session.close`, `session.restartAgents`, `session.update`,
  * `session.archive`, `session.purge`,
- * `session.agent.added`, and `session.agent.removed`.
+ * `session.agent.added`, `session.agent.removed`, and the five
+ * `session.ownership.*` operations of the ownership authority.
  *
  * These handlers cover the minimal, load-bearing session contract for the
  * framework SDK. Host-specific handlers (search, resume, analytics, context
@@ -41,7 +52,7 @@ interface CoreSessionServiceHandlerDeps {
  * Persistence degrades gracefully when no storage handlers are registered:
  * `session.get` / `session.list` / `session.close` all delegate to
  * `SessionStorageSubjects.*` which may be unhandled in ephemeral mode.
- * @param deps - Bus dependency
+ * @param deps - Bus, plus the identity the ownership authority is composed with
  * @returns Array of cleanup callbacks, one per registered handler
  */
 export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandlerDeps): Array<() => void> {
@@ -51,14 +62,19 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
     registerListHandler(deps),
     registerTurnAwaitHandler(deps),
     registerCloseHandler(deps),
-    registerRestartAgentsHandler(deps),
+    registerRestartAgentsHandler(deps.bus),
     registerCoreUpdateHandler(deps),
     registerCoreArchiveHandler(deps),
     registerCorePurgeHandler(deps),
     registerAgentAddedHandler(deps.bus),
     registerAgentRemovedHandler(deps.bus),
     registerAdapterSessionIdReconciliationHandler(deps.bus),
-    registerAdapterSessionCurrencyHandler(deps.bus),
+    registerSessionOwnershipAuthority({
+      bus: deps.bus,
+      machineId: deps.machineId,
+      topology: deps.topology ?? 'shared-machine',
+    }),
+    registerAdapterSessionMovementObserver(deps.bus),
   ];
 }
 
@@ -293,178 +309,6 @@ function registerCloseHandler(deps: CoreSessionServiceHandlerDeps): () => void {
     await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
     await bus.emit(SessionSubjects.closed, { sessionId });
     ctx.setResult({ success: true });
-  });
-}
-
-type RestartAgentsHandlerResult =
-  | { agentId: string; adapterId: string; success: true }
-  | { agentId: string; adapterId: string; success: false; error: string };
-
-/**
- * Probe whether an adapter declares the `session:resume` capability.
- *
- * Best-effort: returns `false` when the adapter is unreachable or has no
- * handler, matching the attach-handler's `adapterSupportsResume` pattern.
- * @param bus - Bus for the capability query
- * @param adapterId - Resolved adapter instance ID
- * @returns `true` when the adapter declares `session:resume`
- */
-async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promise<boolean> {
-  try {
-    const result = await bus.requestOptional(AdapterSubjects.getCapabilities, { adapterId });
-    return result.handled ? new Set(result.data.capabilities).has('session:resume') : false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Resolve the effective machine identity for the restart handler.
- *
- * Prefers an explicit payload override (test/ops escape hatch), then
- * falls back to the runtime identity registered via the adapter-runtime
- * identity handlers (`AdapterRuntimeSubjects.getMachineId`).
- *
- * Returns `undefined` only when both the payload and the runtime identity
- * are absent — downstream locality evaluation treats this as
- * `missing-machine-id` and degrades to deferred lazy recovery with history.
- * @param bus - Bus for identity resolution
- * @param payloadMachineId - Explicit machine ID from the request payload
- * @returns Effective machine identity, or `undefined` when unavailable
- */
-async function resolveEffectiveMachineId(
-  bus: IMakaioBus,
-  payloadMachineId: string | undefined,
-): Promise<string | undefined> {
-  if (payloadMachineId !== undefined) {
-    return payloadMachineId;
-  }
-  const identity = await bus.requestOptional(AdapterRuntimeSubjects.getMachineId, {});
-  return identity.handled ? identity.data.machineId : undefined;
-}
-
-/**
- * Handle explicit session agent runtime restoration.
- *
- * Resolves the local machine identity from the adapter-runtime identity
- * registry (same source as the attach handler), then evaluates native
- * locality per agent. Structural locality signals (machine/cwd/adapter
- * identity) come from the SESSION record, but resume currency and the resume
- * target are per agent: currency via {@link resolveAgentResumeIdentity}, which
- * keeps the session row's lead-owned `moved` state from degrading members that
- * still hold their own provider conversation, and the target via
- * `agent.adapterSessionId` from the agent storage record (post-R8 this field is
- * only ever a provider-confirmed ID, or undefined for never-confirmed agents).
- *
- * When the verdict is native AND the agent has its own `adapterSessionId` →
- * resume with it. When the verdict is native but the agent record has NO
- * `adapterSessionId` → defer to lazy dead-agent recovery (history injection),
- * same as the degraded branch — never borrow another agent's provider session.
- *
- * Agents with degraded, foreign, or unknown locality are deferred to the
- * orchestrator's dead-agent recovery path, which lazily rehydrates them on
- * first send and injects the stored conversation history — guaranteeing the
- * model context is never empty.
- *
- * The request payload accepts an optional `machineId` override for
- * testing and operational tooling; production callers should omit it
- * so the handler resolves the runtime identity itself.
- *
- * When identity resolution is unavailable (no adapter-runtime handlers
- * registered), locality evaluation degrades to `missing-machine-id`,
- * which defers all agents to lazy recovery with history — the safe
- * default that avoids empty-provider-context rehydration.
- * @param deps - Core handler dependencies
- * @returns Cleanup function
- */
-function registerRestartAgentsHandler(deps: CoreSessionServiceHandlerDeps): () => void {
-  const { bus } = deps;
-  return bus.on(SessionSubjects.restartAgents, async (ctx) => {
-    const { sessionId, machineId: payloadMachineId } = ctx.payload;
-    const listResult = await bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
-    const agents = listResult.handled ? listResult.data.agents : [];
-    const results: RestartAgentsHandlerResult[] = [];
-
-    // Resolve effective machine identity: explicit payload override,
-    // then runtime adapter-identity registry, then undefined (degrades).
-    const effectiveMachineId = await resolveEffectiveMachineId(bus, payloadMachineId);
-
-    // Always fetch the session for locality evaluation — the effective
-    // machine ID may come from the runtime rather than the payload.
-    const sessionResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
-    const session: IMakaioSession | undefined = sessionResult.handled
-      ? (sessionResult.data.session ?? undefined)
-      : undefined;
-
-    for (const agent of agents) {
-      try {
-        let resumeAdapterSessionId: string | undefined;
-        let shouldDeferRehydration = false;
-
-        if (session !== undefined) {
-          const canResume = await adapterSupportsResume(bus, agent.adapterId);
-          // Resume currency gates whether this agent's provider conversation is
-          // resumable at all. It is resolved per agent because the session row's
-          // currency is lead-owned: a `moved` state there means the *lead's*
-          // provider session was abandoned with no confirmed successor, so the
-          // lead must defer to history-injected recovery — while a member agent,
-          // whose provider thread the lead's movement never touched, is gated on
-          // its own agent-row identity instead. The resume target likewise stays
-          // per-agent below: each agent rehydrates its own provider
-          // conversation, not the session row's.
-          const resumeIdentity = resolveAgentResumeIdentity(session, agent);
-          const verdict = evaluateNativeLocality({
-            intent: 'resume',
-            session,
-            localMachineId: effectiveMachineId,
-            adapterSupportsNative: canResume,
-            targetAdapterName: agent.adapterName,
-            currentCwd: agent.cwd,
-            targetCwd: agent.cwd,
-            resumeIdentity,
-          });
-
-          if (verdict.kind === 'native' && agent.adapterSessionId !== undefined) {
-            // Native locality confirmed and this agent has its own provider-
-            // confirmed session ID — resume with the agent's own ID so that
-            // multiple agents on the same session each rehydrate against their
-            // own provider conversation (not the lead agent's session).
-            resumeAdapterSessionId = agent.adapterSessionId;
-          } else {
-            // Degraded or foreign locality (including missing-machine-id), or
-            // native verdict but agent has no provider-confirmed session ID yet
-            // (never-started agent). Defer rehydration so the orchestrator's
-            // dead-agent recovery path handles it on first send, injecting the
-            // full stored conversation as history.
-            shouldDeferRehydration = true;
-          }
-        }
-
-        if (shouldDeferRehydration) {
-          // Report success — the agent record is intact and will be
-          // lazily recovered with proper history injection on first send.
-          results.push({ agentId: agent.agentId, adapterId: agent.adapterId, success: true });
-          continue;
-        }
-
-        const recovered = await recoverAgent(bus, agent, {
-          cwd: agent.cwd,
-          model: agent.model,
-          resumeAdapterSessionId,
-        });
-        await bus.requestOptional(AgentStorageSubjects.updateRuntime, {
-          agentId: recovered.agentId,
-          adapterId: recovered.adapterId,
-        });
-        results.push({ agentId: recovered.agentId, adapterId: recovered.adapterId, success: true });
-      } catch (error) {
-        const cause = error instanceof Error ? error.cause : undefined;
-        const message = cause instanceof Error ? cause.message : error instanceof Error ? error.message : String(error);
-        results.push({ agentId: agent.agentId, adapterId: agent.adapterId, success: false, error: message });
-      }
-    }
-
-    ctx.setResult({ sessionId, results });
   });
 }
 

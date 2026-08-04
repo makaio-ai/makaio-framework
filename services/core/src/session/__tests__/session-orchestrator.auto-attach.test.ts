@@ -316,7 +316,9 @@ describe('SessionOrchestrator - Auto-attach', () => {
         MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
           order.push('start');
           receivedPayload = ctx.payload as Record<string, unknown>;
-          const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
+          // A caller-supplied identity is the adapter's, exactly as production:
+          // the reserving start persisted that row before dispatching.
+          const agentId = ctx.payload.agentId ?? `agent-${crypto.randomUUID().slice(0, 8)}`;
           startedAgentId = agentId;
           const adapterSessionId = `adapter-session-${sessionId}`;
           const adapterId = ctx.payload.adapterId;
@@ -395,7 +397,9 @@ describe('SessionOrchestrator - Auto-attach', () => {
       unsubscribers.push(
         MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
           receivedPayload = ctx.payload as Record<string, unknown>;
-          const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
+          // A caller-supplied identity is the adapter's, exactly as production:
+          // the reserving start persisted that row before dispatching.
+          const agentId = ctx.payload.agentId ?? `agent-${crypto.randomUUID().slice(0, 8)}`;
           startedAgentId = agentId;
           const adapterSessionId = `adapter-session-${sessionId}`;
           const adapterId = ctx.payload.adapterId;
@@ -434,7 +438,9 @@ describe('SessionOrchestrator - Auto-attach', () => {
       expect(receivedPayload).not.toHaveProperty('providerContext');
       expect(sessions.get(sessionId)?.agents[0]?.providerConfigId).toBeUndefined();
       expect(startedAgentId).toBeDefined();
-      expect(runtimeUpdates).toEqual([]);
+      // The origin identity is persisted for every start; what an untrusted
+      // provider context must not produce is a provider-config write.
+      expect(runtimeUpdates.map((update) => update.providerConfigId)).toEqual([undefined]);
     });
 
     it('backfills adapterName from adapterId when the direct selection omits adapterName', async () => {

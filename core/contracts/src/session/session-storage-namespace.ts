@@ -2,14 +2,7 @@ import { z } from 'zod';
 import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { MakaioSessionSchema } from './schemas.js';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
-import {
-  type AdapterSessionCurrencyState,
-  AdapterSessionCurrencyStateSchema,
-  BranchKindSchema,
-  ImportStatusSchema,
-  SessionContextInheritanceSchema,
-} from './schemas/primitives.js';
-import { validateCurrencyPairing } from './schemas/adapter-session-currency.js';
+import { BranchKindSchema, ImportStatusSchema, SessionContextInheritanceSchema } from './schemas/primitives.js';
 import { ForkChildInfoSchema } from './schemas/fork-child-info.js';
 import { SessionPreviewDataSchema, SessionRecordMetadataSchema, SessionWithPreviewSchema } from './schemas/session.js';
 import { ClientIdentityObservationSchema } from '../client/account-identity.js';
@@ -57,58 +50,6 @@ function validateClientAccountObservationRequirement(
   }
 }
 
-/**
- * Enforce that the adapter-session currency pair is written as a single value.
- *
- * `currentAdapterSessionId` and `currentAdapterSessionIdState` are two columns
- * carrying one fact — which provider session, if any, a resume attach may
- * target right now — and the sessions table backs that with a CHECK constraint
- * (`sessions_current_adapter_session_id_currency_check`). A half-supplied
- * update would advertise a currency the state does not back: the SQL backends
- * would reject the write, while the in-memory backend would happily persist the
- * impossible pair. Requiring both halves together is what keeps the two
- * backends observably identical, and it is the only write path that reaches
- * these columns — `storage:session.set` deliberately omits them.
- *
- * The difference to {@link validateCurrencyPairing} is exactly the partial
- * update: this refinement first decides whether a half-supplied pair was given
- * (accepting "neither", rejecting "one of two"), then hands the total pair to
- * the shared rule so the two surfaces can never diverge on what a legal pair is.
- * @param value - Candidate update payload containing the currency fields
- * @param ctx - Zod refinement context
- */
-function validateAdapterSessionCurrencyPair(
-  value: {
-    currentAdapterSessionId?: string | null;
-    currentAdapterSessionIdState?: AdapterSessionCurrencyState;
-  },
-  ctx: z.RefinementCtx,
-): void {
-  const { currentAdapterSessionId: id, currentAdapterSessionIdState: state } = value;
-  if (id === undefined && state === undefined) return;
-
-  if (state === undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['currentAdapterSessionIdState'],
-      message: 'currentAdapterSessionIdState is required when currentAdapterSessionId is provided',
-    });
-    return;
-  }
-
-  if (id === undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['currentAdapterSessionId'],
-      message:
-        "currentAdapterSessionId is required when currentAdapterSessionIdState is provided (null for 'inherited' and 'moved')",
-    });
-    return;
-  }
-
-  validateCurrencyPairing({ currentAdapterSessionId: id, currentAdapterSessionIdState: state }, ctx);
-}
-
 export const SessionStorageSetSessionSchema = MakaioSessionSchema.superRefine((value, ctx) => {
   validateClientAccountObservationRequirement(value, ctx);
 });
@@ -140,49 +81,64 @@ export const SessionStorageSetRequestSchema = z
  */
 const MachineIdFieldSchema = z.string().nullable().optional();
 
-const SessionStorageUpdateRequestPayloadSchema = z
-  .object({
-    sessionId: z.string(),
-    status: z.enum(['active', 'closed', 'archived', 'discovered']).optional(),
-    parentSessionId: z.string().optional(),
-    contextInheritance: SessionContextInheritanceSchema.optional(),
-    rootSessionId: z.string().optional(),
-    forkPointMessageId: z.string().optional(),
-    branchKind: BranchKindSchema.optional(),
-    isOrchestrated: z.boolean().optional(),
-    clientId: z.string().optional(),
-    clientAccountId: z.string().optional(),
-    lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
-    executionTargetId: z.string().nullable().optional(),
-    approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
-    title: z.string().optional(),
-    targetWorkingDirectory: z.string().optional(),
-    createdAt: z.number().finite().optional(),
-    lastActivityAt: z.number().finite().optional(),
-    /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
-    metadata: SessionRecordMetadataSchema.nullable().optional(),
-    /**
-     * Write-once spawn provenance. Non-null updates fill missing values without
-     * overwriting an existing tool-call assignment; null explicitly clears it.
-     */
-    spawningToolCallId: z.string().nullable().optional(),
-    /** {@inheritDoc MachineIdFieldSchema} */
-    machineId: MachineIdFieldSchema,
-    /**
-     * Provider-confirmed resume currency. Null clears it (the `'moved'` and
-     * `'inherited'` states carry no confirmed ID); omission leaves the pair
-     * unchanged.
-     *
-     * Must be written together with `currentAdapterSessionIdState` — the pair is
-     * one value, and {@link validateAdapterSessionCurrencyPair} rejects any update
-     * that supplies only one half or a combination the storage CHECK constraint
-     * would refuse.
-     */
-    currentAdapterSessionId: z.string().nullable().optional(),
-    /** {@inheritDoc AdapterSessionCurrencyStateSchema} */
-    currentAdapterSessionIdState: AdapterSessionCurrencyStateSchema.optional(),
-  })
-  .superRefine(validateAdapterSessionCurrencyPair);
+/** Lifecycle status a stored session row can carry. */
+const SessionStorageStatusSchema = z.enum(['active', 'closed', 'archived', 'discovered']);
+
+const SessionStorageUpdateRequestPayloadSchema = z.object({
+  sessionId: z.string(),
+  status: SessionStorageStatusSchema.optional(),
+  /**
+   * Only apply this update when the stored status is one of these.
+   *
+   * Makes a status transition a compare-and-swap, which is what a caller acting
+   * on an *observation* needs: it read a row, decided the observation implies a
+   * transition, and by the time it writes, a concurrent archive or delete may
+   * have made that decision wrong. Without the guard the write lands anyway and
+   * silently undoes the newer state. Same shape and same reason as
+   * `storage:agent.updateStatus`'s `expectedStatus`.
+   *
+   * Omitted, the update is unconditional — the existing behavior every current
+   * caller relies on. Supplied, a refused write reports `success: false`, which
+   * a caller distinguishes from a missing row by re-reading; storage will not
+   * guess which of the two it was.
+   */
+  expectedStatus: z.array(SessionStorageStatusSchema).nonempty().optional(),
+  parentSessionId: z.string().optional(),
+  contextInheritance: SessionContextInheritanceSchema.optional(),
+  rootSessionId: z.string().optional(),
+  forkPointMessageId: z.string().optional(),
+  branchKind: BranchKindSchema.optional(),
+  isOrchestrated: z.boolean().optional(),
+  clientId: z.string().optional(),
+  clientAccountId: z.string().optional(),
+  lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
+  executionTargetId: z.string().nullable().optional(),
+  approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
+  title: z.string().optional(),
+  targetWorkingDirectory: z.string().optional(),
+  createdAt: z.number().finite().optional(),
+  lastActivityAt: z.number().finite().optional(),
+  /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
+  metadata: SessionRecordMetadataSchema.nullable().optional(),
+  /**
+   * Write-once spawn provenance. Non-null updates fill missing values without
+   * overwriting an existing tool-call assignment; null explicitly clears it.
+   */
+  spawningToolCallId: z.string().nullable().optional(),
+  /** {@inheritDoc MachineIdFieldSchema} */
+  machineId: MachineIdFieldSchema,
+  // The adapter-session currency pair is deliberately absent. Resume currency
+  // has exactly one writer — the `storage:sessionOwnership` seam — because it
+  // is the only surface that states who is allowed to write it: a claim
+  // generation, checked in the same transaction as the write. A partial-update
+  // surface has no notion of authority at all, so a caller holding a
+  // pre-movement view could resurrect an abandoned provider session through
+  // it, past every fence the ownership seam maintains.
+  //
+  // `leadAgentId` is absent for the same reason and one more: the designation
+  // is a compare-and-swap the reserving transaction owns end to end (I11), and
+  // an unconditional partial write is not one.
+});
 // Intentionally no `validateClientAccountObservationRequirement(...)` here:
 // partial updates have no previous-row context, so the authoritative transition
 // invariant is enforced in storage handlers after loading the persisted session.

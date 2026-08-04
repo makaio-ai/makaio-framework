@@ -75,6 +75,14 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
  * rather than a gap the snapshot may fill. A first write has no previous row and
  * therefore takes the caller's origin, matching the SQL insert path. Changing it
  * on a live agent is `storage:agent.updateRuntime`'s job.
+ *
+ * `status` is preserved for a third reason, and only in one direction: a stored
+ * `disposed` wins. Disposal is the agent's removal, and it is terminal — the
+ * same rule `storage:agent.updateStatus` enforces. A whole-record write is a
+ * caller-held snapshot, so without this a writer that read the agent before the
+ * removal would revive the row and, with it, every ownership predicate that
+ * refuses a disposed agent. Any other stored status is the caller's to
+ * overwrite, and a first write has no previous row at all.
  * @param store - In-memory agent store
  * @param agentId - Agent being written
  * @param next - Incoming agent record about to be stored
@@ -87,6 +95,7 @@ function storeAgentPreservingOwnership(
   const previous = store.get(agentId);
   store.set(agentId, {
     ...structuredClone(next),
+    status: previous?.status === 'disposed' ? 'disposed' : next.status,
     adapterSessionId: previous === undefined ? next.adapterSessionId : previous.adapterSessionId,
     currentAdapterSessionId: previous?.currentAdapterSessionId,
     currentAdapterSessionIdState: previous?.currentAdapterSessionIdState ?? 'inherited',
@@ -98,9 +107,11 @@ function storeAgentPreservingOwnership(
 /**
  * Apply a mutation to a stored agent, reporting whether it happened.
  *
- * The three mutating subjects all answer the same two questions — does the agent
- * exist, and did the requested change apply — so the lookup and its `false`
- * answer live here rather than being restated in each handler.
+ * The unconditional mutating subjects all answer the same two questions — does
+ * the agent exist, and did the requested change apply — so the lookup and its
+ * `false` answer live here rather than being restated in each handler.
+ * `updateStatus` is not among them: its compare-and-swap has to distinguish "no
+ * such agent" from "refused", which is one answer more than this seam carries.
  * @param store - In-memory agent store
  * @param agentId - Agent to mutate
  * @param mutate - Mutation to apply; returns `false` when it changes nothing
@@ -113,6 +124,62 @@ function mutateAgent(
 ): boolean {
   const agent = store.get(agentId);
   return agent === undefined ? false : mutate(agent);
+}
+
+/** The `storage:agent.updateStatus` response, as the memory backend computes it. */
+interface AgentStatusTransitionResult {
+  /** Whether the agent row exists. */
+  success: boolean;
+  /** Whether this call is the one that wrote the status. */
+  transitioned: boolean;
+}
+
+/**
+ * Apply a status write to a stored agent, reporting existence and effect
+ * separately.
+ *
+ * The two answers are distinct because a write can fail to land for two reasons:
+ * the row is gone, or the row is there and refused. Both refusals mirror the SQL
+ * backends, where they are conjuncts of the write's own predicate rather than
+ * checks preceding it.
+ *
+ * `disposed` is terminal and refuses ahead of the expectation, including an
+ * expectation that names `disposed` itself: the agent was removed, and no
+ * lifecycle write may hand it back a status a later ownership predicate would
+ * treat as live.
+ *
+ * **A refusal is only as good as the caller that reads it.** An existing row
+ * reporting no transition means it was removed while the caller worked,
+ * and a caller that created something live before writing the status has to act
+ * on that. The reserved paths this wave owns do — a start settles after its
+ * dispatch, and a settlement for a removed agent answers `agent-disposed`,
+ * which stops the connector and releases the key. The rehydrate path does not:
+ * its `idle` write belongs to the adapter, is unconditional, and sits outside
+ * this wave's boundary, so a removal landing mid-rehydrate can leave a live
+ * connector attached to a disposed row. Making that refusal actionable is part
+ * of bringing rehydrate under the authority, which lands with the rest of the
+ * rehydrate work rather than as a check bolted onto this predicate.
+ * @param store - In-memory agent store
+ * @param agentId - Agent whose status is being written
+ * @param status - Status to write
+ * @param expectedStatus - Statuses the caller believes it is leaving, if any
+ * @returns Whether the row exists, and whether this call wrote it
+ */
+function applyStatusTransition(
+  store: Map<string, MakaioSessionAgent>,
+  agentId: string,
+  status: MakaioSessionAgent['status'],
+  expectedStatus: readonly MakaioSessionAgent['status'][] | undefined,
+): AgentStatusTransitionResult {
+  const agent = store.get(agentId);
+  if (agent === undefined) return { success: false, transitioned: false };
+  if (agent.status === 'disposed') return { success: true, transitioned: false };
+  if (expectedStatus !== undefined && !expectedStatus.includes(agent.status)) {
+    return { success: true, transitioned: false };
+  }
+  agent.status = status;
+  agent.lastActivityAt = Date.now();
+  return { success: true, transitioned: true };
 }
 
 /**
@@ -196,12 +263,8 @@ export function registerMemoryAgentStorage(
   // storage:agent.updateStatus
   unsubs.push(
     bus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-      const success = mutateAgent(store, ctx.payload.agentId, (agent) => {
-        agent.status = ctx.payload.status;
-        agent.lastActivityAt = Date.now();
-        return true;
-      });
-      ctx.setResult({ success });
+      const { agentId, status, expectedStatus } = ctx.payload;
+      ctx.setResult(applyStatusTransition(store, agentId, status, expectedStatus));
     }),
   );
 

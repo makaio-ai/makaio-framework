@@ -302,7 +302,7 @@ describe('ActiveAgentRegistry', () => {
     const updates: Array<{ agentId: string; status: string }> = [];
     const cleanup = MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
       updates.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, transitioned: true });
     });
 
     try {

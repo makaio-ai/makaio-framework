@@ -187,7 +187,12 @@ export const sessionPackage: MakaioNodeExtension<IMakaioBus> = {
   version: '0.1.0',
   dependencies: [dep(SessionBridgeToken.name)],
   critical: true,
-  create: (ctx) => new MakaioSessionService(ctx.bus),
+  // The machine identity is injected rather than resolved through the bus: it
+  // is the first component of every ownership key, and an authority that
+  // resolved it lazily would make ownership decisions depend on adapter-runtime
+  // boot order. `'shared-machine'` is the topology this host can prove — relay
+  // peers and workflow workers may host adapters on the same machine.
+  create: (ctx) => new MakaioSessionService(ctx.bus, { machineId: ctx.machineId, topology: 'shared-machine' }),
 };
 
 /** Package that registers the framework session.sendMessage orchestrator. */

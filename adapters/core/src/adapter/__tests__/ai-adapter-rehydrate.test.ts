@@ -96,7 +96,7 @@ describe('AIAdapter.handleRehydrateAgent', () => {
         ctx.setResult({ success: true });
       }),
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
       MakaioBus.on(AgentStorageSubjects.set, (ctx) => {
         ctx.setResult({ success: true });
@@ -146,7 +146,7 @@ describe('AIAdapter.handleRehydrateAgent', () => {
         ctx.setResult({ success: true });
       }),
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
 
@@ -174,7 +174,7 @@ describe('AIAdapter.handleRehydrateAgent', () => {
 
     cleanupFns.push(
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
       MakaioBus.on(AgentStorageSubjects.set, (ctx) => {
         ctx.setResult({ success: true });
@@ -235,7 +235,7 @@ describe('AIAdapter.handleRehydrateAgent', () => {
         ctx.setResult({ success: true });
       }),
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
 
@@ -278,7 +278,7 @@ describe('AIAdapter.handleRehydrateAgent', () => {
         });
       }),
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
 
@@ -339,7 +339,7 @@ describe('AIAdapter.handleRehydrateAgent', () => {
           });
         }),
         MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-          ctx.setResult({ success: true });
+          ctx.setResult({ success: true, transitioned: true });
         }),
         ...(options.resolutionHandlers ?? []),
       );

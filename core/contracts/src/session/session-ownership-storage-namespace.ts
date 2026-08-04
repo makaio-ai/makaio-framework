@@ -166,6 +166,17 @@ export type AgentSessionOwnershipRecord = z.infer<typeof AgentSessionOwnershipRe
  * and a movement announced in that window has no legitimate writer.
  */
 export const SessionOwnershipClaimRequestSchema = AdapterSessionClaimKeySchema.extend({
+  /**
+   * Provider session to take the ownership key on, or `null` when the start has
+   * no key yet because the provider will mint its own identity.
+   *
+   * `null` makes this a **keyless reservation**: no claim row is written, and
+   * the operation's whole effect is the lead designation and its currency
+   * mirror. It exists so a fresh start's designation is still one transaction —
+   * a designation written through a second RPC is neither atomic nor
+   * compare-and-swap, and bypasses the mirror.
+   */
+  providerSessionId: z.string().nullable(),
   /** Adapter type name of the claiming runtime. */
   adapterName: z.string(),
   /**
@@ -203,14 +214,28 @@ export const SessionOwnershipClaimRequestSchema = AdapterSessionClaimKeySchema.e
    * its own token — so single use is a caller obligation, not a storage
    * guarantee. Presenting a retired token again is a caller bug, and how it
    * interacts with later generations is undefined.
+   *
+   * Ignored, and not checked for uniqueness, when `providerSessionId` is `null`:
+   * a keyless reservation writes no claim row for a token to identify.
    */
   claimToken: z.string(),
   /**
    * Take over the named generation instead of acquiring a free key.
    *
-   * A takeover is only ever the conclusion of a reconcile that established the
-   * previous owner is gone — the storage seam does not decide abandonment, it
-   * records the conclusion and fences the previous generation out.
+   * A takeover named this way is the conclusion of a reconcile that established
+   * the previous owner is gone — the storage seam does not decide abandonment,
+   * it records the conclusion and fences the previous generation out.
+   *
+   * **This is not the only takeover, and no production caller sends it.** A key
+   * whose incumbent's agent row carries `status: 'disposed'` is taken over
+   * *unconditionally*, with no request flag at all, because a disposed agent can
+   * never legitimately hold a key — see
+   * {@link SessionOwnershipClaimResponseSchema}'s `agent-disposed`. That
+   * takeover is a predicate evaluated inside the taking transaction, so the
+   * evidence behind it can be neither stale nor replayed nor contradicted by a
+   * concurrent writer. A *deleted* agent or session needs no takeover at all:
+   * both foreign keys cascade, so the claim row goes with its parent and the
+   * next claimant performs an ordinary free acquisition.
    *
    * A takeover repoints the claim row at the taking agent, so it is held to the
    * same `(agent, session)` membership as a fresh acquisition and reports the
@@ -233,10 +258,13 @@ export const SessionOwnershipClaimRequestSchema = AdapterSessionClaimKeySchema.e
    * Designate the claiming agent as the session's lead, compare-and-swap style.
    *
    * `expectedLeadAgentId` is the lead the caller read: `null` means "the session
-   * has no lead yet". A session already led by `agentId` satisfies the
-   * designation regardless of the expectation, so a retry is not a conflict.
-   * Omitting the field leaves the lead designation untouched — that is the
-   * member-agent case, and a member must never redirect the session.
+   * has no lead yet". It is **required** whenever a designation is requested —
+   * there is no "designate whatever is there" mode, because that is not a
+   * compare-and-swap and would let two concurrent starts both believe they
+   * lead. A session already led by `agentId` satisfies the designation
+   * regardless of the expectation, so a retry is not a conflict. Omitting the
+   * whole field leaves the lead designation untouched — that is the member-agent
+   * case, and a member must never redirect the session.
    *
    * **A designation that actually promotes a new lead also mirrors that lead's
    * currency onto the session row**, in the same transaction. Session currency
@@ -255,12 +283,26 @@ export const SessionOwnershipClaimRequestSchema = AdapterSessionClaimKeySchema.e
    * independently of the row's origin and are mirrored unchanged.
    *
    * The already-lead case writes nothing, and therefore mirrors nothing: the
-   * snapshot it would refresh is `settleCurrency`'s to keep.
+   * snapshot it would refresh is `settleCurrency`'s to keep. A `clear` mirrors
+   * nothing either: the session keeps the last lead's snapshot standing until a
+   * new lead is promoted, because the alternative — falling back to the row's
+   * own origin — publishes a resume target the departed lead had already moved
+   * away from.
    */
   designateLead: z
     .object({
       /** Lead agent the caller expects to find, or `null` for "no lead yet". */
       expectedLeadAgentId: z.string().nullable(),
+      /**
+       * Clear the designation instead of pointing it at `agentId`.
+       *
+       * The compare-and-swap is unchanged, so a clear cannot erase a newer
+       * designation, and removing a **non-lead** agent therefore writes nothing.
+       * This is the only sanctioned way to unset a lead: the whole-record
+       * session surface preserves the stored designation precisely so that a
+       * caller holding a pre-designation snapshot cannot unset it by accident.
+       */
+      clear: z.literal(true).optional(),
     })
     .optional(),
 });
@@ -280,10 +322,24 @@ export const SessionOwnershipClaimResponseSchema = z.discriminatedUnion('outcome
   z.object({
     /** The claim was taken by this call. */
     outcome: z.literal('claimed'),
-    /** The claim as it now stands. */
-    claim: AdapterSessionClaimRecordSchema,
+    /**
+     * The claim as it now stands, or `null` for a keyless reservation — which
+     * writes no claim row and therefore names no generation.
+     */
+    claim: AdapterSessionClaimRecordSchema.nullable(),
     /** Whether this call wrote the session's lead designation. */
     leadDesignated: z.boolean(),
+    /**
+     * Lead the session named **inside this transaction**, read under the same
+     * row lock the designation writes through.
+     *
+     * The only value a rollback may restore: a lead read before the call is a
+     * lead another start may already have replaced, so restoring it would undo a
+     * designation this caller never observed. Reported whether or not a
+     * designation was requested, so a caller that decides to designate later
+     * still has an honest expectation to present.
+     */
+    previousLeadAgentId: z.string().nullable(),
   }),
   z.object({
     /**
@@ -308,16 +364,42 @@ export const SessionOwnershipClaimResponseSchema = z.discriminatedUnion('outcome
      * session naming a lead whose currency nothing may ever publish again.
      */
     outcome: z.literal('idempotent'),
-    /** The claim as it stands. */
-    claim: AdapterSessionClaimRecordSchema,
+    /**
+     * The claim as it stands, or `null` when this repeat named no key.
+     *
+     * Nullable for the same reason `claimed` is: a **keyless** reservation
+     * writes no claim row, so re-issuing one is idempotent without there being
+     * a generation to report. A repeat that names a provider session always
+     * carries the row it re-validated against.
+     */
+    claim: AdapterSessionClaimRecordSchema.nullable(),
     /** Whether this call wrote the session's lead designation. */
     leadDesignated: z.boolean(),
+    /** Lead the session named inside this transaction, as on `claimed`. */
+    previousLeadAgentId: z.string().nullable(),
   }),
   z.object({
     /** Another generation holds the key. */
     outcome: z.literal('already-claimed'),
     /** The generation that holds it. */
     holder: AdapterSessionClaimRecordSchema,
+  }),
+  z.object({
+    /**
+     * The claiming agent's row carries `status: 'disposed'`; nothing was
+     * written.
+     *
+     * `disposed` is **absorbing for ownership**: a removed agent may never
+     * re-acquire authority, in any form. The guard is a conjunct of every
+     * statement that can end in a success — the acquiring SELECT, both takeover
+     * UPDATEs, the same-token retry's revalidation, the keyless reservation's
+     * locked-row check and the lead designation itself — rather than a
+     * service-side status check, because a status read before a write is exactly
+     * the read-then-write this seam exists to remove. Giving a claim *up* is not
+     * guarded: retiring a removed agent's claims is the one ownership act it
+     * must still be able to perform.
+     */
+    outcome: z.literal('agent-disposed'),
   }),
   z.object({
     /** The session's lead is not the one the caller expected; nothing was written. */
@@ -458,6 +540,18 @@ export const SessionOwnershipSettleCurrencyResponseSchema = z.discriminatedUnion
     outcome: z.literal('not-owner'),
   }),
   z.object({
+    /**
+     * The agent's row carries `status: 'disposed'`; nothing was written.
+     *
+     * Reported before authority is even considered, because `disposed` is
+     * absorbing for ownership: a removed agent's currency may not move again, no
+     * matter which generation asks. The guard is a conjunct of the settle's own
+     * UPDATE for the same reason every other guard here is — a status read
+     * before the write is a read-then-write.
+     */
+    outcome: z.literal('agent-disposed'),
+  }),
+  z.object({
     /** The agent row does not exist. */
     outcome: z.literal('not-found'),
   }),
@@ -465,6 +559,190 @@ export const SessionOwnershipSettleCurrencyResponseSchema = z.discriminatedUnion
 
 /** {@inheritDoc SessionOwnershipSettleCurrencyResponseSchema} */
 export type SessionOwnershipSettleCurrencyResult = z.infer<typeof SessionOwnershipSettleCurrencyResponseSchema>;
+
+// ─── settleMovement ─────────────────────────────────────────────────────────
+
+/**
+ * What the provider did with an agent's conversation.
+ *
+ * The two members differ in what they *know*, not in how far they got, and the
+ * difference decides whether a key may be freed. `confirmed` names a successor
+ * the provider acknowledged, so the generations the agent held before it are
+ * genuinely retired. `demote` says only that the conversation left, with no
+ * acknowledged successor — the provider may still be live under the ID being
+ * voided, so its claim is taken (or kept) rather than released.
+ */
+export const OwnershipMovementSchema = z.discriminatedUnion('kind', [
+  z.object({
+    /** The provider acknowledged the conversation now lives at `providerSessionId`. */
+    kind: z.literal('confirmed'),
+    /** Provider session the conversation moved to. */
+    providerSessionId: z.string(),
+    /**
+     * Token for the successor generation, minted fresh per attempt.
+     *
+     * Used **only** when the agent does not already hold this key: an agent that
+     * does is settled under the generation it already has, and this token names
+     * no row at all. That is what keeps a repeat idempotent instead of letting
+     * it mint a second generation for a key it already owns.
+     */
+    claimToken: z.string(),
+  }),
+  z.object({
+    /**
+     * The agent left its provider session with no acknowledged successor.
+     *
+     * The currency is demoted to `moved`; the claim on the key being voided is
+     * taken if the agent does not already hold it, and is **kept** afterwards.
+     * Only a clean release frees a key, and nothing here proves the provider
+     * process is done with the conversation.
+     */
+    kind: z.literal('demote'),
+    /** {@inheritDoc OwnershipMovementSchema} */
+    claimToken: z.string(),
+  }),
+]);
+
+/** {@inheritDoc OwnershipMovementSchema} */
+export type OwnershipMovement = z.infer<typeof OwnershipMovementSchema>;
+
+/**
+ * Request payload for `storage:sessionOwnership.settleMovement`.
+ *
+ * One call is the whole movement: acquire (or recognize) the successor
+ * generation, settle the agent's currency under it, retire the predecessors it
+ * replaces and refresh the session snapshot — in one transaction. Composed from
+ * `claim` + `settleCurrency` + `release` by a caller, the same act is three
+ * transactions with two windows in which a crash strands a key or publishes a
+ * currency no generation owns.
+ */
+export const SessionOwnershipSettleMovementRequestSchema = z.object({
+  /** {@inheritDoc AdapterSessionClaimKeySchema.shape.machineId} */
+  machineId: z.string(),
+  /** {@inheritDoc AdapterSessionClaimKeySchema.shape.adapterId} */
+  adapterId: z.string(),
+  /** Adapter type name of the owning runtime, carried onto any claim taken. */
+  adapterName: z.string(),
+  /**
+   * Session the agent belongs to.
+   *
+   * Verified against the agent's own row rather than trusted, exactly as
+   * `claim` verifies it: a movement filed under a session the agent has left
+   * would publish its currency into a session it was never part of.
+   */
+  sessionId: z.string(),
+  /** Agent whose provider conversation moved. */
+  agentId: z.string(),
+  /** Revision the caller read before computing the movement. */
+  expectedRevision: z.number().int().nonnegative(),
+  /** {@inheritDoc OwnershipMovementSchema} */
+  movement: OwnershipMovementSchema,
+});
+
+/** {@inheritDoc SessionOwnershipSettleMovementRequestSchema} */
+export type SessionOwnershipSettleMovementRequest = z.infer<typeof SessionOwnershipSettleMovementRequestSchema>;
+
+/**
+ * Result of `storage:sessionOwnership.settleMovement`.
+ *
+ * Every outcome other than `settled` leaves the store exactly as it was: the
+ * claims phase runs inside the same transaction as the settle, so a refusal
+ * reached after a generation was allocated rolls that allocation back with it.
+ *
+ * **The generation the response names is the one the settle wrote through**, not
+ * the one the caller sent. An agent that already held the target key is settled
+ * under the claim it already has, and the request's token names no row at all —
+ * so a caller that carried its own token into a later release would retire a
+ * generation that never existed and leave the real one blocking the key.
+ */
+export const SessionOwnershipSettleMovementResponseSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    /** The movement was recorded in full. */
+    outcome: z.literal('settled'),
+    /** Revision after the write. */
+    revision: z.number().int().nonnegative(),
+    /** {@inheritDoc AdapterSessionCurrencySnapshotSchema} */
+    currency: AdapterSessionCurrencySnapshotSchema,
+    /** Whether the session row's currency snapshot was refreshed too. */
+    sessionSnapshotUpdated: z.boolean(),
+    /**
+     * Provider sessions whose claims this movement retired.
+     *
+     * Only a `confirmed` movement retires anything: it names the successor the
+     * provider acknowledged, which is what makes the generations it replaces
+     * genuinely dead. A `demote` reports an empty list.
+     */
+    releasedProviderSessionIds: z.array(z.string()),
+    /**
+     * The generation the currency now stands under — the claim the settle
+     * actually wrote through, which is the pre-existing one when the agent
+     * already held the target key and the newly minted one otherwise. Callers
+     * carry this, never the token they sent, into any later release.
+     */
+    claim: AdapterSessionClaimRecordSchema,
+  }),
+  z.object({
+    /** The movement was already recorded; nothing was written. */
+    outcome: z.literal('idempotent'),
+    /** Revision as it stands (unchanged). */
+    revision: z.number().int().nonnegative(),
+    /** {@inheritDoc AdapterSessionCurrencySnapshotSchema} */
+    currency: AdapterSessionCurrencySnapshotSchema,
+    /** Always `false` — an idempotent movement writes nothing. */
+    sessionSnapshotUpdated: z.literal(false),
+    /**
+     * The effective generation, or `null` when there is none to name.
+     *
+     * Non-null when the target was already settled under a claim the agent
+     * holds. `null` for the targetless demotion of an agent with nothing
+     * resumable: that movement resolves no key, so it names no generation.
+     * **Only `settled` guarantees a claim**; a caller that needs a token here
+     * falls back to the agent's held claims through `read`.
+     */
+    claim: AdapterSessionClaimRecordSchema.nullable(),
+  }),
+  z.object({
+    /** Another generation holds the successor key. */
+    outcome: z.literal('already-claimed'),
+    /** The generation that holds it. */
+    holder: AdapterSessionClaimRecordSchema,
+  }),
+  z.object({
+    /** {@inheritDoc SessionOwnershipSettleCurrencyResponseSchema} */
+    outcome: z.literal('superseded'),
+    /** Fence that currently governs the agent's currency. */
+    currentFence: z.number().int().nonnegative(),
+  }),
+  z.object({
+    /** The row moved within this generation since the caller read it. */
+    outcome: z.literal('currency-changed'),
+    /** Revision as it stands. */
+    revision: z.number().int().nonnegative(),
+    /** {@inheritDoc AdapterSessionCurrencySnapshotSchema} */
+    currency: AdapterSessionCurrencySnapshotSchema,
+  }),
+  z.object({
+    /** The effective generation is no longer an ownership of this agent. */
+    outcome: z.literal('not-owner'),
+  }),
+  z.object({
+    /** The agent's row carries `status: 'disposed'`; nothing was written. */
+    outcome: z.literal('agent-disposed'),
+  }),
+  z.object({
+    /**
+     * The agent row does not exist, or does not belong to the named session.
+     *
+     * The two are one outcome here, unlike in `claim`: a movement references no
+     * row the caller could not have named itself, so there is nothing more
+     * specific to report than "that agent, in that session, is not there".
+     */
+    outcome: z.literal('not-found'),
+  }),
+]);
+
+/** {@inheritDoc SessionOwnershipSettleMovementResponseSchema} */
+export type SessionOwnershipSettleMovementResult = z.infer<typeof SessionOwnershipSettleMovementResponseSchema>;
 
 // ─── release ────────────────────────────────────────────────────────────────
 
@@ -541,6 +819,68 @@ export const SessionOwnershipReleaseResponseSchema = z.discriminatedUnion('outco
 /** {@inheritDoc SessionOwnershipReleaseResponseSchema} */
 export type SessionOwnershipReleaseResult = z.infer<typeof SessionOwnershipReleaseResponseSchema>;
 
+// ─── releaseAgentClaims ─────────────────────────────────────────────────────
+
+/**
+ * Request payload for `storage:sessionOwnership.releaseAgentClaims`.
+ *
+ * The plural of `release`, and not a convenience: **omitting `claimToken` is the
+ * teardown fan-out**, which exists because reading an agent's claims and
+ * releasing them one by one cannot see a claim taken in between — and an agent
+ * legitimately holds two mid-movement. One predicate over `agent_id` retires
+ * whatever is there at the instant the statement runs, which is the only shape
+ * that can be complete.
+ *
+ * Naming a token scopes the act to exactly one generation, which is the rollback
+ * form: a start that failed before dispatch must give up the generation it took
+ * and nothing else, because the agent may hold a second one from an unrelated
+ * in-flight movement.
+ *
+ * **Not `disposed`-guarded**, unlike every other ownership operation. Giving a
+ * claim up is the one act a removed agent must still perform; guarding it would
+ * strand exactly the claims that most need retiring.
+ */
+export const SessionOwnershipReleaseAgentClaimsRequestSchema = z.object({
+  /** Agent whose claims are being given up. */
+  agentId: z.string(),
+  /** Scope the act to one generation; omitted, every claim of the agent is taken. */
+  claimToken: z.string().optional(),
+  /** {@inheritDoc AdapterSessionClaimDispositionSchema} */
+  disposition: AdapterSessionClaimDispositionSchema,
+});
+
+/** {@inheritDoc SessionOwnershipReleaseAgentClaimsRequestSchema} */
+export type SessionOwnershipReleaseAgentClaimsRequest = z.infer<typeof SessionOwnershipReleaseAgentClaimsRequestSchema>;
+
+/**
+ * Result of `storage:sessionOwnership.releaseAgentClaims`.
+ *
+ * Not a discriminated union, because there is no failure to model: an agent with
+ * no claims — including one whose row is gone entirely — yields empty lists
+ * rather than an error, which is what makes teardown idempotent.
+ */
+export const SessionOwnershipReleaseAgentClaimsResponseSchema = z.object({
+  /**
+   * Provider sessions whose keys are now free, from the `released` disposition
+   * only. The other two keep blocking and report through `markedClaims`.
+   */
+  releasedProviderSessionIds: z.array(z.string()),
+  /** Claims marked `releasing` or `abandoned`, as they now stand. */
+  markedClaims: z.array(AdapterSessionClaimRecordSchema),
+  /**
+   * A `claimToken` was named and matched nothing this agent holds.
+   *
+   * Deliberately not an outcome that names the holder: the token may belong to
+   * another agent, and answering "who has it" to a caller that presented a token
+   * it does not own would leak ownership state a release has no business
+   * revealing. Callers that need the holder ask `listClaims`.
+   */
+  claimTokenNotFound: z.boolean(),
+});
+
+/** {@inheritDoc SessionOwnershipReleaseAgentClaimsResponseSchema} */
+export type SessionOwnershipReleaseAgentClaimsResult = z.infer<typeof SessionOwnershipReleaseAgentClaimsResponseSchema>;
+
 // ─── listClaims ─────────────────────────────────────────────────────────────
 
 /**
@@ -583,15 +923,11 @@ export type SessionOwnershipListClaimsRequest = z.infer<typeof SessionOwnershipL
  * its authority up front, and they are the only writers of the agent currency
  * columns and of the claim table.
  *
- * **The one exception.** The session row's currency snapshot still has a second
- * writer: `storage:session.update` accepts `currentAdapterSessionId` /
- * `currentAdapterSessionIdState`, and the live adapter-session-currency handler
- * uses it. Until settlement is rewired through this seam, a session snapshot
- * written here can be overwritten there — the agent's currency, which is what
- * authority is actually checked against, cannot.
- * TODO(#1140): Wave 2 moves session-currency settlement onto
- * `settleCurrency` and drops those fields from `SessionStorageUpdateSchema`,
- * making this namespace the sole writer of the snapshot too.
+ * **No second writer, including for the session snapshot.** The currency pair
+ * is on neither `storage:session.update` nor `storage:session.set`, so a
+ * snapshot written here can only be superseded by another write through this
+ * seam — one that had to present a claim generation to get in. That is what
+ * makes the snapshot's freshness derivable rather than hoped for.
  *
  * **Transactionality.** These handlers run multi-row writes inside
  * `executeTransaction` from `@makaio/storage-drizzle`, which is a deliberate
@@ -648,6 +984,11 @@ export const SessionOwnershipStorageNamespace = createContractStorageNamespace('
      * designating the claiming agent as the session's lead in the same
      * transaction.
      *
+     * With `providerSessionId: null` it is the **keyless reservation**: no claim
+     * row at all, and the designation plus its currency mirror are the whole
+     * effect. That is the fresh-start shape — there is no provider identity to
+     * own yet, and the designation still has to be atomic and compare-and-swap.
+     *
      * Subject: `storage:sessionOwnership.claim`
      * Type: Request (RPC)
      */
@@ -660,13 +1001,10 @@ export const SessionOwnershipStorageNamespace = createContractStorageNamespace('
      * Write an agent's adapter-session currency under a claim generation, and
      * mirror it onto the session row when the agent is the designated lead.
      *
-     * The columns this writes are authoritative storage state, but nothing
-     * consumes them yet: a restarted member still resumes from the agent's
-     * immutable `adapterSessionId`.
-     * TODO(#1140): Wave 2 wires the SessionService ownership authority
-     * (reserveStart / settleMovement / reconcile), and the resume-identity path
-     * — `resolveAgentResumeIdentity` / `planAgentRecovery` — reads the settled
-     * currency from there.
+     * What is settled here is what a restart resumes: the resume-identity path
+     * resolves an agent's currency from this row whenever it has been settled,
+     * and falls back to the session row only for rows written before the agent
+     * row could carry currency at all.
      *
      * Subject: `storage:sessionOwnership.settleCurrency`
      * Type: Request (RPC)
@@ -674,6 +1012,24 @@ export const SessionOwnershipStorageNamespace = createContractStorageNamespace('
     settleCurrency: {
       request: SessionOwnershipSettleCurrencyRequestSchema,
       response: SessionOwnershipSettleCurrencyResponseSchema,
+    },
+
+    /**
+     * Record a provider-session movement in full: acquire or recognize the
+     * successor generation, settle the agent's currency under it, retire the
+     * predecessors it replaces, and mirror the result onto the session row —
+     * all in one transaction.
+     *
+     * The composite `settleCurrency` exists inside. Callers use this one;
+     * `settleCurrency` remains the single-step primitive the claim/settle
+     * interleavings are exercised through.
+     *
+     * Subject: `storage:sessionOwnership.settleMovement`
+     * Type: Request (RPC)
+     */
+    settleMovement: {
+      request: SessionOwnershipSettleMovementRequestSchema,
+      response: SessionOwnershipSettleMovementResponseSchema,
     },
 
     /**
@@ -685,6 +1041,18 @@ export const SessionOwnershipStorageNamespace = createContractStorageNamespace('
     release: {
       request: SessionOwnershipReleaseRequestSchema,
       response: SessionOwnershipReleaseResponseSchema,
+    },
+
+    /**
+     * Give up every claim an agent holds, or exactly one of them, in a single
+     * statement — the teardown fan-out and the reservation rollback.
+     *
+     * Subject: `storage:sessionOwnership.releaseAgentClaims`
+     * Type: Request (RPC)
+     */
+    releaseAgentClaims: {
+      request: SessionOwnershipReleaseAgentClaimsRequestSchema,
+      response: SessionOwnershipReleaseAgentClaimsResponseSchema,
     },
 
     /**

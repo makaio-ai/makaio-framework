@@ -16,7 +16,13 @@ export {
 } from './schemas/session-lineage.js';
 export { AdapterSchemas } from './schemas.js';
 export { AdapterRuntimeOptionsSchema, type AdapterRuntimeOptions } from './schemas/runtime-options.js';
-export { StartAgentSchema, type StartAgentRequest, type StartAgentResponse } from './schemas/start-agent.js';
+export {
+  AdapterStartDispositionSchema,
+  StartAgentSchema,
+  type AdapterStartDisposition,
+  type StartAgentRequest,
+  type StartAgentResponse,
+} from './schemas/start-agent.js';
 export {
   RehydrateAgentSchema,
   type RehydrateAgentRequest,

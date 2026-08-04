@@ -67,6 +67,77 @@ export interface StartAgentHandlerDeps<
   createAgent: (agentId: string, sessionId: string, options: AgentCreationOptions) => Promise<TAgent>;
 }
 
+/**
+ * Whether the caller owns the agent row for this start.
+ *
+ * A caller that supplies `agentId` has already persisted the row — and, having
+ * done so, owns its lifecycle columns for the duration of the start. The
+ * adapter's own whole-record write would overwrite them, so it is suppressed.
+ * Derived from the payload at every point that needs it rather than threaded
+ * through, so the two readings cannot drift apart.
+ * @param payload - Validated startAgent request payload
+ * @returns `true` when the caller minted and persisted the agent identity
+ */
+function callerOwnsAgentRow(payload: StartAgentRequestPayload): boolean {
+  return payload.agentId !== undefined;
+}
+
+/** The refusal half of the startAgent response. */
+type StartAgentRefusal = Extract<StartAgentResponsePayload, { success: false }>;
+
+/**
+ * Refuse a caller-supplied agent identity that is already live on this instance.
+ *
+ * Two starts for one agent identity would leave a second connector silently
+ * replacing a live one, and no caller can tell afterwards which of the two its
+ * agent row now describes. The refusal fires before anything reaches the
+ * provider, so the caller may release whatever it reserved.
+ *
+ * A minted identity cannot collide, so the check applies only to supplied ones.
+ *
+ * **Known window, deliberately left open.** This reads the registry and the
+ * matching `registry.set()` happens many awaits later, so two concurrent starts
+ * naming one supplied `agentId` would both pass here and the second would
+ * replace the first. What keeps that unreachable is who supplies the field:
+ * `agentId` is optional, and the only production caller that sends it mints it
+ * with `crypto.randomUUID()` for that one attempt and runs the attempt inside
+ * the session service's per-agent exclusive-start seam. Every other caller omits
+ * it and reads the identity back off the response — so no two starts can name
+ * the same identity, and this refusal is defence against a caller that does not
+ * exist yet rather than a race being lost today.
+ *
+ * The fix is not a second pending-set in this module. The registry already owns
+ * exactly this shape for provider sessions — `claimAdapterSession()` checks and
+ * inserts atomically, `set()` settles the claim, failure paths release it — so
+ * an agent-identity claim belongs beside it, not in a parallel structure that
+ * this handler would have to release on each of its several exit paths. The
+ * registry is being reworked next, together with the first caller that can
+ * supply an *existing* identity (an attach that reserves one); the atomic claim
+ * lands there, with them.
+ * @param payload - Validated startAgent request payload
+ * @param agentId - Resolved agent identity for this start
+ * @param registry - Registry of agents live on this adapter instance
+ * @returns The refusal to answer with, or `undefined` when the start may proceed
+ */
+function refuseAgentIdentityCollision<
+  TBus extends ScopedBus<string>,
+  TConnector extends AIAgentConnector<TBus>,
+  TAgent extends AIAgent<TBus, TConnector>,
+>(
+  payload: StartAgentRequestPayload,
+  agentId: string,
+  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>,
+): StartAgentRefusal | undefined {
+  if (!callerOwnsAgentRow(payload) || registry.get(agentId) === undefined) {
+    return undefined;
+  }
+  return {
+    success: false,
+    dispatch: 'not-dispatched',
+    message: `Agent ${agentId} is already registered on this adapter instance`,
+  };
+}
+
 /** Minimal deps needed by persistAndEmitAgent. */
 interface PersistEmitDeps {
   adapterId: string;
@@ -91,6 +162,10 @@ interface StartAgentExecutionResult {
  * Persist agent record and emit lifecycle events.
  *
  * Ensures persistence completes before events fire to avoid race conditions.
+ *
+ * The persistence step is skipped entirely when the caller owns the agent row
+ * (see {@link callerOwnsAgentRow}); the lifecycle emissions below are not, since
+ * they are what tells the rest of the system a live agent exists.
  * @param agentId - Agent identifier
  * @param sessionId - Makaio session ID
  * @param adapterSessionId - Provider session ID, or `undefined` for unconfirmed idle fork starts
@@ -113,38 +188,42 @@ async function persistAndEmitAgent(
 
   // clientId: payload carries it from the caller; adapter definition is the authoritative fallback.
   const resolvedClientId = payload.clientId ?? clientId;
-  try {
-    await globalBus.requestOptional(AgentStorageSubjects.set, {
-      agentId,
-      agent: {
+  // Skipped for a caller-owned row: the caller's record already carries this
+  // agent's identity and its in-flight status, and this write is a whole record.
+  if (!callerOwnsAgentRow(payload)) {
+    try {
+      await globalBus.requestOptional(AgentStorageSubjects.set, {
+        agentId,
+        agent: {
+          agentId,
+          adapterId,
+          adapterName: name,
+          sessionId,
+          adapterSessionId,
+          model: payload.model,
+          cwd: resolvedCwd,
+          allowedDirectories: payload.allowedDirectories,
+          role,
+          status: 'idle' as const,
+          createdAt: now,
+          lastActivityAt: now,
+          ...(resolvedClientId !== undefined && { clientId: resolvedClientId }),
+          ...(payload.harnessId !== undefined && { harnessId: payload.harnessId }),
+          ...(payload.providerContext.state === 'resolved' && {
+            providerConfigId: payload.providerContext.providerConfigId,
+          }),
+        },
+      });
+    } catch (error) {
+      // Agent storage is best-effort in lightweight hosts; lifecycle events below
+      // are the authoritative signal that a live agent exists.
+      console.error(`[AIAdapter:${name}] Optional agent persistence failed:`, {
         agentId,
         adapterId,
-        adapterName: name,
         sessionId,
-        adapterSessionId,
-        model: payload.model,
-        cwd: resolvedCwd,
-        allowedDirectories: payload.allowedDirectories,
-        role,
-        status: 'idle' as const,
-        createdAt: now,
-        lastActivityAt: now,
-        ...(resolvedClientId !== undefined && { clientId: resolvedClientId }),
-        ...(payload.harnessId !== undefined && { harnessId: payload.harnessId }),
-        ...(payload.providerContext.state === 'resolved' && {
-          providerConfigId: payload.providerContext.providerConfigId,
-        }),
-      },
-    });
-  } catch (error) {
-    // Agent storage is best-effort in lightweight hosts; lifecycle events below
-    // are the authoritative signal that a live agent exists.
-    console.error(`[AIAdapter:${name}] Optional agent persistence failed:`, {
-      agentId,
-      adapterId,
-      sessionId,
-      error,
-    });
+        error,
+      });
+    }
   }
 
   // Emit events AFTER agent is persisted to avoid race conditions
@@ -432,6 +511,12 @@ async function createAndStartAgentWithClaim<
  * before creating the agent to prevent TOCTOU races where two concurrent
  * attach-resume requests for the same `adapterSessionId` both pass the
  * attach-handler's live-writer guard before either agent registers.
+ *
+ * The agent identity is minted here unless the caller supplied one. A supplied
+ * one is honoured — and transfers the agent row to the caller, so the adapter
+ * persists no record of its own (see {@link callerOwnsAgentRow}); a supplied one
+ * that is already registered here is refused, since it would mean two starts for
+ * a single agent identity.
  * @param deps - Adapter-provided dependencies
  * @returns Handler bound to the supplied dependencies
  */
@@ -448,7 +533,13 @@ export function createStartAgentHandler<
     ctx: RequestContext<StartAgentRequestPayload, StartAgentResponsePayload>,
   ): Promise<void> {
     const payload = ctx.payload;
-    const agentId = crypto.randomUUID();
+    const agentId = payload.agentId ?? crypto.randomUUID();
+
+    const collision = refuseAgentIdentityCollision(payload, agentId, registry);
+    if (collision !== undefined) {
+      ctx.setResult(collision);
+      return;
+    }
 
     // Absence is a closed configless state, never implicit native or ambient auth.
     const providerContext: ProviderContext =
@@ -468,6 +559,8 @@ export function createStartAgentHandler<
       if (!claimed) {
         ctx.setResult({
           success: false,
+          // Fires before the connector is created, so nothing exists provider-side.
+          dispatch: 'not-dispatched',
           message: `Provider session ${resumeAdapterSessionId} is already claimed by another in-flight start`,
         });
         return;

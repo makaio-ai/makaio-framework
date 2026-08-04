@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { CompressionModeSchema, type MakaioSessionAgent } from '@makaio/contracts';
@@ -102,12 +102,28 @@ function toDbValues(agent: MakaioSessionAgent): AgentsTable['$inferInsert'] {
  * because a fresh row has no origin to lose. Changing the origin of a live agent
  * has its own seam, `storage:agent.updateRuntime`, which carries the field and
  * only writes it when the caller actually supplies one.
+ *
+ * `status` survives the narrowing but stops being the caller's value in one
+ * case: a stored `disposed` wins, because disposal is the agent's removal and is
+ * terminal — the rule {@link registerUpdateStatusHandler} enforces on the
+ * dedicated seam. A whole-record write carries a snapshot read at some earlier
+ * instant, so without the CASE a writer that read the agent before the removal
+ * would revive the row and, with it, every ownership predicate that refuses a
+ * disposed agent. Every other stored status is still overwritten, which is what
+ * keeps an ordinary post-start persistence writing `idle`.
  * @param values - Full column values produced by {@link toDbValues}
- * @returns The same values without the origin column
+ * @param agents - Dialect-resolved agents table, for the existing row's columns
+ * @returns The same values without the origin column, with `status` merged
  */
-function toConflictValues(values: AgentsTable['$inferInsert']): Omit<AgentsTable['$inferInsert'], 'adapterSessionId'> {
-  const { adapterSessionId: _storedOriginWins, ...conflictValues } = values;
-  return conflictValues;
+function toConflictValues(
+  values: AgentsTable['$inferInsert'],
+  agents: AgentsTable,
+): Omit<AgentsTable['$inferInsert'], 'adapterSessionId' | 'status'> & { status: SQL } {
+  const { adapterSessionId: _storedOriginWins, status: _terminalDisposedWins, ...conflictValues } = values;
+  return {
+    ...conflictValues,
+    status: sql`CASE WHEN ${agents.status} = 'disposed' THEN ${agents.status} ELSE excluded.status END`,
+  };
 }
 
 /**
@@ -162,7 +178,7 @@ function registerSetHandler(deps: AgentHandlerDeps): () => void {
       .values(dbValues)
       .onConflictDoUpdate({
         target: agents.agentId,
-        set: toConflictValues(dbValues),
+        set: toConflictValues(dbValues, agents),
       });
 
     ctx.setResult({ success: didAffectRows(result) });
@@ -231,6 +247,26 @@ function registerListBySessionHandler(deps: AgentHandlerDeps): () => void {
 
 /**
  * Register handler for storage:agent.updateStatus.
+ *
+ * Carries the terminal-`disposed` rule: a removed agent's row never transitions
+ * again, so the refusal is a conjunct of the write's own predicate rather than a
+ * check some caller could forget or race.
+ *
+ * **What a refusal does not do — and who is expected to notice.** The refusal
+ * reports `{ success: true, transitioned: false }`: the row is there, this call
+ * did not write it. A lifecycle caller that *created something live* before
+ * writing the status has to read that bit, because the refusal means the row it
+ * is describing was removed while it worked. The reserved paths this wave owns
+ * do: a start settles after its dispatch, and a settlement for a removed agent
+ * answers `agent-disposed`, which stops the connector and releases the key.
+ *
+ * The rehydrate path does not, and cannot yet. Its `idle` write is the adapter's
+ * (`ai-adapter-rehydration`), unconditional and outside this wave's boundary, so
+ * a removal landing mid-rehydrate can leave a live connector attached to a
+ * disposed row. That is the open question this wave records rather than closes:
+ * bringing rehydrate under the authority — a reserved phase, a status
+ * compare-and-swap and a typed disposition — is what makes the refusal
+ * actionable there, and it lands with the rest of the rehydrate work.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
@@ -239,12 +275,42 @@ function registerUpdateStatusHandler(deps: AgentHandlerDeps): () => void {
   const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.updateStatus, async (ctx) => {
-    const { agentId, status } = ctx.payload;
+    const { agentId, status, expectedStatus } = ctx.payload;
     const now = Date.now();
 
-    const result = await db.update(agents).set({ status, lastActivityAt: now }).where(eq(agents.agentId, agentId));
+    // Write first, with both refusals as conjuncts of the write's own predicate:
+    // a read that decided whether the transition is permitted would be a
+    // different instant than the one the write lands in, which is exactly the
+    // race a compare-and-swap exists to remove.
+    //
+    // The `disposed` conjunct is unconditional and outranks `expectedStatus`,
+    // including an expectation naming `disposed` itself. Disposal is the agent's
+    // removal; letting any later write hand the row a live-looking status would
+    // let it re-enter every ownership predicate that refuses a disposed agent.
+    const predicates = [eq(agents.agentId, agentId), ne(agents.status, 'disposed')];
+    if (expectedStatus) predicates.push(inArray(agents.status, expectedStatus));
 
-    ctx.setResult({ success: didAffectRows(result) });
+    const result = await db
+      .update(agents)
+      .set({ status, lastActivityAt: now })
+      .where(and(...predicates));
+
+    if (didAffectRows(result)) {
+      ctx.setResult({ success: true, transitioned: true });
+      return;
+    }
+
+    // Zero rows has two causes — absent, or present and refused — and only a read
+    // can tell them apart, so the read runs here to *classify* a write that
+    // already failed, never to authorize one.
+    //
+    // Deliberately not transactional with the write above. `transitioned: false`
+    // is already settled and is the only answer a caller acts on; `success` is
+    // diagnostic, and a row deleted between the two statements is honestly
+    // reported as gone.
+    const [row] = await db.select({ agentId: agents.agentId }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
+
+    ctx.setResult({ success: row !== undefined, transitioned: false });
   });
 }
 

@@ -11,15 +11,15 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 104 |
-| Subjects | 975 (401 events, 574 RPCs) |
-| framework | 100 |
+| Namespaces | 102 |
+| Subjects | 980 (396 events, 584 RPCs) |
+| framework | 98 |
 | extension | 4 |
-| kind: bus | 74 |
+| kind: bus | 71 |
 | kind: adapter | 9 |
 | kind: client | 2 |
 | kind: extension | 2 |
-| kind: storage | 15 |
+| kind: storage | 16 |
 | kind: extension-storage | 2 |
 
 ## Directories
@@ -46,7 +46,7 @@ next: false
 | [`adapter:openai-node`](./adapter-openai-node.md) | adapter | 19 | 18E / 1R |
 | [`adapter:piSdk`](./adapter-pisdk.md) | adapter | 23 | 22E / 1R |
 | [`adapter:qwen-acp`](./adapter-qwen-acp.md) | adapter | 13 | 12E / 1R |
-| [`agent`](./agent.md) | bus | 34 | 23E / 11R |
+| [`agent`](./agent.md) | bus | 35 | 24E / 11R |
 | [`agentResolution`](./agentresolution.md) | bus | 1 | 0E / 1R |
 | [`approval`](./approval.md) | bus | 2 | 0E / 2R |
 | [`artifact`](./artifact.md) | bus | 16 | 6E / 10R |
@@ -72,15 +72,15 @@ next: false
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |
 | [`native-session-supervisor`](./native-session-supervisor.md) | bus | 4 | 0E / 4R |
-| [`pages`](./pages.md) | bus | 1 | 0E / 1R |
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
-| [`session`](./session.md) | bus | 59 | 31E / 28R |
+| [`session`](./session.md) | bus | 64 | 31E / 33R |
 | [`skill`](./skill.md) | bus | 6 | 3E / 3R |
 | [`storage:message`](./storage-message.md) | storage | 9 | 1E / 8R |
-| [`storage:session`](./storage-session.md) | storage | 14 | 0E / 14R |
+| [`storage:session`](./storage-session.md) | storage | 15 | 0E / 15R |
 | [`storage:sessionEvent`](./storage-sessionevent.md) | storage | 5 | 0E / 5R |
+| [`storage:sessionOwnership`](./storage-sessionownership.md) | storage | 7 | 0E / 7R |
 | [`storage:skill`](./storage-skill.md) | storage | 5 | 0E / 5R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
 | [`storage:workflow`](./storage-workflow.md) | storage | 38 | 0E / 38R |
@@ -88,13 +88,11 @@ next: false
 | [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
 | [`tool`](./tool.md) | bus | 7 | 5E / 2R |
-| [`ui`](./ui.md) | bus | 4 | 2E / 2R |
 | [`vcs`](./vcs.md) | bus | 11 | 0E / 11R |
 | [`vcs:events`](./vcs-events.md) | bus | 2 | 2E / 0R |
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`widget`](./widget.md) | bus | 4 | 4E / 0R |
 | [`worker-node`](./worker-node.md) | bus | 12 | 9E / 3R |
 | [`workflow`](./workflow.md) | bus | 59 | 26E / 33R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |

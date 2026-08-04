@@ -1,5 +1,5 @@
 import { eq, desc, count, inArray, and, sql, type SQL } from 'drizzle-orm';
-import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionStorageSetRequestSchema, SessionStorageUpdateSchema, type IMakaioSession } from '@makaio/contracts';
 import type { z } from 'zod';
@@ -94,13 +94,31 @@ function toDbValues(session: IMakaioSession) {
     importStatus: toNullableDbValue(session.importStatus),
     machineId: toNullableDbValue(session.machineId),
     // `currentAdapterSessionId` / `currentAdapterSessionIdState` are deliberately
-    // absent. The resume currency is owned exclusively by the targeted
-    // `storage:session.update` path (see buildSessionUpdateFields): `set` is a
-    // read-modify-write of a whole session object, so routing currency through
-    // it would let a concurrent writer holding a stale snapshot resurrect an
-    // abandoned provider session. Omitting the columns here leaves them
-    // untouched on every `set`.
+    // absent. The resume currency is owned exclusively by the
+    // `storage:sessionOwnership` seam: `set` is a read-modify-write of a whole
+    // session object, so routing currency through it would let a concurrent
+    // writer holding a stale snapshot resurrect an abandoned provider session.
+    // Omitting the columns here leaves them untouched on every `set`.
   };
+}
+
+/**
+ * Narrow the whole-record write to the columns it may change on an existing row.
+ *
+ * `leadAgentId` is written by exactly one writer — the reserving transaction of
+ * `storage:sessionOwnership.claim`, which designates and clears it under a
+ * compare-and-swap. A `set` carries a caller-held snapshot with no expectation
+ * in it, so a caller that read the session before a designation landed would
+ * otherwise put the previous lead back, or unset one, without ever having
+ * observed the value it replaced. On conflict the stored designation therefore
+ * wins; the insert path keeps the caller's value, because a fresh row has no
+ * designation to lose.
+ * @param values - Full column values produced by {@link toDbValues}
+ * @returns The same values without the designation column
+ */
+function toSessionConflictValues<T extends { leadAgentId: string | null }>(values: T): Omit<T, 'leadAgentId'> {
+  const { leadAgentId: _storedDesignationWins, ...conflictValues } = values;
+  return conflictValues;
 }
 
 /**
@@ -168,14 +186,9 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: Sessi
   assignDefinedField(updateFields, 'createdAt', payload.createdAt);
   assignDefinedField(updateFields, 'lastActivityAt', payload.lastActivityAt);
   assignDefinedField(updateFields, 'machineId', payload.machineId);
-  // The currency pair is one value: writing only one column would violate
-  // `sessions_current_adapter_session_id_currency_check`. The request schema
-  // rejects half-supplied pairs, so the guard here is an all-or-nothing
-  // projection rather than a second validation.
-  if (payload.currentAdapterSessionId !== undefined && payload.currentAdapterSessionIdState !== undefined) {
-    updateFields.currentAdapterSessionId = payload.currentAdapterSessionId;
-    updateFields.currentAdapterSessionIdState = payload.currentAdapterSessionIdState;
-  }
+  // No currency projection: the pair is written exclusively by the
+  // `storage:sessionOwnership` seam, which is the only writer that carries an
+  // authority (a claim generation) into the write.
 
   assignNullableField(updateFields, 'executionTargetId', payload.executionTargetId);
   assignNullableField(updateFields, 'approvalPolicyOverride', payload.approvalPolicyOverride);
@@ -249,7 +262,7 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
         .values({ sessionId, createdAt: session.createdAt, ...dbValues })
         .onConflictDoUpdate({
           target: sessions.sessionId,
-          set: dbValues,
+          set: toSessionConflictValues(dbValues),
           setWhere: buildClientAccountBaselinePredicate(previousRow, sessions),
         });
 
@@ -270,23 +283,59 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
 
 /**
  * Register handler for storage:session.delete.
+ *
+ * **Deletes its ownership children first, in the ownership lock order.** The
+ * foreign keys cascade, so a bare `DELETE FROM sessions` is functionally
+ * complete — but it takes its locks in the order the *database* chooses, which
+ * is the session row first and the `agents` / `adapter_session_claims` rows it
+ * cascades to afterwards. Every ownership operation locks in the opposite order
+ * (`agents` → claims → `sessions`, see the ownership storage handlers), so a
+ * claim racing a delete of its own session deadlocks under Postgres, with no
+ * retry to absorb it. Deleting the children explicitly, in that same order,
+ * inside one transaction makes both sides agree and removes the cycle; the
+ * cascade then has nothing left to reach.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
 function registerDeleteHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
-  const { sessions } = resolveSchema(db, sessionStorageSchema);
+  const { sessions, agents, adapterSessionClaims } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.delete, async (ctx) => {
-    await db.delete(sessions).where(eq(sessions.sessionId, ctx.payload.sessionId));
+    const { sessionId } = ctx.payload;
+    await executeTransaction(db, async (tx) => {
+      // `agents` first, then the claims filed under this session that no agent
+      // of it holds — an agent that moved to another session can still hold a
+      // claim filed under this one, which the agent delete above does not reach.
+      await tx.delete(agents).where(eq(agents.sessionId, sessionId));
+      await tx.delete(adapterSessionClaims).where(eq(adapterSessionClaims.sessionId, sessionId));
+      await tx.delete(sessions).where(eq(sessions.sessionId, sessionId));
+    });
     ctx.setResult({ success: true });
   });
 }
 
 /**
+ * Build the compare-and-swap conjunct for an expected-status guard.
+ * @param expectedStatus - Statuses the caller will accept, or `undefined` for an unconditional write.
+ * @param sessions - Dialect-resolved sessions table object.
+ * @returns The predicate, or `undefined` when the write is unconditional.
+ */
+function buildExpectedStatusPredicate(
+  expectedStatus: SessionUpdatePayload['expectedStatus'],
+  sessions: SessionsTable,
+): SQL | undefined {
+  return expectedStatus === undefined ? undefined : inArray(sessions.status, expectedStatus);
+}
+
+/**
  * Register handler for storage:session.update.
  *
- * Performs partial update of session fields without touching agents.
+ * Performs partial update of session fields without touching agents. A supplied
+ * `expectedStatus` makes the write a compare-and-swap: it is applied only while
+ * the stored status is still one the caller named, and reports `success: false`
+ * otherwise — the same answer a missing row gives, which the caller tells apart
+ * by re-reading.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
@@ -304,8 +353,15 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
       ctx.setResult({ success: true, clientAccountChanged: false });
       return;
     }
+    // The compare-and-swap guard travels with the write, in the same predicate:
+    // a caller acting on an observation must not be able to overwrite a status
+    // that changed after it read the row.
+    const statusGuard = buildExpectedStatusPredicate(payload.expectedStatus, sessions);
     if (!updatesClientAccountState) {
-      const result = await db.update(sessions).set(updateFields).where(eq(sessions.sessionId, sessionId));
+      const result = await db
+        .update(sessions)
+        .set(updateFields)
+        .where(and(eq(sessions.sessionId, sessionId), statusGuard));
       ctx.setResult({ success: didAffectRows(result), clientAccountChanged: false });
       return;
     }
@@ -318,10 +374,23 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
       const previousSession = mapToSession(previousRow, []);
       const nextSession = buildNextSessionClientAccountState(previousSession, payload);
       assertSessionClientAccountStateIsConsistent(previousSession, nextSession);
+      if (payload.expectedStatus !== undefined && !payload.expectedStatus.includes(previousSession.status)) {
+        // Refused rather than retried: the baseline loop exists to re-read a
+        // client-account race, and a status the caller did not expect is not one
+        // — retrying would only re-read the same refusal.
+        ctx.setResult({ success: false, clientAccountChanged: false });
+        return;
+      }
       const result = await db
         .update(sessions)
         .set(updateFields)
-        .where(and(eq(sessions.sessionId, sessionId), buildClientAccountBaselinePredicate(previousRow, sessions)));
+        .where(
+          and(
+            eq(sessions.sessionId, sessionId),
+            statusGuard,
+            buildClientAccountBaselinePredicate(previousRow, sessions),
+          ),
+        );
       if (!didAffectRows(result)) {
         continue;
       }

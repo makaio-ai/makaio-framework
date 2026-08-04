@@ -167,8 +167,10 @@ type _AgentCongruent = Expect<Equal<AgentSqliteSelect, AgentPgSelect>>;
 // Negative: role/status enum unions must stay narrowed on both dialects.
 type _AgentRoleSqlite = Expect<Equal<AgentSqliteSelect['role'], 'lead' | 'member'>>;
 type _AgentRolePg = Expect<Equal<AgentPgSelect['role'], 'lead' | 'member'>>;
-type _AgentStatusSqlite = Expect<Equal<AgentSqliteSelect['status'], 'idle' | 'active' | 'dead' | 'disposed'>>;
-type _AgentStatusPg = Expect<Equal<AgentPgSelect['status'], 'idle' | 'active' | 'dead' | 'disposed'>>;
+type _AgentStatusSqlite = Expect<
+  Equal<AgentSqliteSelect['status'], 'starting' | 'idle' | 'active' | 'dead' | 'disposed'>
+>;
+type _AgentStatusPg = Expect<Equal<AgentPgSelect['status'], 'starting' | 'idle' | 'active' | 'dead' | 'disposed'>>;
 
 // Negative: the adapter-session currency state must stay the narrowed union —
 // it crosses into `@makaio/contracts` as `AdapterSessionCurrencyState`.

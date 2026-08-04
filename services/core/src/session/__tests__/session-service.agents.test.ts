@@ -1,30 +1,27 @@
 /**
  * Component tests for MakaioSessionService - Agent management.
  *
- * Tests the agent.added event handling: role assignment, lead agent
- * tracking, and lastActivityAt updates. Uses real bus requests.
+ * Tests the agent.added / agent.removed event handling: role assignment, lead
+ * designation through the reserving transaction, and lastActivityAt updates.
+ * Uses real bus requests against the real memory backends — session, agent and
+ * ownership rows share one state, because a designation is a compare-and-swap
+ * that reads the agent row and writes the session row inside one transaction.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionSubjects } from '@makaio/contracts';
+import { SessionOwnershipStorageSubjects, SessionSubjects } from '@makaio/contracts';
 import { MakaioSessionService } from '../session-service.js';
-import { registerMemorySessionStorage } from '../storage/memory-handler.js';
-import { registerMemoryAgentStorage } from '../storage/agent-memory-handler.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
+import { SessionStorageSubjects } from '../storage/namespace.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { registerMemorySessionBackends } from './shared.js';
 
 describe('MakaioSessionService - Agent Management', () => {
   let sessionService: MakaioSessionService;
-  let sessionStorageCleanup: () => void;
-  let agentStorageCleanup: () => void;
-  let eventStorageCleanup: () => void;
+  let storageCleanups: Array<() => void> = [];
 
-  /**
-   * Helper to persist an agent and emit agent.added event.
-   * Simulates what the adapter does.
-   * @param params - Agent parameters
-   */
-  async function addAgent(params: {
+  /** What both agent helpers are given. */
+  interface AgentParams {
     sessionId: string;
     agentId: string;
     adapterId: string;
@@ -33,11 +30,18 @@ describe('MakaioSessionService - Agent Management', () => {
     role?: 'lead' | 'member';
     model?: string;
     cwd?: string;
-  }): Promise<void> {
-    const now = Date.now();
-    const role = params.role ?? 'lead';
+  }
 
-    // Persist agent (simulates adapter)
+  /**
+   * Persist an agent row, as the adapter does before it announces the agent.
+   *
+   * Its own step, because the reserving transaction verifies the (agent, session)
+   * pair: a designation for an agent whose row is not there yet is refused, which
+   * is what makes the announcement's ordering load-bearing rather than incidental.
+   * @param params - Agent parameters
+   */
+  async function persistAgent(params: AgentParams): Promise<void> {
+    const now = Date.now();
     await MakaioBus.request(AgentStorageSubjects.set, {
       agentId: params.agentId,
       agent: {
@@ -46,7 +50,7 @@ describe('MakaioSessionService - Agent Management', () => {
         adapterName: params.adapterName,
         sessionId: params.sessionId,
         adapterSessionId: params.adapterSessionId,
-        role,
+        role: params.role ?? 'lead',
         status: 'idle',
         createdAt: now,
         lastActivityAt: now,
@@ -54,28 +58,39 @@ describe('MakaioSessionService - Agent Management', () => {
         cwd: params.cwd,
       },
     });
+  }
 
-    // Emit event (triggers session service handler)
+  /**
+   * Announce an agent and wait for the session service's handler to finish.
+   * @param params - Agent parameters
+   */
+  async function emitAgentAdded(params: AgentParams): Promise<void> {
     await MakaioBus.emit(SessionSubjects.agent.added, {
       sessionId: params.sessionId,
       agentId: params.agentId,
       adapterId: params.adapterId,
       adapterName: params.adapterName,
       adapterSessionId: params.adapterSessionId,
-      role, // Use computed role, not params.role
+      role: params.role ?? 'lead',
       model: params.model,
       cwd: params.cwd,
     });
-
-    // Wait for async handler
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  /**
+   * Helper to persist an agent and emit agent.added event.
+   * Simulates what the adapter does.
+   * @param params - Agent parameters
+   */
+  async function addAgent(params: AgentParams): Promise<void> {
+    await persistAgent(params);
+    await emitAgentAdded(params);
   }
 
   beforeEach(async () => {
     // Register storage handlers BEFORE creating the service
-    sessionStorageCleanup = registerMemorySessionStorage(MakaioBus);
-    agentStorageCleanup = registerMemoryAgentStorage(MakaioBus);
-    eventStorageCleanup = registerMemorySessionEventStorage(MakaioBus);
+    storageCleanups = [...registerMemorySessionBackends(MakaioBus), registerMemorySessionEventStorage(MakaioBus)];
 
     // Create the service (constructor has no side effects)
     sessionService = new MakaioSessionService(MakaioBus);
@@ -86,9 +101,8 @@ describe('MakaioSessionService - Agent Management', () => {
   afterEach(async () => {
     // Clean up in reverse order
     await sessionService.destroy();
-    eventStorageCleanup();
-    agentStorageCleanup();
-    sessionStorageCleanup();
+    for (let index = storageCleanups.length - 1; index >= 0; index -= 1) storageCleanups[index]();
+    storageCleanups = [];
   });
 
   describe('session.agent.added event handling', () => {
@@ -296,6 +310,163 @@ describe('MakaioSessionService - Agent Management', () => {
       expect(session?.agents[1].createdAt).toBeLessThanOrEqual(afterSecond);
       // Second agent was added later
       expect(session?.agents[1].createdAt).toBeGreaterThanOrEqual(session?.agents[0].createdAt ?? 0);
+    });
+  });
+
+  describe('lead designation goes through the reserving transaction', () => {
+    /**
+     * Seed a session with a lead and a member, both persisted and announced.
+     * @returns The session and the two agent IDs.
+     */
+    async function seedLeadAndMember(): Promise<{ sessionId: string; leadId: string; memberId: string }> {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      const leadId = 'lead-agent';
+      const memberId = 'member-agent';
+      await addAgent({
+        sessionId,
+        agentId: leadId,
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        adapterSessionId: 'provider-1',
+        role: 'lead',
+      });
+      await addAgent({
+        sessionId,
+        agentId: memberId,
+        adapterId: 'adapter-2',
+        adapterName: 'test-adapter',
+        adapterSessionId: 'provider-2',
+        role: 'member',
+      });
+      return { sessionId, leadId, memberId };
+    }
+
+    it('designates through a keyless claim, and a stale whole-record set cannot undo it', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      const preDesignation = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session;
+      expect(preDesignation?.leadAgentId).toBeUndefined();
+
+      const keylessDesignations: string[] = [];
+      const observe = MakaioBus.on(
+        SessionOwnershipStorageSubjects.claim,
+        (ctx) => {
+          if (ctx.payload.providerSessionId === null && ctx.payload.designateLead !== undefined) {
+            keylessDesignations.push(ctx.payload.agentId);
+          }
+        },
+        { priority: 100 },
+      );
+      try {
+        await addAgent({
+          sessionId,
+          agentId: 'lead-agent',
+          adapterId: 'adapter-1',
+          adapterName: 'test-adapter',
+          adapterSessionId: 'provider-1',
+          role: 'lead',
+        });
+      } finally {
+        observe();
+      }
+
+      // The designation was written by the reserving transaction, not by the
+      // whole-record write the handler ends with.
+      expect(keylessDesignations).toEqual(['lead-agent']);
+
+      // A caller holding the session as it looked before the designation writes
+      // it back wholesale. `set` no longer carries the designation on conflict,
+      // so the newer value stands.
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId,
+        session: { ...preDesignation!, title: 'renamed' },
+      });
+
+      const stored = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session;
+      expect(stored?.title).toBe('renamed');
+      expect(stored?.leadAgentId).toBe('lead-agent');
+    });
+
+    it('leaves a newer lead standing when the handler read is stale', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      const preDesignation = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session!;
+
+      await addAgent({
+        sessionId,
+        agentId: 'winner',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        adapterSessionId: 'provider-1',
+        role: 'lead',
+      });
+
+      // Stage the losing handler's read: it observes the session exactly as it
+      // stood before the winner's designation, so its compare-and-swap presents
+      // an expectation the row has already moved past.
+      const loser: AgentParams = {
+        sessionId,
+        agentId: 'loser',
+        adapterId: 'adapter-2',
+        adapterName: 'test-adapter',
+        adapterSessionId: 'provider-2',
+        role: 'lead',
+      };
+      await persistAgent(loser);
+      const staleRead = MakaioBus.on(
+        SessionStorageSubjects.get,
+        (ctx) => {
+          if (ctx.payload.sessionId === sessionId) ctx.setResult({ session: preDesignation });
+        },
+        { priority: 100 },
+      );
+      try {
+        await emitAgentAdded(loser);
+      } finally {
+        staleRead();
+      }
+
+      const stored = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session;
+      expect(stored?.leadAgentId).toBe('winner');
+    });
+
+    it('clears nothing when a non-lead agent is removed, and clears under CAS for the lead', async () => {
+      const { sessionId, leadId, memberId } = await seedLeadAndMember();
+
+      await MakaioBus.emit(SessionSubjects.agent.removed, { sessionId, agentId: memberId });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const afterMember = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session;
+      expect(afterMember?.leadAgentId).toBe(leadId);
+      expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId: memberId })).agent?.status).toBe('disposed');
+
+      await MakaioBus.emit(SessionSubjects.agent.removed, { sessionId, agentId: leadId });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const afterLead = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session;
+      expect(afterLead?.leadAgentId).toBeUndefined();
+      expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId: leadId })).agent?.status).toBe('disposed');
+    });
+
+    it('gives up the removed agent’s claims cleanly, freeing the ownership key', async () => {
+      const { sessionId, leadId } = await seedLeadAndMember();
+
+      const claimed = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        machineId: 'machine-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        providerSessionId: 'provider-1',
+        sessionId,
+        agentId: leadId,
+        claimToken: crypto.randomUUID(),
+      });
+      expect(claimed.outcome).toBe('claimed');
+
+      await MakaioBus.emit(SessionSubjects.agent.removed, { sessionId, agentId: leadId });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // A removal is a deliberate stop, so the claim is released rather than
+      // marked: the key is free for whoever attaches to that conversation next.
+      const claims = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(claims.claims).toEqual([]);
     });
   });
 });

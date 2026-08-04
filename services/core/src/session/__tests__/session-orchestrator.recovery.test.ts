@@ -70,13 +70,16 @@ describe('SessionOrchestrator recovery helpers', () => {
     expect(recoveredAgentIds.has(deadAgent.agentId)).toBe(true);
   });
 
-  it('recoverAgent swaps connector and preserves identity', async () => {
+  it('recoverAgent dispatches to the adapter it was given and preserves identity', async () => {
     const { deadAgent } = createSessionWithDeadAgent();
     let rehydratePayload: { adapterId: string; agentId: string; cwd?: string; model?: string } | undefined;
 
+    // Registered to prove it is never consulted: the caller owns the resolution
+    // so the reservation it takes and the dispatch name one adapter instance.
+    let resolveIdCalls = 0;
     MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
-      expect(ctx.payload.adapterName).toBe(deadAgent.adapterName);
-      ctx.setResult({ adapterId: 'current-adapter-id' });
+      resolveIdCalls += 1;
+      ctx.setResult({ adapterId: 'resolved-by-the-callee' });
     });
 
     MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
@@ -84,11 +87,16 @@ describe('SessionOrchestrator recovery helpers', () => {
       ctx.setResult({}); // Success implicit
     });
 
-    const recovered = await recoverAgent(MakaioBus, deadAgent, {
-      cwd: '/new/path',
-      model: 'new-model',
-      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
-    });
+    const recovered = await recoverAgent(
+      MakaioBus,
+      deadAgent,
+      {
+        cwd: '/new/path',
+        model: 'new-model',
+        plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      },
+      'current-adapter-id',
+    );
 
     expect(rehydratePayload).toMatchObject({
       adapterId: 'current-adapter-id',
@@ -96,6 +104,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       cwd: '/new/path',
       model: 'new-model',
     });
+    expect(resolveIdCalls).toBe(0);
     expect(recovered.adapterId).toBe('current-adapter-id');
     expect(recovered).toBe(deadAgent); // Same reference - identity preserved
   });
@@ -215,7 +224,12 @@ describe('SessionOrchestrator recovery helpers', () => {
       ctx.setResult({});
     });
 
-    await recoverAgent(MakaioBus, deadAgent, { model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
+    await recoverAgent(
+      MakaioBus,
+      deadAgent,
+      { model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN },
+      deadAgent.adapterId,
+    );
 
     expect(rehydratePayload?.model).toBe('new-model');
   });
@@ -240,7 +254,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       ctx.setResult({});
     });
 
-    await recoverAgent(MakaioBus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
+    await recoverAgent(MakaioBus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN }, deadAgent.adapterId);
 
     expect(rehydratePayload?.model).toBe('existing-model');
   });

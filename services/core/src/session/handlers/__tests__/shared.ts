@@ -394,7 +394,7 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
      */
     registerFailingStartAgentHandler(errorMessage: string): () => void {
       return MakaioBus.on(AdapterSubjects.startAgent, (context) => {
-        context.setResult({ success: false, message: errorMessage });
+        context.setResult({ success: false, message: errorMessage, dispatch: 'not-dispatched' });
       });
     },
 

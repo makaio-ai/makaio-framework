@@ -7,6 +7,7 @@ import { SnapshotSchemas } from './schemas/snapshot.js';
 import { ResolveAgentConfigSchema } from './schemas/resolve-agent-config.js';
 import { ResolveSystemPromptSchema } from './schemas/resolve-system-prompt.js';
 import { SessionEnrichmentSchemas } from './schemas/enrichment.js';
+import { SessionOwnershipSchemas } from './schemas/ownership.js';
 
 export type { RestartAgentsRequest, RestartAgentsResponse, RestartAgentsResult } from './schemas/crud.js';
 
@@ -151,6 +152,44 @@ export type {
 export { AdapterSessionCurrencyStateSchema, AgentRoleSchema, BranchKindSchema } from './schemas/primitives.js';
 export type { AdapterSessionCurrencyState, AgentRole, BranchKind } from './schemas/primitives.js';
 
+// Session-ownership authority (service surface; the durable seam lives in
+// `session-ownership-storage-namespace.ts`). Every service symbol carries a
+// `Service` infix so it can never be confused with the storage schema of the
+// same name.
+export {
+  OwnershipTopologySchema,
+  SessionOwnershipContinuationServiceRequestSchema,
+  SessionOwnershipContinuationServiceResponseSchema,
+  SessionOwnershipPrincipalSchema,
+  SessionOwnershipReclaimReasonSchema,
+  SessionOwnershipReconciledClaimSchema,
+  SessionOwnershipReconcileServiceResponseSchema,
+  SessionOwnershipReleaseServiceRequestSchema,
+  SessionOwnershipReservationSchema,
+  SessionOwnershipReserveStartServiceRequestSchema,
+  SessionOwnershipReserveStartServiceResponseSchema,
+  SessionOwnershipSchemas,
+  SessionOwnershipServiceMovementSchema,
+  SessionOwnershipSettleMovementServiceRequestSchema,
+  SessionOwnershipSettleMovementServiceResponseSchema,
+} from './schemas/ownership.js';
+export type {
+  OwnershipTopology,
+  SessionOwnershipContinuationServiceRequest,
+  SessionOwnershipContinuationServiceResult,
+  SessionOwnershipPrincipal,
+  SessionOwnershipReclaimReason,
+  SessionOwnershipReconciledClaim,
+  SessionOwnershipReconcileServiceResult,
+  SessionOwnershipReleaseServiceRequest,
+  SessionOwnershipReservation,
+  SessionOwnershipReserveStartServiceRequest,
+  SessionOwnershipReserveStartServiceResult,
+  SessionOwnershipServiceMovement,
+  SessionOwnershipSettleMovementServiceRequest,
+  SessionOwnershipSettleMovementServiceResult,
+} from './schemas/ownership.js';
+
 /**
  * Session domain schemas.
  *
@@ -180,4 +219,5 @@ export const SessionSchemas = {
   ...ResolveAgentConfigSchema,
   ...ResolveSystemPromptSchema,
   ...SessionEnrichmentSchemas,
+  ...SessionOwnershipSchemas,
 } satisfies SchemaRecord;
