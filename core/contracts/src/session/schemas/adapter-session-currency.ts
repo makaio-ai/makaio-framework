@@ -11,10 +11,9 @@ import { AdapterSessionCurrencyStateSchema, type AdapterSessionCurrencyState } f
  * and must be rejected here too, or the in-memory backend would silently accept
  * a state the durable backends cannot represent.
  *
- * This is the *total-pair* rule: both halves are always present. Partial-update
- * surfaces additionally have to decide what a half-supplied pair means, and
- * delegate here once both halves are known — see
- * `validateAdapterSessionCurrencyPair` in `session-storage-namespace.ts`.
+ * This is the *total-pair* rule, and the only one there is: currency is never
+ * written a half at a time, because the two columns are one value. The
+ * `storage:sessionOwnership` seam is the sole writer and always presents both.
  * @param value - Candidate currency pair
  * @param ctx - Zod refinement context
  */

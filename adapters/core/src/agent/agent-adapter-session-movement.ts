@@ -3,14 +3,16 @@
  *
  * Every producer that changes which provider session an agent is current on
  * (provider confirmation, connector swap, pre-confirmation rotation, cold
- * rehydration) announces that change here, and the service-tier currency
- * handler turns each announcement into the session row's resume currency.
+ * rehydration) announces that change here, and the service-tier movement
+ * observer turns each announcement into the agent's durable resume currency,
+ * from which the session row's snapshot is mirrored.
  *
  * ## Seam invariant
  *
  * The session row must never advertise a provider session the agent has
- * stopped being current on. Because the only consumer is change-guarded and
- * an announcement is not persistent, that reduces to five producer duties:
+ * stopped being current on. Because an announcement is not persistent and the
+ * consumer acknowledges only what it actually recorded, that reduces to five
+ * producer duties:
  *
  * 1. **Delivered means acknowledged.** A movement counts as delivered only
  *    when {@link emitAdapterSessionMoved} resolves `true`. `bus.emit` runs
@@ -148,10 +150,10 @@ export async function emitAdapterSessionMoved(
 ): Promise<boolean> {
   try {
     // Consumer locality. `bus.emit` awaits only local handlers, so "delivered"
-    // would say nothing if the currency handler could sit on a different bus
+    // would say nothing if the movement observer could sit on a different bus
     // peer than the producer. It cannot: every composition root that hosts an
     // adapter runtime also composes the session service on the same bus, whose
-    // `onInit` registers `registerAdapterSessionCurrencyHandler`. The main
+    // `onInit` registers the adapter-session movement observer. The main
     // runtime pairs `prepareAdapterRuntime` with the framework core package set
     // (which only ever filters the session *orchestrator* out), and the remote
     // worker-node runtime composes the session service deliberately even though
@@ -170,8 +172,9 @@ export async function emitAdapterSessionMoved(
     // write is still in flight — then this would report `false` before the
     // write settled and the caller would proceed unordered. Today it cannot:
     // `agent.adapterSession.moved` has exactly one local consumer that can
-    // reject, the session-currency handler itself, so first rejection is also
-    // last settlement and fail-fast equals settle-all. (The workflow engine's
+    // reject, the movement observer itself, whose rejection *is* its "not
+    // applied" answer, so first rejection is also last settlement and fail-fast
+    // equals settle-all. (The workflow engine's
     // namespace wildcard also observes this subject, but its handler is
     // synchronous and reports every failure in-band, so it never rejects.
     // Remote subscribers are irrelevant here: transport sends are awaited but

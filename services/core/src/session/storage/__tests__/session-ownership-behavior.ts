@@ -12,7 +12,11 @@
  */
 import { describe, it, expect } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionOwnershipStorageSubjects, resolveResumableAdapterSessionId } from '@makaio/contracts';
+import {
+  SessionOwnershipStorageSubjects,
+  resolveResumableAdapterSessionId,
+  type AdapterSessionClaimRecord,
+} from '@makaio/contracts';
 import { SessionStorageSubjects } from '../namespace.js';
 import { AgentStorageSubjects } from '../agent-namespace.js';
 import { createSession, createAgent } from './shared.js';
@@ -71,6 +75,21 @@ const INHERITED_TARGET = {
 } as const;
 
 /**
+ * The generation a keyed acquisition or retry must carry.
+ *
+ * `claim` is nullable on the response because a keyless reservation writes no
+ * row. Every assertion that reaches for it names a provider session, so a `null`
+ * here is a backend bug rather than a case the test has to branch on — and
+ * failing loudly is what keeps that distinction visible.
+ * @param claim - The claim a `claimed` or `idempotent` outcome reported.
+ * @returns That claim.
+ */
+function requireClaim(claim: AdapterSessionClaimRecord | null): AdapterSessionClaimRecord {
+  if (claim === null) throw new Error('a keyed claim reported no generation');
+  return claim;
+}
+
+/**
  * Build a minimal claim request for the given agent, using a fixed ownership key.
  * @param agentId - Agent to claim for.
  * @param sessionId - Session the agent belongs to.
@@ -123,11 +142,11 @@ export function describeSessionOwnershipBehavior(): void {
 
       expect(result.outcome).toBe('claimed');
       if (result.outcome !== 'claimed') return;
-      expect(result.claim.fence).toBe(1);
-      expect(result.claim.claimToken).toBe(claimToken);
-      expect(result.claim.agentId).toBe(agentId);
-      expect(result.claim.sessionId).toBe(sessionId);
-      expect(result.claim.status).toBe('held');
+      expect(requireClaim(result.claim).fence).toBe(1);
+      expect(requireClaim(result.claim).claimToken).toBe(claimToken);
+      expect(requireClaim(result.claim).agentId).toBe(agentId);
+      expect(requireClaim(result.claim).sessionId).toBe(sessionId);
+      expect(requireClaim(result.claim).status).toBe('held');
       expect(result.leadDesignated).toBe(false);
     });
 
@@ -142,8 +161,8 @@ export function describeSessionOwnershipBehavior(): void {
       const second = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, req);
       expect(second.outcome).toBe('idempotent');
       if (second.outcome !== 'idempotent') return;
-      expect(second.claim.fence).toBe(1);
-      expect(second.claim.claimToken).toBe(claimToken);
+      expect(requireClaim(second.claim).fence).toBe(1);
+      expect(requireClaim(second.claim).claimToken).toBe(claimToken);
 
       // Exactly one claim row must exist
       const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
@@ -479,7 +498,7 @@ export function describeSessionOwnershipBehavior(): void {
       expect(retry.outcome).toBe('idempotent');
       if (retry.outcome !== 'idempotent') return;
       expect(retry.leadDesignated).toBe(true);
-      expect(retry.claim.fence).toBe(first.claim.fence);
+      expect(requireClaim(retry.claim).fence).toBe(requireClaim(first.claim).fence);
 
       const sessionResult = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
       expect(sessionResult.session?.leadAgentId).toBe(agentId);
@@ -575,7 +594,7 @@ export function describeSessionOwnershipBehavior(): void {
       const settled = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken,
-        fence: claim.claim.fence,
+        fence: requireClaim(claim.claim).fence,
         expectedRevision: 0,
         target: { currentAdapterSessionId: 'member-then-lead', currentAdapterSessionIdState: 'confirmed' as const },
       });
@@ -604,14 +623,19 @@ export function describeSessionOwnershipBehavior(): void {
     });
 
     it('mirrors an inherited currency verbatim when a fresh acquisition designates the lead', async () => {
-      const { sessionId, agentId } = await seedSessionAndAgent();
-
-      // The session carries a snapshot from before it had this lead.
-      await MakaioBus.request(SessionStorageSubjects.update, {
+      // The session carries a snapshot from before it had this lead — seeded at
+      // insert, because the ownership seam is the only writer of that pair
+      // afterwards and the partial-update surface no longer carries it at all.
+      const sessionId = `session-${crypto.randomUUID()}`;
+      await MakaioBus.request(SessionStorageSubjects.set, {
         sessionId,
-        currentAdapterSessionId: 'previous-lead-session',
-        currentAdapterSessionIdState: 'confirmed' as const,
+        session: createSession({
+          sessionId,
+          currentAdapterSessionId: 'previous-lead-session',
+          currentAdapterSessionIdState: 'confirmed',
+        }),
       });
+      const agentId = await seedAgent(sessionId);
 
       const claim = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
         ...buildClaimRequest(agentId, sessionId, crypto.randomUUID()),
@@ -751,11 +775,17 @@ export function describeSessionOwnershipBehavior(): void {
       if (claim.outcome !== 'claimed') return;
       expect(claim.leadDesignated).toBe(true);
 
-      // Settlement moves the snapshot on after the designation.
-      await MakaioBus.request(SessionStorageSubjects.update, {
-        sessionId,
-        currentAdapterSessionId: 'settled-after-designation',
-        currentAdapterSessionIdState: 'confirmed' as const,
+      // Settlement moves the snapshot on after the designation — through the
+      // seam, which is the only writer of the pair on either row.
+      await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
+        agentId,
+        claimToken,
+        fence: requireClaim(claim.claim).fence,
+        expectedRevision: 0,
+        target: {
+          currentAdapterSessionId: 'settled-after-designation',
+          currentAdapterSessionIdState: 'confirmed' as const,
+        },
       });
 
       // The retry designates nobody — the session already names this agent — so
@@ -801,7 +831,7 @@ export function describeSessionOwnershipBehavior(): void {
       const beforeRetry = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
       expect(beforeRetry.session?.leadAgentId ?? null).toBeNull();
 
-      return { sessionId, agentId, claimToken, fence: claim.claim.fence };
+      return { sessionId, agentId, claimToken, fence: requireClaim(claim.claim).fence };
     }
 
     /**
@@ -913,8 +943,8 @@ export function describeSessionOwnershipBehavior(): void {
 
       expect(retry.outcome).toBe('idempotent');
       if (retry.outcome !== 'idempotent') return;
-      expect(retry.claim.claimToken).toBe(claimToken);
-      expect(retry.claim.fence).toBe(fence);
+      expect(requireClaim(retry.claim).claimToken).toBe(claimToken);
+      expect(requireClaim(retry.claim).fence).toBe(fence);
       expect(retry.leadDesignated).toBe(true);
 
       // The promotion still mirrors the new lead's currency onto the session.
@@ -971,7 +1001,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(firstResult.outcome).toBe('claimed');
       if (firstResult.outcome !== 'claimed') return;
-      const firstFence = firstResult.claim.fence;
+      const firstFence = requireClaim(firstResult.claim).fence;
 
       const takeover = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
         ...buildClaimRequest(agentId, sessionId, takeoverToken),
@@ -980,9 +1010,9 @@ export function describeSessionOwnershipBehavior(): void {
 
       expect(takeover.outcome).toBe('claimed');
       if (takeover.outcome !== 'claimed') return;
-      expect(takeover.claim.fence).toBeGreaterThan(firstFence);
-      expect(takeover.claim.claimToken).toBe(takeoverToken);
-      expect(takeover.claim.claimToken).not.toBe(firstToken);
+      expect(requireClaim(takeover.claim).fence).toBeGreaterThan(firstFence);
+      expect(requireClaim(takeover.claim).claimToken).toBe(takeoverToken);
+      expect(requireClaim(takeover.claim).claimToken).not.toBe(firstToken);
     });
 
     it('returns already-claimed when supersedes carries a stale token', async () => {
@@ -1099,7 +1129,7 @@ export function describeSessionOwnershipBehavior(): void {
         const settled = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
           agentId,
           claimToken: token,
-          fence: claim.claim.fence,
+          fence: requireClaim(claim.claim).fence,
           expectedRevision: revision,
           target: { currentAdapterSessionId: providerSessionId, currentAdapterSessionIdState: 'confirmed' as const },
         });
@@ -1128,7 +1158,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(held.outcome).toBe('claimed');
       if (held.outcome !== 'claimed') return;
-      expect(held.claim.fence).toBeLessThanOrEqual(currencyFence);
+      expect(requireClaim(held.claim).fence).toBeLessThanOrEqual(currencyFence);
 
       const takeover = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
         ...buildClaimRequest(agentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'fence-key-c'),
@@ -1138,14 +1168,14 @@ export function describeSessionOwnershipBehavior(): void {
       if (takeover.outcome !== 'claimed') return;
 
       // The floor is the taker's own currency fence, not the row it superseded.
-      expect(takeover.claim.fence).toBe(currencyFence + 1);
+      expect(requireClaim(takeover.claim).fence).toBe(currencyFence + 1);
 
       // Which is the whole point: the generation this call just took must be
       // able to write the currency it was taken for.
       const settled = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
-        claimToken: takeover.claim.claimToken,
-        fence: takeover.claim.fence,
+        claimToken: requireClaim(takeover.claim).claimToken,
+        fence: requireClaim(takeover.claim).fence,
         expectedRevision: revision,
         target: { currentAdapterSessionId: 'after-takeover', currentAdapterSessionIdState: 'confirmed' as const },
       });
@@ -1209,7 +1239,7 @@ export function describeSessionOwnershipBehavior(): void {
       const settleResult = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken: token1,
-        fence: claim1.claim.fence,
+        fence: requireClaim(claim1.claim).fence,
         expectedRevision: 0,
         target: INHERITED_TARGET,
       });
@@ -1231,7 +1261,7 @@ export function describeSessionOwnershipBehavior(): void {
       expect(claim2.outcome).toBe('claimed');
       if (claim2.outcome !== 'claimed') return;
       // currencyFence is 1 and no claim is live, so the allocation is exactly 2.
-      expect(claim2.claim.fence).toBe(2);
+      expect(requireClaim(claim2.claim).fence).toBe(2);
     });
 
     it('allocates a strictly higher fence for a second key held at the same time', async () => {
@@ -1245,7 +1275,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(claim1.outcome).toBe('claimed');
       if (claim1.outcome !== 'claimed') return;
-      expect(claim1.claim.fence).toBe(1);
+      expect(requireClaim(claim1.claim).fence).toBe(1);
 
       // Nothing has settled, so `currencyFence` is still 0 — the live claim is
       // the only thing that can lift the allocation.
@@ -1255,14 +1285,14 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(claim2.outcome).toBe('claimed');
       if (claim2.outcome !== 'claimed') return;
-      expect(claim2.claim.fence).toBe(claim1.claim.fence + 1);
+      expect(requireClaim(claim2.claim).fence).toBe(requireClaim(claim1.claim).fence + 1);
 
       // Settling under the second generation moves the agent's currency fence
       // above the first one …
       const settled = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken: token2,
-        fence: claim2.claim.fence,
+        fence: requireClaim(claim2.claim).fence,
         expectedRevision: 0,
         target: { currentAdapterSessionId: 'second-key', currentAdapterSessionIdState: 'confirmed' as const },
       });
@@ -1273,13 +1303,13 @@ export function describeSessionOwnershipBehavior(): void {
       const late = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken: token1,
-        fence: claim1.claim.fence,
+        fence: requireClaim(claim1.claim).fence,
         expectedRevision: 1,
         target: { currentAdapterSessionId: 'first-key', currentAdapterSessionIdState: 'confirmed' as const },
       });
       expect(late.outcome).toBe('superseded');
       if (late.outcome !== 'superseded') return;
-      expect(late.currentFence).toBe(claim2.claim.fence);
+      expect(late.currentFence).toBe(requireClaim(claim2.claim).fence);
 
       const readResult = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
       expect(readResult.ownership?.currency.currentAdapterSessionId).toBe('second-key');
@@ -1303,7 +1333,7 @@ export function describeSessionOwnershipBehavior(): void {
       const settleResult = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken,
-        fence: claimResult.claim.fence,
+        fence: requireClaim(claimResult.claim).fence,
         expectedRevision: 0,
         target: {
           currentAdapterSessionId: 'confirmed-id',
@@ -1342,7 +1372,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(claimResult.outcome).toBe('claimed');
       if (claimResult.outcome !== 'claimed') return;
-      const fence = claimResult.claim.fence;
+      const fence = requireClaim(claimResult.claim).fence;
 
       // --- inherited ---
       const inheritedSettle = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
@@ -1400,7 +1430,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(claimResult.outcome).toBe('claimed');
       if (claimResult.outcome !== 'claimed') return;
-      const fence = claimResult.claim.fence;
+      const fence = requireClaim(claimResult.claim).fence;
 
       const first = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
@@ -1441,7 +1471,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(claimResult.outcome).toBe('claimed');
       if (claimResult.outcome !== 'claimed') return;
-      const fence = claimResult.claim.fence;
+      const fence = requireClaim(claimResult.claim).fence;
 
       // Both settlers read the same revision=0 before either writes
       const settleA = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
@@ -1494,7 +1524,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(firstClaim.outcome).toBe('claimed');
       if (firstClaim.outcome !== 'claimed') return;
-      const firstFence = firstClaim.claim.fence;
+      const firstFence = requireClaim(firstClaim.claim).fence;
 
       // Take over
       const takeover = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
@@ -1503,7 +1533,7 @@ export function describeSessionOwnershipBehavior(): void {
       });
       expect(takeover.outcome).toBe('claimed');
       if (takeover.outcome !== 'claimed') return;
-      const newFence = takeover.claim.fence;
+      const newFence = requireClaim(takeover.claim).fence;
       expect(newFence).toBeGreaterThan(firstFence);
 
       // Stale owner tries to settle under the old fence
@@ -1553,12 +1583,12 @@ export function describeSessionOwnershipBehavior(): void {
       });
       expect(takeover.outcome).toBe('claimed');
       if (takeover.outcome !== 'claimed') return;
-      expect(takeover.claim.fence).toBeGreaterThan(stale.claim.fence);
+      expect(requireClaim(takeover.claim).fence).toBeGreaterThan(requireClaim(stale.claim).fence);
 
       const settled = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken: takeoverToken,
-        fence: takeover.claim.fence,
+        fence: requireClaim(takeover.claim).fence,
         expectedRevision: 0,
         target: { currentAdapterSessionId: 'moved-session', currentAdapterSessionIdState: 'confirmed' as const },
       });
@@ -1569,14 +1599,14 @@ export function describeSessionOwnershipBehavior(): void {
       const staleSettle = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken: staleToken,
-        fence: stale.claim.fence,
+        fence: requireClaim(stale.claim).fence,
         expectedRevision: 1,
         target: { currentAdapterSessionId: 'stale-session', currentAdapterSessionIdState: 'confirmed' as const },
       });
 
       expect(staleSettle.outcome).toBe('superseded');
       if (staleSettle.outcome !== 'superseded') return;
-      expect(staleSettle.currentFence).toBe(takeover.claim.fence);
+      expect(staleSettle.currentFence).toBe(requireClaim(takeover.claim).fence);
 
       const readResult = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
       expect(readResult.ownership?.currency.currentAdapterSessionId).toBe('moved-session');
@@ -1595,7 +1625,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(claim1.outcome).toBe('claimed');
       if (claim1.outcome !== 'claimed') return;
-      const fence1 = claim1.claim.fence;
+      const fence1 = requireClaim(claim1.claim).fence;
 
       // Step 2: takeover (fence 2)
       const takeover = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
@@ -1609,7 +1639,7 @@ export function describeSessionOwnershipBehavior(): void {
       const settle = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken: takeoverToken,
-        fence: takeover.claim.fence,
+        fence: requireClaim(takeover.claim).fence,
         expectedRevision: 0,
         target: INHERITED_TARGET,
       });
@@ -1629,7 +1659,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(reClaim.outcome).toBe('claimed');
       if (reClaim.outcome !== 'claimed') return;
-      const newFence = reClaim.claim.fence;
+      const newFence = requireClaim(reClaim.claim).fence;
 
       // Step 5: stale owner (generation 1) still cannot write
       const staleSettle = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
@@ -1646,7 +1676,7 @@ export function describeSessionOwnershipBehavior(): void {
       expect(staleSettle.outcome).toBe('not-owner'); // token is gone, so not-owner
       // The re-claim is allocated exactly one above the fence that wrote the
       // agent's currency — the key's own history was released with its row.
-      expect(newFence).toBe(takeover.claim.fence + 1);
+      expect(newFence).toBe(requireClaim(takeover.claim).fence + 1);
       expect(newFence).toBeGreaterThan(fence1);
     });
   });
@@ -1769,7 +1799,7 @@ export function describeSessionOwnershipBehavior(): void {
       const result = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken,
-        fence: claim.claim.fence + 1,
+        fence: requireClaim(claim.claim).fence + 1,
         expectedRevision: 0,
         target: { currentAdapterSessionId: 'never-settled', currentAdapterSessionIdState: 'confirmed' as const },
       });
@@ -1807,7 +1837,7 @@ export function describeSessionOwnershipBehavior(): void {
       const settleResult = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken,
-        fence: claimResult.claim.fence,
+        fence: requireClaim(claimResult.claim).fence,
         expectedRevision: 0,
         target: {
           currentAdapterSessionId: 'lead-session',
@@ -1851,7 +1881,7 @@ export function describeSessionOwnershipBehavior(): void {
       const memberSettle = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId: memberAgentId,
         claimToken: memberToken,
-        fence: memberClaim.claim.fence,
+        fence: requireClaim(memberClaim.claim).fence,
         expectedRevision: 0,
         target: {
           currentAdapterSessionId: 'member-session',
@@ -1908,8 +1938,8 @@ export function describeSessionOwnershipBehavior(): void {
       // idempotent no-op.
       const settled = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
-        claimToken: claim.claim.claimToken,
-        fence: claim.claim.fence,
+        claimToken: requireClaim(claim.claim).claimToken,
+        fence: requireClaim(claim.claim).fence,
         expectedRevision: 0,
         target: INHERITED_TARGET,
       });
@@ -1940,7 +1970,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(memberClaim.outcome).toBe('claimed');
       if (memberClaim.outcome !== 'claimed') return;
-      const fence = memberClaim.claim.fence;
+      const fence = requireClaim(memberClaim.claim).fence;
 
       // confirmed
       const c1 = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
@@ -2014,7 +2044,7 @@ export function describeSessionOwnershipBehavior(): void {
       );
       expect(reClaim.outcome).toBe('claimed');
       if (reClaim.outcome !== 'claimed') return;
-      expect(reClaim.claim.fence).toBe(1);
+      expect(requireClaim(reClaim.claim).fence).toBe(1);
     });
 
     it('releasing disposition marks the row as releasing and keeps key blocked', async () => {
@@ -2036,7 +2066,7 @@ export function describeSessionOwnershipBehavior(): void {
 
       expect(markResult.outcome).toBe('marked');
       if (markResult.outcome !== 'marked') return;
-      expect(markResult.claim.status).toBe('releasing');
+      expect(requireClaim(markResult.claim).status).toBe('releasing');
 
       // Key is still blocked
       const competitorToken = crypto.randomUUID();
@@ -2066,7 +2096,7 @@ export function describeSessionOwnershipBehavior(): void {
 
       expect(markResult.outcome).toBe('marked');
       if (markResult.outcome !== 'marked') return;
-      expect(markResult.claim.status).toBe('abandoned');
+      expect(requireClaim(markResult.claim).status).toBe('abandoned');
 
       // Still blocks: storage does not decide that an abandoned owner may be
       // displaced by a competitor that merely wants the key. Only a takeover
@@ -2254,6 +2284,44 @@ export function describeSessionOwnershipBehavior(): void {
   // ─── whole-record writes cannot resurrect ──────────────────────────────────────────────────────────────────────
 
   describe('whole-record writes cannot resurrect currency or claims', () => {
+    it('storage:session.set with a pre-settlement snapshot leaves the mirrored currency untouched', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const claimToken = crypto.randomUUID();
+
+      const preSettleSnapshot = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session!;
+
+      const claim = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, claimToken),
+        designateLead: { expectedLeadAgentId: null },
+      });
+      expect(claim.outcome).toBe('claimed');
+      if (claim.outcome !== 'claimed') return;
+
+      await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
+        agentId,
+        claimToken,
+        fence: requireClaim(claim.claim).fence,
+        expectedRevision: 0,
+        target: { currentAdapterSessionId: 'mirrored-id', currentAdapterSessionIdState: 'confirmed' as const },
+      });
+
+      // A caller holding the session as it looked before the settlement writes
+      // it back wholesale. The currency pair is not on `set` at all, so the
+      // mirror must survive — otherwise any stale reader could resurrect a
+      // provider session the lead has already moved away from.
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId,
+        session: { ...preSettleSnapshot, title: 'renamed' },
+      });
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      // The allowed part of the write landed — a backend that refused the whole
+      // record would satisfy the currency assertions for the wrong reason.
+      expect(stored.session?.title).toBe('renamed');
+      expect(stored.session?.currentAdapterSessionId).toBe('mirrored-id');
+      expect(stored.session?.currentAdapterSessionIdState).toBe('confirmed');
+    });
+
     it('storage:agent.set with a pre-movement snapshot leaves currency, revision and fence untouched', async () => {
       const { sessionId, agentId } = await seedSessionAndAgent();
       const claimToken = crypto.randomUUID();
@@ -2273,7 +2341,7 @@ export function describeSessionOwnershipBehavior(): void {
       await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken,
-        fence: claimResult.claim.fence,
+        fence: requireClaim(claimResult.claim).fence,
         expectedRevision: 0,
         target: {
           currentAdapterSessionId: 'confirmed-target',
@@ -2314,7 +2382,7 @@ export function describeSessionOwnershipBehavior(): void {
       await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId,
         claimToken,
-        fence: claimResult.claim.fence,
+        fence: requireClaim(claimResult.claim).fence,
         expectedRevision: 0,
         target: {
           currentAdapterSessionId: 'settled-id',
@@ -2374,6 +2442,43 @@ export function describeSessionOwnershipBehavior(): void {
       expect(afterAbsent.agent?.adapterSessionId).toBe('origin-1');
       expect(afterAbsent.agent?.status).toBe('idle');
     });
+
+    it('storage:session.set with a pre-designation snapshot leaves the newer lead intact', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const preDesignationSnapshot = (await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session!;
+      expect(preDesignationSnapshot.leadAgentId).toBeUndefined();
+
+      const designated = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: null },
+      });
+      expect(designated.outcome).toBe('claimed');
+
+      // A caller holding the session as it looked before the designation writes
+      // it back wholesale. The designation has exactly one writer — the
+      // reserving transaction — so a snapshot that never observed it must not be
+      // able to put the previous value back, nor to unset one.
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId,
+        session: { ...preDesignationSnapshot, title: 'renamed' },
+      });
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      // The allowed part of the write landed — a backend that refused the whole
+      // record would satisfy the designation assertion for the wrong reason.
+      expect(stored.session?.title).toBe('renamed');
+      expect(stored.session?.leadAgentId).toBe(agentId);
+
+      // And a snapshot naming a *different* lead is refused the same way: `set`
+      // has no expectation in it, so it may not redirect the session either.
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId,
+        session: { ...stored.session!, leadAgentId: 'some-other-agent' },
+      });
+      const afterForeign = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(afterForeign.session?.leadAgentId).toBe(agentId);
+    });
   });
 
   // ─── settle authority is bound to the agent's current session ──────────────────────────────────────────────────
@@ -2416,7 +2521,7 @@ export function describeSessionOwnershipBehavior(): void {
       const moved = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
       expect(moved.agent?.sessionId).toBe(newSessionId);
 
-      return { agentId, oldSessionId, newSessionId, claimToken, fence: claimResult.claim.fence };
+      return { agentId, oldSessionId, newSessionId, claimToken, fence: requireClaim(claimResult.claim).fence };
     }
 
     it('returns not-owner and mirrors nothing when the claim names the session the agent left', async () => {
@@ -2576,7 +2681,7 @@ export function describeSessionOwnershipBehavior(): void {
       // the first key at 1, the second strictly above it while both are live.
       const fences = readResult.ownership!.claims.map((c) => c.fence);
       expect(fences).toEqual([1, 2]);
-      expect(fences).toEqual([claim1.claim.fence, claim2.claim.fence]);
+      expect(fences).toEqual([requireClaim(claim1.claim).fence, requireClaim(claim2.claim).fence]);
     });
 
     it('returns currency fields as null (never undefined) when agent has no currency', async () => {
@@ -2589,6 +2694,798 @@ export function describeSessionOwnershipBehavior(): void {
       expect(readResult.ownership?.currency.adapterSessionId).toBeNull();
       expect(readResult.ownership?.currency.currentAdapterSessionId).toBeNull();
       expect(readResult.ownership?.currency.currentAdapterSessionIdState).toBe('inherited');
+    });
+  });
+
+  // ─── Wave 2: keyless reservation ───────────────────────────────────────────────────────────────────────────────
+
+  describe('claim — keyless reservation', () => {
+    it('designates the lead, writes no claim row, and reports previousLeadAgentId=null', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: null },
+      });
+
+      expect(result.outcome).toBe('claimed');
+      if (result.outcome !== 'claimed') return;
+      // The whole effect is the designation: a fresh start has no provider
+      // identity to own yet, so there is nothing for a claim row to name.
+      expect(result.claim).toBeNull();
+      expect(result.leadDesignated).toBe(true);
+      expect(result.previousLeadAgentId).toBeNull();
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(0);
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(stored.session?.leadAgentId).toBe(agentId);
+    });
+
+    it('reports the lead it replaced, so a rollback has something to restore', async () => {
+      const sessionId = await seedSession();
+      const firstAgentId = await seedAgent(sessionId);
+      const secondAgentId = await seedAgent(sessionId);
+
+      await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(firstAgentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: null },
+      });
+
+      const promoted = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(secondAgentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: firstAgentId },
+      });
+
+      expect(promoted.outcome).toBe('claimed');
+      if (promoted.outcome !== 'claimed') return;
+      expect(promoted.previousLeadAgentId).toBe(firstAgentId);
+
+      // And the restore that value enables is a CAS of its own.
+      const restored = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(firstAgentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: secondAgentId },
+      });
+      expect(restored.outcome).toBe('claimed');
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(stored.session?.leadAgentId).toBe(firstAgentId);
+    });
+
+    it('reports previousLeadAgentId honestly when no designation is requested', async () => {
+      const sessionId = await seedSession();
+      const leadAgentId = await seedAgent(sessionId);
+      const memberAgentId = await seedAgent(sessionId);
+
+      await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(leadAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-lead'),
+        designateLead: { expectedLeadAgentId: null },
+      });
+
+      const member = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(memberAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-member'),
+      );
+
+      expect(member.outcome).toBe('claimed');
+      if (member.outcome !== 'claimed') return;
+      expect(member.leadDesignated).toBe(false);
+      expect(member.previousLeadAgentId).toBe(leadAgentId);
+    });
+
+    it('clears the designation under CAS, and leaves a non-lead removal writing nothing', async () => {
+      const sessionId = await seedSession();
+      const leadAgentId = await seedAgent(sessionId);
+      const memberAgentId = await seedAgent(sessionId);
+
+      await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(leadAgentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: null },
+      });
+
+      // Removing a member names itself as the expectation, which the session
+      // does not carry — so the lead it does carry stays standing.
+      const memberClear = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(memberAgentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: memberAgentId, clear: true },
+      });
+      expect(memberClear.outcome).toBe('lead-conflict');
+
+      const untouched = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(untouched.session?.leadAgentId).toBe(leadAgentId);
+
+      // Removing the lead is the same call with an expectation that holds — and
+      // it is still permitted after the removal marked the agent `disposed`,
+      // because giving authority up is the one act a removed agent must keep.
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: leadAgentId, status: 'disposed' });
+      const leadClear = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(leadAgentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: leadAgentId, clear: true },
+      });
+      expect(leadClear.outcome).toBe('claimed');
+      if (leadClear.outcome !== 'claimed') return;
+      expect(leadClear.previousLeadAgentId).toBe(leadAgentId);
+
+      const cleared = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(cleared.session?.leadAgentId ?? null).toBeNull();
+    });
+  });
+
+  // ─── Wave 2: `disposed` is absorbing for ownership ─────────────────────────────────────────────────────────────
+
+  describe('claim — a removed agent may never re-acquire authority', () => {
+    it('refuses every acquisition path with agent-disposed and writes nothing', async () => {
+      const sessionId = await seedSession();
+      const agentId = await seedAgent(sessionId);
+      const incumbentAgentId = await seedAgent(sessionId);
+
+      // A generation the disposed agent already holds, so the same-token retry
+      // path has something to revalidate against …
+      const ownToken = crypto.randomUUID();
+      const own = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, ownToken, 'machine-1', 'adapter-1', 'prov-own'),
+      );
+      expect(own.outcome).toBe('claimed');
+
+      // … and a foreign generation for the takeover paths.
+      const incumbentToken = crypto.randomUUID();
+      const incumbent = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(incumbentAgentId, sessionId, incumbentToken, 'machine-1', 'adapter-1', 'prov-foreign'),
+      );
+      expect(incumbent.outcome).toBe('claimed');
+
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+
+      // Free acquisition.
+      const free = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-free'),
+      );
+      expect(free.outcome).toBe('agent-disposed');
+
+      // Same-token idempotent retry.
+      const retry = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, ownToken, 'machine-1', 'adapter-1', 'prov-own'),
+      );
+      expect(retry.outcome).toBe('agent-disposed');
+
+      // Token-named takeover.
+      const takeover = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-foreign'),
+        supersedes: { claimToken: incumbentToken },
+      });
+      expect(takeover.outcome).toBe('agent-disposed');
+
+      // Keyless reservation.
+      const keyless = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: null },
+      });
+      expect(keyless.outcome).toBe('agent-disposed');
+
+      // Nothing was written on any of those paths: the two pre-existing
+      // generations still stand and the session still has no lead.
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims.map((claim) => claim.claimToken).sort()).toEqual([ownToken, incumbentToken].sort());
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(stored.session?.leadAgentId ?? null).toBeNull();
+    });
+
+    it('refuses a disposed taker even against a disposed incumbent', async () => {
+      const sessionId = await seedSession();
+      const takerAgentId = await seedAgent(sessionId);
+      const incumbentAgentId = await seedAgent(sessionId);
+
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(incumbentAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-both'),
+      );
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: incumbentAgentId, status: 'disposed' });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: takerAgentId, status: 'disposed' });
+
+      // The incumbent is takeable; the taker may not have it. Both halves of the
+      // rule are needed, and the taker's is the one that must win.
+      const result = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(takerAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-both'),
+      );
+      expect(result.outcome).toBe('agent-disposed');
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(1);
+      expect(listed.claims[0]?.agentId).toBe(incumbentAgentId);
+    });
+
+    it('refuses a lead designation that would keep a removed agent lead', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const claimToken = crypto.randomUUID();
+
+      await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, claimToken),
+        designateLead: { expectedLeadAgentId: null },
+      });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+
+      const retry = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, claimToken),
+        designateLead: { expectedLeadAgentId: agentId },
+      });
+      expect(retry.outcome).toBe('agent-disposed');
+    });
+  });
+
+  // ─── Wave 2: takeover of an unusable incumbent ────────────────────────────────────────────────────────────────
+
+  describe('claim — the unusable-incumbent takeover', () => {
+    it('takes a key whose owner was removed, with a strictly higher fence and a repointed row', async () => {
+      const sessionId = await seedSession();
+      const incumbentAgentId = await seedAgent(sessionId);
+      const takerAgentId = await seedAgent(sessionId);
+      const incumbentToken = crypto.randomUUID();
+
+      const held = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(incumbentAgentId, sessionId, incumbentToken, 'machine-1', 'adapter-1', 'prov-unusable'),
+      );
+      expect(held.outcome).toBe('claimed');
+      if (held.outcome !== 'claimed') return;
+      const heldClaim = requireClaim(held.claim);
+
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: incumbentAgentId, status: 'disposed' });
+
+      // No `supersedes`, no flag: a disposed agent can never legitimately hold a
+      // key, so the takeover needs no caller evidence at all.
+      const takeover = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(takerAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-unusable'),
+      );
+      expect(takeover.outcome).toBe('claimed');
+      if (takeover.outcome !== 'claimed') return;
+      const takenClaim = requireClaim(takeover.claim);
+      expect(takenClaim.claimId).toBe(heldClaim.claimId);
+      expect(takenClaim.agentId).toBe(takerAgentId);
+      expect(takenClaim.fence).toBeGreaterThan(heldClaim.fence);
+
+      // The row was repointed rather than duplicated …
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
+        machineId: 'machine-1',
+        providerSessionId: 'prov-unusable',
+      });
+      expect(listed.claims).toHaveLength(1);
+
+      // … so the previous owner's generation is gone, and a late settle under it
+      // is refused by absence rather than by a fence comparison.
+      const late = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
+        agentId: incumbentAgentId,
+        claimToken: incumbentToken,
+        fence: heldClaim.fence,
+        expectedRevision: 0,
+        target: INHERITED_TARGET,
+      });
+      expect(late.outcome).toBe('agent-disposed');
+    });
+
+    it('never takes over a live incumbent, including one a reconcile marked abandoned', async () => {
+      const sessionId = await seedSession();
+      const incumbentAgentId = await seedAgent(sessionId);
+      const takerAgentId = await seedAgent(sessionId);
+      const incumbentToken = crypto.randomUUID();
+
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(incumbentAgentId, sessionId, incumbentToken, 'machine-1', 'adapter-1', 'prov-live'),
+      );
+      // An `abandoned` marking is a diagnostic presumption and confers nothing:
+      // the rows are live, so the key is still owned.
+      await MakaioBus.request(SessionOwnershipStorageSubjects.release, {
+        agentId: incumbentAgentId,
+        claimToken: incumbentToken,
+        disposition: 'abandoned',
+      });
+
+      const result = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(takerAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-live'),
+      );
+      expect(result.outcome).toBe('already-claimed');
+      if (result.outcome !== 'already-claimed') return;
+      expect(result.holder.claimToken).toBe(incumbentToken);
+      expect(result.holder.status).toBe('abandoned');
+    });
+
+    it('frees the key by cascade when a parent row is deleted, rather than producing a takeover', async () => {
+      const sessionId = await seedSession();
+      const incumbentAgentId = await seedAgent(sessionId);
+      const takerAgentId = await seedAgent(sessionId);
+
+      const held = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(incumbentAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-cascade'),
+      );
+      expect(held.outcome).toBe('claimed');
+      if (held.outcome !== 'claimed') return;
+      const heldClaimId = requireClaim(held.claim).claimId;
+
+      await MakaioBus.request(AgentStorageSubjects.delete, { agentId: incumbentAgentId });
+
+      // The claim went with its parent, so the next claimant does a plain
+      // acquisition: a new row, and a fence from its *own* per-agent sequence
+      // rather than one inherited from the vanished owner.
+      const fresh = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(takerAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-cascade'),
+      );
+      expect(fresh.outcome).toBe('claimed');
+      if (fresh.outcome !== 'claimed') return;
+      const freshClaim = requireClaim(fresh.claim);
+      expect(freshClaim.claimId).not.toBe(heldClaimId);
+      expect(freshClaim.fence).toBe(1);
+    });
+  });
+
+  // ─── Wave 2: settleMovement ───────────────────────────────────────────────────────────────────────────────────
+
+  describe('settleMovement', () => {
+    /**
+     * Build a movement request for one agent against a fixed ownership key.
+     * @param agentId - Agent whose conversation moved.
+     * @param sessionId - Session the agent belongs to.
+     * @param movement - What the provider did.
+     * @param expectedRevision - Revision the caller read.
+     * @param machineId - Machine identity (default `machine-1`).
+     * @param adapterId - Adapter identity (default `adapter-1`).
+     */
+    function buildMovementRequest(
+      agentId: string,
+      sessionId: string,
+      movement:
+        | { kind: 'confirmed'; providerSessionId: string; claimToken: string }
+        | { kind: 'demote'; claimToken: string },
+      expectedRevision = 0,
+      machineId = 'machine-1',
+      adapterId = 'adapter-1',
+    ) {
+      return { machineId, adapterId, adapterName: 'test-adapter', sessionId, agentId, expectedRevision, movement };
+    }
+
+    it('refuses a movement token another live generation already holds', async () => {
+      // Tokens are unique per generation — the SQL backends enforce it with
+      // `uniq_adapter_session_claims_token`, and the acquisition path mirrors
+      // that in memory. The movement's successor write is an acquisition too, so
+      // it answers the same way: not a modeled outcome, because a reused token
+      // is a caller minting one per attempt incorrectly rather than a race the
+      // store arbitrates. Two generations sharing one identity would make every
+      // later token-keyed release and settle resolve to whichever it found first.
+      const sessionId = await seedSession();
+      const holderAgentId = await seedAgent(sessionId);
+      const movingAgentId = await seedAgent(sessionId);
+      const sharedToken = crypto.randomUUID();
+
+      const held = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(holderAgentId, sessionId, sharedToken),
+        providerSessionId: 'prov-token-holder',
+      });
+      expect(held.outcome).toBe('claimed');
+
+      await expect(
+        MakaioBus.request(
+          SessionOwnershipStorageSubjects.settleMovement,
+          buildMovementRequest(movingAgentId, sessionId, {
+            kind: 'confirmed',
+            providerSessionId: 'prov-token-reuse',
+            claimToken: sharedToken,
+          }),
+        ),
+      ).rejects.toThrow(/claim_token/i);
+
+      // Nothing was written: the movement rolled back with the acquisition it
+      // could not make, and the holder's generation is untouched.
+      const { ownership } = await MakaioBus.request(SessionOwnershipStorageSubjects.read, {
+        agentId: movingAgentId,
+      });
+      expect(ownership?.revision).toBe(0);
+      expect(ownership?.claims).toEqual([]);
+      const { claims } = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
+        machineId: 'machine-1',
+      });
+      expect(claims.filter((claim) => claim.claimToken === sharedToken)).toHaveLength(1);
+    });
+
+    it('adopts an unreserved agent’s successor key and mirrors it only for a lead', async () => {
+      const sessionId = await seedSession();
+      const leadAgentId = await seedAgent(sessionId);
+      const memberAgentId = await seedAgent(sessionId);
+
+      await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(leadAgentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: null },
+      });
+
+      // The lead holds no claim at all — the movement is what takes one.
+      const lead = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(leadAgentId, sessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-lead-moved',
+          claimToken: crypto.randomUUID(),
+        }),
+      );
+      expect(lead.outcome).toBe('settled');
+      if (lead.outcome !== 'settled') return;
+      expect(lead.sessionSnapshotUpdated).toBe(true);
+      expect(lead.claim.providerSessionId).toBe('prov-lead-moved');
+      expect(lead.releasedProviderSessionIds).toEqual([]);
+      expect(lead.currency.currentAdapterSessionId).toBe('prov-lead-moved');
+
+      const member = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(memberAgentId, sessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-member-moved',
+          claimToken: crypto.randomUUID(),
+        }),
+      );
+      expect(member.outcome).toBe('settled');
+      if (member.outcome !== 'settled') return;
+      expect(member.sessionSnapshotUpdated).toBe(false);
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(stored.session?.currentAdapterSessionId).toBe('prov-lead-moved');
+    });
+
+    it('rotates A→B atomically, names the new generation, and refuses a late settle under the predecessor', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const firstToken = crypto.randomUUID();
+
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, sessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-a',
+          claimToken: firstToken,
+        }),
+      );
+      expect(first.outcome).toBe('settled');
+      if (first.outcome !== 'settled') return;
+
+      const second = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(
+          agentId,
+          sessionId,
+          { kind: 'confirmed', providerSessionId: 'prov-b', claimToken: crypto.randomUUID() },
+          first.revision,
+        ),
+      );
+      expect(second.outcome).toBe('settled');
+      if (second.outcome !== 'settled') return;
+      // The response names the generation the currency now stands under …
+      expect(second.claim.providerSessionId).toBe('prov-b');
+      expect(second.claim.fence).toBeGreaterThan(first.claim.fence);
+      // … and the predecessor's key is free again, reported by ID.
+      expect(second.releasedProviderSessionIds).toEqual(['prov-a']);
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(1);
+      expect(listed.claims[0]?.providerSessionId).toBe('prov-b');
+
+      // The predecessor was deleted, so its late settle is refused by absence —
+      // `not-owner`, never `superseded`: there is no row left to compare fences
+      // against.
+      const late = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
+        agentId,
+        claimToken: firstToken,
+        fence: first.claim.fence,
+        expectedRevision: second.revision,
+        target: { currentAdapterSessionId: 'prov-a', currentAdapterSessionIdState: 'confirmed' as const },
+      });
+      expect(late.outcome).toBe('not-owner');
+    });
+
+    it('repeats idempotently under a fresh token, reusing the held generation and deleting nothing', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, sessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-repeat',
+          claimToken: crypto.randomUUID(),
+        }),
+      );
+      expect(first.outcome).toBe('settled');
+      if (first.outcome !== 'settled') return;
+
+      // The seam re-announces on every confirmation, and mints a fresh token per
+      // attempt. That token names no row: the agent already holds this key, so
+      // the repeat settles under the generation it has — and a predecessor
+      // delete keyed on the *request's* token would have destroyed it.
+      const repeat = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(
+          agentId,
+          sessionId,
+          { kind: 'confirmed', providerSessionId: 'prov-repeat', claimToken: crypto.randomUUID() },
+          first.revision,
+        ),
+      );
+      expect(repeat.outcome).toBe('idempotent');
+      if (repeat.outcome !== 'idempotent') return;
+      expect(repeat.claim?.claimId).toBe(first.claim.claimId);
+      expect(repeat.revision).toBe(first.revision);
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(1);
+      expect(listed.claims[0]?.claimId).toBe(first.claim.claimId);
+    });
+
+    it('demotes to moved, keeps the claim, and leaves the key blocked', async () => {
+      const sessionId = await seedSession();
+      const agentId = await seedAgent(sessionId);
+      const competitorId = await seedAgent(sessionId);
+      await MakaioBus.request(AgentStorageSubjects.updateRuntime, { agentId, adapterSessionId: 'prov-origin' });
+
+      const demoted = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, sessionId, { kind: 'demote', claimToken: crypto.randomUUID() }),
+      );
+      expect(demoted.outcome).toBe('settled');
+      if (demoted.outcome !== 'settled') return;
+      expect(demoted.currency.currentAdapterSessionIdState).toBe('moved');
+      expect(demoted.claim.providerSessionId).toBe('prov-origin');
+      // Only a clean release frees a key, and nothing here proves the provider
+      // is done with the conversation being voided.
+      expect(demoted.releasedProviderSessionIds).toEqual([]);
+
+      const competitor = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(competitorId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-origin'),
+      );
+      expect(competitor.outcome).toBe('already-claimed');
+    });
+
+    it('reports idempotent with no generation when a demotion resolves no key', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+
+      const result = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, sessionId, { kind: 'demote', claimToken: crypto.randomUUID() }),
+      );
+
+      expect(result.outcome).toBe('idempotent');
+      if (result.outcome !== 'idempotent') return;
+      // Nothing was resumable, so the movement resolves no key and therefore
+      // names no generation — the one outcome whose `claim` is legitimately null.
+      expect(result.claim).toBeNull();
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(0);
+    });
+
+    it('refuses a movement onto a key another agent owns, and changes nothing', async () => {
+      const sessionId = await seedSession();
+      const agentId = await seedAgent(sessionId);
+      const ownerId = await seedAgent(sessionId);
+      const ownerToken = crypto.randomUUID();
+
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(ownerId, sessionId, ownerToken, 'machine-1', 'adapter-1', 'prov-taken'),
+      );
+
+      const result = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, sessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-taken',
+          claimToken: crypto.randomUUID(),
+        }),
+      );
+      expect(result.outcome).toBe('already-claimed');
+      if (result.outcome !== 'already-claimed') return;
+      expect(result.holder.claimToken).toBe(ownerToken);
+
+      // The refusal rolled the whole movement back: no currency, no revision.
+      const ownership = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(ownership.ownership?.revision).toBe(0);
+      expect(ownership.ownership?.currency.currentAdapterSessionIdState).toBe('inherited');
+      expect(ownership.ownership?.claims).toHaveLength(0);
+    });
+
+    it('refuses a removed agent and an agent that is not in the named session', async () => {
+      const sessionId = await seedSession();
+      const agentId = await seedAgent(sessionId);
+      const foreignSessionId = await seedSession();
+
+      const foreign = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, foreignSessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-foreign-session',
+          claimToken: crypto.randomUUID(),
+        }),
+      );
+      expect(foreign.outcome).toBe('not-found');
+
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+      const disposed = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, sessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-disposed',
+          claimToken: crypto.randomUUID(),
+        }),
+      );
+      expect(disposed.outcome).toBe('agent-disposed');
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(0);
+    });
+
+    it('reports currency-changed on a stale revision without writing', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(agentId, sessionId, {
+          kind: 'confirmed',
+          providerSessionId: 'prov-first',
+          claimToken: crypto.randomUUID(),
+        }),
+      );
+      expect(first.outcome).toBe('settled');
+
+      const stale = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(
+          agentId,
+          sessionId,
+          { kind: 'confirmed', providerSessionId: 'prov-second', claimToken: crypto.randomUUID() },
+          0,
+        ),
+      );
+      expect(stale.outcome).toBe('currency-changed');
+
+      // The claims phase rolled back with the settle: the successor key it had
+      // already allocated must not survive a refusal.
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(1);
+      expect(listed.claims[0]?.providerSessionId).toBe('prov-first');
+    });
+  });
+
+  // ─── Wave 2: releaseAgentClaims ───────────────────────────────────────────────────────────────────────────────
+
+  describe('releaseAgentClaims', () => {
+    /**
+     * Give one agent two live generations — the state a movement passes through.
+     * @returns The agent and both generation tokens.
+     */
+    async function claimTwoKeys(): Promise<{ sessionId: string; agentId: string; first: string; second: string }> {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const first = crypto.randomUUID();
+      const second = crypto.randomUUID();
+      for (const [token, providerSessionId] of [
+        [first, 'prov-one'],
+        [second, 'prov-two'],
+      ] as const) {
+        const claimed = await MakaioBus.request(
+          SessionOwnershipStorageSubjects.claim,
+          buildClaimRequest(agentId, sessionId, token, 'machine-1', 'adapter-1', providerSessionId),
+        );
+        expect(claimed.outcome).toBe('claimed');
+      }
+      return { sessionId, agentId, first, second };
+    }
+
+    it('scopes to one generation when a token is named, and leaves the other standing', async () => {
+      const { agentId, first, second } = await claimTwoKeys();
+
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.releaseAgentClaims, {
+        agentId,
+        claimToken: first,
+        disposition: 'released' as const,
+      });
+      expect(result.releasedProviderSessionIds).toEqual(['prov-one']);
+      expect(result.claimTokenNotFound).toBe(false);
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(1);
+      expect(listed.claims[0]?.claimToken).toBe(second);
+    });
+
+    it('retires everything the agent holds when no token is named', async () => {
+      const { agentId } = await claimTwoKeys();
+
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.releaseAgentClaims, {
+        agentId,
+        disposition: 'released' as const,
+      });
+      expect(result.releasedProviderSessionIds.sort()).toEqual(['prov-one', 'prov-two']);
+      expect(result.claimTokenNotFound).toBe(false);
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(0);
+    });
+
+    it('marks rather than deletes for a non-freeing disposition, and keeps the keys blocked', async () => {
+      const { agentId } = await claimTwoKeys();
+
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.releaseAgentClaims, {
+        agentId,
+        disposition: 'abandoned' as const,
+      });
+      expect(result.releasedProviderSessionIds).toEqual([]);
+      expect(result.markedClaims).toHaveLength(2);
+      expect(result.markedClaims.every((claim) => claim.status === 'abandoned')).toBe(true);
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(2);
+    });
+
+    it('reports a foreign token as not-found without revealing its holder', async () => {
+      const sessionId = await seedSession();
+      const agentId = await seedAgent(sessionId);
+      const otherAgentId = await seedAgent(sessionId);
+      const otherToken = crypto.randomUUID();
+
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(otherAgentId, sessionId, otherToken, 'machine-1', 'adapter-1', 'prov-foreign'),
+      );
+
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.releaseAgentClaims, {
+        agentId,
+        claimToken: otherToken,
+        disposition: 'released' as const,
+      });
+      expect(result.claimTokenNotFound).toBe(true);
+      expect(result.releasedProviderSessionIds).toEqual([]);
+      expect(result.markedClaims).toEqual([]);
+
+      // The claim it could not take is untouched.
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(1);
+      expect(listed.claims[0]?.status).toBe('held');
+    });
+
+    it('still lets a removed agent give its claims up', async () => {
+      const { agentId } = await claimTwoKeys();
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+
+      // The one ownership act `disposed` does not absorb: guarding it would
+      // strand exactly the claims that most need retiring.
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.releaseAgentClaims, {
+        agentId,
+        disposition: 'released' as const,
+      });
+      expect(result.releasedProviderSessionIds).toHaveLength(2);
+
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims).toHaveLength(0);
+    });
+
+    it('is idempotent, and reports nothing for an agent that no longer exists', async () => {
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.releaseAgentClaims, {
+        agentId: `agent-${crypto.randomUUID()}`,
+        disposition: 'released' as const,
+      });
+      expect(result.releasedProviderSessionIds).toEqual([]);
+      expect(result.markedClaims).toEqual([]);
+      expect(result.claimTokenNotFound).toBe(false);
     });
   });
 }

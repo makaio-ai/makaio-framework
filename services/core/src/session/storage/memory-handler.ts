@@ -95,44 +95,35 @@ function applyListFilters(sessions: IMakaioSession[], filters: SessionListFilter
 }
 
 /**
- * Carry the stored adapter-session currency across a whole-record `set`.
+ * Carry the fields the compare-and-swap seams own across a whole-record `set`.
  *
- * Mirrors the Drizzle backend, whose `set` column list deliberately omits the
- * currency pair: `set` writes a caller-held snapshot, so letting it carry
- * currency would allow a writer that read the session before a provider-session
- * movement to resurrect the abandoned provider session. Currency is owned
- * exclusively by the targeted `storage:session.update` path.
+ * Mirrors the Drizzle backend, whose `set` deliberately omits the same fields:
+ * `set` writes a caller-held snapshot with no expectation in it, so letting it
+ * carry them would allow a writer that read the session before a provider-session
+ * movement or a lead designation to put the superseded value back. Both are owned
+ * exclusively by the `storage:sessionOwnership` seam, which carries an authority
+ * into every write it makes.
+ *
+ * The two fields differ in what an *insert* does with them, and the difference is
+ * the Drizzle column list read back: the currency pair is not a `set` column at
+ * all, so a fresh row takes the column defaults; `leadAgentId` is one, so a fresh
+ * row takes the caller's value — there is no stored designation for it to lose.
  * @param next - Incoming session record about to be stored
  * @param previous - Currently stored record, or `null` on first insert
  */
-function preserveAdapterSessionCurrency(next: IMakaioSession, previous: IMakaioSession | null): void {
+function preserveCasOwnedFields(next: IMakaioSession, previous: IMakaioSession | null): void {
   next.currentAdapterSessionId = previous?.currentAdapterSessionId;
   next.currentAdapterSessionIdState = previous?.currentAdapterSessionIdState ?? 'inherited';
-}
-
-/**
- * Apply the adapter-session currency pair as one unit.
- *
- * The two columns carry a single fact, and the SQL backends enforce that with
- * `sessions_current_adapter_session_id_currency_check`. Applying them through
- * the generic per-field assigners would let a half-supplied payload leave this
- * backend holding a pair the SQL backends would have rejected — a silent
- * behavioral divergence between the in-memory and Drizzle handlers. The update
- * request schema rejects such payloads before either backend sees them
- * (`validateAdapterSessionCurrencyPair`); applying the pair atomically here
- * keeps that guarantee local instead of borrowed.
- * @param session - Session to mutate
- * @param update - Partial update payload
- */
-function applyAdapterSessionCurrency(session: IMakaioSession, update: SessionUpdatePayload): void {
-  const { currentAdapterSessionId: id, currentAdapterSessionIdState: state } = update;
-  if (id === undefined || state === undefined) return;
-  session.currentAdapterSessionId = id ?? undefined;
-  session.currentAdapterSessionIdState = state;
+  if (previous !== null) next.leadAgentId = previous.leadAgentId;
 }
 
 /**
  * Applies partial update payload to an in-memory session.
+ *
+ * The adapter-session currency pair is deliberately not applied here: it is
+ * written exclusively by the `storage:sessionOwnership` seam, which is the only
+ * surface that carries an authority into the write, so this backend has nothing
+ * to project.
  * @param session - Session to mutate
  * @param update - Partial update payload
  */
@@ -152,7 +143,6 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
   assignDefinedSessionField(session, 'createdAt', update.createdAt);
   assignDefinedSessionField(session, 'lastActivityAt', update.lastActivityAt);
   assignDefinedSessionField(session, 'machineId', update.machineId);
-  applyAdapterSessionCurrency(session, update);
 
   assignNullableSessionField(session, 'executionTargetId', update.executionTargetId);
   assignNullableSessionField(session, 'approvalPolicyOverride', update.approvalPolicyOverride);
@@ -211,6 +201,14 @@ function registerUpdateHandler(bus: IMakaioBus, store: Map<string, IMakaioSessio
     const payload = structuredClone(SessionStorageUpdateSchema.request.parse(ctx.payload));
     const session = store.get(payload.sessionId);
     if (!session) {
+      ctx.setResult({ success: false, clientAccountChanged: false });
+      return;
+    }
+    // The compare-and-swap guard, evaluated against the stored row rather than
+    // against whatever the caller last read: a refused update reports the same
+    // `success: false` a missing row does, and the caller re-reads to tell them
+    // apart.
+    if (payload.expectedStatus !== undefined && !payload.expectedStatus.includes(session.status)) {
       ctx.setResult({ success: false, clientAccountChanged: false });
       return;
     }
@@ -284,7 +282,7 @@ export function registerMemorySessionStorage(
       const detachedSession = structuredClone(session);
       const previous = store.get(sessionId) ?? null;
       const previousSession = previous ? cloneSession(previous) : null;
-      preserveAdapterSessionCurrency(detachedSession, previousSession);
+      preserveCasOwnedFields(detachedSession, previousSession);
       assertSessionClientAccountStateIsConsistent(previous, detachedSession);
       store.set(sessionId, detachedSession);
       ctx.setResult({

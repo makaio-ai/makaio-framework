@@ -56,7 +56,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `namespaces` | `{ namespace: string; cardinality: "single" \| "multiple"; values: readonly string[] \| "open"; authority: readonly ("system" \| "agent" \| "human")[]; appliesTo: readonly ("surface" \| "workpiece" \| "artifact")[]; description?: string \| undefined; }[]` | yes |
+| `namespaces` | `{ namespace: string; cardinality: "single" \| "multiple"; values: readonly string[] \| "open"; authority: readonly ("agent" \| "system" \| "human")[]; appliesTo: readonly ("surface" \| "workpiece" \| "artifact")[]; description?: string \| undefined; }[]` | yes |
 
 ### <a id="facet.namespace.register"></a>`facet.namespace.register` (rpc)
 
@@ -71,7 +71,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `appliesTo` | `readonly ("surface" \| "workpiece" \| "artifact")[]` | yes |
-| `authority` | `readonly ("system" \| "agent" \| "human")[]` | yes |
+| `authority` | `readonly ("agent" \| "system" \| "human")[]` | yes |
 | `cardinality` | `"single" \| "multiple"` | yes |
 | `description` | `string \| undefined` | no |
 | `namespace` | `string` | yes |

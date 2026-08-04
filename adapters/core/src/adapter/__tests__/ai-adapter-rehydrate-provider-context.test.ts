@@ -173,7 +173,7 @@ function registerManagedRehydrateInputs(adapter: TestAdapter, cleanups: Array<()
       });
     }),
     MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, transitioned: true });
     }),
     MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
       ctx.setResult(createManagedRuntimeResolution(ctx.payload.adapterName));
@@ -262,7 +262,7 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
     });
 
     MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, transitioned: true });
     });
 
     const apiKeyRef = buildStoredCredentialRef('provider-1', 'apiKey');

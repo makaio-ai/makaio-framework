@@ -98,7 +98,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
         });
       }),
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
 
@@ -289,7 +289,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
           });
         }),
         MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-          ctx.setResult({ success: true });
+          ctx.setResult({ success: true, transitioned: true });
         }),
         MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
           runtimeUpdates?.push({
@@ -422,7 +422,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
         ctx.setResult({ agent: persistedAgent });
       }),
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
   }

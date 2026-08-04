@@ -236,7 +236,7 @@ function registerSuccessHandlers(
           sessionId: 'makaio-session-ping-1',
         });
       } else {
-        ctx.setResult({ success: false, message: 'adapter busy' });
+        ctx.setResult({ success: false, message: 'adapter busy', dispatch: 'not-dispatched' });
       }
     }),
   ];
@@ -267,7 +267,7 @@ describe('WindowActivator', () => {
     cleanups.push(
       bus.on(AdapterSubjects.startAgent, (ctx) => {
         startAgentCalls.push(ctx.payload);
-        ctx.setResult({ success: false, message: 'should not be reached' });
+        ctx.setResult({ success: false, message: 'should not be reached', dispatch: 'not-dispatched' });
       }),
     );
 
@@ -494,7 +494,7 @@ describe('WindowActivator', () => {
       }),
       bus.on(AdapterSubjects.startAgent, (ctx) => {
         startAgentPayloads.push(ctx.payload);
-        ctx.setResult({ success: false, message: 'must not start' });
+        ctx.setResult({ success: false, message: 'must not start', dispatch: 'not-dispatched' });
       }),
     );
 

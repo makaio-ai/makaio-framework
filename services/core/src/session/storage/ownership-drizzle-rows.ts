@@ -13,12 +13,11 @@
  * operation and is stated at each call site.
  * @packageDocumentation
  */
-import { eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import type { TransactionCallback } from '@makaio/storage-drizzle';
 import type {
   AdapterSessionClaimRecord,
   AdapterSessionCurrencySnapshot,
-  SessionOwnershipClaimRequest,
   SessionOwnershipListClaimsRequest,
 } from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
@@ -86,16 +85,23 @@ export type OwnershipTransaction = Parameters<TransactionCallback<unknown>>[0];
  * serialize against, and the agent may be committed right after), while one that
  * only retires a claim row must proceed (a claim whose agent is gone must stay
  * releasable). Each call site states its own policy.
+ * **The locked row is returned, and reading it is not a read-then-write.** Once
+ * this statement has taken the row, no other transaction can change it until
+ * this one ends, so a guard stated against the returned row holds for the rest
+ * of the operation just as firmly as a conjunct would. The keyless reservation
+ * and the movement settle state their membership and `disposed` guards that way;
+ * every operation that also writes the *claims* table still carries its guards
+ * in the statements that touch it, because those rows are not locked here.
  * @param tx - Open transaction.
  * @param tables - Dialect-resolved session storage tables.
  * @param agentId - Agent whose ownership transitions are being serialized.
- * @returns Whether an agent row existed and is now locked.
+ * @returns The locked agent row, or `undefined` when no agent row exists.
  */
 export async function lockAgentAllocation(
   tx: OwnershipTransaction,
   tables: OwnershipTables,
   agentId: string,
-): Promise<boolean> {
+): Promise<AgentRow | undefined> {
   const { agents } = tables;
   // Known cost, deliberately carried: on Postgres a self-update writes a new
   // tuple version per operation, so heavy claim churn adds autovacuum pressure
@@ -103,12 +109,12 @@ export async function lockAgentAllocation(
   // expressible through this SQLite-typed transaction face without a dialect
   // seam, and ownership operations are per provider-session lifecycle events,
   // not per message — revisit only if vacuum statistics on `agents` say so.
-  const locked = await tx
+  const [locked] = await tx
     .update(agents)
     .set({ currencyFence: agents.currencyFence })
     .where(eq(agents.agentId, agentId))
-    .returning({ agentId: agents.agentId });
-  return locked.length > 0;
+    .returning();
+  return locked;
 }
 
 /**
@@ -275,53 +281,122 @@ export function mapCurrency(row: AgentRow): AdapterSessionCurrencySnapshot {
 }
 
 /**
+ * Everything a claim generation needs, independent of which RPC allocates it.
+ *
+ * `claim` and `settleMovement` both allocate generations and must allocate them
+ * identically — same guards, same fence rule, same unique index. Naming the
+ * inputs once is what keeps the two from drifting: neither operation can add a
+ * guard the other silently lacks.
+ */
+export interface ClaimAcquisition {
+  /** Stable runtime machine identity that owns the provider-native session store. */
+  readonly machineId: string;
+  /** Adapter runtime instance that owns the provider process. */
+  readonly adapterId: string;
+  /** Adapter type name of the owning runtime, carried for diagnostics. */
+  readonly adapterName: string;
+  /** Provider session the key is being taken on. */
+  readonly providerSessionId: string;
+  /** Session the claiming agent belongs to. */
+  readonly sessionId: string;
+  /** Agent that will own the provider session. */
+  readonly agentId: string;
+  /** Caller-minted identity for the generation being taken. */
+  readonly claimToken: string;
+}
+
+/**
+ * How much a statement demands of the agent it writes on behalf of.
+ *
+ * - `live` — the agent must exist, be a member of the named session, and not be
+ *   `disposed`. Every statement that can *end in ownership* demands this.
+ * - `any-status` — membership only. The one act a removed agent must still be
+ *   able to perform is giving authority *up*: clearing its own lead designation,
+ *   and retiring its claims. Demanding liveness there would strand exactly the
+ *   designations and keys that most need retiring.
+ */
+export type AgentGuardMode = 'live' | 'any-status';
+
+/**
+ * Restate the agent a statement writes on behalf of as its own predicate.
+ *
+ * Every statement that can end in ownership repeats this — the acquiring SELECT,
+ * both takeover UPDATEs, the lead designation — rather than trusting a preceding
+ * read, because `storage:agent.set` and `storage:agent.updateStatus` can move or
+ * dispose the agent at any instant and nothing pins its row for the statements
+ * that touch the *claims* table. `disposed` is absorbing for ownership: a
+ * removed agent may never re-acquire authority, and a service-side status check
+ * before the write is precisely the read-then-write this seam exists to remove.
+ * @param tables - Dialect-resolved session storage tables.
+ * @param agentId - Agent the statement acts for.
+ * @param sessionId - Session the statement files the act under.
+ * @param mode - How much the statement demands of that agent.
+ * @returns Predicate over the agents table.
+ */
+export function buildAgentGuard(
+  tables: OwnershipTables,
+  agentId: string,
+  sessionId: string,
+  mode: AgentGuardMode,
+): SQL {
+  const { agents } = tables;
+  return sql`exists (select 1 from ${agents} where ${and(
+    eq(agents.agentId, agentId),
+    eq(agents.sessionId, sessionId),
+    ...(mode === 'live' ? [ne(agents.status, 'disposed')] : []),
+  )})`;
+}
+
+/**
  * Build the SELECT that supplies the acquiring INSERT's row.
  *
  * The guards live in this statement rather than in a preceding read: the row is
- * produced only while the agent exists, its session exists, and the agent is a
- * member of *that* session, and the unique ownership index decides the rest.
- * The membership equality is what keeps a claim from being filed under a session
- * the owning agent has nothing to do with — and, with a lead designation
- * attached, from handing that session's lead to it. The fence is allocated in
- * the same statement by {@link fenceAllocation}, so an agent that already holds
- * a live claim cannot take a second key at the same fence.
+ * produced only while the agent exists, its session exists, the agent is a
+ * member of *that* session and the agent is not `disposed`, and the unique
+ * ownership index decides the rest. The membership equality is what keeps a
+ * claim from being filed under a session the owning agent has nothing to do with
+ * — and, with a lead designation attached, from handing that session's lead to
+ * it. The fence is allocated in the same statement by {@link fenceAllocation},
+ * so an agent that already holds a live claim cannot take a second key at the
+ * same fence.
  *
  * `INSERT ... SELECT` takes its column list from the table's full insertable
  * column order, so the select list is positional. Declaring it as a record keyed
  * by the row type makes an added column a compile error rather than a runtime
  * column-count mismatch; the literal order below is the schema's order.
  * @param tables - Dialect-resolved session storage tables.
- * @param payload - Claim request being acquired.
+ * @param acquisition - The generation being taken.
  * @param claimId - Identifier minted for the new claim row.
  * @param now - Acquisition timestamp.
  * @returns The guarded SELECT feeding the acquiring INSERT.
  */
 export function buildAcquisitionSelect(
   tables: OwnershipTables,
-  payload: SessionOwnershipClaimRequest,
+  acquisition: ClaimAcquisition,
   claimId: string,
   now: number,
 ): SQL {
   const { agents, sessions } = tables;
   const columns: Record<keyof ClaimRow, SQL> = {
     claimId: asText(claimId),
-    machineId: asText(payload.machineId),
-    adapterId: asText(payload.adapterId),
-    adapterName: asText(payload.adapterName),
-    providerSessionId: asText(payload.providerSessionId),
-    sessionId: asText(payload.sessionId),
-    agentId: asText(payload.agentId),
-    claimToken: asText(payload.claimToken),
-    fence: fenceAllocation(tables, payload.agentId, sql`${agents.currencyFence}`),
+    machineId: asText(acquisition.machineId),
+    adapterId: asText(acquisition.adapterId),
+    adapterName: asText(acquisition.adapterName),
+    providerSessionId: asText(acquisition.providerSessionId),
+    sessionId: asText(acquisition.sessionId),
+    agentId: asText(acquisition.agentId),
+    claimToken: asText(acquisition.claimToken),
+    fence: fenceAllocation(tables, acquisition.agentId, sql`${agents.currencyFence}`),
     status: asText('held'),
     claimedAt: asEpochMs(now),
     updatedAt: asEpochMs(now),
   };
 
   return sql`select ${sql.join(Object.values(columns), sql`, `)} from ${agents}
-    where ${eq(agents.agentId, payload.agentId)}
-      and ${eq(agents.sessionId, payload.sessionId)}
-      and exists (select 1 from ${sessions} where ${eq(sessions.sessionId, payload.sessionId)})`;
+    where ${eq(agents.agentId, acquisition.agentId)}
+      and ${eq(agents.sessionId, acquisition.sessionId)}
+      and ${ne(agents.status, 'disposed')}
+      and exists (select 1 from ${sessions} where ${eq(sessions.sessionId, acquisition.sessionId)})`;
 }
 
 /**

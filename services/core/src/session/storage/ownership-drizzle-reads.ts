@@ -10,20 +10,29 @@
  * @packageDocumentation
  */
 import { and, eq } from 'drizzle-orm';
-import type { SessionOwnershipClaimRequest } from '@makaio/contracts';
 import type { AgentRow, ClaimRow, OwnershipTables, OwnershipTransaction } from './ownership-drizzle-rows.js';
+
+/** The ownership key a claim is filed under. */
+export interface ClaimKey {
+  /** Stable runtime machine identity that owns the provider-native session store. */
+  readonly machineId: string;
+  /** Adapter runtime instance that owns the provider process. */
+  readonly adapterId: string;
+  /** Provider's own session/thread identifier. */
+  readonly providerSessionId: string;
+}
 
 /**
  * Read the claim currently holding an ownership key.
  * @param tx - Open transaction.
  * @param tables - Dialect-resolved session storage tables.
- * @param payload - Claim request naming the ownership key.
+ * @param key - Ownership key to look up.
  * @returns The holding row, or `undefined` when the key is free.
  */
 export async function readClaimByKey(
   tx: OwnershipTransaction,
   tables: OwnershipTables,
-  payload: SessionOwnershipClaimRequest,
+  key: ClaimKey,
 ): Promise<ClaimRow | undefined> {
   const { adapterSessionClaims } = tables;
   const [row] = await tx
@@ -31,9 +40,9 @@ export async function readClaimByKey(
     .from(adapterSessionClaims)
     .where(
       and(
-        eq(adapterSessionClaims.machineId, payload.machineId),
-        eq(adapterSessionClaims.adapterId, payload.adapterId),
-        eq(adapterSessionClaims.providerSessionId, payload.providerSessionId),
+        eq(adapterSessionClaims.machineId, key.machineId),
+        eq(adapterSessionClaims.adapterId, key.adapterId),
+        eq(adapterSessionClaims.providerSessionId, key.providerSessionId),
       ),
     )
     .limit(1);

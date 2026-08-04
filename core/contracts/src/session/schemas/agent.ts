@@ -4,12 +4,29 @@ import { AdapterSessionCurrencyStateSchema, AgentRoleSchema } from './primitives
 
 /**
  * Agent lifecycle status.
+ * - 'starting': The agent row exists and its start is in flight; no connector is
+ *   confirmed yet. Distinct from `'idle'` because a caller that persists the row
+ *   before dispatching cannot claim connector readiness, and `'idle'` already
+ *   means exactly that — a consumer seeing `'idle'` will use the agent without
+ *   rehydrating it.
  * - 'idle': Connector ready, no active turn
  * - 'active': Turn in progress
  * - 'dead': Connector lost, awaiting rehydration
  * - 'disposed': Agent replaced (cross-adapter switch) — retained for message metadata
+ *
+ * **`'disposed'` is terminal.** Storage refuses every later transition out of it,
+ * on both the compare-and-swap seam (`storage:agent.updateStatus`) and the
+ * whole-record one (`storage:agent.set`, whose conflict path keeps the stored
+ * value). Ownership authority is a predicate over this column, so a revived
+ * status would let a removed agent reserve and settle again.
+ *
+ * **Status is never liveness evidence.** Whether a `'starting'` row belongs to an
+ * attempt that is still running, or to a process that died mid-start, is decided
+ * by the starting runtime's own in-flight registry and by a compare-and-swap on
+ * this column (`storage:agent.updateStatus`'s `expectedStatus`) — never by
+ * reading the status alone.
  */
-export const AgentStatusSchema = z.enum(['idle', 'active', 'dead', 'disposed']);
+export const AgentStatusSchema = z.enum(['starting', 'idle', 'active', 'dead', 'disposed']);
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
 /**

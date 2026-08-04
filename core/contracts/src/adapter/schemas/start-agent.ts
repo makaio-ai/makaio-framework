@@ -11,6 +11,29 @@ import { ClientProfileNameSchema } from '../../client/profile.js';
 type StartAgentMode = 'create' | 'resume' | 'fork';
 
 /**
+ * How far a failed start got, as evidence for the caller's cleanup decision.
+ *
+ * A caller that reserved provider-session ownership before dispatching has to
+ * decide between two incompatible cleanups: give the reservation back, or retire
+ * it as possibly-live debris. Only the adapter knows which, and a bare error
+ * message cannot carry it.
+ *
+ * Exactly two members, because a start has exactly two knowable outcomes. A
+ * thrown start carries no disposition at all and callers must treat it as
+ * `'dispatch-uncertain'`: the throw may come from anywhere in provider-context
+ * activation, agent creation or the connector start.
+ */
+export const AdapterStartDispositionSchema = z.enum([
+  /** Refused before anything was sent to the provider. Nothing exists provider-side. */
+  'not-dispatched',
+  /** The provider may hold a live session; the adapter cannot say it does not. */
+  'dispatch-uncertain',
+]);
+
+/** {@inheritDoc AdapterStartDispositionSchema} */
+export type AdapterStartDisposition = z.infer<typeof AdapterStartDispositionSchema>;
+
+/**
  * Common fields for all startAgent request modes.
  * Extracted to avoid repetition in discriminated union variants.
  */
@@ -18,6 +41,24 @@ const StartAgentBaseSchema = z
   .object({
     /** Target adapter instance ID */
     adapterId: z.string(),
+
+    /**
+     * Agent identity minted by the caller.
+     *
+     * Supplied when the caller has already persisted the agent row — which a
+     * caller that reserves session ownership before dispatching must do,
+     * because a reservation verifies the (agent, session) pair against storage.
+     *
+     * Its presence also **transfers ownership of the agent row**: the adapter
+     * registers, starts and emits lifecycle events for the agent as usual, but
+     * performs no whole-record agent write of its own. Otherwise its
+     * unconditional `status: 'idle'` write would overwrite the in-flight status
+     * the caller persisted before dispatching.
+     *
+     * Omitted, the adapter mints the identity and owns the row, exactly as it
+     * always has.
+     */
+    agentId: z.string().optional(),
 
     /** Resolved harness ID for tool policy lookup. */
     harnessId: z.string().optional(),
@@ -195,6 +236,9 @@ export const StartAgentSchema = {
 
       /** Error message describing the failure */
       message: z.string(),
+
+      /** {@inheritDoc AdapterStartDispositionSchema} */
+      dispatch: AdapterStartDispositionSchema,
     }),
   ]),
 };

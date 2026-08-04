@@ -452,12 +452,16 @@ export const agentsDual = defineDualTable(
 
     /**
      * Agent lifecycle status.
+     * - 'starting': Start in flight; the row exists but no connector is confirmed
      * - 'idle': Connector ready, no active turn
      * - 'active': Turn in progress
      * - 'dead': Connector lost, awaiting rehydration
      * - 'disposed': Agent replaced (cross-adapter switch) — retained for message metadata
+     *
+     * Stored as plain text on both dialects: the enum narrows the inferred TypeScript
+     * union, it is not a database constraint, so widening the set needs no DDL.
      */
-    status: c.textEnum('status', { enum: ['idle', 'active', 'dead', 'disposed'] as const }).notNull(),
+    status: c.textEnum('status', { enum: ['starting', 'idle', 'active', 'dead', 'disposed'] as const }).notNull(),
 
     /** Timestamp when agent was created (= when added to session) */
     createdAt: c.epochMs('created_at').notNull(),

@@ -244,5 +244,30 @@ describeStorageConformance('handlers-sessions', (config) => {
       expect(listResult.agents[0].status).toBe('active');
       expect(listResult.agents[0].allowedDirectories).toEqual(['/workspace', '/tmp']);
     });
+
+    it('keeps a stored disposed status while still applying the rest of the write', async () => {
+      // The upsert's conflict clause merges `status` in SQL rather than taking
+      // the caller's value outright, so the rule has to hold on every dialect,
+      // not only on the one the shared backend suite runs against.
+      const sessionId = `sess-agent-${crypto.randomUUID()}`;
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session: makeSession({ sessionId }) });
+
+      const agentId = `agent-${crypto.randomUUID()}`;
+      const agent = makeAgent({ agentId, sessionId, status: 'idle' });
+      await MakaioBus.request(AgentStorageSubjects.set, { agentId, agent });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+
+      const revival = await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+      expect(revival).toEqual({ success: true, transitioned: false });
+
+      await MakaioBus.request(AgentStorageSubjects.set, {
+        agentId,
+        agent: { ...agent, status: 'idle', allowedDirectories: ['/tmp'] },
+      });
+
+      const { agent: stored } = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+      expect(stored?.status).toBe('disposed');
+      expect(stored?.allowedDirectories).toEqual(['/tmp']);
+    });
   });
 });

@@ -411,6 +411,7 @@ describe('SubagentService', () => {
         ctx.setResult({
           success: false,
           message: 'Adapter rejected the request',
+          dispatch: 'not-dispatched',
         });
       });
 

@@ -200,7 +200,7 @@ describe('SubagentService provider context', () => {
     });
     mocks.setStartAgentHandler((ctx) => {
       startCalled = true;
-      ctx.setResult({ success: false, message: 'must not start' });
+      ctx.setResult({ success: false, message: 'must not start', dispatch: 'not-dispatched' });
     });
 
     const result = await MakaioBus.request(SubagentSubjects.execute, {
@@ -242,7 +242,7 @@ describe('SubagentService provider context', () => {
     });
     mocks.setStartAgentHandler((ctx) => {
       startCalled = true;
-      ctx.setResult({ success: false, message: 'must not start' });
+      ctx.setResult({ success: false, message: 'must not start', dispatch: 'not-dispatched' });
     });
 
     const result = await MakaioBus.request(SubagentSubjects.execute, {
@@ -279,7 +279,7 @@ describe('SubagentService provider context', () => {
     });
     mocks.setStartAgentHandler((ctx) => {
       startCalled = true;
-      ctx.setResult({ success: false, message: 'must not start' });
+      ctx.setResult({ success: false, message: 'must not start', dispatch: 'not-dispatched' });
     });
 
     const result = await MakaioBus.request(SubagentSubjects.execute, {

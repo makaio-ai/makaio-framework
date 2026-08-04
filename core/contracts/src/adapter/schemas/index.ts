@@ -24,8 +24,8 @@ export type {
 // RPC schemas
 export { GetCapabilitiesSchema } from './get-capabilities.js';
 export type { GetCapabilitiesRequest, GetCapabilitiesResponse } from './get-capabilities.js';
-export { StartAgentSchema } from './start-agent.js';
-export type { StartAgentRequest, StartAgentResponse } from './start-agent.js';
+export { AdapterStartDispositionSchema, StartAgentSchema } from './start-agent.js';
+export type { AdapterStartDisposition, StartAgentRequest, StartAgentResponse } from './start-agent.js';
 export { InferSchema } from './infer.js';
 export type { InferRequest, InferResponse } from './infer.js';
 export { ListAgentsSchema } from './list-agents.js';

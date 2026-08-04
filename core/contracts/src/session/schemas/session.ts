@@ -96,10 +96,10 @@ export const MakaioSessionSchema = z.object({
    * and the `storage:session.set` body — and neither carries currency into
    * storage: both storage backends omit these columns from `set` so a caller
    * holding a pre-movement snapshot cannot resurrect an abandoned provider
-   * session. The single write path that reaches the columns is
-   * `storage:session.update`, where `validateAdapterSessionCurrencyPair`
-   * enforces the invariant in front of both backends, matching the sessions
-   * table CHECK constraint. Refining here would also convert this object into a
+   * session. The single write path that reaches the columns is the
+   * `storage:sessionOwnership` seam, whose currency target schema enforces the
+   * invariant in front of both backends, matching the sessions table CHECK
+   * constraint. Refining here would also convert this object into a
    * `ZodEffects` and break the `.extend()` composition that
    * `SessionWithPreviewSchema`, the search-result schema, and host-layer
    * `extendSubject()` widening depend on.

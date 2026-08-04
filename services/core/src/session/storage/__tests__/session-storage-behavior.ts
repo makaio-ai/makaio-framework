@@ -137,88 +137,101 @@ export function describeSessionStorageBehavior(): void {
       expect(stored.session?.currentAdapterSessionId).toBeUndefined();
     });
 
-    it('rejects an update that supplies only one half of the currency pair', async () => {
-      const session = createSession({ sessionId: 'currency-half-pair', adapterSessionId: 'origin-id' });
+    // Writing the pair is not exercised here, because neither surface this suite
+    // covers can write it: `storage:session.update` no longer carries the pair
+    // and `storage:session.set` never did. The single writer is the
+    // `storage:sessionOwnership` seam, whose own shared suite asserts both the
+    // mirror it writes and that a whole-record `set` cannot clobber it.
+  });
+
+  describe('status compare-and-swap', () => {
+    it('applies an update only while the stored status is one the caller expected', async () => {
+      const session = createSession({ sessionId: 'status-cas', status: 'closed' });
       await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
 
-      await expect(
-        MakaioBus.request(SessionStorageSubjects.update, {
-          sessionId: session.sessionId,
-          currentAdapterSessionId: 'rotated-id',
-        }),
-      ).rejects.toThrow(/currentAdapterSessionIdState is required/i);
+      const applied = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        status: 'active',
+        expectedStatus: ['closed'],
+      });
+      expect(applied.success).toBe(true);
+      const reopened = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(reopened.session?.status).toBe('active');
 
-      await expect(
-        MakaioBus.request(SessionStorageSubjects.update, {
-          sessionId: session.sessionId,
-          currentAdapterSessionIdState: 'confirmed',
-        }),
-      ).rejects.toThrow(/currentAdapterSessionId is required/i);
+      // The same call again: the row moved on, so the write must not land. This
+      // is what keeps an observation from undoing a decision that was taken
+      // after it read the row.
+      const refused = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        status: 'closed',
+        expectedStatus: ['closed'],
+      });
+      expect(refused.success).toBe(false);
+      const unchanged = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(unchanged.session?.status).toBe('active');
+    });
 
-      // A pair the storage CHECK constraint would refuse is refused earlier, at
-      // the contract boundary, so both backends behave identically.
-      await expect(
-        MakaioBus.request(SessionStorageSubjects.update, {
-          sessionId: session.sessionId,
-          currentAdapterSessionId: null,
-          currentAdapterSessionIdState: 'confirmed',
-        }),
-      ).rejects.toThrow(/must be a string exactly when/i);
+    it('guards every field the update carries, not only the status', async () => {
+      const session = createSession({ sessionId: 'status-cas-fields', status: 'archived', title: 'original' });
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
 
+      const refused = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        status: 'active',
+        title: 'renamed',
+        expectedStatus: ['closed'],
+      });
+
+      expect(refused.success).toBe(false);
       const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
-      expect(stored.session?.currentAdapterSessionIdState).toBe('inherited');
-      expect(stored.session?.currentAdapterSessionId).toBeUndefined();
+      expect(stored.session?.status).toBe('archived');
+      expect(stored.session?.title).toBe('original');
     });
 
-    it('persists the currency pair through partial update', async () => {
-      const session = createSession({ sessionId: 'currency-update', adapterSessionId: 'origin-id' });
+    it('leaves an omitted expectation unconditional', async () => {
+      const session = createSession({ sessionId: 'status-cas-omitted', status: 'archived' });
       await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
 
-      await MakaioBus.request(SessionStorageSubjects.update, {
+      const applied = await MakaioBus.request(SessionStorageSubjects.update, {
         sessionId: session.sessionId,
-        currentAdapterSessionId: 'rotated-id',
-        currentAdapterSessionIdState: 'confirmed',
+        status: 'active',
       });
 
-      const confirmed = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
-      expect(confirmed.session?.currentAdapterSessionId).toBe('rotated-id');
-      expect(confirmed.session?.currentAdapterSessionIdState).toBe('confirmed');
-      // The origin identity is write-once provenance and must never move.
-      expect(confirmed.session?.adapterSessionId).toBe('origin-id');
-
-      await MakaioBus.request(SessionStorageSubjects.update, {
-        sessionId: session.sessionId,
-        currentAdapterSessionId: null,
-        currentAdapterSessionIdState: 'moved',
-      });
-
-      const moved = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
-      expect(moved.session?.currentAdapterSessionId).toBeUndefined();
-      expect(moved.session?.currentAdapterSessionIdState).toBe('moved');
-      expect(moved.session?.adapterSessionId).toBe('origin-id');
+      expect(applied.success).toBe(true);
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(stored.session?.status).toBe('active');
     });
+  });
 
-    it('leaves the currency pair untouched on a whole-record set', async () => {
-      // `set` is a read-modify-write of a full snapshot, so it deliberately does
-      // not carry currency — otherwise a stale writer could resurrect an
-      // abandoned provider session.
-      const session = createSession({ sessionId: 'currency-set-isolation', adapterSessionId: 'origin-id' });
+  describe('lead designation', () => {
+    it('takes the caller’s designation on insert and the stored one on conflict', async () => {
+      const session = createSession({ sessionId: 'lead-designation', leadAgentId: 'agent-inserted' });
+
+      // A fresh row has no designation to lose, so the insert keeps the
+      // caller's value — the same split the agent row's origin column makes.
       await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
-      await MakaioBus.request(SessionStorageSubjects.update, {
-        sessionId: session.sessionId,
-        currentAdapterSessionId: 'rotated-id',
-        currentAdapterSessionIdState: 'confirmed',
-      });
+      const inserted = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(inserted.session?.leadAgentId).toBe('agent-inserted');
 
+      // On conflict it is dropped: `set` carries a caller-held snapshot with no
+      // expectation in it, and the designation's single writer — the reserving
+      // transaction — writes it under a compare-and-swap.
       await MakaioBus.request(SessionStorageSubjects.set, {
         sessionId: session.sessionId,
-        session: { ...session, title: 'renamed' },
+        session: { ...inserted.session!, leadAgentId: 'agent-snapshot', title: 'renamed' },
       });
+      const afterConflict = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(afterConflict.session?.title).toBe('renamed');
+      expect(afterConflict.session?.leadAgentId).toBe('agent-inserted');
 
-      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
-      expect(stored.session?.title).toBe('renamed');
-      expect(stored.session?.currentAdapterSessionId).toBe('rotated-id');
-      expect(stored.session?.currentAdapterSessionIdState).toBe('confirmed');
+      // Unsetting it is refused for the same reason, so a stale reader cannot
+      // leave a session leaderless by accident.
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: session.sessionId,
+        session: { ...inserted.session!, leadAgentId: undefined },
+      });
+      const afterClear = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(afterClear.session?.leadAgentId).toBe('agent-inserted');
     });
   });
 

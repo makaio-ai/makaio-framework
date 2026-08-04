@@ -76,7 +76,7 @@ describe('AIAdapter - Session close-driven agent eviction', () => {
     cleanupFns.push(
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
         updateStatusCalls.push({ agentId: ctx.payload.agentId, status: ctx.payload.status });
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
 
@@ -150,7 +150,7 @@ describe('AIAdapter - Session close-driven agent eviction', () => {
     cleanupFns.push(
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
         updateStatusCalls.push({ agentId: ctx.payload.agentId, status: ctx.payload.status });
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
 
@@ -234,7 +234,7 @@ describe('AIAdapter - Session close-driven agent eviction', () => {
 
     cleanupFns.push(
       MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, transitioned: true });
       }),
     );
 

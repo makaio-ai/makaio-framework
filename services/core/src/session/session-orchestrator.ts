@@ -7,19 +7,46 @@ import {
   type AdapterSelection,
   type AgentSelectionBase,
   type CanonicalModelSelection,
+  type IMakaioSession,
   type MessageInput,
+  type ResolvedProviderContext,
   type SessionContext,
+  type StartAgentRequest,
   isCanonicalModelParseError,
   parseCanonicalModel,
 } from '@makaio/contracts';
 import { AdapterRegistry } from './adapter-registry.js';
 import { MessageStorageSubjects } from './messages/index.js';
 import { MessageRoutingSubjects } from './message-routing/index.js';
-import { AgentStorageSubjects } from './storage/agent-namespace.js';
+import {
+  recoverDeadAgentExclusively,
+  resolveInFlightStarts,
+  type InFlightStartResolution,
+} from './handlers/in-flight-start-join.js';
+import { startLeadAgent } from './handlers/lead-start.js';
+import { SessionStartError } from './handlers/session-start-error.js';
 import { SessionTurnManager, USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR } from './session-turn-manager.js';
 import type { TurnCompletionResult } from './turn-completion.js';
 import { emitSessionTurnStarted, emitSessionUserMessageSent } from './session-lifecycle-events.js';
 import { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
+
+/**
+ * Fold one agent-id set into another, in place.
+ * @param target - Set that accumulates.
+ * @param source - Ids to add.
+ */
+function addAll(target: Set<string>, source: ReadonlySet<string>): void {
+  for (const value of source) target.add(value);
+}
+
+/**
+ * A resolution that adopted nothing — the ordinary start, which introduces one
+ * agent it just created and therefore has nothing to re-resolve.
+ */
+const EMPTY_START_RESOLUTION: InFlightStartResolution = {
+  droppedAgentIds: new Set<string>(),
+  recoveringAgentIds: new Set<string>(),
+};
 
 /**
  * Minimum public contract for a session orchestrator service.
@@ -34,7 +61,7 @@ export interface ISessionOrchestrator {
   destroy(): void;
 }
 import {
-  buildRecoveryContext,
+  buildPlannedRecoveryContext,
   buildTurnInitiator,
   extractTextContent,
   getOrCreateSession,
@@ -45,6 +72,51 @@ import type { Turn } from './entities/turn.js';
 import { registerAttachHandler } from './handlers/attach-handler.js';
 import { routeToAgentsCore } from './handlers/route-to-agents-core.js';
 import { resolveRuntimeProviderContext } from '../provider-context/index.js';
+import { FRESH_WITH_HISTORY_RECOVERY_PLAN, recoveryPlanResumeTarget } from './recovery-plan.js';
+
+/** Identity and context a lead start carries independently of the selection. */
+interface LeadStartDispatchContext {
+  /** Live adapter instance the start is dispatched to. */
+  adapterId: string;
+  /** Session the agent is started into. */
+  sessionId: string;
+  /** Resolved provider credentials, when the selection named a provider config. */
+  providerContext: ResolvedProviderContext | undefined;
+  /** Session context passed through from the request. */
+  sessionContext: SessionContext | undefined;
+}
+
+/**
+ * Compose the `adapter.startAgent` payload for a fresh lead start.
+ *
+ * Every field is forwarded only when the selection actually carries it: the
+ * adapter distinguishes "not requested" from "requested as undefined", and a
+ * blanket spread would turn the first into the second for every option the
+ * caller left alone. The agent identity is deliberately absent — the reserving
+ * start mints and persists it before dispatching.
+ * @param selection - Direct adapter selection resolved for this start.
+ * @param context - Identity and context the selection does not carry.
+ * @returns The dispatch payload, complete but for the agent identity.
+ */
+function buildLeadStartRequest(selection: AdapterSelection, context: LeadStartDispatchContext): StartAgentRequest {
+  return {
+    adapterId: context.adapterId,
+    sessionId: context.sessionId,
+    role: 'lead',
+    ...(context.providerContext !== undefined && { providerContext: context.providerContext }),
+    ...(context.sessionContext !== undefined && { sessionContext: context.sessionContext }),
+    ...(selection.model !== undefined && { model: selection.model }),
+    ...(selection.reasoningEffort !== undefined && { reasoningEffort: selection.reasoningEffort }),
+    ...(selection.cwd !== undefined && { cwd: selection.cwd }),
+    ...(selection.systemPrompt !== undefined && { systemPrompt: selection.systemPrompt }),
+    ...(selection.allowedTools !== undefined && { allowedTools: selection.allowedTools }),
+    ...(selection.disallowedTools !== undefined && { disallowedTools: selection.disallowedTools }),
+    ...(selection.env !== undefined && { env: selection.env }),
+    ...(selection.mcpSessionContext !== undefined && { mcpSessionContext: selection.mcpSessionContext }),
+    ...(selection.allowedDirectories !== undefined && { allowedDirectories: selection.allowedDirectories }),
+    ...(selection.adapterConfig !== undefined && { adapterConfig: selection.adapterConfig }),
+  };
+}
 
 /**
  * Slim framework session orchestrator.
@@ -56,16 +128,19 @@ import { resolveRuntimeProviderContext } from '../provider-context/index.js';
  *
  * Registers the core session orchestration handlers:
  * 1. Get or create session (via `getOrCreateSession`)
- * 2. Start agent if session has no agents — resolves the canonical
+ * 2. Resolve any start the session has in flight (via `resolveInFlightStarts`),
+ *    before anything probes an agent or concludes the session has none
+ * 3. Start the lead agent if the session has no agents — resolves the canonical
  *    `adapterName` from direct selections, uses `adapterId` directly when
- *    provided, otherwise resolves it via `AdapterRegistry`, resolves
- *    provider credentials when selected, then calls `AdapterSubjects.startAgent`
- * 3. Resolve target agents (via `resolveTargetAgents`)
- * 4. Verify agent liveness and build recovery context for dead agents
- *    (requestOptional `AdapterSubjects.getAgent` + `buildRecoveryContext`)
- * 5. Get or create turn (via `SessionTurnManager`)
- * 6. Generate message ID and store user message (awaited, persist-before-route)
- *    + routing records (fire-and-forget)
+ *    provided, otherwise resolves it via `AdapterRegistry`, resolves provider
+ *    credentials when selected, then runs the reserved start (via
+ *    `startLeadAgent`)
+ * 4. Resolve target agents (via `resolveTargetAgents`)
+ * 5. Verify agent liveness and recover dead agents under one recovery plan
+ *    (requestOptional `AdapterSubjects.getAgent` + `buildPlannedRecoveryContext`)
+ * 6. Get or create turn (via `SessionTurnManager`), generate the message ID and
+ *    store the user message (awaited, persist-before-route) + routing records
+ *    (fire-and-forget)
  * 7. Emit `session.turn.started` + `session.user_message.sent`
  * 8. Route to agents (via `routeToAgentsCore`, single shared context)
  * 9. Return result with `messageId`, `turnId`, `sessionId`
@@ -124,12 +199,13 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    *
    * Core flow:
    * 1. Get or create session
-   * 2. Start agent if session has no agents (canonicalize direct selections,
-   *    resolve adapterId, resolve provider credentials, startAgent)
-   * 3. Resolve target agents
-   * 4. Verify agent liveness and build recovery context for dead agents
-   * 5. Get or create turn (via SessionTurnManager)
-   * 6. Generate message ID and store user message (awaited) + routing records (fire-and-forget)
+   * 2. Join or arbitrate every start the session has in flight
+   * 3. Start the lead agent if the session has no agents (canonicalize direct
+   *    selections, resolve adapterId, resolve provider credentials, reserved start)
+   * 4. Resolve target agents
+   * 5. Verify agent liveness and recover dead agents under one recovery plan
+   * 6. Get or create turn (via SessionTurnManager), generate the message ID and
+   *    store the user message (awaited) + routing records (fire-and-forget)
    * 7. Emit turn.started + user_message.sent
    * 8. Route to agents (routeToAgentsCore, single shared context)
    * 9. Return result with messageId, turnId, sessionId
@@ -137,7 +213,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
   // eslint-disable-next-line max-lines-per-function -- Core message routing, steps are interdependent
   private registerSendMessageHandler(): void {
     this.cleanups.push(
-      // eslint-disable-next-line max-lines-per-function, complexity -- Core message routing, steps are interdependent
+      // eslint-disable-next-line max-lines-per-function -- Core message routing, steps are interdependent
       this.bus.on(SessionSubjects.sendMessage, async (ctx) => {
         const {
           sessionId,
@@ -164,86 +240,27 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           this.machineId,
         );
 
-        // 2. Start agent if session has no agents
+        // 2. Resolve every start this session has in flight, before anything
+        //    probes an agent or decides the session has none (§4.5).
+        const inFlight = await resolveInFlightStarts(this.bus, session);
+
+        // 3. Start the lead agent if the session has no agents. A start that
+        //    loses the designation race adopts the winner's agents instead, and
+        //    those have never been through step 2 — so whatever it reports as
+        //    needing recovery joins this send's own resolution.
+        const recovering = new Set(inFlight.recoveringAgentIds);
         if (session.agents.length === 0) {
-          const adapterKindSelection = await this.resolveInitialAdapterSelection(
-            agentSelection,
+          const adopted = await this.startLeadAgent(
+            session,
             resolvedSessionId,
+            agentSelection,
             message,
             sessionContext,
           );
-          const adapterName = await this.resolveAdapterName(adapterKindSelection, resolvedSessionId);
-          // When the caller already knows the exact adapter instance (multi-host
-          // topology), bypass the name-based registry lookup entirely.
-          const adapterId =
-            normalizeSelectionString(adapterKindSelection.adapterId) ??
-            (await this.adapterRegistry.resolveAvailable(adapterName));
-          const providerContext =
-            adapterKindSelection.providerConfigId !== undefined
-              ? await resolveRuntimeProviderContext(this.bus, {
-                  adapterName,
-                  providerConfigId: adapterKindSelection.providerConfigId,
-                })
-              : undefined;
-          const providerConfigId = adapterKindSelection.providerConfigId ?? providerContext?.providerConfigId;
-          const startResult = await this.bus.request(AdapterSubjects.startAgent, {
-            adapterId,
-            sessionId: resolvedSessionId,
-            role: 'lead',
-            ...(providerContext !== undefined && { providerContext }),
-            ...(adapterKindSelection.model !== undefined && { model: adapterKindSelection.model }),
-            ...(adapterKindSelection.reasoningEffort !== undefined && {
-              reasoningEffort: adapterKindSelection.reasoningEffort,
-            }),
-            ...(adapterKindSelection.cwd !== undefined && { cwd: adapterKindSelection.cwd }),
-            ...(adapterKindSelection.systemPrompt !== undefined && { systemPrompt: adapterKindSelection.systemPrompt }),
-            ...(adapterKindSelection.allowedTools !== undefined && { allowedTools: adapterKindSelection.allowedTools }),
-            ...(adapterKindSelection.disallowedTools !== undefined && {
-              disallowedTools: adapterKindSelection.disallowedTools,
-            }),
-            ...(adapterKindSelection.env !== undefined && { env: adapterKindSelection.env }),
-            ...(adapterKindSelection.mcpSessionContext !== undefined && {
-              mcpSessionContext: adapterKindSelection.mcpSessionContext,
-            }),
-            ...(adapterKindSelection.allowedDirectories !== undefined && {
-              allowedDirectories: adapterKindSelection.allowedDirectories,
-            }),
-            ...(adapterKindSelection.adapterConfig !== undefined && {
-              adapterConfig: adapterKindSelection.adapterConfig,
-            }),
-            ...(sessionContext !== undefined && { sessionContext }),
-          });
-
-          if (!startResult.success) {
-            throw new Error(
-              `[SessionOrchestrator.sendMessage] Failed to start agent (sessionId=${resolvedSessionId}, adapterName=${adapterName}): ${startResult.message}`,
-            );
-          }
-
-          const now = Date.now();
-          session.agents.push({
-            agentId: startResult.agentId,
-            adapterId: startResult.adapterId,
-            adapterName,
-            sessionId: resolvedSessionId,
-            role: 'lead',
-            status: 'idle',
-            ...(providerConfigId !== undefined && {
-              providerConfigId,
-            }),
-            createdAt: now,
-            lastActivityAt: now,
-          });
-          session.leadAgentId = startResult.agentId;
-          if (providerConfigId !== undefined) {
-            await this.bus.requestOptional(AgentStorageSubjects.updateRuntime, {
-              agentId: startResult.agentId,
-              providerConfigId,
-            });
-          }
+          addAll(recovering, adopted.recoveringAgentIds);
         }
 
-        // 3. Resolve target agents
+        // 4. Resolve target agents
         const targetAgents = resolveTargetAgents(session, targetSpec);
         if (targetAgents.length === 0) {
           throw new Error(
@@ -251,9 +268,15 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           );
         }
 
-        // 4. Verify agent liveness and build recovery context for dead agents
+        // 5. Verify agent liveness and build recovery context for dead agents.
+        // An agent whose in-flight start this send already claimed needs no
+        // probe: the row says `dead` because this caller wrote it there.
         const deadAgentIds = new Set<string>();
         for (const agent of targetAgents) {
+          if (recovering.has(agent.agentId)) {
+            deadAgentIds.add(agent.agentId);
+            continue;
+          }
           const livenessResult = await this.bus.requestOptional(AdapterSubjects.getAgent, {
             agentId: agent.agentId,
             adapterId: agent.adapterId,
@@ -263,20 +286,30 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           }
         }
 
+        // The framework orchestrator evaluates no locality, so it can make only
+        // one honest recovery decision: the replacement connector starts fresh
+        // and the stored conversation is injected. Holding it as a plan keeps
+        // the history assembly and the rehydrate call reading one decision — a
+        // host that later resumes natively here changes this value alone, and
+        // both sides follow.
+        const recoveryPlan = FRESH_WITH_HISTORY_RECOVERY_PLAN;
         let recoveryContext: SessionContext | undefined;
         if (deadAgentIds.size > 0) {
-          recoveryContext = await buildRecoveryContext(this.bus, session);
-          // Rehydrate dead agents — reconnects the connector, no-op when unhandled
+          recoveryContext = await buildPlannedRecoveryContext(this.bus, session, recoveryPlan);
+          const resumeAdapterSessionId = recoveryPlanResumeTarget(recoveryPlan);
+          // Rehydrate dead agents — reconnects the connector, no-op when
+          // unhandled. Routed through the in-flight-start seam, which the
+          // entry-point inventory requires of every service-owned path that can
+          // reach a lifecycle call for an *existing* agent identity: two
+          // concurrent sends onto one dead agent would otherwise dispatch two
+          // rehydrates for it, and the second would race the first's connector.
           for (const agent of targetAgents) {
             if (!deadAgentIds.has(agent.agentId)) continue;
-            await this.bus.requestOptional(AdapterSubjects.rehydrateAgent, {
-              agentId: agent.agentId,
-              adapterId: agent.adapterId,
-            });
+            await recoverDeadAgentExclusively(this.bus, agent, resumeAdapterSessionId);
           }
         }
 
-        // 5. Generate one stable message identity before acquiring/preparing.
+        // 6. Generate one stable message identity before acquiring/preparing.
         // The append is awaited so the user message row is durable before the
         // turn events fire and before routing starts: `session.turn.completed`
         // promises the full turn is queryable via `storage:message.getByTurn`
@@ -384,6 +417,87 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         });
       }),
     );
+  }
+
+  /**
+   * Start the session's lead agent, reserved and in the order §7.1 prescribes.
+   *
+   * Only the adapter selection is resolved here; the reordered start itself —
+   * mint the identity, register the attempt, persist the row, reserve, dispatch,
+   * settle, transition — lives in `startLeadAgent` so this class keeps only the
+   * selection knowledge that is genuinely orchestrator-owned.
+   *
+   * A lost designation race is not an error: the session now has the winner's
+   * agent, and this send continues against it. Only a session that *still* has
+   * no agents after the re-read has nothing to send to.
+   * @param session - Session being sent to; its agents and lead are updated in place.
+   * @param sessionId - Resolved session identity.
+   * @param agentSelection - Public agent selection from the request.
+   * @param message - User message, used as canonical-model prompt context.
+   * @param sessionContext - Session context passed through to the adapter.
+   * @returns What the adopted agents need, empty unless a race was lost.
+   */
+  private async startLeadAgent(
+    session: IMakaioSession,
+    sessionId: string,
+    agentSelection: AgentSelectionBase | undefined,
+    message: MessageInput,
+    sessionContext: SessionContext | undefined,
+  ): Promise<InFlightStartResolution> {
+    const selection = await this.resolveInitialAdapterSelection(agentSelection, sessionId, message, sessionContext);
+    const adapterName = await this.resolveAdapterName(selection, sessionId);
+    // When the caller already knows the exact adapter instance (multi-host
+    // topology), bypass the name-based registry lookup entirely.
+    const adapterId =
+      normalizeSelectionString(selection.adapterId) ?? (await this.adapterRegistry.resolveAvailable(adapterName));
+    const providerContext =
+      selection.providerConfigId !== undefined
+        ? await resolveRuntimeProviderContext(this.bus, { adapterName, providerConfigId: selection.providerConfigId })
+        : undefined;
+    const providerConfigId = selection.providerConfigId ?? providerContext?.providerConfigId;
+
+    const result = await startLeadAgent(this.bus, {
+      sessionId,
+      adapterId,
+      adapterName,
+      // What this send actually read. A session can reach the fresh-start branch
+      // with a designation still standing — the in-flight resolution drops an
+      // agent from the target set without touching the lead it may have been.
+      expectedLeadAgentId: session.leadAgentId ?? null,
+      ...(providerConfigId !== undefined && { providerConfigId }),
+      startRequest: buildLeadStartRequest(selection, { adapterId, sessionId, providerContext, sessionContext }),
+    });
+
+    if (result.outcome === 'started') {
+      session.agents.push(result.agent);
+      session.leadAgentId = result.agent.agentId;
+      return EMPTY_START_RESOLUTION;
+    }
+
+    const { session: reread } = await this.bus.request(SessionSubjects.get, { sessionId });
+    if (!reread || reread.agents.length === 0) {
+      throw new SessionStartError(
+        'lead-conflict',
+        `[SessionOrchestrator.sendMessage] lead designation for session ${sessionId} was won by ${result.currentLeadAgentId ?? 'another start'}, which left no agent behind`,
+      );
+    }
+    session.agents = reread.agents;
+    session.leadAgentId = reread.leadAgentId;
+
+    // The winner designated *before* it dispatched, so the agent this send just
+    // adopted is very likely still `starting`. It has to go through the same
+    // consumer rule every other agent did: without it the liveness probe finds
+    // no connector, reads that as dead, and opens a second lifecycle against a
+    // start that is still running — in another process, where this runtime's
+    // registry cannot see it and only the status compare-and-swap can arbitrate.
+    const adopted = await resolveInFlightStarts(this.bus, session);
+    if (session.agents.length === 0) {
+      throw new SessionStartError(
+        'lead-conflict',
+        `[SessionOrchestrator.sendMessage] lead designation for session ${sessionId} was won by ${result.currentLeadAgentId ?? 'another start'}, whose agent did not survive its start`,
+      );
+    }
+    return adopted;
   }
 
   // ---------------------------------------------------------------------------

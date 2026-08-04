@@ -21,6 +21,39 @@ export {
 } from './schemas.js';
 export { AgentRoleSchema, type AgentRole } from './schemas.js';
 export { AgentStatusSchema, type AgentStatus } from './schemas.js';
+// Session-ownership authority — the service surface of the ownership aggregate.
+export {
+  OwnershipTopologySchema,
+  SessionOwnershipContinuationServiceRequestSchema,
+  SessionOwnershipContinuationServiceResponseSchema,
+  SessionOwnershipPrincipalSchema,
+  SessionOwnershipReclaimReasonSchema,
+  SessionOwnershipReconciledClaimSchema,
+  SessionOwnershipReconcileServiceResponseSchema,
+  SessionOwnershipReleaseServiceRequestSchema,
+  SessionOwnershipReservationSchema,
+  SessionOwnershipReserveStartServiceRequestSchema,
+  SessionOwnershipReserveStartServiceResponseSchema,
+  SessionOwnershipServiceMovementSchema,
+  SessionOwnershipSettleMovementServiceRequestSchema,
+  SessionOwnershipSettleMovementServiceResponseSchema,
+} from './schemas.js';
+export type {
+  OwnershipTopology,
+  SessionOwnershipContinuationServiceRequest,
+  SessionOwnershipContinuationServiceResult,
+  SessionOwnershipPrincipal,
+  SessionOwnershipReclaimReason,
+  SessionOwnershipReconciledClaim,
+  SessionOwnershipReconcileServiceResult,
+  SessionOwnershipReleaseServiceRequest,
+  SessionOwnershipReservation,
+  SessionOwnershipReserveStartServiceRequest,
+  SessionOwnershipReserveStartServiceResult,
+  SessionOwnershipServiceMovement,
+  SessionOwnershipSettleMovementServiceRequest,
+  SessionOwnershipSettleMovementServiceResult,
+} from './schemas.js';
 export { BranchKindSchema, type BranchKind } from './schemas.js';
 export type {
   SessionSnapshot,
@@ -193,11 +226,16 @@ export {
   AgentSessionOwnershipRecordSchema,
   SessionOwnershipClaimRequestSchema,
   SessionOwnershipClaimResponseSchema,
+  OwnershipMovementSchema,
   SessionOwnershipListClaimsRequestSchema,
+  SessionOwnershipReleaseAgentClaimsRequestSchema,
+  SessionOwnershipReleaseAgentClaimsResponseSchema,
   SessionOwnershipReleaseRequestSchema,
   SessionOwnershipReleaseResponseSchema,
   SessionOwnershipSettleCurrencyRequestSchema,
   SessionOwnershipSettleCurrencyResponseSchema,
+  SessionOwnershipSettleMovementRequestSchema,
+  SessionOwnershipSettleMovementResponseSchema,
   SessionOwnershipStorageNamespace,
   SessionOwnershipStorageSubjects,
 } from './session-ownership-storage-namespace.js';
@@ -207,13 +245,18 @@ export type {
   AdapterSessionClaimRecord,
   AdapterSessionClaimStatus,
   AgentSessionOwnershipRecord,
+  OwnershipMovement,
   SessionOwnershipClaimRequest,
   SessionOwnershipClaimResult,
   SessionOwnershipListClaimsRequest,
+  SessionOwnershipReleaseAgentClaimsRequest,
+  SessionOwnershipReleaseAgentClaimsResult,
   SessionOwnershipReleaseRequest,
   SessionOwnershipReleaseResult,
   SessionOwnershipSettleCurrencyRequest,
   SessionOwnershipSettleCurrencyResult,
+  SessionOwnershipSettleMovementRequest,
+  SessionOwnershipSettleMovementResult,
 } from './session-ownership-storage-namespace.js';
 
 // Shared adapter-session currency trias (session row and agent row)

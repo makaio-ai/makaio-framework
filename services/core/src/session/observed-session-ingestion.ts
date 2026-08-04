@@ -18,6 +18,7 @@ import {
   MessageStorageSubjects,
   ROOT_SESSION_LINEAGE_KIND,
   SessionRecordMetadataSchema,
+  SessionSubjects,
   type ClientRuntimeStarted,
   type ClientSessionStarted,
   type ClientSessionTurnCompleted,
@@ -455,10 +456,12 @@ export class ObservedSessionIngestionService {
     const importer = await this.resolveImporter(payload.clientId);
     if (importer === null) return;
 
-    const continuation = payload.startMode === 'resume' || payload.startMode === 'compact';
-    const written = continuation
-      ? await this.rebindObservedSession(payload, adapterSessionId, importer.adapterName)
-      : await this.registerObservedSession(payload, adapterSessionId, importer.adapterName);
+    const continuationMode =
+      payload.startMode === 'resume' || payload.startMode === 'compact' ? payload.startMode : undefined;
+    const written =
+      continuationMode !== undefined
+        ? await this.rebindObservedSession(payload, adapterSessionId, importer.adapterName, continuationMode)
+        : await this.registerObservedSession(payload, adapterSessionId, importer.adapterName);
     if (!written) return;
 
     // Post-write double-check: the gate-check above (managedAdapterSessionIds)
@@ -496,15 +499,23 @@ export class ObservedSessionIngestionService {
    *   The registration seam stamps discovered status plus metadata, and its
    *   creation time taken from the observation is the best available — nothing
    *   downstream will correct it.
+   * A successful rebind is also **evidence the conversation is still in use**,
+   * which a `closed` row contradicts — so it is reported to the ownership
+   * authority, which decides what the observation implies for the row (and
+   * which row: a compaction's lineage root, never a synthesized child).
+   * Reporting is this side's whole duty, and it never changes the rebind's own
+   * result.
    * @param payload - `client.session.started` payload
    * @param adapterSessionId - External session id of the continued session
    * @param source - Importer adapter name (import identity of the session)
+   * @param startMode - How the provider continued the conversation
    * @returns True when a stored session was rebound
    */
   private async rebindObservedSession(
     payload: ClientSessionStarted,
     adapterSessionId: string,
     source: string,
+    startMode: 'resume' | 'compact',
   ): Promise<boolean> {
     const result = await this.bus.requestOptional(SessionStorageSubjects.rebindObserved, {
       externalSessionId: adapterSessionId,
@@ -528,9 +539,28 @@ export class ObservedSessionIngestionService {
       debugLog('Observed continuation of an unknown session; leaving creation to the transcript import', {
         adapterSessionId,
         source,
-        startMode: payload.startMode,
+        startMode,
       });
       return false;
+    }
+
+    // Reported, never depended on. The rebind is the durable act here; the
+    // continuation is an *observation* handed to the authority so a closed row
+    // can reopen. An authority that throws must therefore not fail the rebind
+    // that already landed, and must not skip the tracking-stub reconciliation
+    // that follows this call — a swallowed reopen is a stale status, a
+    // propagated one is a lost session.
+    try {
+      await this.bus.requestOptional(SessionSubjects.ownership.continuation, {
+        sessionId: result.data.sessionId,
+        startMode,
+      });
+    } catch (error) {
+      debugLog('Continuation report failed; the rebind stands', {
+        sessionId: result.data.sessionId,
+        startMode,
+        error,
+      });
     }
     return true;
   }

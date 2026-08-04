@@ -22,6 +22,7 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `adapterSession.moved` | [`agent.adapterSession.moved`](#agent.adapterSession.moved) | event | [`adapter-session-moved.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/adapter-session-moved.ts) |
 | `complete` | [`agent.complete`](#agent.complete) | event | [`complete.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/complete.ts) |
 | `contextWindow.updated` | [`agent.contextWindow.updated`](#agent.contextWindow.updated) | event | [`context-window.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/context-window.ts) |
 | `credential.change` | [`agent.credential.change`](#agent.credential.change) | rpc | [`credential-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/credential-change.ts) |
@@ -59,6 +60,47 @@ next: false
 
 ## Subject Details
 
+### <a id="agent.adapterSession.moved"></a>`agent.adapterSession.moved` (event)
+
+The agent's provider-native session identity moved.
+
+Subject: `agent.adapterSession.moved`
+Type: Event (fire-and-forget)
+
+This is the single seam every provider-session movement converges on. The
+session row's origin `adapterSessionId` is write-once import provenance, so
+consumers that need to know *which provider session is resumable right now*
+must track this event rather than re-reading the origin identity.
+
+Producers:
+- **Provider confirmation** — the connector confirmed a session ID that
+  differs from the last one this agent reported (`confirmed: true`).
+- **Connector swap** — the replacement connector confirmed its own session
+  (`confirmed: true`).
+- **Pre-confirmation rotation** — the caller disabled native resume before
+  the provider confirmed anything, so the pending resume target was
+  discarded and the identity rotated (`confirmed: false`).
+- **Cold rehydration** — a restart-time rehydrate minted or confirmed a
+  different provider session than the persisted one (`confirmed: true`).
+
+`agent.started` is deliberately *not* used as the movement signal: cold
+rehydration moves the provider session without dispatching a turn, so a
+turn-scoped event cannot observe it.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string` | yes |
+| `adapterName` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
+| `agentId` | `string` | yes |
+| `clientId` | `string \| undefined` | no |
+| `confirmed` | `boolean` | yes |
+| `messageId` | `string \| undefined` | no |
+| `occurredAt` | `number \| undefined` | no |
+| `providerConfigId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `turnId` | `string \| undefined` | no |
+
 ### <a id="agent.complete"></a>`agent.complete` (event)
 
 Agent turn completed (any terminal outcome).
@@ -84,7 +126,7 @@ Consumers can inspect `outcome` to distinguish success from failure:
 | `message` | `string \| undefined` | no |
 | `messageId` | `string` | yes |
 | `occurredAt` | `number \| undefined` | no |
-| `outcome` | `"error" \| "completed" \| "superseded" \| "merged" \| "cancelled" \| "rejected" \| undefined` | no |
+| `outcome` | `"error" \| "superseded" \| "completed" \| "merged" \| "cancelled" \| "rejected" \| undefined` | no |
 | `providerConfigId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `structuredOutputValidation` | `{ status: "passed"; } \| { status: "enforced"; } \| { status: "failed"; errors: { message: string; instancePath: string; schemaPath: string; }[]; } \| undefined` | no |
@@ -497,7 +539,7 @@ Purpose: Sends a message to an existing agent instance (errors if agent doesn't 
 | `message` | `string \| { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }` | yes |
 | `messageId` | `string \| undefined` | no |
 | `responseSchema` | `{ schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined` | no |
-| `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; cacheStrategy?: "auto" \| "systemPrompt" \| "fullPrefix" \| undefined; turnContext?: Record<string, unknown> \| undefined; requestCorrelation?: { sessionId?: string \| undefined; turnId?: string \| undefined; messageId?: string \| undefined; executionId?: string \| undefined; frameId?: string \| undefined; } \| undefined; nativeLocality?: { kind: "native"; } \| { kind: "degrade"; reason: "adapter-unsupported" \| "adapter-mismatch" \| "no-adapter-session" \| "missing-machine-id" \| "machine-mismatch" \| "cwd-mismatch" \| "transforms-present" \| "compression-present" \| "connector-swap" \| "mid-history-unsupported" \| "hybrid-imported-orchestrated" \| "native-attempt-failed" \| "agent-already-started" \| "fork-point-unresolvable"; } \| { kind: "foreign"; machineId: string; } \| undefined; nativeFork?: { sourceSessionId: string; sourceAdapterSessionId: string; forkPointMessageId?: string \| undefined; targetWorkingDirectory?: string \| undefined; } \| undefined; } \| undefined` | no |
+| `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; cacheStrategy?: "auto" \| "systemPrompt" \| "fullPrefix" \| undefined; turnContext?: Record<string, unknown> \| undefined; requestCorrelation?: { sessionId?: string \| undefined; turnId?: string \| undefined; messageId?: string \| undefined; executionId?: string \| undefined; frameId?: string \| undefined; } \| undefined; nativeLocality?: { kind: "native"; } \| { kind: "degrade"; reason: "adapter-unsupported" \| "adapter-mismatch" \| "no-adapter-session" \| "missing-machine-id" \| "machine-mismatch" \| "cwd-mismatch" \| "transforms-present" \| "compression-present" \| "connector-swap" \| "mid-history-unsupported" \| "hybrid-imported-orchestrated" \| "native-attempt-failed" \| "agent-already-started" \| "fork-point-unresolvable" \| "adapter-session-moved"; } \| { kind: "foreign"; machineId: string; } \| undefined; nativeFork?: { sourceSessionId: string; sourceAdapterSessionId: string; forkPointMessageId?: string \| undefined; targetWorkingDirectory?: string \| undefined; } \| undefined; } \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `turnId` | `string \| undefined` | no |
 
@@ -844,7 +886,7 @@ For full outcome details (supersededBy, mergedInto), listen to user_message.comp
 | `message` | `string \| undefined` | no |
 | `messageId` | `string` | yes |
 | `occurredAt` | `number \| undefined` | no |
-| `outcome` | `"error" \| "completed" \| "superseded" \| "merged" \| "cancelled" \| "rejected"` | yes |
+| `outcome` | `"error" \| "superseded" \| "completed" \| "merged" \| "cancelled" \| "rejected"` | yes |
 | `providerConfigId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `structuredOutputValidation` | `{ status: "passed"; } \| { status: "enforced"; } \| { status: "failed"; errors: { message: string; instancePath: string; schemaPath: string; }[]; } \| undefined` | no |
@@ -983,7 +1025,7 @@ For persistence/reconstruction:
 | `mergedInto` | `string \| undefined` | no |
 | `messageId` | `string` | yes |
 | `occurredAt` | `number \| undefined` | no |
-| `outcome` | `"error" \| "completed" \| "superseded" \| "merged" \| "cancelled" \| "rejected"` | yes |
+| `outcome` | `"error" \| "superseded" \| "completed" \| "merged" \| "cancelled" \| "rejected"` | yes |
 | `providerConfigId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `supersededBy` | `string \| undefined` | no |
