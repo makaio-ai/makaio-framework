@@ -365,8 +365,60 @@ export const agentsDual = defineDualTable(
       .notNull()
       .references(() => sessionsDual.columnPair('sessionId'), { onDelete: 'cascade' }),
 
-    /** Provider's session ID for native resume support */
+    /**
+     * Provider's session ID — this agent's **immutable origin identity**.
+     *
+     * Records which provider session the agent started from, never where that
+     * conversation moved to. The currency pair below carries the movement.
+     */
     adapterSessionId: c.text('adapter_session_id'),
+
+    /**
+     * Provider-confirmed session ID that currently carries this agent's
+     * conversation.
+     *
+     * Meaningful only while `currentAdapterSessionIdState` is `'confirmed'`.
+     * Mirrors the sessions row's currency pair, and like it is deliberately not
+     * part of any unique index: it moves, so it is not an identity key.
+     */
+    currentAdapterSessionId: c.text('current_adapter_session_id'),
+
+    /**
+     * Currency state of this agent's provider-native resume identity.
+     * - 'inherited': never moved; `adapterSessionId` is the valid currency
+     * - 'moved': moved without provider confirmation; nothing is resumable
+     * - 'confirmed': `currentAdapterSessionId` is the valid currency
+     *
+     * Defaulted so pre-existing rows read as `'inherited'` without a backfill.
+     */
+    currentAdapterSessionIdState: c
+      .textEnum('current_adapter_session_id_state', {
+        enum: ['inherited', 'moved', 'confirmed'] as const,
+      })
+      .notNull()
+      .default('inherited'),
+
+    /**
+     * Compare-and-swap revision of this agent's currency.
+     *
+     * Bumped exclusively by the session-ownership storage seam: a settle passes
+     * the revision it read, and the write only lands while the row still carries
+     * it. That is what totally orders two currency writes issued inside one
+     * claim generation. Any other writer bumping it would make the swap fail for
+     * reasons unrelated to currency, which is the same as not having it.
+     */
+    revision: c.int4('revision').notNull().default(0),
+
+    /**
+     * Fence of the claim generation that last wrote this agent's currency.
+     *
+     * Zero while the currency has never been written. Claim generations are
+     * totally ordered by fence, so a settle carrying a lower fence is a stale
+     * owner from a superseded generation and is refused. Persisting the fence
+     * here — rather than only on the claim row — is what makes that refusal
+     * survive the claim being taken over, released, or re-taken.
+     */
+    currencyFence: c.int4('currency_fence').notNull().default(0),
 
     /** Current model identifier */
     model: c.text('model'),
@@ -419,18 +471,178 @@ export const agentsDual = defineDualTable(
       index('agents_adapter_name_idx').on(t.adapterName),
       index('agents_status_idx').on(t.status),
       index('agents_client_id_idx').on(t.clientId),
+      check(
+        'agents_current_adapter_session_id_currency_check',
+        sql`${t.currentAdapterSessionIdState} IN ('inherited', 'moved', 'confirmed') AND (${t.currentAdapterSessionIdState} <> 'confirmed' OR ${t.currentAdapterSessionId} IS NOT NULL) AND (${t.currentAdapterSessionIdState} = 'confirmed' OR ${t.currentAdapterSessionId} IS NULL)`,
+      ),
+      check('agents_ownership_counters_check', sql`${t.revision} >= 0 AND ${t.currencyFence} >= 0`),
     ],
     postgres: (t) => [
       pgIndex('agents_session_id_idx').on(t.sessionId),
       pgIndex('agents_adapter_name_idx').on(t.adapterName),
       pgIndex('agents_status_idx').on(t.status),
       pgIndex('agents_client_id_idx').on(t.clientId),
+      // Same validating single-step ALTER rationale as the sessions row's
+      // currency check above: both columns and the constraint land in one
+      // generated migration, so every row validated by the scan was just created
+      // with the default `'inherited'` / `NULL` pair.
+      pgCheck(
+        'agents_current_adapter_session_id_currency_check',
+        sql`${t.currentAdapterSessionIdState} IN ('inherited', 'moved', 'confirmed') AND (${t.currentAdapterSessionIdState} <> 'confirmed' OR ${t.currentAdapterSessionId} IS NOT NULL) AND (${t.currentAdapterSessionIdState} = 'confirmed' OR ${t.currentAdapterSessionId} IS NULL)`,
+      ),
+      pgCheck('agents_ownership_counters_check', sql`${t.revision} >= 0 AND ${t.currencyFence} >= 0`),
     ],
   },
 );
 
 /** SQLite face of the `agents` table (canonical schema). */
 export const agents = agentsDual.sqlite;
+
+/**
+ * Adapter session claims table schema.
+ *
+ * Durable ownership of provider-native sessions: one row means "this agent, on
+ * this machine, under this adapter runtime, owns this provider session".
+ *
+ * The **existence** of a row is the ownership, and
+ * `uniq_adapter_session_claims_owner` is what makes ownership exclusive: two
+ * runtimes racing to own the same provider thread both attempt an insert against
+ * that index, and exactly one can win. Exclusivity is therefore a property of
+ * the schema, not of a read-then-write in handler code — which matters because
+ * the competing writers may be different processes over the same database, where
+ * no in-process guard can help.
+ *
+ * A clean release deletes the row. `status` exists for the cases where the key
+ * must keep blocking: a teardown that is not confirmed (`releasing`) and an owner
+ * that failed after dispatching to the provider (`abandoned`). Both keep blocking
+ * until an explicit takeover names the row's `claimToken`, which mints a new
+ * token and a higher `fence` on the same row. Storage does not judge whether
+ * that takeover is legitimate — that is the ownership authority's duty.
+ */
+export const adapterSessionClaimsDual = defineDualTable(
+  'adapter_session_claims',
+  (c) => ({
+    /** Stable identifier of the claim row. */
+    claimId: c.text('claim_id').primaryKey(),
+
+    /** Stable runtime machine identity that owns the provider-native session store. */
+    machineId: c.text('machine_id').notNull(),
+
+    /** Adapter runtime instance that owns the provider process. */
+    adapterId: c.text('adapter_id').notNull(),
+
+    /**
+     * Adapter type name of the owning runtime.
+     *
+     * Not part of the ownership key and never compared by any handler: it is
+     * carried for diagnostics and for readers that would otherwise have to join
+     * `agents` to name the adapter. Rejecting a foreign adapter's provider ID —
+     * if that is ever wanted — is the ownership authority's duty, not storage's.
+     */
+    adapterName: c.text('adapter_name').notNull(),
+
+    /** Provider's own session/thread identifier. */
+    providerSessionId: c.text('provider_session_id').notNull(),
+
+    /** Session the claiming agent belongs to. */
+    sessionId: c
+      .text('session_id')
+      .notNull()
+      .references(() => sessionsDual.columnPair('sessionId'), { onDelete: 'cascade' }),
+
+    /**
+     * Agent that owns the provider session under this claim.
+     *
+     * Cascading on agent deletion is deliberate: a claim is the agent's
+     * authority, so an agent that no longer exists must not keep a provider
+     * session blocked.
+     */
+    agentId: c
+      .text('agent_id')
+      .notNull()
+      .references(() => agentsDual.columnPair('agentId'), { onDelete: 'cascade' }),
+
+    /**
+     * Opaque identity of the current claim generation, minted by the claimant.
+     *
+     * Unique among live claims (`uniq_adapter_session_claims_token`), not
+     * merely unique per key: a generation is named once, and `settleCurrency` /
+     * `release` resolve authority by looking the token up directly. A caller
+     * that reuses a live token across keys therefore fails the write rather
+     * than silently authorizing itself against a foreign row. Retired tokens
+     * are not remembered — a released row is deleted and a takeover overwrites
+     * the superseded token — so single use per attempt is the caller's
+     * obligation (see the contract's `claimToken` doc).
+     */
+    claimToken: c.text('claim_token').notNull(),
+
+    /**
+     * Generation counter, totally ordered **per agent**.
+     *
+     * Allocated strictly above every fence the claiming agent already carries —
+     * its `currency_fence`, the fences of all claims it currently holds, and, on
+     * a takeover, the superseded row's fence. That is what keeps one agent's
+     * generations comparable across its whole lifetime, including while it holds
+     * two claims mid-movement.
+     *
+     * Deliberately *not* monotone per ownership key: a cleanly released key
+     * carries no row, so a different agent may re-take it at a lower fence. A
+     * key is refused by the absence of the caller's claim row, never by
+     * comparing fences across agents.
+     *
+     * `uniq_adapter_session_claims_agent_fence` states that order as a property
+     * of the schema. The allocating statements compute the floor from the
+     * agent's own state, which no per-key index constrains: two processes
+     * claiming two *different* keys for one agent have nothing to collide on and
+     * would otherwise both allocate the same fence, after which a settle from
+     * either generation passes the other's guard. Handlers serialize that
+     * allocation by locking the agent row; this index is what refuses the
+     * duplicate if a path ever forgets to.
+     */
+    fence: c.int4('fence').notNull(),
+
+    /**
+     * Claim lifecycle state.
+     * - 'held': a live runtime owns the provider session
+     * - 'releasing': teardown started, not confirmed — still blocks
+     * - 'abandoned': owner failed after dispatch — still blocks until an
+     *   explicit takeover names this row's `claim_token`
+     */
+    status: c
+      .textEnum('status', { enum: ['held', 'releasing', 'abandoned'] as const })
+      .notNull()
+      .default('held'),
+
+    /** Timestamp when the current generation took the claim. */
+    claimedAt: c.epochMs('claimed_at').notNull(),
+
+    /** Timestamp when the claim row last changed. */
+    updatedAt: c.epochMs('updated_at').notNull(),
+  }),
+  {
+    sqlite: (t) => [
+      uniqueIndex('uniq_adapter_session_claims_owner').on(t.machineId, t.adapterId, t.providerSessionId),
+      uniqueIndex('uniq_adapter_session_claims_token').on(t.claimToken),
+      uniqueIndex('uniq_adapter_session_claims_agent_fence').on(t.agentId, t.fence),
+      index('adapter_session_claims_agent_id_idx').on(t.agentId),
+      index('adapter_session_claims_session_id_idx').on(t.sessionId),
+      check('adapter_session_claims_status_check', sql`${t.status} IN ('held', 'releasing', 'abandoned')`),
+      check('adapter_session_claims_fence_check', sql`${t.fence} >= 1`),
+    ],
+    postgres: (t) => [
+      pgUniqueIndex('uniq_adapter_session_claims_owner').on(t.machineId, t.adapterId, t.providerSessionId),
+      pgUniqueIndex('uniq_adapter_session_claims_token').on(t.claimToken),
+      pgUniqueIndex('uniq_adapter_session_claims_agent_fence').on(t.agentId, t.fence),
+      pgIndex('adapter_session_claims_agent_id_idx').on(t.agentId),
+      pgIndex('adapter_session_claims_session_id_idx').on(t.sessionId),
+      pgCheck('adapter_session_claims_status_check', sql`${t.status} IN ('held', 'releasing', 'abandoned')`),
+      pgCheck('adapter_session_claims_fence_check', sql`${t.fence} >= 1`),
+    ],
+  },
+);
+
+/** SQLite face of the `adapter_session_claims` table (canonical schema). */
+export const adapterSessionClaims = adapterSessionClaimsDual.sqlite;
 
 /**
  * Type for inserting a new session.
@@ -451,3 +663,13 @@ export type InsertAgent = typeof agents.$inferInsert;
  * Type for a selected agent row.
  */
 export type SelectAgent = typeof agents.$inferSelect;
+
+/**
+ * Type for inserting a new adapter session claim.
+ */
+export type InsertAdapterSessionClaim = typeof adapterSessionClaims.$inferInsert;
+
+/**
+ * Type for a selected adapter session claim row.
+ */
+export type SelectAdapterSessionClaim = typeof adapterSessionClaims.$inferSelect;

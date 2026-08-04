@@ -72,6 +72,14 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       adapter_name TEXT NOT NULL,
       session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
       adapter_session_id TEXT,
+      current_adapter_session_id TEXT,
+      current_adapter_session_id_state TEXT NOT NULL DEFAULT 'inherited' CHECK (
+        current_adapter_session_id_state IN ('inherited', 'moved', 'confirmed')
+        AND (current_adapter_session_id_state <> 'confirmed' OR current_adapter_session_id IS NOT NULL)
+        AND (current_adapter_session_id_state = 'confirmed' OR current_adapter_session_id IS NULL)
+      ),
+      revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+      currency_fence INTEGER NOT NULL DEFAULT 0 CHECK (currency_fence >= 0),
       model TEXT,
       cwd TEXT,
       allowed_directories TEXT,
@@ -91,6 +99,30 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
   sql`CREATE INDEX IF NOT EXISTS agents_adapter_name_idx ON agents(adapter_name)`,
   sql`CREATE INDEX IF NOT EXISTS agents_status_idx ON agents(status)`,
   sql`CREATE INDEX IF NOT EXISTS agents_client_id_idx ON agents(client_id)`,
+  sql`
+    CREATE TABLE IF NOT EXISTS adapter_session_claims (
+      claim_id TEXT PRIMARY KEY NOT NULL,
+      machine_id TEXT NOT NULL,
+      adapter_id TEXT NOT NULL,
+      adapter_name TEXT NOT NULL,
+      provider_session_id TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+      claim_token TEXT NOT NULL,
+      fence INTEGER NOT NULL CHECK (fence >= 1),
+      status TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'releasing', 'abandoned')),
+      claimed_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `,
+  sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_adapter_session_claims_owner
+    ON adapter_session_claims(machine_id, adapter_id, provider_session_id)
+  `,
+  sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_adapter_session_claims_token ON adapter_session_claims(claim_token)`,
+  sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_adapter_session_claims_agent_fence ON adapter_session_claims(agent_id, fence)`,
+  sql`CREATE INDEX IF NOT EXISTS adapter_session_claims_agent_id_idx ON adapter_session_claims(agent_id)`,
+  sql`CREATE INDEX IF NOT EXISTS adapter_session_claims_session_id_idx ON adapter_session_claims(session_id)`,
 ];
 
 /**

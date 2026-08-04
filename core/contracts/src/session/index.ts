@@ -184,6 +184,49 @@ export {
   type ImportStatus,
 } from './session-storage-namespace.js';
 
+// Session ownership storage — claims, fencing and currency settlement
+export {
+  AdapterSessionClaimDispositionSchema,
+  AdapterSessionClaimKeySchema,
+  AdapterSessionClaimRecordSchema,
+  AdapterSessionClaimStatusSchema,
+  AgentSessionOwnershipRecordSchema,
+  SessionOwnershipClaimRequestSchema,
+  SessionOwnershipClaimResponseSchema,
+  SessionOwnershipListClaimsRequestSchema,
+  SessionOwnershipReleaseRequestSchema,
+  SessionOwnershipReleaseResponseSchema,
+  SessionOwnershipSettleCurrencyRequestSchema,
+  SessionOwnershipSettleCurrencyResponseSchema,
+  SessionOwnershipStorageNamespace,
+  SessionOwnershipStorageSubjects,
+} from './session-ownership-storage-namespace.js';
+export type {
+  AdapterSessionClaimDisposition,
+  AdapterSessionClaimKey,
+  AdapterSessionClaimRecord,
+  AdapterSessionClaimStatus,
+  AgentSessionOwnershipRecord,
+  SessionOwnershipClaimRequest,
+  SessionOwnershipClaimResult,
+  SessionOwnershipListClaimsRequest,
+  SessionOwnershipReleaseRequest,
+  SessionOwnershipReleaseResult,
+  SessionOwnershipSettleCurrencyRequest,
+  SessionOwnershipSettleCurrencyResult,
+} from './session-ownership-storage-namespace.js';
+
+// Shared adapter-session currency trias (session row and agent row)
+export {
+  AdapterSessionCurrencySnapshotSchema,
+  AdapterSessionCurrencyTargetSchema,
+  resolveResumableAdapterSessionId,
+} from './schemas/adapter-session-currency.js';
+export type {
+  AdapterSessionCurrencySnapshot,
+  AdapterSessionCurrencyTarget,
+} from './schemas/adapter-session-currency.js';
+
 // Shared caller-facing shape of session-creation subjects (`session.create` and friends)
 export {
   SessionCreateBaseSchema,

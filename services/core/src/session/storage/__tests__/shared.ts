@@ -1,5 +1,11 @@
 /**
  * Shared test utilities for session storage Drizzle handler tests.
+ *
+ * Handlers register on the global `MakaioBus` singleton, so two test files
+ * running in one worker would answer each other's requests. That is safe only
+ * because vitest's `isolate: true` default is in force and never overridden for
+ * these projects: each test file gets a fresh module registry, and therefore a
+ * fresh bus singleton, in its own worker.
  */
 import { beforeEach, afterEach } from 'vitest';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
@@ -10,6 +16,7 @@ import { installSessionStorageTestSchema } from '../../testing/storage-test-sche
 import { registerDrizzleSessionStorage } from '../drizzle-handler.js';
 import { registerFtsSearchHandler } from '../fts-search-handler.js';
 import { registerDrizzleAgentStorage } from '../agent-drizzle-handler.js';
+import { registerDrizzleSessionOwnershipStorage } from '../ownership-drizzle-handler.js';
 
 /**
  * Creates a test agent with sensible defaults.
@@ -27,6 +34,11 @@ export function createAgent(overrides: Partial<MakaioSessionAgent> = {}): Makaio
     status: 'idle',
     createdAt: now,
     lastActivityAt: now,
+    // Storage defaults the ownership projection, so fixtures carry it too —
+    // otherwise whole-record round-trip assertions drift by those fields.
+    currentAdapterSessionIdState: 'inherited',
+    revision: 0,
+    currencyFence: 0,
     ...overrides,
   };
 }
@@ -80,6 +92,7 @@ export async function createTestDb(): Promise<TestDbContextWithCleanup> {
     handlerCleanups.push(registerDrizzleSessionStorage(MakaioBus, db));
     handlerCleanups.push(registerFtsSearchHandler(MakaioBus, db));
     handlerCleanups.push(registerDrizzleAgentStorage(MakaioBus, db));
+    handlerCleanups.push(registerDrizzleSessionOwnershipStorage(MakaioBus, db));
 
     // Combined cleanup: unsubscribe handlers, close client, delete temp file
     const cleanup = createDbCleanup(cleanupHandlers, close, dbPath);

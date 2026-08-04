@@ -36,6 +36,7 @@ import { WorkerNodeNamespace } from './worker-node/namespace.js';
 
 import { MessageStorageNamespace } from './session/message-storage-namespace.js';
 import { SessionEventStorageNamespace } from './session/session-event-storage-namespace.js';
+import { SessionOwnershipStorageNamespace } from './session/session-ownership-storage-namespace.js';
 import { SessionStorageNamespace } from './session/session-storage-namespace.js';
 import { SkillStorageNamespace } from './skill/storage-namespace.js';
 
@@ -102,6 +103,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
 export const FrameworkStorageNamespaces: readonly RegistrableBusNamespaceDefinition[] = [
   MessageStorageNamespace,
   SessionEventStorageNamespace,
+  SessionOwnershipStorageNamespace,
   SessionStorageNamespace,
   SkillStorageNamespace,
 ] as RegistrableBusNamespaceDefinition[];
