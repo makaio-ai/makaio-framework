@@ -15,7 +15,7 @@ import {
 } from './client-account-change-events.js';
 import { registerMemorySessionImportHandlers } from './memory-import-handlers.js';
 
-// NOTE: do NOT change without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines-per-function: ["error", { "max": 145 }] */
 
 /**

@@ -1,10 +1,11 @@
-// NOTE: do NOT change lint limits without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 425 }] */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, type IMakaioSession, type MakaioSessionAgent, type SessionMessage } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { buildRecoveryContext, recoverAgent, verifyAndRecoverAgents } from '../session-orchestrator-helpers.js';
+import { FRESH_WITH_HISTORY_RECOVERY_PLAN } from '../recovery-plan.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { SessionEventStorageSubjects } from '../session-events/namespace.js';
 import { MessageStorageSubjects } from '../messages/namespace.js';
@@ -55,6 +56,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     const { verifiedAgents, recoveredAgentIds } = await verifyAndRecoverAgents(MakaioBus, [deadAgent], {
       cwd: '/test/path',
       model: 'test-model',
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
     });
 
     expect(rehydratePayload).toMatchObject({
@@ -85,6 +87,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     const recovered = await recoverAgent(MakaioBus, deadAgent, {
       cwd: '/new/path',
       model: 'new-model',
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
     });
 
     expect(rehydratePayload).toMatchObject({
@@ -212,7 +215,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       ctx.setResult({});
     });
 
-    await recoverAgent(MakaioBus, deadAgent, { model: 'new-model' });
+    await recoverAgent(MakaioBus, deadAgent, { model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
 
     expect(rehydratePayload?.model).toBe('new-model');
   });
@@ -237,7 +240,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       ctx.setResult({});
     });
 
-    await recoverAgent(MakaioBus, deadAgent, {});
+    await recoverAgent(MakaioBus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
 
     expect(rehydratePayload?.model).toBe('existing-model');
   });
@@ -264,7 +267,9 @@ describe('SessionOrchestrator recovery helpers', () => {
       }); // Agent is alive
     });
 
-    const { verifiedAgents, recoveredAgentIds } = await verifyAndRecoverAgents(MakaioBus, [aliveAgent], {});
+    const { verifiedAgents, recoveredAgentIds } = await verifyAndRecoverAgents(MakaioBus, [aliveAgent], {
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+    });
 
     expect(verifiedAgents).toHaveLength(1);
     expect(verifiedAgents[0]).toBe(aliveAgent);
@@ -319,6 +324,7 @@ describe('SessionOrchestrator recovery helpers', () => {
 
     const { verifiedAgents, recoveredAgentIds } = await verifyAndRecoverAgents(MakaioBus, [deadAgent, aliveAgent], {
       cwd: '/test/path',
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
     });
 
     expect(verifiedAgents).toHaveLength(2);
@@ -354,7 +360,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       ctx.setResult({});
     });
 
-    await verifyAndRecoverAgents(MakaioBus, [deadAgent], {});
+    await verifyAndRecoverAgents(MakaioBus, [deadAgent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
 
     expect(startAgentCalled).toBe(false);
     expect(rehydrateAgentCalled).toBe(true);

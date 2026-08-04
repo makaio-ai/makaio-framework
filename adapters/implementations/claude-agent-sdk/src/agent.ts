@@ -1,4 +1,3 @@
-// NOTE: do NOT change without explicit human approval
 import {
   ClaudeCodeAgent as ClaudeCodeAgentBase,
   type ClaudeConnectorNamespace,

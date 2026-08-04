@@ -1,4 +1,4 @@
-// NOTE: do NOT change eslint rules without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 630, "skipBlankLines": true, "skipComments": true }] */
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
