@@ -289,3 +289,76 @@ describe('CodexAppServerConnector - Native Thread Fork', () => {
     expect(forkRequest).toBeUndefined();
   });
 });
+
+describe('CodexAppServerConnector - useNativeResume: false suppresses thread/resume', () => {
+  let ctx: ConnectorTestContext;
+
+  beforeEach(async () => {
+    ctx = await createConnectorTestContext({ resumeAdapterSessionId: 'source-thread' });
+    mockThreadLifecycleResponses(ctx, 'thread-123');
+  });
+
+  afterEach(() => {
+    cleanupConnectorTestContext(ctx);
+    vi.restoreAllMocks();
+  });
+
+  it('sends thread/start instead of thread/resume when useNativeResume is false', async () => {
+    await withStartupTimeout(
+      ctx.connector.start(
+        { role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] },
+        { useNativeResume: false },
+      ),
+      'connector.start timed out',
+    );
+
+    expect(ctx.mockJsonRpcClient.sentRequests).toContainEqual(expect.objectContaining({ method: 'thread/start' }));
+    const resumeRequest = ctx.mockJsonRpcClient.sentRequests.find((r) => r.method === 'thread/resume');
+    expect(resumeRequest).toBeUndefined();
+  });
+
+  it('sends thread/resume when useNativeResume is not set (resumeAdapterSessionId honoured by default)', async () => {
+    await withStartupTimeout(
+      ctx.connector.start({ role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] }),
+      'connector.start timed out',
+    );
+
+    expect(ctx.mockJsonRpcClient.sentRequests).toContainEqual(
+      expect.objectContaining({
+        method: 'thread/resume',
+        params: expect.objectContaining({ threadId: 'source-thread' }),
+      }),
+    );
+    const startRequest = ctx.mockJsonRpcClient.sentRequests.find((r) => r.method === 'thread/start');
+    expect(startRequest).toBeUndefined();
+  });
+
+  it('reports a pending provider-session move while the resume target is armed and unconfirmed', async () => {
+    // Before dispatch: an armed target that a suppressed resume would abandon.
+    // The executor reads this hook pre-dispatch to announce the movement, so
+    // the session row stops advertising the doomed thread before thread/start.
+    expect(ctx.connector.movesProviderSessionOnSuppressedResume()).toBe(true);
+
+    await withStartupTimeout(
+      ctx.connector.start(
+        { role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] },
+        { useNativeResume: false },
+      ),
+      'connector.start timed out',
+    );
+
+    // After the fresh thread exists the provider has committed an identity —
+    // nothing is pending anymore.
+    expect(ctx.connector.movesProviderSessionOnSuppressedResume()).toBe(false);
+  });
+
+  it('reports no pending move without an armed resume target', async () => {
+    const freshCtx = await createConnectorTestContext({});
+    try {
+      mockThreadLifecycleResponses(freshCtx, 'thread-456');
+      expect(freshCtx.connector.movesProviderSessionOnSuppressedResume()).toBe(false);
+    } finally {
+      cleanupConnectorTestContext(freshCtx);
+    }
+  });
+});
