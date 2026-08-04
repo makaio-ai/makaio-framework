@@ -316,8 +316,22 @@ export type IMakaioBus<
   /**
    * Emit an event to all registered handlers.
    *
-   * Events are fire-and-forget - all handlers execute in parallel.
-   * Handler errors are logged but don't stop other handlers from executing.
+   * All local handlers execute in parallel with fail-fast settlement: on
+   * success the returned promise resolves only after every local handler has
+   * settled and every transport send has been attempted, but the first
+   * handler rejection rejects it immediately — slower siblings keep running
+   * unawaited, and no transport send is attempted. `await emit(...)` is
+   * therefore an ordering guarantee only for the success path; after a
+   * rejection, the remaining handlers' effects may not have settled.
+   *
+   * Handler errors are logged and never stop sibling handlers, but they DO
+   * reject the returned promise. Callers that emit for ordering rather than for
+   * correctness must therefore either ignore the promise (`void emit(...)`) or
+   * catch it — an awaited emit propagates a consumer's failure back to the
+   * producer.
+   *
+   * Remote handlers are not awaited: only delivery to the transport is, so the
+   * ordering guarantee is local to this bus instance.
    *
    * **Note:** You cannot emit to wildcard patterns. Use concrete subject keys only.
    * Handlers registered with wildcards will still receive the event if it matches.

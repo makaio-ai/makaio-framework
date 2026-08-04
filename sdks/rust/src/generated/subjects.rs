@@ -25,6 +25,15 @@ pub enum SubjectKind {
 pub mod agent {
     use super::{EventSubject, RequestSubject, Value};
 
+    pub const ADAPTER_SESSION_MOVED: &str = "agent.adapterSession.moved";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct AdapterSessionMoved;
+    impl EventSubject for AdapterSessionMoved {
+        type Payload = Value;
+        const SUBJECT: &'static str = ADAPTER_SESSION_MOVED;
+    }
+
     pub const COMPLETE: &str = "agent.complete";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -516,6 +525,12 @@ pub mod tool {
 }
 
 pub const SUBJECTS: &[ProtocolSubject] = &[
+    ProtocolSubject {
+        kind: SubjectKind::Event,
+        namespace: "agent",
+        subject: "adapterSession.moved",
+        full_subject: agent::ADAPTER_SESSION_MOVED,
+    },
     ProtocolSubject {
         kind: SubjectKind::Event,
         namespace: "agent",

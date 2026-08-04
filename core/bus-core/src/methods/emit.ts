@@ -81,8 +81,10 @@ async function executeHandlers(
 /**
  * Emit an event to all registered handlers.
  *
- * Events are fire-and-forget - all handlers execute in parallel.
- * Handler errors are logged but don't stop other handlers from executing.
+ * Local handlers execute in parallel and are awaited before this resolves, so an
+ * awaited emit orders subsequent work after the handlers' effects. Handler
+ * errors are logged and never stop sibling handlers, but they reject the
+ * returned promise.
  * @param context - Makaio bus context
  * @param subjectDefinition - Concrete event subject (wildcards not allowed)
  * @param payload - Event payload

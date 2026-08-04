@@ -9,8 +9,10 @@ import {
   registerAgentAddedHandler,
   registerAgentRemovedHandler,
 } from './session-service-agent-handlers.js';
+import { registerAdapterSessionCurrencyHandler } from './session-adapter-session-currency-handler.js';
 import { recoverAgent } from './utils/agent-recovery.js';
 import { evaluateNativeLocality } from './native-locality.js';
+import { resolveAgentResumeIdentity } from './session-resume-identity.js';
 import { AdapterRuntimeSubjects } from '../adapter-runtime/namespace.js';
 
 /**
@@ -56,6 +58,7 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
     registerAgentAddedHandler(deps.bus),
     registerAgentRemovedHandler(deps.bus),
     registerAdapterSessionIdReconciliationHandler(deps.bus),
+    registerAdapterSessionCurrencyHandler(deps.bus),
   ];
 }
 
@@ -345,11 +348,13 @@ async function resolveEffectiveMachineId(
  *
  * Resolves the local machine identity from the adapter-runtime identity
  * registry (same source as the attach handler), then evaluates native
- * locality per agent. The locality verdict is evaluated against the SESSION
- * record (machine/cwd/adapter identity), but the resume target is per agent:
- * `agent.adapterSessionId` from the agent storage record (post-R8 this field
- * is only ever a provider-confirmed ID, or undefined for never-confirmed
- * agents).
+ * locality per agent. Structural locality signals (machine/cwd/adapter
+ * identity) come from the SESSION record, but resume currency and the resume
+ * target are per agent: currency via {@link resolveAgentResumeIdentity}, which
+ * keeps the session row's lead-owned `moved` state from degrading members that
+ * still hold their own provider conversation, and the target via
+ * `agent.adapterSessionId` from the agent storage record (post-R8 this field is
+ * only ever a provider-confirmed ID, or undefined for never-confirmed agents).
  *
  * When the verdict is native AND the agent has its own `adapterSessionId` →
  * resume with it. When the verdict is native but the agent record has NO
@@ -398,6 +403,16 @@ function registerRestartAgentsHandler(deps: CoreSessionServiceHandlerDeps): () =
 
         if (session !== undefined) {
           const canResume = await adapterSupportsResume(bus, agent.adapterId);
+          // Resume currency gates whether this agent's provider conversation is
+          // resumable at all. It is resolved per agent because the session row's
+          // currency is lead-owned: a `moved` state there means the *lead's*
+          // provider session was abandoned with no confirmed successor, so the
+          // lead must defer to history-injected recovery — while a member agent,
+          // whose provider thread the lead's movement never touched, is gated on
+          // its own agent-row identity instead. The resume target likewise stays
+          // per-agent below: each agent rehydrates its own provider
+          // conversation, not the session row's.
+          const resumeIdentity = resolveAgentResumeIdentity(session, agent);
           const verdict = evaluateNativeLocality({
             intent: 'resume',
             session,
@@ -406,6 +421,7 @@ function registerRestartAgentsHandler(deps: CoreSessionServiceHandlerDeps): () =
             targetAdapterName: agent.adapterName,
             currentCwd: agent.cwd,
             targetCwd: agent.cwd,
+            resumeIdentity,
           });
 
           if (verdict.kind === 'native' && agent.adapterSessionId !== undefined) {

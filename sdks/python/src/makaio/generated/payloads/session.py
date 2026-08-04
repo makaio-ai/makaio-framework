@@ -82,7 +82,7 @@ class SessionSendMessageRequestSessionContextNativeLocalityVariantA:
 @dataclass(frozen=True)
 class SessionSendMessageRequestSessionContextNativeLocalityVariantB:
     kind: Literal["degrade"]
-    reason: Literal["adapter-unsupported", "adapter-mismatch", "no-adapter-session", "missing-machine-id", "machine-mismatch", "cwd-mismatch", "transforms-present", "compression-present", "connector-swap", "mid-history-unsupported", "hybrid-imported-orchestrated", "native-attempt-failed", "agent-already-started", "fork-point-unresolvable"]
+    reason: Literal["adapter-unsupported", "adapter-mismatch", "no-adapter-session", "missing-machine-id", "machine-mismatch", "cwd-mismatch", "transforms-present", "compression-present", "connector-swap", "mid-history-unsupported", "hybrid-imported-orchestrated", "native-attempt-failed", "agent-already-started", "fork-point-unresolvable", "adapter-session-moved"]
 
 
 @dataclass(frozen=True)

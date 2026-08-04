@@ -4,6 +4,104 @@
     {
       "kind": "event",
       "namespace": "agent",
+      "subject": "adapterSession.moved",
+      "fullSubject": "agent.adapterSession.moved",
+      "local": false,
+      "channel": false,
+      "payloadSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "adapterId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "adapterName": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.name",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "adapterSessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.adapter.session_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "agentId": {
+            "makaio.observability": {
+              "attributeName": "makaio.agent.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "clientId": {
+            "makaio.observability": {
+              "attributeName": "makaio.client.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "messageId": {
+            "makaio.observability": {
+              "attributeName": "makaio.message.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "occurredAt": {
+            "makaio.observability": {
+              "attributeName": "event.occurred_at",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "number"
+          },
+          "providerConfigId": {
+            "makaio.observability": {
+              "attributeName": "makaio.provider.config_id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "sessionId": {
+            "makaio.observability": {
+              "attributeName": "makaio.session.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          },
+          "turnId": {
+            "makaio.observability": {
+              "attributeName": "makaio.turn.id",
+              "kind": "field",
+              "visibility": "attribute"
+            },
+            "type": "string"
+          }
+        },
+        "required": ["agentId", "adapterId", "adapterName", "confirmed"],
+        "type": "object"
+      }
+    },
+    {
+      "kind": "event",
+      "namespace": "agent",
       "subject": "complete",
       "fullSubject": "agent.complete",
       "local": false,
@@ -3857,7 +3955,8 @@
                           "hybrid-imported-orchestrated",
                           "native-attempt-failed",
                           "agent-already-started",
-                          "fork-point-unresolvable"
+                          "fork-point-unresolvable",
+                          "adapter-session-moved"
                         ],
                         "type": "string"
                       }
@@ -9732,7 +9831,8 @@
                           "hybrid-imported-orchestrated",
                           "native-attempt-failed",
                           "agent-already-started",
-                          "fork-point-unresolvable"
+                          "fork-point-unresolvable",
+                          "adapter-session-moved"
                         ],
                         "type": "string"
                       }

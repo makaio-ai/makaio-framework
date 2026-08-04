@@ -15,6 +15,10 @@ export {
   validateSnapshot,
   safeValidateSnapshot,
 } from './schemas.js';
+export {
+  AdapterSessionCurrencyStateSchema,
+  type AdapterSessionCurrencyState,
+} from './schemas.js';
 export { AgentRoleSchema, type AgentRole } from './schemas.js';
 export { AgentStatusSchema, type AgentStatus } from './schemas.js';
 export { BranchKindSchema, type BranchKind } from './schemas.js';

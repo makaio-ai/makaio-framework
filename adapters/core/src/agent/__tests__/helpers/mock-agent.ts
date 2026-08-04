@@ -9,6 +9,7 @@ import type {
   ConnectorStartOptions,
 } from '../../types.js';
 import type { AIAgentConnector } from '../../../connector/agent-connector.js';
+import type { ConfigFactoryInput } from '../../../adapter/index.js';
 import { MessageHandle } from '../../../message-handle/index.js';
 import type { ProcessingState } from '../../../message-handle/types.js';
 import type { AIModel, AIReasoningLevel, ReasoningLevelMap } from '../../../types/ai-model.js';
@@ -183,6 +184,18 @@ export class MockConnector implements Partial<AIAgentConnector> {
   }
 
   /**
+   * Report no pending suppression rotation, matching the base-class default.
+   *
+   * This double never arms a start-time resume target, so the ID it reports is
+   * always provider-committed. Stated explicitly because payload enrichment asks
+   * this question on every emitted event.
+   * @returns Always `false`
+   */
+  public movesProviderSessionOnSuppressedResume(): boolean {
+    return false;
+  }
+
+  /**
    * Start a mock session and return an acknowledged message handle.
    * @param message - Normalized user message
    * @param options - Optional connector start options
@@ -346,6 +359,15 @@ export interface CreateTestableAgentOptions {
   nativeFork?: NativeForkDirective;
   /** Resume adapter session ID for native-resume scenarios. */
   resumeAdapterSessionId?: string;
+  /**
+   * Observe every config-factory input the agent builds.
+   *
+   * The only way to assert what a connector *generation* was constructed with —
+   * `MockConnector` intentionally carries just the runtime fields it exercises,
+   * so resume decisions (which no connector double consumes) are invisible
+   * without this hook.
+   */
+  onConfigFactoryInput?: (input: ConfigFactoryInput) => void;
 }
 
 /**
@@ -366,6 +388,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     mcpSessionContext,
     nativeFork,
     resumeAdapterSessionId,
+    onConfigFactoryInput,
   } = options;
   const { bus: mockBus } = createMockScopedBus();
   const resolveSupportedReasoningLevels = (model: string): ReasoningLevelMap | undefined =>
@@ -388,17 +411,20 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     mcpSessionContext,
     nativeFork,
     resumeAdapterSessionId,
-    configFactory: async (input) => ({
-      bus: mockBus,
-      agentId,
-      adapterId: 'test-adapter',
-      adapterName: 'test',
-      model: input.model ?? initialModel,
-      cwd: input.cwd ?? initialCwd,
-      reasoningEffort: input.reasoningEffort ?? initialReasoningEffort,
-      supportedReasoningLevels: resolveSupportedReasoningLevels(input.model ?? initialModel),
-      mcpSessionContext: input.mcpSessionContext,
-    }),
+    configFactory: async (input) => {
+      onConfigFactoryInput?.(input);
+      return {
+        bus: mockBus,
+        agentId,
+        adapterId: 'test-adapter',
+        adapterName: 'test',
+        model: input.model ?? initialModel,
+        cwd: input.cwd ?? initialCwd,
+        reasoningEffort: input.reasoningEffort ?? initialReasoningEffort,
+        supportedReasoningLevels: resolveSupportedReasoningLevels(input.model ?? initialModel),
+        mcpSessionContext: input.mcpSessionContext,
+      };
+    },
     connectorFactory: async (factoryConfig) => {
       // MockConnector satisfies the runtime contract for all exercised methods
       return asAgentConnector(

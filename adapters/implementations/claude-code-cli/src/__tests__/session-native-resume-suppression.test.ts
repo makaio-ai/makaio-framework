@@ -152,6 +152,27 @@ describe('ClaudeCliSession native resume suppression', () => {
     expect(await session.getAdapterSessionId()).toBe(pinnedId);
   });
 
+  it('reports a pending suppression while advertising the seeded resume target', async () => {
+    // The interleaving that a reported session ID hides from the movement seam:
+    // an idle resume session reports the seeded target as authoritative — the
+    // provider would adopt it — while a `useNativeResume === false` dispatch
+    // would abandon exactly that target. Both answers come from the same
+    // session, so the seam must ask the rotation question, not the ID question.
+    const session = await makeSession();
+
+    expect(session.getConfirmedSessionId()).toBe(RESUME_TARGET);
+    expect(session.resumeTargetPendingSuppression()).toBe(RESUME_TARGET);
+  });
+
+  it('reports no pending suppression once the rotation consumed the target', async () => {
+    const session = await makeSession();
+    const queue = new UserMessageQueue();
+    queue.enqueue(makeHandle(false));
+    await session.processQueue(queue);
+
+    expect(session.resumeTargetPendingSuppression()).toBeUndefined();
+  });
+
   it('resumes the stored target when useNativeResume is true', async () => {
     const session = await makeSession();
     const queue = new UserMessageQueue();

@@ -414,6 +414,61 @@ describe('applyMigrations statement flow (SQLite)', () => {
     }
   });
 
+  it('suspends foreign-key enforcement outside the transaction of a rebuild migration', async () => {
+    const { real, recordingDb, statements, close } = createRecordingDb();
+
+    try {
+      // Seed a parent with an ON DELETE CASCADE child through the unwrapped
+      // handle, mirroring the shape every generated SQLite table rebuild of a
+      // referenced parent hits. Enforcement is enabled explicitly because the
+      // hand-rolled harness handle bypasses the client factory's PRAGMAs, and
+      // without it the cascade this test guards against could not fire.
+      await real.run(sql`PRAGMA foreign_keys = ON`);
+      await real.run(sql`CREATE TABLE rebuild_parent (id TEXT PRIMARY KEY, label TEXT)`);
+      await real.run(sql`
+        CREATE TABLE rebuild_child (
+          id TEXT PRIMARY KEY,
+          parent_id TEXT NOT NULL REFERENCES rebuild_parent(id) ON DELETE CASCADE
+        )
+      `);
+      await real.run(sql`INSERT INTO rebuild_parent (id, label) VALUES ('p1', 'kept')`);
+      await real.run(sql`INSERT INTO rebuild_child (id, parent_id) VALUES ('c1', 'p1')`);
+
+      await applyMigrations(recordingDb, [
+        {
+          tag: '0001_rebuild_parent',
+          folderMillis: 30,
+          hash: 'hash-rebuild-parent',
+          bps: true,
+          sql: [
+            'PRAGMA foreign_keys=OFF;',
+            '\nCREATE TABLE `__new_rebuild_parent` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`label` text NOT NULL\n);\n',
+            '\nINSERT INTO `__new_rebuild_parent`("id", "label") SELECT "id", "label" FROM `rebuild_parent`;',
+            '\nDROP TABLE `rebuild_parent`;',
+            '\nALTER TABLE `__new_rebuild_parent` RENAME TO `rebuild_parent`;',
+            '\nPRAGMA foreign_keys=ON;',
+          ],
+        },
+      ]);
+
+      // The suspend/restore pair must bracket BEGIN/COMMIT from the outside:
+      // SQLite ignores enforcement pragmas issued inside a transaction, which
+      // is exactly where the migration's own copies sit.
+      expect(statements.at(2)).toBe('PRAGMA foreign_keys = OFF');
+      expect(statements.at(3)).toBe('BEGIN');
+      expect(statements.at(-2)).toBe('COMMIT');
+      expect(statements.at(-1)).toBe('PRAGMA foreign_keys = ON');
+
+      const children = await real.all<{ id: string; parent_id: string }>(sql`SELECT id, parent_id FROM rebuild_child`);
+      expect(children).toEqual([{ id: 'c1', parent_id: 'p1' }]);
+
+      // Enforcement is restored, not left disabled for the rest of the process.
+      await expect(real.run(sql`INSERT INTO rebuild_child (id, parent_id) VALUES ('c2', 'missing')`)).rejects.toThrow();
+    } finally {
+      close();
+    }
+  });
+
   it('adopts by rolling back the poisoned transaction and recording in a fresh one', async () => {
     const { real, recordingDb, statements, close } = createRecordingDb();
 

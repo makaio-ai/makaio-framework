@@ -105,6 +105,8 @@ export function mapToSession(sessionRow: SessionRow, agentRows: AgentRow[]): IMa
     branchKind: toOptionalValue(sessionRow.branchKind),
     adapterName: toOptionalValue(sessionRow.adapterName),
     adapterSessionId: toOptionalValue(sessionRow.adapterSessionId),
+    currentAdapterSessionId: toOptionalValue(sessionRow.currentAdapterSessionId),
+    currentAdapterSessionIdState: sessionRow.currentAdapterSessionIdState,
     adapterId: toOptionalValue(sessionRow.adapterId),
     clientId: toOptionalValue(sessionRow.clientId),
     clientAccountId: toOptionalValue(sessionRow.clientAccountId),

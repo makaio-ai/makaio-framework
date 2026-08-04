@@ -26,6 +26,12 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       ),
       adapter_name TEXT,
       adapter_session_id TEXT,
+      current_adapter_session_id TEXT,
+      current_adapter_session_id_state TEXT NOT NULL DEFAULT 'inherited' CHECK (
+        current_adapter_session_id_state IN ('inherited', 'moved', 'confirmed')
+        AND (current_adapter_session_id_state <> 'confirmed' OR current_adapter_session_id IS NOT NULL)
+        AND (current_adapter_session_id_state = 'confirmed' OR current_adapter_session_id IS NULL)
+      ),
       adapter_id TEXT,
       client_id TEXT,
       client_account_id TEXT,

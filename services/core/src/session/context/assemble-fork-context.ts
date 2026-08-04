@@ -6,6 +6,7 @@ import { MessageStorageSubjects } from '../messages/namespace.js';
 import { getFullConversation } from './get-full-conversation.js';
 import { convertSessionMessage } from './convert-session-message.js';
 import { evaluateNativeLocality } from '../native-locality.js';
+import { resolveSessionResumeIdentity } from '../session-resume-identity.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 
 /**
@@ -21,6 +22,32 @@ import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
  */
 function resolveEffectiveForkAdapterName(targetAdapterName: string | undefined, sourceSession: IMakaioSession): string {
   return targetAdapterName ?? sourceSession.adapterName ?? '';
+}
+
+/**
+ * Build the native-fork directive for a mid-history or fork-at-head branch.
+ *
+ * One builder for both shapes: a mid-history fork adds the resolved
+ * provider-native checkpoint, everything else is identical, so the branch point
+ * and target directory cannot drift between the two call paths.
+ * @param input - Parent session identity, resolved provider branch point, the
+ *   fork session supplying the target directory, and the resolved
+ *   provider-native fork-point message ID when this is a mid-history fork
+ * @returns Directive describing the provider-native fork
+ */
+function buildNativeForkDirective(input: {
+  readonly sourceSessionId: string;
+  readonly sourceAdapterSessionId: string;
+  readonly forkSession: IMakaioSession;
+  readonly forkPointAdapterMessageId: string | undefined;
+}): NativeForkDirective {
+  const { targetWorkingDirectory } = input.forkSession;
+  return {
+    sourceSessionId: input.sourceSessionId,
+    sourceAdapterSessionId: input.sourceAdapterSessionId,
+    ...(input.forkPointAdapterMessageId !== undefined && { forkPointMessageId: input.forkPointAdapterMessageId }),
+    ...(targetWorkingDirectory !== undefined && { targetWorkingDirectory }),
+  };
 }
 
 /** Adapter capability signals required before emitting a native fork directive. */
@@ -173,6 +200,12 @@ export async function assembleForkContext(
   // cwd override evaluate locality against the same directory they will pass to
   // startAgent — preventing an approve-against-A/launch-with-B mismatch.
   const effectiveTargetCwd = targetCwd ?? session.targetWorkingDirectory;
+  // A native fork branches from the provider session that actually holds the
+  // source conversation, which is the source session's resume currency — not
+  // its immutable origin `adapterSessionId`. Resolved once here and used for
+  // both the locality verdict and the emitted directive, so the branch point
+  // can never diverge from the session the verdict was computed for.
+  const resumeIdentity = resolveSessionResumeIdentity(sourceSession);
   const verdict = evaluateNativeLocality({
     intent: 'fork',
     session: {
@@ -191,39 +224,36 @@ export async function assembleForkContext(
     targetCwd: effectiveTargetCwd,
     sessionContext: originalContext,
     midHistoryForkSupported: capabilities?.midHistoryForkSupported === true,
+    resumeIdentity,
   });
 
-  // A native verdict implies the evaluator saw a source adapterSessionId; the
+  // A native verdict implies the evaluator saw usable resume currency; the
   // explicit narrow keeps that invariant type-checked instead of asserted.
-  const sourceAdapterSessionId = sourceSession.adapterSessionId;
+  const sourceAdapterSessionId = resumeIdentity.adapterSessionId;
   if (verdict.kind === 'native' && sourceAdapterSessionId !== undefined) {
     // Mid-history fork: resolve the provider-native message ID. The session
     // stores a session-storage UUID, but the adapter needs the adapterMessageId
     // (forwarded as resumeSessionAt in the Claude SDK path).
+    let forkPointAdapterMessageId: string | undefined;
     if (session.forkPointMessageId !== undefined) {
-      const adapterMsgId = await resolveForkPointAdapterMessageId(bus, session.forkPointMessageId);
-      if (adapterMsgId === undefined) {
+      forkPointAdapterMessageId = await resolveForkPointAdapterMessageId(bus, session.forkPointMessageId);
+      if (forkPointAdapterMessageId === undefined) {
         // Degrade: the provider cannot resolve this checkpoint.
         return buildFreshWithHistory(bus, sessionId, originalContext, session, {
           kind: 'degrade',
           reason: 'fork-point-unresolvable',
         });
       }
-      const nativeFork: NativeForkDirective = {
-        sourceSessionId: parentSessionId,
-        sourceAdapterSessionId,
-        forkPointMessageId: adapterMsgId,
-        ...(session.targetWorkingDirectory !== undefined && { targetWorkingDirectory: session.targetWorkingDirectory }),
-      };
-      return { ...originalContext, nativeLocality: verdict, nativeFork, isFirstTurn: true };
     }
 
-    // Fork-at-head: no checkpoint needed, just branch from the tip.
-    const nativeFork: NativeForkDirective = {
+    // Fork-at-head omits forkPointMessageId; both shapes are built once so the
+    // branch point and cwd can never diverge between the two cases.
+    const nativeFork = buildNativeForkDirective({
       sourceSessionId: parentSessionId,
       sourceAdapterSessionId,
-      ...(session.targetWorkingDirectory !== undefined && { targetWorkingDirectory: session.targetWorkingDirectory }),
-    };
+      forkSession: session,
+      forkPointAdapterMessageId,
+    });
     return { ...originalContext, nativeLocality: verdict, nativeFork, isFirstTurn: true };
   }
 

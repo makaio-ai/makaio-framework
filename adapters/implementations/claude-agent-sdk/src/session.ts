@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 780 }] */
+/* eslint max-lines: ["error", { "max": 740 }] */
 import type { Query, SDKUserMessage as SdkSDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage, SDKUserMessage } from '@makaio/client-claude-code';
@@ -11,7 +11,6 @@ import {
   type MessageHandle,
 } from '@makaio/ai-adapters-core';
 import { DeferredPromise } from '@makaio/utils';
-import { MakaioBus } from '@makaio/bus-core';
 import { AsyncQuerySource } from '@makaio/ai-adapters-claude-shared';
 import { ClaudeConnectorTurn } from './turn.js';
 import { UserMessageQueue, processQueueMessages, rejectQueuedHandles } from '@makaio/ai-adapters-core';
@@ -19,8 +18,8 @@ import { buildSdkUserMessage } from './sdk-message-builder.js';
 import { ClaudeCodeConnectorSubjects } from './namespace/index.js';
 import { ClaudeSessionConfig, CreateToolApprovalHandler } from './types/index.js';
 import { buildMcpServersRecord, buildQueryOptions } from './utils/buildQueryOptions.js';
-import { McpSubjects, type McpResolvedServer, type ResponseSchemaDescriptor } from '@makaio/contracts';
-import { unregisterMcpSession } from './mcp-session-bridge.js';
+import type { McpResolvedServer, ResponseSchemaDescriptor } from '@makaio/contracts';
+import { McpSessionRegistration } from './mcp-session-bridge.js';
 import { handleClaudeResultMessage } from './result-handling.js';
 import { TerminalResultDrain } from './terminal-result-drain.js';
 
@@ -60,10 +59,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private processingQueue = false;
   /** Set to true when a second processQueue call arrives while one is in flight */
   private reprocessNeeded = false;
-  /** Adapter session ID registered with the MCP bridge service, if any */
-  private registeredMcpSessionId?: string;
-  /** MCP server port; seeded from config, overridden by `mcp.session.register` RPC response */
-  private mcpServerPort?: number;
+  /** Owns this session's MCP bridge registration and its reported server port. */
+  private readonly mcpRegistration: McpSessionRegistration;
   /** Monotonic owner token for the currently active SDK query. */
   private queryGeneration = 0;
   /** Stable key for the SDK-relevant response schema on the active query. */
@@ -73,7 +70,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   public constructor(config: ClaudeSessionConfig) {
     super(config);
     this.lifecycle = new SessionLifecycle();
-    this.mcpServerPort = config.mcpServerPort;
+    this.mcpRegistration = new McpSessionRegistration(config);
   }
 
   /**
@@ -100,64 +97,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
-   * Register this session with the singleton MCP bridge service.
-   * On success stores the returned port in {@link mcpServerPort} for query options.
-   * Degrades gracefully when the bridge service is not running.
-   */
-  private async registerMcpContext(): Promise<void> {
-    if (!this.sessionId) {
-      return;
-    }
-    this.registeredMcpSessionId = this.sessionId;
-    const makaioSessionId = this.config.sessionId ?? this.sessionId;
-    // MakaioBus (global singleton) is intentional here — MCP subjects live in
-    // the `mcp` namespace, which is unreachable from the adapter's scoped bus.
-    // Same pattern used by ToolSubjects.execute and AgentSubjects throughout
-    // the adapter layer for all cross-namespace RPCs.
-    const result = await MakaioBus.requestOptional(McpSubjects.session.register, {
-      adapterSessionId: this.sessionId,
-      agentId: this.config.agentId,
-      adapterId: this.config.adapterId,
-      adapterName: this.config.adapterName,
-      sessionId: makaioSessionId,
-      contextOverrides: {
-        cwd: this.config.cwd,
-        env: this.config.contextEnv ?? {},
-        sessionId: makaioSessionId,
-        agentId: this.config.agentId,
-        adapterSessionId: this.sessionId,
-      },
-    });
-    if (result.handled) {
-      this.mcpServerPort = result.data.port;
-    }
-  }
-
-  /**
    * Register with the MCP bridge and, if the port changed, patch the live
    * query's MCP server list. Centralises the register-then-repatch sequence
    * so `initialize()` and immediate-mode rotation stay in sync.
    */
   private async refreshMcpContext(): Promise<void> {
-    const previousPort = this.mcpServerPort;
-    await this.registerMcpContext();
-    if (this.mcpServerPort !== previousPort && this.mcpServerPort !== undefined) {
+    if (await this.mcpRegistration.register(this.sessionId)) {
       await this.updateMcpServers(this.config.mcpUpstreamServers ?? []);
     }
-  }
-
-  /**
-   * Unregister this session from the singleton MCP bridge service.
-   * Fire-and-forget: errors are swallowed to avoid masking the close/abort path.
-   */
-  private unregisterMcpContext(): void {
-    if (!this.registeredMcpSessionId) {
-      return;
-    }
-    const sessionId = this.registeredMcpSessionId;
-    this.registeredMcpSessionId = undefined;
-    this.mcpServerPort = this.config.mcpServerPort;
-    unregisterMcpSession(sessionId);
   }
 
   public getQueryInstance(): Query | undefined {
@@ -189,7 +136,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   public async syncMcpContextForTest(sessionId?: string, mode: 'register' | 'refresh' = 'register'): Promise<void> {
     if (sessionId !== undefined) this.sessionId = sessionId;
     if (mode === 'refresh') return this.refreshMcpContext();
-    await this.registerMcpContext();
+    await this.mcpRegistration.register(this.sessionId);
   }
 
   /**
@@ -202,7 +149,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     const mcpServers = buildMcpServersRecord(
       servers,
       this.config.providerConfig?.queryOptions?.mcpServers,
-      this.mcpServerPort,
+      this.mcpRegistration.serverPort,
     );
     await this.queryInstance?.setMcpServers(mcpServers ?? {});
   }
@@ -264,7 +211,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
         config: this.config,
         lifecycle: this.lifecycle,
         createToolApprovalHandler: this.createToolApprovalHandler,
-        mcpServerPort: this.mcpServerPort,
+        mcpServerPort: this.mcpRegistration.serverPort,
         responseSchema,
       });
       queryInstance = query({ prompt: source, options: queryOptions });
@@ -318,12 +265,27 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     const resumeSessionId = this.confirmedSessionId ? this.sessionId : undefined;
     const oldQuery = this.disownActiveQuery();
     oldQuery?.close();
-    if (resumeSessionId === undefined && this.registeredMcpSessionId !== undefined) {
-      this.unregisterMcpContext();
+    if (resumeSessionId === undefined && this.mcpRegistration.isRegistered) {
+      this.mcpRegistration.unregister();
     }
     await this.createQuery(resumeSessionId, responseSchema);
     await this.refreshMcpContext();
     return true;
+  }
+
+  /**
+   * The armed resume target a `useNativeResume === false` dispatch would
+   * discard, or `undefined` when nothing would be abandoned (a confirmed
+   * session owns its own provider thread, so rotations resume it instead).
+   * Single source of truth for the suppression precondition: this session
+   * rotates on it and the connector reports it to the provider-session movement
+   * seam before the dispatch. Both must agree — telling that seam "nothing
+   * moves" while this returns an ID leaves the session row advertising the
+   * abandoned thread.
+   * @returns Resume target pending suppression, or `undefined`
+   */
+  public resumeTargetPendingSuppression(): string | undefined {
+    return this.confirmedSessionId ? undefined : this.config.resumeAdapterSessionId;
   }
 
   /**
@@ -332,16 +294,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    *
    * One-shot, mirroring the nativeFork consumption invariant: the caller has
    * replaced the provider thread with injected history, so a later query
-   * creation must not fall back to the stale target either. Only the pending
-   * start-time target is affected — once `system.init` confirms this
-   * generation's own session, rotations resume it regardless of the flag.
+   * creation must not fall back to the stale target either.
    * @param handle - Message handle carrying the caller's native-resume decision
    * @returns True when a resume-armed query is live and must be rotated fresh
    */
   private suppressStartResumeIfRequested(handle: MessageHandle): boolean {
     if (handle.useNativeResume !== false) return false;
-    if (this.confirmedSessionId || this.config.resumeAdapterSessionId === undefined) return false;
-    const discarded = this.config.resumeAdapterSessionId;
+    const discarded = this.resumeTargetPendingSuppression();
+    if (discarded === undefined) return false;
     this.config.resumeAdapterSessionId = undefined;
     if (this.config.predeterminedSessionId === discarded) {
       // A resumed generation's identity is the session it resumes. When the
@@ -361,7 +321,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private async rotateToFreshQuery(responseSchema?: ResponseSchemaDescriptor): Promise<void> {
     const oldQuery = this.disownActiveQuery();
     oldQuery?.close();
-    this.unregisterMcpContext();
+    this.mcpRegistration.unregister();
     await this.createQuery(undefined, responseSchema);
     await this.refreshMcpContext();
   }
@@ -750,7 +710,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    */
   public async close(): Promise<void> {
     this.closing = true;
-    this.unregisterMcpContext();
+    this.mcpRegistration.unregister();
     const activeQuery = this.queryInstance;
     const queryGeneration = this.queryGeneration;
     const terminalResultDrain =

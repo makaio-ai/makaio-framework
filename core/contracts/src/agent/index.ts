@@ -9,6 +9,7 @@ export {
   type UsageGranularity,
 } from './schemas/index.js';
 export { type Message as AgentMessage } from './schemas/index.js';
+export { AdapterSessionMovedSchema, type AdapterSessionMoved } from './schemas/index.js';
 export { CompleteSchema, type AgentComplete } from './schemas/index.js';
 export {
   SessionMetadataSchema,

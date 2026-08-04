@@ -12,9 +12,20 @@ interface AgentConnectorSwapRuntimeConfig {
   providerContext?: ProviderContext;
   /** MCP session context used to build later connector generations. */
   mcpSessionContext?: AgentConnectorConfigOverrides['mcpSessionContext'];
-  /** Resume target inherited by later connector generations (explicit `undefined` = fresh). */
-  resumeAdapterSessionId?: string | undefined;
 }
+
+/**
+ * Sink for an explicit per-swap resume decision.
+ *
+ * Resume-target inheritance is movement-seam state, not a plain config field:
+ * the decision carries both the session later generations inherit and whether
+ * this agent inherits one at all. So the coordinator hands the decision to the
+ * seam's owner instead of writing the config, which keeps the two halves from
+ * drifting apart.
+ * @param resumeAdapterSessionId - Session later generations inherit, or
+ *   `undefined` to make them start fresh
+ */
+export type ResumeTargetDecisionSink = (resumeAdapterSessionId: string | undefined) => void;
 
 /** Own serialized connector replacement, account activation, and config publication. */
 export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConnector extends AIAgentConnector<TBus>> {
@@ -25,11 +36,13 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
    * @param globalBus - Host-local bus used for managed-account activation
    * @param lifecycleManager - Connector runtime lifecycle owner
    * @param runtimeConfig - Mutable config backing future connector generations
+   * @param publishResumeTargetDecision - Sink applying an explicit resume decision
    */
   public constructor(
     private readonly globalBus: IMakaioBus,
     private readonly lifecycleManager: AgentConnectorLifecycleManager<TBus, TConnector>,
     private readonly runtimeConfig: AgentConnectorSwapRuntimeConfig,
+    private readonly publishResumeTargetDecision: ResumeTargetDecisionSink,
   ) {}
 
   /**
@@ -104,10 +117,11 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
     // ID on resume) so the next inherited generation continues the live
     // conversation, not the abandoned one.
     if (configOverrides !== undefined && 'resumeAdapterSessionId' in configOverrides) {
-      this.runtimeConfig.resumeAdapterSessionId =
+      this.publishResumeTargetDecision(
         configOverrides.resumeAdapterSessionId === undefined
           ? undefined
-          : (confirmedAdapterSessionId ?? configOverrides.resumeAdapterSessionId);
+          : (confirmedAdapterSessionId ?? configOverrides.resumeAdapterSessionId),
+      );
     }
   }
 }

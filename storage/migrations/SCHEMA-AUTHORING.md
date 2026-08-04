@@ -106,6 +106,38 @@ the filenames correlate. Commit the appended `.sql` files and the updated
 
 ---
 
+## SQLite Table Rebuilds
+
+Some changes cannot be expressed as an `ALTER TABLE` in SQLite — adding or
+dropping a table-level `CHECK` constraint is the common one. drizzle-kit then
+generates the documented table rebuild: `CREATE TABLE __new_x` → copy rows →
+`DROP TABLE x` → `ALTER TABLE __new_x RENAME TO x`, wrapped in
+`PRAGMA foreign_keys=OFF` / `PRAGMA foreign_keys=ON`.
+
+That pragma pair is inert where the generator puts it: SQLite ignores
+foreign-key-enforcement pragmas inside a transaction, and `applyMigrations`
+opens one around every migration. Without the pragma taking effect,
+`DROP TABLE x` performs an implicit delete of every row in `x`, which fires the
+cascade actions of any child table referencing it — silently emptying the
+children while the parent's rows survive the copy.
+
+The runner closes that gap rather than each migration working around it: the
+SQLite engine declares `migrations.constraintSuspension`, and `applyMigrations`
+brackets any migration whose statement stream requests suspension with the
+engine's suspend/restore statements **outside** the transaction. Migrations that
+do not request it keep running with enforcement active.
+
+When you author or hand-correct a rebuild migration:
+
+- Keep the generated `PRAGMA foreign_keys=OFF` as the migration's first
+  statement — it is what signals the requirement to the runner.
+- Never rely on a pragma inside a migration's statement stream to change
+  connection state; it will not.
+- Add a regression test that seeds a parent row plus a child row before the
+  rebuild and asserts the child survives it.
+
+---
+
 ## Escape Hatch: Genuinely Divergent Tables
 
 A few tables cannot be expressed from a single column spec because one dialect

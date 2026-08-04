@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
 import { ClaudeConnectorSession } from '../src/session.js';
+import { McpSessionRegistration } from '../src/mcp-session-bridge.js';
 
 /**
  * Minimal ClaudeSessionConfig factory for MCP registration tests.
@@ -91,6 +92,44 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
 
     expect(setMcpServersSpy).toHaveLength(1);
     expect(setMcpServersSpy[0]).not.toHaveProperty('makaio');
+  });
+
+  it('ignores an out-of-order register response after unregister', async () => {
+    // register() writes registeredSessionId before its RPC await; a concurrent
+    // unregister() supersedes the registration while the RPC is in flight. The
+    // late response must not resurrect the superseded registration's port.
+    const SEEDED_PORT = 4100;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    cleanup.push(
+      MakaioBus.on(McpSubjects.session.register, async (ctx) => {
+        await gate;
+        ctx.setResult({ port: 23456 });
+      }),
+    );
+
+    const registration = new McpSessionRegistration({
+      bus: {} as never,
+      adapterId: 'test-adapter',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'test-agent',
+      cwd: '/tmp',
+      model: 'claude-sonnet',
+      env: {},
+      contextEnv: {},
+      sessionId: 'makaio-session-race',
+      mcpServerPort: SEEDED_PORT,
+    });
+
+    const pending = registration.register('adapter-session-race');
+    registration.unregister();
+    release();
+
+    await expect(pending).resolves.toBe(false);
+    expect(registration.isRegistered).toBe(false);
+    expect(registration.serverPort).toBe(SEEDED_PORT);
   });
 
   it('skips registration when sessionId is not set', async () => {

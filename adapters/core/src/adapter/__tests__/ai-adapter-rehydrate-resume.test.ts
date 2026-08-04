@@ -1,10 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, type NativeLocalityVerdict } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  AgentSubjects,
+  type AdapterSessionMoved,
+  type NativeLocalityVerdict,
+} from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { createTestAdapter, MockConnector, TestAgent, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
 import { createNoAuthTestProviderContext } from '../../testing/index.js';
+
+/**
+ * Connector that reports the provider session it was configured with.
+ *
+ * {@link MockConnector} always reports one fixed ID, which makes every rehydrate
+ * look like an identity movement. A real connector that resumed its target
+ * reports that target back, which is what the no-movement case needs.
+ */
+class ConfiguredSessionConnector extends MockConnector {
+  public override async getAdapterSessionId(): Promise<string> {
+    return this.config.adapterSessionId ?? (await super.getAdapterSessionId());
+  }
+}
 
 describe('AIAdapter.handleRehydrateAgent native resume context', () => {
   let adapter: ReturnType<typeof createTestAdapter>['adapter'];
@@ -27,14 +45,27 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
    * Rehydrate a persisted agent and return the connector config created by the cold path.
    * @param nativeLocality - Optional host-evaluated locality verdict attached to the stored agent fixture
    * @param rpcResumeId - Optional resumeAdapterSessionId passed in the RPC payload (service-evaluated)
+   * @param echoConfiguredSession - When true the connector reports the provider session it was
+   *   configured with, mirroring a real connector that genuinely resumed its target instead of
+   *   {@link MockConnector}'s fixed ID
+   * @param createdAgents - When provided, receives every agent instance the rehydrate created, so a
+   *   test can drive the real agent (not {@link AIAdapter.getAgent}'s flattened copy, which drops
+   *   prototype methods)
    * @returns Captured connector configuration
    */
   async function rehydrateColdAgent(
     nativeLocality?: NativeLocalityVerdict,
     rpcResumeId?: string,
+    echoConfiguredSession = false,
+    createdAgents?: TestAgent[],
   ): Promise<BaseAgentConnectorConfig<TestBus> & { adapterId: string }> {
     const capturedConfigs: Array<BaseAgentConnectorConfig<TestBus> & { adapterId: string }> = [];
     ({ adapter } = createTestAdapter('test-adapter-rehydrate-config', {
+      agentFactory: (agentConfig) => {
+        const agent = new TestAgent(agentConfig);
+        createdAgents?.push(agent);
+        return agent;
+      },
       configFactory: async (input) => ({
         bus: input.bus,
         agentId: input.agentId,
@@ -48,7 +79,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       }),
       connectorFactory: async (config) => {
         capturedConfigs.push(config);
-        return new MockConnector(config);
+        return echoConfiguredSession ? new ConfiguredSessionConnector(config) : new MockConnector(config);
       },
     }));
     await adapter.init();
@@ -89,6 +120,108 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
     if (!capturedConfig) throw new Error('Expected connector config to be captured');
     return capturedConfig;
   }
+
+  describe('provider-session movement seam', () => {
+    /**
+     * Capture every `agent.adapterSession.moved` announcement for a test.
+     * @returns Array receiving announced payloads
+     */
+    function captureMovements(): AdapterSessionMoved[] {
+      const movements: AdapterSessionMoved[] = [];
+      cleanupFns.push(
+        MakaioBus.on(AgentSubjects.adapterSession.moved, ({ payload }) => {
+          movements.push(payload);
+        }),
+      );
+      return movements;
+    }
+
+    it('announces a moved provider identity after a fresh cold rehydrate', async () => {
+      // Cold rehydration dispatches no turn, so `agent.started` cannot carry the
+      // movement — the dedicated seam is the only signal a currency consumer gets.
+      const movements = captureMovements();
+      await rehydrateColdAgent();
+
+      expect(movements).toHaveLength(1);
+      expect(movements[0]).toMatchObject({
+        sessionId: 'persisted-session',
+        adapterName: 'test-adapter-rehydrate-config',
+        adapterSessionId: 'mock-adapter-session-id',
+        confirmed: true,
+      });
+    });
+
+    it('stays silent when the rehydrated identity did not move', async () => {
+      const movements = captureMovements();
+      await rehydrateColdAgent({ kind: 'native' }, undefined, true);
+
+      expect(movements).toHaveLength(0);
+    });
+
+    it('announces the movement before the agent row advertises the recovered identity', async () => {
+      // Ordering duty of the seam contract: the session row must carry the new
+      // currency before anything else exposes it, so a concurrent attach reading
+      // the agent row cannot find an identity the session row does not know.
+      const steps: string[] = [];
+      cleanupFns.push(
+        MakaioBus.on(AgentSubjects.adapterSession.moved, () => {
+          steps.push('announced');
+        }),
+        MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
+          if (ctx.payload.adapterSessionId !== undefined) steps.push('agent-row-written');
+          ctx.setResult({ success: true });
+        }),
+      );
+
+      await rehydrateColdAgent();
+
+      expect(steps).toEqual(['announced', 'agent-row-written']);
+    });
+
+    it('keeps a rejected movement retryable after the agent row advanced', async () => {
+      // Retryability duty of the seam contract. The agent row is what a later
+      // rehydrate compares against, so once it holds the recovered ID no later
+      // rehydrate reports movement again. Routing the announcement through the
+      // rehydrated agent's own tracker is what preserves the retry: the
+      // unacknowledged announcement stays armed and the agent's next confirmed
+      // identity re-drives it.
+      // Registered before the rejecting consumer: a failed announcement still
+      // reaches the other subscribers, which is what makes it observable here.
+      const movements = captureMovements();
+      let rejectNext = true;
+      const runtimeUpdates: Array<string | undefined> = [];
+      cleanupFns.push(
+        MakaioBus.on(AgentSubjects.adapterSession.moved, async () => {
+          if (rejectNext) throw new Error('currency write failed');
+        }),
+        MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
+          runtimeUpdates.push(ctx.payload.adapterSessionId);
+          ctx.setResult({ success: true });
+        }),
+      );
+
+      const createdAgents: TestAgent[] = [];
+      await rehydrateColdAgent(undefined, undefined, false, createdAgents);
+
+      // The rejected announcement did not fail the rehydrate, and the agent row
+      // still advanced so a later restart resumes the recovered thread.
+      expect(movements).toHaveLength(1);
+      expect(runtimeUpdates).toEqual(['mock-adapter-session-id']);
+
+      // The retry anchor survived on the agent: re-recording the same identity
+      // announces again instead of deduplicating it as delivered. This is the
+      // path payload enrichment drives on the agent's next emitted event.
+      const agent = createdAgents.at(-1);
+      if (!agent) throw new Error('Expected the rehydrate to have created an agent');
+      rejectNext = false;
+      await agent.recordConfirmedAdapterSession('mock-adapter-session-id');
+
+      expect(movements.map((movement) => movement.adapterSessionId)).toEqual([
+        'mock-adapter-session-id',
+        'mock-adapter-session-id',
+      ]);
+    });
+  });
 
   it('passes persisted adapterSessionId as native resume context during local cold rehydrate', async () => {
     const capturedConfig = await rehydrateColdAgent({ kind: 'native' });
@@ -438,8 +571,63 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     expect(startResult.success).toBe(true);
   });
 
-  it('warm rehydrate rejects a resume target owned by another live agent', async () => {
+  it('start that rotates away from its resume target leaves no dangling claim', async () => {
     ({ adapter } = createTestAdapter('test-adapter-claim'));
+    await adapter.init();
+    registerStorageHandlers(undefined, 'persisted-native-session');
+
+    // A resume-mode start with an initialMessage runs the turn pipeline, which
+    // abandons the armed resume target when native resume is suppressed; the
+    // connector then mints its own provider session ('mock-adapter-session-id').
+    // The start claimed 'abandoned-target' up front, so settling only the
+    // confirmed identity would strand that claim for the adapter's lifetime.
+    const firstStart = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      role: 'lead',
+      mode: 'resume',
+      sessionId: 'claim-test-session',
+      adapterSessionId: 'abandoned-target',
+      initialMessage: 'hello',
+      model: 'test-model',
+      cwd: os.tmpdir(),
+      providerContext: createNoAuthTestProviderContext('cfg', 'provider'),
+    });
+    expect(firstStart.success).toBe(true);
+
+    // The registered entry occupies 'mock-adapter-session-id', not the abandoned
+    // target, so only a stranded pending claim could still lock the latter.
+    const secondStart = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      role: 'lead',
+      mode: 'resume',
+      sessionId: 'claim-test-session',
+      adapterSessionId: 'abandoned-target',
+      model: 'test-model',
+      cwd: os.tmpdir(),
+      providerContext: createNoAuthTestProviderContext('cfg', 'provider'),
+    });
+
+    expect(secondStart.success).toBe(true);
+  });
+
+  it('warm rehydrate rejects a resume target owned by another live agent', async () => {
+    // Occupancy must be real, not implied by a leftover pending claim: the
+    // default MockConnector reports one fixed ID for every agent, so a start
+    // pinned to a provider session would not actually occupy it. Echoing the
+    // configured session is what makes agent B the live writer of 'session-b'.
+    ({ adapter } = createTestAdapter('test-adapter-claim', {
+      configFactory: async (input) => ({
+        bus: input.bus,
+        agentId: input.agentId ?? 'test-agent',
+        adapterId: input.adapterId ?? 'test-adapter-id',
+        adapterName: 'test-adapter-claim',
+        model: input.model ?? 'test-model',
+        cwd: input.cwd ?? os.tmpdir(),
+        ...(input.adapterSessionId !== undefined && { adapterSessionId: input.adapterSessionId }),
+        ...(input.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: input.resumeAdapterSessionId }),
+      }),
+      connectorFactory: async (config) => new ConfiguredSessionConnector(config),
+    }));
     await adapter.init();
 
     registerStorageHandlers(undefined, 'unused-persisted-session');

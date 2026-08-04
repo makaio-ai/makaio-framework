@@ -12,6 +12,21 @@ import { createSqliteClient } from './client';
 import { sqliteFtsSearchStrategy } from './fts-strategy';
 
 /**
+ * Matches the `PRAGMA foreign_keys=OFF` request that generated table-rebuild
+ * migrations put at the head of their statement stream.
+ *
+ * The pragma is inert where it sits — enforcement pragmas are no-ops inside a
+ * transaction — so it is read as a declaration that the migration needs
+ * enforcement suspended, and the applicator acts on it outside the
+ * transaction. Matching is line-anchored because the pragma shares its
+ * statement with any leading comment block, and tolerant about spacing and the
+ * trailing semicolon because the exact text is generator output, not a pinned
+ * contract. A line starting with `--` can never match, so a pragma mentioned
+ * in a comment does not request suspension.
+ */
+const FOREIGN_KEYS_OFF_REQUEST = /^[ \t]*PRAGMA[ \t]+foreign_keys[ \t]*=[ \t]*OFF[ \t]*;?[ \t]*$/im;
+
+/**
  * The built-in SQLite engine.
  *
  * This is the default engine: it deliberately omits {@link StorageEngine.matchesUrl}
@@ -60,6 +75,11 @@ export const sqliteStorageEngine: StorageEngine = {
     )`;
     },
     beginTransactionStatement: 'BEGIN',
+    constraintSuspension: {
+      isRequestedBy: (statements) => statements.some((statement) => FOREIGN_KEYS_OFF_REQUEST.test(statement)),
+      suspendStatement: 'PRAGMA foreign_keys = OFF',
+      restoreStatement: 'PRAGMA foreign_keys = ON',
+    },
     extensionLedgerName: (sourceHash) => `__drizzle_migrations_${sourceHash}`,
   },
 

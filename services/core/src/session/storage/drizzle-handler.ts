@@ -93,6 +93,13 @@ function toDbValues(session: IMakaioSession) {
     discoveredAt: toNullableDbValue(session.discoveredAt),
     importStatus: toNullableDbValue(session.importStatus),
     machineId: toNullableDbValue(session.machineId),
+    // `currentAdapterSessionId` / `currentAdapterSessionIdState` are deliberately
+    // absent. The resume currency is owned exclusively by the targeted
+    // `storage:session.update` path (see buildSessionUpdateFields): `set` is a
+    // read-modify-write of a whole session object, so routing currency through
+    // it would let a concurrent writer holding a stale snapshot resurrect an
+    // abandoned provider session. Omitting the columns here leaves them
+    // untouched on every `set`.
   };
 }
 
@@ -161,6 +168,14 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: Sessi
   assignDefinedField(updateFields, 'createdAt', payload.createdAt);
   assignDefinedField(updateFields, 'lastActivityAt', payload.lastActivityAt);
   assignDefinedField(updateFields, 'machineId', payload.machineId);
+  // The currency pair is one value: writing only one column would violate
+  // `sessions_current_adapter_session_id_currency_check`. The request schema
+  // rejects half-supplied pairs, so the guard here is an all-or-nothing
+  // projection rather than a second validation.
+  if (payload.currentAdapterSessionId !== undefined && payload.currentAdapterSessionIdState !== undefined) {
+    updateFields.currentAdapterSessionId = payload.currentAdapterSessionId;
+    updateFields.currentAdapterSessionIdState = payload.currentAdapterSessionIdState;
+  }
 
   assignNullableField(updateFields, 'executionTargetId', payload.executionTargetId);
   assignNullableField(updateFields, 'approvalPolicyOverride', payload.approvalPolicyOverride);

@@ -36,8 +36,14 @@ export interface AgentPayloadEmitterConfig {
   getConnectorAdapterSessionId: () => string | undefined;
   /** Last known adapterSessionId cached across connector swaps. */
   getLastKnownAdapterSessionId: () => string | undefined;
-  /** Persist latest adapterSessionId after resolution. */
-  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void;
+  /**
+   * Persist latest adapterSessionId after resolution.
+   *
+   * May be asynchronous: the owning agent uses this sink to announce a moved
+   * provider identity, and enrichment awaits it so no event carrying the new ID
+   * is published before the movement is recorded.
+   */
+  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>;
   /** Live event metadata defaults resolved from current runtime state. */
   getEventMetadataDefaults: () => AgentPayloadEventMetadata;
 }
@@ -65,22 +71,39 @@ export class AgentPayloadEmitter {
    * non-Claude adapters) the locally-determined ID is authoritative and returned
    * immediately.
    *
-   * The `lastKnownAdapterSessionId` bridges connector swaps: when the old
-   * connector is gone and the new one is not yet wired, the cached value carries
-   * the confirmed ID from the previous connector.
+   * The `lastKnownAdapterSessionId` bridges connector swaps *for stamping only*:
+   * when the old connector is gone and the new one is not yet wired, the cached
+   * value carries the confirmed ID from the previous connector. The recording
+   * sink is deliberately not given that fallback — see the inline note.
    *
-   * No async fallback is used. `connector.getAdapterSessionId()` may resolve
-   * with a provisional placeholder for fork sessions. Enrichment must never
-   * stamp unconfirmed IDs — omitting the field is safe since R8 schemas allow
-   * it optional.
+   * No async *resolution* fallback is used. `connector.getAdapterSessionId()`
+   * may resolve with a provisional placeholder for fork sessions. Enrichment
+   * must never stamp unconfirmed IDs — omitting the field is safe since R8
+   * schemas allow it optional.
+   *
+   * The recording sink is awaited even though resolution stays synchronous: it
+   * announces a moved provider identity, and that movement must be recorded
+   * before this event advertises the new ID. Recording an unchanged ID — the
+   * case for all but the first event of a generation — resolves without I/O.
    * @returns Confirmed adapter session ID or `undefined`
    */
-  private resolveConfirmedAdapterSessionId(): string | undefined {
-    const id = this.config.getConnectorAdapterSessionId() ?? this.config.getLastKnownAdapterSessionId();
-    if (id !== undefined) {
-      this.config.setLastKnownAdapterSessionId(id);
-    }
-    return id;
+  private async resolveConfirmedAdapterSessionId(): Promise<string | undefined> {
+    const sample = this.config.getConnectorAdapterSessionId();
+    // The sink gets the connector sample alone — never the cached fallback the
+    // returned value falls back to. The two answer different questions: stamping
+    // needs the best identity to *report*, while the sink is told which identity
+    // the agent is *currently on*, and the cache deliberately keeps serving the
+    // abandoned identity after a movement left it behind. Passing the fallback
+    // in let the tracker re-point an inherited resume target at that abandoned
+    // provider thread.
+    //
+    // Invoked unconditionally, including for an unresolved sample: recording
+    // `undefined` leaves the tracker's cache alone but re-drives a parked
+    // undelivered movement. Enrichment is the seam's only retry clock, and an
+    // agent whose connector confirms nothing is exactly the one whose
+    // unconfirmed movement is still outstanding.
+    await this.config.setLastKnownAdapterSessionId(sample);
+    return sample ?? this.config.getLastKnownAdapterSessionId();
   }
 
   /**
@@ -121,7 +144,7 @@ export class AgentPayloadEmitter {
     // turn-less (e.g. user_message.sent for a no-turn submission) and must
     // not inherit the still-executing turn's id.
     const turnId = 'turnId' in payloadEventFields ? payloadEventFields.turnId : this.config.getCurrentTurnId();
-    const adapterSessionId = this.resolveConfirmedAdapterSessionId();
+    const adapterSessionId = await this.resolveConfirmedAdapterSessionId();
     const { clientId, providerConfigId, occurredAt } = this.resolveEventMetadata(
       payloadEventFields,
       options?.includeEventMetadata ?? true,

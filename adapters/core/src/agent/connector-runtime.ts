@@ -42,6 +42,8 @@ export interface CreateConnectorRuntimeOptions<
   readonly connectorFactory: (config: ResolvedAdapterRuntimeConfig<TBus, TConfig>) => TConnector | Promise<TConnector>;
   /** Optional user-message callback attached only after auth preparation. */
   readonly onMessageSent?: (handle: MessageHandle) => void;
+  /** Sink for connector-owned provider-session rotations; see `BaseAgentConnectorConfig`. */
+  readonly onAdapterSessionMoved?: () => Promise<void>;
   /** Trusted host-local auth preparer; defaults to DirectChannel + client lease. */
   readonly prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus, TConfig>;
 }
@@ -61,6 +63,7 @@ export async function createConnectorRuntime<
     const connector = await options.connectorFactory({
       ...prepared.config,
       ...(options.onMessageSent !== undefined && { onMessageSent: options.onMessageSent }),
+      ...(options.onAdapterSessionMoved !== undefined && { onAdapterSessionMoved: options.onAdapterSessionMoved }),
     });
     return { connector, ...(prepared.lease !== undefined && { lease: prepared.lease }) };
   } catch (error) {

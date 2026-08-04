@@ -78,6 +78,31 @@ export interface StorageEngineCapabilities {
 }
 
 /**
+ * Engine-owned protocol for suspending referential-integrity enforcement
+ * around a migration.
+ *
+ * The statements are executed outside the migration transaction, because an
+ * engine that needs this protocol at all is one whose enforcement switch is
+ * connection-scoped and inert inside a transaction.
+ */
+export interface StorageEngineConstraintSuspension {
+  /**
+   * Returns `true` when a migration's statement stream asks for enforcement to
+   * be suspended, so migrations that do not need it keep running with
+   * enforcement active.
+   * @param statements - The migration's statements, in execution order.
+   * @returns Whether the migration requests constraint suspension.
+   */
+  isRequestedBy(statements: readonly string[]): boolean;
+
+  /** Statement that disables enforcement, run before the transaction opens. */
+  readonly suspendStatement: string;
+
+  /** Statement that re-enables enforcement, run after the transaction closes. */
+  readonly restoreStatement: string;
+}
+
+/**
  * Migration behavior owned by an engine: ledger naming and DDL, journal
  * dialect, chain directory layout, and transaction semantics.
  *
@@ -126,6 +151,25 @@ export interface StorageEngineMigrationBehavior {
    * isolation-level pinning the engine's ledger recheck protocol requires.
    */
   readonly beginTransactionStatement: string;
+
+  /**
+   * Protocol for migrations that must run without referential-integrity
+   * enforcement.
+   *
+   * Optional: engines whose DDL can restructure a referenced parent table
+   * in place omit it. SQLite declares it because its only way to add or drop
+   * a table constraint is the documented table rebuild
+   * (`CREATE __new_x` → copy → `DROP x` → `RENAME`), and dropping a referenced
+   * parent while enforcement is active fires the cascade delete actions
+   * declared by its children. Generated rebuild migrations therefore carry a
+   * `PRAGMA foreign_keys=OFF` request in their own statement stream, which
+   * SQLite silently ignores there because the applicator has already opened a
+   * transaction — enforcement pragmas are no-ops inside one. The applicator
+   * honors the request by bracketing the whole migration, transaction
+   * included, with {@link StorageEngineConstraintSuspension.suspendStatement}
+   * and {@link StorageEngineConstraintSuspension.restoreStatement}.
+   */
+  readonly constraintSuspension?: StorageEngineConstraintSuspension;
 
   /**
    * Acquire the engine's cross-process migration lock inside an open

@@ -1,5 +1,5 @@
 // NOTE: do NOT change without explicit human approval
-/* eslint max-lines: ["error", { "max": 590 }] */
+/* eslint max-lines: ["error", { "max": 580 }] */
 import { MakaioBus, NoHandlerError, OnOptions, RequestError } from '@makaio/bus-core';
 import type { IFilteredBus, IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import {
@@ -31,6 +31,7 @@ import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
 import * as process from 'node:process';
 import * as fs from 'node:fs';
 import os from 'node:os';
+import { TurnNumberLedger } from './turn-number-ledger.js';
 import type { UnknownRecord } from 'type-fest';
 import { resolveTimeouts, type TrackedTimeoutConfig } from '@makaio/utils';
 
@@ -99,10 +100,8 @@ export abstract class AIAgentConnector<
    */
   public supportedReasoningLevels: BaseAgentConnectorConfig['supportedReasoningLevels'];
   protected readonly env: Record<string, string>;
-  /** Monotonically-increasing turn counter for MCP ledger bookkeeping. */
-  private _currentTurnNumber = 0;
-  /** Pending canonical turn number staged by {@link setCanonicalTurnNumber}. */
-  private _pendingCanonicalTurnNumber: number | undefined;
+  /** Monotonic turn-number bookkeeping for the MCP tool ledger. */
+  private readonly turnNumbers = new TurnNumberLedger();
   /** Adapter type name for event identification. */
   protected readonly adapterName: string;
   /** Runtime system prompt from start/initialize options. */
@@ -252,13 +251,32 @@ export abstract class AIAgentConnector<
   public abstract getAdapterSessionId(): Promise<string>;
 
   /**
-   * Provider-confirmed adapter session ID, or `undefined` when unconfirmed.
-   * Default returns `this.adapterSessionId`; Claude connectors override to
-   * defer until `system.init` confirms the provider-side session.
-   * @returns Confirmed ID or `undefined`
+   * The provider session ID this connector is currently authoritative on, or
+   * `undefined` when it has none. "Confirmed" means safe to report, not echoed
+   * back by the provider: a seeded ID qualifies when the provider adopts it, and
+   * Claude connectors withhold it only while a fork awaits `system.init`. For
+   * "did the provider commit to it" see {@link movesProviderSessionOnSuppressedResume}.
+   * Samplers (payload enrichment, rotation guards) must not read this accessor
+   * directly — resolve through `providerCommittedAdapterSessionId` in
+   * `agent/agent-adapter-session-movement.ts`, which withholds an armed resume
+   * target that an in-flight dispatch may still abandon.
+   * @returns Currently authoritative provider session ID, or `undefined`
    */
   public getConfirmedAdapterSessionId(): string | undefined {
     return this.adapterSessionId;
+  }
+
+  /**
+   * Whether a dispatch that declines native resume would make this connector
+   * abandon its armed resume target for a fresh provider session.
+   * Narrow honesty query for the movement seam (contract in
+   * `agent/agent-adapter-session-movement.ts`): the executor must know before
+   * dispatching so the session row stops advertising the abandoned target.
+   * Default `false`; connectors that rotate must override.
+   * @returns `true` when declining native resume rotates the provider session
+   */
+  public movesProviderSessionOnSuppressedResume(): boolean {
+    return false;
   }
 
   /**
@@ -309,16 +327,7 @@ export abstract class AIAgentConnector<
    * @throws RangeError when the value is invalid, regresses, or downgrades a staged value
    */
   public setCanonicalTurnNumber(turnNumber: number): void {
-    if (!Number.isInteger(turnNumber) || turnNumber < 1) {
-      throw new RangeError(`setCanonicalTurnNumber: expected positive integer, got ${turnNumber}`);
-    }
-    if (turnNumber <= this._currentTurnNumber) {
-      throw new RangeError(`setCanonicalTurnNumber: ${turnNumber} ≤ current (${this._currentTurnNumber})`);
-    }
-    if (this._pendingCanonicalTurnNumber !== undefined && turnNumber < this._pendingCanonicalTurnNumber) {
-      throw new RangeError(`setCanonicalTurnNumber: ${turnNumber} < pending (${this._pendingCanonicalTurnNumber})`);
-    }
-    this._pendingCanonicalTurnNumber = turnNumber;
+    this.turnNumbers.stage(turnNumber);
   }
 
   /**
@@ -327,13 +336,7 @@ export abstract class AIAgentConnector<
    * @returns The current turn number after advancement
    */
   protected consumeTurnNumber(): number {
-    if (this._pendingCanonicalTurnNumber !== undefined) {
-      this._currentTurnNumber = this._pendingCanonicalTurnNumber;
-      this._pendingCanonicalTurnNumber = undefined;
-      return this._currentTurnNumber;
-    }
-    this._currentTurnNumber += 1;
-    return this._currentTurnNumber;
+    return this.turnNumbers.consume();
   }
 
   /**
@@ -341,7 +344,7 @@ export abstract class AIAgentConnector<
    * @returns The current turn number
    */
   protected get currentTurnNumber(): number {
-    return this._currentTurnNumber;
+    return this.turnNumbers.current;
   }
 
   /**
@@ -349,7 +352,7 @@ export abstract class AIAgentConnector<
    * @returns The pending canonical turn number
    */
   protected get pendingTurnNumber(): number | undefined {
-    return this._pendingCanonicalTurnNumber;
+    return this.turnNumbers.pending;
   }
 
   /**

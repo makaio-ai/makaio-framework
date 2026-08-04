@@ -85,12 +85,13 @@ export class TestAdapter extends AIAdapter<TestBus, MockConnector, TestAgent> {
 /**
  * Create a test adapter with standard wiring.
  * @param adapterName - Adapter name for namespace/config
- * @param options - Optional overrides for connector/config factories
+ * @param options - Optional overrides for the agent/connector/config factories
  * @returns Test adapter and scoped bus
  */
 export function createTestAdapter(
   adapterName: string,
   options?: {
+    agentFactory?: AdapterConfigExtensions['agentFactory'];
     configFactory?: AdapterConfigExtensions['configFactory'];
     connectorFactory?: AdapterConfigExtensions['connectorFactory'];
     prepareAuthRuntime?: AIAdapterConfig<TestBus>['prepareAuthRuntime'];
@@ -106,7 +107,7 @@ export function createTestAdapter(
     namespace,
     scopedBus,
     globalBus: MakaioBus,
-    agentFactory: (config: AIAgentConfig<TestBus, MockConnector>) => new TestAgent(config),
+    agentFactory: options?.agentFactory ?? ((config: AIAgentConfig<TestBus, MockConnector>) => new TestAgent(config)),
     configFactory:
       options?.configFactory ??
       (async (input: ConfigFactoryInput<TestBus>) => ({

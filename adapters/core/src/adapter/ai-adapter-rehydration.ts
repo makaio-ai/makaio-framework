@@ -9,6 +9,7 @@ import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
 import type { ActiveAgentEntry, ActiveAgentRegistry } from './agent-registry.js';
+import { occupiedAdapterSessionId } from './agent-registry.js';
 import type { AgentCreationOptions } from './types.js';
 import type { McpSessionContext, MakaioSessionAgent, NativeLocalityVerdict } from '@makaio/contracts';
 import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
@@ -217,12 +218,11 @@ export class AgentRehydrationManager<
     );
 
     // A resumed generation's identity is the session it resumes — a divergent
-    // identity marker would seed the connector with the old ID and leave the
-    // claimed resume ID dangling after registry.set() clears only the
-    // confirmed identity. A fresh generation mints its own provider identity
-    // instead: pinning a used session ID on a fresh start collides with the
-    // provider's durable session store (claude CLI: "Session ID already in
-    // use").
+    // identity marker would seed the connector with the old ID, leaving the agent
+    // reporting an identity it is not actually writing to. A fresh generation
+    // mints its own provider identity instead: pinning a used session ID on a
+    // fresh start collides with the provider's durable session store (claude
+    // CLI: "Session ID already in use").
     const agentCreationRequest: AgentCreationOptions = {
       model: model ?? persisted.model,
       cwd: cwd ?? persisted.cwd,
@@ -246,39 +246,75 @@ export class AgentRehydrationManager<
       effectiveResumeId,
     );
 
-    // registry.set() auto-clears the pending claim for effectiveResumeId.
-    this.registry.set(agentId, {
-      agent: newAgent,
-      sessionId: persisted.sessionId,
-      adapterSessionId: recoveredAdapterSessionId,
-      usage: restoredUsage,
+    // registry.set() settles the pending claim for effectiveResumeId, including
+    // when the provider confirmed a different session than the claimed target
+    // (lazy-confirming connectors fall back to the persisted ID).
+    this.registry.set(
+      agentId,
+      {
+        agent: newAgent,
+        sessionId: persisted.sessionId,
+        adapterSessionId: recoveredAdapterSessionId,
+        usage: restoredUsage,
+      },
+      effectiveResumeId,
+    );
+    await this.publishRehydratedRuntime(agentId, persisted, newAgent, {
+      cwd,
+      model,
+      recoveredAdapterSessionId,
     });
-    if (effectiveResumeId !== undefined && effectiveResumeId !== recoveredAdapterSessionId) {
-      // The provider confirmed a different session than the claimed resume
-      // target (lazy-confirming connectors fall back to the persisted ID) —
-      // release the claim explicitly so the session does not stay locked.
-      this.registry.releaseAdapterSessionClaim(effectiveResumeId);
-    }
-    // Persist the confirmed identity when it moved (fresh rehydrates mint a
-    // new provider session): the agent.started reconciliation is write-once
-    // and never replaces a stale stored ID, and a later restartAgents native
-    // verdict would resume the abandoned provider thread from storage.
-    //
-    // Deliberately agent-row only: the session-row identity is host-tier
-    // state the adapter does not own, and its currency is a service-tier
-    // seam shared with every other provider-session movement (rotation-mode
-    // turns move the provider session on every send). Updating it from one
-    // producer here would leave the general staleness class in place.
-    const adapterSessionIdMoved = recoveredAdapterSessionId !== persisted.adapterSessionId;
-    if (cwd !== undefined || model !== undefined || adapterSessionIdMoved) {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
-        agentId,
-        cwd,
-        model,
-        ...(adapterSessionIdMoved && { adapterSessionId: recoveredAdapterSessionId }),
-      });
-    }
     await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+  }
+
+  /**
+   * Persist the rehydrated generation's runtime values and announce a moved
+   * provider identity.
+   *
+   * The identity must be persisted when it moved (fresh rehydrates mint a new
+   * provider session): the `agent.started` reconciliation is write-once and
+   * never replaces a stale stored ID, so a later `restartAgents` native verdict
+   * would otherwise resume the abandoned provider thread from storage.
+   *
+   * The session row is deliberately not written from here — its origin
+   * `adapterSessionId` is immutable import provenance, and its resume currency
+   * is owned by the service-tier currency handler. A cold rehydrate produces no
+   * turn start, so `agent.started` cannot carry this movement: it is announced
+   * on the dedicated movement seam instead, which every other producer
+   * (provider confirmation, connector swap, pre-confirmation rotation) feeds.
+   *
+   * Ordering and retryability follow the seam's producer contract (see
+   * `agent-adapter-session-movement.ts`). The announcement runs first, so the
+   * session row carries the new currency before the agent row advertises it;
+   * and it is routed through the rehydrated agent's own movement tracker rather
+   * than emitted here, because the agent row is what a later rehydrate compares
+   * against. Emitting directly and then advancing that row would erase the only
+   * evidence a rejected movement still needs delivering — with the tracker, the
+   * unacknowledged announcement stays armed and the agent's next emitted event
+   * re-drives it, so persisting the recovered ID stays safe.
+   * @param agentId - Agent identifier being rehydrated
+   * @param persisted - Persisted agent record supplying stable identity fields
+   * @param agent - Rehydrated agent instance owning the movement tracker
+   * @param runtime - Requested cwd/model overrides plus the confirmed session ID
+   */
+  private async publishRehydratedRuntime(
+    agentId: string,
+    persisted: MakaioSessionAgent,
+    agent: TAgent,
+    runtime: { cwd: string | undefined; model: string | undefined; recoveredAdapterSessionId: string },
+  ): Promise<void> {
+    const { cwd, model, recoveredAdapterSessionId } = runtime;
+    const adapterSessionIdMoved = recoveredAdapterSessionId !== persisted.adapterSessionId;
+    if (adapterSessionIdMoved) {
+      await agent.recordConfirmedAdapterSession(recoveredAdapterSessionId);
+    }
+    if (cwd === undefined && model === undefined && !adapterSessionIdMoved) return;
+    await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
+      agentId,
+      cwd,
+      model,
+      ...(adapterSessionIdMoved && { adapterSessionId: recoveredAdapterSessionId }),
+    });
   }
 
   /**
@@ -380,7 +416,14 @@ export class AgentRehydrationManager<
     entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
     runtime: { adapterSessionId?: string; rpcResumeId?: string; cwd?: string; model?: string },
   ): Promise<void> {
-    const nativeSessionId = runtime.adapterSessionId ?? entry.adapterSessionId;
+    // Resolve both the resume fallback and the "own session" test through the
+    // occupancy helper, which is what `claimAdapterSession` consults. Comparing
+    // against the entry's reconciled field instead would disagree with the claim
+    // during the post-swap window: a caller passing the freshly published
+    // currency as the resume target would look "foreign", and the claim would
+    // then reject this agent for occupying its own provider session.
+    const ownAdapterSessionId = occupiedAdapterSessionId(entry);
+    const nativeSessionId = runtime.adapterSessionId ?? ownAdapterSessionId;
     const effectiveResumeId = resolveEffectiveResumeId(
       runtime.rpcResumeId,
       await this.resolvePersistedLocalityKind(agentId),
@@ -391,7 +434,7 @@ export class AgentRehydrationManager<
     // payload could attach this live agent to another live agent's provider
     // conversation. The entry's own session needs no claim — the registry
     // already advertises this agent as its occupant.
-    const foreignResumeId = effectiveResumeId !== entry.adapterSessionId ? effectiveResumeId : undefined;
+    const foreignResumeId = effectiveResumeId !== ownAdapterSessionId ? effectiveResumeId : undefined;
     if (foreignResumeId !== undefined && !this.registry.claimAdapterSession(foreignResumeId)) {
       throw new Error(`Provider session ${foreignResumeId} is already claimed by another in-flight rehydrate or start`);
     }

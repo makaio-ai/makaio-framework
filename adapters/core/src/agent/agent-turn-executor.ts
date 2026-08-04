@@ -13,6 +13,7 @@ import type { AIAgentConnector } from '../connector/index.js';
 import type { AgentStartResult, ConnectorStartOptions, SendMessageRequestPayload, StartAgentOptions } from './types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { buildStructuredOutputTurnContext } from './structured-output-turn-context.js';
+import { providerCommittedAdapterSessionId } from './agent-adapter-session-movement.js';
 
 /**
  * Runtime dependencies for AgentTurnExecutor.
@@ -52,6 +53,22 @@ export interface AgentTurnExecutorConfig {
    * @param mode - Derived start mode for this turn
    */
   setPendingStartMode: (mode: StartMode) => void;
+  /**
+   * Report that this dispatch discards the pending start-time resume target,
+   * moving the provider session before any provider confirmation.
+   *
+   * Mirrors the precondition every adapter session applies in its own
+   * `suppressStartResumeIfRequested`: the caller disabled native resume, a
+   * concrete resume target is still armed, and the provider has not confirmed
+   * a session for the current connector generation. Under those conditions the
+   * adapter drops the target and mints a fresh identity, so the previously
+   * advertised provider session stops being valid resume currency.
+   *
+   * Awaited before the dispatch it describes, so the session row stops
+   * advertising the abandoned provider session before the provider is asked to
+   * start a new one.
+   */
+  onNativeResumeSuppressed?: () => void | Promise<void>;
   /** Completion/lifecycle tracker hook. */
   onMessageHandle: AgentMessageHandleCallback;
   /** Side-effect callback to mark agent status active before dispatch. */
@@ -108,6 +125,7 @@ export class AgentTurnExecutor {
   private readonly shouldUseNativeResume: ShouldUseNativeResumeFn;
   private readonly hasResumeTarget: () => boolean;
   private readonly setPendingStartMode: (mode: StartMode) => void;
+  private readonly onNativeResumeSuppressed?: () => void | Promise<void>;
   private readonly onMessageHandle: AgentMessageHandleCallback;
   private readonly onBeforeDispatch?: () => void | Promise<void>;
   private readonly runDispatch: <T>(dispatch: () => Promise<T>) => Promise<T>;
@@ -123,6 +141,7 @@ export class AgentTurnExecutor {
     this.shouldUseNativeResume = config.shouldUseNativeResume;
     this.hasResumeTarget = config.hasResumeTarget;
     this.setPendingStartMode = config.setPendingStartMode;
+    this.onNativeResumeSuppressed = config.onNativeResumeSuppressed;
     this.onMessageHandle = config.onMessageHandle;
     this.onBeforeDispatch = config.onBeforeDispatch;
     this.runDispatch = config.runDispatch ?? (async (dispatch) => dispatch());
@@ -175,14 +194,51 @@ export class AgentTurnExecutor {
    * Derive the start mode for the given resolved session context, stash it
    * as the pending mode for the next lifecycle start emission, and return
    * the native-resume decision shared by the dispatch that follows.
+   *
+   * Async because a suppressed resume target moves the provider session: the
+   * movement is recorded before this returns, so the dispatch that abandons the
+   * old provider session cannot be preceded by a resume that still targets it.
    * @param sessionContext - Session context after pre-user-message hooks
    * @returns Whether the connector should rely on native resume
    */
-  private deriveAndSetPendingStartMode(sessionContext: SessionContext | undefined): boolean {
+  private async deriveAndSetPendingStartMode(sessionContext: SessionContext | undefined): Promise<boolean> {
     const useNativeResume = this.shouldUseNativeResume(sessionContext);
     const startMode = AgentTurnExecutor.deriveStartMode(sessionContext, useNativeResume, this.hasResumeTarget());
     this.setPendingStartMode(startMode);
+    if (this.movesProviderSession(useNativeResume)) {
+      await this.onNativeResumeSuppressed?.();
+    }
     return useNativeResume;
+  }
+
+  /**
+   * Whether this dispatch will move the provider session without confirmation.
+   *
+   * The armed target is abandoned unless the connector holds a *provider-committed*
+   * session that carries continuity forward, which is what
+   * `providerCommittedAdapterSessionId` resolves — the same sampling rule payload
+   * enrichment applies, expressed once. It collapses the two reasons a reported
+   * ID does not prove continuity: a fork awaiting `system.init` reports no
+   * authoritative session at all, and a seeded resume the provider has not echoed
+   * yet reports the very target this dispatch discards. Inferring "no movement"
+   * from the raw accessor left the session row advertising an abandoned provider
+   * thread until a later confirmation — or indefinitely, if the process died
+   * first.
+   *
+   * Effectively one-shot per armed target, so this signal is not a retry clock:
+   * the dispatch it precedes consumes the resume target, after which the
+   * connector reports no pending rotation and mints its own identity — both
+   * reasons stop matching. Re-delivering an announcement no consumer accepted is
+   * therefore owned by `ConfirmedAdapterSessionTracker`, which parks the
+   * undelivered movement and re-drives it from payload enrichment; this method
+   * only has to report the movement honestly once.
+   * @param useNativeResume - Native-resume decision for this dispatch
+   * @returns `true` when the armed resume target is about to be discarded
+   */
+  private movesProviderSession(useNativeResume: boolean): boolean {
+    if (useNativeResume) return false;
+    if (!this.hasResumeTarget()) return false;
+    return providerCommittedAdapterSessionId(this.getConnector()) === undefined;
   }
 
   /**
@@ -205,7 +261,7 @@ export class AgentTurnExecutor {
         messageId: payload.messageId,
       });
 
-      const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+      const useNativeResume = await this.deriveAndSetPendingStartMode(hookResult.sessionContext);
       const normalizedMessage = normalizeMessageInput(hookResult.message);
       const handle = await connector.sendMessage(normalizedMessage, {
         deliveryMode: payload.deliveryMode,
@@ -262,7 +318,7 @@ export class AgentTurnExecutor {
         messageId: options?.messageId,
       });
 
-      const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+      const useNativeResume = await this.deriveAndSetPendingStartMode(hookResult.sessionContext);
       const normalizedMessage = normalizeMessageInput(hookResult.message);
       const connectorOptions: ConnectorStartOptions = {
         systemPrompt,

@@ -571,6 +571,61 @@ describe('core migrations', () => {
     });
   });
 
+  it('preserves session children across the sessions table rebuild', async () => {
+    const migrations = readMigrations();
+    const migration = splitBeforeMigration(migrations, '0031_adapter_session_currency');
+
+    await withMemoryDatabaseAtMigrations(migration.before, async ({ db, rawSql }) => {
+      await rawSql.run(sql`
+        INSERT INTO sessions (session_id, created_at, last_activity_at, status)
+        VALUES ('session-before-0031', 1000, 1001, 'active')
+      `);
+      await rawSql.run(sql`
+        INSERT INTO agents (
+          agent_id, adapter_id, adapter_name, session_id, role, status, created_at, last_activity_at
+        )
+        VALUES (
+          'agent-before-0031', 'adapter-before-0031', 'claude-agent-sdk', 'session-before-0031',
+          'lead', 'idle', 1000, 1001
+        )
+      `);
+      await rawSql.run(sql`
+        INSERT INTO turns (turn_id, session_id, turn_number, started_at, status)
+        VALUES ('turn-before-0031', 'session-before-0031', 1, 1000, 'completed')
+      `);
+      await rawSql.run(sql`
+        INSERT INTO messages (message_id, turn_id, session_id, role, content_text, timestamp)
+        VALUES ('message-before-0031', 'turn-before-0031', 'session-before-0031', 'user', 'hello', 1000)
+      `);
+      await rawSql.run(sql`
+        INSERT INTO session_events (session_id, event_id, timestamp, type, payload)
+        VALUES ('session-before-0031', 'event-before-0031', 1000, 'session.created', '{}')
+      `);
+
+      await applyMigrations(db, [migration.target]);
+
+      const sessionColumns = await rawSql.all<TableColumnInfo>(sql.raw('PRAGMA table_info(sessions)'));
+      expect(sessionColumns.map(({ name }) => name)).toEqual(
+        expect.arrayContaining(['current_adapter_session_id', 'current_adapter_session_id_state']),
+      );
+
+      const sessions = await rawSql.all<{ session_id: string; current_adapter_session_id_state: string }>(sql`
+        SELECT session_id, current_adapter_session_id_state FROM sessions
+      `);
+      expect(sessions).toEqual([{ session_id: 'session-before-0031', current_adapter_session_id_state: 'inherited' }]);
+
+      const agents = await rawSql.all<{ agent_id: string }>(sql`SELECT agent_id FROM agents`);
+      const turns = await rawSql.all<{ turn_id: string }>(sql`SELECT turn_id FROM turns`);
+      const messages = await rawSql.all<{ message_id: string }>(sql`SELECT message_id FROM messages`);
+      const events = await rawSql.all<{ event_id: string }>(sql`SELECT event_id FROM session_events`);
+
+      expect(agents).toEqual([{ agent_id: 'agent-before-0031' }]);
+      expect(turns).toEqual([{ turn_id: 'turn-before-0031' }]);
+      expect(messages).toEqual([{ message_id: 'message-before-0031' }]);
+      expect(events).toEqual([{ event_id: 'event-before-0031' }]);
+    });
+  });
+
   it('client_binary_versions table exists after all migrations', async () => {
     await withMigratedMemoryDatabase(async ({ rawSql }) => {
       const tables = await rawSql.all<{ name: string }>(sql`

@@ -32,6 +32,27 @@ export const SessionContextInheritanceSchema = z.enum(['parent-history', 'none']
 export type SessionContextInheritance = z.infer<typeof SessionContextInheritanceSchema>;
 
 /**
+ * Currency state of the session row's provider-native resume identity.
+ *
+ * The sessions row carries two distinct provider-session concepts:
+ * `adapterSessionId` is the **immutable origin identity** (import key,
+ * write-once), while `currentAdapterSessionId` plus this state form the
+ * **resume currency** — which provider session, if any, a resume attach may
+ * legitimately target right now.
+ *
+ * - `inherited`: the provider session has never moved, so the origin
+ *   `adapterSessionId` still is the valid currency. Default for pre-existing
+ *   rows and for imports.
+ * - `moved`: the provider session moved but the provider has not confirmed a
+ *   replacement yet. Neither the origin ID nor `currentAdapterSessionId` may
+ *   be resumed — callers degrade to fresh-with-history.
+ * - `confirmed`: `currentAdapterSessionId` is the provider-confirmed currency
+ *   and supersedes the origin ID for resume purposes.
+ */
+export const AdapterSessionCurrencyStateSchema = z.enum(['inherited', 'moved', 'confirmed']);
+export type AdapterSessionCurrencyState = z.infer<typeof AdapterSessionCurrencyStateSchema>;
+
+/**
  * Import-specific lifecycle status.
  * - 'discovered': Found in logs, not fully imported yet
  * - 'imported': All messages imported successfully

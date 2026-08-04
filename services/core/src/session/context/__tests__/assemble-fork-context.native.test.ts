@@ -199,6 +199,49 @@ describe('assembleForkContext - native locality', () => {
     });
   });
 
+  describe('source resume currency', () => {
+    it('branches from the confirmed currency instead of the origin identity', async () => {
+      const forkSession = setupNativeForkScenario(
+        {},
+        {
+          currentAdapterSessionId: 'rotated-native',
+          currentAdapterSessionIdState: 'confirmed',
+        },
+      );
+
+      const result = await assembleForkContext(
+        MakaioBus,
+        forkSession,
+        'fork',
+        undefined,
+        true,
+        localMachine,
+        nativeForkCapabilities,
+      );
+
+      expect(result?.nativeLocality).toEqual({ kind: 'native' });
+      expect(result?.nativeFork?.sourceAdapterSessionId).toBe('rotated-native');
+    });
+
+    it('degrades when the source provider session moved without confirmation', async () => {
+      const forkSession = setupNativeForkScenario({}, { currentAdapterSessionIdState: 'moved' });
+
+      const result = await assembleForkContext(
+        MakaioBus,
+        forkSession,
+        'fork',
+        undefined,
+        true,
+        localMachine,
+        nativeForkCapabilities,
+      );
+
+      expect(result?.nativeLocality).toEqual({ kind: 'degrade', reason: 'adapter-session-moved' });
+      expect(result?.nativeFork).toBeUndefined();
+      expect(result?.messageHistory).toHaveLength(1);
+    });
+  });
+
   describe('mid-history fork adapter message resolution', () => {
     it('resolves adapterMessageId from the fork-point message for the directive', async () => {
       // Default scenario: parent-msg has adapterMessageId: 'provider-msg-checkpoint'

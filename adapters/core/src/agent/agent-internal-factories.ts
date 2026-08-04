@@ -154,6 +154,11 @@ export function createAgentTurnExecutor(config: {
   hasResumeTarget: () => boolean;
   /** Set the start mode on the owning agent before connector dispatch. */
   setPendingStartMode: (mode: StartMode) => void;
+  /**
+   * Report a pre-confirmation provider-session movement for this dispatch.
+   * @see AgentTurnExecutorConfig.onNativeResumeSuppressed
+   */
+  onNativeResumeSuppressed?: () => void | Promise<void>;
   onMessageHandle: (messageHandle: MessageHandle, turnId: string | undefined) => Promise<void>;
   onBeforeDispatch?: () => void | Promise<void>;
   runDispatch?: <T>(dispatch: () => Promise<T>) => Promise<T>;
@@ -229,7 +234,8 @@ export function createAgentConnectorLifecycleManager<
   getConnectorRuntime: () => ConnectorRuntimeHandle<TConnector>;
   setConnectorRuntime: (runtime: ConnectorRuntimeHandle<TConnector>) => void;
   getRuntimeSystemPrompt: () => SystemPrompt | undefined;
-  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void;
+  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>;
+  announceAdapterSessionMoved: () => Promise<void>;
 }): AgentConnectorLifecycleManager<TBus, TConnector> {
   return new AgentConnectorLifecycleManager<TBus, TConnector>({
     agentId: config.agentId,
@@ -246,6 +252,7 @@ export function createAgentConnectorLifecycleManager<
     setConnectorRuntime: config.setConnectorRuntime,
     getRuntimeSystemPrompt: config.getRuntimeSystemPrompt,
     setLastKnownAdapterSessionId: config.setLastKnownAdapterSessionId,
+    announceAdapterSessionMoved: config.announceAdapterSessionMoved,
     reportCleanupFailure: (diagnostic) =>
       config.emitGlobal(
         AdapterSubjects.log,

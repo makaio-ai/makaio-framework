@@ -220,6 +220,7 @@ export type { BuildContextOptions, ContextAssemblyResult } from './context/index
 
 // Native locality evaluator (pure function; no bus interaction)
 export { evaluateNativeLocality, type NativeLocalityInput, type NativeLocalityIntent } from './native-locality.js';
+export { resolveSessionResumeIdentity, type SessionResumeIdentity } from './session-resume-identity.js';
 
 // Context window tracking (per-session aggregation)
 export { ContextWindowTracker } from './context-window/index.js';
