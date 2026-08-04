@@ -1,4 +1,4 @@
-// NOTE: do NOT change without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 450 }] */
 import { AIAgent, processDiscriminatedItems, AIAgentConnector } from '@makaio/ai-adapters-core';
 import type { OnOptions } from '@makaio/bus-core';

@@ -1,4 +1,4 @@
-// NOTE: do NOT change lint limits without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 445 }] */ // Bumped from 440 for IsChannel cast comment
 /**
  * Shared test utilities for SessionOrchestrator tests.

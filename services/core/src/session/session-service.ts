@@ -1,4 +1,3 @@
-// NOTE: do NOT change without explicit human approval
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';

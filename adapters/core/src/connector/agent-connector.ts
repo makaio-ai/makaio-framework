@@ -1,4 +1,4 @@
-// NOTE: do NOT change without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 580 }] */
 import { MakaioBus, NoHandlerError, OnOptions, RequestError } from '@makaio/bus-core';
 import type { IFilteredBus, IMakaioBus, ScopedBus } from '@makaio/bus-core';

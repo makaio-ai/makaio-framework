@@ -1,4 +1,4 @@
-// NOTE: do NOT change without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 530 }] */
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { createMakaioContext } from '@makaio/core';

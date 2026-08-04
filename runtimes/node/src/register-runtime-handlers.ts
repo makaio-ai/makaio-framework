@@ -150,7 +150,7 @@ function toProviderRecord(provider: LoadedAdapter['providers'][number]): Provide
   };
 }
 
-// NOTE: do NOT change without explicit human approval
+// NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines-per-function: ["error", { "max": 190 }] */
 /**
  * Register runtime bus handlers for adapter listing, config schemas, and model fetching.

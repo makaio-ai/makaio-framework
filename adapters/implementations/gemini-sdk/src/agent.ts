@@ -337,7 +337,7 @@ export class GeminiAgent extends AIAgent<GeminiConnectorBus, GeminiConnector> {
     this.reasoningBlockIndex = null;
   }
 
-  // NOTE: do NOT change without explicit human approval
+  // NOTE: do NOT change the eslint override on the next line without explicit human approval
   /* eslint complexity: ["error", { "max": 22 }] */
   /**
    * Handle session.finished event - emit step.finished for accumulated content and track usage.
