@@ -27,6 +27,7 @@ import {
 import { initializeConnection, type ConnectionManagerContext } from './connection-manager.js';
 import { resolveCodexApiKeyAccountLogin, type CodexApiKeyAccountLogin } from './account-login.js';
 import { abortCodexConnection, closeCodexConnection } from './connector-shutdown.js';
+import { CommandInfoRegistry } from './command-info-registry.js';
 import {
   startThread,
   processQueue,
@@ -62,10 +63,8 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   private readonly _approvalPolicy?: ApprovalPolicy;
   private readonly _sandboxMode?: SandboxMode;
   private readonly _reasoningEffort?: ReasoningEffort;
-  private readonly commandExecutionByItemId = new Map<string, { command: string; cwd: string }>();
+  private readonly commandInfo = new CommandInfoRegistry();
   private readonly dynamicToolCallByItemId = new Map<string, DynamicToolCallCacheEntry>();
-  /** Pending resolvers for {@link waitForCommandInfo}, keyed by itemId. */
-  private readonly commandInfoWaiters = new Map<string, (info: { command: string; cwd: string }) => void>();
   private disabledNativeTools: ReadonlySet<string> = new Set();
   /** Private connector delivery retained only until this connector closes. */
   private accountLogin: CodexApiKeyAccountLogin | undefined;
@@ -102,10 +101,10 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     }
 
     this.connCtx = this.buildConnectionContext();
-    // buildTurnFlowContext reads some values from `config` directly (resumeAdapterSessionId,
-    // nativeFork) and others from `this` (cwd, model via getters). This mixed sourcing is
-    // intentional: getter-backed fields (model, approvalPolicy, reasoningEffort) must be
-    // live-read per turn, while immutable fork/resume directives are snapshot from config.
+    // buildTurnFlowContext deliberately mixes sourcing: config-sourced initial directives
+    // (resumeAdapterSessionId — later consumed by suppressed resume — and nativeFork) are snapshot
+    // from `config`, while getter-backed fields (model, approvalPolicy, reasoningEffort) are
+    // live-read from `this` per turn.
     this.turnCtx = this.buildTurnFlowContext(config);
   }
 
@@ -205,43 +204,6 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     return this._reasoningEffort;
   }
 
-  /**
-   * Resolve any pending {@link waitForCommandInfo} promise for `itemId`.
-   * Called by the `item/started` lifecycle path after populating `commandExecutionByItemId`.
-   * @param itemId - Item now available in commandExecutionByItemId
-   * @param info - Command execution metadata just written to the cache
-   */
-  private notifyCommandInfoReady(itemId: string, info: { command: string; cwd: string }): void {
-    const resolve = this.commandInfoWaiters.get(itemId);
-    if (resolve) {
-      this.commandInfoWaiters.delete(itemId);
-      resolve(info);
-    }
-  }
-
-  /**
-   * Return `commandExecutionByItemId` entry for `itemId` immediately if present,
-   * otherwise wait up to 5 seconds for `item/started` to populate it.
-   * Returns `undefined` on timeout so callers can degrade gracefully.
-   * @param itemId - Item ID to wait for
-   * @returns Command execution metadata, or `undefined` on timeout
-   */
-  private waitForCommandInfo(itemId: string): Promise<{ command: string; cwd: string } | undefined> {
-    const existing = this.commandExecutionByItemId.get(itemId);
-    if (existing) return Promise.resolve(existing);
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.commandInfoWaiters.delete(itemId);
-        resolve(undefined);
-      }, 5000);
-      this.commandInfoWaiters.set(itemId, (info) => {
-        clearTimeout(timeout);
-        resolve(info);
-      });
-    });
-  }
-
   private resolveSystemPrompt(): string | null {
     if (this.systemPrompt === undefined) return null;
     return typeof this.systemPrompt === 'string' ? this.systemPrompt : this.systemPrompt.content;
@@ -271,7 +233,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       consumeTurnNumber: this.consumeTurnNumber.bind(this),
       getCurrentTurn: () => this.currentTurn,
       emit: this.emit.bind(this),
-      commandExecutionByItemId: this.commandExecutionByItemId,
+      commandExecutionByItemId: this.commandInfo.byItemId,
       dynamicToolCallByItemId: this.dynamicToolCallByItemId,
       updateProcessingState: this.updateProcessingState.bind(this),
       appendAgentMessageDelta: (delta) => {
@@ -281,18 +243,18 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       onTurnCompleted: (n: TurnCompletedNotification) => onTurnCompleted(tfCtx, n),
       getThread: () => this.thread,
       handleAsyncError: (error) => this.handleError(error),
-      onCommandInfoReady: this.notifyCommandInfoReady.bind(this),
+      onCommandInfoReady: (itemId, info) => this.commandInfo.notifyReady(itemId, info),
     });
     registerServerRequestHandler({
       client,
       agentId: this.agentId,
       cwd: this.cwd ?? '',
-      commandExecutionByItemId: this.commandExecutionByItemId,
+      commandExecutionByItemId: this.commandInfo.byItemId,
       requestToolApproval: this.requestToolApproval.bind(this) as ApprovalContext['requestToolApproval'],
       handleError: this.handleError.bind(this),
       getDisabledNativeTools: () => this.disabledNativeTools,
       handleDynamicToolCallRequest: this.handleDynamicToolCallRequest.bind(this),
-      waitForCommandInfo: this.waitForCommandInfo.bind(this),
+      waitForCommandInfo: (itemId) => this.commandInfo.waitFor(itemId),
     });
     this.clientHandlersRegistered = true;
   }
@@ -338,11 +300,35 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     };
   }
 
+  /**
+   * Codex abandons an armed resume target on suppressed native resume: the
+   * turn-flow context feeds `thread/resume` directly, so declining resume
+   * mints a fresh thread and the armed target stops being valid resume
+   * currency. `true` while that target is armed and no thread has been
+   * started — once a thread exists the provider has committed an identity and
+   * nothing is pending. Left at the base `false`, the movement seam would read
+   * the seeded `adapterSessionId` and conclude nothing moved, leaving the
+   * session row advertising the abandoned thread until the fresh one confirms
+   * (contract in `agent/agent-adapter-session-movement.ts`).
+   * @returns `true` while an unconfirmed resume target is armed
+   */
+  public override movesProviderSessionOnSuppressedResume(): boolean {
+    return this.thread === undefined && this.turnCtx.resumeAdapterSessionId !== undefined;
+  }
+
   public async sendMessage(
     message: NormalizedMessageInput,
     options?: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     if (!this.isConnected) await initializeConnection(this.connCtx, this.initConnectionInflight);
+    // Suppress before startThread: that function reads turnCtx.resumeAdapterSessionId directly;
+    // options is not forwarded to it, so clearing it here is the only point suppression applies.
+    // The clear is deliberately NOT restored when startThread rejects: the executor announced the
+    // abandonment (unconfirmed move) before this dispatch, so the session row already stopped
+    // advertising the old thread. Resurrecting the target would let a later dispatch resume a
+    // thread whose abandonment was announced — the bug class #1222 closed. Recovery after a
+    // failed fresh start is the service tier's decision (fresh-with-history), not the connector's.
+    if (!this.thread && options?.useNativeResume === false) this.turnCtx.resumeAdapterSessionId = undefined;
     if (!this.thread) await startThread(this.turnCtx);
 
     const handle = this.createMessageHandle(message, options);
