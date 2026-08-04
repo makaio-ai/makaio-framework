@@ -33,6 +33,7 @@
   },
   "workspaces": [
     "build-tooling",
+    "scripts",
     "packages/**/*",
     "!packages/framework/dist",
     "!packages/framework/dist/**",

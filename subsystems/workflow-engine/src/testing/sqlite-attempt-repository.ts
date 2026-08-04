@@ -252,9 +252,10 @@ function toOperationRecord(row: OperationRow): ProviderOperationOwnershipRecord 
  * Serializes schema initialization per SQLite database file, within this process.
  *
  * Repository construction may begin concurrently on two handles for the same
- * database. DDL must not race in that case, but this queue intentionally ends
- * once the tables exist: transition serialization is per handle so distinct
- * connections still exercise SQLite's real write contention.
+ * database. DDL must not race in that case. Transitions use a separate gate
+ * with the same database identity because libsql can otherwise retain an
+ * unfinished statement after a contended commit and poison the shared test
+ * fixture.
  *
  * The map is module state, so the guarantee is process-local: two processes
  * over one database file do not share a gate and fall back to SQLite's own
@@ -268,6 +269,9 @@ function toOperationRecord(row: OperationRow): ProviderOperationOwnershipRecord 
  * its own write.
  */
 const schemaGates = new Map<string, Promise<void>>();
+
+/** Process-local transition queues keyed by the SQLite database identity. */
+const transactionGates = new Map<string, Promise<void>>();
 
 const SQLITE_BUSY_RETRY_LIMIT = 100;
 
@@ -340,8 +344,9 @@ async function commitTransaction(session: RawSqlSession): Promise<void> {
  * Run schema initialization once at a time for a database.
  *
  * The queueing itself is `serializeByKey` from `@makaio/storage-drizzle`. It
- * deliberately uses a file identity here only; transitions use
- * `serializeDatabaseOperation`, whose handle identity must not be widened.
+ * deliberately uses the same file identity as transition serialization, but
+ * a distinct queue so schema setup and repository operation lifecycles remain
+ * explicit.
  * @param key - Database identity the gate is keyed by.
  * @param work - Transaction body to run once the gate is free.
  * @returns Whatever `work` resolves to.
@@ -349,6 +354,17 @@ async function commitTransaction(session: RawSqlSession): Promise<void> {
  */
 async function withSchemaGate<TResult>(key: string, work: () => Promise<TResult>): Promise<TResult> {
   return serializeByKey(schemaGates, key, work);
+}
+
+/**
+ * Run one test-support transaction at a time across every handle for a database file.
+ * @param key - Stable database identity shared by independent file handles.
+ * @param work - Complete transaction attempt, including rollback cleanup.
+ * @returns Whatever the transaction resolves to.
+ * @typeParam TResult - Result produced by the transaction.
+ */
+async function withTransactionGate<TResult>(key: string, work: () => Promise<TResult>): Promise<TResult> {
+  return serializeByKey(transactionGates, key, work);
 }
 
 /**
@@ -560,37 +576,39 @@ export async function createSqliteAttemptRepository(db: MakaioDatabase): Promise
     if (invalidatedBy !== undefined) {
       throw new Error('This repository was retired by a failed transaction rollback', { cause: invalidatedBy });
     }
-    return serializeDatabaseOperation(db, async () => {
-      for (let retries = 0; ; retries += 1) {
-        try {
-          return await executor.withSession(async (session) => {
-            let began = false;
-            try {
-              await session.run(sql.raw('BEGIN IMMEDIATE'));
-              began = true;
-              const result = await work(session);
-              await commitTransaction(session);
-              return result;
-            } catch (error) {
+    return serializeDatabaseOperation(db, () =>
+      withTransactionGate(gateKey, async () => {
+        for (let retries = 0; ; retries += 1) {
+          try {
+            return await executor.withSession(async (session) => {
+              let began = false;
               try {
-                await session.run(sql.raw('ROLLBACK'));
-              } catch (rollbackError) {
-                if (!began && isNoActiveTransactionError(rollbackError)) throw error;
-                // The connection's transaction state is now unknown, so no later
-                // transition may run on it. Reporting only the original failure
-                // would hide that.
-                invalidatedBy = new AggregateError([error, rollbackError], 'Transaction rollback failed');
-                throw invalidatedBy;
+                await session.run(sql.raw('BEGIN IMMEDIATE'));
+                began = true;
+                const result = await work(session);
+                await commitTransaction(session);
+                return result;
+              } catch (error) {
+                try {
+                  await session.run(sql.raw('ROLLBACK'));
+                } catch (rollbackError) {
+                  if (!began && isNoActiveTransactionError(rollbackError)) throw error;
+                  // The connection's transaction state is now unknown, so no later
+                  // transition may run on it. Reporting only the original failure
+                  // would hide that.
+                  invalidatedBy = new AggregateError([error, rollbackError], 'Transaction rollback failed');
+                  throw invalidatedBy;
+                }
+                throw error;
               }
-              throw error;
-            }
-          });
-        } catch (error) {
-          if (!isSqliteBusyError(error) || retries === SQLITE_BUSY_RETRY_LIMIT) throw error;
-          await yieldForSqliteWriter();
+            });
+          } catch (error) {
+            if (!isSqliteBusyError(error) || retries === SQLITE_BUSY_RETRY_LIMIT) throw error;
+            await yieldForSqliteWriter();
+          }
         }
-      }
-    });
+      }),
+    );
   };
 
   /**
