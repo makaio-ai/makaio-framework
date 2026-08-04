@@ -51,6 +51,37 @@ describe('AgentPayloadEmitter', () => {
     ]);
   });
 
+  it('invokes the recording sink even when no identity resolves', async () => {
+    // Enrichment is the movement seam's only retry clock: recording
+    // `undefined` re-drives a parked undelivered movement in the tracker,
+    // and an agent that resolves no identity at all is exactly the one
+    // whose unconfirmed movement is still outstanding.
+    const recorded: Array<string | undefined> = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async () => {},
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+      }),
+      getCurrentMessageId: () => 'current-message-id',
+      getCurrentTurnId: () => undefined,
+      getConnectorAdapterSessionId: () => undefined,
+      getLastKnownAdapterSessionId: () => undefined,
+      setLastKnownAdapterSessionId: (adapterSessionId) => {
+        recorded.push(adapterSessionId);
+      },
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    await emitter.emitGlobal(AgentSubjects.message, { content: 'hello', messageId: 'message-a' });
+
+    expect(recorded).toEqual([undefined]);
+  });
+
   it('prefers caller-provided turnId over live lifecycle state', async () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
@@ -347,8 +378,11 @@ describe('AgentPayloadEmitter', () => {
 
     await emitter.emitGlobal(AgentSubjects.message, { content: 'during-swap' });
     expect(emittedPayloads[0]).toHaveProperty('adapterSessionId', 'previous-confirmed-session');
-    // The cache write re-affirms the same confirmed value
-    expect(storedIds).toContain('previous-confirmed-session');
+    // The sink is told what the *connector* confirms, not what the cache still
+    // reports: the cached ID may be one a movement already abandoned, and
+    // feeding it back would re-assert currency (and an inherited resume target)
+    // on that abandoned provider thread. Stamping still uses the cache.
+    expect(storedIds).toEqual([undefined]);
   });
 
   it('stamps confirmed adapterSessionId after fork confirmation', async () => {

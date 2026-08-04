@@ -1,0 +1,3 @@
+ALTER TABLE "sessions" ADD COLUMN "current_adapter_session_id" text;--> statement-breakpoint
+ALTER TABLE "sessions" ADD COLUMN "current_adapter_session_id_state" text DEFAULT 'inherited' NOT NULL;--> statement-breakpoint
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_current_adapter_session_id_currency_check" CHECK ("sessions"."current_adapter_session_id_state" IN ('inherited', 'moved', 'confirmed') AND ("sessions"."current_adapter_session_id_state" <> 'confirmed' OR "sessions"."current_adapter_session_id" IS NOT NULL) AND ("sessions"."current_adapter_session_id_state" = 'confirmed' OR "sessions"."current_adapter_session_id" IS NULL));

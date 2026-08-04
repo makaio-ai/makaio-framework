@@ -3,6 +3,11 @@ import { z } from 'zod';
 /**
  * Closed set of reasons a session cannot be resumed or forked natively
  * on the current machine.
+ *
+ * `adapter-session-moved` is the modeled degrade for a session whose provider
+ * identity moved without provider confirmation (currency state `moved`):
+ * neither the origin nor the current ID is valid resume currency, so the caller
+ * must fall back to fresh-with-history.
  */
 export const NativeLocalityReasonSchema = z.enum([
   'adapter-unsupported',
@@ -19,6 +24,7 @@ export const NativeLocalityReasonSchema = z.enum([
   'native-attempt-failed',
   'agent-already-started',
   'fork-point-unresolvable',
+  'adapter-session-moved',
 ]);
 
 export type NativeLocalityReason = z.infer<typeof NativeLocalityReasonSchema>;

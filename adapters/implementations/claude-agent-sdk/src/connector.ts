@@ -440,6 +440,23 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
   }
 
   /**
+   * Report the rotation this connector would perform if the next dispatch
+   * declined native resume.
+   *
+   * Required override: for a non-fork session
+   * {@link getConfirmedAdapterSessionId} reports the locally seeded resume ID —
+   * the provider will adopt it, so it is authoritative — but the session drops
+   * exactly that target and rotates to a fresh query while `system.init` is
+   * still outstanding. Left to the base `false`, the movement seam would see an
+   * ID and conclude nothing moved, leaving the session row pointing at the
+   * abandoned provider thread.
+   * @returns `true` while an unconfirmed resume target is armed
+   */
+  public override movesProviderSessionOnSuppressedResume(): boolean {
+    return this.session?.resumeTargetPendingSuppression() !== undefined;
+  }
+
+  /**
    * Start session with initial message.
    * Initializes Session/Turn and sends the initial message via queue.
    * @param message - The initial user message (SDKUserMessage or MessageParam)

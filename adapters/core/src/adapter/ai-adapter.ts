@@ -8,7 +8,7 @@ import type { ConfigFactoryInput } from './ai-adapter-config.js';
 import type { AdapterProviderDefinition, PlatformDefaults } from '../types/index.js';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { ActiveAgentHandle, AgentCreationOptions, AIAdapterConstructorConfig } from './types.js';
-import { ActiveAgentRegistry } from './agent-registry.js';
+import { ActiveAgentRegistry, toAgentSummary } from './agent-registry.js';
 import { AgentRehydrationManager } from './ai-adapter-rehydration.js';
 import { handleInfer } from './ai-adapter-infer.js';
 import {
@@ -151,25 +151,11 @@ export abstract class AIAdapter<
       // Listen for session-driven closures to evict agents
       this.globalBus.on(SessionSubjects.closed, this.handleSessionClosedByService),
       filteredBus.on(AdapterSubjects.listAgents, (ctx) => {
-        ctx.setResult({
-          agents: Array.from(this.registry.values()).map((entry) => ({
-            agentId: entry.agent.agentId,
-            sessionId: entry.sessionId,
-            adapterSessionId: entry.adapterSessionId,
-          })),
-        });
+        ctx.setResult({ agents: Array.from(this.registry.values()).map(toAgentSummary) });
       }),
       filteredBus.on(AdapterSubjects.getAgent, (ctx) => {
         const entry = this.registry.get(ctx.payload.agentId);
-        ctx.setResult({
-          agent: entry
-            ? {
-                agentId: entry.agent.agentId,
-                sessionId: entry.sessionId,
-                adapterSessionId: entry.adapterSessionId,
-              }
-            : null,
-        });
+        ctx.setResult({ agent: entry ? toAgentSummary(entry) : null });
       }),
       filteredBus.on(AdapterSubjects.stopAgent, (ctx) => {
         ctx.setResult({ success: this.disposeAgent(ctx.payload.agentId) });

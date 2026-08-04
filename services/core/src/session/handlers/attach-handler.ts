@@ -31,6 +31,7 @@ import {
   resolveEffectiveAttachCwd,
 } from './attach-runtime-options.js';
 import { evaluateNativeLocality } from '../native-locality.js';
+import { resolveSessionResumeIdentity } from '../session-resume-identity.js';
 import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import type { SessionTurnManager } from '../session-turn-manager.js';
@@ -197,9 +198,32 @@ async function adapterSessionHasLiveWriter(
  * already using the same `adapterSessionId`. Resuming into an occupied
  * provider session would share/mutate another agent's conversation, so the
  * attach degrades to `agent-already-started` fresh-with-history instead.
- * @param input - Bus for the capability lookup, resolved adapter instance ID,
- *   stable adapter type name, validated session record, local machine identity,
- *   and effective working directory for the locality evaluator
+ *
+ * The provider session is resolved exactly once, through
+ * {@link resolveSessionResumeIdentity}, and that single value feeds all three
+ * roles below: the locality evaluator's currency check (which degrades to
+ * `adapter-session-moved` for an unconfirmed movement), the live-writer probe,
+ * and the resume target returned to the caller. Reading
+ * `session.adapterSessionId` per role is what previously let a resume target
+ * diverge from the session the locality verdict was computed for.
+ *
+ * Currency is re-read here instead of taken from the validated snapshot the
+ * caller loaded. Agent selection, adapter resolution, and provider resolution sit
+ * between the two points, and a provider-session movement the lead agent
+ * persisted during that window is already committed by the time locality is
+ * decided — resolving it from the earlier snapshot resumes a thread the row no
+ * longer advertises. Only currency is refreshed: the structural fields the
+ * evaluator reads (machine, cwd, adapter identity) must stay consistent with the
+ * `effectiveCwd` the caller derived from that same snapshot.
+ *
+ * The read narrows the exposure to a movement landing between it and the claim in
+ * `startAgent`, and no occupancy probe can close that remainder: an abandoned
+ * provider session is by definition the one no live agent claims, so
+ * `claimAdapterSessionId` accepts it. Closing it needs storage-level CAS on the
+ * currency pair, which is the ownership decision TODO(#1140) blocks on.
+ * @param input - Bus for the capability lookup and currency re-read, resolved
+ *   adapter instance ID, stable adapter type name, validated session record,
+ *   local machine identity, and effective working directory for the locality evaluator
  * @returns Resolved resume adapter session ID and optional non-native session context
  */
 async function resolveAttachLocality(input: {
@@ -211,6 +235,8 @@ async function resolveAttachLocality(input: {
   effectiveCwd: string | undefined;
 }): Promise<AttachLocalityResult> {
   const { bus, adapterId, adapterName, session, machineId, effectiveCwd } = input;
+  const { session: currentRow } = await bus.request(SessionSubjects.get, { sessionId: session.sessionId });
+  const resumeIdentity = resolveSessionResumeIdentity(currentRow ?? session);
   const adapterCanResume = await adapterSupportsResume(bus, adapterId);
   const verdict = evaluateNativeLocality({
     intent: 'resume',
@@ -220,12 +246,13 @@ async function resolveAttachLocality(input: {
     targetAdapterName: adapterName,
     currentCwd: session.targetWorkingDirectory,
     targetCwd: effectiveCwd,
+    resumeIdentity,
   });
 
-  // A native verdict implies the evaluator saw a non-empty adapterSessionId,
+  // A native verdict implies the evaluator saw a non-empty resume identity,
   // so the explicit narrow here can only pass — it replaces a non-null assertion.
-  if (verdict.kind === 'native' && session.adapterSessionId !== undefined) {
-    const hasLiveWriter = await adapterSessionHasLiveWriter(bus, adapterId, session.adapterSessionId);
+  if (verdict.kind === 'native' && resumeIdentity.adapterSessionId !== undefined) {
+    const hasLiveWriter = await adapterSessionHasLiveWriter(bus, adapterId, resumeIdentity.adapterSessionId);
     if (hasLiveWriter) {
       const degraded = { kind: 'degrade' as const, reason: 'agent-already-started' as const };
       void emitLocalityDegradeEvent(bus, {
@@ -252,7 +279,7 @@ async function resolveAttachLocality(input: {
   }
 
   return {
-    resumeAdapterSessionId: verdict.kind === 'native' ? session.adapterSessionId : undefined,
+    resumeAdapterSessionId: verdict.kind === 'native' ? resumeIdentity.adapterSessionId : undefined,
     attachSessionContext: verdict.kind !== 'native' ? { nativeLocality: verdict } : undefined,
   };
 }

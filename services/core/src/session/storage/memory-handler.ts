@@ -94,6 +94,43 @@ function applyListFilters(sessions: IMakaioSession[], filters: SessionListFilter
 }
 
 /**
+ * Carry the stored adapter-session currency across a whole-record `set`.
+ *
+ * Mirrors the Drizzle backend, whose `set` column list deliberately omits the
+ * currency pair: `set` writes a caller-held snapshot, so letting it carry
+ * currency would allow a writer that read the session before a provider-session
+ * movement to resurrect the abandoned provider session. Currency is owned
+ * exclusively by the targeted `storage:session.update` path.
+ * @param next - Incoming session record about to be stored
+ * @param previous - Currently stored record, or `null` on first insert
+ */
+function preserveAdapterSessionCurrency(next: IMakaioSession, previous: IMakaioSession | null): void {
+  next.currentAdapterSessionId = previous?.currentAdapterSessionId;
+  next.currentAdapterSessionIdState = previous?.currentAdapterSessionIdState ?? 'inherited';
+}
+
+/**
+ * Apply the adapter-session currency pair as one unit.
+ *
+ * The two columns carry a single fact, and the SQL backends enforce that with
+ * `sessions_current_adapter_session_id_currency_check`. Applying them through
+ * the generic per-field assigners would let a half-supplied payload leave this
+ * backend holding a pair the SQL backends would have rejected — a silent
+ * behavioral divergence between the in-memory and Drizzle handlers. The update
+ * request schema rejects such payloads before either backend sees them
+ * (`validateAdapterSessionCurrencyPair`); applying the pair atomically here
+ * keeps that guarantee local instead of borrowed.
+ * @param session - Session to mutate
+ * @param update - Partial update payload
+ */
+function applyAdapterSessionCurrency(session: IMakaioSession, update: SessionUpdatePayload): void {
+  const { currentAdapterSessionId: id, currentAdapterSessionIdState: state } = update;
+  if (id === undefined || state === undefined) return;
+  session.currentAdapterSessionId = id ?? undefined;
+  session.currentAdapterSessionIdState = state;
+}
+
+/**
  * Applies partial update payload to an in-memory session.
  * @param session - Session to mutate
  * @param update - Partial update payload
@@ -114,6 +151,7 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
   assignDefinedSessionField(session, 'createdAt', update.createdAt);
   assignDefinedSessionField(session, 'lastActivityAt', update.lastActivityAt);
   assignDefinedSessionField(session, 'machineId', update.machineId);
+  applyAdapterSessionCurrency(session, update);
 
   assignNullableSessionField(session, 'executionTargetId', update.executionTargetId);
   assignNullableSessionField(session, 'approvalPolicyOverride', update.approvalPolicyOverride);
@@ -235,6 +273,7 @@ export function registerMemorySessionStorage(bus: IMakaioBus): () => void {
       const detachedSession = structuredClone(session);
       const previous = store.get(sessionId) ?? null;
       const previousSession = previous ? cloneSession(previous) : null;
+      preserveAdapterSessionCurrency(detachedSession, previousSession);
       assertSessionClientAccountStateIsConsistent(previous, detachedSession);
       store.set(sessionId, detachedSession);
       ctx.setResult({

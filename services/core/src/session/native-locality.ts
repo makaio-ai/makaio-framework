@@ -1,4 +1,5 @@
 import type { IMakaioSession, NativeLocalityVerdict, SessionContext } from '@makaio/contracts';
+import type { SessionResumeIdentity } from './session-resume-identity.js';
 
 /**
  * Describes whether the session resume/fork intent is a native continuation
@@ -55,6 +56,19 @@ export interface NativeLocalityInput {
    * Required when `session.forkPointMessageId` is set and `intent === 'fork'`.
    */
   readonly midHistoryForkSupported?: boolean;
+  /**
+   * Resume currency the caller resolved for this session.
+   *
+   * `session.adapterSessionId` is immutable origin provenance, so callers that
+   * track currency must resolve it with {@link resolveSessionResumeIdentity} and
+   * pass the result here. When present it is authoritative — including when it
+   * resolves to no usable provider session, which must never silently fall back
+   * to the origin column.
+   *
+   * Omit it to read the origin column directly. That is correct only for callers
+   * whose sessions cannot have moved their provider identity.
+   */
+  readonly resumeIdentity?: SessionResumeIdentity;
 }
 
 /**
@@ -79,6 +93,29 @@ function hasTransforms(session: IMakaioSession, sessionContext: SessionContext |
  */
 function isAdapterMismatch(session: IMakaioSession, targetAdapterName: string): boolean {
   return session.adapterName !== undefined && targetAdapterName !== session.adapterName;
+}
+
+/**
+ * Disqualify the operation when the session has no usable resume currency.
+ *
+ * Owns both currency-related verdicts so `evaluateNativeLocality` keeps one
+ * decision point for "is there a provider session to work with at all":
+ * a moved-but-unconfirmed identity and a missing identity are different
+ * reasons for the same structural failure.
+ * @param input - Locality evaluation input
+ * @returns Degrade verdict when there is no usable currency, `undefined` otherwise
+ */
+function evaluateResumeCurrency(input: NativeLocalityInput): NativeLocalityVerdict | undefined {
+  if (input.resumeIdentity?.movedUnconfirmed === true) {
+    return { kind: 'degrade', reason: 'adapter-session-moved' };
+  }
+  const resumeAdapterSessionId = input.resumeIdentity
+    ? input.resumeIdentity.adapterSessionId
+    : input.session.adapterSessionId;
+  if (!resumeAdapterSessionId) {
+    return { kind: 'degrade', reason: 'no-adapter-session' };
+  }
+  return undefined;
 }
 
 /**
@@ -112,8 +149,9 @@ export function evaluateNativeLocality(input: NativeLocalityInput): NativeLocali
     return { kind: 'degrade', reason: 'adapter-mismatch' };
   }
 
-  if (!session.adapterSessionId) {
-    return { kind: 'degrade', reason: 'no-adapter-session' };
+  const currencyVerdict = evaluateResumeCurrency(input);
+  if (currencyVerdict) {
+    return currencyVerdict;
   }
 
   if (!session.machineId) {

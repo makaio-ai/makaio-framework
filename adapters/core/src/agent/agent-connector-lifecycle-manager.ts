@@ -42,6 +42,15 @@ export interface AgentConnectorLifecycleManagerConfig<
   prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus>;
   /** Build onMessageSent callback for connector creation. */
   createOnMessageSent: () => (handle: MessageHandle) => void;
+  /**
+   * Sink for provider-session rotations a connector performs on its own.
+   *
+   * Handed to every connector generation, not just the first: a replacement
+   * connector rotates on the same in-flight decisions the original does, and a
+   * generation created without the sink would leave the session row advertising
+   * the thread it abandoned.
+   */
+  announceAdapterSessionMoved: () => Promise<void>;
   /** Wire adapter-specific events on a connector instance. */
   wireEvents: (connector: TConnector) => void | Promise<void>;
   /** Emit idle lifecycle event on processing-state idle transitions. */
@@ -52,8 +61,13 @@ export interface AgentConnectorLifecycleManagerConfig<
   setConnectorRuntime: (runtime: ConnectorRuntimeHandle<TConnector>) => void;
   /** Get runtime system prompt to preserve across swaps. */
   getRuntimeSystemPrompt: () => SystemPrompt | undefined;
-  /** Store latest adapter session ID for enrichment after swaps. */
-  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void;
+  /**
+   * Store latest adapter session ID for enrichment after swaps.
+   *
+   * May be asynchronous: the sink also announces the swap as a provider-session
+   * movement, which the swap awaits before publishing the replacement runtime.
+   */
+  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>;
   /** Publish a sanitized cleanup diagnostic without exposing connector errors. */
   reportCleanupFailure: (diagnostic: ConnectorCleanupDiagnostic) => void | Promise<void>;
 }
@@ -134,10 +148,13 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
     this.connectorWiringCleanups = [];
     const confirmedAdapterSessionId = await this.initializeReplacement(newRuntime, oldWiringCleanups, beforeCommit);
 
-    // Publication is synchronous and non-failing after the final commit guard.
+    // Publication is non-failing after the final commit guard. Recording the
+    // swapped-in identity is awaited rather than fired off: it announces the
+    // provider-session movement, and the session row must carry the replacement
+    // currency before the swapped-in connector is reachable for a resume.
     this.config.setConnectorRuntime(newRuntime);
     if (confirmedAdapterSessionId !== undefined) {
-      this.config.setLastKnownAdapterSessionId(confirmedAdapterSessionId);
+      await this.config.setLastKnownAdapterSessionId(confirmedAdapterSessionId);
     }
     this.runWiringCleanups(oldWiringCleanups);
     await this.closePreviousRuntime(currentRuntime);
@@ -173,6 +190,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       config: fullConfig,
       connectorFactory: this.config.connectorFactory,
       onMessageSent: this.config.createOnMessageSent(),
+      onAdapterSessionMoved: this.config.announceAdapterSessionMoved,
       prepareAuthRuntime: this.config.prepareAuthRuntime,
     });
   }

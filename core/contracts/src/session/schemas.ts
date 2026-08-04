@@ -148,8 +148,8 @@ export type {
   UserMessageCompleted,
   UserMessageSent,
 } from './schemas/orchestrator.js';
-export { AgentRoleSchema, BranchKindSchema } from './schemas/primitives.js';
-export type { AgentRole, BranchKind } from './schemas/primitives.js';
+export { AdapterSessionCurrencyStateSchema, AgentRoleSchema, BranchKindSchema } from './schemas/primitives.js';
+export type { AdapterSessionCurrencyState, AgentRole, BranchKind } from './schemas/primitives.js';
 
 /**
  * Session domain schemas.

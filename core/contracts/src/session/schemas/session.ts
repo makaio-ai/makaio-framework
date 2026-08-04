@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { BranchKindSchema, ImportStatusSchema, SessionContextInheritanceSchema } from './primitives.js';
+import {
+  AdapterSessionCurrencyStateSchema,
+  BranchKindSchema,
+  ImportStatusSchema,
+  SessionContextInheritanceSchema,
+} from './primitives.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { MakaioSessionAgentSchema } from './agent.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
@@ -71,10 +76,37 @@ export const MakaioSessionSchema = z.object({
    */
   adapterName: z.string().optional(),
   /**
-   * Provider's session ID.
-   * For native imports, this is the external tool's session identifier.
+   * Provider's session ID — the **immutable origin identity**.
+   *
+   * For native imports this is the external tool's session identifier and the
+   * conflict key of the import upsert. It is write-once: it records where the
+   * session came from and never tracks where the provider session moved to.
+   * Resume callers must read the currency pair below instead.
    */
   adapterSessionId: z.string().optional(),
+  /**
+   * Provider-confirmed session ID that currently carries the conversation.
+   *
+   * Only meaningful when {@link MakaioSession.currentAdapterSessionIdState} is
+   * `'confirmed'`. Undefined while the currency is `'inherited'` (origin ID is
+   * still valid) or `'moved'` (no confirmed replacement yet).
+   *
+   * The pair invariant (`'confirmed'` ⇔ ID present) is deliberately NOT refined
+   * here. This schema is the session *record* shape — a read/response projection
+   * and the `storage:session.set` body — and neither carries currency into
+   * storage: both storage backends omit these columns from `set` so a caller
+   * holding a pre-movement snapshot cannot resurrect an abandoned provider
+   * session. The single write path that reaches the columns is
+   * `storage:session.update`, where `validateAdapterSessionCurrencyPair`
+   * enforces the invariant in front of both backends, matching the sessions
+   * table CHECK constraint. Refining here would also convert this object into a
+   * `ZodEffects` and break the `.extend()` composition that
+   * `SessionWithPreviewSchema`, the search-result schema, and host-layer
+   * `extendSubject()` widening depend on.
+   */
+  currentAdapterSessionId: z.string().optional(),
+  /** {@inheritDoc AdapterSessionCurrencyStateSchema} */
+  currentAdapterSessionIdState: AdapterSessionCurrencyStateSchema.optional(),
   /**
    * Adapter instance ID (machine/installation specific).
    * Used to determine if native resume is possible.

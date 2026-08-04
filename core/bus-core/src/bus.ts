@@ -579,7 +579,7 @@ export function createBusInstance<Namespace extends string | undefined = undefin
  * **Core Methods:**
  * - `registerNamespace()` - Register typed subjects with Zod schemas
  * - `on()` - Subscribe to events or requests with typed handlers
- * - `emit()` - Fire-and-forget event broadcasting
+ * - `emit()` - Event broadcasting; awaiting it awaits the local handlers
  * - `request()` - Request-response with middleware chain
  * - `scoped()` - Create namespace-scoped bus instance
  *

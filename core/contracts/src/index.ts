@@ -258,6 +258,7 @@ export type {
   ResolvableCanonicalModel,
 } from './canonical-model/index.js';
 export {
+  AdapterSessionMovedSchema,
   AgentNamespace,
   AgentSchemas,
   AgentSubjects,
@@ -267,6 +268,7 @@ export {
   StepTypeSchema,
 } from './agent/index.js';
 export type {
+  AdapterSessionMoved,
   AgentComplete,
   AgentMessage,
   AgentStarted,
@@ -555,6 +557,7 @@ export type {
   McpTransportConfig,
 } from './mcp/index.js';
 export {
+  AdapterSessionCurrencyStateSchema,
   AgentStatusSchema,
   compareMessageCursorAsc,
   compareMessageCursorDesc,
@@ -613,6 +616,7 @@ export {
   validateSnapshot,
 } from './session/index.js';
 export type {
+  AdapterSessionCurrencyState,
   AgentRole,
   BranchKind,
   CacheStrategy,

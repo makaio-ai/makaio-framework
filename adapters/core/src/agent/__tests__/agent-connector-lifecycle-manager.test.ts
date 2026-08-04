@@ -21,6 +21,7 @@ describe('AgentConnectorLifecycleManager', () => {
         setConnectorRuntime: () => {},
         getRuntimeSystemPrompt: () => undefined,
         setLastKnownAdapterSessionId: () => {},
+        announceAdapterSessionMoved: async () => {},
         reportCleanupFailure: () => {},
       });
 
@@ -68,6 +69,7 @@ describe('AgentConnectorLifecycleManager', () => {
       setConnectorRuntime: () => {},
       getRuntimeSystemPrompt: () => undefined,
       setLastKnownAdapterSessionId: () => {},
+      announceAdapterSessionMoved: async () => {},
       reportCleanupFailure: () => {},
     });
 

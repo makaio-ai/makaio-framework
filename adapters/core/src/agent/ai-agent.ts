@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 600, "skipBlankLines": true, "skipComments": true }] */
+/* eslint max-lines: ["error", { "max": 590, "skipBlankLines": true, "skipComments": true }] */
 // AIAgent is the composition root and protected-API facade for all adapter
 // agents: collaborator wiring plus thin delegates for subclasses. That facade
 // role justifies exceeding the repo-wide max-lines default; substantial logic
@@ -73,7 +73,6 @@ import {
   createAgentConnectorLifecycleManager,
   createAgentEventBridge,
   createAgentLifecycleEmitter,
-  createAgentPayloadEmitter,
   createAgentRuntimeMutationManager,
   createAgentTurnExecutor,
 } from './agent-internal-factories.js';
@@ -85,6 +84,8 @@ import {
   type ConnectorRuntimeHandle,
 } from './connector-runtime.js';
 import { AgentConnectorSwapCoordinator } from './agent-connector-swap-coordinator.js';
+import { ConfirmedAdapterSessionTracker } from './agent-adapter-session-movement.js';
+import { createAgentEmissionWiring } from './agent-emission-wiring.js';
 
 /**
  * Abstract base class for AI agents.
@@ -103,8 +104,8 @@ export abstract class AIAgent<
   private connectorRuntime: ConnectorRuntimeHandle<TConnector> | undefined;
   protected confirmedModel?: string;
   protected initialModel?: string;
-  /** Cached adapterSessionId from the last connector that had a session — survives connector swaps. */
-  private lastKnownAdapterSessionId?: string;
+  /** Owns the confirmed provider-session identity cache and the movement seam. */
+  private readonly adapterSessionTracker: ConfirmedAdapterSessionTracker;
   /** Cleanup functions for bus subscriptions (stable, survive connector swap) */
   private busHandlerCleanups: Array<() => void> = [];
   /** Whether init() has been called */
@@ -159,31 +160,14 @@ export abstract class AIAgent<
   public constructor(config: AIAgentConfig<TBus, TConnector>) {
     this.config = { ...config, globalBus: config.globalBus ?? MakaioBus };
     this.availableModels = config.availableModels;
-    const setLastKnownAdapterSessionId = (adapterSessionId: string | undefined) => {
-      this.lastKnownAdapterSessionId = adapterSessionId;
-      // A pending resume target, once set, tracks the live provider-confirmed
-      // continuation. The generation that consumed (or suppressed) the target
-      // confirms its own session here; re-pointing the config keeps later
-      // swaps without an explicit resume key on the current thread instead of
-      // re-arming the stale start-time target. Agents born without a target
-      // keep their fresh-swap semantics (the guard never introduces one).
-      if (adapterSessionId !== undefined && this.config.resumeAdapterSessionId !== undefined) {
-        this.config.resumeAdapterSessionId = adapterSessionId;
-      }
-    };
-    this.payloadEmitter = createAgentPayloadEmitter({
+    this.adapterSessionTracker = new ConfirmedAdapterSessionTracker(this.globalBus, this.config);
+    const setLastKnownAdapterSessionId = this.adapterSessionTracker.record.bind(this.adapterSessionTracker);
+    this.payloadEmitter = createAgentEmissionWiring({
       globalBus: this.globalBus,
-      getAgentContextBase: () => ({
-        agentId: this.agentId,
-        adapterId: this.adapterId,
-        adapterName: this.adapterName,
-        sessionId: this.sessionId,
-      }),
+      host: this.config,
       lifecycleTracker: this.lifecycleTracker,
-      getConnectorAdapterSessionId: () => this.connector?.getConfirmedAdapterSessionId(),
-      getLastKnownAdapterSessionId: () => this.lastKnownAdapterSessionId,
-      setLastKnownAdapterSessionId,
-      getEventMetadataDefaults: this.getEventMetadataDefaults.bind(this),
+      adapterSessionTracker: this.adapterSessionTracker,
+      getConnector: () => this.connector,
     });
     const emitGlobal = this.payloadEmitter.emitGlobal.bind(this.payloadEmitter);
     this.eventBridge = createAgentEventBridge({
@@ -199,6 +183,7 @@ export abstract class AIAgent<
       this.globalBus,
       this.connectorLifecycleManager,
       this.config,
+      this.adapterSessionTracker.adoptResumeTarget.bind(this.adapterSessionTracker),
     );
     this.turnExecutor = createAgentTurnExecutor({
       agentId: this.agentId,
@@ -210,6 +195,7 @@ export abstract class AIAgent<
       shouldUseNativeResume: this.shouldUseNativeResume.bind(this),
       hasResumeTarget: () => this.config.resumeAdapterSessionId !== undefined,
       setPendingStartMode: this.setPendingStartMode.bind(this),
+      onNativeResumeSuppressed: () => this.adapterSessionTracker.recordUnconfirmedMove(),
       onMessageHandle: this.onMessageHandle.bind(this),
       runDispatch: (dispatch) => this.runtimeMutationManager.runTurnDispatch(dispatch),
       ephemeral: this.config.ephemeral,
@@ -251,7 +237,7 @@ export abstract class AIAgent<
    */
   private createConnectorLifecycleManager(
     emitGlobal: AgentPayloadEmitter['emitGlobal'],
-    setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void,
+    setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>,
   ): AgentConnectorLifecycleManager<TBus, TConnector> {
     return createAgentConnectorLifecycleManager<TBus, TConnector>({
       agentId: this.agentId,
@@ -274,18 +260,10 @@ export abstract class AIAgent<
       },
       getRuntimeSystemPrompt: () => this.runtimeSystemPrompt,
       setLastKnownAdapterSessionId,
+      announceAdapterSessionMoved: () => this.adapterSessionTracker.recordUnconfirmedMove(),
     });
   }
 
-  private getEventMetadataDefaults() {
-    return {
-      clientId: this.config.clientId,
-      providerConfigId:
-        this.connector?.providerConfigId ??
-        (this.config.providerContext?.state === 'resolved' ? this.config.providerContext.providerConfigId : undefined),
-      occurredAt: Date.now(),
-    };
-  }
   // ── Public getters (external API) ──────────────────────────────────────────
   /** @returns Unique agent identifier */
   public get agentId(): string {
@@ -343,6 +321,7 @@ export abstract class AIAgent<
       config: fullConfig,
       connectorFactory: this.config.connectorFactory,
       onMessageSent: this.createOnMessageSent(),
+      onAdapterSessionMoved: () => this.adapterSessionTracker.recordUnconfirmedMove(),
       prepareAuthRuntime: this.config.prepareAuthRuntime,
     });
     this.connectorRuntime = connectorRuntime;
@@ -931,6 +910,40 @@ export abstract class AIAgent<
    */
   public async getAdapterSessionId(): Promise<string> {
     return this.ensureConnector().getAdapterSessionId();
+  }
+
+  /**
+   * Announce the provider session this generation resolved to, through the
+   * agent's own movement tracker.
+   *
+   * For producers outside the turn pipeline — cold rehydration resolves an
+   * identity before the agent has emitted anything, so payload enrichment has
+   * not run yet. Routing through the tracker rather than emitting on the seam
+   * directly is what keeps an undelivered announcement retryable: the tracker's
+   * acknowledged-announcement marker is the retry anchor, and the agent's next
+   * emitted event re-drives the announcement. It also makes the announcement
+   * idempotent against that first enrichment call instead of duplicating it.
+   * @param adapterSessionId - Provider session ID this generation is current on
+   * @returns Promise resolving once the announcement attempt completed
+   */
+  public async recordConfirmedAdapterSession(adapterSessionId: string): Promise<void> {
+    await this.adapterSessionTracker.record(adapterSessionId);
+  }
+
+  /**
+   * Provider session this agent is currently the live writer of.
+   *
+   * The occupancy authority for the adapter's registry. Synchronous on purpose:
+   * the claim check serializing two concurrent resume attaches reads it inside a
+   * critical section, which {@link getAdapterSessionId} — awaiting the connector —
+   * cannot serve. Current before any movement is announced, because the tracker
+   * caches a confirmed identity before announcing it; that ordering is what lets a
+   * concurrent attach see this agent occupying the session the same announcement
+   * publishes as resume currency.
+   * @returns Last provider-confirmed session ID, or `undefined` before the first confirmation
+   */
+  public get currentAdapterSessionId(): string | undefined {
+    return this.adapterSessionTracker.lastKnownAdapterSessionId;
   }
 
   /**

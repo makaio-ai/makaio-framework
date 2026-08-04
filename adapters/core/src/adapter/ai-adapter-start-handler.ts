@@ -14,7 +14,7 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
-import type { AgentCreationOptions, StartAgentRequestPayload } from './types.js';
+import type { AgentCreationOptions, AgentUsageTotals, StartAgentRequestPayload } from './types.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { PlatformDefaults } from '../types/index.js';
 import type { ActiveAgentRegistry } from './agent-registry.js';
@@ -149,17 +149,28 @@ async function persistAndEmitAgent(
 
   // Emit events AFTER agent is persisted to avoid race conditions
 
-  // Notify global session service that an agent was added to the session
-  void globalBus.emit(SessionSubjects.agent.added, {
-    sessionId,
-    agentId,
-    adapterId,
-    adapterName: name,
-    adapterSessionId,
-    role,
-    model: payload.model,
-    cwd: resolvedCwd,
-  });
+  // Notify global session service that an agent was added to the session.
+  //
+  // Awaited, not fired off: this event is what establishes the session row's
+  // adapter identity and lead-agent designation, and service-tier handlers gate
+  // on that designation (see the session currency handler). Returning from
+  // `startAgent` before it lands would let the caller's next turn race the
+  // designation. A failing consumer must still not undo a started agent, so the
+  // failure is logged rather than propagated.
+  try {
+    await globalBus.emit(SessionSubjects.agent.added, {
+      sessionId,
+      agentId,
+      adapterId,
+      adapterName: name,
+      adapterSessionId,
+      role,
+      model: payload.model,
+      cwd: resolvedCwd,
+    });
+  } catch (error) {
+    console.error(`[AIAdapter:${name}] session.agent.added consumer failed:`, { agentId, sessionId, error });
+  }
 
   // Emit provider session tracking event
   void globalBus.emit(AdapterSubjects.session.created, {
@@ -231,6 +242,17 @@ async function startOrInitializeAgent<TBus extends ScopedBus<string>, TConnector
     responseSchema: payload.responseSchema,
   });
   return { adapterSessionId };
+}
+
+/**
+ * Build a fresh zero-valued usage baseline for a newly registered agent entry.
+ *
+ * A factory rather than a shared constant: the registry accumulates each entry's
+ * totals in place, so entries must not share one object.
+ * @returns Usage totals starting at zero
+ */
+function createUsageBaseline(): AgentUsageTotals {
+  return { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 };
 }
 
 /**
@@ -467,14 +489,11 @@ export function createStartAgentHandler<
     });
     const { adapterSessionId, messageId, messageHandle } = startResult;
 
-    // Store agent and session info in registry (auto-clears any pending claim
-    // for this adapterSessionId).
-    registry.set(agentId, {
-      agent,
-      sessionId,
-      adapterSessionId,
-      usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
-    });
+    // Store agent and session info in registry, handing over the claimed resume
+    // target so the claim is settled even when the start did not end up on it: a
+    // start that suppresses native resume abandons the armed target and the
+    // connector mints its own provider session.
+    registry.set(agentId, { agent, sessionId, adapterSessionId, usage: createUsageBaseline() }, resumeAdapterSessionId);
 
     if (!payload.ephemeral) {
       try {

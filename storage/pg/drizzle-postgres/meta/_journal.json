@@ -148,6 +148,13 @@
       "when": 1784915844776,
       "tag": "0020_remote-worker-execution",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1785338353913,
+      "tag": "0021_adapter_session_currency",
+      "breakpoints": true
     }
   ]
 }

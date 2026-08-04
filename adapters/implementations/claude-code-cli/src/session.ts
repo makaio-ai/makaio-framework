@@ -105,13 +105,30 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
 
   /**
    * Resolve resume/session IDs for the next CLI turn.
+   *
+   * An immediate-mode restart is a provider-session movement producer, not just
+   * a local identity reset: the superseded subprocess owned the provider thread,
+   * the restart declines `--resume`, and the replacement thread stays unconfirmed
+   * until its `system.init`. The pre-dispatch rotation check in
+   * `AgentTurnExecutor` cannot cover it — it ran while the session was still
+   * confirmed on the old thread, and whether the supersede won is decided later,
+   * inside the queue. So the movement is announced here and awaited before the
+   * spawn (duty 2 in `agent/agent-adapter-session-movement.ts`). Without it the
+   * session row keeps advertising the abandoned thread for the whole gap — and
+   * permanently if the replacement dies before `system.init`, because an armed
+   * resume target makes payload enrichment withhold the identity it would
+   * otherwise heal from.
    * @param handle - Message handle driving the turn (carries the caller's native-resume decision)
    * @param mergedContent - Optional merged content from immediate-mode supersede
    * @returns Session identity values for turn startup
    */
-  private resolveTurnSessionIdentity(handle: MessageHandle, mergedContent?: string[]): TurnSessionIdentity {
+  private async resolveTurnSessionIdentity(
+    handle: MessageHandle,
+    mergedContent?: string[],
+  ): Promise<TurnSessionIdentity> {
     const isImmediateRestart = mergedContent !== undefined && mergedContent.length > 0;
     if (isImmediateRestart) {
+      await this.config.onAdapterSessionMoved?.();
       this.resetForImmediateRestart();
     }
     this.suppressStartResumeIfRequested(handle);
@@ -128,20 +145,38 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   }
 
   /**
+   * The armed resume target a `useNativeResume === false` dispatch would
+   * discard, or `undefined` when nothing would be abandoned.
+   *
+   * Single source of truth for the suppression precondition, read by
+   * {@link suppressStartResumeIfRequested} to perform the rotation and by the
+   * connector to answer the movement seam's honesty query *before* the
+   * dispatch. Both must agree: if the seam were told "nothing moves" while this
+   * returns an ID, the session row would keep advertising the abandoned thread.
+   *
+   * A confirmed session ends the window — this generation then owns its own
+   * provider thread and multi-turn continuity resumes it instead of abandoning
+   * it.
+   * @returns Resume target pending suppression, or `undefined`
+   */
+  public resumeTargetPendingSuppression(): string | undefined {
+    return this.confirmedSessionId ? undefined : this.config.resumeAdapterSessionId;
+  }
+
+  /**
    * Discard the unconsumed start-time resume target when the caller decided
    * against native resume for this dispatch (`useNativeResume === false`).
    *
    * One-shot, mirroring the nativeFork consumption invariant: the caller has
    * replaced the provider thread with injected history, so a later turn must
-   * not fall back to the stale target either. Only the pending start-time
-   * target is affected — once `system.init` confirms this generation's own
-   * session, multi-turn continuity resumes it regardless of the flag.
+   * not fall back to the stale target either. Which target (if any) is pending
+   * is owned by {@link resumeTargetPendingSuppression}.
    * @param handle - Message handle carrying the caller's native-resume decision
    */
   private suppressStartResumeIfRequested(handle: MessageHandle): void {
     if (handle.useNativeResume !== false) return;
-    if (this.confirmedSessionId || this.config.resumeAdapterSessionId === undefined) return;
-    const discarded = this.config.resumeAdapterSessionId;
+    const discarded = this.resumeTargetPendingSuppression();
+    if (discarded === undefined) return;
     this.config.resumeAdapterSessionId = undefined;
     if (this.sessionId === discarded) {
       // Identity was seeded from the resume target: mint a fresh ID so the
@@ -356,7 +391,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * @returns `false` when the turn was skipped due to shutdown; `void` otherwise
    */
   public async startTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
-    const { resumeId, sessionIdForMcp } = this.resolveTurnSessionIdentity(handle, mergedContent);
+    const { resumeId, sessionIdForMcp } = await this.resolveTurnSessionIdentity(handle, mergedContent);
     // Fork directive only applies on the initial CLI invocation: rotations resume the fork child
     // via the confirmed session ID rather than re-forking the source session.
     const nativeFork = resumeId === undefined ? this.config.nativeFork : undefined;

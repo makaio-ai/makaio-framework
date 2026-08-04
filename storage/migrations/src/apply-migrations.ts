@@ -11,11 +11,12 @@
  * {@link MakaioDatabase}: the pinned session runs DDL, DML, and transaction
  * control, and reads the migration ledger table.
  *
- * Per-engine mechanics — ledger naming and DDL, the `BEGIN` flavor, and the
- * cross-process locking protocol — are owned by `StorageEngine.migrations`;
- * this module orchestrates the run and derives all locking behavior from the
- * presence of `acquireTransactionLock` on the resolved engine. The statement
- * stream per engine is unchanged from the pre-seam applicator.
+ * Per-engine mechanics — ledger naming and DDL, the `BEGIN` flavor, the
+ * cross-process locking protocol, and the constraint-suspension protocol — are
+ * owned by `StorageEngine.migrations`; this module orchestrates the run and
+ * derives all locking behavior from the presence of `acquireTransactionLock`
+ * on the resolved engine, and all enforcement-suspension behavior from the
+ * presence of `constraintSuspension`.
  * @see {@link readMigrations} for the filesystem-based data source.
  */
 import { sql, type Name } from 'drizzle-orm';
@@ -315,6 +316,40 @@ async function applyMigrationInTransaction(context: MigrationRunContext, migrati
 }
 
 /**
+ * Run one migration with the engine's constraint enforcement suspended when
+ * the migration's statement stream asks for it.
+ *
+ * The suspend/restore statements bracket the migration's transaction from the
+ * outside: an engine only needs this protocol when its enforcement switch is
+ * connection-scoped and inert inside a transaction, so issuing it in the
+ * statement stream — where generators put it — cannot work. Migrations that do
+ * not request suspension run with enforcement untouched.
+ *
+ * `restoreStatement` runs in a `finally` so a failed migration cannot leave
+ * the pinned session with enforcement disabled.
+ * @param context - Run context for the pinned session.
+ * @param migration - Migration whose statements declare the requirement.
+ * @param apply - Applies the migration inside its own transaction(s).
+ */
+async function withConstraintSuspension(
+  context: MigrationRunContext,
+  migration: MigrationMeta,
+  apply: () => Promise<void>,
+): Promise<void> {
+  const suspension = context.engine.migrations.constraintSuspension;
+  if (!suspension?.isRequestedBy(migration.sql)) {
+    await apply();
+    return;
+  }
+  await context.session.run(sql.raw(suspension.suspendStatement));
+  try {
+    await apply();
+  } finally {
+    await context.session.run(sql.raw(suspension.restoreStatement));
+  }
+}
+
+/**
  * Apply pre-resolved migrations to a database.
  *
  * Creates the dialect's migration ledger table if absent
@@ -340,6 +375,10 @@ async function applyMigrationInTransaction(context: MigrationRunContext, migrati
  * their apply decisions: a runner that loses the race skips the migration
  * cleanly instead of racing the snapshot into a duplicate-object or
  * constraint failure.
+ *
+ * Engines that declare `constraintSuspension` (SQLite) additionally bracket a
+ * migration that requests it with the engine's suspend/restore statements
+ * outside the transaction — see {@link withConstraintSuspension}.
  *
  * Idempotent — safe to call on every startup.
  * @param db - Makaio database instance.
@@ -370,7 +409,7 @@ export async function applyMigrations(
 
     for (const migration of migrations) {
       if (appliedHashes.has(migration.hash)) continue;
-      await applyMigrationInTransaction(context, migration);
+      await withConstraintSuspension(context, migration, () => applyMigrationInTransaction(context, migration));
       appliedHashes.add(migration.hash);
     }
   });

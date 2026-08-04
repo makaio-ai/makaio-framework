@@ -154,6 +154,7 @@ describe('connector runtime lifecycle', () => {
       },
       getRuntimeSystemPrompt: () => undefined,
       setLastKnownAdapterSessionId: () => undefined,
+      announceAdapterSessionMoved: async () => {},
       reportCleanupFailure: () => undefined,
     });
 
@@ -210,6 +211,7 @@ describe('connector runtime lifecycle', () => {
       },
       getRuntimeSystemPrompt: () => undefined,
       setLastKnownAdapterSessionId: () => undefined,
+      announceAdapterSessionMoved: async () => {},
       reportCleanupFailure,
     });
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from makaio.types import EventSubject, RequestSubject
 from makaio.generated.payloads.agent import (
+    AgentAdapterSessionMovedPayload,
     AgentCompletePayload,
     AgentContextWindowUpdatedPayload,
     AgentCredentialChangeRequest,
@@ -51,6 +52,7 @@ from makaio.generated.payloads.agent import (
     AgentValidateModelChangeResponse,
 )
 
+adapter_session_moved: EventSubject[AgentAdapterSessionMovedPayload] = EventSubject("agent.adapterSession.moved", payload_type=AgentAdapterSessionMovedPayload)
 complete: EventSubject[AgentCompletePayload] = EventSubject("agent.complete", payload_type=AgentCompletePayload)
 context_window_updated: EventSubject[AgentContextWindowUpdatedPayload] = EventSubject("agent.contextWindow.updated", payload_type=AgentContextWindowUpdatedPayload)
 credential_change: RequestSubject[AgentCredentialChangeRequest, AgentCredentialChangeResponse] = RequestSubject("agent.credential.change", request_type=AgentCredentialChangeRequest, response_type=AgentCredentialChangeResponse)

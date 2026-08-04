@@ -2,7 +2,13 @@ import { z } from 'zod';
 import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { MakaioSessionSchema } from './schemas.js';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
-import { BranchKindSchema, ImportStatusSchema, SessionContextInheritanceSchema } from './schemas/primitives.js';
+import {
+  type AdapterSessionCurrencyState,
+  AdapterSessionCurrencyStateSchema,
+  BranchKindSchema,
+  ImportStatusSchema,
+  SessionContextInheritanceSchema,
+} from './schemas/primitives.js';
 import { ForkChildInfoSchema } from './schemas/fork-child-info.js';
 import { SessionPreviewDataSchema, SessionRecordMetadataSchema, SessionWithPreviewSchema } from './schemas/session.js';
 import { ClientIdentityObservationSchema } from '../client/account-identity.js';
@@ -50,6 +56,58 @@ function validateClientAccountObservationRequirement(
   }
 }
 
+/**
+ * Enforce that the adapter-session currency pair is written as a single value.
+ *
+ * `currentAdapterSessionId` and `currentAdapterSessionIdState` are two columns
+ * carrying one fact — which provider session, if any, a resume attach may
+ * target right now — and the sessions table backs that with a CHECK constraint
+ * (`sessions_current_adapter_session_id_currency_check`). A half-supplied
+ * update would advertise a currency the state does not back: the SQL backends
+ * would reject the write, while the in-memory backend would happily persist the
+ * impossible pair. Requiring both halves together is what keeps the two
+ * backends observably identical, and it is the only write path that reaches
+ * these columns — `storage:session.set` deliberately omits them.
+ * @param value - Candidate update payload containing the currency fields
+ * @param ctx - Zod refinement context
+ */
+function validateAdapterSessionCurrencyPair(
+  value: {
+    currentAdapterSessionId?: string | null;
+    currentAdapterSessionIdState?: AdapterSessionCurrencyState;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const { currentAdapterSessionId: id, currentAdapterSessionIdState: state } = value;
+  if (id === undefined && state === undefined) return;
+
+  if (state === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['currentAdapterSessionIdState'],
+      message: 'currentAdapterSessionIdState is required when currentAdapterSessionId is provided',
+    });
+    return;
+  }
+
+  if (id === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['currentAdapterSessionId'],
+      message:
+        "currentAdapterSessionId is required when currentAdapterSessionIdState is provided (null for 'inherited' and 'moved')",
+    });
+    return;
+  }
+
+  if ((state === 'confirmed') === (id !== null)) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ['currentAdapterSessionId'],
+    message: "currentAdapterSessionId must be a string exactly when currentAdapterSessionIdState is 'confirmed'",
+  });
+}
+
 export const SessionStorageSetSessionSchema = MakaioSessionSchema.superRefine((value, ctx) => {
   validateClientAccountObservationRequirement(value, ctx);
 });
@@ -81,34 +139,49 @@ export const SessionStorageSetRequestSchema = z
  */
 const MachineIdFieldSchema = z.string().nullable().optional();
 
-const SessionStorageUpdateRequestPayloadSchema = z.object({
-  sessionId: z.string(),
-  status: z.enum(['active', 'closed', 'archived', 'discovered']).optional(),
-  parentSessionId: z.string().optional(),
-  contextInheritance: SessionContextInheritanceSchema.optional(),
-  rootSessionId: z.string().optional(),
-  forkPointMessageId: z.string().optional(),
-  branchKind: BranchKindSchema.optional(),
-  isOrchestrated: z.boolean().optional(),
-  clientId: z.string().optional(),
-  clientAccountId: z.string().optional(),
-  lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
-  executionTargetId: z.string().nullable().optional(),
-  approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
-  title: z.string().optional(),
-  targetWorkingDirectory: z.string().optional(),
-  createdAt: z.number().finite().optional(),
-  lastActivityAt: z.number().finite().optional(),
-  /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
-  metadata: SessionRecordMetadataSchema.nullable().optional(),
-  /**
-   * Write-once spawn provenance. Non-null updates fill missing values without
-   * overwriting an existing tool-call assignment; null explicitly clears it.
-   */
-  spawningToolCallId: z.string().nullable().optional(),
-  /** {@inheritDoc MachineIdFieldSchema} */
-  machineId: MachineIdFieldSchema,
-});
+const SessionStorageUpdateRequestPayloadSchema = z
+  .object({
+    sessionId: z.string(),
+    status: z.enum(['active', 'closed', 'archived', 'discovered']).optional(),
+    parentSessionId: z.string().optional(),
+    contextInheritance: SessionContextInheritanceSchema.optional(),
+    rootSessionId: z.string().optional(),
+    forkPointMessageId: z.string().optional(),
+    branchKind: BranchKindSchema.optional(),
+    isOrchestrated: z.boolean().optional(),
+    clientId: z.string().optional(),
+    clientAccountId: z.string().optional(),
+    lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
+    executionTargetId: z.string().nullable().optional(),
+    approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
+    title: z.string().optional(),
+    targetWorkingDirectory: z.string().optional(),
+    createdAt: z.number().finite().optional(),
+    lastActivityAt: z.number().finite().optional(),
+    /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
+    metadata: SessionRecordMetadataSchema.nullable().optional(),
+    /**
+     * Write-once spawn provenance. Non-null updates fill missing values without
+     * overwriting an existing tool-call assignment; null explicitly clears it.
+     */
+    spawningToolCallId: z.string().nullable().optional(),
+    /** {@inheritDoc MachineIdFieldSchema} */
+    machineId: MachineIdFieldSchema,
+    /**
+     * Provider-confirmed resume currency. Null clears it (the `'moved'` and
+     * `'inherited'` states carry no confirmed ID); omission leaves the pair
+     * unchanged.
+     *
+     * Must be written together with `currentAdapterSessionIdState` — the pair is
+     * one value, and {@link validateAdapterSessionCurrencyPair} rejects any update
+     * that supplies only one half or a combination the storage CHECK constraint
+     * would refuse.
+     */
+    currentAdapterSessionId: z.string().nullable().optional(),
+    /** {@inheritDoc AdapterSessionCurrencyStateSchema} */
+    currentAdapterSessionIdState: AdapterSessionCurrencyStateSchema.optional(),
+  })
+  .superRefine(validateAdapterSessionCurrencyPair);
 // Intentionally no `validateClientAccountObservationRequirement(...)` here:
 // partial updates have no previous-row context, so the authoritative transition
 // invariant is enforced in storage handlers after loading the persisted session.

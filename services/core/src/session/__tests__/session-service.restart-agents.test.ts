@@ -312,6 +312,184 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     expect(rehydrateRequests).toHaveLength(0);
   });
 
+  it('defers rehydration for the lead agent when the session currency moved without confirmation', async () => {
+    // A restart that lands while the provider session was abandoned and no
+    // successor was confirmed must not resume the agent row's stale ID — the
+    // provider thread it names no longer holds the conversation.
+    const sessionId = 'session-moved-currency-restart';
+    const machineId = 'local-machine-moved';
+    const runtimeCleanup = registerRuntimeIdentityAndCapabilities(bus, machineId);
+    await createSessionWithLocality(bus, sessionId, machineId, 'provider-session-xyz');
+    await bus.request(SessionStorageSubjects.update, {
+      sessionId,
+      currentAdapterSessionIdState: 'moved',
+      currentAdapterSessionId: null,
+    });
+    await persistAgent(bus, 'agent-moved', sessionId, {
+      adapterId: 'stale-adapter-moved',
+      adapterName: 'test-adapter',
+    });
+    // Only the lead may move session-row currency, so the `moved` state is a
+    // statement about this agent's provider conversation.
+    await designateLeadAgent(bus, sessionId, 'agent-moved');
+
+    const rehydrateRequests: Array<Record<string, unknown>> = [];
+    bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      rehydrateRequests.push(ctx.payload);
+      ctx.setResult({});
+    });
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
+
+    // The reported adapterId is the *stale* one: a deferred agent is left
+    // untouched for lazy recovery, whereas the native-resume path would have
+    // re-stamped it to `current-test-adapter` via `recoverAgent`. The agent row
+    // still carries a provider session ID (`native-agent-moved`), so only the
+    // session's `moved` currency can explain the deferral here.
+    expect(result.results).toEqual([{ agentId: 'agent-moved', adapterId: 'stale-adapter-moved', success: true }]);
+    expect(rehydrateRequests).toHaveLength(0);
+    runtimeCleanup();
+  });
+
+  it('degrades only the lead when the session currency moved, rehydrating members natively', async () => {
+    // Session-row currency is lead-owned. A lead that abandoned its provider
+    // session says nothing about a member's own provider thread, so a
+    // session-wide degrade here would strand members on lazy history recovery
+    // even though their own conversation is still resumable.
+    const sessionId = 'session-moved-currency-multi';
+    const machineId = 'local-machine-moved-multi';
+    const runtimeCleanup = registerRuntimeIdentityAndCapabilities(bus, machineId);
+    await createSessionWithLocality(bus, sessionId, machineId, 'provider-session-lead');
+    await bus.request(SessionStorageSubjects.update, {
+      sessionId,
+      currentAdapterSessionIdState: 'moved',
+      currentAdapterSessionId: null,
+    });
+    await persistAgent(bus, 'agent-moved-lead', sessionId, {
+      adapterId: 'stale-adapter-lead',
+      adapterName: 'test-adapter',
+      adapterSessionId: 'provider-session-lead',
+    });
+    await persistAgent(bus, 'agent-intact-member', sessionId, {
+      adapterId: 'stale-adapter-member',
+      adapterName: 'test-adapter',
+      adapterSessionId: 'provider-session-member',
+    });
+    // A member with no confirmed provider session of its own has no currency to
+    // resume regardless of the lead's state — the closest expressible probe for
+    // "the member itself has nothing to resume", since an unconfirmed member
+    // movement is not persisted anywhere (see resolveAgentResumeIdentity).
+    await persistAgent(bus, 'agent-unconfirmed-member', sessionId, {
+      adapterId: 'stale-adapter-unconfirmed',
+      adapterName: 'test-adapter',
+      adapterSessionId: undefined,
+    });
+    await designateLeadAgent(bus, sessionId, 'agent-moved-lead');
+
+    const rehydrateRequests: Array<{ agentId: string; resumeAdapterSessionId?: string }> = [];
+    bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      rehydrateRequests.push({
+        agentId: ctx.payload.agentId,
+        resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
+      });
+      ctx.setResult({});
+    });
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
+
+    // Deferred agents keep their stale adapterId; only the natively rehydrated
+    // member is re-stamped to the freshly resolved adapter by `recoverAgent`.
+    expect(result.results).toEqual([
+      { agentId: 'agent-moved-lead', adapterId: 'stale-adapter-lead', success: true },
+      { agentId: 'agent-intact-member', adapterId: 'current-test-adapter', success: true },
+      { agentId: 'agent-unconfirmed-member', adapterId: 'stale-adapter-unconfirmed', success: true },
+    ]);
+    expect(rehydrateRequests).toEqual([
+      { agentId: 'agent-intact-member', resumeAdapterSessionId: 'provider-session-member' },
+    ]);
+    runtimeCleanup();
+  });
+
+  it('degrades every agent when moved currency cannot be attributed to a lead', async () => {
+    // With no designated lead the `moved` state is unattributable: it was
+    // written while *some* agent held the designation. Over-degrading is the
+    // fail-safe reading — the alternative resumes a possibly abandoned thread.
+    const sessionId = 'session-moved-currency-no-lead';
+    const machineId = 'local-machine-moved-no-lead';
+    const runtimeCleanup = registerRuntimeIdentityAndCapabilities(bus, machineId);
+    await createSessionWithLocality(bus, sessionId, machineId, 'provider-session-lead');
+    await bus.request(SessionStorageSubjects.update, {
+      sessionId,
+      currentAdapterSessionIdState: 'moved',
+      currentAdapterSessionId: null,
+    });
+    await persistAgent(bus, 'agent-orphan-a', sessionId, {
+      adapterId: 'stale-adapter-a',
+      adapterName: 'test-adapter',
+    });
+    await persistAgent(bus, 'agent-orphan-b', sessionId, {
+      adapterId: 'stale-adapter-b',
+      adapterName: 'test-adapter',
+    });
+
+    const rehydrateRequests: Array<Record<string, unknown>> = [];
+    bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      rehydrateRequests.push(ctx.payload);
+      ctx.setResult({});
+    });
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
+
+    expect(result.results).toEqual([
+      { agentId: 'agent-orphan-a', adapterId: 'stale-adapter-a', success: true },
+      { agentId: 'agent-orphan-b', adapterId: 'stale-adapter-b', success: true },
+    ]);
+    expect(rehydrateRequests).toHaveLength(0);
+    runtimeCleanup();
+  });
+
+  it('rehydrates a member natively when the session row has no origin currency', async () => {
+    // The session row's currency was also the *presence* gate: a member used to
+    // be degraded with `no-adapter-session` whenever the session row held no
+    // resumable ID, even though the member's own agent row named a live
+    // provider conversation.
+    const sessionId = 'session-no-origin-currency';
+    const machineId = 'local-machine-no-origin';
+    const runtimeCleanup = registerRuntimeIdentityAndCapabilities(bus, machineId);
+    await bus.request(SessionSubjects.create, { sessionId, machineId });
+    await persistAgent(bus, 'agent-lead-no-origin', sessionId, {
+      adapterId: 'stale-adapter-lead-no-origin',
+      adapterName: 'test-adapter',
+      adapterSessionId: undefined,
+    });
+    await persistAgent(bus, 'agent-member-no-origin', sessionId, {
+      adapterId: 'stale-adapter-member-no-origin',
+      adapterName: 'test-adapter',
+      adapterSessionId: 'provider-session-member-no-origin',
+    });
+    await designateLeadAgent(bus, sessionId, 'agent-lead-no-origin');
+
+    const rehydrateRequests: Array<{ agentId: string; resumeAdapterSessionId?: string }> = [];
+    bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      rehydrateRequests.push({
+        agentId: ctx.payload.agentId,
+        resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
+      });
+      ctx.setResult({});
+    });
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
+
+    expect(result.results).toEqual([
+      { agentId: 'agent-lead-no-origin', adapterId: 'stale-adapter-lead-no-origin', success: true },
+      { agentId: 'agent-member-no-origin', adapterId: 'current-test-adapter', success: true },
+    ]);
+    expect(rehydrateRequests).toEqual([
+      { agentId: 'agent-member-no-origin', resumeAdapterSessionId: 'provider-session-member-no-origin' },
+    ]);
+    runtimeCleanup();
+  });
+
   it('resolves runtime identity when payload machineId is omitted', async () => {
     const sessionId = 'session-runtime-identity';
     const runtimeMachineId = 'runtime-resolved-machine';
@@ -548,6 +726,25 @@ async function createSessionWithLocality(
   await bus.request(SessionStorageSubjects.set, {
     sessionId,
     session: { ...session, adapterSessionId },
+  });
+}
+
+/**
+ * Designate a session's lead agent.
+ *
+ * `session.leadAgentId` — not the agent row's `role` column — is the designation
+ * the adapter-session currency handler gates its writes on, so it is also what
+ * decides whose provider conversation the session row's currency describes.
+ * @param bus - Test bus instance
+ * @param sessionId - Session identifier
+ * @param agentId - Agent to designate as lead
+ */
+async function designateLeadAgent(bus: IMakaioBus, sessionId: string, agentId: string): Promise<void> {
+  const { session } = await bus.request(SessionSubjects.get, { sessionId });
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+  await bus.request(SessionStorageSubjects.set, {
+    sessionId,
+    session: { ...session, leadAgentId: agentId },
   });
 }
 

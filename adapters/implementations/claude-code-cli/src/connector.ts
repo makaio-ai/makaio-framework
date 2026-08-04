@@ -140,6 +140,12 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
         this.lastResult = result;
         this.pendingMessageHandle = undefined;
       },
+      // Movement seam sink for the one rotation the executor cannot predict:
+      // an immediate-mode restart supersedes the live subprocess and mints a
+      // fresh identity, and only the session knows the supersede actually won.
+      ...(this.config.onAdapterSessionMoved !== undefined && {
+        onAdapterSessionMoved: this.config.onAdapterSessionMoved,
+      }),
     };
 
     this.session = new ClaudeCliSession(sessionConfig);
@@ -256,6 +262,23 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
    */
   public override getConfirmedAdapterSessionId(): string | undefined {
     return this.session?.getConfirmedSessionId();
+  }
+
+  /**
+   * Report the rotation this connector would perform if the next dispatch
+   * declined native resume.
+   *
+   * Required override: for a non-fork session
+   * {@link getConfirmedAdapterSessionId} reports the locally seeded resume ID —
+   * the provider will adopt it, so it is authoritative — but the session drops
+   * exactly that target and mints a fresh identity while `system.init` is still
+   * outstanding. Left to the base `false`, the movement seam would see an ID and
+   * conclude nothing moved, leaving the session row pointing at the abandoned
+   * provider thread.
+   * @returns `true` while an unconfirmed resume target is armed
+   */
+  public override movesProviderSessionOnSuppressedResume(): boolean {
+    return this.session?.resumeTargetPendingSuppression() !== undefined;
   }
 
   /**

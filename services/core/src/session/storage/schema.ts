@@ -99,10 +99,39 @@ export const sessionsDual = defineDualTable(
     adapterName: c.text('adapter_name'),
 
     /**
-     * Provider's session ID.
-     * For native imports, this is the external tool's session identifier.
+     * Provider's session ID — the **immutable origin identity**.
+     *
+     * For native imports this is the external tool's session identifier and
+     * the conflict key of `uniq_sessions_source_adapter_session_id`. Write-once
+     * by contract: it records where the session came from, never where the
+     * provider session moved to. Resume callers read the currency pair below.
      */
     adapterSessionId: c.text('adapter_session_id'),
+
+    /**
+     * Provider-confirmed session ID that currently carries the conversation.
+     *
+     * Meaningful only while `currentAdapterSessionIdState` is `'confirmed'`.
+     * Deliberately not part of any unique index: unlike the origin identity it
+     * moves, so it is not an identity key.
+     */
+    currentAdapterSessionId: c.text('current_adapter_session_id'),
+
+    /**
+     * Currency state of the provider-native resume identity.
+     * - 'inherited': never moved; `adapterSessionId` is the valid currency
+     * - 'moved': moved without provider confirmation; nothing is resumable
+     * - 'confirmed': `currentAdapterSessionId` is the valid currency
+     *
+     * Defaulted so pre-existing rows and imports read as `'inherited'` without
+     * a backfill pass.
+     */
+    currentAdapterSessionIdState: c
+      .textEnum('current_adapter_session_id_state', {
+        enum: ['inherited', 'moved', 'confirmed'] as const,
+      })
+      .notNull()
+      .default('inherited'),
 
     /**
      * Adapter instance ID (machine/installation specific).
@@ -268,6 +297,10 @@ export const sessionsDual = defineDualTable(
         'sessions_context_inheritance_check',
         sql`${t.contextInheritance} IS NULL OR ${t.contextInheritance} IN ('parent-history', 'none')`,
       ),
+      check(
+        'sessions_current_adapter_session_id_currency_check',
+        sql`${t.currentAdapterSessionIdState} IN ('inherited', 'moved', 'confirmed') AND (${t.currentAdapterSessionIdState} <> 'confirmed' OR ${t.currentAdapterSessionId} IS NOT NULL) AND (${t.currentAdapterSessionIdState} = 'confirmed' OR ${t.currentAdapterSessionId} IS NULL)`,
+      ),
     ],
     postgres: (t) => [
       pgUniqueIndex('uniq_sessions_source_adapter_session_id').on(t.source, t.adapterSessionId),
@@ -283,6 +316,20 @@ export const sessionsDual = defineDualTable(
       pgCheck(
         'sessions_context_inheritance_check',
         sql`${t.contextInheritance} IS NULL OR ${t.contextInheritance} IN ('parent-history', 'none')`,
+      ),
+      // Emitted by drizzle-kit as a plain validating `ALTER TABLE ... ADD
+      // CONSTRAINT`, not as `NOT VALID` followed by `VALIDATE CONSTRAINT`. The
+      // two-step form exists to avoid a long ACCESS EXCLUSIVE lock while an
+      // existing table is scanned, which does not apply here: the constraint
+      // lands in the same generated migration that adds both columns, so every
+      // row it validates was just created with the default `'inherited'` /
+      // `NULL` pair and the scan is trivially satisfiable. Splitting it is also
+      // not expressible through `pgCheck` — it would require hand-editing a
+      // landed migration file, and `readMigrations` hashes raw SQL as ledger
+      // identity, so editing it would orphan every provisioned database.
+      pgCheck(
+        'sessions_current_adapter_session_id_currency_check',
+        sql`${t.currentAdapterSessionIdState} IN ('inherited', 'moved', 'confirmed') AND (${t.currentAdapterSessionIdState} <> 'confirmed' OR ${t.currentAdapterSessionId} IS NOT NULL) AND (${t.currentAdapterSessionIdState} = 'confirmed' OR ${t.currentAdapterSessionId} IS NULL)`,
       ),
     ],
   },

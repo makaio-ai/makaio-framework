@@ -1,5 +1,6 @@
 """Subject constants generated from sdks/manifest/makaio-bus-protocol.json."""
 
+AGENT_ADAPTER_SESSION_MOVED = "agent.adapterSession.moved"
 AGENT_COMPLETE = "agent.complete"
 AGENT_CONTEXT_WINDOW_UPDATED = "agent.contextWindow.updated"
 AGENT_CREDENTIAL_CHANGE = "agent.credential.change"
@@ -53,6 +54,7 @@ TOOL_REGISTRY_CHANGED = "tool.registryChanged"
 TOOL_STARTED = "tool.started"
 
 ALL_SUBJECTS = (
+    AGENT_ADAPTER_SESSION_MOVED,
     AGENT_COMPLETE,
     AGENT_CONTEXT_WINDOW_UPDATED,
     AGENT_CREDENTIAL_CHANGE,

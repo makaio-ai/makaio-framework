@@ -14,6 +14,7 @@ export {
   type AgentStarted,
   type StartMode,
 } from './started.js';
+export { AdapterSessionMovedSchema, type AdapterSessionMoved } from './adapter-session-moved.js';
 export { ModelChangedSchema, type ModelChanged } from './model-changed.js';
 export { CompleteSchema, type AgentComplete } from './complete.js';
 export { IdleSchema, type IdlePayload } from './idle.js';

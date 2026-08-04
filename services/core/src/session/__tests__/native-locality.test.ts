@@ -80,6 +80,35 @@ describe('evaluateNativeLocality', () => {
     ).toEqual({ kind: 'degrade', reason: 'no-adapter-session' });
   });
 
+  it('degrades on adapter-session-moved for an unconfirmed identity movement', () => {
+    expect(
+      evaluateNativeLocality({
+        ...BASE_INPUT,
+        resumeIdentity: { adapterSessionId: undefined, movedUnconfirmed: true },
+      }),
+    ).toEqual({ kind: 'degrade', reason: 'adapter-session-moved' });
+  });
+
+  it('honours a resolved currency over the origin identity', () => {
+    expect(
+      evaluateNativeLocality({
+        ...BASE_INPUT,
+        resumeIdentity: { adapterSessionId: 'moved-on', movedUnconfirmed: false },
+      }),
+    ).toEqual({ kind: 'native' });
+  });
+
+  it('degrades on no-adapter-session when a resolved currency is empty', () => {
+    // A supplied currency is authoritative: it must not fall back to the
+    // session's origin identity, which is still populated here.
+    expect(
+      evaluateNativeLocality({
+        ...BASE_INPUT,
+        resumeIdentity: { adapterSessionId: undefined, movedUnconfirmed: false },
+      }),
+    ).toEqual({ kind: 'degrade', reason: 'no-adapter-session' });
+  });
+
   it('degrades on missing-machine-id when session has no machineId', () => {
     expect(
       evaluateNativeLocality({

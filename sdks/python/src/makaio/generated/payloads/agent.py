@@ -6,6 +6,21 @@ from dataclasses import dataclass
 from typing import Any, Literal, Union
 
 @dataclass(frozen=True)
+class AgentAdapterSessionMovedPayload:
+    adapter_id: str
+    adapter_name: str
+    agent_id: str
+    confirmed: bool
+    adapter_session_id: str | None = None
+    client_id: str | None = None
+    message_id: str | None = None
+    occurred_at: float | None = None
+    provider_config_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True)
 class AgentCompletePayloadStructuredOutputValidationVariantA:
     status: Literal["passed"]
 
@@ -673,7 +688,7 @@ class AgentSendMessageRequestSessionContextNativeLocalityVariantA:
 @dataclass(frozen=True)
 class AgentSendMessageRequestSessionContextNativeLocalityVariantB:
     kind: Literal["degrade"]
-    reason: Literal["adapter-unsupported", "adapter-mismatch", "no-adapter-session", "missing-machine-id", "machine-mismatch", "cwd-mismatch", "transforms-present", "compression-present", "connector-swap", "mid-history-unsupported", "hybrid-imported-orchestrated", "native-attempt-failed", "agent-already-started", "fork-point-unresolvable"]
+    reason: Literal["adapter-unsupported", "adapter-mismatch", "no-adapter-session", "missing-machine-id", "machine-mismatch", "cwd-mismatch", "transforms-present", "compression-present", "connector-swap", "mid-history-unsupported", "hybrid-imported-orchestrated", "native-attempt-failed", "agent-already-started", "fork-point-unresolvable", "adapter-session-moved"]
 
 
 @dataclass(frozen=True)

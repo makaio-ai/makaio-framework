@@ -122,6 +122,106 @@ export function describeSessionStorageBehavior(): void {
     });
   });
 
+  describe('adapter-session currency', () => {
+    it('defaults to inherited currency and leaves the current ID unset', async () => {
+      const session = createSession({ sessionId: 'currency-default', adapterSessionId: 'origin-id' });
+
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      // Asserted strictly: both backends must materialize the column default
+      // rather than leave it absent. A `?? 'inherited'` fallback here would pass
+      // for a backend that never wrote the state at all, which is exactly the
+      // divergence this shared behavior suite exists to catch.
+      expect(stored.session?.currentAdapterSessionIdState).toBe('inherited');
+      expect(stored.session?.currentAdapterSessionId).toBeUndefined();
+    });
+
+    it('rejects an update that supplies only one half of the currency pair', async () => {
+      const session = createSession({ sessionId: 'currency-half-pair', adapterSessionId: 'origin-id' });
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
+
+      await expect(
+        MakaioBus.request(SessionStorageSubjects.update, {
+          sessionId: session.sessionId,
+          currentAdapterSessionId: 'rotated-id',
+        }),
+      ).rejects.toThrow(/currentAdapterSessionIdState is required/i);
+
+      await expect(
+        MakaioBus.request(SessionStorageSubjects.update, {
+          sessionId: session.sessionId,
+          currentAdapterSessionIdState: 'confirmed',
+        }),
+      ).rejects.toThrow(/currentAdapterSessionId is required/i);
+
+      // A pair the storage CHECK constraint would refuse is refused earlier, at
+      // the contract boundary, so both backends behave identically.
+      await expect(
+        MakaioBus.request(SessionStorageSubjects.update, {
+          sessionId: session.sessionId,
+          currentAdapterSessionId: null,
+          currentAdapterSessionIdState: 'confirmed',
+        }),
+      ).rejects.toThrow(/must be a string exactly when/i);
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(stored.session?.currentAdapterSessionIdState).toBe('inherited');
+      expect(stored.session?.currentAdapterSessionId).toBeUndefined();
+    });
+
+    it('persists the currency pair through partial update', async () => {
+      const session = createSession({ sessionId: 'currency-update', adapterSessionId: 'origin-id' });
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
+
+      await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        currentAdapterSessionId: 'rotated-id',
+        currentAdapterSessionIdState: 'confirmed',
+      });
+
+      const confirmed = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(confirmed.session?.currentAdapterSessionId).toBe('rotated-id');
+      expect(confirmed.session?.currentAdapterSessionIdState).toBe('confirmed');
+      // The origin identity is write-once provenance and must never move.
+      expect(confirmed.session?.adapterSessionId).toBe('origin-id');
+
+      await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        currentAdapterSessionId: null,
+        currentAdapterSessionIdState: 'moved',
+      });
+
+      const moved = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(moved.session?.currentAdapterSessionId).toBeUndefined();
+      expect(moved.session?.currentAdapterSessionIdState).toBe('moved');
+      expect(moved.session?.adapterSessionId).toBe('origin-id');
+    });
+
+    it('leaves the currency pair untouched on a whole-record set', async () => {
+      // `set` is a read-modify-write of a full snapshot, so it deliberately does
+      // not carry currency — otherwise a stale writer could resurrect an
+      // abandoned provider session.
+      const session = createSession({ sessionId: 'currency-set-isolation', adapterSessionId: 'origin-id' });
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
+      await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        currentAdapterSessionId: 'rotated-id',
+        currentAdapterSessionIdState: 'confirmed',
+      });
+
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: session.sessionId,
+        session: { ...session, title: 'renamed' },
+      });
+
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: session.sessionId });
+      expect(stored.session?.title).toBe('renamed');
+      expect(stored.session?.currentAdapterSessionId).toBe('rotated-id');
+      expect(stored.session?.currentAdapterSessionIdState).toBe('confirmed');
+    });
+  });
+
   describe('metadata', () => {
     it('should persist session metadata through set, get, and list', async () => {
       const metadata = {

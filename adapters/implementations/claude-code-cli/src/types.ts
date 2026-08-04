@@ -85,6 +85,12 @@ export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCod
   onTurnStart?: OnTurnStartCallback;
   /** Callback when turn completes */
   onTurnComplete?: OnTurnCompleteCallback;
+  /**
+   * Announce that this session abandoned its provider thread with no confirmed
+   * successor. Forwarded from the connector config; see
+   * `BaseAgentConnectorConfig.onAdapterSessionMoved`.
+   */
+  onAdapterSessionMoved?: () => Promise<void>;
   /** CLI-specific provider config */
   providerConfig?: ClaudeCodeCliProviderConfig;
   /** Previous adapter session ID for resume */

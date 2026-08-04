@@ -181,6 +181,24 @@ export interface BaseAgentConnectorConfig<
   onMessageSent?: (messageHandle: MessageHandle) => void;
 
   /**
+   * Announce that the connector rotated its provider session with no confirmed
+   * successor yet.
+   *
+   * For rotations the executor can predict, the movement seam is driven from the
+   * pre-dispatch check in `AgentTurnExecutor` (see
+   * `agent/agent-adapter-session-movement.ts`). A connector that rotates on a
+   * decision only it can observe — the CLI's immediate-mode restart, which kills
+   * the in-flight subprocess and mints a fresh identity — must announce that
+   * movement itself, and `await` it before the dispatch that abandons the old
+   * provider session (duty 2).
+   *
+   * Injected by the owning agent, so the announcement routes through its
+   * `ConfirmedAdapterSessionTracker` and inherits the seam's retry anchor
+   * (duties 3 and 4) instead of emitting one unrecoverable event.
+   */
+  onAdapterSessionMoved?: () => Promise<void>;
+
+  /**
    * Directory restrictions for file-system tool execution.
    * When set, forwarded as `constraints.allowedDirectories` in every tool call.
    * Empty array means no restriction; undefined means no restriction.

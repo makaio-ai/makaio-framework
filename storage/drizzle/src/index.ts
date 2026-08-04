@@ -68,6 +68,7 @@ export {
   quoteSqlIdentifier,
   type StorageEngine,
   type StorageEngineCapabilities,
+  type StorageEngineConstraintSuspension,
   type StorageEngineErrorClassifiers,
   type StorageEngineMigrationBehavior,
 } from './engine/types';
