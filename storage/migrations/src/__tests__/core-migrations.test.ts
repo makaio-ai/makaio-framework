@@ -130,6 +130,28 @@ describe('core migrations', () => {
     expect(migrationSql).toContain('CREATE TABLE `client_runtimes`');
   });
 
+  it('never references rebuild temp tables inside CHECK constraints', () => {
+    // SQLite versions before 3.53.0 do not rewrite table-qualified column
+    // references inside CHECK constraints when the table is renamed, so a
+    // rebuild migration whose CHECKs are qualified with the temporary
+    // `__new_<table>` name fails at `ALTER TABLE __new_<table> RENAME TO
+    // <table>` with "no such column" on those SQLite builds (e.g. the SQLite
+    // bundled with Bun 1.3.x). Rebuild CHECK constraints must reference
+    // columns unqualified.
+    const migrations = readMigrations();
+    for (const migration of migrations) {
+      for (const stmt of migration.sql) {
+        // Match executable SQL only — `applyMigrations` strips `--` line
+        // comments the same way, and migration headers may legitimately
+        // mention the qualified form when documenting this hazard.
+        const executable = stmt.replace(/--.*$/gm, '');
+        expect(executable, `migration '${migration.tag}' qualifies a column with a rebuild temp table`).not.toMatch(
+          /"__new_[A-Za-z0-9_]+"\s*\./,
+        );
+      }
+    }
+  });
+
   it('keeps Drizzle metadata aligned with the managed-binary migration', async () => {
     const migrations = readMigrations();
     const journal = await readMigrationMeta('_journal.json');

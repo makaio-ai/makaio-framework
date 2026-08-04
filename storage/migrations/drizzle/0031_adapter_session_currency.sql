@@ -5,7 +5,12 @@
 -- both the INSERT and SELECT lists so existing rows adopt NULL plus the
 -- 'inherited' default, which is the intended migration semantics. The rebuild
 -- itself is required: SQLite cannot ALTER TABLE ADD CONSTRAINT for the new
--- currency check. Paired with drizzle-postgres/0021_adapter_session_currency.sql.
+-- currency check. The generated CHECK constraints qualified their column
+-- references with the temporary table name ("__new_sessions"."col"); SQLite
+-- versions before 3.53.0 do not rewrite table-qualified CHECK references on
+-- ALTER TABLE ... RENAME, so the rename fails with "no such column". The
+-- references are unqualified ("col") to stay valid across the rename on every
+-- supported SQLite. Paired with drizzle-postgres/0021_adapter_session_currency.sql.
 PRAGMA foreign_keys=OFF;--> statement-breakpoint
 CREATE TABLE `__new_sessions` (
 	`session_id` text PRIMARY KEY NOT NULL,
@@ -44,9 +49,9 @@ CREATE TABLE `__new_sessions` (
 	`import_status` text,
 	`is_sidechain` integer,
 	`machine_id` text,
-	CONSTRAINT "sessions_import_status_check" CHECK("__new_sessions"."import_status" IS NULL OR "__new_sessions"."import_status" IN ('discovered', 'imported', 'tracking')),
-	CONSTRAINT "sessions_context_inheritance_check" CHECK("__new_sessions"."context_inheritance" IS NULL OR "__new_sessions"."context_inheritance" IN ('parent-history', 'none')),
-	CONSTRAINT "sessions_current_adapter_session_id_currency_check" CHECK("__new_sessions"."current_adapter_session_id_state" IN ('inherited', 'moved', 'confirmed') AND ("__new_sessions"."current_adapter_session_id_state" <> 'confirmed' OR "__new_sessions"."current_adapter_session_id" IS NOT NULL) AND ("__new_sessions"."current_adapter_session_id_state" = 'confirmed' OR "__new_sessions"."current_adapter_session_id" IS NULL))
+	CONSTRAINT "sessions_import_status_check" CHECK("import_status" IS NULL OR "import_status" IN ('discovered', 'imported', 'tracking')),
+	CONSTRAINT "sessions_context_inheritance_check" CHECK("context_inheritance" IS NULL OR "context_inheritance" IN ('parent-history', 'none')),
+	CONSTRAINT "sessions_current_adapter_session_id_currency_check" CHECK("current_adapter_session_id_state" IN ('inherited', 'moved', 'confirmed') AND ("current_adapter_session_id_state" <> 'confirmed' OR "current_adapter_session_id" IS NOT NULL) AND ("current_adapter_session_id_state" = 'confirmed' OR "current_adapter_session_id" IS NULL))
 );
 --> statement-breakpoint
 INSERT INTO `__new_sessions`("session_id", "created_at", "last_activity_at", "status", "lead_agent_id", "parent_session_id", "context_inheritance", "root_session_id", "fork_point_message_id", "branch_kind", "adapter_name", "adapter_session_id", "adapter_id", "client_id", "client_account_id", "last_client_identity_observation", "is_orchestrated", "title", "summary", "summary_updated_at", "is_imported", "fork_transforms", "target_working_directory", "execution_target_id", "approval_policy_override", "metadata", "spawning_tool_call_id", "source", "parent_external_session_id", "log_file_path", "discovered_at", "import_status", "is_sidechain", "machine_id") SELECT "session_id", "created_at", "last_activity_at", "status", "lead_agent_id", "parent_session_id", "context_inheritance", "root_session_id", "fork_point_message_id", "branch_kind", "adapter_name", "adapter_session_id", "adapter_id", "client_id", "client_account_id", "last_client_identity_observation", "is_orchestrated", "title", "summary", "summary_updated_at", "is_imported", "fork_transforms", "target_working_directory", "execution_target_id", "approval_policy_override", "metadata", "spawning_tool_call_id", "source", "parent_external_session_id", "log_file_path", "discovered_at", "import_status", "is_sidechain", "machine_id" FROM `sessions`;--> statement-breakpoint

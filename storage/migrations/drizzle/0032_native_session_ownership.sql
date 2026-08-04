@@ -6,7 +6,10 @@
 -- not exist yet. They are omitted from both the INSERT and SELECT lists so
 -- existing rows adopt NULL / 'inherited' / 0, which is the intended migration
 -- semantics. The rebuild itself is required: SQLite cannot ALTER TABLE ADD
--- CONSTRAINT for the new currency and counter checks.
+-- CONSTRAINT for the new currency and counter checks. As in 0031, the rebuild's
+-- CHECK constraints are unqualified ("col", not "__new_agents"."col") because
+-- SQLite versions before 3.53.0 do not rewrite table-qualified CHECK references
+-- on ALTER TABLE ... RENAME.
 --
 -- The `adapter_session_claims` creation is also moved after the rebuild, so its
 -- foreign key never points at a table that the same migration is about to drop.
@@ -36,8 +39,8 @@ CREATE TABLE `__new_agents` (
 	`created_at` integer NOT NULL,
 	`last_activity_at` integer NOT NULL,
 	FOREIGN KEY (`session_id`) REFERENCES `sessions`(`session_id`) ON UPDATE no action ON DELETE cascade,
-	CONSTRAINT "agents_current_adapter_session_id_currency_check" CHECK("__new_agents"."current_adapter_session_id_state" IN ('inherited', 'moved', 'confirmed') AND ("__new_agents"."current_adapter_session_id_state" <> 'confirmed' OR "__new_agents"."current_adapter_session_id" IS NOT NULL) AND ("__new_agents"."current_adapter_session_id_state" = 'confirmed' OR "__new_agents"."current_adapter_session_id" IS NULL)),
-	CONSTRAINT "agents_ownership_counters_check" CHECK("__new_agents"."revision" >= 0 AND "__new_agents"."currency_fence" >= 0)
+	CONSTRAINT "agents_current_adapter_session_id_currency_check" CHECK("current_adapter_session_id_state" IN ('inherited', 'moved', 'confirmed') AND ("current_adapter_session_id_state" <> 'confirmed' OR "current_adapter_session_id" IS NOT NULL) AND ("current_adapter_session_id_state" = 'confirmed' OR "current_adapter_session_id" IS NULL)),
+	CONSTRAINT "agents_ownership_counters_check" CHECK("revision" >= 0 AND "currency_fence" >= 0)
 );
 --> statement-breakpoint
 INSERT INTO `__new_agents`("agent_id", "adapter_id", "adapter_name", "session_id", "adapter_session_id", "model", "cwd", "allowed_directories", "provider_config_id", "persona_id", "profile_id", "harness_id", "client_id", "compression_mode", "role", "status", "created_at", "last_activity_at") SELECT "agent_id", "adapter_id", "adapter_name", "session_id", "adapter_session_id", "model", "cwd", "allowed_directories", "provider_config_id", "persona_id", "profile_id", "harness_id", "client_id", "compression_mode", "role", "status", "created_at", "last_activity_at" FROM `agents`;--> statement-breakpoint
