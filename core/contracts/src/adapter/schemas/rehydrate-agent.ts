@@ -22,7 +22,6 @@ import { z } from 'zod';
  * @param agentId - Agent to rehydrate
  * @param cwd - Optional working directory override for new connector
  * @param model - Optional model override for new connector
- * @param adapterSessionId - Optional persisted native session ID for resume-capable connectors
  */
 export const RehydrateAgentSchema = {
   request: z.object({
@@ -39,25 +38,16 @@ export const RehydrateAgentSchema = {
     model: z.string().optional(),
 
     /**
-     * Optional persisted native session ID for resume-capable connectors.
-     *
-     * Consumed only when the rehydrate resolves to native resume: a fresh
-     * replacement connector mints a new provider session identity instead,
-     * because pinning a used session ID on a fresh generation collides with
-     * the provider's durable session store.
-     */
-    adapterSessionId: z.string().optional(),
-
-    /**
      * Provider-native session ID to resume.
      *
      * When present the adapter creates the connector in native-resume mode so
-     * the provider session continues where it left off. The caller (service
-     * layer) is responsible for evaluating locality before setting this field;
-     * the adapter trusts it without re-evaluation.
-     *
-     * Distinct from `adapterSessionId` which marks the identity of the
-     * provider session a resumed generation continues.
+     * the provider session continues where it left off, and the resumed
+     * generation adopts it as its identity. The caller (service layer) is
+     * responsible for evaluating locality before setting this field; the
+     * adapter trusts it without re-evaluation. Without it the replacement
+     * connector starts fresh and mints a new provider session identity —
+     * pinning a used session ID on a fresh generation collides with the
+     * provider's durable session store.
      */
     resumeAdapterSessionId: z.string().optional(),
   }),

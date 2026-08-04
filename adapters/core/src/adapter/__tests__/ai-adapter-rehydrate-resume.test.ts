@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
-import {
-  AdapterSubjects,
-  AgentSubjects,
-  type AdapterSessionMoved,
-  type NativeLocalityVerdict,
-} from '@makaio/contracts';
+import { AdapterSubjects, AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { createTestAdapter, MockConnector, TestAgent, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
 import { createNoAuthTestProviderContext } from '../../testing/index.js';
@@ -43,7 +38,6 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
 
   /**
    * Rehydrate a persisted agent and return the connector config created by the cold path.
-   * @param nativeLocality - Optional host-evaluated locality verdict attached to the stored agent fixture
    * @param rpcResumeId - Optional resumeAdapterSessionId passed in the RPC payload (service-evaluated)
    * @param echoConfiguredSession - When true the connector reports the provider session it was
    *   configured with, mirroring a real connector that genuinely resumed its target instead of
@@ -54,7 +48,6 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
    * @returns Captured connector configuration
    */
   async function rehydrateColdAgent(
-    nativeLocality?: NativeLocalityVerdict,
     rpcResumeId?: string,
     echoConfiguredSession = false,
     createdAgents?: TestAgent[],
@@ -99,7 +92,6 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
           allowedDirectories: ['/workspace'],
           createdAt: Date.now(),
           lastActivityAt: Date.now(),
-          ...(nativeLocality !== undefined && { nativeLocality }),
         };
         ctx.setResult({
           agent: persistedAgent,
@@ -153,7 +145,9 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
 
     it('stays silent when the rehydrated identity did not move', async () => {
       const movements = captureMovements();
-      await rehydrateColdAgent({ kind: 'native' }, undefined, true);
+      // Resuming the persisted provider session keeps the identity put, so the
+      // seam has nothing to announce.
+      await rehydrateColdAgent('persisted-native-session', true);
 
       expect(movements).toHaveLength(0);
     });
@@ -201,7 +195,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       );
 
       const createdAgents: TestAgent[] = [];
-      await rehydrateColdAgent(undefined, undefined, false, createdAgents);
+      await rehydrateColdAgent(undefined, false, createdAgents);
 
       // The rejected announcement did not fail the rehydrate, and the agent row
       // still advanced so a later restart resumes the recovered thread.
@@ -223,66 +217,25 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
     });
   });
 
-  it('passes persisted adapterSessionId as native resume context during local cold rehydrate', async () => {
-    const capturedConfig = await rehydrateColdAgent({ kind: 'native' });
-
-    expect(capturedConfig).toEqual(
-      expect.objectContaining({
-        adapterSessionId: 'persisted-native-session',
-        resumeAdapterSessionId: 'persisted-native-session',
-        allowedDirectories: ['/workspace'],
-      }),
-    );
-  });
-
-  const nonNativeColdRehydrateCases: Array<{
-    name: string;
-    nativeLocality: NativeLocalityVerdict | undefined;
-  }> = [
-    { name: 'missing locality verdict', nativeLocality: undefined },
-    {
-      name: 'degraded missing-machine locality',
-      nativeLocality: { kind: 'degrade', reason: 'missing-machine-id' },
-    },
-    { name: 'foreign locality', nativeLocality: { kind: 'foreign', machineId: 'remote-machine' } },
-  ];
-
-  it.each(nonNativeColdRehydrateCases)('omits native resume context during cold rehydrate for $name', async ({
-    nativeLocality,
-  }) => {
-    const capturedConfig = await rehydrateColdAgent(nativeLocality);
-
-    expect(capturedConfig).toEqual(
-      expect.objectContaining({
-        allowedDirectories: ['/workspace'],
-      }),
-    );
-    expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
-    // Fresh generations mint their own provider identity downstream — the
-    // used persisted session ID must not be pinned on the replacement.
-    expect(capturedConfig).not.toHaveProperty('adapterSessionId');
-  });
-
   describe('unconfirmed identity invariant', () => {
-    // Invariant: nativeLocality is never persisted to agent storage.
-    // resolveNativeLocalityKind returns undefined for storage-loaded records,
-    // so cold rehydration never sets resumeAdapterSessionId — even when the
-    // persisted adapterSessionId is a placeholder the provider never confirmed.
+    // Invariant: the persisted adapterSessionId is an identity marker, never a
+    // resume decision. Cold rehydration only resumes on the caller's explicit
+    // resumeAdapterSessionId — even when the persisted marker is a placeholder
+    // the provider never confirmed.
 
-    it('does not set resumeAdapterSessionId when persisted record has no locality verdict (unconfirmed identity)', async () => {
-      // Simulates a crash-after-persist, before provider confirmation:
-      // the record carries a placeholder adapterSessionId but no nativeLocality.
-      const capturedConfig = await rehydrateColdAgent(undefined);
+    it('does not set resumeAdapterSessionId when the RPC supplies no resume target', async () => {
+      // Simulates a crash-after-persist, before provider confirmation: the
+      // record carries a placeholder adapterSessionId, and no caller evaluated
+      // locality. The fresh generation must not pin the used session ID.
+      const capturedConfig = await rehydrateColdAgent();
 
+      expect(capturedConfig).toEqual(
+        expect.objectContaining({
+          allowedDirectories: ['/workspace'],
+        }),
+      );
       expect(capturedConfig).not.toHaveProperty('adapterSessionId');
       expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
-    });
-
-    it('sets resumeAdapterSessionId only when persisted record carries a native locality verdict (confirmed identity)', async () => {
-      const capturedConfig = await rehydrateColdAgent({ kind: 'native' });
-
-      expect(capturedConfig.adapterSessionId).toBe('persisted-native-session');
-      expect(capturedConfig.resumeAdapterSessionId).toBe('persisted-native-session');
     });
   });
 
@@ -290,14 +243,12 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
     /**
      * Start a live agent, warm-rehydrate it, and return the replacement
      * connector config created by the swap.
-     * @param rehydrateOverrides - Extra rehydrate RPC payload fields (adapterSessionId, resumeAdapterSessionId)
-     * @param nativeLocality - Optional host-evaluated locality verdict served by the agent-storage handler
+     * @param rehydrateOverrides - Extra rehydrate RPC payload fields (resumeAdapterSessionId)
      * @param runtimeUpdates - When provided, captures storage:agent.updateRuntime payloads
      * @returns Captured replacement connector configuration
      */
     async function rehydrateWarmAgent(
-      rehydrateOverrides: { adapterSessionId?: string; resumeAdapterSessionId?: string },
-      nativeLocality?: NativeLocalityVerdict,
+      rehydrateOverrides: { resumeAdapterSessionId?: string },
       runtimeUpdates?: Array<{ agentId: string; adapterSessionId?: string }>,
     ): Promise<BaseAgentConnectorConfig<TestBus> & { adapterId: string }> {
       const capturedConfigs: Array<BaseAgentConnectorConfig<TestBus> & { adapterId: string }> = [];
@@ -334,7 +285,6 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
               cwd: os.tmpdir(),
               createdAt: Date.now(),
               lastActivityAt: Date.now(),
-              ...(nativeLocality !== undefined && { nativeLocality }),
             },
           });
         }),
@@ -375,41 +325,24 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
     }
 
     it('mints a fresh provider identity when the RPC supplies no resume decision', async () => {
-      // The RPC contract makes the service layer own the resume decision:
-      // adapterSessionId alone never implies resume, warm or cold. The fresh
-      // replacement must not pin either the requested or the live session ID —
-      // both refer to used provider sessions in the durable session store.
-      const capturedConfig = await rehydrateWarmAgent({ adapterSessionId: 'persisted-native-session' });
+      // The RPC contract makes the service layer own the resume decision: a
+      // known live session never implies resume, warm or cold. The fresh
+      // replacement must not pin the live session ID — it refers to a used
+      // provider session in the durable session store.
+      const capturedConfig = await rehydrateWarmAgent({});
 
       expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
       expect(capturedConfig.adapterSessionId).toBeDefined();
-      expect(capturedConfig.adapterSessionId).not.toBe('persisted-native-session');
       expect(capturedConfig.adapterSessionId).not.toBe('live-native-session');
     });
 
     it('resumes with the RPC-supplied resumeAdapterSessionId', async () => {
       const capturedConfig = await rehydrateWarmAgent({
-        adapterSessionId: 'persisted-native-session',
         resumeAdapterSessionId: 'persisted-native-session',
       });
 
       expect(capturedConfig.adapterSessionId).toBe('persisted-native-session');
       expect(capturedConfig.resumeAdapterSessionId).toBe('persisted-native-session');
-    });
-
-    it('resumes the live session when the stored record carries a native locality verdict', async () => {
-      const capturedConfig = await rehydrateWarmAgent({}, { kind: 'native' });
-
-      expect(capturedConfig.adapterSessionId).toBe('live-native-session');
-      expect(capturedConfig.resumeAdapterSessionId).toBe('live-native-session');
-    });
-
-    it('starts the replacement connector fresh under foreign locality', async () => {
-      const capturedConfig = await rehydrateWarmAgent({}, { kind: 'foreign', machineId: 'remote-machine' });
-
-      expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
-      expect(capturedConfig.adapterSessionId).toBeDefined();
-      expect(capturedConfig.adapterSessionId).not.toBe('live-native-session');
     });
 
     it('persists the moved provider identity after a fresh warm rehydrate', async () => {
@@ -418,36 +351,27 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       // restartAgents would otherwise resume the abandoned session from the
       // stale stored ID.
       const runtimeUpdates: Array<{ agentId: string; adapterSessionId?: string }> = [];
-      await rehydrateWarmAgent({}, undefined, runtimeUpdates);
+      await rehydrateWarmAgent({}, runtimeUpdates);
 
       expect(runtimeUpdates).toContainEqual(expect.objectContaining({ adapterSessionId: 'mock-adapter-session-id' }));
     });
   });
 
   describe('RPC-supplied resumeAdapterSessionId (service-evaluated locality)', () => {
-    it('sets resumeAdapterSessionId from RPC payload even without persisted locality verdict', async () => {
-      // The service layer evaluated locality and decided native resume is safe.
-      // The persisted record carries no locality verdict (as expected — locality
-      // is never persisted), but the RPC payload carries the explicit resume ID.
-      const capturedConfig = await rehydrateColdAgent(undefined, 'persisted-native-session');
+    it('sets resumeAdapterSessionId from RPC payload (service-evaluated resume)', async () => {
+      // The service layer evaluated locality and decided native resume is
+      // safe; the resumed generation adopts the target as its identity.
+      const capturedConfig = await rehydrateColdAgent('persisted-native-session');
 
       expect(capturedConfig.adapterSessionId).toBe('persisted-native-session');
       expect(capturedConfig.resumeAdapterSessionId).toBe('persisted-native-session');
     });
 
-    it('RPC resumeAdapterSessionId takes precedence over persisted locality verdict', async () => {
-      // Edge case: persisted locality says native but the RPC supplies a different
-      // resume ID (unlikely in practice, but the contract is clear: RPC wins).
-      const capturedConfig = await rehydrateColdAgent({ kind: 'native' }, 'rpc-override-session');
-
-      expect(capturedConfig.resumeAdapterSessionId).toBe('rpc-override-session');
-    });
-
-    it('omits resumeAdapterSessionId when RPC does not supply it and no persisted verdict', async () => {
-      // Neither the RPC payload nor the persisted record confirms native
-      // locality — connector starts fresh (with a freshly minted provider
-      // identity), first send must inject history.
-      const capturedConfig = await rehydrateColdAgent(undefined, undefined);
+    it('omits resumeAdapterSessionId when the RPC does not supply it', async () => {
+      // The RPC payload carries no resume decision — connector starts fresh
+      // (with a freshly minted provider identity), first send must inject
+      // history.
+      const capturedConfig = await rehydrateColdAgent(undefined);
 
       expect(capturedConfig).not.toHaveProperty('adapterSessionId');
       expect(capturedConfig).not.toHaveProperty('resumeAdapterSessionId');
@@ -477,10 +401,9 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
    *
    * Attaches AgentStorageSubjects.get and updateStatus handlers to the global
    * bus and pushes their cleanup into `cleanupFns`.
-   * @param nativeLocality - Locality verdict attached to the persisted agent fixture
    * @param adapterSessionId - Provider session ID stamped on the persisted record
    */
-  function registerStorageHandlers(nativeLocality: NativeLocalityVerdict | undefined, adapterSessionId: string): void {
+  function registerStorageHandlers(adapterSessionId: string): void {
     cleanupFns.push(
       MakaioBus.on(AgentStorageSubjects.get, (ctx) => {
         const persistedAgent = {
@@ -495,9 +418,6 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
           cwd: os.tmpdir(),
           createdAt: Date.now(),
           lastActivityAt: Date.now(),
-          // nativeLocality is not part of MakaioSessionAgent — it is a host-tier
-          // extension read by resolveNativeLocalityKind via a Record cast.
-          ...(nativeLocality !== undefined && { nativeLocality }),
         };
         ctx.setResult({ agent: persistedAgent });
       }),
@@ -513,7 +433,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
 
     // No locality verdict — the cold rehydrate starts fresh and the
     // connector confirms a new provider session ('mock-adapter-session-id').
-    registerStorageHandlers(undefined, 'persisted-native-session');
+    registerStorageHandlers('persisted-native-session');
     const runtimeUpdates: Array<{ agentId: string; adapterSessionId?: string }> = [];
     cleanupFns.push(
       MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
@@ -545,7 +465,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     // Persisted identity differs from the RPC resume target: the resumed
     // generation must carry the resume target as its identity so that
     // registry.set() clears the matching claim instead of stranding it.
-    registerStorageHandlers(undefined, 'persisted-native-session');
+    registerStorageHandlers('persisted-native-session');
 
     await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
       adapterId: adapter.adapterId,
@@ -574,7 +494,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
   it('start that rotates away from its resume target leaves no dangling claim', async () => {
     ({ adapter } = createTestAdapter('test-adapter-claim'));
     await adapter.init();
-    registerStorageHandlers(undefined, 'persisted-native-session');
+    registerStorageHandlers('persisted-native-session');
 
     // A resume-mode start with an initialMessage runs the turn pipeline, which
     // abandons the armed resume target when native resume is suppressed; the
@@ -630,7 +550,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     }));
     await adapter.init();
 
-    registerStorageHandlers(undefined, 'unused-persisted-session');
+    registerStorageHandlers('unused-persisted-session');
 
     /**
      * Start a live agent occupying the given provider session.
@@ -697,12 +617,13 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     }));
     await adapter.init();
 
-    registerStorageHandlers({ kind: 'native' }, 'native-session-concurrent');
+    registerStorageHandlers('native-session-concurrent');
 
     // Fire the first rehydrate — it will block inside the connector factory.
     const firstRehydrate = MakaioBus.request(AdapterSubjects.rehydrateAgent, {
       adapterId: adapter.adapterId,
       agentId: 'agent-concurrent-1',
+      resumeAdapterSessionId: 'native-session-concurrent',
     });
 
     // Wait until the first rehydrate has entered the connector factory and
@@ -718,6 +639,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
       MakaioBus.request(AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'agent-concurrent-2',
+        resumeAdapterSessionId: 'native-session-concurrent',
       }),
     ).rejects.toThrow('already claimed');
 
@@ -741,13 +663,14 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     }));
     await adapter.init();
 
-    registerStorageHandlers({ kind: 'native' }, 'native-session-release');
+    registerStorageHandlers('native-session-release');
 
     // First rehydrate fails — claim must be released.
     await expect(
       MakaioBus.request(AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'agent-release-1',
+        resumeAdapterSessionId: 'native-session-release',
       }),
     ).rejects.toThrow('Failed to recover agent');
 
@@ -757,6 +680,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
       MakaioBus.request(AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'agent-release-2',
+        resumeAdapterSessionId: 'native-session-release',
       }),
     ).resolves.toBeDefined();
   });
@@ -765,11 +689,12 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     ({ adapter } = createTestAdapter('test-adapter-claim'));
     await adapter.init();
 
-    registerStorageHandlers({ kind: 'native' }, 'native-session-clean');
+    registerStorageHandlers('native-session-clean');
 
     await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
       adapterId: adapter.adapterId,
       agentId: 'agent-clean',
+      resumeAdapterSessionId: 'native-session-clean',
     });
 
     // The entry is registered under the provider-confirmed identity

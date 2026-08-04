@@ -13,6 +13,7 @@ import { resolveAdapterId } from './resolution.js';
 import { getFullConversation } from '../context/get-full-conversation.js';
 import { convertSessionMessage } from '../context/convert-session-message.js';
 import { executePipeline } from '../session-editor/pipeline-executor.js';
+import { recoveryPlanResumeTarget, type RecoveryPlan } from '../recovery-plan.js';
 
 /**
  * Configuration for recovering dead agents during liveness verification.
@@ -23,14 +24,19 @@ export interface RecoveryConfig {
   /** Model identifier (e.g., 'claude-sonnet-4-20250514', 'gpt-4o') */
   model?: string;
   /**
-   * Provider-native session ID to resume.
+   * Whether the replacement connector resumes the provider conversation or
+   * starts fresh and receives the stored conversation as injected history.
    *
-   * When set, the adapter creates the connector in native-resume mode so the
-   * provider session continues from where it left off. The caller is responsible
-   * for evaluating locality (machine identity, adapter capability, CWD match)
-   * before setting this field.
+   * Required, and required to be the same value the caller feeds to its history
+   * assembly (via `buildPlannedRecoveryContext`): the two halves of a
+   * recovery are only correct together. Deciding native resume here while
+   * building history there replays the conversation into a provider session that
+   * already holds it; deciding fresh here without building history there starts
+   * the model blank on a session with prior turns.
+   *
+   * Locality evaluation belongs to the caller — see `planAgentRecovery`.
    */
-  resumeAdapterSessionId?: string;
+  plan: RecoveryPlan;
 }
 
 /**
@@ -136,9 +142,12 @@ export async function ensureAgentModel(
 /**
  * Verify liveness of agents and recover any that are dead.
  * Queries each agent via getAgent; if unresponsive, triggers connector swap via recoverAgent.
+ *
+ * The caller's `recoveryConfig.plan` applies to every agent recovered in this
+ * batch and must be the same plan the caller feeds to its history assembly.
  * @param bus - Bus instance
  * @param agents - Agents to verify
- * @param recoveryConfig - Configuration for recovering dead agents
+ * @param recoveryConfig - Configuration for recovering dead agents, including the shared recovery plan
  * @returns Verified/recovered agents and set of recovered agent IDs
  */
 export async function verifyAndRecoverAgents(
@@ -170,7 +179,7 @@ export async function verifyAndRecoverAgents(
 }
 
 // Re-export from recovery-context.ts — single source of truth for framework-safe recovery.
-export { buildRecoveryContext } from './recovery-context.js';
+export { buildRecoveryContext, buildPlannedRecoveryContext } from './recovery-context.js';
 
 /**
  * Build recovery context and apply optional additional transforms.
@@ -215,15 +224,16 @@ export async function recoverAgent(
   // Persisted adapter IDs can be stale after runtime restart/failover.
   const resolvedAdapterId = await resolveAdapterId(bus, deadAgent.adapterName).catch(() => deadAgent.adapterId);
 
+  // Only the plan's resume target puts the replacement connector into
+  // native-resume mode; the rehydrate RPC carries no identity marker.
+  const resumeAdapterSessionId = recoveryPlanResumeTarget(recoveryConfig.plan);
+
   await bus.request(AdapterSubjects.rehydrateAgent, {
     adapterId: resolvedAdapterId,
     agentId: deadAgent.agentId,
     cwd: recoveryConfig.cwd,
     model: recoveryConfig.model ?? deadAgent.model,
-    ...(deadAgent.adapterSessionId !== undefined && { adapterSessionId: deadAgent.adapterSessionId }),
-    ...(recoveryConfig.resumeAdapterSessionId !== undefined && {
-      resumeAdapterSessionId: recoveryConfig.resumeAdapterSessionId,
-    }),
+    ...(resumeAdapterSessionId !== undefined && { resumeAdapterSessionId }),
   });
 
   deadAgent.adapterId = resolvedAdapterId;
