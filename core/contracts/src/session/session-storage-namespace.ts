@@ -9,6 +9,7 @@ import {
   ImportStatusSchema,
   SessionContextInheritanceSchema,
 } from './schemas/primitives.js';
+import { validateCurrencyPairing } from './schemas/adapter-session-currency.js';
 import { ForkChildInfoSchema } from './schemas/fork-child-info.js';
 import { SessionPreviewDataSchema, SessionRecordMetadataSchema, SessionWithPreviewSchema } from './schemas/session.js';
 import { ClientIdentityObservationSchema } from '../client/account-identity.js';
@@ -68,6 +69,11 @@ function validateClientAccountObservationRequirement(
  * impossible pair. Requiring both halves together is what keeps the two
  * backends observably identical, and it is the only write path that reaches
  * these columns — `storage:session.set` deliberately omits them.
+ *
+ * The difference to {@link validateCurrencyPairing} is exactly the partial
+ * update: this refinement first decides whether a half-supplied pair was given
+ * (accepting "neither", rejecting "one of two"), then hands the total pair to
+ * the shared rule so the two surfaces can never diverge on what a legal pair is.
  * @param value - Candidate update payload containing the currency fields
  * @param ctx - Zod refinement context
  */
@@ -100,12 +106,7 @@ function validateAdapterSessionCurrencyPair(
     return;
   }
 
-  if ((state === 'confirmed') === (id !== null)) return;
-  ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: ['currentAdapterSessionId'],
-    message: "currentAdapterSessionId must be a string exactly when currentAdapterSessionIdState is 'confirmed'",
-  });
+  validateCurrencyPairing({ currentAdapterSessionId: id, currentAdapterSessionIdState: state }, ctx);
 }
 
 export const SessionStorageSetSessionSchema = MakaioSessionSchema.superRefine((value, ctx) => {

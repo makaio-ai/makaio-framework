@@ -31,6 +31,7 @@ import { WorkflowBlockRegistry } from './workflow-blocks/workflow-block-registry
 import { TransitionPipelineService } from './workflow-transitions/transition-pipeline-service.js';
 import { registerDrizzleSessionStorage } from './session/storage/drizzle-handler.js';
 import { registerDrizzleAgentStorage } from './session/storage/agent-drizzle-handler.js';
+import { registerDrizzleSessionOwnershipStorage } from './session/storage/ownership-drizzle-handler.js';
 import { registerFtsSearchHandler } from './session/storage/fts-search-handler.js';
 import { registerDrizzleSessionEventStorage } from './session/session-events/drizzle-handler.js';
 import { registerDrizzleMessageStorage } from './session/messages/drizzle-handler.js';
@@ -151,6 +152,7 @@ export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
         cleanups.push(registerDrizzleMessageRoutingStorage(bus, db));
         cleanups.push(registerDrizzleTurnStorage(bus, db));
         cleanups.push(registerDrizzleAgentStorage(bus, db));
+        cleanups.push(registerDrizzleSessionOwnershipStorage(bus, db));
         cleanups.push(registerDrizzleImportCursorStorage(bus, db));
         cleanups.push(registerFtsSearchHandler(bus, db));
         cleanups.push(registerParentResolver(bus, db));

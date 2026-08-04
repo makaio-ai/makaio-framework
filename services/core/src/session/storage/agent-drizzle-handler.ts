@@ -42,11 +42,29 @@ export function mapAgent(row: AgentRow): MakaioSessionAgent {
     harnessId: row.harnessId ?? undefined,
     clientId: row.clientId ?? undefined,
     compressionMode: row.compressionMode ? CompressionModeSchema.parse(row.compressionMode) : undefined,
+    currentAdapterSessionId: row.currentAdapterSessionId ?? undefined,
+    currentAdapterSessionIdState: row.currentAdapterSessionIdState,
+    revision: row.revision,
+    currencyFence: row.currencyFence,
   };
 }
 
 /**
  * Map MakaioSessionAgent to DB column values (for insert/update).
+ *
+ * The ownership columns (`currentAdapterSessionId`,
+ * `currentAdapterSessionIdState`, `revision`, `currencyFence`) are deliberately
+ * absent: `set` is a whole-record write of a caller-held snapshot, so carrying
+ * them would let a writer that read the agent before a provider-session movement
+ * resurrect the abandoned provider session — and reset the very counters that
+ * reject such a write. Omitting them here leaves the insert to the column
+ * defaults and the conflict update untouched. They are written exclusively
+ * through the `storage:sessionOwnership` seam.
+ *
+ * `adapterSessionId` — the agent's origin provider session, and the fifth
+ * column a `set` may not overwrite — is present here because a *fresh* row has
+ * no stored origin to protect and must take the caller's. On an existing row it
+ * is dropped again by {@link toConflictValues}.
  * @param agent - The agent to convert
  * @returns DB column values for insert/update operations
  */
@@ -71,6 +89,25 @@ function toDbValues(agent: MakaioSessionAgent): AgentsTable['$inferInsert'] {
     clientId: agent.clientId ?? null,
     compressionMode: agent.compressionMode ?? null,
   };
+}
+
+/**
+ * Narrow the whole-record write to the columns it may change on an existing row.
+ *
+ * `adapterSessionId` is the agent's *origin* provider session — the only
+ * resumable ID an agent whose currency is still `inherited` has. A `set` writes
+ * a caller-held snapshot, and a caller that never read the origin (identity
+ * enrichment) or read it before it was written would otherwise erase it. So on
+ * conflict the stored origin wins; the insert path keeps the caller's value,
+ * because a fresh row has no origin to lose. Changing the origin of a live agent
+ * has its own seam, `storage:agent.updateRuntime`, which carries the field and
+ * only writes it when the caller actually supplies one.
+ * @param values - Full column values produced by {@link toDbValues}
+ * @returns The same values without the origin column
+ */
+function toConflictValues(values: AgentsTable['$inferInsert']): Omit<AgentsTable['$inferInsert'], 'adapterSessionId'> {
+  const { adapterSessionId: _storedOriginWins, ...conflictValues } = values;
+  return conflictValues;
 }
 
 /**
@@ -120,10 +157,13 @@ function registerSetHandler(deps: AgentHandlerDeps): () => void {
     const { agent } = ctx.payload;
     const dbValues = toDbValues(agent);
 
-    const result = await db.insert(agents).values(dbValues).onConflictDoUpdate({
-      target: agents.agentId,
-      set: dbValues,
-    });
+    const result = await db
+      .insert(agents)
+      .values(dbValues)
+      .onConflictDoUpdate({
+        target: agents.agentId,
+        set: toConflictValues(dbValues),
+      });
 
     ctx.setResult({ success: didAffectRows(result) });
   });

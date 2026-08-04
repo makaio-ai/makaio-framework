@@ -129,6 +129,11 @@ export const AgentStorageNamespace = createStorageNamespaceDefinition('agent', {
     /**
      * Update runtime-mutable agent fields without full record overwrite.
      *
+     * The agent's ownership columns (currency pair, revision, fence) are
+     * deliberately not expressible here: they may only be written under a claim
+     * generation, through the `storage:sessionOwnership` seam. `adapterSessionId`
+     * below is the immutable *origin* identity, not the currency.
+     *
      * Subject: `storage:agent.updateRuntime`
      * Type: Request (RPC)
      */

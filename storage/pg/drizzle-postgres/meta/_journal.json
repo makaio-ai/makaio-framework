@@ -155,6 +155,13 @@
       "when": 1785338353913,
       "tag": "0021_adapter_session_currency",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1785509242426,
+      "tag": "0022_native_session_ownership",
+      "breakpoints": true
     }
   ]
 }

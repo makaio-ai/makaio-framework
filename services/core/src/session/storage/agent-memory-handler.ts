@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioSessionAgent } from '@makaio/contracts';
 import { AgentStorageSubjects } from './agent-namespace.js';
+import { type SessionStorageMemoryState, createSessionStorageMemoryState, deleteClaimsWhere } from './memory-store.js';
 
 /**
  * Named options for {@link applyRuntimeUpdate}.
@@ -57,14 +58,96 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
 }
 
 /**
+ * Carry the stored ownership columns across a whole-record `set`.
+ *
+ * Mirrors the Drizzle backend, whose conflict-update column list omits the
+ * agent's currency pair, revision, fence and origin: `set` writes a caller-held
+ * snapshot, so letting it carry the first four would allow a writer that read
+ * the agent before a provider-session movement to resurrect the abandoned
+ * provider session — and to reset the very counters that reject such a write.
+ * They are owned exclusively by the `storage:sessionOwnership` seam.
+ *
+ * `adapterSessionId`, the agent's origin provider session, is preserved for a
+ * different reason: it is the only resumable ID an agent whose currency is still
+ * `inherited` has, and a caller that never read it (identity enrichment) would
+ * otherwise erase it. The *previous row's* value wins whenever a previous row
+ * exists — including a previous `undefined`, which is a stored "no origin yet"
+ * rather than a gap the snapshot may fill. A first write has no previous row and
+ * therefore takes the caller's origin, matching the SQL insert path. Changing it
+ * on a live agent is `storage:agent.updateRuntime`'s job.
+ * @param store - In-memory agent store
+ * @param agentId - Agent being written
+ * @param next - Incoming agent record about to be stored
+ */
+function storeAgentPreservingOwnership(
+  store: Map<string, MakaioSessionAgent>,
+  agentId: string,
+  next: MakaioSessionAgent,
+): void {
+  const previous = store.get(agentId);
+  store.set(agentId, {
+    ...structuredClone(next),
+    adapterSessionId: previous === undefined ? next.adapterSessionId : previous.adapterSessionId,
+    currentAdapterSessionId: previous?.currentAdapterSessionId,
+    currentAdapterSessionIdState: previous?.currentAdapterSessionIdState ?? 'inherited',
+    revision: previous?.revision ?? 0,
+    currencyFence: previous?.currencyFence ?? 0,
+  });
+}
+
+/**
+ * Apply a mutation to a stored agent, reporting whether it happened.
+ *
+ * The three mutating subjects all answer the same two questions — does the agent
+ * exist, and did the requested change apply — so the lookup and its `false`
+ * answer live here rather than being restated in each handler.
+ * @param store - In-memory agent store
+ * @param agentId - Agent to mutate
+ * @param mutate - Mutation to apply; returns `false` when it changes nothing
+ * @returns `true` when the agent exists and the mutation applied
+ */
+function mutateAgent(
+  store: Map<string, MakaioSessionAgent>,
+  agentId: string,
+  mutate: (agent: MakaioSessionAgent) => boolean,
+): boolean {
+  const agent = store.get(agentId);
+  return agent === undefined ? false : mutate(agent);
+}
+
+/**
+ * Delete an agent together with the claims it owned.
+ *
+ * The cascade the SQL backends get from their foreign keys: a deleted agent must
+ * not keep blocking an ownership key.
+ * @param state - Shared in-memory state
+ * @param agentId - Agent to delete
+ * @returns `true` when an agent row was removed
+ */
+function deleteAgentCascading(state: SessionStorageMemoryState, agentId: string): boolean {
+  deleteClaimsWhere(state, (claim) => claim.agentId === agentId);
+  return state.agents.delete(agentId);
+}
+
+/**
  * Register in-memory agent storage handlers.
  *
  * Suitable for development and testing. Data is lost when the process exits.
+ *
+ * Pass a shared `SessionStorageMemoryState` to make this handler operate on the
+ * same rows as `registerMemorySessionStorage` and
+ * `registerMemorySessionOwnershipStorage`. Omit it (or pass `undefined`) to get
+ * an isolated, private store — the default, which preserves backward
+ * compatibility for callers that do not need cross-handler state sharing.
  * @param bus - The bus instance to register handlers on
+ * @param state - Shared in-memory state; defaults to a new isolated instance
  * @returns Cleanup function to unsubscribe all handlers
  */
-export function registerMemoryAgentStorage(bus: IMakaioBus): () => void {
-  const store = new Map<string, MakaioSessionAgent>();
+export function registerMemoryAgentStorage(
+  bus: IMakaioBus,
+  state: SessionStorageMemoryState = createSessionStorageMemoryState(),
+): () => void {
+  const store = state.agents;
   const unsubs: Array<() => void> = [];
 
   // storage:agent.get
@@ -78,7 +161,7 @@ export function registerMemoryAgentStorage(bus: IMakaioBus): () => void {
   // storage:agent.set
   unsubs.push(
     bus.on(AgentStorageSubjects.set, (ctx) => {
-      store.set(ctx.payload.agentId, ctx.payload.agent);
+      storeAgentPreservingOwnership(store, ctx.payload.agentId, ctx.payload.agent);
       ctx.setResult({ success: true });
     }),
   );
@@ -86,8 +169,7 @@ export function registerMemoryAgentStorage(bus: IMakaioBus): () => void {
   // storage:agent.delete
   unsubs.push(
     bus.on(AgentStorageSubjects.delete, (ctx) => {
-      const deleted = store.delete(ctx.payload.agentId);
-      ctx.setResult({ success: deleted });
+      ctx.setResult({ success: deleteAgentCascading(state, ctx.payload.agentId) });
     }),
   );
 
@@ -114,47 +196,37 @@ export function registerMemoryAgentStorage(bus: IMakaioBus): () => void {
   // storage:agent.updateStatus
   unsubs.push(
     bus.on(AgentStorageSubjects.updateStatus, (ctx) => {
-      const agent = store.get(ctx.payload.agentId);
-      if (!agent) {
-        ctx.setResult({ success: false });
-        return;
-      }
-      agent.status = ctx.payload.status;
-      agent.lastActivityAt = Date.now();
-      ctx.setResult({ success: true });
+      const success = mutateAgent(store, ctx.payload.agentId, (agent) => {
+        agent.status = ctx.payload.status;
+        agent.lastActivityAt = Date.now();
+        return true;
+      });
+      ctx.setResult({ success });
     }),
   );
 
   // storage:agent.updateActivity
   unsubs.push(
     bus.on(AgentStorageSubjects.updateActivity, (ctx) => {
-      const agent = store.get(ctx.payload.agentId);
-      if (!agent) {
-        ctx.setResult({ success: false });
-        return;
-      }
-      agent.lastActivityAt = ctx.payload.lastActivityAt;
-      ctx.setResult({ success: true });
+      const success = mutateAgent(store, ctx.payload.agentId, (agent) => {
+        agent.lastActivityAt = ctx.payload.lastActivityAt;
+        return true;
+      });
+      ctx.setResult({ success });
     }),
   );
 
   // storage:agent.updateRuntime
   unsubs.push(
     bus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
-      const agent = store.get(ctx.payload.agentId);
-      if (!agent) {
-        ctx.setResult({ success: false });
-        return;
-      }
       const { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
-      if (
-        !applyRuntimeUpdate(agent, { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId })
-      ) {
-        ctx.setResult({ success: false });
-        return;
-      }
-      agent.lastActivityAt = Date.now();
-      ctx.setResult({ success: true });
+      const success = mutateAgent(store, ctx.payload.agentId, (agent) => {
+        const options = { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId };
+        if (!applyRuntimeUpdate(agent, options)) return false;
+        agent.lastActivityAt = Date.now();
+        return true;
+      });
+      ctx.setResult({ success });
     }),
   );
 

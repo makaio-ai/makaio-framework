@@ -5,57 +5,9 @@ import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle'
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
 import type { MakaioSessionAgent } from '@makaio/contracts';
+import { installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
 import { registerDrizzleAgentStorage } from '../agent-drizzle-handler.js';
 import { AgentStorageSubjects } from '../agent-namespace.js';
-
-/**
- * SQL statement to create the sessions table for testing.
- * Intentionally minimal — only the columns needed to satisfy the agents FK.
- * Agents FK references sessions, so we need this table.
- */
-const CREATE_SESSIONS_TABLE_SQL = sql`
-  CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL,
-    last_activity_at INTEGER NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('active', 'closed')),
-    spawning_tool_call_id TEXT
-  )
-`;
-
-/**
- * SQL statement to create the agents table for testing.
- * Mirrors the agent-storage shape used by the Drizzle handler.
- */
-const CREATE_AGENTS_TABLE_SQL = sql`
-  CREATE TABLE IF NOT EXISTS agents (
-    agent_id TEXT PRIMARY KEY NOT NULL,
-    adapter_id TEXT NOT NULL,
-    adapter_name TEXT NOT NULL,
-    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-    adapter_session_id TEXT,
-    model TEXT,
-    cwd TEXT,
-    allowed_directories TEXT,
-    provider_config_id TEXT,
-    persona_id TEXT,
-    profile_id TEXT,
-    harness_id TEXT,
-    client_id TEXT,
-    compression_mode TEXT,
-    role TEXT NOT NULL CHECK (role IN ('lead', 'member')),
-    status TEXT NOT NULL CHECK (status IN ('idle', 'active', 'dead', 'disposed')),
-    created_at INTEGER NOT NULL,
-    last_activity_at INTEGER NOT NULL
-  )
-`;
-
-/**
- * Index for agent lookups by parent session.
- */
-const CREATE_AGENTS_INDEX_SQL = sql`
-  CREATE INDEX IF NOT EXISTS agents_session_id_idx ON agents(session_id)
-`;
 
 /**
  * Creates a test agent with sensible defaults.
@@ -73,6 +25,11 @@ function createTestAgent(overrides: Partial<MakaioSessionAgent> = {}): MakaioSes
     status: 'idle',
     createdAt: now,
     lastActivityAt: now,
+    // Storage defaults the ownership projection, so fixtures carry it too —
+    // otherwise whole-record round-trip assertions drift by those fields.
+    currentAdapterSessionIdState: 'inherited',
+    revision: 0,
+    currencyFence: 0,
     ...overrides,
   };
 }
@@ -84,10 +41,9 @@ function createTestAgent(overrides: Partial<MakaioSessionAgent> = {}): MakaioSes
 async function createTestDb(): Promise<TestDbContextWithCleanup> {
   const { db, close, dbPath, exec } = await createTempDb('agent-storage');
 
-  // Create tables through the dialect-portable raw SQL executor
-  await exec(CREATE_SESSIONS_TABLE_SQL);
-  await exec(CREATE_AGENTS_TABLE_SQL);
-  await exec(CREATE_AGENTS_INDEX_SQL);
+  // One canonical session-storage schema for every test that registers the real
+  // handlers — a local copy of the DDL silently drifts from the real columns.
+  await installSessionStorageTestSchema(db);
 
   // Register handlers
   const handlerCleanup = registerDrizzleAgentStorage(MakaioBus, db);

@@ -61,6 +61,7 @@ import {
   worklogFrameEntriesDual,
 } from '@makaio/subsystem-workflow-engine';
 import {
+  adapterSessionClaimsDual,
   agentsDual,
   importCursorsDual,
   messageRoutingDual,
@@ -70,6 +71,7 @@ import {
 } from '@makaio/services-core/session';
 import { discoverSchemas } from '@makaio/storage-migrations/discover-schemas';
 import type {
+  AdapterSessionClaimStatus,
   MessageRoutingStatus,
   SpanStatus,
   TurnStatus,
@@ -167,6 +169,33 @@ type _AgentRoleSqlite = Expect<Equal<AgentSqliteSelect['role'], 'lead' | 'member
 type _AgentRolePg = Expect<Equal<AgentPgSelect['role'], 'lead' | 'member'>>;
 type _AgentStatusSqlite = Expect<Equal<AgentSqliteSelect['status'], 'idle' | 'active' | 'dead' | 'disposed'>>;
 type _AgentStatusPg = Expect<Equal<AgentPgSelect['status'], 'idle' | 'active' | 'dead' | 'disposed'>>;
+
+// Negative: the adapter-session currency state must stay the narrowed union —
+// it crosses into `@makaio/contracts` as `AdapterSessionCurrencyState`.
+type _AgentCurrencyStateSqlite = Expect<
+  Equal<AgentSqliteSelect['currentAdapterSessionIdState'], 'inherited' | 'moved' | 'confirmed'>
+>;
+type _AgentCurrencyStatePg = Expect<
+  Equal<AgentPgSelect['currentAdapterSessionIdState'], 'inherited' | 'moved' | 'confirmed'>
+>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// adapter_session_claims — FK→sessions and FK→agents; the `status` enum crosses
+// into `@makaio/contracts` as `AdapterSessionClaimStatus`, so a collapse to
+// `string` would silently widen a public surface.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type AdapterSessionClaimSqliteSelect = typeof adapterSessionClaimsDual.sqlite.$inferSelect;
+type AdapterSessionClaimPgSelect = typeof adapterSessionClaimsDual.postgres.$inferSelect;
+
+// Parity: both dialect faces infer the same select row.
+type _AdapterSessionClaimCongruent = Expect<Equal<AdapterSessionClaimSqliteSelect, AdapterSessionClaimPgSelect>>;
+
+// Negative: the claim status union must stay narrowed on both dialects.
+type _AdapterSessionClaimStatusSqlite = Expect<
+  Equal<AdapterSessionClaimSqliteSelect['status'], AdapterSessionClaimStatus>
+>;
+type _AdapterSessionClaimStatusPg = Expect<Equal<AdapterSessionClaimPgSelect['status'], AdapterSessionClaimStatus>>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // workflow_definitions — scopeType must be WorkflowExecutionScope['type']
@@ -380,6 +409,7 @@ type _SessionEventSelectCongruent = Expect<Equal<SessionEventSqliteSelect, Sessi
  * surface, where a silent widening would weaken an external consumer's types.
  */
 const PINNED_DUAL_TABLES: ReadonlySet<string> = new Set([
+  'adapter_session_claims',
   'harness_definitions',
   'client_runtimes',
   'sessions',

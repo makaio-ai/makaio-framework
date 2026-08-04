@@ -6,11 +6,24 @@
 
 export { SessionStorageNamespace, SessionStorageSubjects } from './namespace.js';
 export { AgentStorageNamespace, AgentStorageSubjects } from './agent-namespace.js';
-export { sessions, sessionsDual, agents, agentsDual } from './schema.js';
+export {
+  sessions,
+  sessionsDual,
+  agents,
+  agentsDual,
+  adapterSessionClaims,
+  adapterSessionClaimsDual,
+} from './schema.js';
 export { registerMemorySessionStorage } from './memory-handler.js';
 export { registerDrizzleSessionStorage } from './drizzle-handler.js';
 export { registerMemoryAgentStorage } from './agent-memory-handler.js';
 export { registerDrizzleAgentStorage } from './agent-drizzle-handler.js';
+export { registerMemorySessionOwnershipStorage } from './ownership-memory-handler.js';
+// The shared in-memory backing store: a host wiring the three memory session
+// handlers must hand them one state instance, or they see disconnected rows.
+// `deleteClaimsWhere` stays internal — it is the handlers' cascade, not an API.
+export { createSessionStorageMemoryState, type SessionStorageMemoryState } from './memory-store.js';
+export { registerDrizzleSessionOwnershipStorage } from './ownership-drizzle-handler.js';
 export { registerFtsSearchHandler } from './fts-search-handler.js';
 export {
   fetchAgentsBySession,

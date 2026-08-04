@@ -5,10 +5,13 @@
  * exposes their Postgres faces under the canonical names so the Postgres
  * migration chain and the dialect-variant aggregate keep resolving them.
  */
-import { sessionsDual, agentsDual } from './schema.js';
+import { sessionsDual, agentsDual, adapterSessionClaimsDual } from './schema.js';
 
 /** Postgres face of the `sessions` table. */
 export const sessions = sessionsDual.postgres;
 
 /** Postgres face of the `agents` table. */
 export const agents = agentsDual.postgres;
+
+/** Postgres face of the `adapter_session_claims` table. */
+export const adapterSessionClaims = adapterSessionClaimsDual.postgres;

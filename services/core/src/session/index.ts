@@ -76,10 +76,13 @@ export { SessionExtensionContextImpl, createSessionExtensionContext } from './ex
 
 // Session storage (CRUD)
 export {
+  adapterSessionClaims,
+  adapterSessionClaimsDual,
   agents,
   agentsDual,
   AgentStorageNamespace,
   AgentStorageSubjects,
+  createSessionStorageMemoryState,
   fetchAgentsBySession,
   fetchMessageCountsBySession,
   fetchPreviewBySession,
@@ -90,16 +93,23 @@ export {
   mapToSession,
   parseForkTransforms,
   registerDrizzleAgentStorage,
+  registerDrizzleSessionOwnershipStorage,
   registerDrizzleSessionStorage,
   registerFtsSearchHandler,
   registerMemoryAgentStorage,
+  registerMemorySessionOwnershipStorage,
   registerMemorySessionStorage,
   sessions,
   sessionsDual,
   SessionStorageNamespace,
   SessionStorageSubjects,
 } from './storage/index.js';
-export type { SearchFilters, SearchSessionRow, SessionPreviewMaps } from './storage/index.js';
+export type {
+  SearchFilters,
+  SearchSessionRow,
+  SessionPreviewMaps,
+  SessionStorageMemoryState,
+} from './storage/index.js';
 
 // Session event storage (event log)
 export {

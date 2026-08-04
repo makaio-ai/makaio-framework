@@ -5,6 +5,7 @@ import {
   SessionStorageSetRequestSchema,
   SessionStorageUpdateSchema,
 } from '@makaio/contracts';
+import { type SessionStorageMemoryState, createSessionStorageMemoryState, deleteClaimsWhere } from './memory-store.js';
 import type { z } from 'zod';
 import { SessionStorageSubjects } from './namespace.js';
 import { AgentStorageSubjects } from './agent-namespace.js';
@@ -233,7 +234,14 @@ function registerUpdateHandler(bus: IMakaioBus, store: Map<string, IMakaioSessio
  *
  * Suitable for development, testing, and single-instance deployments.
  * Data is lost when the process exits.
+ *
+ * Pass a shared `SessionStorageMemoryState` to make this handler operate on the
+ * same rows as `registerMemoryAgentStorage` and
+ * `registerMemorySessionOwnershipStorage`. Omit it (or pass `undefined`) to get
+ * an isolated, private store — the default, which preserves backward
+ * compatibility for callers that do not need cross-handler state sharing.
  * @param bus - The bus instance to register handlers on
+ * @param state - Shared in-memory state; defaults to a new isolated instance
  * @returns Cleanup function to unsubscribe all handlers
  * @example
  * ```typescript
@@ -245,8 +253,11 @@ function registerUpdateHandler(bus: IMakaioBus, store: Map<string, IMakaioSessio
  * cleanup();
  * ```
  */
-export function registerMemorySessionStorage(bus: IMakaioBus): () => void {
-  const store = new Map<string, IMakaioSession>();
+export function registerMemorySessionStorage(
+  bus: IMakaioBus,
+  state: SessionStorageMemoryState = createSessionStorageMemoryState(),
+): () => void {
+  const store = state.sessions;
   const unsubs: Array<() => void> = [];
   // storage:session.get
   unsubs.push(
@@ -286,6 +297,20 @@ export function registerMemorySessionStorage(bus: IMakaioBus): () => void {
   // storage:session.delete
   unsubs.push(
     bus.on(SessionStorageSubjects.delete, async (ctx) => {
+      // Cascade, mirroring the drizzle FK graph: the session's agents go with
+      // it, and so do the claims reachable through either foreign key — filed
+      // under the session, or held by one of its agents (an agent that moved
+      // here can hold a claim still filed under its previous session).
+      const orphanedAgentIds = new Set<string>();
+      for (const [agentId, agent] of state.agents) {
+        if (agent.sessionId !== ctx.payload.sessionId) continue;
+        orphanedAgentIds.add(agentId);
+        state.agents.delete(agentId);
+      }
+      deleteClaimsWhere(
+        state,
+        (claim) => claim.sessionId === ctx.payload.sessionId || orphanedAgentIds.has(claim.agentId),
+      );
       store.delete(ctx.payload.sessionId);
       ctx.setResult({ success: true });
       await ctx.next();
