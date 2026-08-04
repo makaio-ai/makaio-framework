@@ -45,7 +45,11 @@ describe('CLI detection', () => {
     await writeFile(executablePath, "#!/bin/sh\ntrap '' TERM\nwhile :; do :; done\n");
     await chmod(executablePath, 0o755);
 
-    await expect(probeExecutableVersion(executablePath, 250, 25)).rejects.toMatchObject({
+    // Generous timeout and force-kill grace: the assertion is about the
+    // escalation SIGTERM → SIGKILL, not about its latency. A 25ms grace made
+    // the test flake under machine load (observed: SIGKILL escalation raced
+    // the event loop and the error surfaced without the force-kill marker).
+    await expect(probeExecutableVersion(executablePath, 1_000, 100)).rejects.toMatchObject({
       timedOut: true,
       isForcefullyTerminated: true,
     });
