@@ -18,16 +18,14 @@ export type SessionStartFailureCode =
   /** The agent row is `disposed` or gone; the connector was stopped. */
   | 'agent-unavailable'
   /**
-   * The settlement neither landed nor was refused on ownership grounds. Nothing
-   * is torn down — the row stays `starting` for the next send to resolve.
+   * The settlement neither landed nor was refused on ownership grounds — a raw
+   * throw from one of its guarded acts, not a modeled answer. The attempt is
+   * torn down on the caller-owned paths: the connector is stopped best-effort,
+   * the attempt's tokens are retired as `abandoned`, and the row is committed
+   * `dead` — the durable state must not advertise a start whose settlement
+   * this process can no longer vouch for.
    */
   | 'settlement-unresolved'
-  /**
-   * Another runtime claimed this start's recovery while it was in flight, so its
-   * completion has no row left to write. The claims were abandoned and the
-   * connector stopped.
-   */
-  | 'start-lost'
   /** A joined start left the row `starting` more often than the bounded re-read allows. */
   | 'start-unresolved'
   /** Another start won the lead designation and the session still has no agents. */
@@ -36,16 +34,31 @@ export type SessionStartFailureCode =
 /** A reserved start that did not end with a usable agent. */
 export class SessionStartError extends Error {
   /**
+   * Agents this call could not act for because their provider session is held
+   * by a generation this runtime does not own.
+   *
+   * A response field is unreachable on a path that throws, and a send that
+   * silently reaches fewer agents than it was asked to is exactly the failure
+   * this contract refuses everywhere else. The field carries the set for
+   * in-process callers; the message names the agents as well, for anything
+   * crossing a transport that may not preserve custom error properties.
+   */
+  public readonly deferredAgentIds?: readonly string[];
+
+  /**
    * @param code - Which modeled outcome this is; the value callers branch on.
    * @param message - Human-readable detail, including the identifiers involved.
    * @param cause - Underlying failure, when one exists.
+   * @param deferredAgentIds - Agents held by a foreign generation, when that is why this failed.
    */
   public constructor(
     public readonly code: SessionStartFailureCode,
     message: string,
     cause?: unknown,
+    deferredAgentIds?: readonly string[],
   ) {
     super(message, { cause });
     this.name = 'SessionStartError';
+    if (deferredAgentIds !== undefined) this.deferredAgentIds = deferredAgentIds;
   }
 }

@@ -1,23 +1,52 @@
 /**
+ * What an attempt tells a joiner about the agent it was driving.
+ *
+ * One bit, because one bit is what every attempt can state honestly and what
+ * every joiner actually needs. The three attempts this seam carries — a fresh
+ * lead start, an attach, a reserved rehydrate — end in outcomes of three
+ * different shapes, and none of them is meaningful to a joiner that ran none of
+ * that work under none of those inputs. "Is there a connector for this agent
+ * now" is meaningful to all of them.
+ */
+export type StartAttemptOutcome =
+  /** A connector for this agent is live, as far as this attempt got. */
+  | 'connected'
+  /**
+   * The attempt ended without building one, and said so rather than throwing.
+   *
+   * The modeled non-successes: a recovery that deferred or was refused, a start
+   * that lost its designation race. They are *resolutions*, so a joiner watching
+   * only for a rejection cannot see them.
+   */
+  | 'no-connector';
+
+/**
  * One agent's start attempt, as a joinable handle.
  *
  * `settled` resolves — or rejects — when the attempt is completely over,
- * including every failure-cleanup step. A joiner awaits it and then **re-reads
- * the agent row**: where the attempt writes that row, the row is what says what
- * happened, never the promise's outcome. A fresh start's pre-dispatch failure
- * both deletes the row and rejects the attempt, so a rule that mapped rejection
- * onto "dead" would contradict the deleted-row rule for the very same event.
+ * including every failure-cleanup step, and it carries **the attempt's own
+ * verdict**. That is what a joiner reads.
  *
- * The rejection is not noise, though, and a joiner may not discard it blindly:
- * an attempt whose failure path writes no status — a rehydrate, whose agent row
- * belongs to the adapter — leaves the row exactly as it found it, and a joiner
- * reading it would take the row's *pre-attempt* state for the attempt's result.
- * Such a joiner reports the rejection it can see. What no joiner may do is infer
- * a row state from a rejection, or ignore a row an attempt did write.
+ * It did not always: joiners used to await the promise for its timing alone and
+ * then re-read the agent row. The row cannot answer the question. Where an
+ * attempt *writes* it the row is authoritative about the row — a fresh start's
+ * pre-dispatch failure deletes it, so mapping the rejection onto "dead" would
+ * contradict the deleted-row rule for one event — but the row was never a proxy
+ * for "a connector exists", and every place that treated it as one was one
+ * interleaving away from being wrong. A recovery that rolls its claim back to
+ * the `idle` it found leaves a row that reads *usable* behind an attempt that
+ * built nothing; an `idle` row whose connector died is exactly what the liveness
+ * probe exists to catch.
+ *
+ * So the division is: the attempt's verdict says whether a connector exists, and
+ * the row says what state the agent identity is in. A joiner needs both, and
+ * infers neither from the other. Where there is no entry to join — another
+ * process, or one that died — there is no verdict to read, and the status
+ * compare-and-swap arbitrates instead.
  */
 export interface InFlightStart {
-  /** Settles when the attempt is over; carries no verdict of its own. */
-  readonly settled: Promise<void>;
+  /** Settles when the attempt is over, carrying what it left behind. */
+  readonly settled: Promise<StartAttemptOutcome>;
 }
 
 /**
@@ -30,10 +59,9 @@ export interface InFlightStart {
  * planned to resume, would overwrite the identity the running attempt actually
  * established.
  *
- * What a joiner consumes instead is the attempt's authoritative result: the
- * durable agent row, re-read after {@link InFlightStart.settled}. The row is
- * shared, survives the process, and is what every other consumer rule in this
- * wave already treats as the verdict — the promise carries none.
+ * What a joiner consumes instead is the attempt's own verdict — see
+ * {@link InFlightStart.settled} — together with the durable agent row, which
+ * says what state the identity is in but never whether a connector exists.
  */
 export interface ExclusiveStart extends InFlightStart {
   /**
@@ -45,7 +73,7 @@ export interface ExclusiveStart extends InFlightStart {
 
 /** Internal view of a published entry. */
 interface MutableInFlightStart {
-  readonly settled: Promise<void>;
+  readonly settled: Promise<StartAttemptOutcome>;
 }
 
 /**
@@ -76,13 +104,14 @@ const inFlightStarts = new Map<string, MutableInFlightStart>();
  * durable work must not repeat that work against inputs the running attempt
  * never used (see {@link ExclusiveStart.joined}).
  * @param agentId - Agent identity the attempt belongs to; the seam's key.
- * @param attempt - The complete attempt, including its reservation, its
+ * @param attempt - The complete attempt, answering whether it left a connector
+ *   behind, including its reservation, its
  *   persistence, its settlement and its failure cleanup. Nothing that can leave
  *   durable state behind may run outside it: a joiner runs none of it, and what
  *   sits outside would then run twice, once against the wrong inputs.
  * @returns This call's handle — the attempt it registered, or the one it joined.
  */
-export function runExclusiveStart(agentId: string, attempt: () => Promise<void>): ExclusiveStart {
+export function runExclusiveStart(agentId: string, attempt: () => Promise<StartAttemptOutcome>): ExclusiveStart {
   const existing = inFlightStarts.get(agentId);
   if (existing !== undefined) return { joined: true, settled: existing.settled };
 
@@ -103,7 +132,7 @@ export function runExclusiveStart(agentId: string, attempt: () => Promise<void>)
   const settled = (async () => {
     await gate;
     try {
-      await attempt();
+      return await attempt();
     } finally {
       // Identity-checked: a later attempt for the same agent owns its own
       // entry, and this one must never evict it.

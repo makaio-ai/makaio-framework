@@ -25,7 +25,8 @@ export async function resolveAdapterId(bus: IMakaioBus, adapterName: string, mac
 }
 
 /**
- * Resolve the adapter instance an agent should currently be addressed at.
+ * Resolve the adapter instance an agent should currently be addressed at, under
+ * the runtime's own machine identity.
  *
  * A persisted `adapterId` goes stale across a runtime restart or a failover, so
  * every act that names an instance — the capability probe, the ownership
@@ -34,6 +35,35 @@ export async function resolveAdapterId(bus: IMakaioBus, adapterName: string, mac
  * it is the last instance this agent was known to live on, which beats failing
  * the whole recovery because a registry lookup was unavailable.
  *
+ * Stated once, here, because reserving against one instance and dispatching to
+ * another reserves in a namespace the dispatch never uses — a bug the call sites
+ * would otherwise have to remember separately.
+ *
+ * **The fallback is what makes this the unscoped form**, and the signature is
+ * the enforcement: there is no machine to pass. A caller acting for a machine it
+ * named takes {@link resolveLiveAdapterIdForMachine} instead, which cannot fall
+ * back and says so.
+ *
+ * Reachable only through that function, deliberately: every caller states
+ * whether it is acting for a named machine, and the unscoped answer is what it
+ * gets when it names none. An export here would be a second door into the
+ * fallback, opened without the question being asked.
+ * @param bus - Bus the lookup is issued on.
+ * @param agent - Agent whose adapter instance is being resolved.
+ * @returns The resolved instance, or the agent's persisted one when the lookup
+ *   cannot answer.
+ */
+async function resolveLiveAdapterId(
+  bus: IMakaioBus,
+  agent: Pick<MakaioSessionAgent, 'adapterName' | 'adapterId'>,
+): Promise<string> {
+  return resolveAdapterId(bus, agent.adapterName).catch(() => agent.adapterId);
+}
+
+/**
+ * Resolve that instance for a **named** machine, or answer that this runtime
+ * cannot.
+ *
  * **The machine is part of the answer.** An adapter instance ID is derived from
  * `(machineId, adapterName)`, so resolving without naming a machine derives it
  * for the runtime's own — which is right in production and wrong the moment a
@@ -41,26 +71,43 @@ export async function resolveAdapterId(bus: IMakaioBus, adapterName: string, mac
  * dispatching to the instance ID of machine R builds an ownership key no other
  * actor would ever compute: it collides with nothing, so it protects nothing.
  * Passing the same identity the reservation uses keeps the whole act in one
- * namespace, and a runtime that cannot serve that machine's instance finds out
- * at the capability probe, which is where a start is *supposed* to discover it
- * cannot resume natively.
+ * namespace.
  *
- * Stated once, here, because reserving against one instance and dispatching to
- * another reserves in a namespace the dispatch never uses — a bug the two call
- * sites would otherwise have to remember separately.
+ * **And that is why this form has no persisted fallback.** The derivation is
+ * one-way — given a stored instance ID, the machine it was derived for cannot be
+ * recovered from it — so falling back to the stored value would produce exactly
+ * the mixed key above, silently, and precisely in the moment the lookup that
+ * could have proven the pair was unavailable. A runtime that cannot derive the
+ * named machine's instance may not act for that machine at all; this answers
+ * `undefined` and leaves the consequence to the caller, which is the only layer
+ * that knows what its own refusal looks like — a modeled deferral, a non-native
+ * degrade, a reported non-start.
+ *
+ * A caller whose machine identity is simply absent is not scoped at all and gets
+ * the unscoped answer, fallback included.
  * @param bus - Bus the lookup is issued on.
  * @param agent - Agent whose adapter instance is being resolved.
- * @param machineId - Machine to resolve for; omit to use the runtime's own,
- *   which is what production does.
- * @returns The resolved instance, or the agent's persisted one when the lookup
- *   cannot answer.
+ * @param machineId - Machine every act of this attempt names, or `undefined`
+ *   when the caller names none.
+ * @returns The resolved instance, or `undefined` when a named machine has none
+ *   resolvable here.
  */
-export async function resolveLiveAdapterId(
+export async function resolveLiveAdapterIdForMachine(
   bus: IMakaioBus,
   agent: Pick<MakaioSessionAgent, 'adapterName' | 'adapterId'>,
-  machineId?: string,
-): Promise<string> {
-  return resolveAdapterId(bus, agent.adapterName, machineId).catch(() => agent.adapterId);
+  machineId: string | undefined,
+): Promise<string | undefined> {
+  if (machineId === undefined) return resolveLiveAdapterId(bus, agent);
+  return resolveAdapterId(bus, agent.adapterName, machineId).catch((error: unknown) => {
+    // The refusal is modeled by the caller (deferral / non-native degrade), so
+    // the only trace of WHY the named machine had no instance would otherwise
+    // vanish with this catch.
+    console.debug(
+      `[resolveLiveAdapterIdForMachine] no instance of ${agent.adapterName} resolvable for machine ${machineId}:`,
+      error,
+    );
+    return undefined;
+  });
 }
 
 /**

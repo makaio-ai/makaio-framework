@@ -13,8 +13,13 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { extensionToken, type CapabilityToken, type MakaioNodeExtension } from '@makaio/contracts';
-import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
+import { dep, extensionToken, type CapabilityToken, type MakaioNodeExtension } from '@makaio/contracts';
+// Root barrel by necessity, not by preference: `SessionToken` is declared in the
+// package's own composition module and has no narrower export. Naming a subpath
+// that does not exist would be the change here, and adding one to publish a
+// single token widens the package's public surface for a cosmetic import.
+import { SessionToken } from '@makaio/services-core';
+import { ADAPTER_SUBSYSTEM_PACKAGE_NAME, type IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { ExtensionCoordinator } from '@makaio/kernel';
 import { AdapterSubsystemService } from './adapter-subsystem-service.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
@@ -32,8 +37,14 @@ export {
 } from './provider-config-auth-validation.js';
 export { ProviderRuntimeContextError, type ProviderRuntimeContextErrorCode } from './provider-runtime-view.js';
 
-/** Extension token for the adapter subsystem service. */
-export const AdapterSubsystemToken = extensionToken<AdapterSubsystemService>('adapter-subsystem');
+/**
+ * Extension token for the adapter subsystem service.
+ *
+ * Built from the name declared alongside the subsystem's bus subjects, so a
+ * framework package that must order itself after this one can name it without
+ * importing the subsystem — which would invert the package layering.
+ */
+export const AdapterSubsystemToken = extensionToken<AdapterSubsystemService>(ADAPTER_SUBSYSTEM_PACKAGE_NAME);
 
 /**
  * Options for creating the adapter subsystem extension package.
@@ -72,6 +83,15 @@ export interface CreateAdapterSubsystemPackageOptions {
  * {@link createAdapterSubsystemContributionProcessor} before calling
  * `coordinator.startAll()` to ensure adapter contributions are processed in a
  * stable order.
+ *
+ * It declares the session package as a dependency because an adapter that
+ * starts an agent must be able to reserve provider-session ownership first, and
+ * the session package is what registers that authority. No new package edge is
+ * created — `@makaio/services-core` is already a dependency of this subsystem —
+ * only a declared start order, so a reserving adapter can never come up before
+ * the authority it reserves from. The coordinator tears packages down in
+ * reverse dependency order, which additionally puts adapter teardown before
+ * session teardown.
  * @param options - Package-scoped dependencies including the coordinator.
  * @returns Critical Makaio extension for the adapter subsystem.
  */
@@ -83,6 +103,7 @@ export function createAdapterSubsystemPackage(
     displayName: 'Adapter Subsystem',
     version: '0.1.0',
     provides: ['adapters'] satisfies readonly CapabilityToken[],
+    dependencies: [dep(SessionToken.name)],
     critical: true,
     create: (ctx) =>
       new AdapterSubsystemService({
@@ -103,7 +124,11 @@ export function createAdapterSubsystemPackage(
 }
 
 export { AdapterSubsystemService } from './adapter-subsystem-service.js';
-export { createAdapterSubsystemContributionProcessor } from './adapter-subsystem-contribution-factory.js';
+export {
+  contributesToAdapterSubsystem,
+  createAdapterSubsystemContributionProcessor,
+  orderAfterAdapterSubsystem,
+} from './adapter-subsystem-contribution-factory.js';
 export type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 export type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 

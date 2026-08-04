@@ -45,6 +45,7 @@ import { KernelSubjects } from '@makaio/kernel/namespace';
 import {
   AdapterSubsystemToken,
   FileAdapterConfigRepository,
+  orderAfterAdapterSubsystem,
   type AdapterSubsystemService,
 } from '@makaio/subsystem-adapter';
 import {
@@ -512,7 +513,11 @@ export async function bootMakaioRuntimeCore(
     // - browserOnlyResult: extensions with browser but no server entrypoint
     // - extensionsWithCli: CLI-only extensions (no server, no browser)
     // The merge order is irrelevant by design.
-    const packagesToLoad = [...frameworkPackages, ...bootEligibleExtensionPackages];
+    // Discovered extensions that contribute adapters or providers are processed
+    // by the adapter subsystem the moment they activate, so they must start
+    // after it. Stamped here rather than declared by each extension: a
+    // contributed package names adapters, not framework packages.
+    const packagesToLoad = [...frameworkPackages, ...orderAfterAdapterSubsystem(bootEligibleExtensionPackages)];
     const loadedPackageNames = new Set(packagesToLoad.map((pkg) => pkg.name));
     const configDefaults = filterConfigDefaultsForLoadedPackages(
       mergePackageConfigDefaults(

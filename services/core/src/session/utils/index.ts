@@ -3,7 +3,9 @@ export { getOrCreateSession, resolveTargetAgents, findTurnByAgent } from './sess
 export { resolveAdapterId, resolveModelCapabilities, resolveExecutionTarget } from './resolution.js';
 export { buildRecoveryContext, buildPlannedRecoveryContext } from './recovery-context.js';
 export {
+  type AgentRecoveryOutcome,
   type RecoveryConfig,
+  type VerifiedAgents,
   ensureAgentCwd,
   ensureAgentModel,
   verifyAndRecoverAgents,

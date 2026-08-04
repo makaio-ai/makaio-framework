@@ -9,13 +9,17 @@ import {
 } from '@makaio/contracts';
 import type { PipelineStep } from '../../session-editor/types.js';
 import { resolveRuntimeProviderContext } from '../../provider-context/index.js';
-import { resolveLiveAdapterId } from './resolution.js';
+import { resolveLiveAdapterIdForMachine } from './resolution.js';
 import { getFullConversation } from '../context/get-full-conversation.js';
 import { convertSessionMessage } from '../context/convert-session-message.js';
 import { executePipeline } from '../session-editor/pipeline-executor.js';
 import { recoveryPlanResumeTarget, type RecoveryPlan } from '../recovery-plan.js';
-import { runExclusiveStart } from '../ownership/in-flight-starts.js';
-import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { failedRehydrateError } from '../handlers/reserved-rehydrate.js';
+import {
+  restoreProbedLiveAgent,
+  runOrJoinReservedRehydrate,
+  type ExclusiveRehydrateOutcome,
+} from '../handlers/in-flight-start-join.js';
 
 /**
  * Configuration for recovering dead agents during liveness verification.
@@ -39,6 +43,22 @@ export interface RecoveryConfig {
    * Locality evaluation belongs to the caller — see `planAgentRecovery`.
    */
   plan: RecoveryPlan;
+  /**
+   * Machine identity every ownership act of this recovery names.
+   *
+   * A recovery reserves and settles under a machine, and addresses an adapter
+   * instance that is derived from one — so both have to come from the *same*
+   * identity or the key they build is one no other actor computes. Supplying it
+   * is therefore not an optimisation: without it the instance is resolved for
+   * this runtime's own machine (or falls back to the agent's persisted one)
+   * while the authority files the acts under its default, which is the mixed key
+   * the aggregate exists to prevent.
+   *
+   * Omitted only by a caller that genuinely has no machine identity — a headless
+   * host, a test composition — where every act is unscoped and consistent for
+   * that reason.
+   */
+  machineId?: string;
 }
 
 /**
@@ -142,8 +162,32 @@ export async function ensureAgentModel(
 }
 
 /**
+ * What a liveness-and-recovery pass leaves its caller with.
+ *
+ * Three sets rather than two, because a recovery can now end in a third state:
+ * the agent's provider session is held by a generation this runtime does not
+ * own, so no connector was built and none may be. The helper **names** that set
+ * and decides nothing with it — it has no session, no orchestrator and no way
+ * to start anything, and what a product does without those agents differs per
+ * product.
+ */
+export interface VerifiedAgents {
+  /** Agents this runtime may drive. */
+  readonly usable: MakaioSessionAgent[];
+  /** Agents recovered during this call. */
+  readonly recoveredAgentIds: Set<string>;
+  /**
+   * Agents this runtime may **not** drive: their provider session is held by a
+   * generation it does not own (I23a). Never empty-able by retrying — the
+   * caller must decide what its product does without them.
+   */
+  readonly deferredAgentIds: Set<string>;
+}
+
+/**
  * Verify liveness of agents and recover any that are dead.
- * Queries each agent via getAgent; if unresponsive, triggers connector swap via recoverAgent.
+ * Queries each agent via getAgent; if unresponsive, triggers a reserved
+ * rehydrate via recoverAgent.
  *
  * The caller's `recoveryConfig.plan` applies to every agent recovered in this
  * batch and must be the same plan the caller feeds to its history assembly.
@@ -156,15 +200,16 @@ export async function ensureAgentModel(
  * @param bus - Bus instance
  * @param agents - Agents to verify
  * @param recoveryConfig - Configuration for recovering dead agents, including the shared recovery plan
- * @returns Verified/recovered agents and set of recovered agent IDs
+ * @returns Usable agents, the ones recovered here, and the ones this runtime may not drive
  */
 export async function verifyAndRecoverAgents(
   bus: IMakaioBus,
   agents: MakaioSessionAgent[],
   recoveryConfig: RecoveryConfig,
-): Promise<{ verifiedAgents: MakaioSessionAgent[]; recoveredAgentIds: Set<string> }> {
-  const verifiedAgents: MakaioSessionAgent[] = [];
+): Promise<VerifiedAgents> {
+  const usable: MakaioSessionAgent[] = [];
   const recoveredAgentIds = new Set<string>();
+  const deferredAgentIds = new Set<string>();
 
   for (const agent of agents) {
     const result = await bus.requestOptional(AdapterSubjects.getAgent, {
@@ -173,20 +218,39 @@ export async function verifyAndRecoverAgents(
     });
 
     if (result.handled && result.data.agent !== null) {
-      // Agent is alive
-      verifiedAgents.push(agent);
-    } else {
-      // Agent is dead, recover it via connector swap — into the live instance
-      // resolved for THIS agent, inside the loop, since a batch may span
-      // adapters.
-      const liveAdapterId = await resolveLiveAdapterId(bus, agent);
-      const recovered = await recoverAgent(bus, agent, recoveryConfig, liveAdapterId);
-      verifiedAgents.push(recovered);
-      recoveredAgentIds.add(recovered.agentId);
+      // Agent is alive — and where the row says otherwise, the probe is the
+      // newer evidence and takes the contradiction back. A `dead` row for an
+      // agent whose connector answers is the residue of a recovery claim
+      // somebody else's probe vetoed, and nothing else lifts it: the per-turn
+      // activity stamp moves a row only between `idle` and `active`.
+      if (agent.status === 'dead') await restoreProbedLiveAgent(bus, agent.agentId);
+      usable.push(agent);
+      continue;
     }
+    // Agent is dead, recover it under the ownership authority — into the live
+    // instance resolved for THIS agent, inside the loop, since a batch may span
+    // adapters, and for the machine every ownership act of this recovery names,
+    // since the instance ID is derived from it.
+    const liveAdapterId = await resolveLiveAdapterIdForMachine(bus, agent, recoveryConfig.machineId);
+    if (liveAdapterId === undefined) {
+      // No instance of this agent's adapter is derivable for that machine, and
+      // the persisted one may not stand in: the machine it belongs to cannot be
+      // recovered from it. That makes this an agent this runtime may not drive —
+      // the same statement the authority's own `machine-identity-unavailable`
+      // makes a round trip later, so it takes the same set.
+      deferredAgentIds.add(agent.agentId);
+      continue;
+    }
+    const recovered = await recoverAgent(bus, agent, recoveryConfig, liveAdapterId);
+    if (recovered.kind === 'deferred') {
+      deferredAgentIds.add(agent.agentId);
+      continue;
+    }
+    usable.push(recovered.agent);
+    recoveredAgentIds.add(recovered.agent.agentId);
   }
 
-  return { verifiedAgents, recoveredAgentIds };
+  return { usable, recoveredAgentIds, deferredAgentIds };
 }
 
 // Re-export from recovery-context.ts — single source of truth for framework-safe recovery.
@@ -215,90 +279,94 @@ export async function buildRecoveryContextWithPipeline(
   };
 }
 
+/** How one agent's recovery ended, for a caller that has a fallback for neither. */
+export type AgentRecoveryOutcome =
+  /** A connector is live again; the agent carries the instance it now lives on. */
+  | { readonly kind: 'recovered'; readonly agent: MakaioSessionAgent }
+  /**
+   * This runtime may not drive the agent: its provider session is held by a
+   * generation it does not own. Nothing was dispatched and nothing may be.
+   */
+  | { readonly kind: 'deferred'; readonly reason: 'occupied' | 'machine-identity-unavailable' };
+
 /**
- * Recover a dead agent by triggering connector swap via the adapter.
+ * Recover a dead agent under the ownership authority.
  * The agent keeps its identity — no session mutation needed.
  *
  * Context delivery happens via the normal sendMessage path that follows
  * recovery (same handler invocation). No staging needed.
  *
  * **The adapter instance is an input, never resolved here.** The ownership key
- * is `(machine, adapter instance, provider session)`, so a caller that reserves
- * ownership before recovering must reserve against the very instance the
- * rehydrate is dispatched to. Resolving internally would put the reservation and
- * the dispatch in two different namespaces whenever the persisted ID went stale.
+ * is `(machine, adapter instance, provider session)`, so the reservation this
+ * makes has to name the very instance the rehydrate is dispatched to. Resolving
+ * internally would put the reservation and the dispatch in two different
+ * namespaces whenever the persisted ID went stale.
  *
- * The dispatch runs inside the in-flight-start seam, so a concurrent consumer
- * that finds this agent mid-recovery joins the attempt instead of starting a
- * second lifecycle for the same identity. A joined call dispatched nothing, so
- * it takes the adapter instance from the **stored agent row** — the attempt that
- * did run is the only thing that can say which instance the agent now lives on,
- * and re-stamping this caller's own input would advertise a binding that never
- * happened.
+ * The reserved rehydrate runs inside the in-flight-start seam, so a concurrent
+ * consumer that finds this agent mid-recovery joins the attempt instead of
+ * starting a second lifecycle for the same identity — and consumes that join
+ * through the shared seam, which classifies the row the attempt left behind
+ * rather than reading its own success into the absence of a rejection.
  * @param bus - Bus instance
  * @param deadAgent - The dead agent to recover; its `adapterId` is re-stamped to the instance the
  *   attempt actually used
  * @param recoveryConfig - Configuration for the recovered connector
  * @param adapterId - Live adapter instance to rehydrate into, resolved by the caller for THIS agent
- * @returns Same agent reference — identity preserved
+ * @returns The recovered agent, or the statement that this runtime may not drive it
+ * @throws Whatever {@link failedRehydrateError} raises when the recovery failed rather than deferred
  */
 export async function recoverAgent(
   bus: IMakaioBus,
   deadAgent: MakaioSessionAgent,
   recoveryConfig: RecoveryConfig,
   adapterId: string,
-): Promise<MakaioSessionAgent> {
-  const start = runExclusiveStart(deadAgent.agentId, () =>
-    dispatchAgentRehydrate(bus, deadAgent, recoveryConfig, adapterId),
-  );
-  await start.settled;
-
-  if (!start.joined) {
-    deadAgent.adapterId = adapterId;
-    // Persisted, not only mutated in memory. The agent now lives on this
-    // instance, and the row is what every later reader consults — including the
-    // movement observer, which drops an announcement whose instance the row does
-    // not name. Leaving the row on the previous instance would make the
-    // replacement connector's own movements unrecordable.
-    await bus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId: deadAgent.agentId, adapterId });
-    return deadAgent;
-  }
-  const stored = await bus.requestOptional(AgentStorageSubjects.get, { agentId: deadAgent.agentId });
-  const row = stored.handled ? stored.data.agent : null;
-  // An unreadable row leaves the caller's view untouched rather than guessing:
-  // the previous binding is at least one this process once observed, while the
-  // joiner's input is one nothing ever dispatched to.
-  if (row !== null) deadAgent.adapterId = row.adapterId;
-  return deadAgent;
+): Promise<AgentRecoveryOutcome> {
+  const resumeTarget = recoveryPlanResumeTarget(recoveryConfig.plan);
+  const outcome = await runOrJoinReservedRehydrate(bus, {
+    agent: deadAgent,
+    sessionId: deadAgent.sessionId,
+    adapterId,
+    resumeProviderSessionId: resumeTarget ?? null,
+    // The same identity the caller resolved `adapterId` under, or none at all.
+    // Reserving under a machine the instance was not derived for is the mixed
+    // key; the caller is where both halves are known, so both travel together.
+    ...(recoveryConfig.machineId !== undefined && { machineId: recoveryConfig.machineId }),
+    ...(recoveryConfig.cwd !== undefined && { cwd: recoveryConfig.cwd }),
+    ...((recoveryConfig.model ?? deadAgent.model) !== undefined && {
+      model: recoveryConfig.model ?? deadAgent.model,
+    }),
+  });
+  return classifyRecoveredAgent(deadAgent, outcome);
 }
 
 /**
- * Dispatch one rehydrate, without entering the in-flight-start seam.
+ * Turn a reserved rehydrate's outcome into this helper's own answer.
  *
- * Split out from {@link recoverAgent} for callers that own the seam entry
- * themselves because they have durable work — a reservation, a runtime write, a
- * settlement — that has to sit inside the *same* attempt. Entering twice would
- * make the inner call join its own outer entry and wait for a promise that is
- * waiting on it.
- * @param bus - Bus instance
- * @param deadAgent - The dead agent being recovered
- * @param recoveryConfig - Configuration for the recovered connector
- * @param adapterId - Live adapter instance to rehydrate into
+ * Only `deferred` is reported rather than raised: it is a modeled statement
+ * about ownership that the caller has to act on, while a refused or lost
+ * recovery leaves no connector and no honest way to continue with the agent.
+ * @param agent - The agent being recovered.
+ * @param outcome - What the recovery answered.
+ * @returns The recovered agent, or the deferral.
+ * @throws Whatever {@link failedRehydrateError} raises, for every outcome that is neither.
  */
-export async function dispatchAgentRehydrate(
-  bus: IMakaioBus,
-  deadAgent: MakaioSessionAgent,
-  recoveryConfig: RecoveryConfig,
-  adapterId: string,
-): Promise<void> {
-  // Only the plan's resume target puts the replacement connector into
-  // native-resume mode; the rehydrate RPC carries no identity marker.
-  const resumeAdapterSessionId = recoveryPlanResumeTarget(recoveryConfig.plan);
-  await bus.request(AdapterSubjects.rehydrateAgent, {
-    adapterId,
-    agentId: deadAgent.agentId,
-    cwd: recoveryConfig.cwd,
-    model: recoveryConfig.model ?? deadAgent.model,
-    ...(resumeAdapterSessionId !== undefined && { resumeAdapterSessionId }),
-  });
+function classifyRecoveredAgent(
+  agent: MakaioSessionAgent,
+  outcome: ExclusiveRehydrateOutcome | undefined,
+): AgentRecoveryOutcome {
+  switch (outcome?.kind) {
+    case 'rehydrated':
+    // A joined attempt built the connector, and the agent carries the instance
+    // the stored row names — never the one this call resolved for a dispatch it
+    // did not make.
+    case 'joined':
+      return { kind: 'recovered', agent: outcome.agent };
+    case 'deferred':
+      return { kind: 'deferred', reason: outcome.reason };
+    // Exhaustive by type rather than by enumeration: the shared factory accepts
+    // exactly the remaining members, so a new outcome stops compiling here
+    // instead of silently becoming a start failure.
+    default:
+      throw failedRehydrateError(agent.agentId, outcome);
+  }
 }

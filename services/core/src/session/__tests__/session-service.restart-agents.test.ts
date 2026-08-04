@@ -90,7 +90,7 @@ describe('MakaioSessionService - restartAgents', () => {
     }> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
@@ -136,7 +136,7 @@ describe('MakaioSessionService - restartAgents', () => {
         agentId: ctx.payload.agentId,
         status: 'idle',
       });
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
     let setCallsDuringRestart = 0;
     bus.on(AgentStorageSubjects.set, (ctx) => {
@@ -173,7 +173,7 @@ describe('MakaioSessionService - restartAgents', () => {
       if (ctx.payload.agentId === 'agent-fails') {
         throw new Error('adapter refused rehydrate');
       }
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
@@ -234,7 +234,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -267,7 +267,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -298,7 +298,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -330,7 +330,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -381,7 +381,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -428,7 +428,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -470,7 +470,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -510,7 +510,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     // No machineId in payload — handler resolves it from runtime identity
@@ -546,7 +546,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     // No machineId in payload, no getMachineId handler → degrades to
@@ -594,7 +594,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -641,7 +641,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -673,7 +673,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -712,7 +712,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({});
+      ctx.setResult({ success: true });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {

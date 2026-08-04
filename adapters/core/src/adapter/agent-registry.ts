@@ -143,6 +143,21 @@ export class ActiveAgentRegistry<
    * released via `releaseAdapterSessionClaim()` on failure.
    */
   private readonly pendingAdapterSessionClaims = new Set<string>();
+  /**
+   * Agent identities claimed by in-flight startAgent calls.
+   *
+   * The twin of {@link pendingAdapterSessionClaims}, for the other identity a
+   * start holds. A caller-supplied identity used to be checked against
+   * {@link entries} alone, which was sound only while nothing awaited between
+   * the check and the registration. A reserved start awaits a storage round
+   * trip there, so two concurrent starts naming one identity would both pass
+   * the check and the second would silently replace the first's connector.
+   *
+   * Claimed atomically in `claimAgentIdentity()`, settled by `set()` alongside
+   * the adapter-session claim, and given back by `releaseAgentIdentityClaim()`
+   * on every failure path.
+   */
+  private readonly pendingAgentIdentityClaims = new Set<string>();
   private readonly globalBus: IMakaioBus;
   private readonly adapterName: string;
 
@@ -183,6 +198,35 @@ export class ActiveAgentRegistry<
    */
   public releaseAdapterSessionClaim(adapterSessionId: string): void {
     this.pendingAdapterSessionClaims.delete(adapterSessionId);
+  }
+
+  /**
+   * Atomically claim an agent identity for an in-flight start.
+   *
+   * Synchronous, and therefore atomic within the event loop: the check and the
+   * insert cannot be interleaved, which is exactly what a check against the
+   * registered entries alone could not promise once a start began awaiting
+   * storage between them.
+   *
+   * The claim is settled by `set()` when the real entry lands, or given back by
+   * {@link releaseAgentIdentityClaim} when the start fails.
+   * @param agentId - Identity the start intends to register
+   * @returns `true` when the identity was free and is now held by this attempt
+   */
+  public claimAgentIdentity(agentId: string): boolean {
+    if (this.pendingAgentIdentityClaims.has(agentId) || this.entries.has(agentId)) {
+      return false;
+    }
+    this.pendingAgentIdentityClaims.add(agentId);
+    return true;
+  }
+
+  /**
+   * Give an unsettled identity claim back after a failed start.
+   * @param agentId - Identity previously claimed
+   */
+  public releaseAgentIdentityClaim(agentId: string): void {
+    this.pendingAgentIdentityClaims.delete(agentId);
   }
 
   /**
@@ -238,6 +282,10 @@ export class ActiveAgentRegistry<
     claimedAdapterSessionId?: string,
   ): void {
     this.entries.set(agentId, entry);
+    // The identity claim is settled unconditionally: the entry that now holds
+    // the identity supersedes any claim on it, and a start that claimed none
+    // deletes nothing.
+    this.pendingAgentIdentityClaims.delete(agentId);
     if (claimedAdapterSessionId !== undefined) {
       this.pendingAdapterSessionClaims.delete(claimedAdapterSessionId);
     }
@@ -267,6 +315,7 @@ export class ActiveAgentRegistry<
   public clear(): void {
     this.entries.clear();
     this.pendingAdapterSessionClaims.clear();
+    this.pendingAgentIdentityClaims.clear();
   }
 
   /**
@@ -299,8 +348,12 @@ export class ActiveAgentRegistry<
   }
 
   /**
-   * Evict an agent without updating storage status. Used for ephemeral agents
-   * that were never persisted.
+   * Evict an agent without updating storage status.
+   *
+   * For callers that own the row's terminal status themselves: an ephemeral
+   * agent that was never persisted, and a failed start whose cleanup has already
+   * compare-and-swapped the row to `dead` — which {@link dispose} would then
+   * overwrite with the terminal `disposed`.
    * @param agentId - Agent to evict
    */
   public async evictSilently(agentId: string): Promise<void> {

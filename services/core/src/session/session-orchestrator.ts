@@ -1,19 +1,13 @@
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import {
   AdapterSubjects,
-  CanonicalModelSubjects,
   SessionContextSchema,
   SessionSubjects,
-  type AdapterSelection,
   type AgentSelectionBase,
-  type CanonicalModelSelection,
   type IMakaioSession,
+  type MakaioSessionAgent,
   type MessageInput,
-  type ResolvedProviderContext,
   type SessionContext,
-  type StartAgentRequest,
-  isCanonicalModelParseError,
-  parseCanonicalModel,
 } from '@makaio/contracts';
 import { AdapterRegistry } from './adapter-registry.js';
 import { MessageStorageSubjects } from './messages/index.js';
@@ -21,14 +15,21 @@ import { MessageRoutingSubjects } from './message-routing/index.js';
 import {
   recoverDeadAgentExclusively,
   resolveInFlightStarts,
+  restoreProbedLiveAgent,
   type InFlightStartResolution,
 } from './handlers/in-flight-start-join.js';
+import { dropDeferredAgents, refuseTotalDeferral, resolveSendTargetForm } from './handlers/deferred-agents.js';
+import { buildLeadStartRequest, inheritAgentSelection } from './handlers/lead-start-request.js';
 import { startLeadAgent } from './handlers/lead-start.js';
 import { SessionStartError } from './handlers/session-start-error.js';
 import { SessionTurnManager, USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR } from './session-turn-manager.js';
 import type { TurnCompletionResult } from './turn-completion.js';
 import { emitSessionTurnStarted, emitSessionUserMessageSent } from './session-lifecycle-events.js';
-import { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
+import { normalizeSelectionString } from './selection-utils.js';
+import { resolveInitialAdapterSelection, resolveSelectionAdapterName } from './session-orchestrator-selection.js';
+
+/** Log prefix every refusal this orchestrator's send path raises carries. */
+const SEND_MESSAGE_CALLER = '[session.sendMessage]';
 
 /**
  * Fold one agent-id set into another, in place.
@@ -46,6 +47,7 @@ function addAll(target: Set<string>, source: ReadonlySet<string>): void {
 const EMPTY_START_RESOLUTION: InFlightStartResolution = {
   droppedAgentIds: new Set<string>(),
   recoveringAgentIds: new Set<string>(),
+  arbitratedAgentIds: new Set<string>(),
 };
 
 /**
@@ -74,48 +76,39 @@ import { routeToAgentsCore } from './handlers/route-to-agents-core.js';
 import { resolveRuntimeProviderContext } from '../provider-context/index.js';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN, recoveryPlanResumeTarget } from './recovery-plan.js';
 
-/** Identity and context a lead start carries independently of the selection. */
-interface LeadStartDispatchContext {
-  /** Live adapter instance the start is dispatched to. */
-  adapterId: string;
-  /** Session the agent is started into. */
-  sessionId: string;
-  /** Resolved provider credentials, when the selection named a provider config. */
-  providerContext: ResolvedProviderContext | undefined;
-  /** Session context passed through from the request. */
-  sessionContext: SessionContext | undefined;
+/** What re-resolving a send's targets after a deferral needs from the send. */
+interface DeferralRetargetContext {
+  /** Session being sent to; its agents are filtered in place. */
+  readonly session: IMakaioSession;
+  /** Resolved session identity. */
+  readonly sessionId: string;
+  /** The request's target spec, which decides how a total deferral degrades. */
+  readonly targetSpec: string[] | 'all' | undefined;
+  /** Agent selection from the request, when it named one. */
+  readonly agentSelection: AgentSelectionBase | undefined;
+  /** User message, used as canonical-model prompt context by a fresh start. */
+  readonly message: MessageInput;
+  /** Session context passed through to a fresh start. */
+  readonly sessionContext: SessionContext | undefined;
 }
 
-/**
- * Compose the `adapter.startAgent` payload for a fresh lead start.
- *
- * Every field is forwarded only when the selection actually carries it: the
- * adapter distinguishes "not requested" from "requested as undefined", and a
- * blanket spread would turn the first into the second for every option the
- * caller left alone. The agent identity is deliberately absent — the reserving
- * start mints and persists it before dispatching.
- * @param selection - Direct adapter selection resolved for this start.
- * @param context - Identity and context the selection does not carry.
- * @returns The dispatch payload, complete but for the agent identity.
- */
-function buildLeadStartRequest(selection: AdapterSelection, context: LeadStartDispatchContext): StartAgentRequest {
-  return {
-    adapterId: context.adapterId,
-    sessionId: context.sessionId,
-    role: 'lead',
-    ...(context.providerContext !== undefined && { providerContext: context.providerContext }),
-    ...(context.sessionContext !== undefined && { sessionContext: context.sessionContext }),
-    ...(selection.model !== undefined && { model: selection.model }),
-    ...(selection.reasoningEffort !== undefined && { reasoningEffort: selection.reasoningEffort }),
-    ...(selection.cwd !== undefined && { cwd: selection.cwd }),
-    ...(selection.systemPrompt !== undefined && { systemPrompt: selection.systemPrompt }),
-    ...(selection.allowedTools !== undefined && { allowedTools: selection.allowedTools }),
-    ...(selection.disallowedTools !== undefined && { disallowedTools: selection.disallowedTools }),
-    ...(selection.env !== undefined && { env: selection.env }),
-    ...(selection.mcpSessionContext !== undefined && { mcpSessionContext: selection.mcpSessionContext }),
-    ...(selection.allowedDirectories !== undefined && { allowedDirectories: selection.allowedDirectories }),
-    ...(selection.adapterConfig !== undefined && { adapterConfig: selection.adapterConfig }),
-  };
+/** What retargeting around a deferral left for the send to finish. */
+interface DeferralRetargetResult {
+  /** The targets that survive, after any fresh start the degrade required. */
+  readonly targetAgents: MakaioSessionAgent[];
+  /**
+   * Agents a replacement start adopted that have not been through the recovery
+   * step.
+   *
+   * A replacement that loses its own designation race adopts the winner's
+   * agents, and those were never probed by this send — the same fact the
+   * fresh-start branch consumes, arriving one step later.
+   */
+  readonly recovering: ReadonlySet<string>;
+  /** Of those, the ones claimed by compare-and-swap against another process. */
+  readonly arbitrated: ReadonlySet<string>;
+  /** History for the replacement agent, when one was started. */
+  readonly recoveryContext?: SessionContext;
 }
 
 /**
@@ -249,6 +242,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         //    those have never been through step 2 — so whatever it reports as
         //    needing recovery joins this send's own resolution.
         const recovering = new Set(inFlight.recoveringAgentIds);
+        const arbitrated = new Set(inFlight.arbitratedAgentIds);
         if (session.agents.length === 0) {
           const adopted = await this.startLeadAgent(
             session,
@@ -258,54 +252,48 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             sessionContext,
           );
           addAll(recovering, adopted.recoveringAgentIds);
+          addAll(arbitrated, adopted.arbitratedAgentIds);
         }
 
         // 4. Resolve target agents
-        const targetAgents = resolveTargetAgents(session, targetSpec);
+        let targetAgents = resolveTargetAgents(session, targetSpec);
         if (targetAgents.length === 0) {
           throw new Error(
             `[SessionOrchestrator.sendMessage] No valid target agents found (sessionId=${resolvedSessionId})`,
           );
         }
 
-        // 5. Verify agent liveness and build recovery context for dead agents.
-        // An agent whose in-flight start this send already claimed needs no
-        // probe: the row says `dead` because this caller wrote it there.
-        const deadAgentIds = new Set<string>();
-        for (const agent of targetAgents) {
-          if (recovering.has(agent.agentId)) {
-            deadAgentIds.add(agent.agentId);
-            continue;
-          }
-          const livenessResult = await this.bus.requestOptional(AdapterSubjects.getAgent, {
-            agentId: agent.agentId,
-            adapterId: agent.adapterId,
-          });
-          if (livenessResult.handled && livenessResult.data.agent === null) {
-            deadAgentIds.add(agent.agentId);
-          }
-        }
+        // 5. Verify agent liveness and recover the dead ones, reserved.
+        const recovered = await this.recoverDeadTargets(session, targetAgents, recovering, arbitrated);
+        const deferredAgentIds = recovered.deferredAgentIds;
+        let recoveryContext = recovered.recoveryContext;
 
-        // The framework orchestrator evaluates no locality, so it can make only
-        // one honest recovery decision: the replacement connector starts fresh
-        // and the stored conversation is injected. Holding it as a plan keeps
-        // the history assembly and the rehydrate call reading one decision — a
-        // host that later resumes natively here changes this value alone, and
-        // both sides follow.
-        const recoveryPlan = FRESH_WITH_HISTORY_RECOVERY_PLAN;
-        let recoveryContext: SessionContext | undefined;
-        if (deadAgentIds.size > 0) {
-          recoveryContext = await buildPlannedRecoveryContext(this.bus, session, recoveryPlan);
-          const resumeAdapterSessionId = recoveryPlanResumeTarget(recoveryPlan);
-          // Rehydrate dead agents — reconnects the connector, no-op when
-          // unhandled. Routed through the in-flight-start seam, which the
-          // entry-point inventory requires of every service-owned path that can
-          // reach a lifecycle call for an *existing* agent identity: two
-          // concurrent sends onto one dead agent would otherwise dispatch two
-          // rehydrates for it, and the second would race the first's connector.
-          for (const agent of targetAgents) {
-            if (!deadAgentIds.has(agent.agentId)) continue;
-            await recoverDeadAgentExclusively(this.bus, agent, resumeAdapterSessionId);
+        // 5b. A deferral is a statement about ownership, so it has to reach the
+        //     target set *before* admission and routing: adding the id to a
+        //     bookkeeping set afterwards would still route the message to an
+        //     agent storage has just said belongs to another generation.
+        if (deferredAgentIds.size > 0) {
+          const retargeted = await this.retargetAfterDeferral(
+            { session, sessionId: resolvedSessionId, targetSpec, agentSelection, message, sessionContext },
+            targetAgents,
+            deferredAgentIds,
+          );
+          targetAgents = retargeted.targetAgents;
+          recoveryContext = retargeted.recoveryContext ?? recoveryContext;
+          // 5c. A replacement start that lost its designation race adopted
+          //     agents this send has never probed. They go through the very
+          //     step the fresh-start branch runs them through — reached from
+          //     here because that branch is already behind us.
+          if (retargeted.recovering.size > 0) {
+            const adopted = await this.recoverDeadTargets(
+              session,
+              targetAgents,
+              retargeted.recovering,
+              retargeted.arbitrated,
+            );
+            if (adopted.deferredAgentIds.size > 0)
+              refuseTotalDeferral(SEND_MESSAGE_CALLER, resolvedSessionId, adopted.deferredAgentIds);
+            recoveryContext = adopted.recoveryContext ?? recoveryContext;
           }
         }
 
@@ -409,14 +397,198 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           ctx.payload.responseSchema,
         );
 
-        // 9. Return result
+        // 9. Return result. The deferred set is reported when it is non-empty:
+        //    a partial delivery a caller cannot detect is indistinguishable
+        //    from the narrower send it never asked for.
         ctx.setResult({
           messageId,
           turnId: turn.turnId,
           sessionId: resolvedSessionId,
+          ...(deferredAgentIds.size > 0 && { deferredAgentIds: [...deferredAgentIds] }),
         });
       }),
     );
+  }
+
+  /**
+   * Probe this send's targets and recover the ones that are gone.
+   *
+   * **An agent whose in-flight start this send consumed *locally* needs no
+   * probe; one it merely out-raced does.** The distinction is the evidence
+   * behind the verdict. A locally joined attempt reported what it built, and
+   * this process ran it. A won compare-and-swap reports only that this caller
+   * wrote a status first: the attempt it outran belongs to a process this
+   * runtime cannot see, and writing `dead` does not make the agent dead. Wave 3
+   * cannot ask whether that process is alive (OQ-B, Wave 4) — but it can ask
+   * whether a *connector* answers, which is what the probe already does for
+   * every other target and the only instrument here that carries evidence
+   * across processes. Skipping it there was the send believing its own status
+   * write, and it is what let a second lifecycle open beside a live one.
+   *
+   * The framework orchestrator evaluates no locality, so it can make only one
+   * honest recovery decision: the replacement connector starts fresh and the
+   * stored conversation is injected. Holding it as a plan keeps the history
+   * assembly and the rehydrate reading one decision — a host that later resumes
+   * natively here changes that value alone and both sides follow.
+   *
+   * Each recovery is reserved and runs inside the in-flight-start seam, which
+   * the entry-point inventory requires of every service-owned path that can
+   * reach a lifecycle call for an *existing* agent identity: two concurrent
+   * sends onto one dead agent would otherwise dispatch two rehydrates, and the
+   * second would race the first's connector.
+   * @param session - Session being sent to.
+   * @param targetAgents - Targets this send materialised.
+   * @param recovering - Agents whose in-flight start this send already claimed.
+   * @param arbitrated - Of those, the ones claimed by compare-and-swap against another process.
+   * @returns The injected history, when any agent needed it, and the agents this runtime may not drive.
+   */
+  private async recoverDeadTargets(
+    session: IMakaioSession,
+    targetAgents: readonly MakaioSessionAgent[],
+    recovering: ReadonlySet<string>,
+    arbitrated: ReadonlySet<string>,
+  ): Promise<{ recoveryContext: SessionContext | undefined; deferredAgentIds: Set<string> }> {
+    // **The probes first, together; the classification after.** Each asks one
+    // adapter whether one agent's connector answers, and no answer depends on
+    // another — so a session with N targets paid N round trips in series for a
+    // question with no ordering in it. What follows *does* have an order: the
+    // recoveries below are dispatched one at a time, deliberately.
+    const probes = await Promise.all(
+      targetAgents.map(async (agent) => {
+        // An agent whose in-flight start this send consumed locally is not
+        // probed at all: the attempt reported what it built, and this process
+        // ran it.
+        if (recovering.has(agent.agentId) && !arbitrated.has(agent.agentId)) return undefined;
+        return this.bus.requestOptional(AdapterSubjects.getAgent, {
+          agentId: agent.agentId,
+          adapterId: agent.adapterId,
+        });
+      }),
+    );
+
+    const deadAgents: MakaioSessionAgent[] = [];
+    for (const [index, agent] of targetAgents.entries()) {
+      const liveness = probes[index];
+      if (liveness === undefined) {
+        deadAgents.push(agent);
+        continue;
+      }
+      const answered = liveness.handled ? liveness.data.agent : undefined;
+      if (arbitrated.has(agent.agentId)) {
+        // The probe may only **veto** this recovery, never authorise skipping it.
+        // A positive "a connector answers" is evidence the out-raced start
+        // landed, and opening a second lifecycle beside it is the harm. Anything
+        // else — no answer, an adapter that is gone, a null — leaves the
+        // compare-and-swap's verdict standing, which is what recovers an agent
+        // whose owning process really did die. Reading an unanswerable probe as
+        // "alive" would trade the duplicate for a stranded agent nobody rebuilds.
+        if (answered == null) {
+          deadAgents.push(agent);
+          continue;
+        }
+        // The veto also takes back the `dead` the arbitration wrote to claim
+        // this recovery: nothing else can, and a live agent whose row says
+        // otherwise is read as recoverable by every later consumer that does not
+        // probe for itself.
+        await restoreProbedLiveAgent(this.bus, agent.agentId);
+        continue;
+      }
+      if (liveness.handled && answered === null) deadAgents.push(agent);
+    }
+
+    const deferredAgentIds = new Set<string>();
+    if (deadAgents.length === 0) return { recoveryContext: undefined, deferredAgentIds };
+
+    const recoveryPlan = FRESH_WITH_HISTORY_RECOVERY_PLAN;
+    // Read before the recoveries, where it has always been: the ordering of this
+    // read against the rehydrate dispatches is observable to a concurrent send
+    // racing for the same turn, and nothing here needs it moved.
+    const recoveryContext = await buildPlannedRecoveryContext(this.bus, session, recoveryPlan);
+    const resumeProviderSessionId = recoveryPlanResumeTarget(recoveryPlan) ?? null;
+    for (const agent of deadAgents) {
+      const recovered = await recoverDeadAgentExclusively(this.bus, agent, {
+        resumeProviderSessionId,
+        machineId: this.machineId,
+      });
+      if (recovered.deferred) deferredAgentIds.add(agent.agentId);
+    }
+
+    // Returned only for agents that came back. The history is injected into
+    // every target this send routes to, so handing it over when nothing was
+    // recovered gives a live agent — one that never lost its connector — the
+    // whole conversation again plus `isFirstTurn`. An all-deferred batch
+    // recovered nobody, and the replacement the deferral path may start asks for
+    // its own history there.
+    if (deferredAgentIds.size === deadAgents.length) return { recoveryContext: undefined, deferredAgentIds };
+    return { recoveryContext, deferredAgentIds };
+  }
+
+  /**
+   * Re-resolve a send's targets around agents this runtime may not drive.
+   *
+   * The three send forms degrade differently, and the difference is deliberate:
+   *
+   * - **lead-default** — a deferred lead is always *total*, because target
+   *   resolution raises for a session whose named lead it cannot resolve, so
+   *   there is no state in which the default send proceeds with "the other
+   *   usable agents". The session re-enters the fresh-start branch and gains a
+   *   **new** lead agent, which the stored conversation is injected into. That
+   *   is what fresh-with-history means once the old agent is owned elsewhere: a
+   *   fresh *agent*, not a second connector bolted onto one this runtime does
+   *   not own.
+   * - **`'all'`** — deliver to the usable ones; a broadcast with no recipient
+   *   is not a delivery and fails.
+   * - **an explicit array** — deliver to the usable ones; a caller that named
+   *   its agents gets a failure rather than a substitute, because substituting
+   *   would answer a question nobody asked.
+   * @param context - The send's identity, target spec and start inputs.
+   * @param targetAgents - Targets as this send materialised them.
+   * @param deferredAgentIds - Agents held by a generation this runtime does not own.
+   * @returns The surviving targets, and what a replacement start left for the caller to finish.
+   * @throws A {@link SessionStartError} when every target deferred and no fresh start applies.
+   */
+  private async retargetAfterDeferral(
+    context: DeferralRetargetContext,
+    targetAgents: readonly MakaioSessionAgent[],
+    deferredAgentIds: ReadonlySet<string>,
+  ): Promise<DeferralRetargetResult> {
+    const { session, sessionId, targetSpec } = context;
+    const deferredAgents = targetAgents.filter((agent) => deferredAgentIds.has(agent.agentId));
+    const remaining = dropDeferredAgents(session, targetAgents, deferredAgentIds);
+    // The survivors kept their connectors: they were never dead, so they need
+    // neither recovery nor injected history.
+    if (remaining.length > 0) {
+      return {
+        targetAgents: remaining,
+        recovering: EMPTY_START_RESOLUTION.recoveringAgentIds,
+        arbitrated: EMPTY_START_RESOLUTION.arbitratedAgentIds,
+      };
+    }
+    if (resolveSendTargetForm(targetSpec) !== 'lead-default')
+      refuseTotalDeferral(SEND_MESSAGE_CALLER, sessionId, deferredAgentIds);
+
+    // The replacement inherits the deferred lead's own adapter identity unless
+    // the caller named a selection: the send asked to continue this
+    // conversation, and answering it with a differently-configured agent would
+    // be a second unasked-for substitution on top of the first.
+    const adopted = await this.startLeadAgent(
+      session,
+      sessionId,
+      context.agentSelection ?? inheritAgentSelection(deferredAgents[0]),
+      context.message,
+      context.sessionContext,
+    );
+    const restarted = resolveTargetAgents(session, targetSpec);
+    if (restarted.length === 0) refuseTotalDeferral(SEND_MESSAGE_CALLER, sessionId, deferredAgentIds);
+    // A fresh *agent* continuing the old conversation is what fresh-with-history
+    // means here, so this replacement is exactly the case that wants the stored
+    // history injected — the only one left once every dead target deferred.
+    return {
+      targetAgents: restarted,
+      recovering: adopted.recoveringAgentIds,
+      arbitrated: adopted.arbitratedAgentIds,
+      recoveryContext: await buildPlannedRecoveryContext(this.bus, session, FRESH_WITH_HISTORY_RECOVERY_PLAN),
+    };
   }
 
   /**
@@ -444,12 +616,28 @@ export class SessionOrchestrator implements ISessionOrchestrator {
     message: MessageInput,
     sessionContext: SessionContext | undefined,
   ): Promise<InFlightStartResolution> {
-    const selection = await this.resolveInitialAdapterSelection(agentSelection, sessionId, message, sessionContext);
-    const adapterName = await this.resolveAdapterName(selection, sessionId);
+    const selection = await resolveInitialAdapterSelection(
+      this.bus,
+      agentSelection,
+      sessionId,
+      message,
+      sessionContext,
+    );
+    const adapterName = await resolveSelectionAdapterName(this.bus, selection, sessionId);
     // When the caller already knows the exact adapter instance (multi-host
     // topology), bypass the name-based registry lookup entirely.
-    const adapterId =
-      normalizeSelectionString(selection.adapterId) ?? (await this.adapterRegistry.resolveAvailable(adapterName));
+    const namedAdapterId = normalizeSelectionString(selection.adapterId);
+    const adapterId = namedAdapterId ?? (await this.adapterRegistry.resolveAvailable(adapterName, this.machineId));
+    // **Named alongside the instance, or not at all.** An instance ID is a
+    // one-way hash of `(machineId, adapterName)`, so the machine an ownership
+    // act names has to be the one its instance was derived from. Resolved here,
+    // that is this runtime's — passed to the resolution *and* to the start, so
+    // the two provably agree. Supplied by the caller, the owning machine is not
+    // recoverable from the ID and this runtime must not invent one: it leaves
+    // the authority to act under its own identity, exactly as before, and a
+    // caller targeting another machine's instance carries the pre-existing
+    // exposure rather than a newly minted mis-keyed claim.
+    const startMachineId = namedAdapterId === undefined ? this.machineId : undefined;
     const providerContext =
       selection.providerConfigId !== undefined
         ? await resolveRuntimeProviderContext(this.bus, { adapterName, providerConfigId: selection.providerConfigId })
@@ -465,6 +653,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
       // agent from the target set without touching the lead it may have been.
       expectedLeadAgentId: session.leadAgentId ?? null,
       ...(providerConfigId !== undefined && { providerConfigId }),
+      ...(startMachineId !== undefined && { machineId: startMachineId }),
       startRequest: buildLeadStartRequest(selection, { adapterId, sessionId, providerContext, sessionContext }),
     });
 
@@ -530,121 +719,5 @@ export class SessionOrchestrator implements ISessionOrchestrator {
     this.cleanups.length = 0;
     this.turnManager.destroy();
     this.adapterRegistry.destroy();
-  }
-
-  /**
-   * Resolve the adapter name for a direct adapter selection.
-   *
-   * Adapter startup and persisted identity require a stable adapter name.
-   * When the caller provides `adapterId`, the framework validates any explicit
-   * name against the adapter-subsystem reverse lookup and otherwise backfills the
-   * canonical adapter name from that subsystem-owned mapping.
-   * @param selection - Direct adapter selection
-   * @param sessionId - Session ID used in error messages
-   * @returns Resolved adapter name
-   */
-  private async resolveAdapterName(selection: AdapterSelection, sessionId: string): Promise<string> {
-    const explicitAdapterName = normalizeSelectionString(selection.adapterName);
-    const adapterId = normalizeSelectionString(selection.adapterId);
-
-    if (!explicitAdapterName && !adapterId) {
-      throw new Error(
-        `[SessionOrchestrator.sendMessage] adapterName or adapterId required when session has no agents (sessionId=${sessionId})`,
-      );
-    }
-
-    if (adapterId) {
-      return resolveAdapterNameById(
-        this.bus,
-        adapterId,
-        explicitAdapterName,
-        `[SessionOrchestrator.sendMessage] (sessionId=${sessionId}) `,
-      );
-    }
-
-    return explicitAdapterName as string;
-  }
-
-  /**
-   * Resolve the public agent selection into the direct adapter shape required
-   * by the framework orchestrator's startup path.
-   * @param selection - Public session agent selection from the request.
-   * @param sessionId - Session ID used for context and diagnostics.
-   * @param message - User message used as canonical-model prompt context.
-   * @param sessionContext - Optional session context passed through the request.
-   * @returns Direct adapter selection for `adapter.startAgent`.
-   */
-  private async resolveInitialAdapterSelection(
-    selection: AgentSelectionBase | undefined,
-    sessionId: string,
-    message: MessageInput,
-    sessionContext: SessionContext | undefined,
-  ): Promise<AdapterSelection> {
-    if (!selection) {
-      throw new Error(
-        `[SessionOrchestrator.sendMessage] agent selection required when session has no agents (sessionId=${sessionId})`,
-      );
-    }
-
-    if (selection.kind === 'adapter') {
-      return selection as AdapterSelection;
-    }
-
-    if (selection.kind === 'canonical-model') {
-      return await this.resolveCanonicalModelSelection(
-        selection as CanonicalModelSelection,
-        sessionId,
-        message,
-        sessionContext,
-      );
-    }
-
-    throw new Error(
-      `[SessionOrchestrator.sendMessage] agent with kind: 'adapter' or 'canonical-model' required when session has no agents (sessionId=${sessionId})`,
-    );
-  }
-
-  /**
-   * Resolve a framework-owned canonical-model selection to a direct adapter selection.
-   * @param selection - Canonical model selection from the session request.
-   * @param sessionId - Session ID used for context and diagnostics.
-   * @param message - User message used as canonical-model prompt context.
-   * @param sessionContext - Optional session context passed through the request.
-   * @returns Direct adapter selection with resolved adapter, provider config, and model.
-   */
-  private async resolveCanonicalModelSelection(
-    selection: CanonicalModelSelection,
-    sessionId: string,
-    message: MessageInput,
-    sessionContext: SessionContext | undefined,
-  ): Promise<AdapterSelection> {
-    const parsed = parseCanonicalModel(selection.model);
-    if (isCanonicalModelParseError(parsed)) {
-      throw new Error(
-        `[SessionOrchestrator.sendMessage] Invalid canonical model "${selection.model}" (sessionId=${sessionId}): ${parsed.message}`,
-      );
-    }
-
-    if (parsed.kind === 'virtual') {
-      throw new Error(
-        `[SessionOrchestrator.sendMessage] Virtual canonical models require a host resolver (sessionId=${sessionId})`,
-      );
-    }
-
-    const resolved = await this.bus.request(CanonicalModelSubjects.resolve, {
-      parsed,
-      context: {
-        sessionId,
-        promptText: extractTextContent(message),
-        ...(sessionContext !== undefined ? { sessionContext } : {}),
-      },
-    });
-
-    return {
-      ...selection,
-      ...resolved,
-      kind: 'adapter',
-      providerConfigId: selection.providerConfigId ?? resolved.providerConfigId,
-    };
   }
 }

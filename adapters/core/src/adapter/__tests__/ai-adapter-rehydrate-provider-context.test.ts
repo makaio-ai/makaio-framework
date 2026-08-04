@@ -407,13 +407,17 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
     registerManagedRehydrateInputs(adapter, cleanups);
 
     try {
+      // Answered, not thrown: activation is a local account-manager transaction
+      // that runs before any connector exists, so a reserving caller may hand
+      // its provider-session key straight back instead of retiring it over an
+      // unavailable credential store.
       await expect(
         MakaioBus.request(AdapterSubjects.rehydrateAgent, {
           adapterId: adapter.adapterId,
           agentId: 'missing-manager-rehydrate-agent',
           resumeAdapterSessionId: 'managed-native-session',
         }),
-      ).rejects.toThrow('selected account manager is unavailable');
+      ).resolves.toMatchObject({ success: false, dispatch: 'not-dispatched' });
       expect(events).toEqual([]);
       expect(connectors).toEqual([]);
       expect(adapter.getAgent('missing-manager-rehydrate-agent')).toBeUndefined();

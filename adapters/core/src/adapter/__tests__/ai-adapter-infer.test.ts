@@ -28,6 +28,7 @@ import type { AIAdapterConfig } from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
 import type { AdapterProviderDefinition } from '../../types/provider-definition.js';
 import { createTestProviderAuth } from '../../__tests__/__fixtures__/adapter-provider-auth.js';
+import { registerAgentRowStorage, registerStartReservationAuthority } from './shared.js';
 
 type TestBus = ReturnType<typeof createMockScopedBus>['bus'];
 
@@ -573,6 +574,9 @@ describe('AIAdapter.handleInfer', () => {
     const cleanupActivation = registerActivationFixture(events, {
       commitCode: (attempt) => (attempt === 1 ? 'commit-failed' : undefined),
     });
+    // The start below is an adapter-owned resume, which now writes a
+    // pre-dispatch row and reserves its provider session before dispatching.
+    const cleanupHost = [registerStartReservationAuthority(), registerAgentRowStorage()];
     const request = {
       adapterId: adapter.adapterId,
       role: 'lead' as const,
@@ -594,6 +598,7 @@ describe('AIAdapter.handleInfer', () => {
       expect(capture.connectors).toHaveLength(2);
     } finally {
       cleanupActivation();
+      for (const cleanup of cleanupHost) cleanup();
     }
   });
 

@@ -15,7 +15,8 @@ import { MessageStorageSubjects } from '../messages/namespace.js';
 import { registerMemoryMessageStorage } from '../messages/memory-handler.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
-import { registerMemorySessionStorage } from '../storage/memory-handler.js';
+import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { MakaioSessionService } from '../session-service.js';
 import {
   FRESH_WITH_HISTORY_RECOVERY_PLAN,
   planAgentRecovery,
@@ -25,8 +26,10 @@ import {
 } from '../recovery-plan.js';
 import { recoverAgent } from '../utils/agent-recovery.js';
 import { buildPlannedRecoveryContext } from '../utils/recovery-context.js';
-import { createTestAgent } from './shared.js';
+import { createTestAgent, registerMemorySessionBackends } from './shared.js';
 
+/** Machine the authority is composed with; the recovery reserves under it. */
+const MACHINE_ID = 'recovery-plan-machine';
 const SESSION_ID = 'session-recovery-plan';
 const AGENT_ID = 'agent-recovery-plan';
 const PROVIDER_SESSION_ID = 'provider-session-recovery-plan';
@@ -41,6 +44,7 @@ interface RecoveryOutcome {
 
 describe('recovery plan', () => {
   let bus: IMakaioBus;
+  let service: MakaioSessionService;
   let cleanups: Array<() => void>;
   let rehydratePayloads: Array<{ agentId: string; resumeAdapterSessionId?: string }>;
 
@@ -48,7 +52,9 @@ describe('recovery plan', () => {
     bus = createBusInstance();
     rehydratePayloads = [];
     cleanups = [
-      registerMemorySessionStorage(bus),
+      // The session, agent and ownership backends share one state: a reserved
+      // recovery verifies the `(agent, session)` pair it reserves against.
+      ...registerMemorySessionBackends(bus),
       registerMemoryMessageStorage(bus),
       registerMemorySessionEventStorage(bus),
       bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
@@ -56,13 +62,16 @@ describe('recovery plan', () => {
       }),
       bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydratePayloads.push(ctx.payload);
-        ctx.setResult({});
+        ctx.setResult({ success: true });
       }),
     ];
+    service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
+    await service.init();
     await seedConversation(bus);
   });
 
   afterEach(() => {
+    service.destroy();
     for (const cleanup of cleanups.reverse()) cleanup();
   });
 
@@ -146,6 +155,7 @@ async function executeRecovery(
     role: 'lead',
   });
 
+  await bus.request(AgentStorageSubjects.set, { agentId: AGENT_ID, agent });
   await recoverAgent(bus, agent, { plan }, agent.adapterId);
   const context = await buildPlannedRecoveryContext(bus, session, plan);
 

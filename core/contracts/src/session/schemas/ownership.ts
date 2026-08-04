@@ -224,13 +224,27 @@ export type SessionOwnershipServiceMovement = z.infer<typeof SessionOwnershipSer
 /**
  * Request payload for `session.ownership.settleMovement`.
  *
- * The authority mints the claim token and reads the revision itself: both are
- * per-attempt values a caller cannot hold correctly across a retry, and the
- * whole movement is one storage transaction underneath.
+ * The authority reads the revision itself, because that is a per-attempt value
+ * a caller cannot hold correctly across a retry, and the whole movement is one
+ * storage transaction underneath.
  */
 export const SessionOwnershipSettleMovementServiceRequestSchema = SessionOwnershipPrincipalSchema.extend({
   /** {@inheritDoc SessionOwnershipServiceMovementSchema} */
   movement: SessionOwnershipServiceMovementSchema,
+  /**
+   * Token to mint the successor generation under, supplied by the caller.
+   *
+   * The service minted this internally, which left a caller that has a rollback
+   * to perform unable to name the generation its own settlement created: a
+   * settle whose transaction commits but whose response is lost leaves a `held`
+   * successor nobody can release. Storage has always taken the token from
+   * outside — `OwnershipMovementSchema.claimToken` — so this exposes an
+   * existing parameter one layer up rather than adding one.
+   *
+   * Omitted, the service mints as before: the movement observer has no cleanup
+   * to perform and nothing to name.
+   */
+  claimToken: z.string().optional(),
 });
 
 /** {@inheritDoc SessionOwnershipSettleMovementServiceRequestSchema} */

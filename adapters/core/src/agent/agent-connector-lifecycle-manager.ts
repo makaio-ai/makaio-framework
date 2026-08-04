@@ -24,6 +24,24 @@ export type ConnectorSwapCommitGuard = () => void | Promise<void>;
 /**
  * Dependencies for connector lifecycle management.
  */
+/**
+ * Where a swap publishes the provider session its replacement confirmed.
+ *
+ * May be asynchronous: the sink also announces the movement, which the swap
+ * awaits before publishing the replacement runtime. `settledByCaller` is the
+ * one case with nothing to announce — the swap's caller writes that movement's
+ * durable currency itself, so the sink records the identity and stays silent.
+ *
+ * **Named rather than written out at each site**, because it is written out at
+ * three: a site that redeclares it with one parameter still accepts the
+ * two-parameter sink, and the flag would then be dropped by a later wrapper
+ * with no type error and no symptom but a second settle producer.
+ */
+export type AdapterSessionPublicationSink = (
+  adapterSessionId: string | undefined,
+  settledByCaller?: boolean,
+) => void | Promise<void>;
+
 export interface AgentConnectorLifecycleManagerConfig<
   TBus extends ScopedBus<string>,
   TConnector extends AIAgentConnector<TBus>,
@@ -65,9 +83,14 @@ export interface AgentConnectorLifecycleManagerConfig<
    * Store latest adapter session ID for enrichment after swaps.
    *
    * May be asynchronous: the sink also announces the swap as a provider-session
-   * movement, which the swap awaits before publishing the replacement runtime.
+   * movement, which the swap awaits before publishing the replacement runtime —
+   * unless the swap's caller settles that movement's currency itself, which it
+   * says with `settledByCaller` and the sink then records without announcing.
    */
-  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>;
+  setLastKnownAdapterSessionId: (
+    adapterSessionId: string | undefined,
+    settledByCaller?: boolean,
+  ) => void | Promise<void>;
   /** Publish a sanitized cleanup diagnostic without exposing connector errors. */
   reportCleanupFailure: (diagnostic: ConnectorCleanupDiagnostic) => void | Promise<void>;
 }
@@ -132,11 +155,15 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * Uses create-before-close pattern with rollback to preserve availability.
    * @param configOverrides - Optional runtime override fields
    * @param beforeCommit - Final guard after replacement initialization and before publication
+   * @param settledByCaller - Whether the caller writes the replacement's durable
+   *   currency itself, in which case the confirmed identity is recorded without
+   *   being announced as a movement
    * @returns The replacement's provider-confirmed session ID, when it has one
    */
   public async swapConnector(
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
+    settledByCaller = false,
   ): Promise<string | undefined> {
     const currentRuntime = this.config.getConnectorRuntime();
     const currentConnector = currentRuntime.connector;
@@ -148,14 +175,22 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
     this.connectorWiringCleanups = [];
     const confirmedAdapterSessionId = await this.initializeReplacement(newRuntime, oldWiringCleanups, beforeCommit);
 
-    // Publication is non-failing after the final commit guard. Recording the
-    // swapped-in identity is awaited rather than fired off: it announces the
-    // provider-session movement, and the session row must carry the replacement
-    // currency before the swapped-in connector is reachable for a resume.
-    this.config.setConnectorRuntime(newRuntime);
+    // Publication is non-failing after the final commit guard, and it happens in
+    // this order: **the identity is recorded before the replacement becomes
+    // reachable.** Recording is awaited rather than fired off because it
+    // announces the provider-session movement, and the seam's second duty is
+    // that a producer orders an acknowledged announcement ahead of whatever
+    // depends on it — here, the connector a concurrent resume can reach. The
+    // other order published a connector whose provider session the session row
+    // did not name yet. Nothing in recording reads the published runtime: the
+    // tracker announces from the agent's stable identity and caches from the
+    // value passed in. A caller that settles that currency itself is the one
+    // case with nothing to announce — the ordering it needs is its own, and it
+    // takes it after the swap returns.
     if (confirmedAdapterSessionId !== undefined) {
-      await this.config.setLastKnownAdapterSessionId(confirmedAdapterSessionId);
+      await this.config.setLastKnownAdapterSessionId(confirmedAdapterSessionId, settledByCaller);
     }
+    this.config.setConnectorRuntime(newRuntime);
     this.runWiringCleanups(oldWiringCleanups);
     await this.closePreviousRuntime(currentRuntime);
     return confirmedAdapterSessionId;

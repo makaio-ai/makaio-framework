@@ -6,6 +6,8 @@
  */
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
+import { SessionSubjects } from '@makaio/contracts';
+import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { createMockScopedBus } from '@makaio/test-utils';
 import { AIAdapter } from '../ai-adapter.js';
 import { createAdapterNamespace } from '../../factory/create-adapter-namespace.js';
@@ -127,6 +129,74 @@ export function createTestAdapter(
   });
 
   return { adapter, scopedBus };
+}
+
+/**
+ * Answer every start reservation with a committed one.
+ *
+ * A resume start the adapter owns the agent row for reserves its provider
+ * session before it dispatches, as a **hard** request: an adapter that can start
+ * and cannot reserve is a broken composition, so the call does not degrade when
+ * the subject is unhandled.
+ *
+ * What this registers is a stand-in for the *authority*, never for the seam
+ * under test. It belongs in suites whose subject is the connector lifecycle —
+ * rehydration, inference, session-close eviction — which need a started agent
+ * and say nothing about ownership. The suite that asserts the reservation itself
+ * composes the real memory backends and the real authority, because a stub there
+ * would assert nothing.
+ * @returns Cleanup for the registered handler.
+ */
+export function registerStartReservationAuthority(): () => void {
+  return MakaioBus.on(SessionSubjects.ownership.reserveStart, (ctx) => {
+    const now = Date.now();
+    ctx.setResult({
+      outcome: 'reserved',
+      reservation: {
+        agentId: ctx.payload.agentId,
+        sessionId: ctx.payload.sessionId,
+        machineId: 'test-machine',
+        adapterId: ctx.payload.adapterId,
+        claim:
+          ctx.payload.resumeProviderSessionId === null
+            ? null
+            : {
+                claimId: `claim-${ctx.payload.agentId}`,
+                machineId: 'test-machine',
+                adapterId: ctx.payload.adapterId,
+                adapterName: ctx.payload.adapterName,
+                providerSessionId: ctx.payload.resumeProviderSessionId,
+                sessionId: ctx.payload.sessionId,
+                agentId: ctx.payload.agentId,
+                claimToken: `token-${ctx.payload.agentId}`,
+                fence: 1,
+                status: 'held',
+                claimedAt: now,
+                updatedAt: now,
+              },
+        leadDesignated: false,
+        previousLeadAgentId: null,
+      },
+    });
+  });
+}
+
+/**
+ * Accept the agent-row writes a reserved start makes.
+ *
+ * A reserved start writes its `starting` row before it may reserve and its whole
+ * record after it lands, both through `storage:agent.set` — and the first is a
+ * hard request, because the reservation is taken against that row.
+ *
+ * Only for suites that do not inspect the row themselves: request handlers form
+ * one chain and the first registered answers, so a suite with its own recorder
+ * must register that instead of this.
+ * @returns Cleanup for the registered handler.
+ */
+export function registerAgentRowStorage(): () => void {
+  return MakaioBus.on(AgentStorageSubjects.set, (ctx) => {
+    ctx.setResult({ success: true });
+  });
 }
 
 // Re-export commonly needed types for tests

@@ -16,22 +16,17 @@ import {
   type ResolvedProviderContext,
 } from '@makaio/contracts';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
-import type { IMakaioSession } from '@makaio/contracts';
+import type { MakaioSessionAgent } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '../../adapter-runtime/index.js';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
 import { SessionBridge } from '../session-bridge.js';
 import type { AdapterRuntimeSnapshotResolution, ProviderRuntimeSnapshot } from '../../adapter-subsystem/schemas.js';
+import { MakaioSessionService } from '../session-service.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
+import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
 import {
-  createMockSession,
-  resetBusHandlers,
-  waitForAsync,
-  registerCreateSessionHandler,
-  registerGetSessionHandler,
-  registerGetAgentHandler,
-  registerAgentAddedHandler,
   registerStartAgentHandler,
   registerSendMessageHandler,
   registerRehydrateAgentHandler,
@@ -44,6 +39,10 @@ import {
   collectUserMessageAcknowledgedEvents,
   type UnsubscribeFunction,
 } from '../testing/orchestrator-shared.js';
+import { registerMemorySessionBackends, resetBusHandlers, waitForAsync } from './shared.js';
+
+/** Machine identity the orchestrator, the adapter ids and the authority share. */
+const MACHINE_ID = 'test-machine';
 
 /**
  * Build a managed inferred context for auto-attach activation tests.
@@ -142,40 +141,91 @@ function makeAdapterRuntimeResolution(
 describe('SessionOrchestrator - Auto-attach', () => {
   let orchestrator: SessionOrchestrator;
   let bridge: SessionBridge;
+  let service: MakaioSessionService;
   let unsubscribers: UnsubscribeFunction[];
-  let sessions: Map<string, IMakaioSession>;
   let defaultCwdChangeUnsub: UnsubscribeFunction | undefined;
   let defaultModelChangeUnsub: UnsubscribeFunction | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetBusHandlers();
     unsubscribers = [];
-    sessions = new Map();
 
-    // Register default handlers
-    unsubscribers.push(registerCreateSessionHandler(sessions));
-    unsubscribers.push(registerGetSessionHandler(sessions));
-    unsubscribers.push(registerAgentAddedHandler(sessions));
+    // Auto-attach ends in a reserved fresh lead start, and a reservation is a
+    // hard dependency of every start path: the session, agent and ownership
+    // rows therefore come from the real memory backends over one shared state,
+    // and only the turn/message/routing surface is stubbed. Composing the real
+    // session service is what registers the authority those starts reserve
+    // from — the same call that registers `session.create`, `session.get` and
+    // `session.agent.added`, which this suite used to stub over a plain map.
+    unsubscribers.push(...registerMemorySessionBackends(MakaioBus));
+    unsubscribers.push(registerMemorySessionEventStorage(MakaioBus));
+    unsubscribers.push(registerMockStorageHandlers({ omit: ['agent', 'session'] }));
     unsubscribers.push(registerRehydrateAgentHandler());
     defaultCwdChangeUnsub = registerCwdChangeHandler();
     defaultModelChangeUnsub = registerModelChangeHandler();
     unsubscribers.push(defaultCwdChangeUnsub);
     unsubscribers.push(defaultModelChangeUnsub);
-    unsubscribers.push(registerMockStorageHandlers());
+    service = new MakaioSessionService(MakaioBus, { machineId: MACHINE_ID });
+    await service.init();
     bridge = new SessionBridge(MakaioBus);
   });
 
   afterEach(() => {
     orchestrator?.destroy();
     bridge?.destroy();
+    service?.destroy();
     unsubscribers.forEach((unsub) => unsub());
   });
+
+  /**
+   * Create the empty session an auto-attach test starts its first agent into.
+   *
+   * Goes through `session.create` rather than writing the row directly, so the
+   * fixture is the same durable state production reaches — which is what the
+   * reservation verifies the `(agent, session)` pair against.
+   * @param sessionId - Session to create.
+   */
+  async function seedEmptySession(sessionId: string): Promise<void> {
+    await MakaioBus.request(SessionSubjects.create, { sessionId });
+  }
+
+  /**
+   * Read the agent rows a session ended up with.
+   * @param sessionId - Session to read.
+   * @returns The stored agent rows, in storage order.
+   */
+  async function readStoredAgents(sessionId: string): Promise<readonly MakaioSessionAgent[]> {
+    const stored = await MakaioBus.request(AgentStorageSubjects.listBySession, { sessionId });
+    return stored.agents;
+  }
+
+  /**
+   * Report a stored agent as live, so the liveness check does not open a
+   * recovery the test is not about.
+   *
+   * Answers from the same agent rows the start wrote, rather than from a
+   * fixture map: an agent the auto-attach flow did not persist must not be
+   * reported alive here either.
+   * @returns Unsubscribe function.
+   */
+  function registerStoredAgentLivenessHandler(): UnsubscribeFunction {
+    return MakaioBus.on(AdapterSubjects.getAgent, async (ctx) => {
+      const stored = await MakaioBus.request(AgentStorageSubjects.get, { agentId: ctx.payload.agentId });
+      const agent = stored.agent;
+      ctx.setResult({
+        agent:
+          agent === null
+            ? null
+            : { agentId: agent.agentId, sessionId: agent.sessionId, adapterSessionId: agent.adapterSessionId ?? '' },
+      });
+    });
+  }
 
   describe('should create session when sendMessage called with new sessionId', () => {
     it('creates a new session and returns the provided sessionId', async () => {
       // Setup: register handlers for auto-attach flow
       unsubscribers.push(registerStartAgentHandler());
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
 
       // Execute
       const sessionId = `session-${crypto.randomUUID().slice(0, 8)}`;
@@ -195,7 +245,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
   describe('should auto-attach agent when session has no agents', () => {
     it('registers attachResolved with the framework orchestrator lifecycle', async () => {
       const sessionId = 'session-attach-resolved';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       let receivedPayload: { adapterId: string; sessionId: string } | undefined;
       unsubscribers.push(
@@ -204,7 +254,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
         }),
       );
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('my-adapter');
 
       const result = await MakaioBus.requestOptional(SessionSubjects.agent.attachResolved, {
@@ -221,7 +271,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
         }),
       });
       expect(receivedPayload).toEqual({
-        adapterId: buildDeterministicAdapterId('test-machine', 'my-adapter'),
+        adapterId: buildDeterministicAdapterId(MACHINE_ID, 'my-adapter'),
         sessionId,
       });
     });
@@ -229,7 +279,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
     it('calls adapter.startAgent when session exists but has no agents', async () => {
       // Setup: session with no agents
       const sessionId = 'session-empty';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       let startAgentCalled = false;
       let receivedPayload: { adapterId: string; sessionId: string } | undefined;
@@ -241,7 +291,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
         }),
       );
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('my-adapter');
 
       // Execute
@@ -254,7 +304,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       // Assert
       expect(startAgentCalled).toBe(true);
       expect(receivedPayload).toEqual({
-        adapterId: buildDeterministicAdapterId('test-machine', 'my-adapter'),
+        adapterId: buildDeterministicAdapterId(MACHINE_ID, 'my-adapter'),
         sessionId,
       });
     });
@@ -280,11 +330,10 @@ describe('SessionOrchestrator - Auto-attach', () => {
       resolvedModel,
     }) => {
       const sessionId = `session-provider-context-${providerConfigId}`;
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       const order: string[] = [];
       let credentialActivated = false;
-      const runtimeUpdates: Array<{ agentId: string; providerConfigId?: string }> = [];
       let receivedPayload: Record<string, unknown> | undefined;
       let startedAgentId: string | undefined;
       if (resolvedModel !== undefined) {
@@ -333,17 +382,8 @@ describe('SessionOrchestrator - Auto-attach', () => {
           emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
         }),
       );
-      unsubscribers.push(
-        MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
-          runtimeUpdates.push({
-            agentId: ctx.payload.agentId,
-            providerConfigId: ctx.payload.providerConfigId ?? undefined,
-          });
-          ctx.setResult({ success: true });
-        }),
-      );
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -361,8 +401,12 @@ describe('SessionOrchestrator - Auto-attach', () => {
           definitionId,
         },
       });
-      expect(sessions.get(sessionId)?.agents[0]?.providerConfigId).toBe(providerConfigId);
-      expect(runtimeUpdates).toEqual([{ agentId: startedAgentId, providerConfigId }]);
+      // Asserted on the durable row rather than on a captured `updateRuntime`
+      // payload: the runtime write is what the resolution is *for*, and the row
+      // is the only place a caller ever reads it back from.
+      const storedAgents = await readStoredAgents(sessionId);
+      expect(storedAgents).toHaveLength(1);
+      expect(storedAgents[0]).toMatchObject({ agentId: startedAgentId, providerConfigId });
     });
 
     it('does not trust loose providerContext fields on public sendMessage', async () => {
@@ -373,9 +417,8 @@ describe('SessionOrchestrator - Auto-attach', () => {
         endpointOverrides: { anthropic: 'https://provider.example/chat' },
         credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-direct', 'apiKey') },
       };
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
-      const runtimeUpdates: Array<{ agentId: string; providerConfigId?: string }> = [];
       let receivedPayload: Record<string, unknown> | undefined;
       let runtimeContextResolved = false;
       let credentialActivated = false;
@@ -414,17 +457,8 @@ describe('SessionOrchestrator - Auto-attach', () => {
           emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
         }),
       );
-      unsubscribers.push(
-        MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
-          runtimeUpdates.push({
-            agentId: ctx.payload.agentId,
-            providerConfigId: ctx.payload.providerConfigId ?? undefined,
-          });
-          ctx.setResult({ success: true });
-        }),
-      );
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -436,16 +470,20 @@ describe('SessionOrchestrator - Auto-attach', () => {
       expect(runtimeContextResolved).toBe(false);
       expect(credentialActivated).toBe(false);
       expect(receivedPayload).not.toHaveProperty('providerContext');
-      expect(sessions.get(sessionId)?.agents[0]?.providerConfigId).toBeUndefined();
       expect(startedAgentId).toBeDefined();
       // The origin identity is persisted for every start; what an untrusted
-      // provider context must not produce is a provider-config write.
-      expect(runtimeUpdates.map((update) => update.providerConfigId)).toEqual([undefined]);
+      // provider context must not produce is a provider-config write. Both are
+      // read off the durable row, so the assertion covers the write's effect
+      // rather than the shape of one intercepted payload.
+      const storedAgents = await readStoredAgents(sessionId);
+      expect(storedAgents).toHaveLength(1);
+      expect(storedAgents[0]?.adapterSessionId).toBe(`adapter-session-${sessionId}`);
+      expect(storedAgents[0]?.providerConfigId).toBeUndefined();
     });
 
     it('backfills adapterName from adapterId when the direct selection omits adapterName', async () => {
       const sessionId = 'session-id-only';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       let startAgentCalled = false;
       let receivedPayload: { adapterId: string; sessionId: string } | undefined;
@@ -456,7 +494,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
         }),
       );
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('resolved-adapter-name', 'machine-1:resolved-adapter-name');
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -474,9 +512,9 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
     it('rejects when explicit adapterName does not match the name stored for adapterId', async () => {
       const sessionId = 'session-name-id-mismatch';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('bar', 'machine-1:bar');
 
       await expect(
@@ -493,9 +531,9 @@ describe('SessionOrchestrator - Auto-attach', () => {
     it('throws error when agent selection is missing for session with no agents', async () => {
       // Setup: session with no agents
       const sessionId = 'session-no-adapter';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
 
       // Execute & Assert — framework orchestrator requires an explicit initial agent selection.
       await expect(
@@ -508,7 +546,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
     });
 
     it('throws error when agent selection is missing for new session', async () => {
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
 
       // Execute & Assert — framework orchestrator requires an explicit initial agent selection.
       await expect(
@@ -524,12 +562,12 @@ describe('SessionOrchestrator - Auto-attach', () => {
   describe('should emit turn.started for auto-attach flow', () => {
     it('emits turn.started event with correct agentIds', async () => {
       const sessionId = 'session-turn-started';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       unsubscribers.push(registerStartAgentHandler());
 
       const turnStarted = collectTurnStartedEvents(unsubscribers);
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       // Execute
@@ -555,12 +593,12 @@ describe('SessionOrchestrator - Auto-attach', () => {
   describe('should emit user_message.sent for auto-attach flow', () => {
     it('emits user_message.sent event with message content', async () => {
       const sessionId = 'session-msg-sent';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       unsubscribers.push(registerStartAgentHandler());
 
       const messageSent = collectUserMessageSentEvents(unsubscribers);
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       const testMessage = 'Test message content';
@@ -589,13 +627,13 @@ describe('SessionOrchestrator - Auto-attach', () => {
   describe('should emit user_message.acknowledged for auto-attach flow', () => {
     it('emits user_message.acknowledged event after agent receives message', async () => {
       const sessionId = 'session-msg-ack';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       unsubscribers.push(registerStartAgentHandler());
       unsubscribers.push(registerSendMessageHandler());
 
       const messageAck = collectUserMessageAcknowledgedEvents(unsubscribers);
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       // Execute
@@ -621,10 +659,10 @@ describe('SessionOrchestrator - Auto-attach', () => {
   describe('should return sessionId, messageId, turnId', () => {
     it('returns all three IDs for auto-attach flow', async () => {
       const sessionId = 'session-return-ids';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       unsubscribers.push(registerStartAgentHandler());
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       // Execute
@@ -644,7 +682,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
     it('returns provided sessionId for new session', async () => {
       unsubscribers.push(registerStartAgentHandler());
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       // Execute
@@ -663,7 +701,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
     it('passes runtime options to adapter.startAgent', async () => {
       const sessionId = 'session-runtime-opts';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+      await seedEmptySession(sessionId);
 
       let receivedPayload: Record<string, unknown> | undefined;
 
@@ -688,7 +726,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
         }),
       );
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       // Execute
@@ -711,8 +749,8 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
     it('does not run redundant model/cwd mutations after initial auto-attach', async () => {
       const sessionId = 'session-runtime-no-redundant-mutations';
-      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
-      unsubscribers.push(registerGetAgentHandler(sessions));
+      await seedEmptySession(sessionId);
+      unsubscribers.push(registerStoredAgentLivenessHandler());
 
       // Remove default handlers to count exactly how many mutation RPCs are attempted.
       defaultCwdChangeUnsub?.();
@@ -735,7 +773,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       unsubscribers.push(registerStartAgentHandler());
       unsubscribers.push(registerSendMessageHandler());
 
-      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
       await emitAdapterInitialized('test-adapter');
 
       await MakaioBus.request(SessionSubjects.sendMessage, {

@@ -14,18 +14,18 @@ const CURRENCY_CHANGED_RETRY_BUDGET = 1;
 /**
  * Turn an observed movement into the durable movement the seam understands.
  *
- * The token is minted here, per attempt, and is used only when the agent does
- * not already hold the target key: an agent that does is settled under the
- * generation it has, and this token names no row at all. That is what keeps a
- * repeat idempotent instead of minting a second generation for a key the agent
- * already owns.
+ * The token is used only when the agent does not already hold the target key:
+ * an agent that does is settled under the generation it has, and this token
+ * names no row at all. That is what keeps a repeat idempotent instead of
+ * minting a second generation for a key the agent already owns.
  * @param movement - The observation, as a real union.
- * @returns The durable movement, carrying a fresh generation token.
+ * @param claimToken - Generation the successor is minted under.
+ * @returns The durable movement, carrying the generation token.
  */
-function toDurableMovement(movement: SessionOwnershipServiceMovement): OwnershipMovement {
+function toDurableMovement(movement: SessionOwnershipServiceMovement, claimToken: string): OwnershipMovement {
   return movement.confirmed
-    ? { kind: 'confirmed', providerSessionId: movement.providerSessionId, claimToken: mintClaimToken() }
-    : { kind: 'demote', claimToken: mintClaimToken() };
+    ? { kind: 'confirmed', providerSessionId: movement.providerSessionId, claimToken }
+    : { kind: 'demote', claimToken };
 }
 
 /**
@@ -42,6 +42,16 @@ function toDurableMovement(movement: SessionOwnershipServiceMovement): Ownership
  * contention this operation cannot arbitrate — and looping would let one
  * agent's announcements starve the queue behind them. The caller is told and
  * the seam re-announces.
+ *
+ * **The successor's token is the caller's when it names one**, and is minted
+ * once per call otherwise — never once per attempt. A caller that has a
+ * rollback to perform must be able to name the generation its own settlement
+ * created *without* seeing the response, because the response is exactly what a
+ * dropped packet takes away. Reusing one token across the bounded retry is safe
+ * in both directions: `currency-changed` rolls its transaction back, so no row
+ * carries the token and the token uniqueness constraint cannot fire; and a
+ * repeat that follows a committed settlement finds the agent already holding
+ * the target key, discards the token unused and reports `idempotent`.
  * @param context - Composed authority context.
  * @param request - The movement, and the principal that observed it.
  * @returns The durable outcome, or `machine-identity-unavailable`.
@@ -52,6 +62,7 @@ export async function runSettleMovement(
 ): Promise<SessionOwnershipSettleMovementServiceResult> {
   const machineId = resolveOwnershipMachineId(context, request.machineId);
   if (machineId === undefined) return { outcome: 'machine-identity-unavailable' };
+  const claimToken = request.claimToken ?? mintClaimToken();
 
   for (let attempt = 0; ; attempt += 1) {
     const { ownership } = await context.bus.request(SessionOwnershipStorageSubjects.read, {
@@ -68,7 +79,7 @@ export async function runSettleMovement(
       sessionId: request.sessionId,
       agentId: request.agentId,
       expectedRevision: ownership.revision,
-      movement: toDurableMovement(request.movement),
+      movement: toDurableMovement(request.movement, claimToken),
     });
 
     if (result.outcome !== 'currency-changed' || attempt >= CURRENCY_CHANGED_RETRY_BUDGET) return result;

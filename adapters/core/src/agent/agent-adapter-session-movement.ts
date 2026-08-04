@@ -256,6 +256,16 @@ export function providerCommittedAdapterSessionId(connector: AdapterSessionConfi
 export interface ConfirmedAdapterSessionTrackerHost {
   /** Stable agent identifier. */
   readonly agentId: string;
+  /**
+   * Whether this agent's provider session is the adapter's to publish yet.
+   *
+   * Absent means yes. `false` marks the window in which a caller-owned start has
+   * not handed its key over: the cache still moves, because it is what the
+   * registry resolves occupancy through (duty 5), and the announcement does not,
+   * because the caller settles that key and the observer settling it first would
+   * hold a generation under a token that caller cannot give back.
+   */
+  readonly isProviderKeyPublishable?: () => boolean;
   /** Adapter instance identifier. */
   readonly adapterId: string;
   /** Adapter type name. */
@@ -386,9 +396,21 @@ export class ConfirmedAdapterSessionTracker {
    * still re-drive an undelivered movement — enrichment is the seam's only retry
    * clock, and an agent whose connector reports nothing is exactly the one whose
    * unconfirmed movement is still outstanding.
+   * **`settledByCaller` routes the movement to {@link recordCallerSettled}**, and
+   * the branch lives here rather than at each producer because this is the one
+   * place every producer already passes through — the swap's publication sink,
+   * payload enrichment, and the rehydrate's own explicit record. A producer that
+   * knows the caller settles this operation's currency says so; one that does
+   * not, announces, exactly as before.
    * @param adapterSessionId - Resolved provider session ID, or `undefined`
+   * @param settledByCaller - Whether the caller writes this movement's durable
+   *   currency itself, in which case it is recorded and not announced
    */
-  public async record(adapterSessionId: string | undefined): Promise<void> {
+  public async record(adapterSessionId: string | undefined, settledByCaller = false): Promise<void> {
+    if (settledByCaller && adapterSessionId !== undefined) {
+      this.recordCallerSettled(adapterSessionId);
+      return;
+    }
     if (adapterSessionId !== undefined) {
       this.lastKnown = adapterSessionId;
       if (this.inheritsResumeTarget) {
@@ -406,6 +428,15 @@ export class ConfirmedAdapterSessionTracker {
         // sample alone — never a cached predecessor, which after an unconfirmed
         // movement is deliberately the *abandoned* identity.
         this.host.resumeAdapterSessionId = adapterSessionId;
+      }
+      if (this.host.isProviderKeyPublishable?.() === false) {
+        // Cached and inherited, but not published — see the host field. The
+        // cache is occupancy evidence (duty 5) and the inherited target is what
+        // a later swap resumes; neither publishes anything. The movement is left
+        // *unannounced* rather than marked announced: nothing has settled it, so
+        // claiming it had would be the one thing {@link recordCallerSettled} is
+        // careful to say only when it is true.
+        return;
       }
       // Announcing a *confirmed* movement for anything that differs from the
       // last acknowledged one is only sound because no caller passes a
@@ -488,11 +519,61 @@ export class ConfirmedAdapterSessionTracker {
   }
 
   /**
+   * Take an identity whose currency the **caller** settles, without announcing
+   * it.
+   *
+   * For the one producer that is not this seam's to drive: a start or rehydrate
+   * the caller owns the agent row for settles the confirmed key itself, under a
+   * generation token it minted and can therefore give back on every failure
+   * path. Announcing the same movement would make the observer a *second*
+   * settle producer for one identity, and its generation would be held under a
+   * token the caller never sees — so a caller whose own settlement then fails
+   * retires everything it took and leaves that one behind, held on a dead row,
+   * where every later attempt reads it as occupied.
+   *
+   * Everything except the announcement still happens, and each part for its own
+   * reason. {@link lastKnown} is the adapter registry's occupancy authority
+   * (duty 5): leaving it unset would let a concurrent attach find no live writer
+   * on a session this agent is driving. The inherited resume target follows the
+   * same rule {@link record} applies, so a later connector swap resumes the
+   * session the provider actually confirmed. And {@link lastAnnounced} is marked
+   * because the movement is *settled*, not pending: the seam's retry clock —
+   * payload enrichment on the agent's next event — would otherwise re-drive it
+   * onto the observer and re-create exactly the second producer this avoids.
+   *
+   * **A parked movement is superseded, not kept.** {@link undelivered} holds the
+   * one movement no consumer acknowledged yet, and the seam's rule for it is
+   * that a newer statement about the agent's current session supersedes an older
+   * undelivered one — which is exactly what this is, and it holds whichever
+   * session the parked one named: a confirmed movement onto a predecessor key is
+   * a statement about a state this agent has since left, and an unconfirmed one
+   * ("moved, no successor") re-announced *after* the caller settled a successor
+   * would blank the currency that settlement just wrote. Clearing it is the same
+   * bookkeeping {@link announce} performs for a delivered movement, and it is
+   * delivered by construction here — the durable write happened, just not
+   * through this seam.
+   *
+   * Synchronous, and that is the point: there is nothing to deliver, so there is
+   * nothing to order against (duty 2) and no anchor to hold (duty 4).
+   * @param adapterSessionId - Provider session the caller settles the currency on
+   */
+  public recordCallerSettled(adapterSessionId: string): void {
+    this.lastKnown = adapterSessionId;
+    if (this.inheritsResumeTarget) this.host.resumeAdapterSessionId = adapterSessionId;
+    this.lastAnnounced = adapterSessionId;
+    this.undelivered = undefined;
+  }
+
+  /**
    * Announce one movement and update the delivery markers from its outcome.
    *
-   * Sole writer of {@link lastAnnounced} and {@link undelivered}, so the seam's
-   * "delivered means acknowledged" duty holds for every movement kind through
-   * one code path instead of once per producer method.
+   * Sole writer of {@link lastAnnounced} and {@link undelivered} **among the
+   * movements this seam delivers**, so the "delivered means acknowledged" duty
+   * holds for every movement kind through one code path instead of once per
+   * producer method. {@link recordCallerSettled} is the one other writer, and it
+   * is not an exception to that duty: it records a movement whose durable write
+   * the caller performs, so there is nothing for this seam to deliver and the
+   * markers state exactly that.
    *
    * A delivered *unconfirmed* movement deliberately leaves {@link lastAnnounced}
    * standing. The marker then no longer describes the row (which now advertises

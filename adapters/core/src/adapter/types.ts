@@ -4,6 +4,7 @@
  * Canonical home for types that cross module boundaries within the adapter
  * package (registry, rehydration, infer, and the adapter class itself).
  */
+import type { ProviderKeyPublication } from './adapter-provider-key-publication.js';
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AdapterNamespace } from '../factory/create-adapter-namespace.js';
 import type { LogImportConfig } from '../log-importer/registry-types.js';
@@ -59,6 +60,15 @@ export type AgentCreationOptions = Omit<
 > & {
   adapterSessionId?: string;
   resumeAdapterSessionId?: string;
+  /**
+   * The attempt's provider-key publication gate.
+   *
+   * Carried into the agent because the routes inside it — the identity
+   * enrichment stamps on every emitted event, the movement its tracker
+   * announces — are publication routes like the start's own, and every route
+   * asks one gate. See {@link ProviderKeyPublication}.
+   */
+  providerKeyPublication?: ProviderKeyPublication;
   /** Unresolved provider context (credential refs, not plaintext). */
   providerContext?: ProviderContext;
   /**

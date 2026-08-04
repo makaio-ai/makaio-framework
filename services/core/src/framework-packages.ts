@@ -318,7 +318,23 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
   };
 }
 
-/** Framework packages that are independent of host-specific factories. */
+/**
+ * Framework packages that are independent of host-specific factories.
+ *
+ * **Independent of factories, not self-contained.** Members may declare
+ * dependencies on packages a host composes from a *sibling* set, and two do
+ * today: `session-client-account-linking` names `makaio.clients-core`, and
+ * {@link canonicalModelPackage} names the adapter subsystem. Neither can be a
+ * member — both live in packages that depend on this one, so naming them here
+ * would invert the layering — which is why handing this array to a coordinator
+ * on its own has never validated and is not the contract.
+ *
+ * The obligation that carries instead: a host composing this set composes the
+ * clients set and the adapter subsystem alongside it. The node boot path does,
+ * and the subsystem is pushed into the same load set immediately before these
+ * packages so the ordering the canonical-model service needs is the
+ * coordinator's to satisfy rather than the array order's to preserve.
+ */
 export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = [
   artifactSchemaRegistryPackage,
   artifactLifecycleHookRegistryPackage,

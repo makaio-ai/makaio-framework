@@ -20,7 +20,11 @@ import { AgentLifecycleEmitter, type AgentLifecycleEmitterConfig } from './agent
 import { AgentPayloadEmitter, type AgentPayloadEmitterConfig } from './agent-payload-emitter.js';
 import { AgentTurnExecutor } from './agent-turn-executor.js';
 import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
-import { AgentConnectorLifecycleManager, type ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
+import {
+  AgentConnectorLifecycleManager,
+  type AdapterSessionPublicationSink,
+  type ConnectorSwapCommitGuard,
+} from './agent-connector-lifecycle-manager.js';
 import type { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import type { ToolCallTracker } from './tool-call-tracker.js';
 import type { ConnectorRuntimeHandle } from './connector-runtime.js';
@@ -50,6 +54,9 @@ export function createAgentPayloadEmitter(config: CreatePayloadEmitterInput): Ag
     getConnectorAdapterSessionId: config.getConnectorAdapterSessionId,
     getLastKnownAdapterSessionId: config.getLastKnownAdapterSessionId,
     setLastKnownAdapterSessionId: config.setLastKnownAdapterSessionId,
+    ...(config.isProviderKeyPublishable !== undefined && {
+      isProviderKeyPublishable: config.isProviderKeyPublishable,
+    }),
     getEventMetadataDefaults: config.getEventMetadataDefaults,
   });
 }
@@ -234,7 +241,7 @@ export function createAgentConnectorLifecycleManager<
   getConnectorRuntime: () => ConnectorRuntimeHandle<TConnector>;
   setConnectorRuntime: (runtime: ConnectorRuntimeHandle<TConnector>) => void;
   getRuntimeSystemPrompt: () => SystemPrompt | undefined;
-  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>;
+  setLastKnownAdapterSessionId: AdapterSessionPublicationSink;
   announceAdapterSessionMoved: () => Promise<void>;
 }): AgentConnectorLifecycleManager<TBus, TConnector> {
   return new AgentConnectorLifecycleManager<TBus, TConnector>({

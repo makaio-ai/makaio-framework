@@ -8,6 +8,7 @@ import {
   registerSuccessfulMessageAppendHandler,
   registerSuccessfulSendHandler,
   type AttachHandlerTestContext,
+  type StartAgentRequestPayload,
 } from './shared.js';
 import { waitForAsync } from '../../__tests__/shared.js';
 import { MessageStorageSubjects } from '../../messages/namespace.js';
@@ -18,7 +19,7 @@ import { AgentStorageSubjects } from '../../storage/agent-namespace.js';
 import { getSessionAgentAttachError } from '../attach-error.js';
 
 describe('registerAttachHandler - turn tracking', () => {
-  const { sessionId, adapterName, agentId } = ATTACH_TEST_IDS;
+  const { sessionId, adapterName } = ATTACH_TEST_IDS;
 
   let ctx: AttachHandlerTestContext;
   let defaultMessageAppendCleanup: () => void;
@@ -53,7 +54,7 @@ describe('registerAttachHandler - turn tracking', () => {
       const turn = ctx.getActiveTurn(sessionId);
       expect(turn).toBeDefined();
       expect(turn?.sessionId).toBe(sessionId);
-      expect([...turn!.agentIds]).toContain(agentId);
+      expect([...turn!.agentIds]).toContain(ctx.startedAgentId());
       expect(turn?.initiator).toEqual({ source: 'extension', sourceId: 'test:attach' });
       expect(result.turnId).toBe(turn?.turnId);
       expect(result.messageId).toMatch(/[0-9a-f-]{36}/);
@@ -103,7 +104,7 @@ describe('registerAttachHandler - turn tracking', () => {
             sendPayload = context.payload;
             context.setResult({ messageId: context.payload.messageId ?? crypto.randomUUID() });
             await MakaioBus.emit(AgentSubjects.message, {
-              agentId,
+              agentId: ctx.startedAgentId(),
               adapterId: context.payload.adapterId,
               adapterName,
               adapterSessionId: 'native-session',
@@ -112,7 +113,7 @@ describe('registerAttachHandler - turn tracking', () => {
               turnId: context.payload.turnId,
             });
             await MakaioBus.emit(AgentSubjects.complete, {
-              agentId,
+              agentId: ctx.startedAgentId(),
               adapterId: context.payload.adapterId,
               adapterName,
               adapterSessionId: 'native-session',
@@ -155,7 +156,7 @@ describe('registerAttachHandler - turn tracking', () => {
             contentText: 'Initial answer',
           }),
         );
-        expect(settlements).toContainEqual({ turnId: result.turnId!, agentId });
+        expect(settlements).toContainEqual({ turnId: result.turnId!, agentId: ctx.startedAgentId() });
         expect(turnCompleted).toContainEqual({ turnId: result.turnId!, success: true });
         expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
       } finally {
@@ -194,7 +195,7 @@ describe('registerAttachHandler - turn tracking', () => {
       ).rejects.toThrow('provider dispatch failed');
 
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
-      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId }));
+      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId: ctx.startedAgentId() }));
       expect(completed).toContainEqual(
         expect.objectContaining({ success: false, error: expect.stringContaining('provider dispatch failed') }),
       );
@@ -219,7 +220,7 @@ describe('registerAttachHandler - turn tracking', () => {
       ).rejects.toThrow('startup cancelled');
 
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
-      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId }));
+      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId: ctx.startedAgentId() }));
     });
 
     it('terminalizes the prepared turn when admission authority rejects at provider dispatch', async () => {
@@ -244,7 +245,7 @@ describe('registerAttachHandler - turn tracking', () => {
 
       expect(admissionChecks).toBe(2);
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
-      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId }));
+      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId: ctx.startedAgentId() }));
     });
 
     it('terminalizes and rolls back when close claims the session before initial provider dispatch', async () => {
@@ -315,16 +316,17 @@ describe('registerAttachHandler - turn tracking', () => {
       const attachError = await attach.catch((error: unknown) => error);
       const stagedError = getSessionAgentAttachError(attachError);
       expect(stagedError?.stage).toBe('initial_message');
-      expect(stagedError?.cause).toBeInstanceOf(AggregateError);
-      expect((stagedError?.cause as AggregateError).errors[0]).toMatchObject({
-        message: expect.stringContaining('Session close won before agent attach committed'),
-      });
+      expect((stagedError?.cause as Error).message).toContain('Session close won before agent attach committed');
       releaseClose.resolve();
       await expect(close).resolves.toEqual({ success: true });
       expect(routedMessages).toHaveLength(0);
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
-      expect(deletedAgents).toEqual([agentId]);
-      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId }));
+      // The connector was dispatched, so the row is retired rather than deleted:
+      // deleting it would cascade its claims away and free an ownership key for
+      // a provider session nobody has proven is closed (§7.4).
+      expect(deletedAgents).toEqual([]);
+      expect(ctx.getStoredAgent(ctx.startedAgentId())?.status).toBe('dead');
+      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId: ctx.startedAgentId() }));
     });
 
     it.each([
@@ -364,7 +366,7 @@ describe('registerAttachHandler - turn tracking', () => {
           async (context) => {
             context.setResult({ messageId: context.payload.messageId ?? crypto.randomUUID() });
             await MakaioBus.emit(AgentSubjects.complete, {
-              agentId,
+              agentId: ctx.startedAgentId(),
               adapterId: context.payload.adapterId,
               adapterName,
               adapterSessionId: 'native-session',
@@ -414,8 +416,24 @@ describe('registerAttachHandler - turn tracking', () => {
 
     it('allows an idle attach without consuming or replacing the active turn slot', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
-      const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
-      ctx.trackUnsubscribe(unsubscribe);
+      // Each attach lands on a provider session of its own: two agents reporting
+      // one provider session is a genuine ownership conflict now, and the second
+      // settlement would be refused `already-claimed` — which is what this test
+      // is *not* about.
+      const receivedRequests: StartAgentRequestPayload[] = [];
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AdapterSubjects.startAgent, (context) => {
+          receivedRequests.push(context.payload);
+          context.setResult({
+            success: true,
+            agentId: context.payload.agentId ?? crypto.randomUUID(),
+            adapterId: context.payload.adapterId,
+            adapterSessionId: `adapter-session-${receivedRequests.length}`,
+            sessionId,
+            messageId: 'msg-001',
+          });
+        }),
+      );
       ctx.trackUnsubscribe(ctx.registerHandler());
 
       const first = await MakaioBus.request(SessionSubjects.agent.attach, {
@@ -493,8 +511,9 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(completionAttempts).toBe(2);
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
       expect(stoppedAgents).toHaveLength(1);
-      expect(stoppedAgents[0]).toMatchObject({ agentId });
-      expect(deletedAgents).toEqual([agentId]);
+      expect(stoppedAgents[0]).toMatchObject({ agentId: ctx.startedAgentId() });
+      expect(deletedAgents).toEqual([]);
+      expect(ctx.getStoredAgent(ctx.startedAgentId())?.status).toBe('dead');
     });
 
     it('emits turn.started event', async () => {
@@ -532,7 +551,7 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(turnStartedEvents).toHaveLength(1);
       expect(turnStartedEvents[0].sessionId).toBe(sessionId);
       expect(turnStartedEvents[0].messageId).toBe(result.messageId);
-      expect(turnStartedEvents[0].agentIds).toContain(agentId);
+      expect(turnStartedEvents[0].agentIds).toContain(ctx.startedAgentId());
     });
 
     it('persists the initial user message before emitting turn events', async () => {
@@ -606,7 +625,7 @@ describe('registerAttachHandler - turn tracking', () => {
         error: 'initial-message-persistence-failed',
       });
       expect(stoppedAgents).toHaveLength(1);
-      expect(stoppedAgents[0]).toMatchObject({ agentId });
+      expect(stoppedAgents[0]).toMatchObject({ agentId: ctx.startedAgentId() });
       expect(stoppedAgents[0].adapterId).toBeTruthy();
     });
 
@@ -655,7 +674,7 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
       expect(turnStartedEvents).toHaveLength(0);
       expect(stoppedAgents).toHaveLength(1);
-      expect(stoppedAgents[0]).toMatchObject({ agentId });
+      expect(stoppedAgents[0]).toMatchObject({ agentId: ctx.startedAgentId() });
     });
 
     it('emits user_message.sent event', async () => {
@@ -696,7 +715,7 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(userMessageSentEvents).toHaveLength(1);
       expect(userMessageSentEvents[0].sessionId).toBe(sessionId);
       expect(userMessageSentEvents[0].content).toBe(initialMessage);
-      expect(userMessageSentEvents[0].agentIds).toContain(agentId);
+      expect(userMessageSentEvents[0].agentIds).toContain(ctx.startedAgentId());
     });
 
     it('emits user_message.acknowledged event', async () => {
@@ -734,7 +753,7 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(acknowledgedEvents).toHaveLength(1);
       expect(acknowledgedEvents[0].sessionId).toBe(sessionId);
       expect(acknowledgedEvents[0].messageId).toBe(result.messageId);
-      expect(acknowledgedEvents[0].agentId).toBe(agentId);
+      expect(acknowledgedEvents[0].agentId).toBe(ctx.startedAgentId());
     });
 
     it('handles structured message input', async () => {

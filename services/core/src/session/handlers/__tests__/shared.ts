@@ -6,7 +6,12 @@ import {
   SessionStorageSubjects,
   SessionSubjects,
 } from '@makaio/contracts';
-import type { IMakaioSession, StartAgentResponse } from '@makaio/contracts';
+import type {
+  AdapterSessionClaimRecord,
+  IMakaioSession,
+  MakaioSessionAgent,
+  StartAgentResponse,
+} from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { Turn } from '../../entities/turn.js';
 import { SessionTurnManager } from '../../session-turn-manager.js';
@@ -22,6 +27,10 @@ import {
   DEFAULT_TEST_MACHINE_ID,
   registerMockAdapterIdentityHandlers,
 } from '../../testing/mock-adapter-identity-registry.js';
+import { registerSessionOwnershipAuthority } from '../../ownership/index.js';
+import { registerMemoryAgentStorage } from '../../storage/agent-memory-handler.js';
+import { registerMemorySessionOwnershipStorage } from '../../storage/ownership-memory-handler.js';
+import { createSessionStorageMemoryState } from '../../storage/memory-store.js';
 
 /**
  * Registers a mock handler for agent.sendMessage that succeeds.
@@ -232,6 +241,60 @@ export function registerDefaultConversationStubs(
   );
 }
 
+/** A generation held for a foreign agent, so an attach meets an occupied key. */
+export interface HeldProviderSession {
+  /** Session the foreign agent belongs to. */
+  readonly sessionId: string;
+  /** Agent that holds the generation. */
+  readonly agentId: string;
+  /** Adapter instance the key is namespaced by. */
+  readonly adapterId: string;
+  /** Adapter type name the claim is filed under. */
+  readonly adapterName: string;
+  /** Machine the key is namespaced by. */
+  readonly machineId: string;
+  /** Provider session the generation owns. */
+  readonly providerSessionId: string;
+}
+
+/**
+ * Take a real generation for a foreign agent on a provider session.
+ *
+ * The replacement for the live-writer probe every attach suite used to mock:
+ * occupancy is a claim row now, taken through the authority the attach under
+ * test asks, so a test cannot accidentally assert against a verdict the
+ * production path no longer consults.
+ * @param held - The foreign agent, and the key it takes.
+ */
+export async function holdProviderSession(held: HeldProviderSession): Promise<void> {
+  const now = Date.now();
+  await MakaioBus.request(AgentStorageSubjects.set, {
+    agentId: held.agentId,
+    agent: {
+      agentId: held.agentId,
+      adapterId: held.adapterId,
+      adapterName: held.adapterName,
+      sessionId: held.sessionId,
+      role: 'member',
+      status: 'idle',
+      createdAt: now,
+      lastActivityAt: now,
+    },
+  });
+  const reserved = await MakaioBus.request(SessionSubjects.ownership.reserveStart, {
+    sessionId: held.sessionId,
+    agentId: held.agentId,
+    adapterId: held.adapterId,
+    adapterName: held.adapterName,
+    role: 'member',
+    resumeProviderSessionId: held.providerSessionId,
+    machineId: held.machineId,
+  });
+  if (reserved.outcome !== 'reserved') {
+    throw new Error(`could not hold ${held.providerSessionId}: ${reserved.outcome}`);
+  }
+}
+
 /**
  * Creates a test context for registerAttachHandler tests.
  * Encapsulates the repeated setup: resetBusHandlers, turn manager, unsubscribers,
@@ -248,18 +311,42 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
       currentMachineId === null ? undefined : (currentMachineId ?? DEFAULT_TEST_MACHINE_ID),
     );
   unsubscribers.push(unsubscribeAdapterIdentityRegistry);
-  // No-op stub for agent identity persistence: attach handler tests focus on
-  // adapter routing and turn setup, not downstream agent storage.
-  unsubscribers.push(
-    MakaioBus.on(
-      AgentStorageSubjects.set,
-      /**
-       * Acknowledge agent persistence writes in attach-handler tests.
-       * @param context - Bus handler context for AgentStorageSubjects.set.
-       */
-      (context) => context.setResult({ success: true }),
-    ),
-  );
+  // Attach is a reserved, caller-owned start: it writes its own `starting` agent
+  // row and reserves the provider session against it, so a no-op persistence
+  // stub is no longer a neutral simplification — the reservation reads the row
+  // it would swallow. Real memory agent and ownership storage over one state,
+  // and the real authority, is the smallest composition that keeps these suites
+  // about attach rather than about the ownership seam. Session *storage* stays
+  // stubbed: the conversation walk owns `SessionStorageSubjects.get`, so session
+  // rows are seeded into the shared state directly instead.
+  const memoryState = createSessionStorageMemoryState();
+  // Attach mints its own agent identity, so no fixture constant can name it.
+  // Recorded ahead of every startAgent handler and handed straight on, so a test
+  // can assert against the identity the attach under test actually used.
+  let lastStartedAgentId: string | undefined;
+  /** Register the agent and ownership composition a reserved attach needs. */
+  function composeOwnership(): void {
+    unsubscribers.push(registerMemoryAgentStorage(MakaioBus, memoryState));
+    unsubscribers.push(registerMemorySessionOwnershipStorage(MakaioBus, memoryState));
+    unsubscribers.push(
+      registerSessionOwnershipAuthority({
+        bus: MakaioBus,
+        machineId: DEFAULT_TEST_MACHINE_ID,
+        topology: 'shared-machine',
+      }),
+    );
+    unsubscribers.push(
+      MakaioBus.on(
+        AdapterSubjects.startAgent,
+        (context) => {
+          lastStartedAgentId = context.payload.agentId;
+          return context.next();
+        },
+        { priority: 1000 },
+      ),
+    );
+  }
+  composeOwnership();
   // Stub for turn creation: setupTurnTracking calls TurnStorageSubjects.create
   // to obtain a monotonic turnNumber before emitting lifecycle events.
   // The counter is local to createAttachHandlerContext() so each test context
@@ -352,14 +439,64 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
     },
 
     /**
-     * Registers a mock session.get handler.
+     * Registers a mock session.get handler, and seeds the row ownership reads.
+     *
+     * The reservation an attach takes checks the agent's membership against a
+     * *stored* session, so a session the service can `get` but ownership cannot
+     * find would refuse every attach with `not-found`.
      * @param session - Session to return (or null)
      * @returns Unsubscribe function
      */
     registerSessionGetHandler(session: IMakaioSession | null): () => void {
+      if (session !== null) memoryState.sessions.set(session.sessionId, session);
       return MakaioBus.on(SessionSubjects.get, (context) => {
         context.setResult({ session });
       });
+    },
+
+    /**
+     * The identity the most recent attach minted and dispatched under.
+     * @returns The agent id the last `adapter.startAgent` request carried
+     */
+    startedAgentId(): string {
+      if (lastStartedAgentId === undefined) throw new Error('no attach has dispatched a startAgent request yet');
+      return lastStartedAgentId;
+    },
+
+    /**
+     * Seed a session row for tests that answer `session.get` themselves.
+     * @param session - Session the ownership backend must be able to find
+     */
+    seedSessionRow(session: IMakaioSession): void {
+      memoryState.sessions.set(session.sessionId, session);
+    },
+
+    /**
+     * Re-register the agent and ownership composition over the same state.
+     *
+     * For the tests that call `resetBusHandlers()` mid-test: the rows survive,
+     * the handlers do not.
+     */
+    restoreOwnershipComposition(): void {
+      composeOwnership();
+    },
+
+    /**
+     * Read an agent row as ownership and the attach path left it.
+     * @param agentId - Agent to read
+     * @returns The stored row, or `undefined` when none was written or it was deleted
+     */
+    getStoredAgent(agentId: string): MakaioSessionAgent | undefined {
+      return memoryState.agents.get(agentId);
+    },
+
+    /**
+     * Read the ownership claims one agent holds.
+     * @param agentId - Agent whose generations are inspected
+     * @returns Every claim row filed for the agent
+     */
+    getAgentClaims(agentId: string): AdapterSessionClaimRecord[] {
+      return [...memoryState.claims.values()].filter((claim) => claim.agentId === agentId);
     },
 
     /**
@@ -376,7 +513,9 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
         receivedRequests.push(context.payload);
         context.setResult({
           success: true,
-          agentId: ids.agentId,
+          // Echoed, as a real adapter does: attach mints the identity and
+          // suppresses the adapter's own row write by supplying it.
+          agentId: context.payload.agentId ?? ids.agentId,
           adapterId: context.payload.adapterId,
           adapterSessionId: ids.adapterSessionId,
           sessionId: ids.sessionId,
@@ -434,6 +573,11 @@ export interface AttachHandlerTestContext {
   setDefaultAdapterCapabilities: (capabilities: string[]) => void;
   createMockSession: (overrides?: Partial<IMakaioSession>) => IMakaioSession;
   registerSessionGetHandler: (session: IMakaioSession | null) => () => void;
+  startedAgentId: () => string;
+  seedSessionRow: (session: IMakaioSession) => void;
+  restoreOwnershipComposition: () => void;
+  getStoredAgent: (agentId: string) => MakaioSessionAgent | undefined;
+  getAgentClaims: (agentId: string) => AdapterSessionClaimRecord[];
   registerStartAgentHandler: (overrides?: Partial<Extract<StartAgentResponse, { success: true }>>) => {
     unsubscribe: () => void;
     receivedRequests: StartAgentRequestPayload[];

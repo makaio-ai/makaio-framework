@@ -12,6 +12,7 @@ export {
   runExclusiveStart,
   type ExclusiveStart,
   type InFlightStart,
+  type StartAttemptOutcome,
 } from './in-flight-starts.js';
 export { enqueueAgentSettle } from './settle-queue.js';
 export { mintClaimToken } from './claim-token.js';

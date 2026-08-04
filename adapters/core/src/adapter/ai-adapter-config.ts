@@ -117,6 +117,22 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
    * so no transcript is written to the provider's session store.
    */
   ephemeral?: boolean;
+
+  /**
+   * Whether this agent's provider session is this adapter's to publish yet.
+   *
+   * Absent means yes, which is every adapter-owned agent: the adapter is the
+   * only publisher such an agent has. It answers `false` for the window in which
+   * a **caller-owned** start has not handed its key over — the caller reserved
+   * the provider session and settles the key its connector confirms, so an
+   * announcement or an event field from here would publish a key no generation
+   * holds yet, and the observer would settle it under a token that caller's
+   * failure paths cannot name.
+   *
+   * A predicate rather than a flag because the window has an end the adapter can
+   * observe — its own registration — and no new state to keep in step with it.
+   */
+  isProviderKeyPublishable?: () => boolean;
 }
 
 /**

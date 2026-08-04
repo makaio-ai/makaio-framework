@@ -149,8 +149,10 @@ export function registerGetAgentHandler(sessions: Map<string, IMakaioSession>): 
  */
 export function registerRehydrateAgentHandler(): UnsubscribeFunction {
   return MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
-    // Connector swap is successful - return empty response
-    ctx.setResult({});
+    // The connector came back. `success: true` without an `adapterSessionId`
+    // means the connector kept the key it was asked to resume — the response is
+    // a disposition union, not the `{}` this stub used to answer.
+    ctx.setResult({ success: true });
   });
 }
 

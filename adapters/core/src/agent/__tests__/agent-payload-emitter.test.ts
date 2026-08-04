@@ -4,6 +4,46 @@ import { AgentPayloadEmitter } from '../agent-payload-emitter.js';
 import { createAgentEventBridge } from '../agent-internal-factories.js';
 
 describe('AgentPayloadEmitter', () => {
+  it('lets no provider key out of any event while the key is not this attempt\u2019s to publish', async () => {
+    // The route-agnostic half of the publication gate. Every enriched event —
+    // whatever subject, whoever built the payload — passes through this one
+    // funnel, so a route that never heard of the gate cannot leak: not by asking
+    // for the key (the resolver withholds it) and not by *arriving* with one,
+    // which is the shape the connector's own scoped events have when the bridge
+    // re-emits them globally.
+    const emittedPayloads: Array<Record<string, unknown>> = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async (_subject: unknown, payload: unknown) => {
+          emittedPayloads.push(payload as Record<string, unknown>);
+        },
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+      }),
+      getCurrentMessageId: () => undefined,
+      getCurrentTurnId: () => undefined,
+      getConnectorAdapterSessionId: () => 'connector-confirmed-session',
+      getLastKnownAdapterSessionId: () => 'cached-session',
+      setLastKnownAdapterSessionId: () => {},
+      isProviderKeyPublishable: () => false,
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    // A payload that already carries a provider session, as a bridged connector
+    // event does, on a subject this gate was never written for.
+    await emitter.emitGlobal(AgentSubjects.message, {
+      content: 'hello',
+      adapterSessionId: 'carried-by-the-payload',
+    } as never);
+
+    expect(emittedPayloads).toHaveLength(1);
+    expect(emittedPayloads[0]).not.toHaveProperty('adapterSessionId');
+  });
+
   it('prefers caller-provided messageId and emits runtime analytics defaults', async () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({

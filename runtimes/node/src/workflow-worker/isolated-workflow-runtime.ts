@@ -12,6 +12,7 @@ import {
   ToolRegistryToken,
   toolRegistryPackage,
 } from '@makaio/services-core';
+import { orderAfterAdapterSubsystem } from '@makaio/subsystem-adapter';
 import { createClientsCorePackage } from '@makaio/subsystem-client';
 import type { Toolset } from '@makaio/tools-core';
 import {
@@ -173,7 +174,9 @@ export async function createIsolatedWorkflowRuntime(
       toolRegistryPackage,
       cliDetectionPackage,
       clientsCorePackage,
-      ...contributedPackages,
+      // Contributed packages may contribute adapters, which the subsystem must
+      // already be running to process.
+      ...orderAfterAdapterSubsystem(contributedPackages),
     ];
     coordinator.load(packagesToLoad);
     shutdownSteps.push(...registerExtensionBootContributions(packagesToLoad, bus, coordinator));

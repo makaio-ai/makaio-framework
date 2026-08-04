@@ -21,3 +21,32 @@ export function createNoAuthTestProviderContext(
     },
   };
 }
+
+/**
+ * Build a provider context whose native account the adapter must activate.
+ *
+ * Activation only runs for a resolved context in `inferred` auth mode that names
+ * an account — every other shape skips it — so a case about the activation step
+ * has to say so precisely rather than by hoping the default qualifies.
+ * @param account - Native account the context selects.
+ * @param providerConfigId - Provider config identifier.
+ * @param definitionId - Provider definition identifier.
+ * @returns A context that requires account activation.
+ */
+export function createManagedAccountTestProviderContext(
+  account: { managerId: string; accountId: string } = { managerId: 'test-manager', accountId: 'test-account' },
+  providerConfigId = 'test-provider-config',
+  definitionId = 'test-provider',
+): ProviderContext {
+  return {
+    state: 'resolved',
+    providerConfigId,
+    definitionId,
+    auth: {
+      mode: 'inferred',
+      method: { owner: 'client', clientId: definitionId, methodId: 'native' },
+      definition: { id: 'native', mode: 'inferred', label: 'Native account' },
+      account,
+    },
+  };
+}

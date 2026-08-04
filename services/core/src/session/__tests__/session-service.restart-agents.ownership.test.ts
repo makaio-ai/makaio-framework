@@ -9,7 +9,7 @@ import {
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { MakaioSessionService } from '../session-service.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
-import { runExclusiveStart } from '../ownership/in-flight-starts.js';
+import { peekInFlightStart, runExclusiveStart } from '../ownership/in-flight-starts.js';
 import { createTestAgent, registerMemorySessionBackends, settleEventLoop } from './shared.js';
 
 /** A gate the test opens by hand, so the join window is deterministic. */
@@ -44,6 +44,29 @@ function createDeferred(): Deferred {
 const MACHINE_ID = 'restart-ownership-machine';
 /** The instance `adapterRuntime.resolveId` answers with — never the stored one. */
 const LIVE_ADAPTER_ID = 'live-test-adapter';
+
+/**
+ * The generation a refused reservation reports as the holder.
+ * @param agentId - Agent whose key is held elsewhere.
+ * @returns A claim record naming a foreign owner.
+ */
+function foreignHolder(agentId: string) {
+  const now = Date.now();
+  return {
+    claimId: `claim-${agentId}`,
+    machineId: MACHINE_ID,
+    adapterId: LIVE_ADAPTER_ID,
+    adapterName: 'test-adapter',
+    providerSessionId: `provider-${agentId}`,
+    sessionId: 'session-foreign',
+    agentId: `foreign-${agentId}`,
+    claimToken: `token-${agentId}`,
+    fence: 1,
+    status: 'held' as const,
+    claimedAt: now,
+    updatedAt: now,
+  };
+}
 /** The instance persisted on the agent rows, stale by construction. */
 const STALE_ADAPTER_ID = 'stale-test-adapter';
 
@@ -120,7 +143,7 @@ describe('MakaioSessionService - restartAgents ownership', () => {
       bus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
         dispatched.push(ctx.payload);
         await onDispatch?.(ctx.payload.agentId);
-        ctx.setResult({});
+        ctx.setResult({ success: true });
       }),
     );
     return dispatched;
@@ -249,12 +272,12 @@ describe('MakaioSessionService - restartAgents ownership', () => {
     expect(await listClaims()).toEqual([]);
   });
 
-  it('abandons the reserved claim and writes no status when the rehydrate throws', async () => {
-    // Case 42. `rehydrateAgent` has no failure response, so every failure is a
-    // throw and therefore of unknown extent: the provider may still hold a live
-    // session, which is why the claim is retired as `abandoned` rather than
-    // released. The row's status belongs to the adapter on this path and the
-    // service must not touch it.
+  it('abandons the reserved claim and marks the row dead when the rehydrate throws', async () => {
+    // Case 42, re-pointed to the caller-owned row. A *throw* is of unknown
+    // extent — the provider may still hold a live session — so the claim is
+    // retired as `abandoned` rather than released. The status is now the
+    // service's to write: it moved the row to `starting` before reserving, so
+    // it owes the row a terminal state on the way out.
     await seedResumableAgent('session-throwing', 'agent-throwing');
     storageCleanups.push(
       bus.on(AdapterSubjects.rehydrateAgent, () => {
@@ -277,8 +300,9 @@ describe('MakaioSessionService - restartAgents ownership', () => {
     expect(claims[0]?.status).toBe('abandoned');
 
     const { agent } = await bus.request(AgentStorageSubjects.get, { agentId: 'agent-throwing' });
-    // Untouched: `createTestAgent` persists `idle`, and no service write moved it.
-    expect(agent?.status).toBe('idle');
+    // The attempt's own `starting` claim, compare-and-swapped to `dead`: never
+    // left `starting`, which the next send would read as a phantom recovery.
+    expect(agent?.status).toBe('dead');
   });
 
   it('refuses the settlement and releases cleanly when a removal lands mid-rehydrate', async () => {
@@ -397,6 +421,8 @@ describe('MakaioSessionService - restartAgents ownership', () => {
         agentId: 'agent-joined',
         adapterId: 'other-live-adapter',
       });
+      // This attempt did build a connector; the joiner may take it at its word.
+      return 'connected';
     });
 
     const restart = bus.request(SessionSubjects.restartAgents, { sessionId: 'session-joined' });
@@ -422,6 +448,79 @@ describe('MakaioSessionService - restartAgents ownership', () => {
     expect(ownership?.currency.currentAdapterSessionId).toBeNull();
     expect(adapterSessionId).toBe('provider-agent-joined');
   });
+  it('does not report a deferred restart as a connector to whoever joined it', async () => {
+    // A restart reports a *deferred* agent as a success — nothing failed, the
+    // send decides later — but nothing was dispatched for it either. The seam
+    // verdict follows the outcome rather than that success: told `connected`, a
+    // joiner would trust the row the rollback put back and route at a runtime
+    // this process does not own.
+    await seedResumableAgent('session-deferred-join', 'agent-deferred-join');
+    const dispatched = captureRehydrates();
+    // The key belongs to a generation this runtime does not own, which is what
+    // makes the restart defer instead of dispatching.
+    // Held inside the reservation so the attempt is provably still in flight
+    // when the joiner looks for it — the entry is gone the instant it settles.
+    const held = createDeferred();
+    storageCleanups.push(
+      bus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (ctx) => {
+          await held.promise;
+          ctx.setResult({ outcome: 'occupied', holder: foreignHolder(ctx.payload.agentId) });
+        },
+        { priority: 100 },
+      ),
+    );
+
+    const restart = bus.request(SessionSubjects.restartAgents, { sessionId: 'session-deferred-join' });
+    await settleEventLoop();
+    const entry = peekInFlightStart('agent-deferred-join');
+    expect(entry).toBeDefined();
+    const joinedVerdict = entry?.settled;
+    held.resolve();
+    const joined = await joinedVerdict;
+    const result = await restart;
+
+    // The restart itself still reports the deferral as a success…
+    expect(result.results).toEqual([{ agentId: 'agent-deferred-join', adapterId: STALE_ADAPTER_ID, success: true }]);
+    // …and the seam still tells a joiner there is no connector behind it.
+    expect(joined).toBe('no-connector');
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it('asks for itself when the attempt it joined built no connector', async () => {
+    // The joined attempt answered for *its* inputs: it may have been refused,
+    // deferred or lost its own arbitration, and the row it leaves behind is the
+    // row it found. A joiner that read that as its own failure would report a
+    // recoverable agent as unrecoverable without ever having tried — which is
+    // why the shared seam gives every joiner exactly one re-entry, and why the
+    // restart now enters through it rather than around it.
+    await seedResumableAgent('session-joined-no-connector', 'agent-joined-no-connector');
+    const dispatched = captureRehydrates();
+
+    const attempt = createDeferred();
+    const inFlight = runExclusiveStart('agent-joined-no-connector', async () => {
+      await attempt.promise;
+      return 'no-connector';
+    });
+
+    const restart = bus.request(SessionSubjects.restartAgents, { sessionId: 'session-joined-no-connector' });
+    await settleEventLoop();
+    // Nothing yet: the restart is waiting on the attempt it joined.
+    expect(dispatched).toHaveLength(0);
+
+    attempt.resolve();
+    await inFlight.settled;
+    const result = await restart;
+
+    // One re-entry, and it is this restart's own reserved rehydrate: it
+    // dispatched, so it may report the live instance it bound the agent to.
+    expect(dispatched).toHaveLength(1);
+    expect(result.results).toEqual([
+      { agentId: 'agent-joined-no-connector', adapterId: LIVE_ADAPTER_ID, success: true },
+    ]);
+  });
+
   it('reports failure when the start it joined rejected, rather than reading the untouched row', async () => {
     // The wave's rule is that the row an attempt leaves behind is the verdict —
     // and it holds only because a failing attempt writes that row. A fresh start
@@ -511,5 +610,38 @@ describe('MakaioSessionService - restartAgents ownership', () => {
     const { ownership } = await bus.request(SessionOwnershipStorageSubjects.read, { agentId: 'agent-named-machine' });
     expect(ownership?.currency.currentAdapterSessionId).toBe(adapterSessionId);
     expect(ownership?.currencyFence).toBeGreaterThan(0);
+  });
+
+  it('restarts nothing when the named machine has no instance of the agent’s adapter', async () => {
+    // The other side of the same rule. When the instance cannot be derived for
+    // the machine every ownership act names, the *persisted* one may not stand
+    // in for it: an instance ID is a one-way hash of (machineId, adapterName),
+    // so the machine it belongs to cannot be recovered from it, and reserving
+    // under this machine while dispatching at that instance is precisely the key
+    // nobody else computes. The agent is reported the way any non-native plan is
+    // reported — nothing failed and nothing was dispatched, so the send path
+    // recovers it with injected history.
+    await seedResumableAgent('session-unresolvable-instance', 'agent-unresolvable-instance');
+    storageCleanups.push(
+      bus.on(
+        AdapterRuntimeSubjects.resolveId,
+        () => {
+          throw new Error('no adapter instance for this machine');
+        },
+        // Ahead of the fixture's resolver: the first registered handler wins.
+        { priority: 100 },
+      ),
+    );
+    const dispatched = captureRehydrates();
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId: 'session-unresolvable-instance' });
+
+    expect(result.results).toEqual([
+      { agentId: 'agent-unresolvable-instance', adapterId: STALE_ADAPTER_ID, success: true },
+    ]);
+    expect(dispatched).toHaveLength(0);
+    // And no generation was taken in a namespace the dispatch would never have
+    // used.
+    expect(await listClaims()).toEqual([]);
   });
 });

@@ -86,6 +86,7 @@ export {
   SessionExtensionContextImpl,
   SessionOrchestrator,
   sessions,
+  SessionStartError,
   SessionStorageNamespace,
   SessionStorageSubjects,
   SessionTurnManager,
@@ -96,6 +97,7 @@ export {
   TurnStorageSubjects,
   verifyAndRecoverAgents,
   type AgentContextState,
+  type AgentRecoveryOutcome,
   type BuildContextOptions,
   type ContextAssemblyResult,
   type ContextWindowTrackerConfig,
@@ -123,6 +125,7 @@ export {
   type TurnPairStateChange,
   type TurnPairTerminalOutcome,
   type TurnResult,
+  type VerifiedAgents,
 } from './session/index.js';
 export {
   ArtifactSchemaRegistry,

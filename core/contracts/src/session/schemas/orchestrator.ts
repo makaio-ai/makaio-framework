@@ -254,6 +254,20 @@ export const OrchestratorSchemas = {
       turnId: z.string(),
       /** Session ID (echo of request target) */
       sessionId: z.string(),
+      /**
+       * Agents this send could not deliver to because their provider session is
+       * held by a generation this runtime does not own.
+       *
+       * Absent when every target was delivered to — so a caller that ignores it
+       * sees the shape it always saw. It exists because the alternative is a
+       * send that is silently narrower than it was asked for: a broadcast to
+       * four agents delivering to three, indistinguishable from a broadcast to
+       * three.
+       *
+       * A send in which *every* target deferred raises instead, carrying the
+       * same set on the error.
+       */
+      deferredAgentIds: z.array(z.string()).optional(),
     }),
   },
 

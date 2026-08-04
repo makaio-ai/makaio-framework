@@ -15,8 +15,19 @@ import type { McpSessionContext, MakaioSessionAgent } from '@makaio/contracts';
 import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import { AdapterSubjects, McpSubjects, SessionSubjects } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
-import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
-import { restoreAgentUsageFromTurns } from './restore-agent-usage.js';
+import {
+  notDispatched,
+  prepareColdRehydrate,
+  type ColdRehydratePreflightDeps,
+  type RehydrateAgentRefusal,
+  type RehydrateRuntime,
+} from './ai-adapter-rehydrate-preflight.js';
+import {
+  providerKeyIsPublishable,
+  providerKeyPublicationFor,
+  publishedProviderKey,
+  type ProviderKeyPublication,
+} from './adapter-provider-key-publication.js';
 import {
   commitAdapterProviderContextActivation,
   prepareAdapterProviderContextActivation,
@@ -26,7 +37,6 @@ import {
 
 type RehydrateAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubjects.rehydrateAgent>;
 type RehydrateAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.rehydrateAgent>;
-
 /**
  * Configuration for AgentRehydrationManager construction.
  * @typeParam TBus - Scoped bus type for adapter-specific events
@@ -60,8 +70,15 @@ export class AgentRehydrationManager<
   TConnector extends AIAgentConnector<TBus> = AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector> = AIAgent<TBus, TConnector>,
 > {
-  /** In-flight rehydrate operations keyed by agentId (single-flight dedupe). */
-  private readonly inFlight = new Map<string, Promise<void>>();
+  /**
+   * In-flight rehydrate operations keyed by agentId (single-flight dedupe).
+   *
+   * The key is the agent alone, deliberately: adding the ownership mode would
+   * permit two concurrent rehydrates of one agent, which is exactly what this
+   * map exists to prevent. The promise carries the owning attempt's own
+   * response so a joiner is answered with what actually happened.
+   */
+  private readonly inFlight = new Map<string, Promise<RehydrateAgentResponsePayload>>();
   private readonly globalBus: IMakaioBus;
   private readonly registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   private readonly createAgentFn: (
@@ -92,22 +109,30 @@ export class AgentRehydrationManager<
   public handleRehydrateAgent = async (
     ctx: RequestContext<RehydrateAgentRequestPayload, RehydrateAgentResponsePayload>,
   ): Promise<void> => {
-    const { agentId, cwd, model, resumeAdapterSessionId: rpcResumeId } = ctx.payload;
+    const { agentId, cwd, model, resumeAdapterSessionId: rpcResumeId, callerOwnsAgentRow } = ctx.payload;
+    const runtime: RehydrateRuntime = {
+      rpcResumeId,
+      cwd,
+      model,
+      callerOwnsAgentRow,
+      publication: providerKeyPublicationFor({ callerOwnsAgentRow: callerOwnsAgentRow === true }),
+    };
     const existing = this.inFlight.get(agentId);
     if (existing) {
-      await existing;
-      ctx.setResult({});
+      // A joiner is answered with the owning attempt's own result. Synthesising
+      // a success here would report that attempt's refusal as a rehydrate that
+      // happened.
+      ctx.setResult(await existing);
       return;
     }
 
-    const rehydratePromise = (async (): Promise<void> => {
+    const rehydratePromise = (async (): Promise<RehydrateAgentResponsePayload> => {
       const entry = this.registry.get(agentId);
       if (entry) {
-        await this.rehydrateRegisteredAgent(agentId, entry, { rpcResumeId, cwd, model });
-        return;
+        return await this.rehydrateRegisteredAgent(agentId, entry, runtime);
       }
-      await this.rehydrateFromStorage(agentId, { rpcResumeId, cwd, model });
-    })().catch((error) => {
+      return await this.rehydrateFromStorage(agentId, runtime);
+    })().catch((error): never => {
       if (error instanceof AggregateError) {
         throw new AggregateError(error.errors, `Failed to recover agent ${agentId}: ${error.message}`);
       }
@@ -117,14 +142,26 @@ export class AgentRehydrationManager<
 
     this.inFlight.set(agentId, rehydratePromise);
 
+    let result: RehydrateAgentResponsePayload;
     try {
-      await rehydratePromise;
+      result = await rehydratePromise;
     } finally {
       this.inFlight.delete(agentId);
     }
 
-    ctx.setResult({});
+    ctx.setResult(result);
   };
+
+  /**
+   * The reads the cold preflight performs on this adapter's behalf.
+   * @returns Bus and MCP resolver bound to this manager.
+   */
+  private preflightDeps(): ColdRehydratePreflightDeps {
+    return {
+      globalBus: this.globalBus,
+      resolveMcpSessionContext: (sessionId, profileId) => this.resolveMcpSessionContext(sessionId, profileId),
+    };
+  }
 
   /**
    * Cold-path rehydration: resurrect an agent from storage.
@@ -132,64 +169,21 @@ export class AgentRehydrationManager<
    * Resolves MCP context, provider credentials, system prompt, and usage
    * baseline before creating a new agent instance and registering it.
    * @param agentId - Agent identifier to rehydrate
-   * @param runtime - Runtime overrides from the rehydrate RPC payload
+   * @param runtime - Runtime overrides and ownership mode from the rehydrate RPC payload
+   * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
    */
   private async rehydrateFromStorage(
     agentId: string,
-    runtime: {
-      rpcResumeId?: string;
-      cwd?: string;
-      model?: string;
-    },
-  ): Promise<void> {
-    const { rpcResumeId, cwd, model } = runtime;
-    const result = await this.globalBus.requestOptional(AgentStorageSubjects.get, { agentId });
-    if (!result.handled || !result.data.agent) {
-      throw new Error(`Agent ${agentId} not found in storage`);
-    }
-    const persisted = result.data.agent;
-    if (persisted.status === 'disposed') {
-      throw new Error(`Agent ${agentId} is disposed and cannot be rehydrated`);
-    }
-    // Re-resolve MCP session context from persisted keys so the rehydrated agent
-    // regains tool ledger and native passthrough. Best-effort: resolves to
-    // undefined if the MCP service is unavailable on this process start.
-    const mcpSessionContext = await this.resolveMcpSessionContext(persisted.sessionId, persisted.profileId);
-    const providerContext =
-      persisted.providerConfigId !== undefined
-        ? await resolveRuntimeProviderContext(this.globalBus, {
-            adapterName: persisted.adapterName,
-            providerConfigId: persisted.providerConfigId,
-          })
-        : undefined;
-    // A resumed generation's identity is the session it resumes — a divergent
-    // identity marker would seed the connector with the old ID, leaving the agent
-    // reporting an identity it is not actually writing to. A fresh generation
-    // mints its own provider identity instead: pinning a used session ID on a
-    // fresh start collides with the provider's durable session store (claude
-    // CLI: "Session ID already in use").
-    const agentCreationRequest: AgentCreationOptions = {
-      model: model ?? persisted.model,
-      cwd: cwd ?? persisted.cwd,
-      allowedDirectories: persisted.allowedDirectories,
-      ...(rpcResumeId !== undefined && {
-        adapterSessionId: rpcResumeId,
-        resumeAdapterSessionId: rpcResumeId,
-      }),
-      ...(providerContext !== undefined && { providerContext }),
-      ...(mcpSessionContext !== undefined && { mcpSessionContext }),
-    };
-
-    // Restore cumulative usage baseline from persisted turn history.
-    // Without this, the adapter's in-memory totals would restart from zero
-    // after every process restart, making session-level usage unreliable.
-    const restoredUsage = await restoreAgentUsageFromTurns(this.globalBus, persisted.sessionId, agentId);
-    const { agent: newAgent, adapterSessionId: recoveredAdapterSessionId } = await this.claimAndCreateAgent(
-      agentId,
-      persisted,
-      agentCreationRequest,
-      rpcResumeId,
-    );
+    runtime: RehydrateRuntime,
+  ): Promise<RehydrateAgentResponsePayload> {
+    const { rpcResumeId, cwd, model, callerOwnsAgentRow } = runtime;
+    const preflight = await prepareColdRehydrate(this.preflightDeps(), agentId, runtime);
+    if ('success' in preflight) return preflight;
+    const { persisted, agentCreationRequest, restoredUsage } = preflight;
+    const created = await this.claimAndCreateAgent(agentId, persisted, agentCreationRequest, rpcResumeId);
+    // A refusal is returned verbatim: only the response arm carries `success`.
+    if ('success' in created) return created;
+    const { agent: newAgent, adapterSessionId: recoveredAdapterSessionId } = created;
 
     // registry.set() settles the pending claim for the resume target, including
     // when the provider confirmed a different session than the claimed target
@@ -208,8 +202,12 @@ export class AgentRehydrationManager<
       cwd,
       model,
       recoveredAdapterSessionId,
+      publication: runtime.publication,
     });
-    await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+    if (!callerOwnsAgentRow) {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+    }
+    return { success: true, adapterSessionId: recoveredAdapterSessionId };
   }
 
   /**
@@ -237,28 +235,58 @@ export class AgentRehydrationManager<
    * evidence a rejected movement still needs delivering — with the tracker, the
    * unacknowledged announcement stays armed and the agent's next emitted event
    * re-drives it, so persisting the recovered ID stays safe.
+   *
+   * **A rehydrate whose key is deferred announces nothing, because it is not
+   * this generation's currency writer.** A deferred key belongs to a caller that
+   * reserved the provider session and settles the confirmed key itself, under a
+   * token it minted before dispatching. The observer would settle the same
+   * movement under a token of its own, which no failure path of that caller can
+   * name — so a settlement that then fails gives back the reservation and its
+   * own candidate and leaves the observer's generation held on a row it has just
+   * marked dead. One movement, one settle producer: the same gate that decides
+   * whether the start handler announces, applied at the seam where the caller
+   * settles instead. What is given up is a window — between the
+   * connector confirming the key and the caller's settlement claiming it, nobody
+   * holds it — which is the residual this aggregate already documents and which
+   * the next attempt heals; a leaked generation heals for nobody.
    * @param agentId - Agent identifier being rehydrated
    * @param persisted - Persisted agent record supplying stable identity fields
    * @param agent - Rehydrated agent instance owning the movement tracker
-   * @param runtime - Requested cwd/model overrides plus the confirmed session ID
+   * @param runtime - Requested cwd/model overrides, the confirmed session ID, and who settles it
    */
   private async publishRehydratedRuntime(
     agentId: string,
     persisted: MakaioSessionAgent,
     agent: TAgent,
-    runtime: { cwd: string | undefined; model: string | undefined; recoveredAdapterSessionId: string },
+    runtime: {
+      cwd: string | undefined;
+      model: string | undefined;
+      recoveredAdapterSessionId: string;
+      publication: ProviderKeyPublication;
+    },
   ): Promise<void> {
     const { cwd, model, recoveredAdapterSessionId } = runtime;
     const adapterSessionIdMoved = recoveredAdapterSessionId !== persisted.adapterSessionId;
+    // Same gate, in its "who settles this" form: a deferred key is the caller's,
+    // so the movement is recorded as settled by it rather than announced.
+    const callerSettlesCurrency = !providerKeyIsPublishable(runtime.publication);
     if (adapterSessionIdMoved) {
-      await agent.recordConfirmedAdapterSession(recoveredAdapterSessionId);
+      await agent.recordConfirmedAdapterSession(recoveredAdapterSessionId, callerSettlesCurrency);
     }
-    if (cwd === undefined && model === undefined && !adapterSessionIdMoved) return;
+    // The row write is a publication route like any other, so it takes its key
+    // from the gate: a caller-owned rehydrate's answer *is* the hand-over, and
+    // until the caller settles, this row would advertise a provider session no
+    // generation holds — while a caller whose settlement then fails could give
+    // back the generations it took but never the advertisement.
+    const publishedAdapterSessionId = adapterSessionIdMoved
+      ? publishedProviderKey(runtime.publication, recoveredAdapterSessionId)
+      : undefined;
+    if (cwd === undefined && model === undefined && publishedAdapterSessionId === undefined) return;
     await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
       agentId,
       cwd,
       model,
-      ...(adapterSessionIdMoved && { adapterSessionId: recoveredAdapterSessionId }),
+      ...(publishedAdapterSessionId !== undefined && { adapterSessionId: publishedAdapterSessionId }),
     });
   }
 
@@ -273,38 +301,52 @@ export class AgentRehydrationManager<
    * - `registry.set()` (called by the caller) auto-clears the claim on
    *   success.
    *
-   * Hard failure on a denied claim is intentional: the session is already
-   * owned by another in-flight operation. Degrading silently to fresh-without-
-   * resume would produce two agents writing to different provider conversations
-   * under the same logical agent ID, which is a harder-to-diagnose corruption.
+   * Refusal on a denied claim is intentional: the session is already owned by
+   * another in-flight operation. Degrading silently to fresh-without-resume
+   * would produce two agents writing to different provider conversations under
+   * the same logical agent ID, which is a harder-to-diagnose corruption. The
+   * refusal is *modeled* rather than thrown — nothing reached the provider, so
+   * a reserving caller may release its reservation instead of retiring the key.
    * @param agentId - Agent identifier being rehydrated
    * @param persisted - Persisted agent record
    * @param creationRequest - Agent creation options (includes resumeAdapterSessionId when resuming)
    * @param effectiveResumeId - Provider session being claimed, or `undefined` for fresh-start
-   * @returns Newly created ready agent and its provider-confirmed session ID
+   * @returns Newly created ready agent with its provider-confirmed session ID, or the modeled refusal to return verbatim
    */
   private async claimAndCreateAgent(
     agentId: string,
     persisted: MakaioSessionAgent,
     creationRequest: AgentCreationOptions,
     effectiveResumeId: string | undefined,
-  ): Promise<{ agent: TAgent; adapterSessionId: string }> {
+  ): Promise<{ agent: TAgent; adapterSessionId: string } | RehydrateAgentRefusal> {
     if (effectiveResumeId !== undefined) {
       const claimed = this.registry.claimAdapterSession(effectiveResumeId);
       if (!claimed) {
-        throw new Error(
+        return notDispatched(
           `Provider session ${effectiveResumeId} is already claimed by another in-flight rehydrate or start`,
         );
       }
     }
 
-    let activation: ProviderContextActivationLifecycle | undefined;
-    let newAgent: TAgent | undefined;
+    // Its own step and its own answer: preparing the account is a local
+    // account-manager transaction and no connector exists yet, so a failure
+    // provably reached no provider. Modeled, the caller hands the key straight
+    // back — the answer this path already gives a disposed agent.
+    let activation: ProviderContextActivationLifecycle;
     try {
       activation = await prepareAdapterProviderContextActivation(
         this.globalBus,
         creationRequest.providerContext ?? { state: 'unresolved' },
       );
+    } catch (error) {
+      if (effectiveResumeId !== undefined) this.registry.releaseAdapterSessionClaim(effectiveResumeId);
+      return notDispatched(
+        `Agent ${agentId} could not activate its provider account: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    let newAgent: TAgent | undefined;
+    try {
       newAgent = await this.createAgentFn(agentId, persisted.sessionId, creationRequest);
       // Re-resolve the system prompt via the host-tier RPC so the rehydrated
       // agent retains its identity after a process restart. Resolution is
@@ -326,7 +368,6 @@ export class AgentRehydrationManager<
       return { agent: newAgent, adapterSessionId: recoveredAdapterSessionId };
     } catch (error) {
       try {
-        if (activation === undefined) throw error;
         const failedAgent = newAgent;
         return await rollbackAdapterProviderContextActivationAfterFailure({
           activation,
@@ -353,13 +394,14 @@ export class AgentRehydrationManager<
    * without it the replacement connector starts fresh (no provider resume).
    * @param agentId - Agent identifier being rehydrated
    * @param entry - Active registry entry for the agent
-   * @param runtime - Runtime overrides from the rehydrate request
+   * @param runtime - Runtime overrides and ownership mode from the rehydrate request
+   * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
    */
   private async rehydrateRegisteredAgent(
     agentId: string,
     entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
-    runtime: { rpcResumeId?: string; cwd?: string; model?: string },
-  ): Promise<void> {
+    runtime: RehydrateRuntime,
+  ): Promise<RehydrateAgentResponsePayload> {
     // Resolve the "own session" test through the occupancy helper, which is
     // what `claimAdapterSession` consults. Comparing against the entry's
     // reconciled field instead would disagree with the claim during the
@@ -375,9 +417,18 @@ export class AgentRehydrationManager<
     // already advertises this agent as its occupant.
     const foreignResumeId = effectiveResumeId !== ownAdapterSessionId ? effectiveResumeId : undefined;
     if (foreignResumeId !== undefined && !this.registry.claimAdapterSession(foreignResumeId)) {
-      throw new Error(`Provider session ${foreignResumeId} is already claimed by another in-flight rehydrate or start`);
+      // Modeled like the cold path's denial: the connector has not been swapped,
+      // so a reserving caller's key is still exactly as it was.
+      return notDispatched(
+        `Provider session ${foreignResumeId} is already claimed by another in-flight rehydrate or start`,
+      );
     }
     const previousAdapterSessionId = entry.adapterSessionId;
+    // Read from the gate, exactly as the cold path reads it: the question "may
+    // this attempt publish the key" and the question "who settles it" are the
+    // same question, and asking the payload again here is what let the two paths
+    // answer it from two different facts.
+    const callerSettlesCurrency = !providerKeyIsPublishable(runtime.publication);
     try {
       // The resume key is always present: an explicit `undefined` overrides
       // the agent config's start-time resume target, so a non-native
@@ -394,12 +445,22 @@ export class AgentRehydrationManager<
       // wants injected, and no production caller warm-rehydrates without a
       // resume decision today (restartAgents defers non-native agents to
       // dead-agent recovery, which builds the recovery context itself).
-      await entry.agent.swapConnector({
-        cwd: runtime.cwd,
-        model: runtime.model,
-        ...(effectiveResumeId !== undefined && { adapterSessionId: effectiveResumeId }),
-        resumeAdapterSessionId: effectiveResumeId,
-      });
+      await entry.agent.swapConnector(
+        {
+          cwd: runtime.cwd,
+          model: runtime.model,
+          ...(effectiveResumeId !== undefined && { adapterSessionId: effectiveResumeId }),
+          resumeAdapterSessionId: effectiveResumeId,
+        },
+        undefined,
+        // The swap publishes the replacement's confirmed session, and a deferred
+        // key must not be published as an announcement: the caller settles that
+        // key itself, under a token it minted before dispatching, and the
+        // observer settling it first would hold a generation no failure path of
+        // that caller can name. The same gate the cold path reads, in its "who
+        // settles this" form.
+        callerSettlesCurrency,
+      );
       const refreshedAdapterSessionId = await entry.agent.getAdapterSessionId();
       if (refreshedAdapterSessionId) {
         entry.adapterSessionId = refreshedAdapterSessionId;
@@ -418,15 +479,29 @@ export class AgentRehydrationManager<
     // thread from storage.
     const movedAdapterSessionId =
       entry.adapterSessionId !== previousAdapterSessionId ? entry.adapterSessionId : undefined;
-    if (runtime.cwd !== undefined || runtime.model !== undefined || movedAdapterSessionId !== undefined) {
+    // Through the same gate as the cold path's row write, and for the same
+    // reason: the response carries the key to the caller, whose settlement
+    // claims it first.
+    const publishedAdapterSessionId = publishedProviderKey(runtime.publication, movedAdapterSessionId);
+    if (runtime.cwd !== undefined || runtime.model !== undefined || publishedAdapterSessionId !== undefined) {
       await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
         agentId,
         cwd: runtime.cwd,
         model: runtime.model,
-        ...(movedAdapterSessionId !== undefined && { adapterSessionId: movedAdapterSessionId }),
+        ...(publishedAdapterSessionId !== undefined && { adapterSessionId: publishedAdapterSessionId }),
       });
     }
-    await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+    if (!runtime.callerOwnsAgentRow) {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+    }
+    // The entry's field is the post-swap identity: it was just refreshed from
+    // the live connector, so it is what the registry advertises as this agent's
+    // occupancy and what a settling caller must settle on. It stays absent only
+    // when the connector confirmed nothing.
+    return {
+      success: true,
+      ...(entry.adapterSessionId !== undefined && { adapterSessionId: entry.adapterSessionId }),
+    };
   }
 
   /**

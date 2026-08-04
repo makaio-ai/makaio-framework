@@ -1,88 +1,57 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { StartAgentRequest } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import type { AttachIdentity } from './attach-execution-types.js';
-import { stopStartedAgentAfterFailure } from './attach-turn-tracking.js';
+import { buildCallerOwnedAgentRow } from './lead-start-request.js';
 
-/**
- * Persist identity metadata needed for recovery and downstream services.
- * @param bus - Bus providing agent storage.
- * @param params - Started agent identity and runtime metadata.
- * @returns Whether an identity record was written.
- */
-async function persistAgentIdentity(
-  bus: IMakaioBus,
-  params: AttachIdentity & { agentId: string; adapterId: string },
-): Promise<boolean> {
-  if (!params.personaId && !params.profileId && !params.harnessId && !params.providerConfigId) return false;
-  await bus.request(AgentStorageSubjects.set, {
-    agentId: params.agentId,
-    agent: {
-      agentId: params.agentId,
-      adapterId: params.adapterId,
-      adapterName: params.adapterName,
-      sessionId: params.sessionId,
-      role: params.role,
-      status: 'idle',
-      personaId: params.personaId,
-      profileId: params.profileId,
-      harnessId: params.harnessId,
-      providerConfigId: params.providerConfigId,
-      createdAt: params.timestamp,
-      lastActivityAt: params.timestamp,
-      ...(params.model !== undefined && { model: params.model }),
-      ...(params.cwd !== undefined && { cwd: params.cwd }),
-      ...(params.compressionMode !== undefined && { compressionMode: params.compressionMode }),
-    },
-  });
-  return true;
+/** Identity and runtime facts one attach persists before it dispatches. */
+export interface AttachAgentRowInput {
+  /** Caller-minted agent identity; attach owns this row. */
+  readonly agentId: string;
+  /** Live adapter instance the start is dispatched to. */
+  readonly adapterId: string;
+  /** Identity metadata resolved for the attach. */
+  readonly identity: AttachIdentity;
+  /** The runtime facts the dispatch will carry. */
+  readonly runtime: Pick<StartAgentRequest, 'model' | 'cwd' | 'allowedDirectories' | 'clientId' | 'harnessId'>;
 }
 
 /**
- * Persist identity metadata and rollback the started adapter agent on failure.
- * @param bus - Bus instance for persistence and rollback calls.
- * @param startResult - Started adapter and agent identity.
- * @param identity - Identity payload to persist.
- * @returns Whether an identity record was written.
+ * Write the `starting` agent row an attach reserves and dispatches under.
+ *
+ * **Pre-dispatch, and through the same builder a fresh lead start uses.** Attach
+ * used to write a whole record *after* the dispatch, with `status: 'idle'` and a
+ * narrower field set — which under the reserved attach is wrong twice over. The
+ * late write would overwrite the `starting` the reservation depends on before
+ * the settlement could run, and the narrow field set would silently lose every
+ * field the adapter's own suppressed row write used to supply:
+ * `allowedDirectories` and `clientId` are written by *nobody* once `agentId` is
+ * supplied, so a second builder here would drop them without a symptom.
+ *
+ * The short-circuit that skipped the write for an attach with no persona,
+ * profile, harness or provider config is gone with it: a reserved start has to
+ * have a row, because the reservation checks the agent's membership against one.
+ * @param bus - Bus the write is issued on.
+ * @param input - Identity, adapter binding and runtime facts of the attach.
  */
-export async function persistIdentityOrRollback(
-  bus: IMakaioBus,
-  startResult: { agentId: string; adapterId: string },
-  identity: AttachIdentity,
-): Promise<boolean> {
-  try {
-    return await persistAgentIdentity(bus, { ...identity, ...startResult });
-  } catch (error) {
-    console.error('[attach-handler] Failed to persist agent identity, rolling back started agent', {
+export async function persistAttachAgentRow(bus: IMakaioBus, input: AttachAgentRowInput): Promise<void> {
+  const { identity } = input;
+  // `requestOptional`, exactly as the fresh lead start writes its own row: a host
+  // with no agent storage is refused a page later, by the reservation that reads
+  // the row — the seam that can say what is missing and why.
+  await bus.requestOptional(AgentStorageSubjects.set, {
+    agentId: input.agentId,
+    agent: buildCallerOwnedAgentRow({
+      agentId: input.agentId,
+      adapterId: input.adapterId,
+      adapterName: identity.adapterName,
       sessionId: identity.sessionId,
-      agentId: startResult.agentId,
-      adapterId: startResult.adapterId,
-      error,
-    });
-    await stopStartedAgentAfterFailure(bus, startResult, identity.sessionId, 'identity persistence failure');
-    throw error;
-  }
-}
-
-/**
- * Remove identity persisted before a later attach stage failed.
- * @param bus - Bus providing agent identity storage.
- * @param agentId - Started agent whose identity must be rolled back.
- * @param attachError - Attach error that triggered rollback.
- * @returns Primary failure, or an aggregate that also records delete failure.
- */
-export async function rollbackPersistedIdentity(
-  bus: IMakaioBus,
-  agentId: string,
-  attachError: unknown,
-): Promise<unknown> {
-  try {
-    const { success } = await bus.request(AgentStorageSubjects.delete, { agentId });
-    if (!success) throw new Error(`Persisted agent identity was not deleted: ${agentId}`);
-    return attachError;
-  } catch (deleteError) {
-    return new AggregateError(
-      [attachError, deleteError],
-      `Failed to rollback agent identity after attach failure: ${agentId}`,
-    );
-  }
+      role: identity.role,
+      runtime: input.runtime,
+      ...(identity.providerConfigId !== undefined && { providerConfigId: identity.providerConfigId }),
+      ...(identity.personaId !== undefined && { personaId: identity.personaId }),
+      ...(identity.profileId !== undefined && { profileId: identity.profileId }),
+      ...(identity.compressionMode !== undefined && { compressionMode: identity.compressionMode }),
+    }),
+  });
 }

@@ -11,28 +11,24 @@ import type {
   AgentSelectionBase,
   IMakaioSession,
   MessageInput,
+  NativeLocalityReason,
+  NativeLocalityVerdict,
   ResolvedAgentConfig,
-  SessionContext,
 } from '@makaio/contracts';
 import { buildTurnInitiator, extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
 import { normalizeSelectionString, resolveAdapterNameById } from '../selection-utils.js';
 import { resolveAttachProviderSelection } from './attach-provider-selection.js';
-import type { AttachAgentParams, ResolvedAttachExecution } from './attach-execution-types.js';
+import type { AttachAgentParams, AttachLocalityResult, ResolvedAttachExecution } from './attach-execution-types.js';
 import {
   assertSessionActiveAfterStart,
   dispatchInitialAttachMessage,
   stopStartedAgentAfterFailure,
 } from './attach-turn-tracking.js';
-import { persistIdentityOrRollback, rollbackPersistedIdentity } from './attach-identity-persistence.js';
-import {
-  extractRuntimeOptions,
-  launchAttachAgent,
-  mergeRuntimeOptions,
-  resolveEffectiveAttachCwd,
-} from './attach-runtime-options.js';
+import { retireStartedAttach, startReservedAttachAgent } from './attach-start.js';
+import { extractRuntimeOptions, mergeRuntimeOptions, resolveEffectiveAttachCwd } from './attach-runtime-options.js';
 import { evaluateNativeLocality } from '../native-locality.js';
+import { runExclusiveStart } from '../ownership/index.js';
 import { resolveSessionResumeIdentity } from '../session-resume-identity.js';
-import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import type { SessionTurnManager } from '../session-turn-manager.js';
 import type { TurnReservation } from '../session-turn-manager.js';
@@ -101,14 +97,6 @@ interface AdapterCandidate {
   readonly adapterId: string | undefined;
 }
 
-/** Locality resolution result for an attach operation. */
-interface AttachLocalityResult {
-  /** Adapter session ID to use for native resume mode, or undefined for fresh create. */
-  resumeAdapterSessionId: string | undefined;
-  /** Session context carrying the locality verdict for non-native paths. */
-  attachSessionContext: SessionContext | undefined;
-}
-
 /**
  * Safely evaluate a boolean predicate against an optional bus RPC.
  *
@@ -152,60 +140,30 @@ async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promis
 }
 
 /**
- * Checks whether any live agent in the adapter registry is already using the
- * given provider-native session ID.
- *
- * A provider-native session has exactly one live writer. When a second agent
- * attempts to resume the same `adapterSessionId`, it would mutate the first
- * agent's conversation. This guard ensures attach degrades to
- * fresh-with-history instead.
- *
- * This is a best-effort guard: the definitive serialization happens in the
- * adapter's `startAgent` handler via `registry.claimAdapterSession()`, which
- * atomically rejects a second concurrent resume for the same provider session.
- *
- * Uses `requestOptional` so adapters that have not registered a `listAgents`
- * handler are treated as having no live writer (safe default: the adapter
- * cannot confirm liveness, so the resume attempt proceeds).
- * @param bus - Bus instance for the agent query
- * @param adapterId - Resolved adapter instance ID
- * @param adapterSessionId - Provider-native session ID to check
- * @returns `true` when a live agent already holds the adapter session
- */
-async function adapterSessionHasLiveWriter(
-  bus: IMakaioBus,
-  adapterId: string,
-  adapterSessionId: string,
-): Promise<boolean> {
-  return probeOptionalCapability(
-    () => bus.requestOptional(AdapterSubjects.listAgents, { adapterId }),
-    (data) => data.agents.some((a) => a.adapterSessionId === adapterSessionId),
-  );
-}
-
-/**
- * Resolves the native locality verdict for a resume attach and returns both
- * the resume adapter session ID (present only for native) and the session
- * context to forward (present only for non-native).
+ * Resolves the **structural** native locality verdict for a resume attach and
+ * returns both the resume adapter session ID (present only for native) and the
+ * session context to forward (present only for non-native).
  *
  * Queries the target adapter's `session:resume` capability via bus so that
  * adapters without native resume produce a `degrade('adapter-unsupported')`
  * verdict upfront, rather than relying solely on the downstream
  * `AIAgent.supportsNativeResume()` fallback.
  *
- * When the structural locality check passes (`native`), an additional
- * live-writer guard verifies no existing agent in the adapter registry is
- * already using the same `adapterSessionId`. Resuming into an occupied
- * provider session would share/mutate another agent's conversation, so the
- * attach degrades to `agent-already-started` fresh-with-history instead.
+ * **Structural, and nothing more.** Whether the provider session is actually
+ * free is decided by the reservation, in the transaction that takes it — never
+ * here. The live-writer probe this function used to run could not decide the
+ * case it existed for: an abandoned provider session is by definition the one no
+ * live agent claims, so a probe accepts exactly the session a second writer must
+ * not touch. Occupancy is now a compare-and-swap on the ownership key, and a
+ * `native` verdict returned here can still degrade a step later.
  *
  * The provider session is resolved exactly once, through
- * {@link resolveSessionResumeIdentity}, and that single value feeds all three
- * roles below: the locality evaluator's currency check (which degrades to
- * `adapter-session-moved` for an unconfirmed movement), the live-writer probe,
- * and the resume target returned to the caller. Reading
- * `session.adapterSessionId` per role is what previously let a resume target
- * diverge from the session the locality verdict was computed for.
+ * {@link resolveSessionResumeIdentity}, and that single value feeds both roles
+ * below: the locality evaluator's currency check (which degrades to
+ * `adapter-session-moved` for an unconfirmed movement) and the resume target
+ * returned to the caller. Reading `session.adapterSessionId` per role is what
+ * previously let a resume target diverge from the session the locality verdict
+ * was computed for.
  *
  * Currency is re-read here instead of taken from the validated snapshot the
  * caller loaded. Agent selection, adapter resolution, and provider resolution sit
@@ -215,12 +173,6 @@ async function adapterSessionHasLiveWriter(
  * longer advertises. Only currency is refreshed: the structural fields the
  * evaluator reads (machine, cwd, adapter identity) must stay consistent with the
  * `effectiveCwd` the caller derived from that same snapshot.
- *
- * The read narrows the exposure to a movement landing between it and the claim in
- * `startAgent`, and no occupancy probe can close that remainder: an abandoned
- * provider session is by definition the one no live agent claims, so
- * `claimAdapterSessionId` accepts it. Closing it needs storage-level CAS on the
- * currency pair, which is the ownership decision TODO(#1140) blocks on.
  * @param input - Bus for the capability lookup and currency re-read, resolved
  *   adapter instance ID, stable adapter type name, validated session record,
  *   local machine identity, and effective working directory for the locality evaluator
@@ -233,11 +185,33 @@ async function resolveAttachLocality(input: {
   session: IMakaioSession;
   machineId: string | undefined;
   effectiveCwd: string | undefined;
+  callerNamedInstance: boolean;
 }): Promise<AttachLocalityResult> {
   const { bus, adapterId, adapterName, session, machineId, effectiveCwd } = input;
-  const { session: currentRow } = await bus.request(SessionSubjects.get, { sessionId: session.sessionId });
-  const resumeIdentity = resolveSessionResumeIdentity(currentRow ?? session);
-  const adapterCanResume = await adapterSupportsResume(bus, adapterId);
+  // **A named instance cannot be resumed natively, because its machine cannot be
+  // named with it.** An instance ID is a one-way hash of `(machineId,
+  // adapterName)`, so a caller that hands one over hands over an instance
+  // without its owner. Every ownership act this attach performs would then run
+  // under *this* runtime's identity against another machine's instance — a claim
+  // keyed `(local machine, remote instance, provider session)`, which the runtime
+  // that really owns that instance computes differently and therefore never
+  // sees. That is not a window; it is a claim that protects nothing while
+  // looking like it does.
+  //
+  // Decided before anything is read: neither the session's resume identity nor
+  // the adapter's capability can change the answer. Resuming a named remote
+  // instance honestly needs the machine alongside it, which is a payload change
+  // and belongs with the rest of the identity work.
+  if (input.callerNamedInstance) {
+    return degradedAttachLocality(bus, session, adapterId, 'missing-machine-id');
+  }
+
+  // Independent reads: the session's own row and what the adapter can do.
+  const [current, adapterCanResume] = await Promise.all([
+    bus.request(SessionSubjects.get, { sessionId: session.sessionId }),
+    adapterSupportsResume(bus, adapterId),
+  ]);
+  const resumeIdentity = resolveSessionResumeIdentity(current.session ?? session);
   const verdict = evaluateNativeLocality({
     intent: 'resume',
     session,
@@ -248,40 +222,37 @@ async function resolveAttachLocality(input: {
     targetCwd: effectiveCwd,
     resumeIdentity,
   });
-
-  // A native verdict implies the evaluator saw a non-empty resume identity,
-  // so the explicit narrow here can only pass — it replaces a non-null assertion.
-  if (verdict.kind === 'native' && resumeIdentity.adapterSessionId !== undefined) {
-    const hasLiveWriter = await adapterSessionHasLiveWriter(bus, adapterId, resumeIdentity.adapterSessionId);
-    if (hasLiveWriter) {
-      const degraded = { kind: 'degrade' as const, reason: 'agent-already-started' as const };
-      void emitLocalityDegradeEvent(bus, {
-        sessionId: session.sessionId,
-        intent: 'resume',
-        verdict: degraded,
-        adapterId,
-      });
-      return {
-        resumeAdapterSessionId: undefined,
-        attachSessionContext: { nativeLocality: degraded },
-      };
-    }
-  }
-
-  // Emit for non-native evaluator verdicts (degrade or foreign).
   if (verdict.kind !== 'native') {
-    void emitLocalityDegradeEvent(bus, {
-      sessionId: session.sessionId,
-      intent: 'resume',
-      verdict,
-      adapterId,
-    });
+    return degradedAttachLocality(bus, session, adapterId, verdict);
   }
+  return { resumeAdapterSessionId: resumeIdentity.adapterSessionId, attachSessionContext: undefined };
+}
 
-  return {
-    resumeAdapterSessionId: verdict.kind === 'native' ? resumeIdentity.adapterSessionId : undefined,
-    attachSessionContext: verdict.kind !== 'native' ? { nativeLocality: verdict } : undefined,
-  };
+/**
+ * Announce a non-native verdict and shape the context the attach seeds from.
+ *
+ * One place, so every degrade — the evaluator's and this handler's own — is
+ * announced and carried the same way.
+ * @param bus - Bus the event is emitted on.
+ * @param session - Session the attach is for.
+ * @param adapterId - Adapter instance the attach targets.
+ * @param verdict - The non-native verdict, or the reason to build a degrade from.
+ * @returns The locality result: no resume target, and the verdict to seed with.
+ */
+function degradedAttachLocality(
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  adapterId: string,
+  verdict: NativeLocalityVerdict | NativeLocalityReason,
+): AttachLocalityResult {
+  const resolved: NativeLocalityVerdict = typeof verdict === 'string' ? { kind: 'degrade', reason: verdict } : verdict;
+  void emitLocalityDegradeEvent(bus, {
+    sessionId: session.sessionId,
+    intent: 'resume',
+    verdict: resolved,
+    adapterId,
+  });
+  return { resumeAdapterSessionId: undefined, attachSessionContext: { nativeLocality: resolved } };
 }
 
 /**
@@ -314,7 +285,7 @@ async function attachAgent(
   const session = await validateSession(bus, sessionId);
   const resolved = await resolveAttachSelection(bus, sessionId, initialMessage, agentSelection);
   const adapterCandidate = resolveAdapterCandidate(agentSelection, resolved);
-  const { adapterName, adapterId } = await resolveAdapterTarget(
+  const { adapterName, adapterId, callerNamedInstance } = await resolveAdapterTarget(
     bus,
     adapterCandidate.adapterName,
     adapterCandidate.adapterId,
@@ -335,27 +306,20 @@ async function attachAgent(
     runtimeOptions,
   );
   const role = determineRole(session, requestedRole);
-  const locality = await resolveAttachLocality({ bus, adapterId, adapterName, session, machineId, effectiveCwd });
-  const { resumeAdapterSessionId } = locality;
-  // Seed non-native paths with existing history so the fresh provider context is populated.
-  const attachSessionContext = locality.attachSessionContext
-    ? await seedAttachContextWithHistory(bus, sessionId, locality.attachSessionContext)
-    : undefined;
+  const localityInput = { bus, session, machineId, effectiveCwd, adapterId, adapterName, callerNamedInstance };
+  const locality = await resolveAttachLocality(localityInput);
   return executeResolvedAttach(bus, turnManager, {
     launch: {
       adapterId,
       sessionId,
       role,
       effectiveRuntimeOptions,
-      resumeAdapterSessionId,
       harnessId: params.harnessId ?? resolved?.harnessId,
-      attachSessionContext,
     },
     identity: {
       adapterName,
       sessionId,
       role,
-      timestamp: Date.now(),
       personaId: getPersonaId(agentSelection),
       profileId: resolved?.profileId,
       harnessId: params.harnessId ?? resolved?.harnessId,
@@ -364,24 +328,72 @@ async function attachAgent(
       model: mergedModel,
       cwd: effectiveCwd,
     },
+    locality,
+    expectedLeadAgentId: session.leadAgentId ?? null,
+    machineId,
     session,
     initialMessage,
     responseSchema,
     initiator: buildTurnInitiator(source, extensionId),
-    sessionContext: attachSessionContext,
     assertAttachCommitAllowed: () => assertAttachCommitAllowed?.(),
     assertInitialMessageAdmission,
   });
 }
 
 /**
- * Start the resolved agent and dispatch an initial message through an exclusive turn reservation.
+ * Mint the attach's agent identity and run the whole attempt under it.
+ *
+ * Attach becomes a caller-owned start here: it mints the identity, and from that
+ * moment the row, the reservation and the dispatch all belong to it. The attempt
+ * runs inside the in-flight-start seam for the *whole* of its life — start,
+ * settlement, commit and initial turn — so there is no instant at which the
+ * `starting` row it wrote is visible without an entry a concurrent consumer can
+ * join instead of opening a second lifecycle beside it.
  * @param bus - Bus used for adapter lifecycle, persistence, and routing.
  * @param turnManager - Owner of session turn slots and completion state.
  * @param input - Fully resolved attach launch, identity, and message inputs.
  * @returns Attach response containing canonical turn identity when a message was dispatched.
  */
 async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnManager, input: ResolvedAttachExecution) {
+  const agentId = crypto.randomUUID();
+  let result: Awaited<ReturnType<typeof runAttachAttempt>> | undefined;
+  await runExclusiveStart(agentId, async () => {
+    result = await runAttachAttempt(bus, turnManager, agentId, input);
+    // Every modeled attach refusal throws, so reaching here is a live connector.
+    return 'connected';
+  }).settled;
+  if (result === undefined) {
+    // Unreachable: the identity is minted here, so the seam has no existing
+    // entry to hand back instead of running the attempt.
+    throw new SessionAgentAttachError(
+      'agent_attach',
+      new Error(`[attach-handler] attach for agent ${agentId} produced no result`),
+    );
+  }
+  return result;
+}
+
+/**
+ * Start the resolved agent and dispatch an initial message through an exclusive turn reservation.
+ *
+ * Two stages, and the difference matters to the rollback. The start owns the
+ * agent row and ends committed — the reserved start is complete the moment its
+ * settlement is accepted. The initial turn is the *next* operation, and a
+ * failure there unwinds a start that already succeeded: the claims are retired,
+ * the connector is stopped, and the row goes to `dead` from wherever the
+ * connector left it.
+ * @param bus - Bus used for adapter lifecycle, persistence, and routing.
+ * @param turnManager - Owner of session turn slots and completion state.
+ * @param agentId - Caller-minted agent identity, already registered with the seam.
+ * @param input - Fully resolved attach launch, identity, and message inputs.
+ * @returns Attach response containing canonical turn identity when a message was dispatched.
+ */
+async function runAttachAttempt(
+  bus: IMakaioBus,
+  turnManager: SessionTurnManager,
+  agentId: string,
+  input: ResolvedAttachExecution,
+) {
   // Idle-only attach does not consume a turn slot. Initial-message attach must
   // reserve before provider startup so it cannot race an active or pending turn.
   let reservation: TurnReservation | undefined;
@@ -392,13 +404,36 @@ async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnMa
     throw new SessionAgentAttachError('initial_message', error);
   }
   try {
-    let identityPersisted = false;
-    let startResult;
+    let started;
     try {
-      startResult = await launchAttachAgent(bus, input.launch);
-      await assertSessionActiveAfterStart(bus, startResult, input.session.sessionId);
-      identityPersisted = await persistIdentityOrRollback(bus, startResult, input.identity);
+      started = await startReservedAttachAgent(bus, {
+        agentId,
+        launch: input.launch,
+        identity: input.identity,
+        locality: input.locality,
+        expectedLeadAgentId: input.expectedLeadAgentId,
+        machineId: input.machineId,
+      });
     } catch (error) {
+      throw new SessionAgentAttachError('agent_attach', error);
+    }
+    const { startResult } = started;
+    // **After the start completed, not inside it.** A close can land while the
+    // provider is still starting, and the close handler cannot evict an agent
+    // that had not entered the adapter registry yet — so the attach has to look
+    // again. Looking *before* the settlement put a storage round trip between a
+    // live connector and the claim on the key it confirmed, which is a window
+    // for a second writer and, on failure, a retirement that never named that
+    // key. Ordered behind the settlement, the same failure retires a start whose
+    // key is held, through the teardown a committed start already has — and a
+    // session that is *gone* rather than closed is reported by the settlement
+    // itself, which releases the key cleanly.
+    try {
+      await assertSessionActiveAfterStart(bus, startResult, input.session.sessionId);
+    } catch (error) {
+      // `assertSessionActiveAfterStart` has already stopped the connector; what
+      // is left is the durable half.
+      await retireStartedAttach(bus, started);
       throw new SessionAgentAttachError('agent_attach', error);
     }
     let turnInfo;
@@ -406,16 +441,14 @@ async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnMa
       try {
         input.assertAttachCommitAllowed();
       } catch (error) {
-        const attachError = identityPersisted
-          ? await rollbackPersistedIdentity(bus, startResult.agentId, error)
-          : error;
+        await retireStartedAttach(bus, started);
         await stopStartedAgentAfterFailure(
           bus,
           startResult,
           input.session.sessionId,
           'session close won attach commit',
         );
-        throw new SessionAgentAttachError('agent_attach', attachError);
+        throw new SessionAgentAttachError('agent_attach', error);
       }
     } else {
       const assertAdmission = () => {
@@ -431,17 +464,15 @@ async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnMa
         input.initialMessage,
         input.responseSchema,
         input.initiator,
-        input.sessionContext,
+        started.sessionContext,
         assertAdmission,
       ).catch(async (error: unknown) => {
-        const attachError = identityPersisted
-          ? await rollbackPersistedIdentity(bus, startResult.agentId, error)
-          : error;
-        throw new SessionAgentAttachError('initial_message', attachError);
+        await retireStartedAttach(bus, started);
+        throw new SessionAgentAttachError('initial_message', error);
       });
     }
     return {
-      agentId: startResult.agentId,
+      agentId,
       adapterSessionId: startResult.adapterSessionId,
       role: input.identity.role,
       ...(turnInfo && { messageId: turnInfo.messageId, turnId: turnInfo.turnId }),
@@ -506,7 +537,7 @@ async function resolveAdapterTarget(
   candidateAdapterName: string | undefined,
   candidateAdapterId: string | undefined,
   machineId: string | undefined,
-): Promise<{ adapterName: string; adapterId: string }> {
+): Promise<{ adapterName: string; adapterId: string; callerNamedInstance: boolean }> {
   const normalizedAdapterName = normalizeSelectionString(candidateAdapterName);
   const normalizedAdapterId = normalizeSelectionString(candidateAdapterId);
 
@@ -523,7 +554,7 @@ async function resolveAdapterTarget(
       normalizedAdapterName,
       '[attach-handler] ',
     );
-    return { adapterName, adapterId: normalizedAdapterId };
+    return { adapterName, adapterId: normalizedAdapterId, callerNamedInstance: true };
   }
 
   // At this point normalizedAdapterId is undefined and the early guard ensures
@@ -531,7 +562,7 @@ async function resolveAdapterTarget(
   // guards at the top of the function, so we re-assert here to keep strict mode happy.
   const resolvedName = normalizedAdapterName as string;
   const adapterId = await resolveAdapterId(bus, resolvedName, machineId);
-  return { adapterName: resolvedName, adapterId };
+  return { adapterName: resolvedName, adapterId, callerNamedInstance: false };
 }
 
 /**
