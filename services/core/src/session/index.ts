@@ -33,6 +33,7 @@ export {
   resolveModelCapabilities,
   verifyAndRecoverAgents,
   buildRecoveryContext,
+  buildPlannedRecoveryContext,
   buildRecoveryContextWithPipeline,
   recoverAgent,
   resolveExecutionTarget,
@@ -135,7 +136,8 @@ export {
 // canonical schemas live with the log-import service). Exported so the
 // owning service's conformance tests can pin the mirror against the
 // canonical schemas; not part of the supported public session API.
-export { LogImportTriggerSubjects, isTrackingStub } from './observed-session-ingestion.js';
+export { LogImportTriggerSubjects } from './log-import-trigger-subjects.js';
+export { isTrackingStub } from './observed-session-ingestion.js';
 export { isPolicyDiscoveredObservedSession } from './observed-session-ingestion.js';
 export { ObservedSessionIngestionService } from './observed-session-ingestion.js';
 export {
@@ -221,6 +223,17 @@ export type { BuildContextOptions, ContextAssemblyResult } from './context/index
 // Native locality evaluator (pure function; no bus interaction)
 export { evaluateNativeLocality, type NativeLocalityInput, type NativeLocalityIntent } from './native-locality.js';
 export { resolveSessionResumeIdentity, type SessionResumeIdentity } from './session-resume-identity.js';
+
+// Recovery plan (pure decision object shared by rehydrate and history routing)
+export {
+  FRESH_WITH_HISTORY_RECOVERY_PLAN,
+  planAgentRecovery,
+  recoveryPlanRequiresHistory,
+  recoveryPlanResumeTarget,
+  type FreshWithHistoryRecoveryPlan,
+  type NativeResumeRecoveryPlan,
+  type RecoveryPlan,
+} from './recovery-plan.js';
 
 // Context window tracking (per-session aggregation)
 export { ContextWindowTracker } from './context-window/index.js';

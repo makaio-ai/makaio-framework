@@ -176,6 +176,10 @@ export {
   SessionStorageUpdateSchema,
   ImportUpsertRequestSchema,
   type ImportUpsertRequest,
+  SessionStorageRebindObservedRequestSchema,
+  type SessionStorageRebindObservedRequest,
+  SessionStorageRebindObservedResponseSchema,
+  type SessionStorageRebindObservedResult,
   ImportStatusSchema,
   type ImportStatus,
 } from './session-storage-namespace.js';

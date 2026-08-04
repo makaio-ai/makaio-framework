@@ -11,8 +11,6 @@
  */
 
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
-import { createBusNamespace } from '@makaio/core';
-import { z } from 'zod';
 import {
   CapabilitySubjects,
   ClientSubjects,
@@ -20,13 +18,13 @@ import {
   MessageStorageSubjects,
   ROOT_SESSION_LINEAGE_KIND,
   SessionRecordMetadataSchema,
-  TurnIngestionMarkerSchema,
   type ClientRuntimeStarted,
   type ClientSessionStarted,
   type ClientSessionTurnCompleted,
   type IMakaioSession,
   type SessionRecordMetadata,
 } from '@makaio/contracts';
+import { LogImportTriggerSubjects } from './log-import-trigger-subjects.js';
 import { SessionStorageSubjects } from './storage/namespace.js';
 import {
   OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID,
@@ -46,85 +44,6 @@ import {
  * this cap, the oldest entry is evicted FIFO before a new ID is inserted.
  */
 export const MANAGED_SESSION_CAP = 10_000;
-
-/**
- * Minimal local mirror of the log-import bus subjects this component calls.
- *
- * The log-import service package depends on this package, so importing its
- * subject definitions here would create a package cycle. Bus subjects are
- * matched by fully-qualified name and payloads are validated against the
- * schemas registered by the owning service at boot — these mirrored
- * definitions are type carriers for the fields this component reads and
- * writes, not a second source of truth. Canonical schemas live with the
- * log-import service.
- *
- * Exported for tests that stub the log-import seam; not part of the public
- * session API surface.
- * @internal
- */
-export const LogImportTriggerSubjects = createBusNamespace('log-import', {
-  /** Mirror of `log-import.listImporters` (adapterName/clientId subset). */
-  listImporters: {
-    request: z.object({}),
-    response: z.object({
-      /** Registered importers; only the correlation fields are typed here. */
-      importers: z.array(
-        z.object({
-          /** Importer adapter name — the `source` identity used by imports. */
-          adapterName: z.string(),
-          /** Client application id whose hooks observe this importer's sessions. */
-          clientId: z.string().optional(),
-        }),
-      ),
-    }),
-  },
-  /** Mirror of `log-import.importFile` (path-addressable import trigger). */
-  importFile: {
-    request: z.object({
-      /** Absolute path to the transcript file on disk. */
-      filePath: z.string(),
-      /** Registered importer adapter name. */
-      adapterName: z.string(),
-      /** Marker stamped on emitted `session.turn.*` events. */
-      ingestionMarker: TurnIngestionMarkerSchema.optional(),
-    }),
-    response: z.discriminatedUnion('status', [
-      z.object({
-        /** File was imported and persisted. */
-        status: z.literal('imported'),
-        /** Makaio session ID that was populated. */
-        sessionId: z.string(),
-        /** Number of messages persisted. */
-        messageCount: z.number(),
-        /** Number of turns persisted. */
-        turnCount: z.number(),
-      }),
-      z.object({
-        /** Request was gracefully skipped. */
-        status: z.literal('skipped'),
-        /** Machine-readable skip reason. */
-        reason: z.enum(['no-importer', 'file-missing']),
-      }),
-    ]),
-  },
-  /** Mirror of `log-import.importSession` (discovery-stub-based trigger). */
-  importSession: {
-    request: z.object({
-      /** External session ID provided by the adapter. */
-      adapterSessionId: z.string(),
-      /** Registered importer adapter name. */
-      adapterName: z.string(),
-      /** Marker stamped on emitted `session.turn.*` events. */
-      ingestionMarker: TurnIngestionMarkerSchema.optional(),
-    }),
-    response: z.object({
-      /** Makaio session ID that was populated. */
-      sessionId: z.string(),
-      /** Number of messages imported into the session. */
-      messageCount: z.number(),
-    }),
-  },
-}).subjects;
 
 /**
  * Log a debug-level diagnostic when `MAKAIO_DEBUG` is enabled.
@@ -192,10 +111,15 @@ export function isTrackingStub(session: Pick<IMakaioSession, 'isImported' | 'imp
  * Bridges observed client sessions into the canonical session model.
  *
  * Responsibilities:
- * - Register observed sessions on `client.session.started` through the
- *   unified registration seam (`storage:session.importUpsert`), keyed on the
- *   importer's adapter name so hook-first registration and later transcript
- *   imports converge on the same `(source, adapterSessionId)` identity.
+ * - Register newly started observed sessions on `client.session.started`
+ *   through the unified registration seam (`storage:session.importUpsert`),
+ *   keyed on the importer's adapter name so hook-first registration and later
+ *   transcript imports converge on the same `(source, adapterSessionId)`
+ *   identity.
+ * - Rebind continued sessions (`startMode` `resume` / `compact`) through
+ *   `storage:session.rebindObserved`: a continuation refreshes runtime and
+ *   locality facts only and never registers, so it cannot rewrite the origin,
+ *   lineage, import status, creation time or content an import owns.
  * - Trigger targeted transcript imports on `client.session.turn.completed`
  *   (`log-import.importFile` when the transcript path is known, discovery
  *   fallback via `log-import.importSession` otherwise).
@@ -506,15 +430,21 @@ export class ObservedSessionIngestionService {
   }
 
   /**
-   * Register an observed session through the unified registration seam.
+   * Route an observed session start to registration or rebind.
+   *
+   * A `SessionStart` signal carries two different facts depending on its start
+   * mode, and conflating them is what let a continuation rewrite import data:
+   * - `resume` / `compact` continue an external session that already exists.
+   *   Its origin, lineage, import status, creation time and content belong to
+   *   whoever first imported it; only the runtime observing it may have moved.
+   *   These modes therefore *rebind* (see {@link rebindObservedSession}).
+   * - `fresh`, `clear`, `fork` and an absent start mode announce a session
+   *   this process is seeing begin, so they register through the unified
+   *   registration seam (see {@link registerObservedSession}).
    *
    * Skipped for managed sessions and when no importer is resolvable — a
    * session that can never receive imported content must not create a
-   * dangling stub. The registration `source` is the importer's adapter name,
-   * NOT the raw client id: the `(source, adapterSessionId)` upsert key must
-   * match what the import path writes, otherwise hook-first registration
-   * would fork the session identity and every import would create a
-   * duplicate session.
+   * dangling stub.
    * @param payload - `client.session.started` payload
    */
   private async handleSessionStarted(payload: ClientSessionStarted): Promise<void> {
@@ -525,15 +455,131 @@ export class ObservedSessionIngestionService {
     const importer = await this.resolveImporter(payload.clientId);
     if (importer === null) return;
 
-    const metadata = parseSessionMetadata(payload.metadata);
-    const importStatus = await this.decideImportStatus({
+    const continuation = payload.startMode === 'resume' || payload.startMode === 'compact';
+    const written = continuation
+      ? await this.rebindObservedSession(payload, adapterSessionId, importer.adapterName)
+      : await this.registerObservedSession(payload, adapterSessionId, importer.adapterName);
+    if (!written) return;
+
+    // Post-write double-check: the gate-check above (managedAdapterSessionIds)
+    // and the storage write are not atomic — runtime.started may have populated
+    // the gate between the two. Both sides now reconcile: the runtime side adds
+    // to the gate then checks storage; the hook side writes storage then checks
+    // the gate. Every interleaving order is caught by one of the two sides.
+    if (this.managedAdapterSessionIds.has(adapterSessionId)) {
+      await this.reconcileTrackingStub(payload.clientId, adapterSessionId);
+    }
+  }
+
+  /**
+   * Rebind an already known observed session to the runtime continuing it.
+   *
+   * Refreshes runtime/locality facts only (working directory, transcript path,
+   * owning machine). A continuation carries no evidence about origin, lineage,
+   * import status or creation time, so it must not be able to write them —
+   * that is precisely what routing resume/compact through the import upsert
+   * used to do.
+   *
+   * A `'not-found'` outcome is resolved by the ingestion policy, because the
+   * skip is only correct while a transcript import is still coming:
+   * - `tracking`: skip. Fabricating a row here would stamp import provenance
+   *   and a creation time taken from the resume moment, and the
+   *   timestamp-correction clause of the import upsert only fires while
+   *   `createdAt` still equals `discoveredAt` — so the invented creation time
+   *   would survive the real transcript import forever. Skipping keeps the
+   *   session's first row the one the import path creates from the transcript,
+   *   with the real creation time and content; the turn-completed trigger
+   *   reaches that path on the very next turn without any extra state here.
+   * - `discovered`: register. Metadata-only policy makes the turn-completed
+   *   trigger decline content import for this session forever, so no import
+   *   will ever create the row and skipping would drop the session entirely.
+   *   The registration seam stamps discovered status plus metadata, and its
+   *   creation time taken from the observation is the best available — nothing
+   *   downstream will correct it.
+   * @param payload - `client.session.started` payload
+   * @param adapterSessionId - External session id of the continued session
+   * @param source - Importer adapter name (import identity of the session)
+   * @returns True when a stored session was rebound
+   */
+  private async rebindObservedSession(
+    payload: ClientSessionStarted,
+    adapterSessionId: string,
+    source: string,
+  ): Promise<boolean> {
+    const result = await this.bus.requestOptional(SessionStorageSubjects.rebindObserved, {
+      externalSessionId: adapterSessionId,
+      source,
+      ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
+      ...(payload.transcriptPath !== undefined ? { logFilePath: payload.transcriptPath } : {}),
+      ...(payload.machineId !== undefined ? { machineId: payload.machineId } : {}),
+    });
+    if (!result.handled) {
+      debugLog('Session storage unavailable; skipped observed-session rebind', { adapterSessionId });
+      return false;
+    }
+    if (result.data.outcome === 'not-found') {
+      const importStatus = await this.decideImportStatus(this.policyInput(payload, adapterSessionId, source));
+      if (importStatus === 'discovered') {
+        // Metadata-only policy: no transcript import will ever create the row.
+        // The decision is handed on so registration does not re-evaluate the
+        // policy providers for the same observation.
+        return await this.registerObservedSession(payload, adapterSessionId, source, importStatus);
+      }
+      debugLog('Observed continuation of an unknown session; leaving creation to the transcript import', {
+        adapterSessionId,
+        source,
+        startMode: payload.startMode,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Build the ingestion-policy input for an observed session-start payload.
+   * @param payload - `client.session.started` payload
+   * @param adapterSessionId - External session id of the observed session
+   * @param adapterName - Importer adapter name that would own content import
+   * @returns Policy input describing the observation
+   */
+  private policyInput(
+    payload: ClientSessionStarted,
+    adapterSessionId: string,
+    adapterName: string,
+  ): ObservedSessionIngestionPolicyInput {
+    return {
       clientId: payload.clientId,
       source: payload.source,
       adapterSessionId,
-      adapterName: importer.adapterName,
+      adapterName,
       ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
       ...(payload.transcriptPath !== undefined ? { transcriptPath: payload.transcriptPath } : {}),
-    });
+    };
+  }
+
+  /**
+   * Register an observed session through the unified registration seam.
+   *
+   * The registration `source` is the importer's adapter name, NOT the raw
+   * client id: the `(source, adapterSessionId)` upsert key must match what the
+   * import path writes, otherwise hook-first registration would fork the
+   * session identity and every import would create a duplicate session.
+   * @param payload - `client.session.started` payload
+   * @param adapterSessionId - External session id of the started session
+   * @param source - Importer adapter name (import identity of the session)
+   * @param decidedImportStatus - Already evaluated ingestion-policy verdict,
+   *   passed by callers that had to consult the policy before routing here
+   * @returns True when the registration reached storage
+   */
+  private async registerObservedSession(
+    payload: ClientSessionStarted,
+    adapterSessionId: string,
+    source: string,
+    decidedImportStatus?: ObservedSessionIngestionPolicyImportStatus,
+  ): Promise<boolean> {
+    const metadata = parseSessionMetadata(payload.metadata);
+    const importStatus =
+      decidedImportStatus ?? (await this.decideImportStatus(this.policyInput(payload, adapterSessionId, source)));
 
     // Derive lineage discriminant from the optional fork signal. When the
     // emitter reports startMode === 'fork' with a parent adapter session id,
@@ -562,7 +608,7 @@ export class ObservedSessionIngestionService {
     const result = await this.bus.requestOptional(SessionStorageSubjects.importUpsert, {
       ...lineage,
       externalSessionId: adapterSessionId,
-      source: importer.adapterName,
+      source,
       clientId: payload.clientId,
       cwd: payload.cwd ?? null,
       ...(payload.transcriptPath !== undefined ? { logFilePath: payload.transcriptPath } : {}),
@@ -576,17 +622,9 @@ export class ObservedSessionIngestionService {
       // Session storage not registered yet (boot window / degraded host) —
       // the watcher or a later import re-registers idempotently.
       debugLog('Session storage unavailable; skipped observed-session registration', { adapterSessionId });
-      return;
+      return false;
     }
-
-    // Post-upsert double-check: the gate-check above (managedAdapterSessionIds)
-    // and the importUpsert are not atomic — runtime.started may have populated
-    // the gate between the two. Both sides now reconcile: the runtime side adds
-    // to the gate then checks storage; the hook side writes storage then checks
-    // the gate. Every interleaving order is caught by one of the two sides.
-    if (this.managedAdapterSessionIds.has(adapterSessionId)) {
-      await this.reconcileTrackingStub(payload.clientId, adapterSessionId);
-    }
+    return true;
   }
 
   /**

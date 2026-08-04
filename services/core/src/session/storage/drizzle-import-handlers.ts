@@ -9,6 +9,7 @@ import { kindToBranchKind } from '../import/lineage-utils.js';
 import type { SessionHandlerDeps } from './drizzle-handler.js';
 import { createMonotonicClock } from './monotonic-clock.js';
 import { resolveImportCreateStatus } from './import-lifecycle.js';
+import { registerRebindObservedHandler } from './drizzle-rebind-observed-handler.js';
 
 const nextDiscoveredAt = createMonotonicClock();
 
@@ -657,8 +658,8 @@ function registerUpdateImportStatusHandler(deps: SessionHandlerDeps): () => void
 /**
  * Register Drizzle-based session import storage handlers.
  *
- * Covers the 5 import-specific bus subjects: `importUpsert`, `getByLogFilePath`,
- * `listImported`, `countBySource`, and `updateImportStatus`.
+ * Covers the 6 import-specific bus subjects: `importUpsert`, `rebindObserved`,
+ * `getByLogFilePath`, `listImported`, `countBySource`, and `updateImportStatus`.
  *
  * Called by `registerDrizzleSessionStorage` as part of the full handler set.
  * @param bus - The bus instance to register handlers on
@@ -669,6 +670,7 @@ export function registerDrizzleSessionImportHandlers(bus: IMakaioBus, db: Makaio
   const deps: SessionHandlerDeps = { bus, db };
   return [
     registerImportUpsertHandler(deps),
+    registerRebindObservedHandler(deps),
     registerGetByLogFilePathHandler(deps),
     registerListImportedHandler(deps),
     registerCountBySourceHandler(deps),
