@@ -120,6 +120,9 @@ export function createBaseConfig(customRules, options = {}) {
         '**/coverage/*',
         '**/*.md',
         '**/node_modules/**',
+        // Agent-session worktrees are full nested checkouts; linting must never
+        // traverse them, independent of .gitignore correctness.
+        '**/.claude/worktrees/**',
         ...extraIgnores,
       ],
     },

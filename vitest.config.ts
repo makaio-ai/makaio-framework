@@ -31,7 +31,11 @@ import {
   categoryIncludes,
   fileMatchesCategories,
   FORKS_REQUIRED_FILES,
+  FORKS_REQUIRED_PROJECT_NAME,
+  GIT_SERIAL_PROJECT_NAME,
   GIT_SERIAL_TEST_GLOBS,
+  GIT_TEST_ENV,
+  GIT_TEST_GROUP_ORDER,
   frameworkShards as shards,
   FRAMEWORK_ADAPTER_DIRS as ADAPTER_DIRS,
   parseTestCategories,
@@ -93,7 +97,7 @@ export default defineConfig({
       {
         extends: true,
         test: {
-          name: 'forks-required',
+          name: FORKS_REQUIRED_PROJECT_NAME,
           pool: 'forks',
           include: forksRequiredInclude,
         },
@@ -101,10 +105,9 @@ export default defineConfig({
       {
         extends: true,
         test: {
-          name: 'git-serial',
-          pool: 'forks',
-          fileParallelism: false,
-          maxWorkers: 1,
+          name: GIT_SERIAL_PROJECT_NAME,
+          env: GIT_TEST_ENV,
+          sequence: { groupOrder: GIT_TEST_GROUP_ORDER },
           exclude,
           include: GIT_SERIAL_TEST_GLOBS,
         },
