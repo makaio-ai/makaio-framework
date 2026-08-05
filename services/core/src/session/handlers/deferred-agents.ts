@@ -28,6 +28,77 @@ export function resolveSendTargetForm(targetSpec: readonly string[] | 'all' | un
 }
 
 /**
+ * Whether a send named its target agents itself.
+ *
+ * A predicate rather than a `=== 'explicit'` comparison, so the named ids narrow
+ * out of the spec where they are needed: classifying the spec and getting the ids
+ * out of it is one question.
+ * @param targetSpec - The request's `agentIds`, as the schema models it.
+ * @returns `true` when the spec is an id array, narrowing it to one.
+ */
+function isExplicitTargetSpec(targetSpec: readonly string[] | 'all' | undefined): targetSpec is readonly string[] {
+  return resolveSendTargetForm(targetSpec) === 'explicit';
+}
+
+/**
+ * Admit a send to the fresh-start branch, or refuse the targets it stated.
+ *
+ * **Decided before that branch runs, and the ordering is the whole point.**
+ * `lead-default` is the only form that asks for *an* agent rather than asserting
+ * something about the ones the session has; every other form states a target,
+ * and a session with no agents answers every such statement the same way. So
+ * only `lead-default` may bring a session its first agent:
+ *
+ * - **`explicit`** — the session cannot contain the ids the caller named, and
+ *   substituting a freshly started agent would answer a question nobody asked.
+ * - **`'all'`** — "all of them" of nothing is not a delivery, exactly as it is
+ *   not one when every target defers ({@link refuseTotalDeferral}).
+ *
+ * Either send was already decided at this moment, so starting a lead first only
+ * changes *what the failure leaves behind* — an agent row, a lead designation
+ * and a reserved provider session created by a send that never delivered.
+ *
+ * This admits, it does not clear: a named agent the session *has* may still turn
+ * out to be undrivable, which is what the post-recovery validation decides.
+ *
+ * `agent-unavailable` is reused rather than invented, exactly as
+ * {@link refuseTotalDeferral} reuses it: the code means "this runtime may not act
+ * for these agents", and an agent that does not exist is the strongest form of
+ * that, not a different fact. Only the named form carries `deferredAgentIds` — a
+ * throw makes the response field unreachable, so the ids travel on the error
+ * where there are ids to travel; a broadcast named none, and inventing a payload
+ * for it would say the session held agents it never held.
+ * @param caller - Log prefix of the send path raising this, e.g. `[session.sendMessage]`.
+ * @param sessionId - Session the send was for.
+ * @param session - Session as this send resolved it, after any in-flight start.
+ * @param targetSpec - The request's `agentIds`, as the schema models it.
+ * @throws A {@link SessionStartError} naming the agents, when the send named any.
+ */
+export function admitFreshStartTargets(
+  caller: string,
+  sessionId: string,
+  session: IMakaioSession,
+  targetSpec: readonly string[] | 'all' | undefined,
+): void {
+  if (session.agents.length > 0 || resolveSendTargetForm(targetSpec) === 'lead-default') return;
+  if (isExplicitTargetSpec(targetSpec)) {
+    const agentIds = [...targetSpec];
+    throw new SessionStartError(
+      'agent-unavailable',
+      `${caller} session ${sessionId} has no agents, so it cannot have the ${
+        agentIds.length === 1 ? 'agent' : 'agents'
+      } this send named: ${agentIds.join(', ')}`,
+      undefined,
+      agentIds,
+    );
+  }
+  throw new SessionStartError(
+    'agent-unavailable',
+    `${caller} session ${sessionId} has no agents, so a send targeting all of them has none to reach`,
+  );
+}
+
+/**
  * Remove agents this runtime may not drive from the session and the send.
  *
  * **This has to happen before admission and routing, not after.** The targets

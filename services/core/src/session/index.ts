@@ -63,6 +63,7 @@ export { SessionStartError, type SessionStartFailureCode } from './handlers/sess
 
 // Optional session handlers used by hosts that opt into richer session operations.
 export {
+  admitFreshStartTargets,
   refuseTotalDeferral,
   resolveInFlightStarts,
   routeToAgents,
