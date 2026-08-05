@@ -6,6 +6,7 @@
  *
  * Encapsulates the full `adapter.startAgent` RPC lifecycle:
  * - Session resolution (use provided or create via SessionSubjects.create)
+ * - Ownership acquisition for the starts the adapter owns the row for
  * - Agent creation via the adapter's createAgent delegate
  * - Agent start (with initial message) or idle initialization
  * - Registry registration
@@ -18,25 +19,37 @@ import type { AgentCreationOptions, AgentUsageTotals, StartAgentRequestPayload }
 import type { MessageHandle } from '../message-handle/index.js';
 import type { PlatformDefaults } from '../types/index.js';
 import type { ActiveAgentRegistry } from './agent-registry.js';
-import type { ExtractSubjectResponse, RequestContext } from '@makaio/core';
+import type { RequestContext } from '@makaio/core';
 import {
-  AdapterSubjects,
   ProviderContextSchema,
   SessionContextSchema,
   SessionSubjects,
   type ProviderContext,
   type SessionContext,
 } from '@makaio/contracts';
-import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { createUnresolvedProviderContext, normalizeMessageInput } from '../utils/index.js';
+import {
+  providerKeyIsPublishable,
+  providerKeyPublicationFor,
+  releaseProviderKeyPublication,
+  type ProviderKeyPublication,
+} from './adapter-provider-key-publication.js';
+import {
+  acquireStartOwnership,
+  failStartAfterRegistration,
+  getResumeAdapterSessionId,
+  releaseStartAcquisitions,
+  type StartAcquisitions,
+  type StartAgentRefusal,
+  type StartAgentResponsePayload,
+} from './adapter-start-reservation.js';
+import { callerOwnsAgentRow, persistAndEmitAgent, rollbackRegisteredAgent } from './ai-adapter-start-persistence.js';
 import {
   commitAdapterProviderContextActivation,
   prepareAdapterProviderContextActivation,
   rollbackAdapterProviderContextActivationAfterFailure,
   type ProviderContextActivationLifecycle,
 } from './provider-context-activation-lifecycle.js';
-
-type StartAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.startAgent>;
 
 export const EPHEMERAL_CLEANUP_COMPLETION_TIMEOUT_MS = 5 * 60_000;
 
@@ -68,24 +81,6 @@ export interface StartAgentHandlerDeps<
 }
 
 /**
- * Whether the caller owns the agent row for this start.
- *
- * A caller that supplies `agentId` has already persisted the row — and, having
- * done so, owns its lifecycle columns for the duration of the start. The
- * adapter's own whole-record write would overwrite them, so it is suppressed.
- * Derived from the payload at every point that needs it rather than threaded
- * through, so the two readings cannot drift apart.
- * @param payload - Validated startAgent request payload
- * @returns `true` when the caller minted and persisted the agent identity
- */
-function callerOwnsAgentRow(payload: StartAgentRequestPayload): boolean {
-  return payload.agentId !== undefined;
-}
-
-/** The refusal half of the startAgent response. */
-type StartAgentRefusal = Extract<StartAgentResponsePayload, { success: false }>;
-
-/**
  * Refuse a caller-supplied agent identity that is already live on this instance.
  *
  * Two starts for one agent identity would leave a second connector silently
@@ -93,31 +88,20 @@ type StartAgentRefusal = Extract<StartAgentResponsePayload, { success: false }>;
  * agent row now describes. The refusal fires before anything reaches the
  * provider, so the caller may release whatever it reserved.
  *
- * A minted identity cannot collide, so the check applies only to supplied ones.
+ * A minted identity cannot collide, so the claim is taken only for supplied
+ * ones — behaviour for a caller that supplies none is unchanged.
  *
- * **Known window, deliberately left open.** This reads the registry and the
- * matching `registry.set()` happens many awaits later, so two concurrent starts
- * naming one supplied `agentId` would both pass here and the second would
- * replace the first. What keeps that unreachable is who supplies the field:
- * `agentId` is optional, and the only production caller that sends it mints it
- * with `crypto.randomUUID()` for that one attempt and runs the attempt inside
- * the session service's per-agent exclusive-start seam. Every other caller omits
- * it and reads the identity back off the response — so no two starts can name
- * the same identity, and this refusal is defence against a caller that does not
- * exist yet rather than a race being lost today.
- *
- * The fix is not a second pending-set in this module. The registry already owns
- * exactly this shape for provider sessions — `claimAdapterSession()` checks and
- * inserts atomically, `set()` settles the claim, failure paths release it — so
- * an agent-identity claim belongs beside it, not in a parallel structure that
- * this handler would have to release on each of its several exit paths. The
- * registry is being reworked next, together with the first caller that can
- * supply an *existing* identity (an attach that reserves one); the atomic claim
- * lands there, with them.
+ * The check is a *claim*, not a read, because a reserved start now awaits a
+ * storage round trip between here and the settling `registry.set()`. Reading the
+ * registry would leave both of two concurrent starts for one supplied identity
+ * believing the identity was free, and the second would replace the first's
+ * connector. `claimAgentIdentity` checks and inserts in one synchronous step,
+ * mirroring the provider-session claim beside it: settled by `set()`, given back
+ * on every failure path.
  * @param payload - Validated startAgent request payload
  * @param agentId - Resolved agent identity for this start
  * @param registry - Registry of agents live on this adapter instance
- * @returns The refusal to answer with, or `undefined` when the start may proceed
+ * @returns The refusal to answer with, or `undefined` when the identity is free
  */
 function refuseAgentIdentityCollision<
   TBus extends ScopedBus<string>,
@@ -128,7 +112,7 @@ function refuseAgentIdentityCollision<
   agentId: string,
   registry: ActiveAgentRegistry<TBus, TConnector, TAgent>,
 ): StartAgentRefusal | undefined {
-  if (!callerOwnsAgentRow(payload) || registry.get(agentId) === undefined) {
+  if (!callerOwnsAgentRow(payload) || registry.claimAgentIdentity(agentId)) {
     return undefined;
   }
   return {
@@ -136,15 +120,6 @@ function refuseAgentIdentityCollision<
     dispatch: 'not-dispatched',
     message: `Agent ${agentId} is already registered on this adapter instance`,
   };
-}
-
-/** Minimal deps needed by persistAndEmitAgent. */
-interface PersistEmitDeps {
-  adapterId: string;
-  name: string;
-  clientId: string | undefined;
-  getPlatformDefaults: () => PlatformDefaults | undefined;
-  globalBus: IMakaioBus;
 }
 
 /** Result from starting or idly initializing an agent. */
@@ -156,137 +131,6 @@ interface StartAgentExecutionResult {
   readonly adapterSessionId: string | undefined;
   readonly messageId?: string;
   readonly messageHandle?: MessageHandle;
-}
-
-/**
- * Persist agent record and emit lifecycle events.
- *
- * Ensures persistence completes before events fire to avoid race conditions.
- *
- * The persistence step is skipped entirely when the caller owns the agent row
- * (see {@link callerOwnsAgentRow}); the lifecycle emissions below are not, since
- * they are what tells the rest of the system a live agent exists.
- * @param agentId - Agent identifier
- * @param sessionId - Makaio session ID
- * @param adapterSessionId - Provider session ID, or `undefined` for unconfirmed idle fork starts
- * @param payload - Start agent request payload with resolved providerContext
- * @param deps - Adapter identity and bus deps
- */
-async function persistAndEmitAgent(
-  agentId: string,
-  sessionId: string,
-  adapterSessionId: string | undefined,
-  payload: StartAgentRequestPayload & { providerContext: ProviderContext },
-  deps: PersistEmitDeps,
-): Promise<void> {
-  const { adapterId, name, clientId, getPlatformDefaults, globalBus } = deps;
-  const role = payload.role;
-  const now = Date.now();
-  // Resolve effective cwd (request overrides platform defaults)
-  const platformDefaults = getPlatformDefaults();
-  const resolvedCwd = payload.cwd ?? platformDefaults?.cwd;
-
-  // clientId: payload carries it from the caller; adapter definition is the authoritative fallback.
-  const resolvedClientId = payload.clientId ?? clientId;
-  // Skipped for a caller-owned row: the caller's record already carries this
-  // agent's identity and its in-flight status, and this write is a whole record.
-  if (!callerOwnsAgentRow(payload)) {
-    try {
-      await globalBus.requestOptional(AgentStorageSubjects.set, {
-        agentId,
-        agent: {
-          agentId,
-          adapterId,
-          adapterName: name,
-          sessionId,
-          adapterSessionId,
-          model: payload.model,
-          cwd: resolvedCwd,
-          allowedDirectories: payload.allowedDirectories,
-          role,
-          status: 'idle' as const,
-          createdAt: now,
-          lastActivityAt: now,
-          ...(resolvedClientId !== undefined && { clientId: resolvedClientId }),
-          ...(payload.harnessId !== undefined && { harnessId: payload.harnessId }),
-          ...(payload.providerContext.state === 'resolved' && {
-            providerConfigId: payload.providerContext.providerConfigId,
-          }),
-        },
-      });
-    } catch (error) {
-      // Agent storage is best-effort in lightweight hosts; lifecycle events below
-      // are the authoritative signal that a live agent exists.
-      console.error(`[AIAdapter:${name}] Optional agent persistence failed:`, {
-        agentId,
-        adapterId,
-        sessionId,
-        error,
-      });
-    }
-  }
-
-  // Emit events AFTER agent is persisted to avoid race conditions
-
-  // Notify global session service that an agent was added to the session.
-  //
-  // Awaited, not fired off: this event is what establishes the session row's
-  // adapter identity and lead-agent designation, and service-tier handlers gate
-  // on that designation (see the session currency handler). Returning from
-  // `startAgent` before it lands would let the caller's next turn race the
-  // designation. A failing consumer must still not undo a started agent, so the
-  // failure is logged rather than propagated.
-  try {
-    await globalBus.emit(SessionSubjects.agent.added, {
-      sessionId,
-      agentId,
-      adapterId,
-      adapterName: name,
-      adapterSessionId,
-      role,
-      model: payload.model,
-      cwd: resolvedCwd,
-    });
-  } catch (error) {
-    console.error(`[AIAdapter:${name}] session.agent.added consumer failed:`, { agentId, sessionId, error });
-  }
-
-  // Emit provider session tracking event
-  void globalBus.emit(AdapterSubjects.session.created, {
-    adapterId,
-    adapterName: name,
-    adapterSessionId,
-    sessionId,
-    model: payload.model ?? 'unknown',
-  });
-}
-
-/**
- * Remove a registered-but-uncommitted agent after start-agent persistence fails.
- * @param registry - Active agent registry that owns close and status updates.
- * @param agentId - Agent identifier to remove.
- * @param adapterName - Adapter name for diagnostic context.
- * @param cause - Original persistence failure.
- */
-async function rollbackRegisteredAgent<
-  TBus extends ScopedBus<string>,
-  TConnector extends AIAgentConnector<TBus>,
-  TAgent extends AIAgent<TBus, TConnector>,
->(
-  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>,
-  agentId: string,
-  adapterName: string,
-  cause: unknown,
-): Promise<void> {
-  try {
-    await registry.evict(agentId);
-  } catch (evictionError) {
-    throw new AggregateError(
-      [cause, evictionError],
-      `[AIAdapter:${adapterName}] startAgent persistence failed and live agent cleanup also failed.`,
-      { cause: evictionError },
-    );
-  }
 }
 
 /**
@@ -377,17 +221,23 @@ function assertValidEphemeralStartPayload(payload: StartAgentRequestPayload): vo
  * @param payload - Validated startAgent request payload
  * @param providerContext - Brand-restored provider context
  * @param sessionContext - Parsed session context, when supplied
+ * @param publication - The attempt's provider-key publication gate
  * @returns Options for the adapter's agent factory
  */
 function buildCreationOptions(
   payload: StartAgentRequestPayload,
   providerContext: ProviderContext,
   sessionContext: SessionContext | undefined,
+  publication: ProviderKeyPublication,
 ): AgentCreationOptions {
   const { sessionContext: _rawSessionContext, ...creationPayload } = payload;
   return {
     ...creationPayload,
     providerContext,
+    // The attempt's gate travels into the agent, so the routes inside it — the
+    // identity enrichment stamps on every event, the movement its tracker
+    // announces — ask the same question the start's own routes ask.
+    providerKeyPublication: publication,
     ...(sessionContext !== undefined ? { sessionContext } : {}),
   };
 }
@@ -419,21 +269,6 @@ async function resolveSessionId(payload: StartAgentRequestPayload, globalBus: IM
 }
 
 /**
- * Extract the provider-native session ID to claim for resume-mode requests.
- *
- * Returns the `adapterSessionId` from the payload when mode is `'resume'`,
- * or `undefined` for other modes where no claim is needed.
- * @param payload - Start-agent request payload
- * @returns Provider session ID to claim, or `undefined`
- */
-function getResumeAdapterSessionId(payload: StartAgentRequestPayload): string | undefined {
-  if (payload.mode === 'resume' && 'adapterSessionId' in payload) {
-    return payload.adapterSessionId as string;
-  }
-  return undefined;
-}
-
-/**
  * Create and start an agent, releasing the adapter-session claim on failure.
  *
  * Wraps `createAgent` and `startOrInitializeAgent` with claim-aware error
@@ -456,49 +291,246 @@ async function createAndStartAgentWithClaim<
   registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   globalBus: IMakaioBus;
   createAgent: (agentId: string, sessionId: string, options: AgentCreationOptions) => Promise<TAgent>;
+  /** Record that this attempt may have reached the provider, at the moment it may. */
+  markDispatched: () => void;
+  /** The attempt's publication gate, carried into the agent it creates. */
+  publication: ProviderKeyPublication;
 }): Promise<{ agent: TAgent; startResult: StartAgentExecutionResult }> {
-  const {
-    agentId,
-    sessionId,
-    payload,
-    providerContext,
-    sessionContext,
-    adapterName,
-    resumeAdapterSessionId,
-    registry,
-    globalBus,
-  } = params;
+  const { agentId, sessionId, payload, providerContext, sessionContext, adapterName, globalBus } = params;
   let activation: ProviderContextActivationLifecycle | undefined;
   let agent: TAgent | undefined;
   try {
+    // **Before the marker, deliberately.** Preparing the account is a local
+    // account-manager transaction — one bus RPC that takes a per-client mutation
+    // lock and stages a native account switch — and no connector exists yet, so
+    // it cannot have produced a provider session. Marking it as dispatched
+    // retired a key nothing had touched: the claim went `abandoned`, the row
+    // `dead`, and the next attempt found the provider session `occupied` on the
+    // strength of an account manager being unavailable. I15's boundary is the
+    // *entry of the provider-touching call*, and this is not it.
     activation = await prepareAdapterProviderContextActivation(globalBus, providerContext);
+    // From here on the attempt may have reached the provider: the connector is
+    // constructed and then initialised, and `initialize` has spoken to the
+    // provider by the time it can fail. The marker goes up before the
+    // construction, not between it and the initialise — over-reporting reach by
+    // one local step is the safe direction, under-reporting it is not.
+    params.markDispatched();
     agent = await params.createAgent(
       agentId,
       sessionId,
-      buildCreationOptions(payload, providerContext, sessionContext),
+      buildCreationOptions(payload, providerContext, sessionContext, params.publication),
     );
     const startResult = await startOrInitializeAgent(agent, payload, sessionContext);
     await commitAdapterProviderContextActivation(activation);
     return { agent, startResult };
   } catch (error) {
-    try {
-      if (activation === undefined) throw error;
-      const failedAgent = agent;
-      return await rollbackAdapterProviderContextActivationAfterFailure({
-        activation,
-        primaryError: error,
-        ...(failedAgent !== undefined && {
-          cleanup: () => failedAgent.close({ emitSessionClosed: !payload.ephemeral }),
-        }),
-        operation: `[AIAdapter:${adapterName}] startAgent`,
-        cleanupFailureMessage: `[AIAdapter:${adapterName}] startAgent and connector cleanup both failed.`,
-      });
-    } finally {
-      if (resumeAdapterSessionId !== undefined) {
-        registry.releaseAdapterSessionClaim(resumeAdapterSessionId);
-      }
-    }
+    // **No claim release here.** This used to give the process-local
+    // adapter-session claim back in a `finally`, and the attempt's own cleanup
+    // then gave it back a second time — it still held the acquisition, having
+    // never been told. A local claim is a slot, not a counter: between the two
+    // releases another start in this process can claim the same provider
+    // session, and the second release takes *its* guard away before it reaches
+    // `registry.set`, which is exactly the collision the claim exists to refuse.
+    //
+    // So the acquisition has one owner: `releaseStartAcquisitions`, reached from
+    // the caller's single catch. Every path out of here is a throw — the
+    // rollback helper returns `never` — so there is no exit it fails to cover.
+    if (activation === undefined) throw error;
+    const failedAgent = agent;
+    return await rollbackAdapterProviderContextActivationAfterFailure({
+      activation,
+      primaryError: error,
+      ...(failedAgent !== undefined && {
+        cleanup: () => failedAgent.close({ emitSessionClosed: !payload.ephemeral }),
+      }),
+      operation: `[AIAdapter:${adapterName}] startAgent`,
+      cleanupFailureMessage: `[AIAdapter:${adapterName}] startAgent and connector cleanup both failed.`,
+    });
   }
+}
+
+/**
+ * Run one adapter start, from the provider context to the persisted row.
+ *
+ * Every refusal it returns has already given back what it took; everything it
+ * throws is given back by the caller's single `catch`, which is what keeps the
+ * acquisitions leak-proof without a `finally` per resource.
+ * @param deps - Adapter-provided dependencies
+ * @param payload - Validated startAgent request payload
+ * @param agentId - Resolved agent identity for this start
+ * @param acquisitions - Acquisition state this attempt records into
+ * @returns The response to answer with, and the initial turn's handle when there is one
+ */
+async function runStartAttempt<
+  TBus extends ScopedBus<string>,
+  TConnector extends AIAgentConnector<TBus>,
+  TAgent extends AIAgent<TBus, TConnector>,
+>(
+  deps: StartAgentHandlerDeps<TBus, TConnector, TAgent>,
+  payload: StartAgentRequestPayload,
+  agentId: string,
+  acquisitions: StartAcquisitions,
+): Promise<{ result: StartAgentResponsePayload; messageHandle: MessageHandle | undefined }> {
+  const { name, registry, globalBus, createAgent } = deps;
+  // Absence is a closed configless state, never implicit native or ambient auth.
+  const providerContext: ProviderContext =
+    payload.providerContext === undefined
+      ? createUnresolvedProviderContext()
+      : ProviderContextSchema.parse(payload.providerContext);
+
+  assertValidEphemeralStartPayload(payload);
+  const sessionId = await resolveSessionId(payload, globalBus);
+  const resolvedPayload = { ...payload, providerContext };
+
+  const refusal = await acquireStartOwnership(deps, { payload: resolvedPayload, agentId, sessionId, acquisitions });
+  if (refusal !== undefined) return { result: refusal, messageHandle: undefined };
+  const resumeAdapterSessionId = getResumeAdapterSessionId(payload);
+
+  const sessionContext = payload.sessionContext ? SessionContextSchema.parse(payload.sessionContext) : undefined;
+  const { agent, startResult } = await createAndStartAgentWithClaim({
+    markDispatched: () => {
+      acquisitions.dispatched = true;
+    },
+    publication: acquisitions.publication,
+    agentId,
+    sessionId,
+    payload,
+    providerContext,
+    sessionContext,
+    adapterName: name,
+    resumeAdapterSessionId,
+    registry,
+    globalBus,
+    createAgent,
+  });
+  const { adapterSessionId, messageId, messageHandle } = startResult;
+
+  // Store agent and session info in registry, handing over the claimed resume
+  // target so the claim is settled even when the start did not end up on it: a
+  // start that suppresses native resume abandons the armed target and the
+  // connector mints its own provider session.
+  registry.set(agentId, { agent, sessionId, adapterSessionId, usage: createUsageBaseline() }, resumeAdapterSessionId);
+  // Both process-local claims are settled by that registration, so a later
+  // failure has nothing of theirs left to give back.
+  acquisitions.claimedIdentity = false;
+  acquisitions.resumeAdapterSessionId = undefined;
+
+  if (!payload.ephemeral) {
+    const failure = await persistStartedAgent(
+      deps,
+      { agentId, sessionId, adapterSessionId },
+      resolvedPayload,
+      acquisitions,
+    );
+    if (failure !== undefined) return { result: failure, messageHandle: undefined };
+    await announceStartedAdapterSession(agent, adapterSessionId, acquisitions.publication);
+  }
+  // **The hand-over is complete**: everything this start publishes has been
+  // published, and the key now travels to the caller in the response below. From
+  // here the agent's own routes may report it — see
+  // {@link releaseProviderKeyPublication} for what the remaining gap to the
+  // caller's settlement is and why the adapter cannot see it.
+  releaseProviderKeyPublication(acquisitions.publication);
+
+  return {
+    result: {
+      success: true,
+      agentId,
+      adapterId: deps.adapterId,
+      sessionId,
+      adapterSessionId,
+      ...(messageId !== undefined && { messageId }),
+    },
+    messageHandle,
+  };
+}
+
+/**
+ * Announce the provider session an adapter-owned start settled on.
+ *
+ * **Path C's currency writer is the movement observer (§4.1), and an observer
+ * only runs on an announcement.** Every other producer of one is an *event*:
+ * payload enrichment records the connector's identity as the agent emits, and a
+ * connector swap records the replacement's. An idle start emits nothing and
+ * swaps nothing, so on that path the announcement has to come from the start —
+ * without it the connector's session is never settled, and a start whose
+ * provider declined the resume leaves the reservation on the abandoned key while
+ * the live one stays unclaimed. Not a window that the first turn closes: an
+ * agent that never takes a turn never closes it at all, and the next reservation
+ * for that key walks through unopposed.
+ *
+ * Routed through the agent's tracker rather than settling here, which keeps the
+ * observer the single settle producer: the adapter states where the connector
+ * is, and what that means for durable currency stays the authority's to decide.
+ *
+ * For a **deferred** key it is not announced but *handed over*: the caller
+ * settles the confirmed key itself as Path A and Path D prescribe, so announcing
+ * would put a second write behind one movement — while saying nothing would
+ * leave the key unmarked, and the first event enriched after this start
+ * registers would announce it after all, racing the settlement it belongs to.
+ * Recording it as the caller's says both things at once.
+ *
+ * Which of the two this is comes from the attempt's own publication gate, and
+ * only from there: "may this key be published" and "who settles it" are one
+ * question, and re-deriving the second from the payload is how a route ends up
+ * answering it from a fact the gate does not share.
+ * @param agent - The started agent, whose tracker owns the announcement.
+ * @param adapterSessionId - Provider session the connector confirmed, when it confirmed one.
+ * @param publication - The attempt's provider-key publication gate.
+ */
+async function announceStartedAdapterSession(
+  agent: {
+    recordConfirmedAdapterSession: (adapterSessionId: string, settledByCaller?: boolean) => Promise<void>;
+  },
+  adapterSessionId: string | undefined,
+  publication: ProviderKeyPublication,
+): Promise<void> {
+  if (adapterSessionId === undefined) return;
+  await agent.recordConfirmedAdapterSession(adapterSessionId, !providerKeyIsPublishable(publication));
+}
+
+/**
+ * Write the started agent's row and announce it, guarded when it was reserved.
+ *
+ * A reserved start's row is what its reservation was taken against, so a refused
+ * write is a start failure rather than a logged inconvenience: reporting success
+ * over an unwritten row leaves it `starting`, and the next send turns that into
+ * a second recovery for a live agent. The typed refusal it answers with is the
+ * one post-dispatch outcome the adapter can describe, which is why it returns
+ * rather than throws.
+ * @param deps - Adapter-provided dependencies
+ * @param identity - Agent, session and the provider session the connector landed on
+ * @param payload - Start payload with its provider context resolved
+ * @param acquisitions - What the attempt holds, with `dispatched` already set
+ * @returns The refusal to answer with, or `undefined` when the row stands
+ */
+async function persistStartedAgent<
+  TBus extends ScopedBus<string>,
+  TConnector extends AIAgentConnector<TBus>,
+  TAgent extends AIAgent<TBus, TConnector>,
+>(
+  deps: StartAgentHandlerDeps<TBus, TConnector, TAgent>,
+  identity: { agentId: string; sessionId: string; adapterSessionId: string | undefined },
+  payload: StartAgentRequestPayload & { providerContext: ProviderContext },
+  acquisitions: StartAcquisitions,
+): Promise<StartAgentRefusal | undefined> {
+  const { agentId, sessionId, adapterSessionId } = identity;
+  let failure: string | undefined;
+  try {
+    failure = await persistAndEmitAgent(agentId, sessionId, adapterSessionId, payload, deps, {
+      guarded: acquisitions.reservation !== undefined,
+      // Restated, never recomputed: this write replaces the whole pre-dispatch
+      // record, and a fresh `createdAt` here would date the agent from the
+      // moment its connector came up.
+      createdAt: acquisitions.agentRowCreatedAt,
+      publication: acquisitions.publication,
+    });
+  } catch (error) {
+    await rollbackRegisteredAgent(deps.registry, agentId, deps.name, error);
+    throw error;
+  }
+  if (failure === undefined) return undefined;
+  return failStartAfterRegistration(deps, agentId, acquisitions, failure);
 }
 
 /**
@@ -510,13 +542,17 @@ async function createAndStartAgentWithClaim<
  * For resume-mode requests, atomically claims the provider-native session ID
  * before creating the agent to prevent TOCTOU races where two concurrent
  * attach-resume requests for the same `adapterSessionId` both pass the
- * attach-handler's live-writer guard before either agent registers.
+ * attach-handler's live-writer guard before either agent registers. When the
+ * adapter also owns the agent row, that process-local claim is backed by a
+ * **durable** reservation of the same provider session: `startAgent` has many
+ * producers, and requiring each of them to reserve would still leave the next
+ * one unprotected, so the gate lives where every producer must pass.
  *
  * The agent identity is minted here unless the caller supplied one. A supplied
  * one is honoured — and transfers the agent row to the caller, so the adapter
  * persists no record of its own (see {@link callerOwnsAgentRow}); a supplied one
- * that is already registered here is refused, since it would mean two starts for
- * a single agent identity.
+ * that is already claimed or registered here is refused, since it would mean two
+ * starts for a single agent identity.
  * @param deps - Adapter-provided dependencies
  * @returns Handler bound to the supplied dependencies
  */
@@ -527,7 +563,7 @@ export function createStartAgentHandler<
 >(
   deps: StartAgentHandlerDeps<TBus, TConnector, TAgent>,
 ): (ctx: RequestContext<StartAgentRequestPayload, StartAgentResponsePayload>) => Promise<void> {
-  const { adapterId, name, clientId, getPlatformDefaults, registry, globalBus, createAgent } = deps;
+  const { name, registry, globalBus } = deps;
 
   return async function handleStartAgent(
     ctx: RequestContext<StartAgentRequestPayload, StartAgentResponsePayload>,
@@ -541,79 +577,39 @@ export function createStartAgentHandler<
       return;
     }
 
-    // Absence is a closed configless state, never implicit native or ambient auth.
-    const providerContext: ProviderContext =
-      payload.providerContext === undefined
-        ? createUnresolvedProviderContext()
-        : ProviderContextSchema.parse(payload.providerContext);
+    // The one predicate the collision refusal claims under, read again rather
+    // than returned from it, so the two readings cannot drift apart — and read
+    // once here, because the claim this attempt holds and the gate it publishes
+    // under are two consequences of the same fact.
+    const callerOwnsRow = callerOwnsAgentRow(payload);
+    const acquisitions: StartAcquisitions = {
+      // Held exactly when the caller supplied the identity.
+      claimedIdentity: callerOwnsRow,
+      resumeAdapterSessionId: undefined,
+      reservation: undefined,
+      agentRowCreatedAt: undefined,
+      dispatched: false,
+      publication: providerKeyPublicationFor({
+        callerOwnsAgentRow: callerOwnsRow,
+        ...(payload.ephemeral !== undefined && { ephemeral: payload.ephemeral }),
+      }),
+    };
 
-    assertValidEphemeralStartPayload(payload);
-    const sessionId = await resolveSessionId(payload, globalBus);
-
-    // For resume mode, claim the provider-native session ID before creating
-    // the agent. The atomic claim ensures exactly one concurrent request
-    // proceeds; the loser receives a failure response.
-    const resumeAdapterSessionId = getResumeAdapterSessionId(payload);
-    if (resumeAdapterSessionId !== undefined) {
-      const claimed = registry.claimAdapterSession(resumeAdapterSessionId);
-      if (!claimed) {
-        ctx.setResult({
-          success: false,
-          // Fires before the connector is created, so nothing exists provider-side.
-          dispatch: 'not-dispatched',
-          message: `Provider session ${resumeAdapterSessionId} is already claimed by another in-flight start`,
-        });
-        return;
-      }
+    let attempt: { result: StartAgentResponsePayload; messageHandle: MessageHandle | undefined };
+    try {
+      attempt = await runStartAttempt(deps, payload, agentId, acquisitions);
+    } catch (error) {
+      // The scope of this catch is exactly "failures with no modeled response":
+      // every outcome the attempt can describe answers for itself and has
+      // already given its acquisitions back.
+      await releaseStartAcquisitions({ globalBus, registry, agentId, ...acquisitions });
+      throw error;
     }
 
-    const sessionContext = payload.sessionContext ? SessionContextSchema.parse(payload.sessionContext) : undefined;
-    const { agent, startResult } = await createAndStartAgentWithClaim({
-      agentId,
-      sessionId,
-      payload,
-      providerContext,
-      sessionContext,
-      adapterName: name,
-      resumeAdapterSessionId,
-      registry,
-      globalBus,
-      createAgent,
-    });
-    const { adapterSessionId, messageId, messageHandle } = startResult;
+    ctx.setResult(attempt.result);
 
-    // Store agent and session info in registry, handing over the claimed resume
-    // target so the claim is settled even when the start did not end up on it: a
-    // start that suppresses native resume abandons the armed target and the
-    // connector mints its own provider session.
-    registry.set(agentId, { agent, sessionId, adapterSessionId, usage: createUsageBaseline() }, resumeAdapterSessionId);
-
-    if (!payload.ephemeral) {
-      try {
-        await persistAndEmitAgent(
-          agentId,
-          sessionId,
-          adapterSessionId,
-          { ...payload, providerContext },
-          { adapterId, name, clientId, getPlatformDefaults, globalBus },
-        );
-      } catch (error) {
-        await rollbackRegisteredAgent(registry, agentId, name, error);
-        throw error;
-      }
-    }
-
-    ctx.setResult({
-      success: true,
-      agentId,
-      adapterId,
-      sessionId,
-      adapterSessionId,
-      ...(messageId !== undefined && { messageId }),
-    });
-
-    if (payload.ephemeral) {
-      void cleanupEphemeralAgentAfterTurn(registry, agentId, name, messageHandle).catch((err) => {
+    if (payload.ephemeral && attempt.result.success) {
+      void cleanupEphemeralAgentAfterTurn(registry, agentId, name, attempt.messageHandle).catch((err) => {
         console.warn(`[AIAdapter:${name}] Ephemeral agent cleanup failed:`, err);
       });
     }

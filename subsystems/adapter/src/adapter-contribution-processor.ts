@@ -9,6 +9,7 @@ import type { AdapterConfigStore } from './adapter-config-store.js';
 import type { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 import type { LoadedAdapter } from './adapter-runtime-types.js';
+import { contributesToAdapterSubsystem } from './adapter-subsystem-contribution-factory.js';
 import {
   cloneAdapterClientRefs,
   resolveAdapterClientDefinitions,
@@ -147,7 +148,7 @@ export class AdapterContributionProcessor {
    */
   public register(addCleanup: (fn: () => void) => void): void {
     const processor: ContributionProcessor = {
-      filter: (pkg: KernelMakaioExtension): boolean => !!pkg.adapters?.length || !!pkg.providers?.length,
+      filter: contributesToAdapterSubsystem,
       processActivated: async (
         name: string,
         pkg: KernelMakaioExtension,

@@ -224,6 +224,19 @@ Subject: `session.agent.removed`
 Type: Event (fire-and-forget)
 Emitted when: An agent is detached/removed from a session
 
+**A producer must have stopped the agent's connector first.** The removal
+handler disposes the agent row *and* releases the agent's ownership claims,
+which is precisely the act that strips a live connector of its anchor: the
+provider session it speaks to becomes acquirable while it is still running,
+and a second runtime may then legitimately take it.
+
+The handler cannot verify the connector is gone and must not try — it would
+put an adapter round trip, and adapter availability, inside a storage-facing
+event handler, so removing an agent would start failing when an adapter is
+slow. The emitter can, because it is the party that decided to remove the
+agent. Note that `adapter.stopAgent`'s response is not evidence of a closed
+connector today; it reports only that an entry existed.
+
 | Field | Type | Required |
 |-------|------|----------|
 | `agentId` | `string` | yes |
@@ -926,6 +939,7 @@ Type: Request (RPC)
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
 | `agentId` | `string` | yes |
+| `claimToken` | `string \| undefined` | no |
 | `machineId` | `string \| undefined` | no |
 | `movement` | `{ confirmed: true; providerSessionId: string; } \| { confirmed: false; }` | yes |
 | `sessionId` | `string` | yes |
@@ -1169,6 +1183,7 @@ documents are intentionally not accepted at this session boundary.
 
 | Field | Type | Required |
 |-------|------|----------|
+| `deferredAgentIds` | `string[] \| undefined` | no |
 | `messageId` | `string` | yes |
 | `sessionId` | `string` | yes |
 | `turnId` | `string` | yes |

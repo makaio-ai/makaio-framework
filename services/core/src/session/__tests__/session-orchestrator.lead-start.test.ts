@@ -24,6 +24,7 @@ import { SessionStartError } from '../handlers/session-start-error.js';
 import { startLeadAgent } from '../handlers/lead-start.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { resolveInFlightStarts } from '../handlers/in-flight-start-join.js';
+import { resolveTargetAgents } from '../utils/session-utils.js';
 import { runExclusiveStart } from '../ownership/index.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
@@ -83,7 +84,7 @@ describe('reserved fresh lead start', () => {
       }),
       MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydratedAgentIds.push(ctx.payload.agentId);
-        ctx.setResult({});
+        ctx.setResult({ success: true });
       }),
     ];
     service = new MakaioSessionService(MakaioBus, { machineId: MACHINE_ID });
@@ -361,12 +362,171 @@ describe('reserved fresh lead start', () => {
     expect(rehydratedAgentIds).toEqual([]);
   });
 
-  it('reports a start whose recovery another runtime claimed as lost (case 35)', async () => {
-    const sessionId = await seedSession('lead-start-lost');
+  it.each([
+    { label: 'a machine the caller named', machineId: 'remote-machine' },
+    { label: "the authority's own", machineId: undefined },
+  ])('names $label in both the reservation and the settlement', async ({ machineId }) => {
+    // An adapter instance ID is a one-way hash of `(machineId, adapterName)`, so
+    // the machine an ownership act names has to be the one its instance came
+    // from. A start that reserves and settles under this runtime while
+    // dispatching to another machine's instance builds a key nobody else
+    // computes — it collides with nothing and protects nothing, and the real
+    // machine's runtime reserves the same provider session and wins.
+    const sessionId = await seedSession(`lead-start-machine-${machineId ?? 'own'}`);
+    const named: Array<string | undefined> = [];
+    cleanups.push(
+      MakaioBus.on(
+        SessionSubjects.ownership.reserveStart,
+        (ctx) => {
+          named.push(ctx.payload.machineId);
+          return ctx.next();
+        },
+        { priority: 1000 },
+      ),
+      MakaioBus.on(
+        SessionSubjects.ownership.settleMovement,
+        (ctx) => {
+          named.push(ctx.payload.machineId);
+          return ctx.next();
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    const result = await startLeadAgent(MakaioBus, {
+      sessionId,
+      adapterId: ADAPTER_ID,
+      adapterName: ADAPTER_NAME,
+      expectedLeadAgentId: null,
+      ...(machineId !== undefined && { machineId }),
+      startRequest: { adapterId: ADAPTER_ID, sessionId, role: 'lead' },
+    });
+
+    expect(result.outcome).toBe('started');
+    // The reservation is keyless for a fresh start, so the settlement is the one
+    // keyed act — and both name the same identity, whichever it is.
+    expect(named).toEqual([machineId, machineId]);
+  });
+
+  it('does not let a refused origin write pass as a completed start', async () => {
+    // The column is write-once, so a dropped write is a start that permanently
+    // misreports where its conversation began — and every later native resume
+    // reads it. A refusal is one of the two failure forms; the throw is pinned
+    // by the case below, and both land in the same region.
+    const sessionId = await seedSession('lead-start-origin-refused');
+    cleanups.push(
+      MakaioBus.on(
+        AgentStorageSubjects.updateRuntime,
+        (ctx) => {
+          ctx.setResult({ success: false });
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    await expect(start(sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
+
+    // The settle ran first, so this failure has a real generation to retire.
+    const claims = await loadClaims();
+    expect(claims).not.toHaveLength(0);
+    expect(claims.every((claim) => claim.status === 'abandoned')).toBe(true);
+    expect(stoppedAgentIds).toHaveLength(1);
+  });
+
+  it('names a removal as a removal when the completion fails on it', async () => {
+    // A post-dispatch step fails *because* the row is gone: the write that names
+    // it is refused like any other refusal, so without a re-read the removal is
+    // reported as "the settlement did not resolve" — which is the code a
+    // consumer branches on, and the rehydrate path has always classified it
+    // correctly. One table for every caller-owned teardown, or the three paths
+    // answer one fact three ways.
+    const sessionId = await seedSession('lead-start-removed-under-completion');
+    cleanups.push(
+      MakaioBus.on(
+        AgentStorageSubjects.updateRuntime,
+        async (ctx) => {
+          await MakaioBus.request(AgentStorageSubjects.delete, { agentId: ctx.payload.agentId });
+          return ctx.next();
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    await expect(start(sessionId)).rejects.toMatchObject({ code: 'agent-unavailable' });
+
+    // Classified differently, torn down the same way: the connector nobody
+    // proved closed is stopped. Nothing is left to retire — deleting the row
+    // cascades its claims away, which is the removal's own doing and the reason
+    // this failure has a name other than an unresolved settlement.
+    expect(stoppedAgentIds).toHaveLength(1);
+    expect(await loadClaims()).toHaveLength(0);
+    expect(await loadAgent(stoppedAgentIds[0] ?? '')).toBeNull();
+  });
+
+  it('claims the confirmed key before the bookkeeping that can fail on it', async () => {
+    // The runtime write records where the conversation *began*; the settlement
+    // claims the key the connector is speaking to *now*. Run first, the record
+    // could fail and take the claim with it — leaving the confirmed provider
+    // session unclaimed under a connector nobody proved closed, and no
+    // generation for the failure path to give back.
+    const sessionId = await seedSession('lead-start-origin-after-settle');
+    cleanups.push(
+      MakaioBus.on(
+        AgentStorageSubjects.updateRuntime,
+        () => {
+          throw new Error('runtime write transport failed');
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    await expect(start(sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
+
+    // The key was claimed before the write that failed, so the failure has a
+    // real generation to retire — `abandoned`, which keeps the key blocked for a
+    // provider session nobody has proven closed, rather than free for a second
+    // driver.
+    const claims = await loadClaims();
+    expect(claims).not.toHaveLength(0);
+    expect(claims.every((claim) => claim.status === 'abandoned')).toBe(true);
+    expect(stoppedAgentIds).toHaveLength(1);
+  });
+
+  it('leaves a post-dispatch failure recoverable by the next default send (case 31, follow-on)', async () => {
+    // Why case 31 keeps the designation rather than clearing it, asserted rather
+    // than argued. A fresh start has no previous lead to restore, so clearing is
+    // the whole effect — and a session holding the `dead` row the failure kept
+    // (I15) with nothing designated is one `resolveTargetAgents` raises for.
+    // Kept, the lead names an agent the session has, and the next send's own
+    // consumer rule recovers it.
+    const sessionId = await seedSession('lead-start-recoverable-after-failure');
+    registerStartAgent({ throwWith: 'provider start exploded' });
+
+    await expect(start(sessionId)).rejects.toThrow('provider start exploded');
+
+    const session = await loadSession(sessionId);
+    if (session === null) throw new Error('seeded session is missing');
+    expect(session.leadAgentId).toBe(session.agents[0]?.agentId);
+    // The default target still resolves, and resolves to the dead row — which is
+    // exactly what the send path's recovery step is for.
+    expect(resolveTargetAgents(session, undefined).map((agent) => agent.status)).toEqual(['dead']);
+    const resolution = await resolveInFlightStarts(MakaioBus, session);
+    expect([...resolution.droppedAgentIds]).toEqual([]);
+  });
+
+  it('keeps a healthy start whose row a peer stomped to dead (cases 35, 98a)', async () => {
+    const sessionId = await seedSession('lead-start-peer-dead');
     registerStartAgent({
       duringDispatch: async (agentId) => {
-        // Stands in for a peer process applying the consumer rule's status CAS
-        // while this start is still dispatching.
+        // A peer applying the in-flight consumer rule compare-and-swaps
+        // `starting → dead` to claim this recovery. Under Wave 3 it then
+        // reserves, is told `occupied` and degrades — it never touches the
+        // provider session. The status write says nothing about ownership, and
+        // reading it as a lost start would stop a live connector (I21′).
         await MakaioBus.request(AgentStorageSubjects.updateStatus, {
           agentId,
           status: 'dead',
@@ -375,14 +535,56 @@ describe('reserved fresh lead start', () => {
       },
     });
 
+    const result = await start(sessionId);
+
+    expect(result.outcome).toBe('started');
+    if (result.outcome !== 'started') return;
+    // `dead` is in the commit's expectation precisely so the owner restores it.
+    expect((await loadAgent(result.agent.agentId))?.status).toBe('idle');
+    expect(stoppedAgentIds).toEqual([]);
+  });
+
+  it('accepts a peer that wrote idle first as a silent no-op (case 98b)', async () => {
+    const sessionId = await seedSession('lead-start-peer-idle');
+    registerStartAgent({
+      duringDispatch: async (agentId) => {
+        // What an *unreserved* attempt joining the same agent writes.
+        await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+      },
+    });
+
+    const result = await start(sessionId);
+
+    expect(result.outcome).toBe('started');
+    expect(stoppedAgentIds).toEqual([]);
+  });
+
+  it.each([
+    { label: 'disposed', dispose: true },
+    { label: 'deleted', dispose: false },
+  ])('reports a start whose row was $label under it as unavailable (case 98c, Path A)', async ({ dispose }) => {
+    const sessionId = await seedSession(`lead-start-removed-${dispose ? 'disposed' : 'deleted'}`);
+    registerStartAgent({
+      duringDispatch: async (agentId) => {
+        // A removal landing between the dispatch and the commit. It is terminal
+        // and owner-independent, so reading it cannot be raced — and it is the
+        // one refusal that means this attempt's connector has no generation.
+        if (dispose) {
+          await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+          return;
+        }
+        await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
+      },
+    });
+
     const failure = await start(sessionId).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SessionStartError);
     if (!(failure instanceof SessionStartError)) return;
-    expect(failure.code).toBe('start-lost');
+    expect(failure.code).toBe('agent-unavailable');
     expect(stoppedAgentIds).toHaveLength(1);
     const claims = await loadClaims();
-    expect(claims.map((claim) => claim.status)).toEqual(['abandoned']);
+    expect(claims.every((claim) => claim.status !== 'held')).toBe(true);
   });
 
   it('applies the join-result table to a start that deleted its row (case 36)', async () => {
@@ -413,6 +615,8 @@ describe('reserved fresh lead start', () => {
         });
         await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
         // A pre-dispatch failure both deletes the row and rejects the attempt.
+        // The verdict never arrives, which is the point: the row is what the
+        // resolution reads.
         throw new Error('pre-dispatch failure');
       }).settled.catch(() => undefined);
     });
@@ -457,6 +661,9 @@ describe('reserved fresh lead start', () => {
           releaseAttempt = release;
         });
         await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status });
+        // Immaterial here: this resolution is about the identity's state, which
+        // only the row can answer.
+        return 'connected';
       }).settled;
     });
     await attemptStarted;
@@ -545,6 +752,104 @@ describe('reserved fresh lead start', () => {
     const session = await loadSession(sessionId);
     // Never `idle`: the transition is permitted only after an accepted settlement.
     expect(session?.agents[0]?.status).toBe('dead');
+    const claims = await loadClaims();
+    expect(claims.map((claim) => [claim.agentId, claim.status])).toEqual([[incumbentId, 'held']]);
+  });
+
+  it('deletes the row when the write that stored it throws after committing', async () => {
+    // The same acquisition frame the attach path needed. This write is a round
+    // trip like any other: its transaction can commit while its response is
+    // lost, and a rollback region that began after it would leave a `starting`
+    // row with no reservation, no owner and no connector — a phantom every later
+    // send has to arbitrate over.
+    const sessionId = await seedSession('lead-start-lost-row-write');
+    let rowDeletes = 0;
+    cleanups.push(
+      MakaioBus.on(
+        AgentStorageSubjects.delete,
+        (ctx) => {
+          rowDeletes += 1;
+          return ctx.next();
+        },
+        { priority: 100 },
+      ),
+      MakaioBus.on(
+        AgentStorageSubjects.set,
+        (ctx) => {
+          // Committed, then lost: written through to the store, reported failed.
+          ctx.next();
+          throw new Error('agent storage response was lost');
+        },
+        { priority: 100 },
+      ),
+    );
+    registerStartAgent({ adapterSessionId: 'provider-lost-write' });
+
+    const failure = await start(sessionId).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    // Nothing was dispatched, and the row the write may have stored is gone.
+    expect(rowDeletes).toBe(1);
+    const session = await loadSession(sessionId);
+    expect(session?.agents ?? []).toEqual([]);
+  });
+
+  it('keeps the refusal it classified when the terminal status write throws', async () => {
+    // The teardown a refused settlement performs is best-effort down to its last
+    // step: the generations are already back, and the status it writes is not
+    // ownership evidence — a row left `starting` is resolved by the send path's
+    // in-flight rule, which is what the `settlement-unresolved` outcome relies
+    // on by design. So a storage failure in that write must not replace the
+    // refusal the authority named with an error about the cleanup.
+    const incumbentSession = await seedSession('lead-start-incumbent-throwing');
+    const incumbentId = 'incumbent-agent-throwing';
+    await MakaioBus.request(AgentStorageSubjects.set, {
+      agentId: incumbentId,
+      agent: {
+        agentId: incumbentId,
+        adapterId: ADAPTER_ID,
+        adapterName: ADAPTER_NAME,
+        sessionId: incumbentSession,
+        role: 'lead',
+        status: 'idle',
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+      },
+    });
+    const reserved = await MakaioBus.request(SessionSubjects.ownership.reserveStart, {
+      sessionId: incumbentSession,
+      agentId: incumbentId,
+      adapterId: ADAPTER_ID,
+      adapterName: ADAPTER_NAME,
+      role: 'member',
+      resumeProviderSessionId: 'provider-throwing',
+    });
+    expect(reserved.outcome).toBe('reserved');
+
+    // Only the terminal write fails; every other transition this start makes is
+    // left alone, so the case fails for the reason it is about.
+    cleanups.push(
+      MakaioBus.on(
+        AgentStorageSubjects.updateStatus,
+        (ctx) => {
+          if (ctx.payload.status === 'dead') throw new Error('agent storage is unavailable');
+          ctx.next();
+        },
+        { priority: 100 },
+      ),
+    );
+
+    const sessionId = await seedSession('lead-start-refused-settle-throwing');
+    registerStartAgent({ adapterSessionId: 'provider-throwing' });
+
+    const failure = await start(sessionId).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SessionStartError);
+    if (!(failure instanceof SessionStartError)) return;
+    expect(failure.code).toBe('ownership-refused');
+    // And the teardown ran once, not twice: the connector was stopped exactly
+    // once and the incumbent's generation is untouched.
+    expect(stoppedAgentIds).toHaveLength(1);
     const claims = await loadClaims();
     expect(claims.map((claim) => [claim.agentId, claim.status])).toEqual([[incumbentId, 'held']]);
   });

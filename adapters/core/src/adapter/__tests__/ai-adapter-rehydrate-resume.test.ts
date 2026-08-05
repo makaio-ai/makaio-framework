@@ -3,7 +3,15 @@ import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
-import { createTestAdapter, MockConnector, TestAgent, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
+import {
+  createTestAdapter,
+  MockConnector,
+  registerAgentRowStorage,
+  registerStartReservationAuthority,
+  TestAgent,
+  type BaseAgentConnectorConfig,
+  type TestBus,
+} from './shared.js';
 import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
 /**
@@ -25,7 +33,9 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    cleanupFns = [];
+    // An adapter-owned resume start writes a pre-dispatch row and reserves the
+    // provider session before it dispatches; both are hard requests.
+    cleanupFns = [registerStartReservationAuthority(), registerAgentRowStorage()];
   });
 
   afterEach(async () => {
@@ -385,7 +395,9 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    cleanupFns = [];
+    // An adapter-owned resume start writes a pre-dispatch row and reserves the
+    // provider session before it dispatches; both are hard requests.
+    cleanupFns = [registerStartReservationAuthority(), registerAgentRowStorage()];
   });
 
   afterEach(async () => {
@@ -530,7 +542,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     expect(secondStart.success).toBe(true);
   });
 
-  it('warm rehydrate rejects a resume target owned by another live agent', async () => {
+  it('warm rehydrate refuses a resume target owned by another live agent', async () => {
     // Occupancy must be real, not implied by a leftover pending claim: the
     // default MockConnector reports one fixed ID for every agent, so a start
     // pinned to a provider session would not actually occupy it. Echoing the
@@ -577,17 +589,22 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     const agentA = await startLiveAgent('claim-session-a', 'session-a');
     await startLiveAgent('claim-session-b', 'session-b');
 
-    // Agent A must not be attachable to agent B's provider conversation.
-    await expect(
-      MakaioBus.request(AdapterSubjects.rehydrateAgent, {
-        adapterId: adapter.adapterId,
-        agentId: agentA,
-        resumeAdapterSessionId: 'session-b',
-      }),
-    ).rejects.toThrow('already claimed');
+    // Agent A must not be attachable to agent B's provider conversation. The
+    // refusal is modeled, not thrown: nothing was dispatched, so a caller
+    // holding a reservation can give it back rather than retire it.
+    const refused = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      adapterId: adapter.adapterId,
+      agentId: agentA,
+      resumeAdapterSessionId: 'session-b',
+    });
+
+    expect(refused.success).toBe(false);
+    if (refused.success) throw new Error('Expected the warm rehydrate to be refused');
+    expect(refused.dispatch).toBe('not-dispatched');
+    expect(refused.message).toContain('already claimed');
   });
 
-  it('concurrent cold rehydrate for same native resume ID is rejected', async () => {
+  it('concurrent cold rehydrate for same native resume ID is refused', async () => {
     // Two promises coordinate the race:
     // - `gate`: blocks the first connector creation until we are ready.
     // - `connectorEntered`: resolves when the first connector factory is
@@ -630,18 +647,21 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     // therefore holds the claim before we fire the second.
     await connectorEntered;
 
-    // The second rehydrate for the same provider session must be rejected
+    // The second rehydrate for the same provider session must be refused
     // while the first still holds the claim — assert BEFORE releasing the
     // gate. (Releasing first would race: once the first rehydrate completes,
     // the resumed session is released again because the provider confirmed a
     // different identity, and a late second claim would legitimately succeed.)
-    await expect(
-      MakaioBus.request(AdapterSubjects.rehydrateAgent, {
-        adapterId: adapter.adapterId,
-        agentId: 'agent-concurrent-2',
-        resumeAdapterSessionId: 'native-session-concurrent',
-      }),
-    ).rejects.toThrow('already claimed');
+    const refused = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      adapterId: adapter.adapterId,
+      agentId: 'agent-concurrent-2',
+      resumeAdapterSessionId: 'native-session-concurrent',
+    });
+
+    expect(refused.success).toBe(false);
+    if (refused.success) throw new Error('Expected the concurrent cold rehydrate to be refused');
+    expect(refused.dispatch).toBe('not-dispatched');
+    expect(refused.message).toContain('already claimed');
 
     // Unblock the first rehydrate connector creation.
     resolveGate();

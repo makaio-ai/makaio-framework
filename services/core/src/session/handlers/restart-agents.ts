@@ -2,36 +2,17 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, SessionSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { evaluateNativeLocality } from '../native-locality.js';
-import { runExclusiveStart, type ExclusiveStart } from '../ownership/index.js';
-import {
-  planAgentRecovery,
-  recoveryPlanRequiresHistory,
-  type NativeResumeRecoveryPlan,
-  type RecoveryPlan,
-} from '../recovery-plan.js';
+import { planAgentRecovery, recoveryPlanRequiresHistory, type RecoveryPlan } from '../recovery-plan.js';
 import { resolveAgentResumeIdentity } from '../session-resume-identity.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
-import { dispatchAgentRehydrate } from '../utils/agent-recovery.js';
-import { resolveLiveAdapterId } from '../utils/resolution.js';
-import { classifyJoinedRow } from './in-flight-start-join.js';
-import { abandonDispatchedStart, applySettlementOutcome, type StartCleanupPolicy } from './lead-start-cleanup.js';
+import { resolveLiveAdapterIdForMachine } from '../utils/resolution.js';
+import { runOrJoinReservedRehydrate, type ExclusiveRehydrateOutcome } from './in-flight-start-join.js';
 
 /** One agent's outcome, as `session.restartAgents` reports it. */
 type RestartAgentsHandlerResult =
   | { agentId: string; adapterId: string; success: true }
   | { agentId: string; adapterId: string; success: false; error: string };
-
-/**
- * The rehydrate path does **not** own `agents.status`.
- *
- * `adapter.rehydrateAgent` writes `idle` unconditionally, before the service
- * settles, and this wave does not change that. So the shared start cleanup runs
- * here with every status write suppressed: releasing claims and stopping a
- * connector this runtime may not own are the parts that belong to ownership,
- * and the status column is not one of them.
- */
-const ADAPTER_OWNED_STATUS: StartCleanupPolicy = { writesAgentStatus: false };
 
 /**
  * Probe whether an adapter declares the `session:resume` capability.
@@ -73,112 +54,6 @@ async function resolveEffectiveMachineId(
   return identity.handled ? identity.data.machineId : undefined;
 }
 
-/** How a reservation attempt for a restart ended, as the path branches on it. */
-type RestartReservation =
-  /** Reserved, or no authority to reserve from — either way, dispatch. */
-  | { kind: 'proceed' }
-  /**
-   * Another generation owns the key, or the authority cannot decide. Neither is
-   * a failure of this agent: the send path recovers it with injected history.
-   */
-  | { kind: 'degrade' }
-  /** The reservation was refused on grounds that make the agent unrecoverable here. */
-  | { kind: 'refused'; outcome: string };
-
-/**
- * Reserve the provider session this restart is about to resume.
- *
- * A restart reserves as a **member** regardless of the agent's stored role: the
- * session's lead designation is a statement about who speaks for the session
- * now, and a process coming back up must not re-take it from whoever holds it.
- *
- * An unhandled authority means there is nothing to reserve from, so nothing was
- * taken and nothing has to be given back — the same degradation the fresh-start
- * path accepts, rather than making the ownership extension a boot dependency of
- * restarting a session. An authority that *is* registered and answers
- * `machine-identity-unavailable` is different: it declined to decide, and a
- * native resume dispatched past a decline is exactly the unowned second writer
- * this aggregate exists to prevent.
- * @param bus - Bus the reservation is issued on
- * @param agent - Agent being restarted
- * @param adapterId - Live adapter instance the rehydrate will be dispatched to
- * @param resumeProviderSessionId - Provider session the plan resumes
- * @param machineId - Effective machine identity the plan was decided for
- * @returns Whether to dispatch, degrade to history injection, or report failure
- */
-async function reserveRestart(
-  bus: IMakaioBus,
-  agent: MakaioSessionAgent,
-  adapterId: string,
-  resumeProviderSessionId: string,
-  machineId: string | undefined,
-): Promise<RestartReservation> {
-  const result = await bus.requestOptional(SessionSubjects.ownership.reserveStart, {
-    sessionId: agent.sessionId,
-    agentId: agent.agentId,
-    adapterId,
-    adapterName: agent.adapterName,
-    role: 'member',
-    resumeProviderSessionId,
-    // The effective identity, which is the composed one unless the caller named
-    // a machine. Omitting it here would let the plan be decided for one machine
-    // and the key reserved in another's namespace — and a handler asked to act
-    // for a named machine would answer `machine-identity-unavailable` on a host
-    // that has no identity of its own, refusing the very operation the override
-    // exists to make possible.
-    ...(machineId !== undefined && { machineId }),
-  });
-  if (!result.handled) return { kind: 'proceed' };
-
-  switch (result.data.outcome) {
-    case 'reserved':
-      return { kind: 'proceed' };
-    case 'occupied':
-    case 'machine-identity-unavailable':
-      return { kind: 'degrade' };
-    default:
-      return { kind: 'refused', outcome: result.data.outcome };
-  }
-}
-
-/**
- * Settle the provider session the rehydrated agent resumed.
- *
- * The rehydrate re-attaches the connector to a conversation this runtime has
- * just reserved, so the currency has to name it — otherwise the next movement
- * would be settled against a generation nobody recorded. The settle-outcome
- * table applies unchanged apart from its status writes, which this path does
- * not own.
- * @param bus - Bus the settlement is issued on
- * @param agent - Agent that was rehydrated
- * @param adapterId - Live adapter instance the connector lives on
- * @param providerSessionId - Provider session the agent resumed
- * @param machineId - Effective machine identity the reservation was taken under
- */
-async function settleRestartedAgent(
-  bus: IMakaioBus,
-  agent: MakaioSessionAgent,
-  adapterId: string,
-  providerSessionId: string,
-  machineId: string | undefined,
-): Promise<void> {
-  const settled = await bus.requestOptional(SessionSubjects.ownership.settleMovement, {
-    sessionId: agent.sessionId,
-    agentId: agent.agentId,
-    adapterId,
-    adapterName: agent.adapterName,
-    movement: { confirmed: true, providerSessionId },
-    // The same identity the reservation used: the settlement writes through the
-    // generation that reservation took, and a settle in another machine's
-    // namespace would find no claim of the caller's and refuse as `not-owner`.
-    ...(machineId !== undefined && { machineId }),
-  });
-  // No authority means no currency to be refused ownership of, exactly as at
-  // the reservation.
-  if (!settled.handled) return;
-  await applySettlementOutcome(bus, adapterId, agent.agentId, settled.data.outcome, ADAPTER_OWNED_STATUS);
-}
-
 /**
  * Decide how one agent regains its conversation.
  *
@@ -215,131 +90,57 @@ async function planRestart(
 }
 
 /**
- * Reserve, rehydrate, persist and settle one agent — the whole durable attempt.
+ * Report what the shared recovery decided as a restart.
  *
- * Runs as one in-flight-start attempt, so every durable step is inside it. That
- * is not tidiness: a consumer that joins this attempt runs none of these steps,
- * and anything left outside would run a second time under the joiner's own
- * inputs — persisting an adapter instance nothing dispatched to, and settling
- * the provider session the joiner *planned* to resume over the one this attempt
- * actually did.
+ * The durable work — the row claim, the reservation, the dispatch, the runtime
+ * write, the settlement and the commit — and the whole join tail belong to the
+ * shared seam, so a restart and a send recover an agent through one code path
+ * and produce one set of ownership effects. What is restart-specific is only
+ * what each outcome *means* to the caller's result list, which is this.
  *
- * A dispatch failure is always a throw, because `adapter.rehydrateAgent` has no
- * failure response. Every one of them is therefore of unknown extent: the
- * provider may hold a live session, so the claims are retired as `abandoned`
- * rather than released, and no status is written — the agent row belongs to the
- * adapter on this path.
- * @param bus - Bus every step is issued on
- * @param agent - Agent being restarted
- * @param adapterId - Live adapter instance every step names
- * @param plan - The native-resume plan being executed
- * @param machineId - Effective machine identity every ownership act names
+ * A deferral reports **success**: another generation owns this provider
+ * session, so the agent takes exactly the plan it would have taken had it never
+ * had one, and the send path recovers it with injected history. A restart
+ * produces no turn, so there is nothing here to attach that history to.
+ * @param identity - Agent being restarted and the instance its row already names
+ * @param outcome - What the shared recovery answered
  * @returns This agent's entry in the handler's result list
  */
-async function runReservedRehydrate(
-  bus: IMakaioBus,
-  agent: MakaioSessionAgent,
-  adapterId: string,
-  plan: NativeResumeRecoveryPlan,
-  machineId: string | undefined,
-): Promise<RestartAgentsHandlerResult> {
-  const { agentId, adapterId: storedAdapterId } = agent;
-  const reservation = await reserveRestart(bus, agent, adapterId, plan.resumeAdapterSessionId, machineId);
-  if (reservation.kind === 'degrade') {
-    // The modeled degrade: another generation owns this provider session, so
-    // the agent takes exactly the plan it would have taken had it never had one.
-    return { agentId, adapterId: storedAdapterId, success: true };
+function reportRestartOutcome(
+  identity: { readonly agentId: string; readonly storedAdapterId: string },
+  outcome: ExclusiveRehydrateOutcome | undefined,
+): RestartAgentsHandlerResult {
+  const { agentId, storedAdapterId } = identity;
+  switch (outcome?.kind) {
+    // The instance the agent is now bound to, read off the row the attempt left
+    // behind — whether this call ran that attempt or joined one that did. Never
+    // the instance this call resolved for a dispatch it may not have made.
+    case 'rehydrated':
+    case 'joined':
+      return { agentId, adapterId: outcome.agent.adapterId, success: true };
+    // A deferred or refused agent keeps its stored adapter ID: nothing was
+    // dispatched for it, so re-stamping the row with a freshly resolved
+    // instance would advertise a binding that does not exist.
+    case 'deferred':
+      return { agentId, adapterId: storedAdapterId, success: true };
+    case 'refused':
+      return {
+        agentId,
+        adapterId: storedAdapterId,
+        success: false,
+        error: `Ownership reservation refused: ${outcome.message ?? outcome.outcome}`,
+      };
+    case 'lost':
+      return {
+        agentId,
+        adapterId: storedAdapterId,
+        success: false,
+        error: 'Another runtime claimed this agent’s recovery',
+      };
+    default:
+      // Unreachable: a self-run attempt records its outcome before it settles.
+      return { agentId, adapterId: storedAdapterId, success: false, error: 'Restart produced no result' };
   }
-  if (reservation.kind === 'refused') {
-    return {
-      agentId,
-      adapterId: storedAdapterId,
-      success: false,
-      error: `Ownership reservation refused: ${reservation.outcome}`,
-    };
-  }
-
-  try {
-    await dispatchAgentRehydrate(bus, agent, { cwd: agent.cwd, model: agent.model, plan }, adapterId);
-  } catch (error) {
-    await abandonDispatchedStart(bus, agentId, ADAPTER_OWNED_STATUS);
-    throw error;
-  }
-  agent.adapterId = adapterId;
-  await bus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId, adapterId });
-  await settleRestartedAgent(bus, agent, adapterId, plan.resumeAdapterSessionId, machineId);
-  return { agentId, adapterId, success: true };
-}
-
-/**
- * Wait for an attempt this call joined, and report what it left behind.
- *
- * **A rejection outranks the row on this path**, which is the one place the
- * wave's "the row the attempt left behind is the verdict" rule does not carry.
- * That rule holds because a failing attempt *writes* the row: a fresh start
- * deletes it before dispatch and compare-and-swaps it to `dead` after one. A
- * rehydrate writes no status at all — the adapter owns that column here — so a
- * failed Path-B attempt leaves the row exactly as it found it, which for a
- * restart is typically a pre-existing `idle`. Classifying that would read the
- * row's *pre-attempt* state as the attempt's result and report a restart that
- * demonstrably failed as a success.
- *
- * The rejection is admissible precisely because it is this process's own: the
- * seam only ever hands back a promise for an attempt running here. Where no
- * rejection can be observed — the attempt belongs to another process, or to one
- * that died — nothing changes: there is no entry to join, and the row-state rule
- * and the status compare-and-swap arbitrate as before.
- * @param bus - Bus the re-read is issued on
- * @param agent - Agent whose start was joined
- * @param start - The joined attempt
- * @returns This agent's entry in the handler's result list
- */
-async function joinReservedRehydrate(
-  bus: IMakaioBus,
-  agent: MakaioSessionAgent,
-  start: ExclusiveStart,
-): Promise<RestartAgentsHandlerResult> {
-  let failure: { readonly error: unknown } | undefined;
-  await start.settled.catch((error: unknown) => {
-    failure = { error };
-  });
-  if (failure !== undefined) {
-    return {
-      agentId: agent.agentId,
-      adapterId: agent.adapterId,
-      success: false,
-      error: `Concurrent start for this agent failed: ${describeRestartFailure(failure.error)}`,
-    };
-  }
-  return reportJoinedRestart(bus, agent);
-}
-
-/**
- * Report a restart whose agent another attempt brought up.
- *
- * Reached only when that attempt *succeeded*, so the stored row now describes
- * its result and is classified by the same table the send path applies to a
- * joined start. A restart whose agent is up has done its job; one whose row is
- * `dead`, gone or `disposed` has not, and says so rather than reporting another
- * attempt's success as its own.
- * @param bus - Bus the re-read is issued on
- * @param agent - Agent whose start was joined
- * @returns This agent's entry in the handler's result list
- */
-async function reportJoinedRestart(bus: IMakaioBus, agent: MakaioSessionAgent): Promise<RestartAgentsHandlerResult> {
-  const stored = await bus.requestOptional(AgentStorageSubjects.get, { agentId: agent.agentId });
-  const row = stored.handled ? stored.data.agent : agent;
-  // The instance the joined attempt bound the agent to, falling back to the
-  // caller's view only when the row is gone — never to an instance this call
-  // resolved for a dispatch it did not make.
-  const { agentId, adapterId } = row ?? agent;
-  if (classifyJoinedRow(row) === 'use') return { agentId, adapterId, success: true };
-  return {
-    agentId,
-    adapterId,
-    success: false,
-    error: 'A concurrent start for this agent ended without a usable runtime',
-  };
 }
 
 /**
@@ -351,10 +152,13 @@ async function reportJoinedRestart(bus: IMakaioBus, agent: MakaioSessionAgent): 
  * one step, which is why deferring reports success — the agent record is intact
  * and reachable.
  *
- * The reserved rehydrate itself is exclusive per agent. Finding an attempt
+ * The reserved rehydrate itself is exclusive per agent, and this handler enters
+ * it through the same run-or-join seam the send path uses. Finding an attempt
  * already in flight means this process is starting that identity somewhere else,
  * and a restart must then consume that attempt's result rather than open a
- * second lifecycle beside it.
+ * second lifecycle beside it — including the one bounded re-entry a joiner is
+ * owed when the attempt it joined built no connector, because that attempt
+ * answered for *its* inputs and this restart has not asked for its own yet.
  * @param bus - Bus every step is issued on
  * @param session - Session row supplying the structural locality signals
  * @param agent - Agent being restarted
@@ -389,22 +193,37 @@ async function restartAgent(
   // instance — and one *machine*, since the instance ID is derived from it. A
   // caller that named a machine gets its whole restart in that machine's
   // namespace rather than a key mixing its identity with this runtime's.
-  const adapterId = await resolveLiveAdapterId(bus, agent, machineId);
+  const adapterId = await resolveLiveAdapterIdForMachine(bus, agent, machineId);
+  if (adapterId === undefined) {
+    // No instance of this agent's adapter is derivable for the machine this
+    // restart acts under, so there is none this restart could both reserve
+    // under and dispatch to — the persisted ID cannot stand in, because the
+    // machine it belongs to cannot be recovered from it. Reported exactly like
+    // the deferral a non-native plan takes, and for the same reason: nothing
+    // failed and nothing was dispatched, the agent record is intact, and the
+    // send path recovers it with injected history.
+    return { agentId, adapterId: storedAdapterId, success: true };
+  }
 
   const plan = await planRestart(bus, session, agent, adapterId, machineId);
   if (recoveryPlanRequiresHistory(plan)) return { agentId, adapterId: storedAdapterId, success: true };
 
-  let result: RestartAgentsHandlerResult | undefined;
-  const start = runExclusiveStart(agentId, async () => {
-    result = await runReservedRehydrate(bus, agent, adapterId, plan, machineId);
+  const outcome = await runOrJoinReservedRehydrate(bus, {
+    agent,
+    sessionId: agent.sessionId,
+    adapterId,
+    resumeProviderSessionId: plan.resumeAdapterSessionId,
+    // The effective identity, which is the composed one unless the caller named
+    // a machine. Omitting it here would let the plan be decided for one machine
+    // and the key reserved in another's namespace — and a handler asked to act
+    // for a named machine would answer `machine-identity-unavailable` on a host
+    // that has no identity of its own, refusing the very operation the override
+    // exists to make possible.
+    ...(machineId !== undefined && { machineId }),
+    ...(agent.cwd !== undefined && { cwd: agent.cwd }),
+    ...(agent.model !== undefined && { model: agent.model }),
   });
-  if (start.joined) return joinReservedRehydrate(bus, agent, start);
-  await start.settled;
-  if (result === undefined) {
-    // Unreachable: this call registered the attempt, so its callback ran.
-    return { agentId, adapterId: storedAdapterId, success: false, error: 'Restart produced no result' };
-  }
-  return result;
+  return reportRestartOutcome({ agentId, storedAdapterId }, outcome);
 }
 
 /**

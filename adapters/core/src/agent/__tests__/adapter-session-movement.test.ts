@@ -331,6 +331,43 @@ describe('ConfirmedAdapterSessionTracker', () => {
     }
   });
 
+  it('supersedes an undelivered movement when the caller settles the successor', async () => {
+    // The caller-settled twin of the case above, and it supersedes for the same
+    // reason plus a sharper one. A parked movement is re-driven by the next
+    // enrichment call, which would hand it to the movement observer — the second
+    // settle producer a caller-settled movement exists to remove — and an
+    // unconfirmed one re-announced after the settlement would blank the very
+    // currency that settlement wrote.
+    let failNext = false;
+    const consumer = MakaioBus.on(AgentSubjects.adapterSession.moved, async () => {
+      if (failNext) throw new Error('storage write failed');
+    });
+    try {
+      const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
+      await tracker.record('provider-1');
+      failNext = true;
+      await tracker.recordUnconfirmedMove();
+      failNext = false;
+      capture.movements.length = 0;
+
+      // The caller settles the successor itself, so nothing is announced for it.
+      await tracker.record('provider-2', true);
+      expect(capture.movements).toEqual([]);
+
+      // And the parked movement is gone rather than waiting for the next event:
+      // enrichment re-records the identity, then reports none, and neither
+      // re-drives it.
+      await tracker.record('provider-2');
+      await tracker.record(undefined);
+      await settle();
+
+      expect(capture.movements).toEqual([]);
+      expect(tracker.lastKnownAdapterSessionId).toBe('provider-2');
+    } finally {
+      consumer();
+    }
+  });
+
   it('resolves only after the seam consumers finished applying the movement', async () => {
     // The ordering guarantee the currency seam depends on: a producer that
     // awaits the announcement can rely on the session row already carrying the

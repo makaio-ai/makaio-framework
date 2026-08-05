@@ -210,20 +210,24 @@ describe('registerAttachHandler', () => {
         sessionId,
         role: 'lead',
       });
-      expect(result.agentId).toBe(agentId);
+      // Attach mints the identity and supplies it, so the adapter echoes it back
+      // rather than naming one of its own.
+      expect(result.agentId).toBe(receivedRequests[0].agentId);
       expect(result.adapterSessionId).toBe(adapterSessionId);
     });
 
     it('rolls back an agent that finishes starting after the session closes', async () => {
       const session = ctx.createMockSession();
       const stoppedAgents: unknown[] = [];
+      let startedAgentId: string | undefined;
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
       ctx.trackUnsubscribe(
         MakaioBus.on(AdapterSubjects.startAgent, (context) => {
           session.status = 'closed';
+          startedAgentId = context.payload.agentId;
           context.setResult({
             success: true,
-            agentId,
+            agentId: startedAgentId ?? agentId,
             adapterId: context.payload.adapterId,
             adapterSessionId,
             sessionId,
@@ -248,9 +252,13 @@ describe('registerAttachHandler', () => {
       expect(stoppedAgents).toEqual([
         {
           adapterId: buildDeterministicAdapterId('test-machine', adapterName),
-          agentId,
+          agentId: startedAgentId,
         },
       ]);
+      // Post-dispatch: the row is retired, never deleted — deleting it would
+      // cascade the claims away and free a key nobody proved is closed.
+      expect(ctx.getStoredAgent(startedAgentId!)?.status).toBe('dead');
+      expect(ctx.getAgentClaims(startedAgentId!).map((claim) => claim.status)).not.toContain('held');
     });
 
     it('rolls back idle attach when a concurrent close claims the session before commit', async () => {
@@ -262,6 +270,7 @@ describe('registerAttachHandler', () => {
       const releaseClose = Promise.withResolvers<void>();
       const lifecycleOrder: string[] = [];
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
+      let startedAgentId: string | undefined;
       ctx.trackUnsubscribe(
         MakaioBus.on(
           AdapterSubjects.startAgent,
@@ -269,9 +278,10 @@ describe('registerAttachHandler', () => {
             attachStarted.resolve();
             await releaseAttach.promise;
             lifecycleOrder.push('agent-started');
+            startedAgentId = context.payload.agentId;
             context.setResult({
               success: true,
-              agentId,
+              agentId: startedAgentId ?? agentId,
               adapterId,
               adapterSessionId,
               sessionId,
@@ -286,16 +296,13 @@ describe('registerAttachHandler', () => {
           AgentStorageSubjects.set,
           (context) => {
             lifecycleOrder.push('identity-persisted');
-            context.setResult({ success: true });
+            // Observed, then handed on to the real memory backend: the
+            // reservation this attach takes reads the very row a swallowing
+            // stub would have dropped.
+            return context.next();
           },
           { priority: 1 },
         ),
-      );
-      ctx.trackUnsubscribe(
-        MakaioBus.on(AgentStorageSubjects.delete, () => {
-          lifecycleOrder.push('identity-deleted');
-          throw new Error('identity delete failed');
-        }),
       );
       ctx.trackUnsubscribe(
         MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
@@ -326,13 +333,14 @@ describe('registerAttachHandler', () => {
       const attachError = await attach.catch((error: unknown) => error);
       const stagedError = getSessionAgentAttachError(attachError);
       expect(stagedError?.stage).toBe('agent_attach');
-      expect(stagedError?.cause).toBeInstanceOf(AggregateError);
-      expect((stagedError?.cause as AggregateError).errors[0]).toMatchObject({
-        message: expect.stringContaining('Session close won before agent attach committed'),
-      });
+      expect((stagedError?.cause as Error).message).toContain('Session close won before agent attach committed');
       releaseClose.resolve();
       await expect(close).resolves.toEqual({ success: true });
-      expect(lifecycleOrder).toEqual(['agent-started', 'identity-persisted', 'identity-deleted', 'agent-stopped']);
+      // The row is written *before* the dispatch now — it is what the
+      // reservation checks membership against — and a post-dispatch failure
+      // retires it rather than deleting it (§7.4).
+      expect(lifecycleOrder).toEqual(['identity-persisted', 'agent-started', 'agent-stopped']);
+      expect(ctx.getStoredAgent(startedAgentId!)?.status).toBe('dead');
     });
 
     it('uses explicit providerContext on local attachResolved without rebuilding or native activation', async () => {
@@ -399,6 +407,9 @@ describe('registerAttachHandler', () => {
       // registered by createAttachHandlerContext. Non-native attach paths now
       // call seedAttachContextWithHistory which reads the conversation chain.
       registerDefaultConversationStubs(ctx.trackUnsubscribe);
+      // The same reset cleared the agent, ownership and authority registrations
+      // a reserved attach cannot run without.
+      ctx.restoreOwnershipComposition();
 
       let resolvePayload: { adapterName?: string; machineId?: string } | undefined;
       ctx.trackUnsubscribe(
@@ -590,7 +601,7 @@ describe('registerAttachHandler', () => {
         sessionId,
         role: 'lead',
       });
-      expect(result.agentId).toBe(agentId);
+      expect(result.agentId).toBe(receivedRequests[0].agentId);
       expect(result.adapterSessionId).toBe(adapterSessionId);
     });
 
@@ -700,7 +711,7 @@ describe('registerAttachHandler', () => {
   describe('cleanup function', () => {
     it('returns a cleanup function that unsubscribes the handler', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
-      const { unsubscribe } = ctx.registerStartAgentHandler();
+      const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
       ctx.trackUnsubscribe(unsubscribe);
 
       const handlerCleanup = ctx.registerHandler();
@@ -710,7 +721,7 @@ describe('registerAttachHandler', () => {
         sessionId,
         agent: { kind: 'adapter', adapterName },
       });
-      expect(result.agentId).toBe(agentId);
+      expect(result.agentId).toBe(receivedRequests[0].agentId);
 
       // Call cleanup
       handlerCleanup();

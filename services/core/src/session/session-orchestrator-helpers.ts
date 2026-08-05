@@ -11,7 +11,9 @@ export { buildTurnInitiator } from './utils/turn-initiator.js';
 export { resolveAdapterId, resolveModelCapabilities, resolveExecutionTarget } from './utils/resolution.js';
 export { buildRecoveryContext, buildPlannedRecoveryContext } from './utils/recovery-context.js';
 export {
+  type AgentRecoveryOutcome,
   type RecoveryConfig,
+  type VerifiedAgents,
   ensureAgentCwd,
   ensureAgentModel,
   verifyAndRecoverAgents,

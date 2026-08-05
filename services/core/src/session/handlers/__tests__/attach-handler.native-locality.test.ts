@@ -16,9 +16,11 @@ import {
   SessionStorageSubjects,
   SessionSubjects,
 } from '@makaio/contracts';
+import { buildDeterministicAdapterId } from '../../../adapter-runtime/index.js';
 import {
   ATTACH_TEST_IDS,
   createAttachHandlerContext,
+  holdProviderSession,
   type AttachHandlerTestContext,
   type StartAgentRequestPayload,
 } from './shared.js';
@@ -302,27 +304,27 @@ describe('registerAttachHandler - native locality', () => {
     });
   });
 
-  describe('live-writer guard (agent-already-started)', () => {
+  describe('occupancy (agent-already-started)', () => {
     /**
-     * Registers a mock adapter.listAgents handler returning the given agents.
-     * @param testCtx - Test context for cleanup tracking
-     * @param agents - List of live agents to report
+     * Take a generation for a foreign agent on the session's native key.
+     *
+     * Occupancy is a claim row decided inside the reserving transaction, so the
+     * fixture holds a real generation rather than mocking a liveness probe the
+     * attach path no longer asks (I17).
+     * @param providerSessionId - Provider session the foreign generation owns
      */
-    function registerListAgentsHandler(
-      testCtx: AttachHandlerTestContext,
-      agents: Array<{ agentId: string; sessionId: string; adapterSessionId: string }>,
-    ): void {
-      testCtx.trackUnsubscribe(
-        MakaioBus.on(AdapterSubjects.listAgents, (context) => {
-          context.setResult({ agents });
-        }),
-      );
+    async function holdSession(providerSessionId: string): Promise<void> {
+      await holdProviderSession({
+        sessionId,
+        agentId: 'existing-agent',
+        adapterId: buildDeterministicAdapterId(localMachine, adapterName),
+        adapterName,
+        machineId: localMachine,
+        providerSessionId,
+      });
     }
 
-    it('degrades to agent-already-started when a live agent holds the same adapterSessionId', async () => {
-      registerListAgentsHandler(ctx, [
-        { agentId: 'existing-agent', sessionId, adapterSessionId: nativeAdapterSessionId },
-      ]);
+    it('degrades to agent-already-started when another generation holds the provider session', async () => {
       const receivedRequests = setupLocalityTest(
         ctx,
         ctx.createMockSession({
@@ -331,6 +333,7 @@ describe('registerAttachHandler - native locality', () => {
         }),
         localMachine,
       );
+      await holdSession(nativeAdapterSessionId);
 
       await MakaioBus.request(SessionSubjects.agent.attach, {
         sessionId,
@@ -346,10 +349,7 @@ describe('registerAttachHandler - native locality', () => {
       });
     });
 
-    it('allows native resume when no live agent holds the adapterSessionId', async () => {
-      registerListAgentsHandler(ctx, [
-        { agentId: 'other-agent', sessionId: 'other-session', adapterSessionId: 'different-session' },
-      ]);
+    it('allows native resume when no generation holds the adapterSessionId', async () => {
       const receivedRequests = setupLocalityTest(
         ctx,
         ctx.createMockSession({
@@ -371,8 +371,19 @@ describe('registerAttachHandler - native locality', () => {
       });
     });
 
-    it('allows native resume when adapter has no live agents at all', async () => {
-      registerListAgentsHandler(ctx, []);
+    it('never asks the adapter who is live — no path probes listAgents (I17)', async () => {
+      // The probe is gone, and its answer is unreachable: a handler that would
+      // have reported a live writer on the very key being resumed is registered
+      // and must never be asked. The reservation is the only occupancy decision.
+      let probes = 0;
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AdapterSubjects.listAgents, (context) => {
+          probes += 1;
+          context.setResult({
+            agents: [{ agentId: 'existing-agent', sessionId, adapterSessionId: nativeAdapterSessionId }],
+          });
+        }),
+      );
       const receivedRequests = setupLocalityTest(
         ctx,
         ctx.createMockSession({
@@ -387,6 +398,7 @@ describe('registerAttachHandler - native locality', () => {
         agent: { kind: 'adapter', adapterName },
       });
 
+      expect(probes).toBe(0);
       expect(receivedRequests).toHaveLength(1);
       expect(receivedRequests[0]).toMatchObject({
         mode: 'resume',
@@ -394,37 +406,12 @@ describe('registerAttachHandler - native locality', () => {
       });
     });
 
-    it('allows native resume when listAgents handler is not registered (safe default)', async () => {
-      // No listAgents handler registered — requestOptional returns { handled: false }
-      const receivedRequests = setupLocalityTest(
-        ctx,
-        ctx.createMockSession({
-          machineId: localMachine,
-          adapterSessionId: nativeAdapterSessionId,
-        }),
-        localMachine,
-      );
-
-      await MakaioBus.request(SessionSubjects.agent.attach, {
-        sessionId,
-        agent: { kind: 'adapter', adapterName },
-      });
-
-      expect(receivedRequests).toHaveLength(1);
-      expect(receivedRequests[0]).toMatchObject({
-        mode: 'resume',
-        adapterSessionId: nativeAdapterSessionId,
-      });
-    });
-
-    it('rejects the second of two concurrent resume-attaches to the same adapterSessionId', async () => {
-      // Simulate the adapter's claim-based guard: the first resume-mode
-      // startAgent succeeds; the second for the same adapterSessionId fails
-      // because the claim is already held. This covers the TOCTOU window
-      // where both attaches pass the listAgents live-writer guard before
-      // either agent registers.
-      registerListAgentsHandler(ctx, []);
-
+    it('lets exactly one of two concurrent resume-attaches take the provider session', async () => {
+      // The window the deleted live-writer probe could never close: both
+      // attaches read a free provider session, and both used to dispatch
+      // `mode: 'resume'` against it. Ownership decides it inside the reserving
+      // transaction now, so the loser degrades to fresh-with-history instead of
+      // becoming a second writer — and neither attach fails.
       const session = ctx.createMockSession({
         machineId: localMachine,
         adapterSessionId: nativeAdapterSessionId,
@@ -432,67 +419,51 @@ describe('registerAttachHandler - native locality', () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
       ctx.trackUnsubscribe(ctx.registerHandler(localMachine));
 
-      // Track claimed adapterSessionIds to simulate registry.claimAdapterSession.
-      // The handler is synchronous: the first resume claim succeeds, the second
-      // for the same adapterSessionId is rejected immediately.
-      const claimedSessions = new Set<string>();
       const receivedRequests: StartAgentRequestPayload[] = [];
       let agentCounter = 0;
       ctx.trackUnsubscribe(
         MakaioBus.on(AdapterSubjects.startAgent, (context) => {
           receivedRequests.push(context.payload);
-          const payload = context.payload;
-          const payloadAdapterSessionId =
-            'adapterSessionId' in payload ? (payload.adapterSessionId as string | undefined) : undefined;
-
-          if (payload.mode === 'resume' && payloadAdapterSessionId) {
-            if (claimedSessions.has(payloadAdapterSessionId)) {
-              context.setResult({
-                success: false,
-                message: `Provider session ${payloadAdapterSessionId} is already claimed`,
-                // The refusal fires before anything reaches the provider, which
-                // is what the production adapter stamps at the same site.
-                dispatch: 'not-dispatched',
-              });
-              return;
-            }
-            claimedSessions.add(payloadAdapterSessionId);
-          }
-
-          agentCounter++;
+          agentCounter += 1;
           context.setResult({
             success: true,
-            agentId: `agent-${agentCounter}`,
+            agentId: context.payload.agentId ?? `agent-${agentCounter}`,
             adapterId: context.payload.adapterId,
-            adapterSessionId: ATTACH_TEST_IDS.adapterSessionId,
+            // Distinct per start: the degraded attach lands on a provider
+            // session of its own, which is the whole point of the degrade.
+            adapterSessionId: `${ATTACH_TEST_IDS.adapterSessionId}-${agentCounter}`,
             sessionId: ATTACH_TEST_IDS.sessionId,
             messageId: ATTACH_TEST_IDS.messageId,
           });
         }),
       );
 
-      // Fire both attaches concurrently and collect results
+      // Both as members: a concurrent *lead* race is a different decision with a
+      // different answer (`lead-conflict`), and this case is about the key.
       const results = await Promise.allSettled([
         MakaioBus.request(SessionSubjects.agent.attach, {
           sessionId,
           agent: { kind: 'adapter', adapterName },
+          role: 'member',
         }),
         MakaioBus.request(SessionSubjects.agent.attach, {
           sessionId,
           agent: { kind: 'adapter', adapterName },
+          role: 'member',
         }),
       ]);
 
-      // Both requests sent resume-mode startAgent
-      const resumeRequests = receivedRequests.filter((r) => r.mode === 'resume');
-      expect(resumeRequests).toHaveLength(2);
-
-      // Exactly one succeeds and one fails (adapter rejects the duplicate claim)
-      const fulfilled = results.filter((r) => r.status === 'fulfilled');
-      const rejected = results.filter((r) => r.status === 'rejected');
-      expect(fulfilled).toHaveLength(1);
-      expect(rejected).toHaveLength(1);
-      expect((rejected[0] as PromiseRejectedResult).reason.message).toContain('Failed to start agent');
+      expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
+      // Exactly one resume, and the loser carries seeded history instead of an
+      // empty provider context.
+      const resumeRequests = receivedRequests.filter((request) => request.mode === 'resume');
+      const freshRequests = receivedRequests.filter((request) => request.mode !== 'resume');
+      expect(resumeRequests).toHaveLength(1);
+      expect(freshRequests).toHaveLength(1);
+      expect(freshRequests[0].sessionContext?.nativeLocality).toEqual({
+        kind: 'degrade',
+        reason: 'agent-already-started',
+      });
     });
   });
 
@@ -773,13 +744,6 @@ describe('registerAttachHandler - native locality', () => {
 
     it('emits locality.degraded for agent-already-started live-writer guard', async () => {
       const captured = captureDegradeEvents(ctx);
-      ctx.trackUnsubscribe(
-        MakaioBus.on(AdapterSubjects.listAgents, (context) => {
-          context.setResult({
-            agents: [{ agentId: 'existing-agent', sessionId, adapterSessionId: nativeAdapterSessionId }],
-          });
-        }),
-      );
       setupLocalityTest(
         ctx,
         ctx.createMockSession({
@@ -788,6 +752,14 @@ describe('registerAttachHandler - native locality', () => {
         }),
         localMachine,
       );
+      await holdProviderSession({
+        sessionId,
+        agentId: 'existing-agent',
+        adapterId: buildDeterministicAdapterId(localMachine, adapterName),
+        adapterName,
+        machineId: localMachine,
+        providerSessionId: nativeAdapterSessionId,
+      });
 
       await MakaioBus.request(SessionSubjects.agent.attach, {
         sessionId,

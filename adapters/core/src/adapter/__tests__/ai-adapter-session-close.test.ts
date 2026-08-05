@@ -10,6 +10,8 @@ import {
   MockConnector,
   TestAdapter,
   createTestAdapter,
+  registerAgentRowStorage,
+  registerStartReservationAuthority,
   type TestBus,
   type BaseAgentConnectorConfig,
 } from './shared.js';
@@ -33,7 +35,9 @@ describe('AIAdapter - Session close-driven agent eviction', () => {
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    cleanupFns = [];
+    // An adapter-owned resume start writes a pre-dispatch row and reserves the
+    // provider session before it dispatches; both are hard requests.
+    cleanupFns = [registerStartReservationAuthority(), registerAgentRowStorage()];
   });
 
   afterEach(async () => {

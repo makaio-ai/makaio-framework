@@ -11,6 +11,7 @@ import type {
   StartAgentRequest,
   StartAgentResponse,
 } from '@makaio/contracts';
+import { AttachStartError } from './attach-error.js';
 
 /** Runtime options plus model, providerContext, and reasoningEffort. */
 export type ExtractableRuntimeOptions = Partial<
@@ -180,15 +181,29 @@ export function buildStartAgentRequest(
   };
 }
 
-/** Input bundle for launching an agent after all attach parameters have been resolved. */
-export interface LaunchAttachAgentInput {
+/**
+ * Where an attach dispatches to, and with what runtime options.
+ *
+ * Everything here is known before the reservation. The two fields the final
+ * locality verdict decides — the resume target and the seeded context — are
+ * supplied at the launch itself, on {@link LaunchAttachAgentInput}.
+ */
+export interface AttachLaunchTarget {
   readonly adapterId: string;
   readonly sessionId: string;
   readonly role: AgentRole;
   readonly effectiveRuntimeOptions: ExtractableRuntimeOptions;
-  readonly resumeAdapterSessionId: string | undefined;
   readonly harnessId: string | undefined;
-  readonly attachSessionContext: SessionContext | undefined;
+}
+
+/** Input bundle for launching an agent after the reservation produced the final verdict. */
+export interface LaunchAttachAgentInput extends AttachLaunchTarget {
+  /** Caller-minted agent identity; supplying it suppresses the adapter's own row write. */
+  readonly agentId: string;
+  /** Resume target, present only for a reservation that took the provider session's key. */
+  readonly resumeAdapterSessionId?: string;
+  /** History-seeded context, present only for a non-native attach. */
+  readonly attachSessionContext?: SessionContext;
 }
 
 /**
@@ -202,6 +217,12 @@ export interface LaunchAttachAgentInput {
  *
  * Startup failures are surfaced directly to the caller (UI/SDK) rather than
  * entering a degrade-and-retry path — that belongs to the coordinator layer.
+ *
+ * A refusal raises an {@link AttachStartError} carrying the adapter's own
+ * disposition, and not a bare `Error`: that field is the only evidence the
+ * rollback has about whether anything reached the provider, and a
+ * `not-dispatched` refusal unwound as if it were dispatch-uncertain would leave
+ * a `dead` row and an abandoned key for a start that never got there.
  * @param bus - Bus instance for adapter dispatch
  * @param input - All resolved attach parameters required to construct and send the request
  * @returns The successful idle startAgent response containing agentId and adapterId
@@ -211,6 +232,7 @@ export async function launchAttachAgent(
   input: LaunchAttachAgentInput,
 ): Promise<Extract<StartAgentResponse, { success: true }>> {
   const {
+    agentId,
     adapterId,
     sessionId,
     role,
@@ -229,9 +251,13 @@ export async function launchAttachAgent(
     harnessId,
     attachSessionContext,
   );
-  const startResult = await bus.request(AdapterSubjects.startAgent, startAgentRequest);
+  const startResult = await bus.request(AdapterSubjects.startAgent, { ...startAgentRequest, agentId });
   if (!startResult.success) {
-    throw new Error(`[attach-handler] Failed to start agent: ${startResult.message}`);
+    throw new AttachStartError(
+      'start-failed',
+      `[attach-handler] Failed to start agent: ${startResult.message}`,
+      startResult.dispatch,
+    );
   }
   return startResult;
 }

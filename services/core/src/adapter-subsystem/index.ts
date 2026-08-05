@@ -44,4 +44,4 @@ export type {
   CreateCanonicalProviderConfigInput,
   CreateCanonicalProviderConfigInputPayload,
 } from './write-types.js';
-export { AdapterSubsystemNamespace, AdapterSubsystemSubjects } from './namespace.js';
+export { ADAPTER_SUBSYSTEM_PACKAGE_NAME, AdapterSubsystemNamespace, AdapterSubsystemSubjects } from './namespace.js';

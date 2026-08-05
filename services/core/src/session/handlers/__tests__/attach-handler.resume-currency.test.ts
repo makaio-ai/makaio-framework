@@ -10,10 +10,12 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
+import { SessionSubjects } from '@makaio/contracts';
+import { buildDeterministicAdapterId } from '../../../adapter-runtime/index.js';
 import {
   ATTACH_TEST_IDS,
   createAttachHandlerContext,
+  holdProviderSession,
   type AttachHandlerTestContext,
   type StartAgentRequestPayload,
 } from './shared.js';
@@ -60,17 +62,21 @@ describe('registerAttachHandler - resume currency', () => {
   }
 
   /**
-   * Register a mock `adapter.listAgents` handler reporting one live writer.
-   * @param heldAdapterSessionId - Provider session the live agent already holds
+   * Take a generation for a foreign agent on one provider session.
+   *
+   * The reservation is what decides occupancy now, so the fixture takes a real
+   * claim instead of mocking a liveness probe the attach path never asks.
+   * @param heldAdapterSessionId - Provider session the foreign generation owns
    */
-  function registerLiveWriter(heldAdapterSessionId: string): void {
-    ctx.trackUnsubscribe(
-      MakaioBus.on(AdapterSubjects.listAgents, (context) => {
-        context.setResult({
-          agents: [{ agentId: 'existing-agent', sessionId, adapterSessionId: heldAdapterSessionId }],
-        });
-      }),
-    );
+  async function holdSession(heldAdapterSessionId: string): Promise<void> {
+    await holdProviderSession({
+      sessionId,
+      agentId: 'existing-agent',
+      adapterId: buildDeterministicAdapterId(localMachine, adapterName),
+      adapterName,
+      machineId: localMachine,
+      providerSessionId: heldAdapterSessionId,
+    });
   }
 
   /** Issue the attach request under test. */
@@ -149,13 +155,13 @@ describe('registerAttachHandler - resume currency', () => {
     });
   });
 
-  it('keys live-writer detection on the confirmed current identity', async () => {
-    // A live writer on the *origin* ID is irrelevant once the currency moved on.
-    registerLiveWriter(originAdapterSessionId);
+  it('keys occupancy on the confirmed current identity', async () => {
+    // A generation on the *origin* ID is irrelevant once the currency moved on.
     const requests = setupCurrencyTest({
       currentAdapterSessionIdState: 'confirmed',
       currentAdapterSessionId,
     });
+    await holdSession(originAdapterSessionId);
 
     await attach();
 
@@ -163,12 +169,12 @@ describe('registerAttachHandler - resume currency', () => {
     expect(requests[0]).toMatchObject({ mode: 'resume', adapterSessionId: currentAdapterSessionId });
   });
 
-  it('degrades when a live writer holds the confirmed current identity', async () => {
-    registerLiveWriter(currentAdapterSessionId);
+  it('degrades when another generation holds the confirmed current identity', async () => {
     const requests = setupCurrencyTest({
       currentAdapterSessionIdState: 'confirmed',
       currentAdapterSessionId,
     });
+    await holdSession(currentAdapterSessionId);
 
     await attach();
 
@@ -197,6 +203,7 @@ describe('registerAttachHandler - resume currency', () => {
       adapterSessionId: originAdapterSessionId,
       currentAdapterSessionIdState: 'moved',
     });
+    ctx.seedSessionRow(confirmedRow);
     let reads = 0;
     ctx.trackUnsubscribe(
       MakaioBus.on(SessionSubjects.get, (context) => {

@@ -18,6 +18,8 @@ import {
   registerMemorySessionEventStorage,
   registerMemoryMessageStorage,
   registerMemoryAgentStorage,
+  registerMemorySessionOwnershipStorage,
+  createSessionStorageMemoryState,
   AgentStorageSubjects,
   MakaioSessionService,
   SessionOrchestrator,
@@ -240,10 +242,15 @@ export async function setupWorkflowExecutorTest(
   const cleanupFns: Array<() => void> = [];
   const dbContext = await createTestDb();
 
-  cleanupFns.push(registerMemorySessionStorage(MakaioBus));
+  // One shared state across the three session backends, and the ownership
+  // backend among them: every start path reserves now, and a reservation reads
+  // the agent and session rows the other two wrote.
+  const sessionState = createSessionStorageMemoryState();
+  cleanupFns.push(registerMemorySessionStorage(MakaioBus, sessionState));
   cleanupFns.push(registerMemorySessionEventStorage(MakaioBus));
   cleanupFns.push(registerMemoryMessageStorage(MakaioBus));
-  cleanupFns.push(registerMemoryAgentStorage(MakaioBus));
+  cleanupFns.push(registerMemoryAgentStorage(MakaioBus, sessionState));
+  cleanupFns.push(registerMemorySessionOwnershipStorage(MakaioBus, sessionState));
 
   const sessionService = new MakaioSessionService(MakaioBus);
   await sessionService.init();
@@ -332,10 +339,15 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(
   const cleanupFns: Array<() => void> = [];
   const dbContext = await createTestDb();
 
-  cleanupFns.push(registerMemorySessionStorage(MakaioBus));
+  // One shared state across the three session backends, and the ownership
+  // backend among them: every start path reserves now, and a reservation reads
+  // the agent and session rows the other two wrote.
+  const sessionState = createSessionStorageMemoryState();
+  cleanupFns.push(registerMemorySessionStorage(MakaioBus, sessionState));
   cleanupFns.push(registerMemorySessionEventStorage(MakaioBus));
   cleanupFns.push(registerMemoryMessageStorage(MakaioBus));
-  cleanupFns.push(registerMemoryAgentStorage(MakaioBus));
+  cleanupFns.push(registerMemoryAgentStorage(MakaioBus, sessionState));
+  cleanupFns.push(registerMemorySessionOwnershipStorage(MakaioBus, sessionState));
 
   const sessionService = new MakaioSessionService(MakaioBus);
   await sessionService.init();

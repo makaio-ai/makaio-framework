@@ -10,31 +10,30 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects, type AgentRole } from '@makaio/contracts';
 import { MakaioSessionService } from '../session-service.js';
-import { registerMemorySessionStorage } from '../storage/memory-handler.js';
-import { registerMemoryAgentStorage } from '../storage/agent-memory-handler.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
-import { resetBusHandlers, waitForAsync } from './shared.js';
+import { designateSessionLead } from '../ownership/index.js';
+import { registerMemorySessionBackends, resetBusHandlers, waitForAsync } from './shared.js';
 
 describe('adapter-session-ID reconciliation', () => {
   let sessionService: MakaioSessionService;
-  let sessionStorageCleanup: () => void;
-  let agentStorageCleanup: () => void;
-  let eventStorageCleanup: () => void;
+  let storageCleanups: Array<() => void> = [];
 
   beforeEach(() => {
     resetBusHandlers();
-    sessionStorageCleanup = registerMemorySessionStorage(MakaioBus);
-    agentStorageCleanup = registerMemoryAgentStorage(MakaioBus);
-    eventStorageCleanup = registerMemorySessionEventStorage(MakaioBus);
+    // **A designated composition**, because that is the only one this handler's
+    // rule can be stated in: the session-level backfill follows the lead, and a
+    // host without the ownership backend designates none. Session, agent and
+    // ownership rows share one state, as they do in every host that owns
+    // sessions.
+    storageCleanups = [...registerMemorySessionBackends(MakaioBus), registerMemorySessionEventStorage(MakaioBus)];
     sessionService = new MakaioSessionService(MakaioBus);
   });
 
   afterEach(() => {
     sessionService?.destroy();
-    eventStorageCleanup();
-    agentStorageCleanup();
-    sessionStorageCleanup();
+    for (let index = storageCleanups.length - 1; index >= 0; index -= 1) storageCleanups[index]?.();
+    storageCleanups = [];
   });
 
   // ===========================================================================
@@ -247,34 +246,39 @@ describe('adapter-session-ID reconciliation', () => {
     expect(sessionAfter.session?.adapterSessionId).toBe('lead-confirmed-id');
   });
 
-  it('accepts a member agent as first writer when session adapterSessionId is unset', async () => {
+  it('refuses a member as first writer, and takes the lead that follows it', async () => {
+    // The exception this used to pin — "no lead named yet, so whoever confirms
+    // first speaks for the session" — is unreachable as a *signal*: a start that
+    // carries an initial message emits `agent.started` from inside its own start
+    // call, before that start's `agent.added` names anyone lead. So an absent
+    // lead is the ordinary state of an ordinary start, and reading it as "this
+    // host cannot designate" hands the session's resume target to whichever
+    // agent's first turn happens to land first.
     const sessionId = 'session-recon-5';
     const memberAgentId = 'member-first-agent';
+    const leadAgentId = 'lead-after-member';
     const adapterId = 'adapter-recon-5';
-    const memberConfirmedId = 'member-first-confirmed-id';
 
     await sessionService.init();
-
-    // Create session with no adapterSessionId set yet
     await MakaioBus.request(SessionSubjects.create, { sessionId });
 
-    // Member agent with undefined adapterSessionId — no lead has fired yet
+    // A member on the session's adapter, confirming before any lead exists.
     await seedAgent(sessionId, memberAgentId, adapterId, 'test-adapter', 'member');
+    await emitAgentStarted(memberAgentId, adapterId, 'test-adapter', 'member-first-confirmed-id', sessionId);
 
-    // Session has no adapterSessionId yet
-    const sessionBefore = await MakaioBus.request(SessionSubjects.get, { sessionId });
-    expect(sessionBefore.session?.adapterSessionId).toBeUndefined();
-
-    // Member agent fires agent.started first (first-writer-wins)
-    await emitAgentStarted(memberAgentId, adapterId, 'test-adapter', memberConfirmedId, sessionId);
-
-    // Member agent storage is updated
+    // Its own row is reconciled — each agent owns its provider session.
     const memberAgent = await MakaioBus.request(AgentStorageSubjects.get, { agentId: memberAgentId });
-    expect(memberAgent.agent?.adapterSessionId).toBe(memberConfirmedId);
+    expect(memberAgent.agent?.adapterSessionId).toBe('member-first-confirmed-id');
+    // The session's is not: that column is the lead's.
+    const afterMember = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    expect(afterMember.session?.adapterSessionId).toBeUndefined();
 
-    // Session adapterSessionId is set by the member agent (same-adapter, first writer wins)
-    const sessionAfter = await MakaioBus.request(SessionSubjects.get, { sessionId });
-    expect(sessionAfter.session?.adapterSessionId).toBe(memberConfirmedId);
+    // The lead arrives and confirms — and the session takes its key.
+    await seedAgent(sessionId, leadAgentId, adapterId, 'test-adapter', 'lead');
+    await emitAgentStarted(leadAgentId, adapterId, 'test-adapter', 'lead-confirmed-id', sessionId);
+
+    const afterLead = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    expect(afterLead.session?.adapterSessionId).toBe('lead-confirmed-id');
   });
 
   it('skips session-level backfill when the emitting agent belongs to a different adapter', async () => {
@@ -318,6 +322,38 @@ describe('adapter-session-ID reconciliation', () => {
     const sessionAfter = await MakaioBus.request(SessionSubjects.get, { sessionId });
     expect(sessionAfter.session?.adapterSessionId).toBeUndefined();
     expect(sessionAfter.session?.adapterName).toBe('claude-code');
+  });
+
+  it('skips a lead that runs on a sibling instance of the session’s own adapter', async () => {
+    // The instance half of the same rule, and it needs the *lead* to be the one
+    // mismatching — a member is refused for being a member. A replacement lead
+    // is exactly that: the designation moves to it, while the session's adapter
+    // identity stays where the first lead established it. Its provider session
+    // is minted inside its own instance, and two instances of one adapter name
+    // are two machines, so it names a conversation this session's identity does
+    // not resolve to.
+    const sessionId = 'session-recon-sibling';
+    const firstLeadId = 'lead-instance-a';
+    const replacementLeadId = 'lead-instance-b';
+    const sessionAdapterId = 'adapter-instance-a';
+    const siblingAdapterId = 'adapter-instance-b';
+
+    await sessionService.init();
+    await MakaioBus.request(SessionSubjects.create, { sessionId });
+
+    // The session's identity: one adapter name, on instance A.
+    await seedAgent(sessionId, firstLeadId, sessionAdapterId, 'claude-code', 'lead');
+    // The replacement takes the designation; the identity stays put.
+    await seedAgent(sessionId, replacementLeadId, siblingAdapterId, 'claude-code', 'lead');
+    const before = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    expect(before.session?.leadAgentId).toBe(replacementLeadId);
+    expect(before.session?.adapterId).toBe(sessionAdapterId);
+
+    await emitAgentStarted(replacementLeadId, siblingAdapterId, 'claude-code', 'sibling-provider-session', sessionId);
+
+    const afterSibling = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    expect(afterSibling.session?.adapterSessionId).toBeUndefined();
+    expect(afterSibling.session?.adapterId).toBe(sessionAdapterId);
   });
 
   it('backfills session-level ID when matching-adapter agent confirms', async () => {
@@ -367,8 +403,20 @@ describe('adapter-session-ID reconciliation', () => {
     // Create a bare session — no agent.added, so adapterName is unset (legacy path)
     await MakaioBus.request(SessionSubjects.create, { sessionId });
 
-    // Seed agent storage directly (bypass agent.added to keep session bare)
+    // Seed agent storage directly (bypass agent.added to keep session bare) and
+    // name the agent as the session's lead on the row itself — which is what a
+    // legacy session is: one whose designation exists without the announcement
+    // that would have established its identity.
     await seedAgent(sessionId, agentId, adapterId, 'claude-code', 'lead', { emitAdded: false });
+    // Through the reserving transaction, which is the designation's one writer —
+    // a whole-record `set` deliberately preserves the stored lead instead of
+    // carrying one in.
+    const designated = await designateSessionLead(MakaioBus, {
+      sessionId,
+      agentId,
+      expectedLeadAgentId: null,
+    });
+    expect(designated?.outcome).toBe('claimed');
 
     // Verify session has no adapter identity at all
     const sessionBefore = await MakaioBus.request(SessionSubjects.get, { sessionId });

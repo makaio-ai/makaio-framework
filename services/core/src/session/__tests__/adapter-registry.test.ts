@@ -121,6 +121,56 @@ describe('AdapterRegistry', () => {
         cleanup();
       }
     });
+
+    it('never serves one machine\u2019s instance to a lookup that named another', async () => {
+      // An instance ID is derived from `(machineId, adapterName)`, so caching by
+      // name alone lets a fallback hand out the instance of a machine the caller
+      // never asked about — the caller then dispatches to machine R while
+      // claiming ownership in machine X's namespace, which is the mixed key the
+      // ownership seam exists to refuse.
+      let resolvable = true;
+      const cleanup = MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
+        if (!resolvable) throw new Error('adapter runtime identity is unavailable');
+        ctx.setResult({ adapterId: `instance-for-${ctx.payload.machineId ?? 'own'}` });
+      });
+
+      try {
+        await expect(registry.resolveAvailable('openai-node', 'machine-a')).resolves.toBe('instance-for-machine-a');
+        await expect(registry.resolveAvailable('openai-node', 'machine-b')).resolves.toBe('instance-for-machine-b');
+
+        resolvable = false;
+        // Each scope falls back to what *it* resolved, and to nothing else.
+        await expect(registry.resolveAvailable('openai-node', 'machine-a')).resolves.toBe('instance-for-machine-a');
+        await expect(registry.resolveAvailable('openai-node', 'machine-b')).resolves.toBe('instance-for-machine-b');
+        // A machine neither call resolved for has no cached answer, and the
+        // failure names the scope that came up empty rather than guessing.
+        await expect(registry.resolveAvailable('openai-node', 'machine-c')).rejects.toThrow('machineId="machine-c"');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('does not answer a machine-scoped lookup from the unattributed event cache', async () => {
+      // `adapter.initialized` carries no machine, and the bus can span hosts, so
+      // the instance it announces belongs to nobody in particular. It may serve
+      // the unscoped lookup it always served; a caller careful enough to name a
+      // machine gets a failure instead of a guess about that very identity.
+      await MakaioBus.emit(AdapterSubjects.initialized, {
+        adapterId: 'unattributed-id',
+        adapterName: 'openai-node',
+        capabilities: [],
+      });
+      const cleanup = MakaioBus.on(AdapterRuntimeSubjects.resolveId, () => {
+        throw new Error('adapter runtime identity is unavailable');
+      });
+
+      try {
+        await expect(registry.resolveAvailable('openai-node', 'machine-a')).rejects.toThrow('machineId="machine-a"');
+        await expect(registry.resolveAvailable('openai-node')).resolves.toBe('unattributed-id');
+      } finally {
+        cleanup();
+      }
+    });
   });
 
   describe('destroy()', () => {

@@ -25,6 +25,7 @@ describe('runExclusiveStart', () => {
         visibleInsideAttempt = peekInFlightStart(agentId) !== undefined;
         resolveStarted();
         await gate;
+        return 'connected';
       });
     });
 
@@ -50,9 +51,11 @@ describe('runExclusiveStart', () => {
     const first = runExclusiveStart(agentId, async () => {
       attempts += 1;
       await gate;
+      return 'connected';
     });
     const second = runExclusiveStart(agentId, async () => {
       attempts += 1;
+      return 'connected';
     });
 
     // Two concurrent lifecycle attempts for one agent identity are exactly what
@@ -77,13 +80,13 @@ describe('runExclusiveStart', () => {
     const joiner = peekInFlightStart(agentId);
     expect(joiner?.settled).toBe(entry.settled);
 
-    // A joiner catches and then re-reads the agent row: the rejection says the
-    // attempt is over, never what state it left behind.
+    // A rejection is the one verdict the promise cannot carry as a value, and a
+    // joiner reads it as "no connector, and I know why".
     await expect(joiner?.settled).rejects.toThrow('pre-dispatch failure');
     expect(peekInFlightStart(agentId)).toBeUndefined();
 
     // A later attempt for the same agent gets a fresh entry.
-    const next = runExclusiveStart(agentId, async () => undefined);
+    const next = runExclusiveStart(agentId, async () => 'connected');
     expect(next.joined).toBe(false);
     expect(next.settled).not.toBe(entry.settled);
     await next.settled;
@@ -115,6 +118,7 @@ describe('runExclusiveStart', () => {
         peekedDuringPrefix = (await Promise.race([joined.settled, stillPending])) === marker ? 'pending' : 'settled';
       }
       await gate;
+      return 'connected';
     });
 
     releaseAttempt?.();

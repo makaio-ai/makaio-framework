@@ -34,6 +34,7 @@ import type {
 import type { PostTurnHookOptions } from '@makaio/hooks';
 import type { TurnPairStateChange, TurnPairTerminalOutcome } from '@makaio/services-core';
 import * as sessionCore from '@makaio/services-core/session';
+import * as coreBarrel from '@makaio/services-core';
 import { LogImportSubjects, registerImportFileHandler } from '@makaio/services-log-import';
 
 describe('published contract exports (session ingestion surface)', () => {
@@ -106,6 +107,26 @@ describe('published contract exports (session ingestion surface)', () => {
 
     it('no longer exposes the retired SessionLogger', () => {
       expect('SessionLogger' in sessionCore).toBe(false);
+    });
+
+    it('keeps the raw rehydrate dispatch unreachable from outside (case 105)', () => {
+      // The structural half of the one-producer rule, and the half that holds:
+      // every service-owned rehydrate must reserve the provider session it is
+      // about to speak to, and a consumer outside this package cannot reach the
+      // unreserved primitive at all. An ESLint pair narrows the surface *inside*
+      // the package and is a review aid rather than a proof — a caller that
+      // aliases the subject evades it, which is why the export removal is what
+      // the gate rests on.
+      expect('dispatchAgentRehydrate' in sessionCore).toBe(false);
+      expect(typeof coreBarrel.verifyAndRecoverAgents).toBe('function');
+      expect('dispatchAgentRehydrate' in coreBarrel).toBe(false);
+    });
+
+    it('names the agents a send could not act for', () => {
+      // The reported set is the caller's only way to see that a delivery was
+      // narrower than it asked for.
+      expectTypeOf<sessionCore.VerifiedAgents['deferredAgentIds']>().toEqualTypeOf<Set<string>>();
+      expect(typeof sessionCore.SessionStartError).toBe('function');
     });
   });
 

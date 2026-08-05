@@ -58,10 +58,12 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
    * Atomically activate an optional managed account and replace the connector.
    * @param configOverrides - Connector construction overrides
    * @param beforeCommit - Optional caller guard before account commit and publication
+   * @param settledByCaller - Whether the caller settles the replacement's currency itself
    */
   public async swapConnector(
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
+    settledByCaller = false,
   ): Promise<void> {
     await this.runExclusive(async () => {
       let activation: AgentProviderContextActivation | undefined;
@@ -69,10 +71,14 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
         if (configOverrides?.providerContext !== undefined) {
           activation = await AgentProviderContextActivation.prepare(this.globalBus, configOverrides.providerContext);
         }
-        await this.swapConnectorUnlocked(configOverrides, async () => {
-          await beforeCommit?.();
-          await activation?.commit();
-        });
+        await this.swapConnectorUnlocked(
+          configOverrides,
+          async () => {
+            await beforeCommit?.();
+            await activation?.commit();
+          },
+          settledByCaller,
+        );
       } catch (error) {
         if (activation !== undefined) {
           try {
@@ -95,12 +101,18 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
    * Replace and publish a connector while the caller already owns the barrier.
    * @param configOverrides - Connector construction overrides
    * @param beforeCommit - Final guard after initialization and before publication
+   * @param settledByCaller - Whether the caller settles the replacement's currency itself
    */
   public async swapConnectorUnlocked(
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
+    settledByCaller = false,
   ): Promise<void> {
-    const confirmedAdapterSessionId = await this.lifecycleManager.swapConnector(configOverrides, beforeCommit);
+    const confirmedAdapterSessionId = await this.lifecycleManager.swapConnector(
+      configOverrides,
+      beforeCommit,
+      settledByCaller,
+    );
     if (configOverrides?.providerContext !== undefined) {
       this.runtimeConfig.providerContext = configOverrides.providerContext;
     }

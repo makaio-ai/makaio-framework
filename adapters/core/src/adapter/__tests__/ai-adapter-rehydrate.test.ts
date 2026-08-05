@@ -8,6 +8,7 @@ import {
   MockConnector,
   TestAdapter,
   createTestAdapter as createTestAdapterShared,
+  registerStartReservationAuthority,
   type TestBus,
   type BaseAgentConnectorConfig,
   type NormalizedMessageInput,
@@ -70,7 +71,9 @@ describe('AIAdapter.handleRehydrateAgent', () => {
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    cleanupFns = [];
+    // An adapter-owned resume start reserves before it dispatches, as a hard
+    // request. Every case here registers its own agent-row recorder.
+    cleanupFns = [registerStartReservationAuthority()];
   });
 
   afterEach(async () => {

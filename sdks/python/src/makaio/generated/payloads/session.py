@@ -137,6 +137,7 @@ class SessionSendMessageResponse:
     message_id: str
     session_id: str
     turn_id: str
+    deferred_agent_ids: list[str] | None = None
 
 
 @dataclass(frozen=True)

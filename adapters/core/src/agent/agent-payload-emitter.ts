@@ -44,6 +44,15 @@ export interface AgentPayloadEmitterConfig {
    * is published before the movement is recorded.
    */
   setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>;
+  /**
+   * Whether the agent's provider session is this adapter's to publish yet.
+   *
+   * Absent means yes. While it answers `false` the enriched event carries no
+   * provider session at all — a caller-owned start's key is the caller's to
+   * publish, and a consumer that writes it onto a session row would advertise a
+   * key no generation holds yet.
+   */
+  isProviderKeyPublishable?: () => boolean;
   /** Live event metadata defaults resolved from current runtime state. */
   getEventMetadataDefaults: () => AgentPayloadEventMetadata;
 }
@@ -103,6 +112,9 @@ export class AgentPayloadEmitter {
     // agent whose connector confirms nothing is exactly the one whose
     // unconfirmed movement is still outstanding.
     await this.config.setLastKnownAdapterSessionId(sample);
+    // Recorded either way — the cache is occupancy evidence — but reported only
+    // where this adapter is the one publishing the key. See the config field.
+    if (this.config.isProviderKeyPublishable?.() === false) return undefined;
     return sample ?? this.config.getLastKnownAdapterSessionId();
   }
 
@@ -169,6 +181,15 @@ export class AgentPayloadEmitter {
     // emitter contract documented on the base event schema.
     if (turnId === undefined && 'turnId' in enriched) {
       delete (enriched as Record<string, unknown>).turnId;
+    }
+    // **The gate strips, it does not merely abstain.** Payloads reach here
+    // already carrying a provider session — the connector stamps its own on
+    // every scoped event, and the bridge re-emits those globally — so a gate
+    // that only declines to *add* the field would let the connector's copy ride
+    // out untouched. Withholding is a statement about the key, not about this
+    // emitter's contribution to it.
+    if (this.config.isProviderKeyPublishable?.() === false && 'adapterSessionId' in enriched) {
+      delete (enriched as Record<string, unknown>).adapterSessionId;
     }
     return enriched;
   }

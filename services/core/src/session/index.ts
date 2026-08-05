@@ -52,11 +52,19 @@ export {
   recoverAgent,
   resolveExecutionTarget,
   resolveRuntimeProviderContext,
+  type AgentRecoveryOutcome,
   type RecoveryConfig,
+  type VerifiedAgents,
 } from './session-orchestrator-helpers.js';
+
+// The modeled start failures, so a host or product path can raise and branch on
+// the same outcomes the framework's own start paths do.
+export { SessionStartError, type SessionStartFailureCode } from './handlers/session-start-error.js';
 
 // Optional session handlers used by hosts that opt into richer session operations.
 export {
+  refuseTotalDeferral,
+  resolveInFlightStarts,
   routeToAgents,
   routeToAgentsCore,
   registerAbandonHandler,
@@ -64,6 +72,8 @@ export {
   registerCompressHandler,
   registerForkHandler,
   registerMergeHandler,
+  type InFlightStartResolution,
+  type StartResolution,
 } from './handlers/index.js';
 
 // Optional lifecycle helpers for host composition.

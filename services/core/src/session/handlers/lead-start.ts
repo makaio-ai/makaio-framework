@@ -8,13 +8,16 @@ import {
   type StartAgentResponse,
 } from '@makaio/contracts';
 import { runExclusiveStart } from '../ownership/index.js';
+import { mintClaimToken } from '../ownership/claim-token.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { completeCallerOwnedStart, type CallerOwnedStart } from './caller-owned-start.js';
 import {
   abandonDispatchedStart,
-  applySettlementOutcome,
   rollbackReservedStart,
+  StartClaimTokens,
   type StartCleanupPolicy,
 } from './lead-start-cleanup.js';
+import { buildCallerOwnedAgentRow } from './lead-start-request.js';
 import { SessionStartError } from './session-start-error.js';
 
 /**
@@ -33,6 +36,21 @@ export interface LeadStartRequest {
   readonly adapterName: string;
   /** Provider config to stamp on the agent's runtime row once the start lands. */
   readonly providerConfigId?: string;
+  /**
+   * Machine identity every ownership act of this start names.
+   *
+   * **It has to come from wherever `adapterId` came from.** An adapter instance
+   * ID is a one-way hash of `(machineId, adapterName)`, so a start that reserves
+   * and settles under one machine while dispatching to another machine's
+   * instance builds an ownership key no other actor computes — it collides with
+   * nothing, and therefore protects nothing. A runtime on the instance's real
+   * machine would reserve the same provider session under *its* identity and
+   * win, which is the second writer this whole seam exists to refuse.
+   *
+   * `undefined` leaves the authority to act under its own identity, which is
+   * right exactly when the instance was resolved for that identity too.
+   */
+  readonly machineId?: string;
   /**
    * Lead the caller observed on the session row, or `null` when it names none.
    *
@@ -79,7 +97,7 @@ export type LeadStartResult =
 
 /** A reservation attempt, as the start path has to branch on it. */
 type ReservationAttempt =
-  | { kind: 'reserved'; reservation: SessionOwnershipReservation | undefined }
+  | { kind: 'reserved'; reservation: SessionOwnershipReservation }
   | { kind: 'lead-conflict'; currentLeadAgentId: string | null }
   | { kind: 'refused'; outcome: string };
 
@@ -90,11 +108,19 @@ type ReservationAttempt =
  * its own identity, and the reservation's whole purpose here is the pre-dispatch
  * lead designation and the agent-row existence check that goes with it.
  *
- * A host with no ownership authority registered gets `reserved` with no
- * reservation. That is the honest reading: there is no authority to reserve
- * from, so nothing was taken and nothing has to be rolled back — the same
- * degradation every other optional session-storage read in this path accepts,
- * rather than making the authority a hard dependency of sending a message.
+ * Issued as a **hard** request. An absent authority is not a lightweight host
+ * but a broken composition: the same call that registers this path's handler
+ * registers the authority, and the orchestrator that owns `sendMessage`
+ * declares the session package as a critical dependency — so a host that can
+ * dispatch a start and cannot reserve one is forbidden by the package graph. A
+ * degrade here would make that misconfiguration indistinguishable from a
+ * supported topology, and every start it let through would dispatch unowned.
+ * The throw is caught by the caller, which rolls the pre-dispatch row back
+ * before it propagates.
+ *
+ * `machine-identity-unavailable` cannot arise on this path either: a keyless
+ * reservation never reads the machine-scoped key triple and falls back to the
+ * designation sentinel, so a host with no machine identity still reserves.
  * @param bus - Bus the reservation is issued on.
  * @param request - The start being reserved for.
  * @param agentId - Caller-minted agent identity the reservation is taken for.
@@ -105,7 +131,7 @@ async function reserveLeadStart(
   request: LeadStartRequest,
   agentId: string,
 ): Promise<ReservationAttempt> {
-  const result = await bus.requestOptional(SessionSubjects.ownership.reserveStart, {
+  const reserved = await bus.request(SessionSubjects.ownership.reserveStart, {
     sessionId: request.sessionId,
     agentId,
     adapterId: request.adapterId,
@@ -113,136 +139,18 @@ async function reserveLeadStart(
     role: 'lead',
     resumeProviderSessionId: null,
     expectedLeadAgentId: request.expectedLeadAgentId,
+    ...(request.machineId !== undefined && { machineId: request.machineId }),
   });
-  if (!result.handled) return { kind: 'reserved', reservation: undefined };
 
-  const reserved = result.data;
   if (reserved.outcome === 'reserved') return { kind: 'reserved', reservation: reserved.reservation };
   if (reserved.outcome === 'lead-conflict') {
     return { kind: 'lead-conflict', currentLeadAgentId: reserved.currentLeadAgentId };
   }
-  // `occupied` cannot occur — a keyless reservation takes no key — and the rest
-  // (`not-found`, `agent-disposed`, `machine-identity-unavailable`) all mean the
-  // same thing to a caller: do not dispatch.
+  // `occupied` and `machine-identity-unavailable` cannot occur — a keyless
+  // reservation takes no key and reads no machine-scoped triple — but they stay
+  // in the total branch rather than being narrowed away, because they mean to a
+  // caller exactly what `not-found` and `agent-disposed` mean: do not dispatch.
   return { kind: 'refused', outcome: reserved.outcome };
-}
-
-/**
- * Settle the provider session the adapter reported, and complete the start.
- *
- * The origin identity is written first and separately from the currency: the
- * agent row's `adapterSessionId` is the immutable provider session the agent
- * started *from*, and the ownership seam is the only writer of where that
- * conversation currently lives.
- *
- * A start that returned no provider session (an idle fork start) has nothing to
- * settle — the movement observer settles it when the provider confirms — and is
- * treated exactly as an accepted settlement so the status transition still runs.
- * @param bus - Bus the settlement is issued on.
- * @param request - The start being completed.
- * @param agentId - Agent the start was for.
- * @param providerSessionId - Provider session the adapter reported, when it did.
- */
-async function settleStartedAgent(
-  bus: IMakaioBus,
-  request: LeadStartRequest,
-  agentId: string,
-  providerSessionId: string | undefined,
-): Promise<void> {
-  if (providerSessionId !== undefined || request.providerConfigId !== undefined) {
-    await bus.requestOptional(AgentStorageSubjects.updateRuntime, {
-      agentId,
-      ...(providerSessionId !== undefined && { adapterSessionId: providerSessionId }),
-      ...(request.providerConfigId !== undefined && { providerConfigId: request.providerConfigId }),
-    });
-  }
-  if (providerSessionId === undefined) return;
-
-  const settled = await bus.requestOptional(SessionSubjects.ownership.settleMovement, {
-    sessionId: request.sessionId,
-    agentId,
-    adapterId: request.adapterId,
-    adapterName: request.adapterName,
-    movement: { confirmed: true, providerSessionId },
-  });
-  // No authority means no currency to be refused ownership of, exactly as at the
-  // reservation.
-  if (!settled.handled) return;
-  await applySettlementOutcome(bus, request.adapterId, agentId, settled.data.outcome, CALLER_OWNED_STATUS);
-}
-
-/**
- * Hand the completed start its `starting → idle` transition.
- *
- * Permitted only after an accepted settlement (§7.5), and always as a
- * compare-and-swap, because the row this attempt is finishing may already have
- * been claimed for recovery by another runtime. Losing that arbitration is a
- * modeled loss, not corruption: the start gives its claims up, stops the
- * connector it can no longer account for, and reports failure.
- * @param bus - Bus the transition is issued on.
- * @param request - The start being completed.
- * @param agentId - Agent the start was for.
- */
-async function commitStartedAgent(bus: IMakaioBus, request: LeadStartRequest, agentId: string): Promise<void> {
-  const transition = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
-    agentId,
-    status: 'idle',
-    expectedStatus: ['starting'],
-  });
-  // Unhandled means no agent storage in this host, so there is no row for a peer
-  // to have taken and nothing to arbitrate.
-  if (!transition.handled || transition.data.transitioned) return;
-
-  await abandonDispatchedStart(bus, agentId, CALLER_OWNED_STATUS);
-  await bus.requestOptional(AdapterSubjects.stopAgent, { adapterId: request.adapterId, agentId });
-  throw new SessionStartError(
-    'start-lost',
-    `[session.start] start for agent ${agentId} was claimed by another runtime before it completed`,
-  );
-}
-
-/**
- * Build the agent row a caller-owned start persists before it dispatches.
- *
- * This is now the **only** whole-record write for such a start: supplying
- * `agentId` transfers row ownership, and the adapter suppresses its own. So the
- * row has to carry what that suppressed write would have carried — the runtime
- * facts the request names (model, working directory, allowed directories,
- * client and harness) — or they simply never reach storage, and every reader of
- * `session.agents` sees an agent with no model and no cwd.
- *
- * One field is deliberately not mirrored: the adapter resolves an absent `cwd`
- * against its own platform defaults, which the service cannot see. A
- * caller-owned row therefore records the working directory the caller asked
- * for, and nothing when it asked for none — the honest reading, and not a
- * regression for the one caller that has this seam, which always resolves a
- * directory before composing the request.
- * @param request - The start being run, carrying the composed adapter request.
- * @param agentId - Caller-minted agent identity.
- * @returns The row to persist before dispatching.
- */
-function buildCallerOwnedAgentRow(request: LeadStartRequest, agentId: string): MakaioSessionAgent {
-  const now = Date.now();
-  const { model, cwd, allowedDirectories, clientId, harnessId } = request.startRequest;
-  return {
-    agentId,
-    adapterId: request.adapterId,
-    adapterName: request.adapterName,
-    sessionId: request.sessionId,
-    role: 'lead',
-    // Not `idle`: no connector is confirmed yet, and a consumer that read `idle`
-    // here would use the agent without rehydrating it. The origin identity is
-    // deliberately absent — it is written after the dispatch reports one.
-    status: 'starting',
-    createdAt: now,
-    lastActivityAt: now,
-    ...(model !== undefined && { model }),
-    ...(cwd !== undefined && { cwd }),
-    ...(allowedDirectories !== undefined && { allowedDirectories }),
-    ...(clientId !== undefined && { clientId }),
-    ...(harnessId !== undefined && { harnessId }),
-    ...(request.providerConfigId !== undefined && { providerConfigId: request.providerConfigId }),
-  };
 }
 
 /**
@@ -263,27 +171,42 @@ async function runLeadStartAttempt(
   request: LeadStartRequest,
   agentId: string,
 ): Promise<LeadStartResult> {
-  const agent = buildCallerOwnedAgentRow(request, agentId);
-  await bus.requestOptional(AgentStorageSubjects.set, { agentId, agent });
-
+  const agent = buildCallerOwnedAgentRow({
+    agentId,
+    adapterId: request.adapterId,
+    adapterName: request.adapterName,
+    sessionId: request.sessionId,
+    role: 'lead',
+    runtime: request.startRequest,
+    ...(request.providerConfigId !== undefined && { providerConfigId: request.providerConfigId }),
+  });
   let attempt: ReservationAttempt;
   try {
+    // **Inside the region, not before it.** A write whose transaction commits
+    // and whose response is then lost throws here with the row already stored,
+    // and a region that started after it would leave that row behind — the same
+    // reason the adapter records its own row acquisition at the write's *issue*
+    // rather than at its return (I20).
+    await bus.requestOptional(AgentStorageSubjects.set, { agentId, agent });
     attempt = await reserveLeadStart(bus, request, agentId);
   } catch (error) {
     // Nothing reached the provider, so this is the pre-dispatch cleanup: the row
-    // written a moment ago is the only thing to take back, and leaving it would
-    // strand a `starting` agent that every later send has to arbitrate over.
+    // this attempt may have stored is the only thing to take back, and leaving it
+    // would strand a `starting` agent that every later send has to arbitrate
+    // over. The delete is unconditional for the same reason the write is inside
+    // the region: whether it landed is exactly what a lost response does not
+    // say, and deleting a row that was never written is a no-op.
     //
-    // Deliberately *not* degraded into an unreserved start. A reservation only
-    // throws when the authority is registered and its storage is not, and that
-    // is a broken composition rather than a lightweight host: the framework's
-    // own package graph makes it unreachable (the session service depends on
-    // the session-storage package, which registers the ownership handlers in
-    // the same all-or-nothing block), and a hand-composed host that manages it
-    // cannot enforce single ownership at all. Starting anyway would make a
-    // misconfiguration indistinguishable from a supported topology — the degrade
-    // this wave grants is for an authority that is *absent*, which takes nothing
-    // and therefore has nothing to give back.
+    // Deliberately *not* degraded into an unreserved start. A reservation
+    // throws when the authority is absent, or when it is registered and its
+    // storage is not; both are broken compositions rather than lightweight
+    // hosts, and the framework's own package graph makes both unreachable (the
+    // session service registers the authority in the same call as this path's
+    // handler, and depends on the session-storage package that registers the
+    // ownership handlers in one all-or-nothing block). A hand-composed host
+    // that manages either cannot enforce single ownership at all, so starting
+    // anyway would make a misconfiguration indistinguishable from a supported
+    // topology.
     await rollbackReservedStart(bus, agentId, undefined);
     throw error;
   }
@@ -302,25 +225,62 @@ async function runLeadStartAttempt(
   }
 
   const { reservation } = attempt;
+  // **The policy deliberately names no reservation, unlike the reserved
+  // attach's.** Naming it would make a post-dispatch failure clear the
+  // designation this start made, and for a *fresh* start there is no previous
+  // lead to restore — the clear is the whole effect. That leaves the session
+  // holding the `dead` row this failure kept (I15) with nothing designated, and
+  // `resolveTargetAgents` raises for a default send against a session whose
+  // lead it cannot resolve: the session becomes unreachable by default sends
+  // instead of merely degraded.
+  //
+  // Kept, the lead names an agent the session legitimately has, and the next
+  // send's own consumer rule finds it `dead` and recovers it. Attach differs
+  // because it can displace an *existing* lead and therefore has one to put
+  // back. Pinned by case 31's uncertain half and the recovery case below it.
+  // Seeded with the one generation knowable here, which is none for the keyless
+  // reservation a fresh start takes. The settlement adds whatever generation it
+  // actually wrote through.
+  const claimTokens = new StartClaimTokens([reservation.claim?.claimToken]);
   let startResult: StartAgentResponse;
   try {
     startResult = await bus.request(AdapterSubjects.startAgent, { ...request.startRequest, agentId });
   } catch (error) {
     // A throw carries no disposition, so the provider may hold a live session.
-    await abandonDispatchedStart(bus, agentId, CALLER_OWNED_STATUS);
+    await abandonDispatchedStart(bus, agentId, CALLER_OWNED_STATUS, claimTokens);
     throw error;
   }
   if (!startResult.success) {
     if (startResult.dispatch === 'not-dispatched') await rollbackReservedStart(bus, agentId, reservation);
-    else await abandonDispatchedStart(bus, agentId, CALLER_OWNED_STATUS);
+    else await abandonDispatchedStart(bus, agentId, CALLER_OWNED_STATUS, claimTokens);
     throw new SessionStartError(
       'start-failed',
       `[session.start] Failed to start agent (sessionId=${request.sessionId}, adapterName=${request.adapterName}): ${startResult.message}`,
     );
   }
 
-  await settleStartedAgent(bus, request, agentId, startResult.adapterSessionId);
-  await commitStartedAgent(bus, request, agentId);
+  // Minted before the settle and releasable from the moment it exists: a
+  // settlement whose transaction commits and whose response is then lost leaves
+  // nothing else that names the successor generation (I15b), and a failure of
+  // the completion is exactly when that matters.
+  const settlementClaimToken = mintClaimToken();
+  claimTokens.add(settlementClaimToken);
+  const dispatched: CallerOwnedStart = {
+    sessionId: request.sessionId,
+    agentId,
+    adapterId: request.adapterId,
+    adapterName: request.adapterName,
+    policy: CALLER_OWNED_STATUS,
+    claimTokens,
+    settlementClaimToken,
+    ...(request.providerConfigId !== undefined && { providerConfigId: request.providerConfigId }),
+    // The settlement is the one keyed act a fresh start performs — its
+    // reservation is keyless — so this is where naming the wrong machine costs
+    // something: the claim lands in a namespace the instance's own runtime never
+    // looks in.
+    ...(request.machineId !== undefined && { machineId: request.machineId }),
+  };
+  await completeCallerOwnedStart(bus, dispatched, startResult.adapterSessionId);
   return {
     outcome: 'started',
     agent: {
@@ -348,6 +308,10 @@ export async function startLeadAgent(bus: IMakaioBus, request: LeadStartRequest)
   let result: LeadStartResult | undefined;
   await runExclusiveStart(agentId, async () => {
     result = await runLeadStartAttempt(bus, request, agentId);
+    // A lost designation race built nothing for *this* identity: the winner's
+    // agent is a different one, and a joiner waiting on this attempt must not
+    // read the row it never wrote as a connector of its own.
+    return result.outcome === 'started' ? 'connected' : 'no-connector';
   }).settled;
   if (result === undefined) {
     // Unreachable: the identity is minted here, so the seam has no existing

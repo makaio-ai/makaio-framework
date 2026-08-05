@@ -16,6 +16,7 @@ import {
   buildOptionalAgentConfig,
   resolveExecutionModels,
 } from './ai-adapter-create-utils.js';
+import { providerKeyIsPublishable } from './adapter-provider-key-publication.js';
 import { createStartAgentHandler } from './ai-adapter-start-handler.js';
 import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 
@@ -321,6 +322,12 @@ export abstract class AIAdapter<
       ...(this.prepareAuthRuntime !== undefined && { prepareAuthRuntime: this.prepareAuthRuntime }),
       sessionId: sessionId,
       ...(request.providerContext !== undefined && { providerContext: request.providerContext }),
+      // The attempt's publication gate, read live: the routes inside this agent
+      // ask the same question its start's own routes ask, and the answer changes
+      // once — when the start hands the key over.
+      ...(request.providerKeyPublication !== undefined && {
+        isProviderKeyPublishable: (): boolean => providerKeyIsPublishable(request.providerKeyPublication),
+      }),
       ...buildOptionalAgentConfig({
         platformCwd: this.platformDefaults?.cwd,
         platformEnv: this.platformDefaults?.env,

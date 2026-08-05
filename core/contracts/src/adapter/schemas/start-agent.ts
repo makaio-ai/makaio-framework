@@ -22,6 +22,10 @@ type StartAgentMode = 'create' | 'resume' | 'fork';
  * thrown start carries no disposition at all and callers must treat it as
  * `'dispatch-uncertain'`: the throw may come from anywhere in provider-context
  * activation, agent creation or the connector start.
+ *
+ * `adapter.rehydrateAgent` is a second producer of this vocabulary. Its failure
+ * response narrows the field to `'not-dispatched'`, because a rehydrate that
+ * may have reached the provider always leaves by throwing.
  */
 export const AdapterStartDispositionSchema = z.enum([
   /** Refused before anything was sent to the provider. Nothing exists provider-side. */

@@ -161,7 +161,6 @@ export abstract class AIAgent<
     this.config = { ...config, globalBus: config.globalBus ?? MakaioBus };
     this.availableModels = config.availableModels;
     this.adapterSessionTracker = new ConfirmedAdapterSessionTracker(this.globalBus, this.config);
-    const setLastKnownAdapterSessionId = this.adapterSessionTracker.record.bind(this.adapterSessionTracker);
     this.payloadEmitter = createAgentEmissionWiring({
       globalBus: this.globalBus,
       host: this.config,
@@ -178,7 +177,7 @@ export abstract class AIAgent<
       incrementBlockIndex: this.incrementBlockIndex.bind(this),
       getUsageModel: () => this.confirmedModel ?? this.initialModel,
     });
-    this.connectorLifecycleManager = this.createConnectorLifecycleManager(emitGlobal, setLastKnownAdapterSessionId);
+    this.connectorLifecycleManager = this.createConnectorLifecycleManager(emitGlobal);
     this.connectorSwapCoordinator = new AgentConnectorSwapCoordinator(
       this.globalBus,
       this.connectorLifecycleManager,
@@ -232,12 +231,10 @@ export abstract class AIAgent<
   /**
    * Create the connector lifecycle collaborator bound to this agent instance.
    * @param emitGlobal - Enriched global event emitter
-   * @param setLastKnownAdapterSessionId - Sink for the latest confirmed provider session
    * @returns Connector lifecycle manager for this agent
    */
   private createConnectorLifecycleManager(
     emitGlobal: AgentPayloadEmitter['emitGlobal'],
-    setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>,
   ): AgentConnectorLifecycleManager<TBus, TConnector> {
     return createAgentConnectorLifecycleManager<TBus, TConnector>({
       agentId: this.agentId,
@@ -259,7 +256,11 @@ export abstract class AIAgent<
         this.connector = runtime.connector;
       },
       getRuntimeSystemPrompt: () => this.runtimeSystemPrompt,
-      setLastKnownAdapterSessionId,
+      // Bound, never re-wrapped: an inline wrapper is checked against
+      // `AdapterSessionPublicationSink`, which a one-parameter arrow still
+      // satisfies — and it would drop `settledByCaller` silently, putting the
+      // movement observer back on a caller-settled swap.
+      setLastKnownAdapterSessionId: this.adapterSessionTracker.record.bind(this.adapterSessionTracker),
       announceAdapterSessionMoved: () => this.adapterSessionTracker.recordUnconfirmedMove(),
     });
   }
@@ -629,15 +630,19 @@ export abstract class AIAgent<
    * as baseline for non-overridden fields.
    * @param configOverrides - Optional config overrides (e.g., new cwd, model)
    * @param beforeCommit - Optional guard executed before replacing the active connector
+   * @param settledByCaller - Whether the caller writes the replacement's durable
+   *   currency itself, in which case the swap records the confirmed session
+   *   without announcing it as a movement
    * @throws Error if connector is currently processing a turn
    */
   public async swapConnector(
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
+    settledByCaller = false,
   ): Promise<void> {
     // Resume-decision publication happens inside the coordinator's serialized
     // swap transaction so queued swaps can never observe the stale target.
-    await this.connectorSwapCoordinator.swapConnector(configOverrides, beforeCommit);
+    await this.connectorSwapCoordinator.swapConnector(configOverrides, beforeCommit, settledByCaller);
   }
 
   /**
@@ -923,11 +928,21 @@ export abstract class AIAgent<
    * acknowledged-announcement marker is the retry anchor, and the agent's next
    * emitted event re-drives the announcement. It also makes the announcement
    * idempotent against that first enrichment call instead of duplicating it.
+   * **Who writes the durable currency is a parameter, not a second method.**
+   * A start or rehydrate whose caller owns the agent row settles the confirmed
+   * key itself, under a generation token that caller minted and can give back;
+   * announcing the same movement would make the observer a second settle
+   * producer for one identity, and its generation would be held under a token
+   * nobody in that caller's failure paths can name. One entry point keeps that
+   * choice explicit at every call site rather than letting a future producer
+   * pick the announcing variant by not knowing there is another — see
+   * {@link ConfirmedAdapterSessionTracker.recordCallerSettled}.
    * @param adapterSessionId - Provider session ID this generation is current on
+   * @param settledByCaller - Whether the caller writes this movement's currency itself
    * @returns Promise resolving once the announcement attempt completed
    */
-  public async recordConfirmedAdapterSession(adapterSessionId: string): Promise<void> {
-    await this.adapterSessionTracker.record(adapterSessionId);
+  public async recordConfirmedAdapterSession(adapterSessionId: string, settledByCaller = false): Promise<void> {
+    await this.adapterSessionTracker.record(adapterSessionId, settledByCaller);
   }
 
   /**

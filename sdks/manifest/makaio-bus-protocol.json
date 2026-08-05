@@ -9924,6 +9924,12 @@
       "responseSchema": {
         "additionalProperties": false,
         "properties": {
+          "deferredAgentIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "messageId": {
             "type": "string"
           },

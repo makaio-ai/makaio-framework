@@ -43,6 +43,12 @@ export interface AgentEmissionWiringHost {
   readonly clientId?: string;
   /** Provider configuration state, used as the metadata fallback. */
   readonly providerContext?: ProviderContext;
+  /**
+   * Whether this agent's provider session is the adapter's to publish yet.
+   *
+   * Absent means yes; see {@link AgentPayloadEmitterConfig.isProviderKeyPublishable}.
+   */
+  readonly isProviderKeyPublishable?: () => boolean;
 }
 
 /**
@@ -91,6 +97,9 @@ export function createAgentEmissionWiring(input: {
     },
     getLastKnownAdapterSessionId: () => adapterSessionTracker.lastKnownAdapterSessionId,
     setLastKnownAdapterSessionId: (adapterSessionId) => adapterSessionTracker.record(adapterSessionId),
+    ...(host.isProviderKeyPublishable !== undefined && {
+      isProviderKeyPublishable: host.isProviderKeyPublishable,
+    }),
     getEventMetadataDefaults: () => ({
       clientId: host.clientId,
       providerConfigId:

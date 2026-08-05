@@ -268,10 +268,15 @@ The adapter will:
 2. Create a new connector with optional config overrides (cwd, model)
 3. Wire the new connector to the existing agent instance
 
-Success is implicit. Errors are thrown if:
-- Agent not found
-- Adapter not found
-- Connector swap fails
+The response is a disposition union, mirroring `adapter.startAgent`. A refusal
+the adapter takes *before* anything reaches the provider — a disposed agent,
+or a provider session already claimed by another in-flight operation — is
+modelled as `{ success: false, dispatch: 'not-dispatched' }` so a caller that
+reserved provider-session ownership can give the reservation back cleanly
+instead of retiring it as possibly-live debris. Every other failure still
+throws, and a throw is `'dispatch-uncertain'` by construction: it can come
+from anywhere in provider-context activation, agent creation or the connector
+swap.
 
 **Request:**
 
@@ -279,13 +284,19 @@ Success is implicit. Errors are thrown if:
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `agentId` | `string` | yes |
+| `callerOwnsAgentRow` | `true \| undefined` | no |
 | `cwd` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
 | `resumeAdapterSessionId` | `string \| undefined` | no |
 
 **Response:**
 
-_Empty object._
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `dispatch` | `"not-dispatched" \| undefined` | no |
+| `message` | `string \| undefined` | no |
+| `success` | `true \| false` | yes |
 
 ### <a id="adapter.session.closed"></a>`adapter.session.closed` (event)
 
