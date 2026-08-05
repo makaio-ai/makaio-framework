@@ -1069,4 +1069,191 @@ describe('reserved fresh lead start', () => {
     expect(session?.leadAgentId).toBe(winner);
     expect(routed).toEqual([winner]);
   });
+
+  /**
+   * Which sends may reach the fresh-start branch at all (#1140).
+   *
+   * The branch exists to give a session its *first* agent, and only the default
+   * send may use one: it asks for *an* agent. Every other form states a target —
+   * named ids the empty session provably does not have, or "all of them" of
+   * nothing — and a stated target is a claim about what the session already has.
+   * Before this admission both failed *after* bootstrapping, leaving the agent
+   * row and the provider reservation of a send that never delivered.
+   *
+   * Both halves are asserted for each refusing form: the refusal, and the absence
+   * of everything the bootstrap would otherwise have created. Against the real
+   * authority and the real backends, so "no reservation" is read out of storage
+   * rather than inferred from a stub not being called.
+   */
+  describe('fresh-start admission by send target form', () => {
+    /**
+     * Compose the orchestrator and capture what a send routes.
+     * @returns Agents each `agent.sendMessage` reached, in order.
+     */
+    function composeOrchestrator(): string[] {
+      const orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
+      cleanups.push(() => {
+        orchestrator.destroy();
+      });
+      const routed: string[] = [];
+      cleanups.push(
+        MakaioBus.on(AgentSubjects.sendMessage, (ctx) => {
+          routed.push(ctx.payload.agentId);
+          ctx.setResult({ messageId: ctx.payload.messageId ?? crypto.randomUUID() });
+        }),
+      );
+      return routed;
+    }
+
+    /**
+     * Find the start refusal a send raised, through the transport wrapper.
+     * @param failure - Whatever the send rejected with.
+     * @returns The refusal itself, or `undefined` when nothing raised one.
+     */
+    function carriedStartError(failure: unknown): SessionStartError | undefined {
+      let current: unknown = failure;
+      while (current instanceof Error) {
+        if (current instanceof SessionStartError) return current;
+        current = current.cause;
+      }
+      return undefined;
+    }
+
+    /**
+     * Record every start dispatched from here on, ahead of the adapter stub.
+     * @returns Agent ids `adapter.startAgent` was called with, in order.
+     */
+    function observeDispatchedStarts(): string[] {
+      const dispatched: string[] = [];
+      cleanups.push(
+        MakaioBus.on(
+          AdapterSubjects.startAgent,
+          async (ctx) => {
+            dispatched.push(ctx.payload.agentId ?? 'unnamed');
+            await ctx.next();
+          },
+          { priority: 100 },
+        ),
+      );
+      return dispatched;
+    }
+
+    /**
+     * Assert a refused send left nothing behind — the other half of the fix.
+     *
+     * No start was dispatched, no agent row survived, nothing was designated, no
+     * generation was reserved, and nothing was routed.
+     * @param sessionId - Session the refused send was for.
+     * @param dispatched - Starts the adapter observed.
+     * @param routed - Agents the send reached.
+     */
+    async function expectNothingStarted(
+      sessionId: string,
+      dispatched: readonly string[],
+      routed: readonly string[],
+    ): Promise<void> {
+      expect(dispatched).toEqual([]);
+      const session = await loadSession(sessionId);
+      expect(session?.agents).toEqual([]);
+      expect(session?.leadAgentId ?? null).toBeNull();
+      expect(await loadClaims()).toEqual([]);
+      expect(routed).toEqual([]);
+    }
+
+    it('refuses a send that names agents an empty session does not have, before any start', async () => {
+      const sessionId = await seedSession('send-explicit-empty');
+      const dispatched = observeDispatchedStarts();
+      registerStartAgent();
+      const routed = composeOrchestrator();
+
+      const refusal = await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        message: 'to an agent that never existed',
+        agentIds: ['ghost-agent'],
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      const carried = carriedStartError(refusal);
+      expect(carried?.code).toBe('agent-unavailable');
+      // The named agents travel in the field *and* the message, as every
+      // refusal on this path does. `deferredAgentIds` is not a foreign-held
+      // claim: its contract is "the named targets this call could not act
+      // for" — the `agent-unavailable` set — and it does not separate
+      // nonexistent from foreign-held any more than the code does (see the
+      // field's TSDoc on SessionStartError).
+      expect(carried?.deferredAgentIds).toEqual(['ghost-agent']);
+      expect(carried?.message).toContain('ghost-agent');
+      await expectNothingStarted(sessionId, dispatched, routed);
+    });
+
+    it('refuses an explicit `all` send on an empty session, before any start', async () => {
+      const sessionId = await seedSession('send-all-empty');
+      const dispatched = observeDispatchedStarts();
+      registerStartAgent();
+      const routed = composeOrchestrator();
+
+      const refusal = await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        message: 'to all of nobody',
+        agentIds: 'all',
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      const carried = carriedStartError(refusal);
+      expect(carried?.code).toBe('agent-unavailable');
+      expect(carried?.message).toContain('has no agents');
+      // A broadcast named nobody, so there is no id set to carry — the field
+      // stays absent rather than claiming agents the session never had.
+      expect(carried?.deferredAgentIds).toBeUndefined();
+      await expectNothingStarted(sessionId, dispatched, routed);
+    });
+
+    it('still bootstraps the lead for a send that names no target', async () => {
+      const sessionId = await seedSession('send-default-empty');
+      registerStartAgent();
+      const routed = composeOrchestrator();
+
+      await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        message: 'first message of the session',
+        agent: { kind: 'adapter', adapterName: ADAPTER_NAME },
+      });
+
+      const session = await loadSession(sessionId);
+      expect(session?.agents).toHaveLength(1);
+      const leadAgentId = session?.agents[0]?.agentId;
+      expect(session?.leadAgentId).toBe(leadAgentId);
+      expect(routed).toEqual([leadAgentId]);
+    });
+
+    it('leaves an explicit send against an agent the session has untouched', async () => {
+      const sessionId = await seedSession('send-explicit-existing');
+      registerStartAgent();
+      const routed = composeOrchestrator();
+      // The session earns its agent the only way the admission still allows.
+      await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        message: 'first message of the session',
+        agent: { kind: 'adapter', adapterName: ADAPTER_NAME },
+      });
+      const leadAgentId = (await loadSession(sessionId))?.agents[0]?.agentId;
+      expect(leadAgentId).toBeDefined();
+      if (leadAgentId === undefined) return;
+
+      await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        message: 'follow-up, addressed by id',
+        agentIds: [leadAgentId],
+      });
+
+      expect(routed).toEqual([leadAgentId, leadAgentId]);
+      // The named agent was reached without a second lead appearing beside it.
+      const session = await loadSession(sessionId);
+      expect(session?.agents.map((agent) => agent.agentId)).toEqual([leadAgentId]);
+    });
+  });
 });

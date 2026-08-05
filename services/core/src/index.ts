@@ -1,3 +1,9 @@
+/* eslint-disable max-lines */
+// A pure re-export barrel: one named export per line, and `export *` is banned
+// repo-wide, so its length is the size of this package's public surface — not a
+// complexity signal, and not reducible by extraction (a sub-barrel has to be
+// re-exported name by name from here anyway). Same treatment as the other
+// package barrels that outgrew the limit, and it needs no ceiling to maintain.
 export {
   actionRegistry,
   AdapterRegistry,

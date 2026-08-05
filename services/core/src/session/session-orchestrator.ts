@@ -18,7 +18,12 @@ import {
   restoreProbedLiveAgent,
   type InFlightStartResolution,
 } from './handlers/in-flight-start-join.js';
-import { dropDeferredAgents, refuseTotalDeferral, resolveSendTargetForm } from './handlers/deferred-agents.js';
+import {
+  admitFreshStartTargets,
+  dropDeferredAgents,
+  refuseTotalDeferral,
+  resolveSendTargetForm,
+} from './handlers/deferred-agents.js';
 import { buildLeadStartRequest, inheritAgentSelection } from './handlers/lead-start-request.js';
 import { startLeadAgent } from './handlers/lead-start.js';
 import { SessionStartError } from './handlers/session-start-error.js';
@@ -123,6 +128,9 @@ interface DeferralRetargetResult {
  * 1. Get or create session (via `getOrCreateSession`)
  * 2. Resolve any start the session has in flight (via `resolveInFlightStarts`),
  *    before anything probes an agent or concludes the session has none
+ * 2b. Refuse a send that stated targets (named ids or `'all'`) against a session
+ *    that has none — before the start below, so a refused send leaves no agent
+ *    and no reservation; only the default send may bootstrap a session
  * 3. Start the lead agent if the session has no agents — resolves the canonical
  *    `adapterName` from direct selections, uses `adapterId` directly when
  *    provided, otherwise resolves it via `AdapterRegistry`, resolves provider
@@ -193,6 +201,9 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    * Core flow:
    * 1. Get or create session
    * 2. Join or arbitrate every start the session has in flight
+   * 2b. Refuse a target-stating send (named ids or `'all'`) against a session
+   *    with no agents, before the bootstrap can leave state behind a send that
+   *    cannot deliver
    * 3. Start the lead agent if the session has no agents (canonicalize direct
    *    selections, resolve adapterId, resolve provider credentials, reserved start)
    * 4. Resolve target agents
@@ -236,6 +247,17 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         // 2. Resolve every start this session has in flight, before anything
         //    probes an agent or decides the session has none (§4.5).
         const inFlight = await resolveInFlightStarts(this.bus, session);
+
+        // 2b. A send that stated its targets — named ids or `'all'` — against a
+        //     session that has none is already decided, so it is answered before
+        //     the start below can leave an agent row and a provider reservation
+        //     behind a send that never delivered. Only the default send may bring
+        //     a session its first agent. Read *after* step 2, because an
+        //     in-flight resolution can be what emptied the session — the send is
+        //     then refused for that same reason, not started over on the caller's
+        //     behalf. Targets that survive here are still validated after the
+        //     recovery pass (§8.2a): existing is not the same as drivable.
+        admitFreshStartTargets(SEND_MESSAGE_CALLER, resolvedSessionId, session, targetSpec);
 
         // 3. Start the lead agent if the session has no agents. A start that
         //    loses the designation race adopts the winner's agents instead, and

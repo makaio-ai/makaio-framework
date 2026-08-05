@@ -144,7 +144,10 @@ export const OrchestratorSchemas = {
    *
    * Single entry point for all user messages. Handles:
    * - Creating session if sessionId does not exist
-   * - Auto-attaching agent via adapter.startAgent if session has no agents
+   * - Auto-attaching agent via adapter.startAgent if session has no agents —
+   *   only for the default send (no `agentIds`). A send that states its targets,
+   *   whether named ids or `'all'`, is refused against a session that has none
+   *   and leaves no agent behind
    * - Turn lifecycle (creates turn if none active)
    * - Routing to targeted agents
    *
@@ -205,6 +208,12 @@ export const OrchestratorSchemas = {
        *
        * Mutually exclusive with `agent` — enforced at runtime in the
        * orchestrator, not at the schema level.
+       *
+       * Either form targets agents that must already exist: named ids the
+       * session does not have are refused rather than answered with an agent
+       * nobody asked for, and `'all'` of nothing is refused rather than turned
+       * into a first agent. Only the default send (no `agentIds`) can bring a
+       * session its first agent.
        */
       agentIds: z.union([z.array(z.string()), z.literal('all')]).optional(),
 

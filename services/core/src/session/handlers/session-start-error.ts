@@ -34,8 +34,14 @@ export type SessionStartFailureCode =
 /** A reserved start that did not end with a usable agent. */
 export class SessionStartError extends Error {
   /**
-   * Agents this call could not act for because their provider session is held
-   * by a generation this runtime does not own.
+   * The named targets this call could not act for — exactly the set the
+   * `agent-unavailable` code refuses. Two producers fill it: a total deferral
+   * (every named agent's provider session is held by a generation this runtime
+   * does not own) and a stated-target send against a session with no agents
+   * (the named agents do not exist). The field deliberately does not separate
+   * the two, because the code does not either: which one it was is a statement
+   * about the session, carried by the message, not a distinct caller branch —
+   * in particular, no entry is guaranteed to be foreign-held-and-retryable.
    *
    * A response field is unreachable on a path that throws, and a send that
    * silently reaches fewer agents than it was asked to is exactly the failure
@@ -49,7 +55,7 @@ export class SessionStartError extends Error {
    * @param code - Which modeled outcome this is; the value callers branch on.
    * @param message - Human-readable detail, including the identifiers involved.
    * @param cause - Underlying failure, when one exists.
-   * @param deferredAgentIds - Agents held by a foreign generation, when that is why this failed.
+   * @param deferredAgentIds - The named targets this call could not act for, when the send named any.
    */
   public constructor(
     public readonly code: SessionStartFailureCode,
