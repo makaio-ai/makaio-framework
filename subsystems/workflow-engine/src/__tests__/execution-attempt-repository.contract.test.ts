@@ -29,8 +29,8 @@ import type { BeginProvisioningInput } from '../execution-attempt-repository.js'
  * Two controllers over one database.
  *
  * `alpha` and `beta` are independent repository instances over independent
- * connections to the same file. Nothing is shared between them in this
- * process, so every agreement they reach is an agreement about durable rows.
+ * connections to the same file. Their transaction control is serialized by
+ * database identity, while their state agreement still comes from durable rows.
  */
 interface ContractHarness {
   readonly alpha: Required<ExecutionAttemptRepository>;
@@ -1033,13 +1033,13 @@ describe('execution attempt repository contract (failed rollback)', () => {
     // The reused identifier makes the insert fail inside the transaction, and
     // the rollback that should undo it fails too.
     refuseRollback = true;
-    await expect(repository.createAttempt(ids)).rejects.toThrow('Transaction rollback failed');
+    const failedTransition = repository.createAttempt(ids);
+    const queuedRead = repository.recovery.getAttemptWithAllocation(ids.executionAttemptId);
+    await expect(failedTransition).rejects.toThrow('Transaction rollback failed');
 
-    // The connection's transaction state is now unknown, so nothing may run
-    // on it — not even a read that would otherwise be harmless.
-    await expect(repository.recovery.getAttemptWithAllocation(ids.executionAttemptId)).rejects.toThrow(
-      'retired by a failed transaction rollback',
-    );
+    // The connection's transaction state is now unknown, so even work queued
+    // before the rollback failure became visible must not run on it.
+    await expect(queuedRead).rejects.toThrow('retired by a failed transaction rollback');
   });
 });
 
