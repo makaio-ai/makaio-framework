@@ -2,21 +2,21 @@
  * What `frameworkCorePackages` obliges a host to compose alongside it.
  *
  * The set is independent of host-specific *factories*, which is not the same as
- * self-contained: two members declare packages that live in sets depending on
- * this one, so they cannot be members and the array has never loaded on its own.
- * That is a contract, not a defect — but it is the kind of contract that is
- * discovered at boot unless something states it.
+ * self-contained: two members declare required packages that live in sets
+ * depending on this one, so they cannot be members and the array has never
+ * loaded on its own. That is a contract, not a defect — but it is the kind of
+ * contract that is discovered at boot unless something states it.
  *
  * These cases state it. The valuable one is the last: a *new* member reaching
- * outside the set fails here, where the fix is cheap, instead of at a host's
- * first start.
+ * outside the set through a required dependency fails here, where the fix is
+ * cheap, instead of at a host's first start.
  */
 import { describe, expect, it } from 'vitest';
 import { ADAPTER_SUBSYSTEM_PACKAGE_NAME } from '../adapter-subsystem/namespace.js';
 import { canonicalModelPackage, frameworkCorePackages } from '../index.js';
 
 /**
- * Dependencies a host is expected to satisfy from a sibling set.
+ * Required dependencies a host is expected to satisfy from a sibling set.
  *
  * Each entry is a package that depends on `@makaio/services-core` and therefore
  * cannot be named in its package list. Adding to this list is a decision about
@@ -41,18 +41,18 @@ describe('frameworkCorePackages', () => {
     expect(frameworkCorePackages.map((pkg) => pkg.name)).not.toContain(ADAPTER_SUBSYSTEM_PACKAGE_NAME);
   });
 
-  it('reaches outside itself only for the dependencies a host is told to compose', () => {
+  it('reaches outside itself only for required dependencies a host is told to compose', () => {
     const provided = new Set(frameworkCorePackages.map((pkg) => pkg.name));
-    const external = new Set<string>();
+    const requiredExternal = new Set<string>();
     for (const pkg of frameworkCorePackages) {
       for (const declared of pkg.dependencies ?? []) {
-        if (!provided.has(declared.name)) external.add(declared.name);
+        if (!declared.optional && !provided.has(declared.name)) requiredExternal.add(declared.name);
       }
     }
 
-    // An unexpected name here means a new member depends on something no host
-    // has been told to bring, and the coordinator will refuse the load set at
-    // startup with nothing pointing at the cause.
-    expect([...external].sort()).toEqual([...COMPOSED_BY_THE_HOST].sort());
+    // An unexpected name here means a new member has a required dependency no
+    // host has been told to bring, and the coordinator will refuse the load set
+    // at startup with nothing pointing at the cause.
+    expect([...requiredExternal].sort()).toEqual([...COMPOSED_BY_THE_HOST].sort());
   });
 });

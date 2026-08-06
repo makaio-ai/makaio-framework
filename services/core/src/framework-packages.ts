@@ -327,10 +327,10 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
  * Framework packages that are independent of host-specific factories.
  *
  * **Independent of factories, not self-contained.** Members may declare
- * dependencies on packages a host composes from a *sibling* set, and two do
- * today: `session-client-account-linking` names `makaio.clients-core`, and
- * {@link canonicalModelPackage} names the adapter subsystem. Neither can be a
- * member — both live in packages that depend on this one, so naming them here
+ * required dependencies on packages a host composes from a *sibling* set, and
+ * two do today: `session-client-account-linking` names `makaio.clients-core`,
+ * and {@link canonicalModelPackage} names the adapter subsystem. Neither can be
+ * a member — both live in packages that depend on this one, so naming them here
  * would invert the layering — which is why handing this array to a coordinator
  * on its own has never validated and is not the contract.
  *
