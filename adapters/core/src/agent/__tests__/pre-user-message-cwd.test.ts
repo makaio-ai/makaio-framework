@@ -2,13 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
 import { createMockScopedBus } from '@makaio/test-utils';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { registerPreUserMessageHook, resetPreUserMessageHooks } from '@makaio/hooks';
 import { AIAgent } from '../ai-agent.js';
 import { AIAgentConnector } from '../../connector/agent-connector.js';
 import { MessageHandle } from '../../message-handle/index.js';
 import type { AIAgentConfig, AgentStartResult, BaseAgentConnectorConfig } from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
+import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 
 type TestBus = ReturnType<typeof createMockScopedBus>['bus'];
 
@@ -36,7 +37,16 @@ class HookTestConnector extends AIAgentConnector {
     return null;
   }
   public async interrupt(): Promise<void> {}
-  public async close(): Promise<void> {}
+  /**
+   * Report a teardown of nothing.
+   *
+   * This double holds no process, connection or subscription, so `released` is
+   * literally true of it: every handle is dropped and no callback can arrive.
+   * @returns The `released` class.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
+    return { evidence: 'released' };
+  }
   public async getAdapterSessionId(): Promise<string> {
     return 'session-from-connector';
   }
@@ -70,6 +80,7 @@ function createHookTestAgent(): HookTestAgent {
     capabilities: [],
     nativeTools: [],
     adapterBus: mockBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     model: 'model-1',
     cwd: os.tmpdir(),

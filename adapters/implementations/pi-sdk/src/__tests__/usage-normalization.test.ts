@@ -7,10 +7,11 @@
  * @packageDocumentation
  */
 
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { createNoAuthTestProviderContext } from '@makaio/ai-adapters-core';
 import { PiAgent } from '../agent.js';
 import { PiConnector } from '../connector.js';
@@ -26,8 +27,16 @@ class TestPiConnector extends PiConnector {
   /** No-op initialization — the Pi SDK session is never created in this test. */
   public override async initialize(): Promise<void> {}
 
-  /** No-op close. */
-  public override async close(): Promise<void> {}
+  /**
+   * Report a teardown of nothing.
+   *
+   * This double holds no process, connection or subscription, so `released` is
+   * literally true of it: every handle is dropped and no callback can arrive.
+   * @returns The `released` class.
+   */
+  public override async close(): Promise<ConnectorTeardownResult> {
+    return { evidence: 'released' };
+  }
 
   /**
    * Emit a raw usage payload on the scoped `usage` subject, exactly like the
@@ -51,6 +60,7 @@ async function makeAgent(): Promise<{ agent: PiAgent; connector: TestPiConnector
     adapterId: TEST_ADAPTER_ID,
     adapterName: 'pi-sdk',
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     sessionId: 'framework-session-1',
     cwd: tmpdir(),

@@ -329,7 +329,7 @@ describe('MakaioSessionService - restartAgents ownership', () => {
     storageCleanups.push(
       bus.on(AdapterSubjects.stopAgent, (ctx) => {
         stopped.push(ctx.payload.agentId);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, evidence: 'released' });
       }),
     );
 

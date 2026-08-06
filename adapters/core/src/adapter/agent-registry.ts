@@ -12,6 +12,9 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
+import type { AgentTeardownArbiter } from '../agent/agent-teardown-arbiter.js';
+import { closeConnectorRuntime } from '../agent/connector-runtime.js';
+import type { TeardownReport } from '../connector/teardown-report.js';
 import type { AgentUsageTotals } from './types.js';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 
@@ -114,6 +117,39 @@ export interface ActiveAgentRegistryConfig {
   globalBus: IMakaioBus;
   /** Adapter name for error-log context. */
   adapterName: string;
+  /**
+   * Adapter-instance arbiter between teardowns and connector replacements.
+   *
+   * **Required**: this registry owns all four agent-teardown entry points, and
+   * every one of them runs through the arbiter's single flight. A registry
+   * constructed without one would let two of them close one connector twice.
+   */
+  arbiter: AgentTeardownArbiter;
+}
+
+/** What one agent teardown observed, plus whether there was an agent at all. */
+export interface AgentDisposalReport extends TeardownReport {
+  /**
+   * Whether a live agent was found and its teardown attempted.
+   *
+   * True for a teardown this call joined as well as one it started: an agent *was*
+   * found, by whichever caller got there first, and both callers are answered with
+   * the same evidence.
+   */
+  readonly found: boolean;
+}
+
+/** Options a teardown entry point accepts from the request that drove it. */
+export interface AgentTeardownOptions {
+  /**
+   * Absolute deadline of the request driving this teardown, when it has one.
+   *
+   * Passed through so a teardown that must wait for a connector replacement ends
+   * its wait inside the deadline of whoever is waiting on it. Absent for
+   * fan-out teardowns with no request behind them, where the policy ceiling stands
+   * alone.
+   */
+  readonly deadline?: number | undefined;
 }
 
 /**
@@ -160,10 +196,13 @@ export class ActiveAgentRegistry<
   private readonly pendingAgentIdentityClaims = new Set<string>();
   private readonly globalBus: IMakaioBus;
   private readonly adapterName: string;
+  /** Arbiter owning the teardown and connector-replacement maps for this instance. */
+  private readonly arbiter: AgentTeardownArbiter;
 
   public constructor(config: ActiveAgentRegistryConfig) {
     this.globalBus = config.globalBus;
     this.adapterName = config.adapterName;
+    this.arbiter = config.arbiter;
   }
 
   /**
@@ -319,32 +358,136 @@ export class ActiveAgentRegistry<
   }
 
   /**
-   * Evict an agent from memory and mark as dead in storage.
-   * @param agentId - Agent identifier
-   * @param options - Optional lifecycle emission controls for session-driven eviction
+   * Whether this instance holds something a teardown could actually **close**.
+   *
+   * **The single place that enumerates what a teardown can act on.** A caller that
+   * reads only the entries answers "provably nothing speaking" for an agent whose
+   * connector is mid-teardown, so the flight counts too. Splitting this across the
+   * call sites is how one of them ends up missing a case.
+   *
+   * A connector replacement is deliberately **not** in this disjunction, even
+   * though it holds live runtimes: entering the flight for one would close the
+   * runtime under a replacement that is still running — the orphan the arbitration's
+   * refusal region exists to prevent — and after an expiry there is nothing of this
+   * teardown's own left to close either. It belongs to
+   * {@link reportWithNothingToTearDown} instead, which is the other half of the same
+   * question.
+   * @param agentId - Agent identity to probe
+   * @returns Whether an entry or a teardown flight covers it
    */
-  public async evict(agentId: string, options: { emitSessionClosed?: boolean } = {}): Promise<void> {
-    const entry = this.entries.get(agentId);
-    this.entries.delete(agentId);
-    let closeError: unknown;
-    if (entry) {
-      try {
-        await entry.agent.close({ emitSessionClosed: options.emitSessionClosed });
-      } catch (error) {
-        closeError = error;
-      }
+  private hasTeardownSubject(agentId: string): boolean {
+    return this.entries.has(agentId) || this.arbiter.hasTeardownInFlight(agentId);
+  }
+
+  /**
+   * Answer for an identity nothing closeable was found for.
+   *
+   * **The single place that enumerates what can still be speaking for an identity
+   * without being closeable**, and therefore the only place `released` — the answer
+   * that frees an identity — may be produced. It is the twin of
+   * {@link hasTeardownSubject}: "nothing here" is true only when nothing on this
+   * instance can still be speaking, so a closed list of absences is exactly the
+   * shape that drifts behind its own mechanism.
+   *
+   * Two such states exist today. An in-flight **start** holds the identity without
+   * having registered it: there is nothing to close, but it is about to register a
+   * connector, so closing "the entry" would be a no-op reported as success. An
+   * in-flight **connector replacement** holds both runtimes after a teardown gave up
+   * waiting for it: the entry and the flight are both gone by then, and the
+   * replacement closes nothing until it settles.
+   * @param agentId - Agent identity nothing closeable was found for
+   * @returns `unknown` naming whichever act still holds the identity, else `released`
+   */
+  private reportWithNothingToTearDown(agentId: string): AgentDisposalReport {
+    if (this.pendingAgentIdentityClaims.has(agentId)) {
+      return {
+        found: false,
+        evidence: 'unknown',
+        detail: `Agent ${agentId} is being started on this instance and has no runtime to tear down yet.`,
+      };
     }
+    if (this.arbiter.hasReplacementInFlight(agentId)) {
+      return {
+        found: false,
+        evidence: 'unknown',
+        detail: `Agent ${agentId} has an unsettled connector replacement in flight that owns its runtimes; nothing was closed.`,
+      };
+    }
+    return { found: false, evidence: 'released' };
+  }
+
+  /**
+   * The single teardown flight, as this registry's four entry points see it.
+   *
+   * **No plan parameter.** The four entry points want different terminal effects,
+   * so the flight closes and classifies while each wrapper applies its own status
+   * afterwards. Entry removal sits **behind** the close everywhere, which is what
+   * lets a reentrant eviction — triggered by the very `session.closed` event this
+   * close emits — join the flight that emitted it instead of finding a half-present
+   * registry and starting a second close.
+   * @param agentId - Agent being torn down
+   * @param options - Lifecycle emission control and the caller's deadline
+   * @returns What the teardown observed
+   */
+  private async teardownFlight(
+    agentId: string,
+    options: AgentTeardownOptions & { emitSessionClosed?: boolean | undefined },
+  ): Promise<TeardownReport> {
+    try {
+      return await this.arbiter.runTeardown(agentId, {
+        deadline: options.deadline,
+        closeCurrent: async () => {
+          const entry = this.entries.get(agentId);
+          if (entry === undefined) {
+            return { evidence: 'released' };
+          }
+          return entry.agent.close({ emitSessionClosed: options.emitSessionClosed });
+        },
+        closeUnclosed: (runtime) => closeConnectorRuntime(runtime),
+        // Read at call time, like the close above: the entry is still present on
+        // the expiry arm — it is this `finally` that removes it — and an identity
+        // nothing is registered for has no wiring to give up.
+        releaseIdentity: () => this.entries.get(agentId)?.agent.releaseIdentityWiring(),
+      });
+    } finally {
+      // **Behind the whole flight, not behind the close alone.** Keeping the entry
+      // for the duration of the close is what lets a reentrant eviction join
+      // instead of finding a half-present registry; removing it on *every* exit is
+      // what stops an agent this teardown gave up from staying routable — including
+      // on the expiry arm, where nothing was closed but the teardown is still over.
+      this.entries.delete(agentId);
+    }
+  }
+
+  /**
+   * Evict an agent from memory and mark as dead in storage.
+   *
+   * **Still throws the close failure after the `dead` write**, exactly as before:
+   * the rollback consumer of a failed start awaits this and converts a close
+   * rejection into an aggregate carrying both failures, and returning instead of
+   * throwing would delete that signal silently. Callers that want the class read
+   * the resolved value; the throw contract is unchanged.
+   * @param agentId - Agent identifier
+   * @param options - Lifecycle emission control and the caller's deadline
+   * @returns What the teardown observed — reported even when the class is weak
+   */
+  public async evict(
+    agentId: string,
+    options: AgentTeardownOptions & { emitSessionClosed?: boolean } = {},
+  ): Promise<TeardownReport> {
+    const report = await this.teardownFlight(agentId, options);
     try {
       await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
     } catch (error) {
-      if (closeError === undefined) {
+      if (report.closeError === undefined) {
         throw error;
       }
       console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as dead:`, error);
     }
-    if (closeError !== undefined) {
-      throw closeError;
+    if (report.closeError !== undefined) {
+      throw report.closeError;
     }
+    return report;
   }
 
   /**
@@ -354,40 +497,68 @@ export class ActiveAgentRegistry<
    * agent that was never persisted, and a failed start whose cleanup has already
    * compare-and-swapped the row to `dead` — which {@link dispose} would then
    * overwrite with the terminal `disposed`.
+   *
+   * It goes through the same flight as the other three; what stays untouched is
+   * its *status* behaviour, which is to write none.
    * @param agentId - Agent to evict
+   * @param options - The caller's deadline, when it has one
+   * @returns What the teardown observed
    */
-  public async evictSilently(agentId: string): Promise<void> {
-    const entry = this.entries.get(agentId);
-    this.entries.delete(agentId);
-    if (!entry) return;
-    try {
-      await entry.agent.close({ emitSessionClosed: false });
-    } catch (error) {
+  public async evictSilently(agentId: string, options: AgentTeardownOptions = {}): Promise<TeardownReport> {
+    const report = await this.teardownFlight(agentId, { ...options, emitSessionClosed: false });
+    if (report.closeError !== undefined) {
       console.warn(
         `[ActiveAgentRegistry:${this.adapterName}] Agent ${agentId} close error during silent eviction:`,
-        error,
+        report.closeError,
       );
     }
+    return report;
   }
 
   /**
-   * Dispose an agent: close it, remove from registry, mark as disposed in storage.
+   * Dispose an agent: close it, remove it, mark it disposed in storage.
+   *
+   * **Awaits the close** the eviction path always awaited, so its caller can
+   * report what was observed instead of what was requested. The terminal `disposed`
+   * write is unchanged and is made even when the class is weak: the status records
+   * that this adapter gave the agent up, never that a provider conversation ended.
+   *
+   * Concurrent wrappers may both write a status, and that is safe without
+   * arbitration because `disposed` is terminal in storage: the *effective* terminal
+   * status is `disposed` whenever a disposal participated, in either order.
    * @param agentId - Agent identifier
-   * @returns true if the agent was found and disposed
+   * @param options - The caller's deadline, when it has one
+   * @returns Whether an agent was found, and what its teardown observed
    */
-  public dispose(agentId: string): boolean {
-    const entry = this.entries.get(agentId);
-    if (!entry) return false;
-    void entry.agent.close().catch((error) => {
-      console.warn(`[ActiveAgentRegistry:${this.adapterName}] Agent ${agentId} close error during dispose:`, error);
-    });
-    this.entries.delete(agentId);
-    void this.globalBus
-      .requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' })
-      .catch((error) => {
-        console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as disposed:`, error);
-      });
-    return true;
+  public async dispose(agentId: string, options: AgentTeardownOptions = {}): Promise<AgentDisposalReport> {
+    // Nothing registered and no flight, so the only question left is what else can
+    // still be speaking for the identity. A subject always wins over the states
+    // below, so a start claim or a replacement that coexists with a flight joins
+    // that flight instead of being reported.
+    if (!this.hasTeardownSubject(agentId)) return this.reportWithNothingToTearDown(agentId);
+    const report = await this.teardownFlight(agentId, options);
+    try {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+    } catch (error) {
+      console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as disposed:`, error);
+    }
+    return { found: true, ...report };
+  }
+
+  /**
+   * Tear down every agent on this instance and clear the registry.
+   *
+   * The adapter-instance shutdown path, and the fourth entry point into the same
+   * flight: closing the agents directly is what let an instance shutdown race a
+   * concurrent stop into two closes of one connector. No status is written — a
+   * normal process shutdown must not mark every agent it owned terminally gone.
+   * @returns One report per agent that was live, in iteration order
+   */
+  public async closeAll(): Promise<readonly TeardownReport[]> {
+    const agentIds = [...this.entries.keys()];
+    const reports = await Promise.all(agentIds.map((agentId) => this.teardownFlight(agentId, {})));
+    this.clear();
+    return reports;
   }
 
   /**

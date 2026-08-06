@@ -1,6 +1,8 @@
 import {
   processQueueMessages,
   markCompletedWithFinalResult,
+  reportBestEffortStages,
+  stageFailure,
   formatContextBlockAsText,
   formatContextBlocksAsText,
   formatMessageHistoryAsTranscript,
@@ -10,6 +12,7 @@ import {
   type QueueableTurn,
   type UserMessageQueue,
 } from '@makaio/ai-adapters-core';
+import type { ConnectorTeardownResult } from '@makaio/contracts';
 import { registerMcpSession, buildMcpServerConfig, unregisterMcpSession } from './mcp-bridge.js';
 import {
   createDeltaHandler,
@@ -719,13 +722,21 @@ export class CursorSdkSession {
   }
 
   /**
-   * Close the session and release all resources.
+   * Close the session, release all resources, and report what was observed.
    *
    * Cancels any active run, closes the Cursor Agent, and unregisters the MCP session.
    * Safe to call even if initialization did not complete.
+   *
+   * The agent disposal used to fail silently. It still runs best-effort — the MCP
+   * unregistration behind it must happen whatever the SDK does — but a session
+   * that could not tell whether its own agent was disposed cannot claim to have
+   * released it, so the failure now decides the class instead of only reaching a
+   * log line.
+   * @returns What this session observed about the end of its Cursor Agent.
    */
-  public async close(): Promise<void> {
+  public async close(): Promise<ConnectorTeardownResult> {
     this.closed = true;
+    const unaccounted: string[] = [];
 
     if (this.activeRun) {
       await this.cancelRun(this.activeRun, 'close');
@@ -736,6 +747,7 @@ export class CursorSdkSession {
         await disposeCursorAgent(this.cursorAgent);
       } catch (err) {
         console.warn('[CursorSdkSession] Agent close failed:', err);
+        unaccounted.push(stageFailure('Cursor Agent disposal', err));
       }
     }
 
@@ -749,5 +761,13 @@ export class CursorSdkSession {
     this.cursorAgent = undefined;
     this.activeRun = undefined;
     this.activeTurn = undefined;
+
+    const unaccountedReport = reportBestEffortStages('Cursor session close', unaccounted);
+    if (unaccountedReport !== undefined) return unaccountedReport;
+    return {
+      evidence: 'detached',
+      detail:
+        'The Cursor Agent was disposed and released; the SDK owns the callbacks it was handed, so no end of it is observable here.',
+    };
   }
 }

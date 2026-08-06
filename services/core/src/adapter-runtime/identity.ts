@@ -116,6 +116,15 @@ export function buildDeterministicAdapterId(machineId: string, adapterName: stri
 
 /**
  * Resolve an adapter id request against the current runtime machine.
+ *
+ * **Derivation, not a lookup**, which is what makes the answer available before
+ * any instance has announced itself — and also the boundary of what it can
+ * answer: an instance registered under an id a host supplied itself is not
+ * reproduced by any derivation, so name-based resolution cannot reach one. The
+ * adapter loader registers instances under this same derivation, which is why
+ * every name-only caller reaches the intended instance today; a host that
+ * overrides the id owes itself the reconciliation, and it belongs here rather
+ * than in each caller.
  * @param request - Forward lookup payload.
  * @param currentMachineId - Runtime-default machine identifier.
  * @returns Deterministic UUID-shaped runtime adapter id.

@@ -155,7 +155,7 @@ Type: Request (RPC)
 | `exitCode` | `number \| undefined` | no |
 | `runtimeMs` | `number` | yes |
 | `shellId` | `string` | yes |
-| `status` | `"running" \| "exited"` | yes |
+| `status` | `"exited" \| "running"` | yes |
 | `stderrSize` | `number` | yes |
 | `stdoutSize` | `number` | yes |
 | `truncated` | `boolean` | yes |

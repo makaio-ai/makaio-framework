@@ -22,6 +22,13 @@ import { AdapterSubsystemSubjects } from './namespace.js';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
 import type { LoadedAdapter, AdapterInstance, AdapterInitOptions } from './adapter-runtime-types.js';
 import { resolveDefaultClientId } from './adapter-client-refs.js';
+import {
+  AdapterInstanceCloseTimeoutError,
+  aggregateAdapterInstanceTeardowns,
+  classifyAdapterInstanceClose,
+  type AdapterInstanceShutdownReport,
+  type AdapterInstanceTeardownResult,
+} from './adapter-instance-teardown.js';
 
 /** Maximum time to wait for an adapter instance close hook before continuing shutdown. */
 export const ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS = 5_000;
@@ -96,9 +103,16 @@ export function toAvailableAdapter(adapter: LoadedAdapter): AvailableAdapter {
 
 /**
  * Close one adapter instance through its supported lifecycle hook.
+ *
+ * Still **throws**, because the three callers that roll an instance back build
+ * their own failure from the exception. What changed is that the failure now says
+ * which of the two things happened: a hook that outlives its budget raises
+ * {@link AdapterInstanceCloseTimeoutError}, so a caller reporting the attempt can
+ * tell "it reported a failure" from "it reported nothing".
  * @param adapterId - Runtime adapter ID used for diagnostics.
  * @param instance - Adapter instance to close.
  * @param timeoutMs - Maximum time to wait for the close hook.
+ * @throws AdapterInstanceCloseTimeoutError When the hook does not return in time.
  */
 export async function closeAdapterInstance(
   adapterId: string,
@@ -109,14 +123,37 @@ export async function closeAdapterInstance(
   if (!closeHook) {
     return;
   }
+  await runAdapterCloseHook(adapterId, closeHook, timeoutMs);
+}
+
+/**
+ * Run an already-resolved close hook under its budget.
+ *
+ * Split from {@link closeAdapterInstance} for the one caller that must know
+ * *whether there was a hook* in order to classify the attempt: resolving the hook
+ * twice to answer that would let the two resolutions disagree about which of
+ * `shutdown`/`closeAsync`/`close` an instance exposes. Callers that only need the
+ * close go through {@link closeAdapterInstance}.
+ * @param adapterId - Runtime adapter ID used for diagnostics.
+ * @param closeHook - Hook resolved from the instance.
+ * @param timeoutMs - Maximum time to wait for the hook.
+ * @throws AdapterInstanceCloseTimeoutError When the hook does not return in time.
+ */
+async function runAdapterCloseHook(adapterId: string, closeHook: AdapterCloseHook, timeoutMs: number): Promise<void> {
+  const hookSettled = Promise.resolve().then(closeHook);
+  // A hook that rejects *after* losing the race below has no consumer left, and an
+  // unobserved rejection would take the whole shutdown down with it. The timeout is
+  // already the reported outcome, so the late failure is only kept from escaping.
+  // Attaching this handler does not remove the rejection from the race.
+  hookSettled.catch(() => undefined);
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      Promise.resolve().then(closeHook),
+      hookSettled,
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(new Error(`Timed out closing adapter ${adapterId} after ${timeoutMs}ms`));
+          reject(new AdapterInstanceCloseTimeoutError(adapterId, timeoutMs));
         }, timeoutMs);
       }),
     ]);
@@ -128,18 +165,58 @@ export async function closeAdapterInstance(
 }
 
 /**
- * Best-effort shutdown of all adapter instances and clear the map.
+ * Shut down all adapter instances, report each one, and clear the map.
+ *
+ * **A timed-out instance is no longer indistinguishable from a clean close**
+ * (Wave 3 R49). Every instance is still attempted and the map is still cleared —
+ * one adapter that will not let go must not keep the others hosted — but the
+ * shutdown now says what it observed per instance and in aggregate, because the
+ * only consumer that could act on it is one that knows whether anything is still
+ * running.
+ *
+ * The instances are closed **concurrently**. They are independent resources and no
+ * consumer of this report depends on the order they let go in, whereas serialising
+ * them meant one adapter that will not let go spent the whole close budget before
+ * the next one was even asked — so a host with several stuck adapters waited a
+ * multiple of a budget it had declared once. Result order still follows the map, so
+ * the per-instance breakdown reads the same as before.
  * @param instances - Mutable map of adapter instances to shut down.
+ * @returns Per-instance results and the class standing for all of them.
  */
-export async function shutdownAdapterInstances(instances: Map<string, AdapterInstance>): Promise<void> {
-  for (const [adapterId, instance] of instances) {
+export async function shutdownAdapterInstances(
+  instances: Map<string, AdapterInstance>,
+): Promise<AdapterInstanceShutdownReport> {
+  const results = await Promise.all(
+    [...instances].map(([adapterId, instance]) => shutDownOneAdapterInstance(adapterId, instance)),
+  );
+  instances.clear();
+  return aggregateAdapterInstanceTeardowns(results);
+}
+
+/**
+ * Close one instance during shutdown and classify what the attempt proved.
+ *
+ * Never rejects: a shutdown reports every instance, so a failure here is an
+ * outcome to classify rather than one to propagate past the siblings.
+ * @param adapterId - Runtime adapter ID being closed.
+ * @param instance - Instance to close.
+ * @returns The class this attempt proves.
+ */
+async function shutDownOneAdapterInstance(
+  adapterId: string,
+  instance: AdapterInstance,
+): Promise<AdapterInstanceTeardownResult> {
+  const closeHook = resolveAdapterCloseHook(instance);
+  let failure: unknown;
+  if (closeHook !== undefined) {
     try {
-      await closeAdapterInstance(adapterId, instance);
+      await runAdapterCloseHook(adapterId, closeHook, ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
     } catch (shutdownError) {
+      failure = shutdownError;
       console.error(`[adapter-runtime] Error shutting down adapter ${adapterId}:`, shutdownError);
     }
   }
-  instances.clear();
+  return classifyAdapterInstanceClose(adapterId, failure, closeHook !== undefined);
 }
 
 /**

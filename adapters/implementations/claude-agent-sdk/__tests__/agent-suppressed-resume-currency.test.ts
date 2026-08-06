@@ -10,6 +10,7 @@
  * target. The session row must not be pointed back at the abandoned thread in
  * that window.
  */
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
@@ -50,6 +51,7 @@ async function makeResumeArmedAgent(): Promise<ClaudeCodeAgent> {
   const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus();
   return new ClaudeCodeAgent({
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     adapterId: ADAPTER_ID,
     adapterName: 'claude-agent-sdk',

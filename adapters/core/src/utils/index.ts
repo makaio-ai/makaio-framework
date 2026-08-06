@@ -3,6 +3,8 @@
  */
 
 export { safeJsonStringify } from './safeJsonStringify.js';
+export { withTimeout } from './withTimeout.js';
+export { runBestEffortCleanups } from './runBestEffortCleanups.js';
 
 // Turn context serialization
 export {

@@ -18,6 +18,10 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import type { IPtyBackend, IPtyProcess, IPtySpawnOptions } from './types.js';
+import { probeProcessPresence } from './process-probe.js';
+import type { TmuxCommandOutcome } from './tmux-commands.js';
+import { DEFAULT_TMUX_COMMAND_TIMEOUT_MS, runTmuxCommand, tmuxCapture, tmuxExec } from './tmux-commands.js';
+import { cleanupStaleOwnedTmuxSessions, MANAGED_SESSION_OPTION, OWNER_PID_OPTION } from './tmux-session-ownership.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -62,66 +66,24 @@ export interface TmuxBackendOptions {
    * tmux metadata on this backend's server and never kills the server itself.
    */
   cleanupStaleOwnedSessions?: boolean;
+
+  /**
+   * Milliseconds any single tmux invocation may block before it is killed.
+   *
+   * Every tmux call is synchronous, so this bounds how long a wedged `tmux` can
+   * hold the event loop. It is also the ceiling on the confirming read
+   * {@link IPtyProcess.kill} performs after a successful `kill-session`: a
+   * caller that owns an observation budget passes it here so the confirmation
+   * can never outlast the budget it is supposed to fit inside.
+   *
+   * Defaults to {@link DEFAULT_TMUX_COMMAND_TIMEOUT_MS}.
+   */
+  commandTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Run a tmux command on the given server, returning stdout as a trimmed string.
- *
- * Uses `execFileSync` for safety: arguments are passed as an array so they
- * are never interpolated through a shell.
- * @param serverName - Tmux server socket name (passed as `-L <serverName>`).
- * @param args - Remaining tmux subcommand and arguments.
- * @returns Trimmed stdout string (may be empty).
- * @throws If the tmux process exits with a non-zero code.
- */
-function tmuxExec(serverName: string, args: string[]): string {
-  const output = execFileSync('tmux', ['-L', serverName, ...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return output.trim();
-}
-
-/**
- * Run a tmux command, returning `null` instead of throwing on failure.
- *
- * Used for polling operations where the session may no longer exist.
- * @param serverName - Tmux server socket name.
- * @param args - Remaining tmux subcommand and arguments.
- * @returns Trimmed stdout string, or `null` if the command failed.
- */
-function tmuxExecSafe(serverName: string, args: string[]): string | null {
-  try {
-    return tmuxExec(serverName, args);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Run a tmux command, returning the raw (untrimmed) stdout string.
- *
- * Used for `capture-pane` where trailing newlines are significant for
- * incremental diffing.
- * @param serverName - Tmux server socket name.
- * @param args - Remaining tmux subcommand and arguments.
- * @returns Raw stdout string, or `null` if the command failed.
- */
-function tmuxCapture(serverName: string, args: string[]): string | null {
-  try {
-    const output = execFileSync('tmux', ['-L', serverName, ...args], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return output;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Pattern matching the tmux "Pane is dead (…)" sentinel appended to the pane
@@ -140,68 +102,6 @@ const DEAD_PANE_SENTINEL_RE = /\nPane is dead \([^\n]*\)\n?$/;
  */
 function stripDeadPaneSentinel(capture: string): string {
   return capture.replace(DEAD_PANE_SENTINEL_RE, '');
-}
-
-const MANAGED_SESSION_OPTION = '@makaio-managed';
-const OWNER_PID_OPTION = '@makaio-owner-pid';
-
-/**
- * Parse a positive integer from tmux user-option output.
- * @param value - Raw tmux format value.
- * @returns Parsed positive integer, or `undefined` when invalid.
- */
-function parsePositiveInteger(value: string | undefined): number | undefined {
-  if (!value || !/^[1-9]\d*$/.test(value)) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
-}
-
-/**
- * Check whether an owner process is still alive.
- * @param pid - Process identifier recorded in tmux metadata.
- * @returns `true` when the process exists or cannot be signalled due to permissions.
- */
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-/**
- * Remove stale Makaio-owned tmux sessions from a server.
- *
- * Only sessions carrying both the managed marker and an owner PID are eligible.
- * Unmarked user sessions and sessions owned by a live process are preserved.
- * @param serverName - Tmux server socket name.
- */
-function cleanupStaleOwnedTmuxSessions(serverName: string): void {
-  const raw = tmuxExecSafe(serverName, [
-    'list-sessions',
-    '-F',
-    `#{session_name}\t#{${MANAGED_SESSION_OPTION}}\t#{${OWNER_PID_OPTION}}`,
-  ]);
-  if (!raw) {
-    return;
-  }
-
-  for (const line of raw.split('\n')) {
-    const [sessionName, managedMarker, ownerPidRaw] = line.split('\t');
-    if (!sessionName || managedMarker !== '1') {
-      continue;
-    }
-
-    const ownerPid = parsePositiveInteger(ownerPidRaw);
-    if (ownerPid === undefined || isProcessAlive(ownerPid)) {
-      continue;
-    }
-
-    tmuxExecSafe(serverName, ['kill-session', '-t', sessionName]);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,11 +135,14 @@ class TmuxPtyProcess implements IPtyProcess {
   private readonly exitListeners = new Set<ExitListener>();
 
   /**
-   * Callbacks registered via {@link addCleanupHook} that are fired after all
-   * exit listeners have been notified. Unlike {@link onExit}, these do not
-   * start the polling timer.
+   * Callbacks registered via {@link addReleaseHook}, fired once when this
+   * session stops being managed. Unlike {@link onExit}, these do not start the
+   * polling timer.
    */
-  private readonly cleanupCallbacks: Array<() => void> = [];
+  private readonly releaseCallbacks: Array<() => void> = [];
+
+  /** Whether {@link releaseTracking} has already fired the release callbacks. */
+  private released = false;
 
   /**
    * The exit event payload stored by {@link markExited} so that
@@ -277,6 +180,7 @@ class TmuxPtyProcess implements IPtyProcess {
    * @param initialRows - Initial row height.
    * @param pollIntervalMs - Milliseconds between polls when data listeners are active.
    * @param exitPollIntervalMs - Milliseconds between polls when only exit listeners are active.
+   * @param commandTimeoutMs - Milliseconds any single tmux invocation may block.
    */
   public constructor(
     pid: number,
@@ -287,6 +191,7 @@ class TmuxPtyProcess implements IPtyProcess {
     initialRows: number,
     private readonly pollIntervalMs: number,
     private readonly exitPollIntervalMs: number,
+    private readonly commandTimeoutMs: number,
   ) {
     this.pid = pid;
     this.process = processName;
@@ -320,7 +225,7 @@ class TmuxPtyProcess implements IPtyProcess {
   public write(data: string): void {
     if (this.exited) return;
     try {
-      tmuxExec(this.serverName, ['send-keys', '-t', this.sessionName, '-l', '--', data]);
+      tmuxExec(this.serverName, ['send-keys', '-t', this.sessionName, '-l', '--', data], this.commandTimeoutMs);
     } catch {
       // Session may have died between the guard and this call — ignore.
     }
@@ -333,7 +238,7 @@ class TmuxPtyProcess implements IPtyProcess {
   public sendKey(key: string): void {
     if (this.exited) return;
     try {
-      tmuxExec(this.serverName, ['send-keys', '-t', this.sessionName, key]);
+      tmuxExec(this.serverName, ['send-keys', '-t', this.sessionName, key], this.commandTimeoutMs);
     } catch {
       // Session may have died between the guard and this call — ignore.
     }
@@ -344,7 +249,11 @@ class TmuxPtyProcess implements IPtyProcess {
    * @returns Visible pane text, or `null` when the pane no longer exists.
    */
   public captureVisible(): string | null {
-    const rawCapture = tmuxCapture(this.serverName, ['capture-pane', '-t', this.sessionName, '-p']);
+    const rawCapture = tmuxCapture(
+      this.serverName,
+      ['capture-pane', '-t', this.sessionName, '-p'],
+      this.commandTimeoutMs,
+    );
     return rawCapture === null ? null : stripDeadPaneSentinel(rawCapture);
   }
 
@@ -356,7 +265,11 @@ class TmuxPtyProcess implements IPtyProcess {
   public resize(cols: number, rows: number): void {
     if (this.exited) return;
     try {
-      tmuxExec(this.serverName, ['resize-window', '-t', this.sessionName, '-x', String(cols), '-y', String(rows)]);
+      tmuxExec(
+        this.serverName,
+        ['resize-window', '-t', this.sessionName, '-x', String(cols), '-y', String(rows)],
+        this.commandTimeoutMs,
+      );
       this._cols = cols;
       this._rows = rows;
     } catch {
@@ -371,19 +284,128 @@ class TmuxPtyProcess implements IPtyProcess {
    * does not expose per-signal session termination through its CLI; the
    * session is always destroyed via `kill-session`.
    *
-   * Exit listeners receive `exitCode: 0` for this forced termination path
-   * because polling stops before the pane can report its natural exit status.
+   * An exit is published **only** when an end was actually established, never
+   * merely because the kill call returned. Three routes establish it, in
+   * decreasing order of authority: the kill itself reports that the session was
+   * already gone; or — after a kill that succeeded — a confirming read finds it
+   * gone; or, when that read establishes nothing, the pane PID turns out to be
+   * held by nobody ({@link probePaneProcessAfterInconclusiveRead}). Polling is
+   * stopped before the kill, so everything after it has to be acquired here
+   * rather than waited for.
+   *
+   * When no route produces an answer, no exit is published. That is not a lost
+   * event but the honest outcome: this session's end was not observed, and a
+   * caller waiting on an observation learns it did not arrive instead of being
+   * handed one that was never made.
    * @param _signal - Ignored; present for {@link IPtyProcess} compatibility.
    */
   public kill(_signal?: string): void {
     if (this.exited) return;
     this.stopPolling();
-    try {
-      tmuxExec(this.serverName, ['kill-session', '-t', this.sessionName]);
-    } catch {
-      // Already gone.
+
+    const killStartedAt = Date.now();
+    const killOutcome = runTmuxCommand(
+      this.serverName,
+      ['kill-session', '-t', this.sessionName],
+      this.commandTimeoutMs,
+    );
+
+    // The kill is committed once the command has been issued, and that — not any
+    // evidence outcome — is what ends this backend's management of the session
+    // name. Released here so a kill that publishes no exit still stops being
+    // tracked. It publishes nothing and nothing below reads it.
+    //
+    // **Deliberately not conditional on the outcome below, and that is the whole
+    // point.** Release answers a resource-ownership question — does this backend
+    // still manage this session name — while the outcomes answer an evidence
+    // question about the process. A release gated on "delivered, or absence
+    // proven" would make ownership a function of an evidence classification, which
+    // is the coupling the two questions are kept apart to prevent: the gated form
+    // reads as if a tracked entry meant a live session, and the next reader trying
+    // to publish an exit from that state has been invited to.
+    //
+    // What bounds the cost, for the one outcome where the release is not backed by
+    // an answer: an `unanswerable` kill releases a session {@link dispose} will
+    // then not re-kill, so the honest limit is the construction-time stale-owner
+    // sweep ({@link cleanupStaleOwnedTmuxSessions}) — it reaps Makaio-owned
+    // sessions whose owner process is gone, so such a session outlives this
+    // process at most until the next backend is built. The price of the stale
+    // entry itself is one redundant `kill-session`.
+    this.releaseTracking();
+
+    if (killOutcome.kind === 'answered-negative') {
+      // The server itself reports no such session: absence is proven, and the
+      // pane's process is gone by the same authority that would have run it.
+      this.markExited(0);
+      return;
     }
-    this.markExited(0);
+
+    if (killOutcome.kind !== 'answered') {
+      // The kill either failed for an unrelated reason or never reached a
+      // server. The session may still be running; nothing may be published.
+      return;
+    }
+
+    this.confirmAbsenceAfterKill(this.commandTimeoutMs - (Date.now() - killStartedAt));
+  }
+
+  /**
+   * Confirm this session's absence after a `kill-session` that succeeded.
+   *
+   * Bounded by whatever is left of the caller's command budget once the kill
+   * has returned, because the call is synchronous: no concurrent timer can end
+   * a blocked read, so the read's own timeout is the only thing keeping the
+   * budget honest. An expired budget asked nobody, which is the same as a read
+   * that never reached a server.
+   *
+   * A server's own *no such session* stays the primary answer, because it is
+   * truth about this session rather than about a PID. Only when that read comes
+   * back inconclusive does the pane PID get a say — see
+   * {@link probePaneProcessAfterInconclusiveRead}.
+   * @param remainingBudgetMs - Milliseconds left of the command budget.
+   */
+  private confirmAbsenceAfterKill(remainingBudgetMs: number): void {
+    const confirmation: TmuxCommandOutcome =
+      remainingBudgetMs > 0
+        ? runTmuxCommand(this.serverName, ['has-session', '-t', this.sessionName], remainingBudgetMs)
+        : { kind: 'unanswerable' };
+
+    if (confirmation.kind === 'answered-negative') {
+      this.markExited(0);
+      return;
+    }
+
+    // The server answered that the session is still there. That is a refutation,
+    // not an inconclusive read, so the local probe has nothing to add.
+    if (confirmation.kind === 'answered') return;
+
+    this.probePaneProcessAfterInconclusiveRead();
+  }
+
+  /**
+   * Fall back to the pane PID when the post-kill read established nothing.
+   *
+   * The case this exists for is the killed session having been the **last** on
+   * its tmux server: the server dies with it, the confirming read answers *"no
+   * server running"*, and that proves nothing about the pane — a tmux server
+   * going away does not end the processes it started. The PID this backend
+   * captured at session creation does prove it, in exactly one direction.
+   *
+   * Only proven absence is acted on. A signalable PID may be a recycled one
+   * belonging to somebody else, and so may a PID this runtime is not allowed to
+   * signal; recycling can make a dead process look alive but never a live one
+   * look dead, so the outcome claimed here is the one it cannot fabricate. On
+   * either inconclusive outcome nothing is published and the caller's wait ends
+   * without an observation.
+   *
+   * An exit here means the process spawned *in the pane* has ended. Anything
+   * that pane process started in turn is not this backend's resource and was
+   * never covered by an exit event.
+   */
+  private probePaneProcessAfterInconclusiveRead(): void {
+    if (probeProcessPresence(this.pid) === 'absent') {
+      this.markExited(0);
+    }
   }
 
   /**
@@ -507,7 +529,11 @@ class TmuxPtyProcess implements IPtyProcess {
     if (this.dataListeners.size > 0) {
       // `-S -` captures the full scrollback so output from fast processes is
       // not discarded by the visible-area-only default.
-      const rawCapture = tmuxCapture(this.serverName, ['capture-pane', '-t', this.sessionName, '-p', '-S', '-']);
+      const rawCapture = tmuxCapture(
+        this.serverName,
+        ['capture-pane', '-t', this.sessionName, '-p', '-S', '-'],
+        this.commandTimeoutMs,
+      );
 
       if (rawCapture !== null) {
         const capture = stripDeadPaneSentinel(rawCapture);
@@ -557,22 +583,29 @@ class TmuxPtyProcess implements IPtyProcess {
    *
    * Once the pane is confirmed dead, kills the lingering session (left alive by
    * `remain-on-exit on`) and calls {@link markExited}.
+   *
+   * A failed poll is not an exit. Only a live server reporting that the session
+   * does not exist proves absence; a poll that never reached a server proves
+   * nothing, because a tmux server can go away while a process it started keeps
+   * running. Such a poll therefore publishes nothing and leaves the session in
+   * its unobserved state.
    */
   private checkExit(): void {
-    const result = tmuxExecSafe(this.serverName, [
-      'list-panes',
-      '-t',
-      this.sessionName,
-      '-F',
-      '#{pane_dead}:#{pane_dead_status}',
-    ]);
+    const listing = runTmuxCommand(
+      this.serverName,
+      ['list-panes', '-t', this.sessionName, '-F', '#{pane_dead}:#{pane_dead_status}'],
+      this.commandTimeoutMs,
+    );
 
-    if (result === null) {
-      // Session no longer exists — treat as clean exit.
+    if (listing.kind === 'answered-negative') {
+      // A live server reports no such session — absence proven, clean exit.
       this.markExited(0);
       return;
     }
 
+    if (listing.kind !== 'answered') return;
+
+    const result = listing.stdout;
     const colonIdx = result.indexOf(':');
     if (colonIdx === -1) return;
 
@@ -581,14 +614,14 @@ class TmuxPtyProcess implements IPtyProcess {
       const exitCode = parseInt(result.slice(colonIdx + 1), 10);
       // Clean up the dead session — `remain-on-exit on` kept it alive only so
       // we could read the exit code; it is no longer needed.
-      tmuxExecSafe(this.serverName, ['kill-session', '-t', this.sessionName]);
+      runTmuxCommand(this.serverName, ['kill-session', '-t', this.sessionName], this.commandTimeoutMs);
       this.markExited(Number.isFinite(exitCode) ? exitCode : 0);
     }
   }
 
   /**
    * Mark this process as exited and fire all registered exit listeners exactly
-   * once, then run any cleanup hooks registered via {@link addCleanupHook}.
+   * once, then release this session's tracking.
    * @param exitCode - The process exit code to deliver to listeners.
    * @param signal - Optional signal number that caused the exit.
    */
@@ -601,26 +634,40 @@ class TmuxPtyProcess implements IPtyProcess {
       listener(this.exitEvent);
     }
     this.exitListeners.clear();
-    for (const fn of this.cleanupCallbacks) {
+    this.releaseTracking();
+  }
+
+  /**
+   * Fire the release hooks once, whichever event got here first.
+   *
+   * Release answers *"does this backend still manage this session name"*, which
+   * is a resource-ownership question and not evidence: it publishes no exit, does
+   * not touch {@link exited}, and cannot influence any class a caller reports.
+   */
+  private releaseTracking(): void {
+    if (this.released) return;
+    this.released = true;
+    for (const fn of this.releaseCallbacks) {
       fn();
     }
   }
 
   /**
-   * Register an internal cleanup hook that is called after all exit listeners
-   * have been notified.
+   * Register an internal hook that is called once this session stops being
+   * managed by its backend — at the earlier of the kill being committed and an
+   * exit being published.
    *
    * Unlike {@link onExit}, this does **not** start the polling timer, making it
    * safe for backend-internal housekeeping (e.g. removing a session from the
    * active-sessions map) without unintended side effects.
-   * @param fn - Callback to invoke once when the process exits.
+   * @param fn - Callback to invoke once when the session is released.
    */
-  public addCleanupHook(fn: () => void): void {
-    if (this.exited) {
+  public addReleaseHook(fn: () => void): void {
+    if (this.released) {
       fn();
       return;
     }
-    this.cleanupCallbacks.push(fn);
+    this.releaseCallbacks.push(fn);
   }
 
   /**
@@ -663,6 +710,7 @@ export class TmuxBackend implements IPtyBackend {
   private readonly serverName: string;
   private readonly pollIntervalMs: number;
   private readonly exitPollIntervalMs: number;
+  private readonly commandTimeoutMs: number;
   private readonly activeSessions = new Map<string, TmuxPtyProcess>();
 
   /**
@@ -678,8 +726,9 @@ export class TmuxBackend implements IPtyBackend {
     this.serverName = options.serverName ?? 'makaio';
     this.pollIntervalMs = options.pollIntervalMs ?? 200;
     this.exitPollIntervalMs = options.exitPollIntervalMs ?? 2000;
+    this.commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_TMUX_COMMAND_TIMEOUT_MS;
     if (options.cleanupStaleOwnedSessions !== false) {
-      cleanupStaleOwnedTmuxSessions(this.serverName);
+      cleanupStaleOwnedTmuxSessions(this.serverName, this.commandTimeoutMs);
     }
   }
 
@@ -770,13 +819,13 @@ export class TmuxBackend implements IPtyBackend {
 
     let pid: number;
     try {
-      const pidStr = tmuxExec(this.serverName, newSessionArgs);
+      const pidStr = tmuxExec(this.serverName, newSessionArgs, this.commandTimeoutMs);
       pid = parseInt(pidStr, 10);
       if (!Number.isFinite(pid) || pid <= 0) {
         throw new Error(`Unexpected pane_pid value: '${pidStr}'`);
       }
     } catch (err) {
-      tmuxExecSafe(this.serverName, ['kill-session', '-t', sessionName]);
+      runTmuxCommand(this.serverName, ['kill-session', '-t', sessionName], this.commandTimeoutMs);
       return Promise.reject(err instanceof Error ? err : new Error(`tmux new-session failed: ${String(err)}`));
     }
 
@@ -789,13 +838,14 @@ export class TmuxBackend implements IPtyBackend {
       rows,
       this.pollIntervalMs,
       this.exitPollIntervalMs,
+      this.commandTimeoutMs,
     );
 
     this.activeSessions.set(sessionName, proc);
 
-    // Use addCleanupHook instead of onExit so that removing the session from
+    // Use addReleaseHook instead of onExit so that removing the session from
     // the active map does not start the polling timer as a side effect.
-    proc.addCleanupHook(() => {
+    proc.addReleaseHook(() => {
       this.activeSessions.delete(sessionName);
     });
 
@@ -818,7 +868,7 @@ export class TmuxBackend implements IPtyBackend {
     this.disposed = true;
     for (const [sessionName, proc] of this.activeSessions) {
       proc.teardown();
-      tmuxExecSafe(this.serverName, ['kill-session', '-t', sessionName]);
+      runTmuxCommand(this.serverName, ['kill-session', '-t', sessionName], this.commandTimeoutMs);
     }
     this.activeSessions.clear();
   }
@@ -833,7 +883,7 @@ export class TmuxBackend implements IPtyBackend {
  */
 export function isTmuxAvailable(): boolean {
   try {
-    execFileSync('tmux', ['-V'], { stdio: 'pipe' });
+    execFileSync('tmux', ['-V'], { stdio: 'pipe', timeout: DEFAULT_TMUX_COMMAND_TIMEOUT_MS });
     return true;
   } catch {
     return false;

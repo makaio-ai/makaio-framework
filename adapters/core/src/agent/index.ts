@@ -1,4 +1,5 @@
 export { AIAgentConnector } from '../connector/index.js';
+export { CONNECTOR_EXIT_OBSERVATION_MS } from '../connector/index.js';
 export { BaseConnectorSession, type ConnectorSessionConfig } from '../connector/base-connector-session.js';
 export { BaseConnectorTurn, type PauseResult } from '../connector/base-connector-turn.js';
 export {
@@ -20,11 +21,40 @@ export {
   type AgentTurnExecutorConfig,
   type ShouldUseNativeResumeFn,
 } from './agent-turn-executor.js';
+// `AgentConnectorLifecycleManager` is deliberately **not** exported. It is the
+// sole connector-replacement mechanism, and while it was publicly constructible a
+// caller could build one with a config of its own and replace a connector without
+// passing the arbitration door — the one hole a door-shaped seam can have.
+// Unexporting it is what makes "one door" a property of the module rather than a
+// convention. Its diagnostic and config types travel with it.
 export {
-  AgentConnectorLifecycleManager,
-  type AgentConnectorLifecycleManagerConfig,
-  type ConnectorCleanupDiagnostic,
-} from './agent-connector-lifecycle-manager.js';
+  AgentTeardownArbiter,
+  type ClosableConnectorRuntime,
+  type ConnectorReplacementSettlement,
+  type ConnectorSwapAdmission,
+  type ConnectorSwapHandover,
+  type TeardownSubject,
+} from './agent-teardown-arbiter.js';
+export { ConnectorSwapVetoedError, type ConnectorSwapVetoReason } from './connector-swap-vetoed-error.js';
+export {
+  aggregateTeardownReports,
+  rethrowTeardownFailure,
+  unknownTeardown,
+  type TeardownReport,
+} from '../connector/teardown-report.js';
+export { SWAP_SETTLEMENT_WAIT_MS } from '../connector/teardown-timing.js';
+export {
+  capTeardownEvidence,
+  describeTeardownFailure,
+  exitWasObserved,
+  reportBestEffortStages,
+  reportObservedExit,
+  reportRepeatTeardown,
+  runBestEffortStage,
+  stageFailure,
+  type ObservedExitOptions,
+} from '../connector/teardown-observation.js';
+export { GenerationRetirementLedger, type SupersededGeneration } from '../connector/generation-retirement.js';
 export {
   closeConnectorRuntime,
   createConnectorRuntime,

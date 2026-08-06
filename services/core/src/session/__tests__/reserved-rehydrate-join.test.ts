@@ -42,12 +42,11 @@ describe('a joined reserved rehydrate', () => {
       cwd: '/before',
       model: 'model-before',
     });
-    // Detached from the store on purpose. The memory backend hands out the row
-    // object itself and mutates it in place, so a caller holding it would see
-    // writes it never read and this case would pass without the refresh. A
-    // backend that materialises rows per query — as the SQL ones do — gives the
-    // caller a snapshot, which is what a send actually holds and the only shape
-    // in which the defect is observable.
+    // Detached explicitly, which is what a send holds: a snapshot taken before
+    // the attempt ran. Both backends materialise their reads now, so the copy is
+    // no longer a workaround for one of them handing out its stored row — it
+    // states what the case is about, which is that nothing refreshes this
+    // snapshot except the join.
     const snapshot: MakaioSessionAgent = { ...stored };
 
     let release!: () => void;

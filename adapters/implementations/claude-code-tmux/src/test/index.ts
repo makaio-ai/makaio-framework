@@ -258,7 +258,9 @@ export const createTestConfig = async (
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
-  const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider);
+  const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider, {
+    ...(options?.authSelection !== undefined && { authSelection: options.authSelection }),
+  });
   const definitionProviders = resolveConformanceDefinitionProviders({
     adapterName: ADAPTER_NAME,
     providers: testPreset.providers,

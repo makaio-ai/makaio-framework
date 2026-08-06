@@ -4,6 +4,8 @@ import { AgentSubjects } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import type { AIAgent } from '../../agent/ai-agent.js';
 import { ConfirmedAdapterSessionTracker } from '../../agent/agent-adapter-session-movement.js';
+import { AgentTeardownArbiter } from '../../agent/agent-teardown-arbiter.js';
+import type { TeardownReport } from '../../connector/teardown-report.js';
 import { ActiveAgentRegistry } from '../agent-registry.js';
 
 /**
@@ -11,7 +13,7 @@ import { ActiveAgentRegistry } from '../agent-registry.js';
  * @param close - Close implementation used by the test.
  * @returns Agent-compatible close-only test double.
  */
-function createCloseOnlyAgent(close: (options?: { emitSessionClosed?: boolean }) => Promise<void>): AIAgent {
+function createCloseOnlyAgent(close: (options?: { emitSessionClosed?: boolean }) => Promise<TeardownReport>): AIAgent {
   return { close } as AIAgent;
 }
 
@@ -21,7 +23,11 @@ describe('ActiveAgentRegistry', () => {
    * @returns Registry for test use
    */
   function createRegistry(): InstanceType<typeof ActiveAgentRegistry> {
-    return new ActiveAgentRegistry({ globalBus: MakaioBus, adapterName: 'test-adapter' });
+    return new ActiveAgentRegistry({
+      globalBus: MakaioBus,
+      adapterName: 'test-adapter',
+      arbiter: new AgentTeardownArbiter(),
+    });
   }
 
   describe('claimAdapterSession', () => {
@@ -39,7 +45,7 @@ describe('ActiveAgentRegistry', () => {
     it('rejects a claim when a registered entry already holds the adapterSessionId', () => {
       const registry = createRegistry();
       registry.set('agent-1', {
-        agent: createCloseOnlyAgent(async () => {}),
+        agent: createCloseOnlyAgent(async () => ({ evidence: 'released' })),
         sessionId: 's1',
         adapterSessionId: 'session-A',
         usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
@@ -79,7 +85,7 @@ describe('ActiveAgentRegistry', () => {
     it('returns true for a registered entry', () => {
       const registry = createRegistry();
       registry.set('agent-1', {
-        agent: createCloseOnlyAgent(async () => {}),
+        agent: createCloseOnlyAgent(async () => ({ evidence: 'released' })),
         sessionId: 's1',
         adapterSessionId: 'session-A',
         usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
@@ -103,7 +109,7 @@ describe('ActiveAgentRegistry', () => {
       registry.set(
         'agent-1',
         {
-          agent: createCloseOnlyAgent(async () => {}),
+          agent: createCloseOnlyAgent(async () => ({ evidence: 'released' })),
           sessionId: 's1',
           adapterSessionId: 'session-A',
           usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
@@ -127,7 +133,7 @@ describe('ActiveAgentRegistry', () => {
       registry.claimAdapterSession('session-Y');
 
       registry.set('agent-A', {
-        agent: createCloseOnlyAgent(async () => {}),
+        agent: createCloseOnlyAgent(async () => ({ evidence: 'released' })),
         sessionId: 's1',
         adapterSessionId: 'session-Y',
         usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
@@ -146,7 +152,7 @@ describe('ActiveAgentRegistry', () => {
       registry.set(
         'agent-1',
         {
-          agent: createCloseOnlyAgent(async () => {}),
+          agent: createCloseOnlyAgent(async () => ({ evidence: 'released' })),
           sessionId: 's1',
           adapterSessionId: 'session-minted',
           usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
@@ -168,7 +174,7 @@ describe('ActiveAgentRegistry', () => {
       registry.claimAdapterSession('session-inflight');
 
       registry.set('agent-1', {
-        agent: createCloseOnlyAgent(async () => {}),
+        agent: createCloseOnlyAgent(async () => ({ evidence: 'released' })),
         sessionId: 's1',
         adapterSessionId: 'session-other',
         usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
@@ -201,7 +207,7 @@ describe('ActiveAgentRegistry', () => {
         sessionId: 'session-1',
       });
       const agent = {
-        close: async () => {},
+        close: async (): Promise<TeardownReport> => ({ evidence: 'released' }),
         get currentAdapterSessionId(): string | undefined {
           return tracker.lastKnownAdapterSessionId;
         },
@@ -284,7 +290,7 @@ describe('ActiveAgentRegistry', () => {
       const registry = createRegistry();
       registry.claimAdapterSession('session-A');
       registry.set('agent-1', {
-        agent: createCloseOnlyAgent(async () => {}),
+        agent: createCloseOnlyAgent(async () => ({ evidence: 'released' })),
         sessionId: 's1',
         adapterSessionId: 'session-B',
         usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
@@ -306,7 +312,11 @@ describe('ActiveAgentRegistry', () => {
     });
 
     try {
-      const registry = new ActiveAgentRegistry({ globalBus: MakaioBus, adapterName: 'test-adapter' });
+      const registry = new ActiveAgentRegistry({
+        globalBus: MakaioBus,
+        adapterName: 'test-adapter',
+        arbiter: new AgentTeardownArbiter(),
+      });
       registry.set('agent-1', {
         agent: createCloseOnlyAgent(async () => {
           throw closeError;

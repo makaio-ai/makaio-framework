@@ -39,6 +39,8 @@ const sdkControls = vi.hoisted(() => ({
   cancelledRunIds: [] as string[],
   asyncDisposeCalls: 0,
   closeCalls: 0,
+  /** Failure the agent's own disposal raises, when a test injects one. */
+  disposeFailure: undefined as Error | undefined,
   deferredSendIds: new Set<string>(),
   deferredWaitIds: new Set<string>(),
   sendResolvers: new Map<string, (run: TestRun) => void>(),
@@ -86,6 +88,7 @@ vi.mock('@cursor/sdk', () => {
           },
           [Symbol.asyncDispose]: async () => {
             sdkControls.asyncDisposeCalls += 1;
+            if (sdkControls.disposeFailure !== undefined) throw sdkControls.disposeFailure;
           },
           close: async () => {
             sdkControls.closeCalls += 1;
@@ -167,6 +170,7 @@ describe('CursorSdkSession', () => {
     sdkControls.cancelledRunIds.length = 0;
     sdkControls.asyncDisposeCalls = 0;
     sdkControls.closeCalls = 0;
+    sdkControls.disposeFailure = undefined;
     sdkControls.deferredSendIds.clear();
     sdkControls.deferredWaitIds.clear();
     sdkControls.sendResolvers.clear();
@@ -389,5 +393,36 @@ describe('CursorSdkSession', () => {
 
     expect(sdkControls.asyncDisposeCalls).toBe(1);
     expect(sdkControls.closeCalls).toBe(0);
+  });
+});
+
+// Case 206 — no observed class survives a swallowed failure (I29).
+describe('CursorSdkSession teardown evidence', () => {
+  beforeEach(() => {
+    sdkControls.disposeFailure = undefined;
+    sdkControls.asyncDisposeCalls = 0;
+  });
+
+  it('reports the class its own disposal supports when every stage was accounted for', async () => {
+    const session = await createSession();
+
+    const report = await session.close();
+
+    expect(sdkControls.asyncDisposeCalls).toBe(1);
+    expect(report.evidence).toBe('detached');
+  });
+
+  it('claims no observed class when the agent disposal failed unaccounted for', async () => {
+    sdkControls.disposeFailure = new Error('cursor agent disposal rejected');
+    const session = await createSession();
+
+    const report = await session.close();
+
+    // The stages behind the disposal still ran — that is why the failure is
+    // caught at all — but a session that cannot say whether its own agent was
+    // disposed may not report a class that claims it was.
+    expect(sdkControls.asyncDisposeCalls).toBe(1);
+    expect(report.evidence).toBe('unknown');
+    expect(report.detail).toContain('Cursor Agent disposal failed');
   });
 });

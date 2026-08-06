@@ -38,7 +38,6 @@ import type {
 import {
   AgentSchemas,
   type AgentStarted,
-  AgentSubjects,
   type MessageInput,
   type ProviderContext,
   type SessionContext,
@@ -71,6 +70,7 @@ import { AgentPayloadEmitter } from './agent-payload-emitter.js';
 import { AgentLifecycleEmitter } from './agent-lifecycle-emitter.js';
 import {
   createAgentConnectorLifecycleManager,
+  createAgentConnectorSwapCoordinator,
   createAgentEventBridge,
   createAgentLifecycleEmitter,
   createAgentRuntimeMutationManager,
@@ -83,9 +83,11 @@ import {
   rollbackAgentInitialization,
   type ConnectorRuntimeHandle,
 } from './connector-runtime.js';
-import { AgentConnectorSwapCoordinator } from './agent-connector-swap-coordinator.js';
+import type { AgentConnectorSwapCoordinator } from './agent-connector-swap-coordinator.js';
+import { AgentCloseReportLedger } from './agent-close-report-ledger.js';
+import type { TeardownReport } from '../connector/teardown-report.js';
 import { ConfirmedAdapterSessionTracker } from './agent-adapter-session-movement.js';
-import { createAgentEmissionWiring } from './agent-emission-wiring.js';
+import { createAgentEmissionWiring, createOnMessageSentEmitter } from './agent-emission-wiring.js';
 
 /**
  * Abstract base class for AI agents.
@@ -106,8 +108,6 @@ export abstract class AIAgent<
   protected initialModel?: string;
   /** Owns the confirmed provider-session identity cache and the movement seam. */
   private readonly adapterSessionTracker: ConfirmedAdapterSessionTracker;
-  /** Cleanup functions for bus subscriptions (stable, survive connector swap) */
-  private busHandlerCleanups: Array<() => void> = [];
   /** Whether init() has been called */
   private initialized = false;
   /** Runtime system prompt captured from start/initialize, preserved across connector swaps. */
@@ -128,6 +128,10 @@ export abstract class AIAgent<
   private readonly connectorLifecycleManager: AgentConnectorLifecycleManager<TBus, TConnector>;
   /** Serialized connector replacement and runtime-config publication owner. */
   private readonly connectorSwapCoordinator: AgentConnectorSwapCoordinator<TBus, TConnector>;
+  /** Classes of closes performed for this agent that no teardown waiter reported. */
+  private readonly closeReportLedger = new AgentCloseReportLedger();
+  /** Callback every connector generation reports a submitted message through. */
+  private readonly onMessageSent: (handle: MessageHandle) => void;
   /** Payload enrichment and global emission helper. */
   private readonly payloadEmitter: AgentPayloadEmitter;
   /** Stateful lifecycle emitter for start/complete/error/session.closed. */
@@ -169,6 +173,7 @@ export abstract class AIAgent<
       getConnector: () => this.connector,
     });
     const emitGlobal = this.payloadEmitter.emitGlobal.bind(this.payloadEmitter);
+    this.onMessageSent = createOnMessageSentEmitter(emitGlobal);
     this.eventBridge = createAgentEventBridge({
       emitGlobal,
       toolCallTracker: this.toolCallTracker,
@@ -178,12 +183,17 @@ export abstract class AIAgent<
       getUsageModel: () => this.confirmedModel ?? this.initialModel,
     });
     this.connectorLifecycleManager = this.createConnectorLifecycleManager(emitGlobal);
-    this.connectorSwapCoordinator = new AgentConnectorSwapCoordinator(
-      this.globalBus,
-      this.connectorLifecycleManager,
-      this.config,
-      this.adapterSessionTracker.adoptResumeTarget.bind(this.adapterSessionTracker),
-    );
+    this.connectorSwapCoordinator = createAgentConnectorSwapCoordinator<TBus, TConnector>({
+      agentId: this.agentId,
+      globalBus: this.globalBus,
+      lifecycleManager: this.connectorLifecycleManager,
+      runtimeConfig: this.config,
+      publishResumeTargetDecision: this.adapterSessionTracker.adoptResumeTarget.bind(this.adapterSessionTracker),
+      arbiter: this.config.teardownArbiter,
+      hasConnectorRuntime: () => this.connectorRuntime !== undefined,
+      detachConnectorRuntime: this.detachConnectorRuntime.bind(this),
+      recordUnreportedCloseReports: this.closeReportLedger.record.bind(this.closeReportLedger),
+    });
     this.turnExecutor = createAgentTurnExecutor({
       agentId: this.agentId,
       adapterId: this.adapterId,
@@ -242,7 +252,7 @@ export abstract class AIAgent<
       configFactory: this.config.configFactory,
       connectorFactory: this.config.connectorFactory,
       prepareAuthRuntime: this.config.prepareAuthRuntime,
-      createOnMessageSent: this.createOnMessageSent.bind(this),
+      createOnMessageSent: () => this.onMessageSent,
       wireEvents: this.wireEvents.bind(this),
       emitGlobal,
       getConnectorRuntime: () => {
@@ -321,7 +331,7 @@ export abstract class AIAgent<
     const connectorRuntime = await createConnectorRuntime({
       config: fullConfig,
       connectorFactory: this.config.connectorFactory,
-      onMessageSent: this.createOnMessageSent(),
+      onMessageSent: this.onMessageSent,
       onAdapterSessionMoved: () => this.adapterSessionTracker.recordUnconfirmedMove(),
       prepareAuthRuntime: this.config.prepareAuthRuntime,
     });
@@ -335,7 +345,7 @@ export abstract class AIAgent<
       // credential rotations) never re-fork the source session.
       this.config.nativeFork = undefined;
 
-      this.busHandlerCleanups.push(
+      this.connectorLifecycleManager.addBusHandlerCleanups(
         ...registerAgentBusHandlers({
           globalBus: this.globalBus,
           agentId: this.agentId,
@@ -365,9 +375,7 @@ export abstract class AIAgent<
 
       this.initialized = true;
     } catch (error) {
-      const handlerCleanups = this.busHandlerCleanups;
-      this.busHandlerCleanups = [];
-      this.connectorLifecycleManager.clearConnectorWiring();
+      const handlerCleanups = this.connectorLifecycleManager.detachWiring();
       this.connectorRuntime = undefined;
       await rollbackAgentInitialization({
         runtime: connectorRuntime,
@@ -611,7 +619,7 @@ export abstract class AIAgent<
    * @param cleanup - Function to unsubscribe from the bus
    */
   protected addBusHandlerCleanup(cleanup: () => void): void {
-    this.busHandlerCleanups.push(cleanup);
+    this.connectorLifecycleManager.addBusHandlerCleanups(cleanup);
   }
 
   /**
@@ -664,35 +672,6 @@ export abstract class AIAgent<
   }
 
   /**
-   * Create the onMessageSent callback for connector factories.
-   *
-   * Returns a callback that emits user_message.sent events to the global bus.
-   * @returns Callback function for connector config
-   */
-  private createOnMessageSent(): (handle: MessageHandle) => void {
-    return (handle) => {
-      // user_message.sent describes the message being submitted, not the
-      // executing turn — and it fires before the handle is tracked. Neither
-      // enrichment's getCurrentTurnId() (resolves to the still-executing
-      // turn) nor any shared tracker field (mutable — overlapping sends
-      // overwrite it before a hook-delayed first send emits) is safe here.
-      // The handle carries its lifecycle turnId (threaded from
-      // agent.sendMessage.turnId at dispatch); requestCorrelation.turnId is
-      // deliberately NOT used — it is transport correlation and may exist
-      // when no lifecycle turn does, which would leave sent unpaired with
-      // acknowledged/completed. The key is set even when undefined so a
-      // no-turn submission stays turn-less instead of inheriting the
-      // executing turn's id via enrichment.
-      void this.emitGlobal(AgentSubjects.user_message.sent, {
-        messageId: handle.messageId,
-        content: handle.message,
-        deliveryMode: handle.deliveryMode,
-        turnId: handle.turnId,
-      });
-    };
-  }
-
-  /**
    * Wire adapter-specific connector events.
    * Called automatically during init() and connector swap.
    * Subclasses implement this to set up their event mappings.
@@ -724,29 +703,69 @@ export abstract class AIAgent<
    *
    * Emits session.closed event (once per session) unless explicitly suppressed,
    * then unsubscribes from all bus handlers and aborts the connector if available.
+   * Reports the class the connector runtime observed, or `released` when there was
+   * no runtime — provably nothing is speaking in that case.
+   *
+   * **A bus-handler cleanup failure does not downgrade the class**, because a local
+   * listener that refuses to unsubscribe cannot keep a provider conversation alive.
+   * A failed lease release *does* downgrade, because the lease is a resource this
+   * runtime held; that asymmetry is the whole distinction.
+   *
+   * **The report is for the agent, not only for the runtime it is holding now.** A
+   * connector replacement closes runtimes on this agent's behalf, and when no
+   * teardown was waiting to receive what those closes observed, the classes are
+   * booked on the agent — so they are aggregated here rather than lost, and a
+   * runtime that was superseded unobserved cannot be answered for as if it had
+   * never existed.
    * @param options - Cleanup options; ephemeral agents suppress session-close lifecycle events because they never join a session.
+   * @returns What this agent observed about the end of its resources
    */
-  public async close(options: { emitSessionClosed?: boolean } = {}): Promise<void> {
+  public async close(options: { emitSessionClosed?: boolean } = {}): Promise<TeardownReport> {
     if (options.emitSessionClosed ?? true) {
       this.emitSessionClosed('closed');
     }
 
-    for (const cleanup of this.busHandlerCleanups) {
-      try {
-        cleanup();
-      } catch (error) {
-        console.warn(`[AIAgent] Bus handler cleanup failed:`, error);
-      }
-    }
-    this.busHandlerCleanups = [];
+    this.connectorLifecycleManager.releaseWiring();
 
-    this.connectorLifecycleManager.clearConnectorWiring();
+    const runtime = this.detachConnectorRuntime();
+    const report: TeardownReport =
+      runtime === undefined ? { evidence: 'released' } : await closeConnectorRuntime(runtime);
+    return this.closeReportLedger.capReport(report);
+  }
 
+  /**
+   * Give this agent's identity up, closing nothing.
+   *
+   * **For the teardown that abandons its wait on a connector replacement.** From
+   * the instant that wait expires this agent is no longer the instance answering
+   * for its ID — the registry entry is dropped in the same arm, so a successor may
+   * claim the ID immediately — while the runtimes stay with the replacement until
+   * it settles, which can be a whole wait later. Waiting for that settlement to
+   * unsubscribe leaves both agents answering for one identity in between.
+   *
+   * It closes nothing, reports nothing and emits nothing: the expiry arm's
+   * `unknown` is the honest statement about the runtimes, and this changes none of
+   * it. Safe to call twice — the cleanups are taken off their list, not merely run.
+   */
+  public releaseIdentityWiring(): void {
+    this.connectorLifecycleManager.releaseBusHandlers();
+  }
+
+  /**
+   * Take this agent's connector runtime away from it.
+   *
+   * Clearing the reference **before** the close is awaited is what makes "the
+   * runtime is gone" permanent: only a start or a published replacement ever sets
+   * it, so a replacement arriving after a teardown began finds the absence and is
+   * refused instead of building onto a dying agent. The abandoned-waiter path in
+   * the replacement coordinator needs the same guarantee, which is why this is one
+   * method and not two copies of a two-line sequence.
+   * @returns The runtime this agent held, or `undefined` when it held none
+   */
+  private detachConnectorRuntime(): ConnectorRuntimeHandle<TConnector> | undefined {
     const runtime = this.connectorRuntime;
     this.connectorRuntime = undefined;
-    if (runtime !== undefined) {
-      await closeConnectorRuntime(runtime);
-    }
+    return runtime;
   }
 
   /**

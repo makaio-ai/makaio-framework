@@ -80,7 +80,7 @@ describe('reserved fresh lead start', () => {
       registerMockStorageHandlers({ omit: ['agent', 'session'] }),
       MakaioBus.on(AdapterSubjects.stopAgent, (ctx) => {
         stoppedAgentIds.push(ctx.payload.agentId);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, evidence: 'released' });
       }),
       MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydratedAgentIds.push(ctx.payload.agentId);
@@ -143,7 +143,7 @@ describe('reserved fresh lead start', () => {
   function start(sessionId: string, runtime?: LeadStartRuntimeFields, expectedLeadAgentId: string | null = null) {
     return startLeadAgent(MakaioBus, {
       sessionId,
-      adapterId: ADAPTER_ID,
+      instance: { adapterId: ADAPTER_ID, machineId: MACHINE_ID },
       adapterName: ADAPTER_NAME,
       expectedLeadAgentId,
       startRequest: { adapterId: ADAPTER_ID, sessionId, role: 'lead', ...runtime },
@@ -364,7 +364,7 @@ describe('reserved fresh lead start', () => {
 
   it.each([
     { label: 'a machine the caller named', machineId: 'remote-machine' },
-    { label: "the authority's own", machineId: undefined },
+    { label: "this runtime's own", machineId: MACHINE_ID },
   ])('names $label in both the reservation and the settlement', async ({ machineId }) => {
     // An adapter instance ID is a one-way hash of `(machineId, adapterName)`, so
     // the machine an ownership act names has to be the one its instance came
@@ -372,6 +372,11 @@ describe('reserved fresh lead start', () => {
     // dispatching to another machine's instance builds a key nobody else
     // computes — it collides with nothing and protects nothing, and the real
     // machine's runtime reserves the same provider session and wins.
+    //
+    // **Both arms now name one**, which is the point rather than a fixture
+    // detail: a fresh start's reservation is keyless and hides an absent machine,
+    // its settlement is keyed and does not — so the instance it dispatches to
+    // arrives with its machine or the start never runs (case 208).
     const sessionId = await seedSession(`lead-start-machine-${machineId ?? 'own'}`);
     const named: Array<string | undefined> = [];
     cleanups.push(
@@ -396,10 +401,9 @@ describe('reserved fresh lead start', () => {
 
     const result = await startLeadAgent(MakaioBus, {
       sessionId,
-      adapterId: ADAPTER_ID,
+      instance: { adapterId: ADAPTER_ID, machineId },
       adapterName: ADAPTER_NAME,
       expectedLeadAgentId: null,
-      ...(machineId !== undefined && { machineId }),
       startRequest: { adapterId: ADAPTER_ID, sessionId, role: 'lead' },
     });
 

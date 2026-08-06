@@ -90,7 +90,7 @@ export function createReservedAttachContext(): ReservedAttachContext {
       stopped.push(context.payload.agentId);
       // "Succeeded" is never evidence a connector closed (I15); the cases that
       // care assert that they did not treat it as such.
-      context.setResult({ success: true });
+      context.setResult({ success: true, evidence: 'released' });
     }),
   );
 

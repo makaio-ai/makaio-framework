@@ -8,6 +8,11 @@ import type { StdioTransport, StdioMessage } from '../createStdioTransport.js';
 class MockTransport implements StdioTransport {
   sentMessages: unknown[] = [];
 
+  /** No child process backs this double, so its exit is never observed. */
+  readonly exited = new Promise<number | null>(() => {});
+
+  closeRequested = false;
+
   messageCallback: ((message: StdioMessage) => void) | null = null;
   errorCallback: ((error: Error) => void) | null = null;
 
@@ -16,7 +21,11 @@ class MockTransport implements StdioTransport {
   }
 
   close(): void {
-    // Mock close
+    this.closeRequested = true;
+  }
+
+  shutdownRequested(): boolean {
+    return this.closeRequested;
   }
 
   onMessage(callback: (message: StdioMessage) => void): void {

@@ -12,18 +12,26 @@ import {
   type AIReasoningLevel,
 } from '@makaio/ai-adapters-core';
 import type { ScopedBus } from '@makaio/bus-core';
-import { McpSubjects, type McpSessionContext, type ToolListItem } from '@makaio/contracts';
+import {
+  McpSubjects,
+  type ConnectorTeardownResult,
+  type McpSessionContext,
+  type ToolListItem,
+} from '@makaio/contracts';
 
 /**
  * Minimal session contract required by BaseStreamConnector.
  *
  * Extends `ProceduralConnectorSession` with the lifecycle methods that the
- * connector delegates to: `abort` (used by interrupt/close), `updateModel` and
- * `updateCwd` for in-place mutation without a full session swap.
+ * connector delegates to: reusable `abort` for interrupt, terminal `close` for
+ * ownership release, and `updateModel`/`updateCwd` for in-place mutation without
+ * a full session swap.
  */
 export interface StreamConnectorSession extends ProceduralConnectorSession {
-  /** Abort the active turn, cancelling any in-flight API call. */
+  /** Abort the active turn while keeping the session available for later turns. */
   abort(): Promise<void>;
+  /** Terminally retire the session and prevent later queue processing. */
+  close(): Promise<void>;
   /**
    * Update the model used for subsequent API calls.
    * @param model - New model identifier
@@ -219,10 +227,16 @@ export abstract class BaseStreamConnector<
    * @returns The initialised session as `ProceduralConnectorSession`
    */
   protected async ensureSession(): Promise<ProceduralConnectorSession> {
+    if (this.isTurnEventLifecycleClosed) {
+      throw new Error(`[${this.config.adapterName}] Cannot initialize a closed connector`);
+    }
     if (!this.session) {
       await this.initializeSession();
     }
-    return this.session!;
+    if (!this.session) {
+      throw new Error(`[${this.config.adapterName}] Cannot initialize a closed connector`);
+    }
+    return this.session;
   }
 
   /**
@@ -250,6 +264,7 @@ export abstract class BaseStreamConnector<
    */
   private async initializeSession(): Promise<void> {
     await this.fetchToolsViaBus();
+    if (this.isTurnEventLifecycleClosed) return;
     this.prepareMcpDirectTools();
 
     this.session = this.createSession();
@@ -454,10 +469,35 @@ export abstract class BaseStreamConnector<
   }
 
   /**
-   * Gracefully close the session.
+   * Gracefully close the session and report what was observed.
+   *
+   * **Class: `detached`.** The local evidence stops at the abort. Closing a
+   * stream connector aborts its session, which *pauses* the active turn and
+   * signals an `AbortController`; nothing awaits the settlement of the HTTP
+   * request that signal is meant to end, and the provider request may still be
+   * in flight when this resolves. There is no process to watch and no
+   * acknowledged connection shutdown, so `released` would claim that no callback
+   * can arrive afterwards — which is precisely what is not established here.
+   * @returns `detached`, naming the settlement this close does not wait for.
    */
-  public async close(): Promise<void> {
-    await this.session?.abort();
+  public async close(): Promise<ConnectorTeardownResult> {
+    // A closed connector must stop receiving turn events, whatever class it
+    // reports: a live subscription keeps it reachable from the bus, and a later
+    // generation on this agent id would drive its state machine. `detached` is a
+    // weaker claim about the *provider*, not a licence to stay wired locally.
+    const turnEventDrain = this.closeTurnEventLifecycle();
+    const session = this.session;
+    this.session = undefined;
+    // `close()` synchronously closes the session queue before awaiting the
+    // active turn pause. Start it before any close-time drain can yield so a
+    // retained session reference cannot dispatch after terminal close begins.
+    const closeSession = session?.close();
+    await turnEventDrain;
+    await closeSession;
+    return {
+      evidence: 'detached',
+      detail: 'The stream session was aborted; the provider request settlement is not awaited here.',
+    };
   }
 
   /**

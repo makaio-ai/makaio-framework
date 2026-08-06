@@ -10,6 +10,7 @@ import {
 } from './adapter-runtime-lifecycle.js';
 import { AdapterSubsystemSubjects } from './namespace.js';
 import type { AdapterInstance, LoadedAdapter } from './adapter-runtime-types.js';
+import type { AdapterInstanceShutdownReport } from './adapter-instance-teardown.js';
 
 // ---------------------------------------------------------------------------
 // Constructor options
@@ -363,11 +364,16 @@ export class AdapterRuntimeRegistry {
   /**
    * Shut down all live adapter instances and clear all in-memory tracking maps.
    *
-   * Intended to be called from the owning service's `onDestroy` hook.
+   * Intended to be called from the owning service's `onDestroy` hook. The report
+   * is returned rather than discarded: an instance whose close did not land is the
+   * one fact a shutdown can produce that somebody above may need, and swallowing it
+   * here would make reporting it below pointless.
+   * @returns Per-instance teardown results and the class standing for all of them.
    */
-  public async shutdownAll(): Promise<void> {
-    await shutdownAdapterInstances(this.adapterInstances);
+  public async shutdownAll(): Promise<AdapterInstanceShutdownReport> {
+    const report = await shutdownAdapterInstances(this.adapterInstances);
     this.loadedAdapters.clear();
     this.packageAdapters.clear();
+    return report;
   }
 }

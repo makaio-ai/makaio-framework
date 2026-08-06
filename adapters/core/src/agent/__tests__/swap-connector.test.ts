@@ -17,6 +17,7 @@ import {
 import type { ConfigFactoryInput } from '../../adapter/ai-adapter-config.js';
 import type { AdapterProviderDefinition } from '../../types/provider-definition.js';
 import { createTestProviderAuth } from '../../__tests__/__fixtures__/adapter-provider-auth.js';
+import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 
 const TEST_API_KEY_METHOD = {
   id: 'api-key',
@@ -141,6 +142,7 @@ function createSwapTestAgent(
     capabilities: [],
     nativeTools: [],
     adapterBus: mockBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     model: 'test-model-1',
     cwd: '/test/cwd1',
@@ -520,6 +522,7 @@ describe('AIAgent.swapConnector', () => {
       capabilities: [],
       nativeTools: [],
       adapterBus: mockBus,
+      teardownArbiter: new AgentTeardownArbiter(),
       globalBus: MakaioBus,
       model: 'test-model-1',
       cwd: '/test/cwd1',

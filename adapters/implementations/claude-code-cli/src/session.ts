@@ -1,10 +1,13 @@
 import { isKnownSdkMessageForRouting, type SDKMessage } from '@makaio/client-claude-code';
-import { McpSubjects, type McpTransportConfig } from '@makaio/contracts';
+import { McpSubjects, type ConnectorTeardownResult, type McpTransportConfig } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   BaseConnectorSession,
   markCompletedWithFinalResult,
   rejectQueuedHandles,
+  reportBestEffortStages,
+  reportObservedExit,
+  stageFailure,
   type AIReasoningLevel,
   type MessageHandle,
   type MessageResult,
@@ -100,8 +103,11 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     transport: CliStdioTransport;
     deferred: DeferredPromise<void>;
   };
-  /** Shares one teardown across concurrent abort/close calls. */
-  private closePromise?: Promise<void>;
+  /**
+   * Shares one teardown — and therefore one observation — across concurrent
+   * abort/close calls.
+   */
+  private closePromise?: Promise<ConnectorTeardownResult>;
 
   /**
    * Resolve resume/session IDs for the next CLI turn.
@@ -593,15 +599,27 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
 
   /**
    * Complete a transport-level error turn after canonical handle transforms.
+   *
+   * Finalising the turn stays best-effort — a caller stranded on an unsettled
+   * handle is worse off than one whose turn ended untidily — but the failure is
+   * *handed back* rather than only logged, so a teardown running this stage can
+   * count it among the stages it could not account for. It is returned instead of
+   * thrown because the other caller is the transport error listener installed by
+   * {@link startTurn}, which has nobody to catch a rejection.
    * @param turn - Turn attached to the failed transport
    * @param handle - Message handle for the failed turn
    * @param error - Transport error
+   * @returns The named stage failure when finalisation failed, `undefined` otherwise.
    */
-  private async completeTransportError(turn: ClaudeConnectorTurn, handle: MessageHandle, error: Error): Promise<void> {
+  private async completeTransportError(
+    turn: ClaudeConnectorTurn,
+    handle: MessageHandle,
+    error: Error,
+  ): Promise<string | undefined> {
     // Once provider result handling has started, that path owns terminal turn finalization.
     // Late transport errors from the same subprocess must not re-enter completion while
     // result callbacks are still draining.
-    if (handle.isProcessed) return;
+    if (handle.isProcessed) return undefined;
 
     const result: MessageResult = { outcome: 'error', error };
     await markCompletedWithFinalResult(handle, result, this.onTurnComplete);
@@ -609,7 +627,9 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       await turn.finishOnError();
     } catch (finishError) {
       console.error('[Session] Failed to finish errored turn:', finishError);
+      return stageFailure('turn finalisation', finishError);
     }
+    return undefined;
   }
 
   /**
@@ -643,27 +663,35 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   /**
    * Abort the session by killing the active subprocess.
    * Also unregisters agent context from the MCP context registry if registered.
+   *
+   * Reports nothing: `abort()` is the panic path and its callers have no class to
+   * report to. The observation still happens inside {@link close}, and a later
+   * `close()` joins the same flight and reads it.
    */
   public override async abort(): Promise<void> {
     await this.close();
   }
 
   /**
-   * Gracefully close the session (kills the subprocess if active).
-   * Sets the closing flag to prevent new turns from starting, then
-   * unregisters agent context from the MCP context registry if registered.
+   * Gracefully close the session (kills the subprocess if active) and report
+   * what was observed.
+   *
+   * Sets the closing flag to prevent new turns from starting, then unregisters
+   * agent context from the MCP context registry if registered. A second caller
+   * joins the first close and receives the same class, because the observation
+   * happens once and two callers cannot each have watched it.
+   * @returns What this session observed about the end of the CLI process.
    */
-  public async close(): Promise<void> {
+  public async close(): Promise<ConnectorTeardownResult> {
     this.closing = true;
     if (this.closePromise) {
-      await this.closePromise;
-      return;
+      return this.closePromise;
     }
 
     const closePromise = this.closeActiveTransport();
     this.closePromise = closePromise;
     try {
-      await closePromise;
+      return await closePromise;
     } finally {
       // Identity comparison, not a missing await — the promise is awaited
       // above; this only clears the memoized handle if it is still ours.
@@ -671,12 +699,34 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     }
   }
 
-  /** Drain and then force-close the transport owned by the current turn. */
-  private async closeActiveTransport(): Promise<void> {
+  /**
+   * Drain, force-close and then *watch* the transport owned by the current turn.
+   *
+   * The CLI spawns one process per turn, so a close either finds a live process —
+   * whose termination this session can watch through the transport's own exit
+   * observation — or finds none, in which case there is nothing left that could
+   * speak and every handle has been dropped.
+   *
+   * Two stages used to fail silently here: finalising the interrupted turn, and
+   * closing the transport. Both still run to completion best-effort, because a
+   * turn left unfinalised strands a caller on a handle nobody settles; what
+   * changes is that a failure in either is no longer invisible. A session that
+   * could not tell whether its own kill was even delivered has no business
+   * claiming it watched the process end, so the class becomes `unknown` and names
+   * the stage.
+   *
+   * Turn finalisation reports through {@link completeTransportError}'s return
+   * value rather than through the `catch` below, because that stage catches its
+   * own failure to keep going — an exception the `catch` here would therefore
+   * never see, and the reason a class was claimed over it before.
+   * @returns What this session observed about the end of the CLI process.
+   */
+  private async closeActiveTransport(): Promise<ConnectorTeardownResult> {
     const transport = this.transport;
     const turn = this.currentTurn;
     const handle = turn?.getMessageHandle();
     const shouldDrain = transport !== undefined && turn !== undefined && !turn.isCompleted();
+    const unaccounted: string[] = [];
     try {
       if (shouldDrain) {
         await this.drainTerminalResult(transport);
@@ -685,10 +735,16 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         this.transport = undefined;
       }
       if (turn && handle && !handle.isProcessed) {
-        await this.completeTransportError(turn, handle, new Error(CLOSED_BEFORE_TERMINAL_RESULT_MESSAGE));
+        const finalisation = await this.completeTransportError(
+          turn,
+          handle,
+          new Error(CLOSED_BEFORE_TERMINAL_RESULT_MESSAGE),
+        );
+        if (finalisation !== undefined) unaccounted.push(finalisation);
       }
     } catch (error) {
       console.error('[Session] Failed to finalize active turn during close', error);
+      unaccounted.push(stageFailure('turn finalisation', error));
     } finally {
       if (this.transport === transport) {
         this.transport = undefined;
@@ -697,8 +753,16 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         transport?.close();
       } catch (error) {
         console.error('[Session] Failed to close transport during close', error);
+        unaccounted.push(stageFailure('transport close', error));
       }
       this.unregisterMcpSession();
     }
+
+    const unaccountedReport = reportBestEffortStages('Claude CLI close', unaccounted);
+    if (unaccountedReport !== undefined) return unaccountedReport;
+    // No transport means no process was spawned for a turn, so there is nothing
+    // that could still speak and every handle this session held is dropped.
+    if (transport === undefined) return { evidence: 'released' };
+    return reportObservedExit({ exited: transport.exited, resource: 'The claude CLI turn process' });
   }
 }

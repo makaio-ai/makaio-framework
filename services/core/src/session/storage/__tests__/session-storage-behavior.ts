@@ -8,8 +8,19 @@
  */
 import { describe, it, expect } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioSession } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../namespace.js';
 import { createSession } from './shared.js';
+
+/** The identity triplet as the backfill write carries it. */
+interface BackfillIdentity {
+  /** Adapter type name of the lead conversation. */
+  adapterName: string;
+  /** Adapter instance the lead conversation was minted inside. */
+  adapterId: string;
+  /** Provider session, when the caller knows one. */
+  adapterSessionId?: string;
+}
 
 /**
  * Registers shared behavioral tests for any SessionStorage backend.
@@ -655,6 +666,199 @@ export function describeSessionStorageBehavior(): void {
       expect(secondUpdate.success).toBe(true);
       expect(result.session?.spawningToolCallId).toBe('tool-call-first');
       expect(result.session?.title).toBe('renamed while preserving provenance');
+    });
+  });
+
+  describe('identity backfill (conditional on an open identity and a named lead)', () => {
+    /**
+     * Seed one row and return the identity write that should land on it.
+     * @param overrides - Session fields the case needs to differ.
+     * @returns The seeded session ID and a writer for the identity backfill.
+     */
+    async function seedForBackfill(overrides: Partial<IMakaioSession>): Promise<{
+      sessionId: string;
+      backfill: (identity: BackfillIdentity, lead: string | null) => Promise<boolean>;
+    }> {
+      const session = createSession(overrides);
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
+      return {
+        sessionId: session.sessionId,
+        backfill: async (identity, lead) =>
+          (
+            await MakaioBus.request(SessionStorageSubjects.update, {
+              sessionId: session.sessionId,
+              identity,
+              expectIdentityOpenForLead: lead,
+              lastActivityAt: Date.now(),
+            })
+          ).success,
+      };
+    }
+
+    /**
+     * Read the stored identity triplet of a session.
+     * @param sessionId - Session to read.
+     * @returns The three identity columns as stored.
+     */
+    async function readIdentity(
+      sessionId: string,
+    ): Promise<{ adapterName?: string; adapterId?: string; adapterSessionId?: string }> {
+      const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      return {
+        adapterName: session?.adapterName,
+        adapterId: session?.adapterId,
+        adapterSessionId: session?.adapterSessionId,
+      };
+    }
+
+    it('writes the triplet while the identity is open and the row names the lead', async () => {
+      const { sessionId, backfill } = await seedForBackfill({ leadAgentId: 'lead-1' });
+
+      expect(await backfill({ adapterName: 'lead-adapter', adapterId: 'lead-instance' }, 'lead-1')).toBe(true);
+
+      // The provider session is genuinely absent here — a reserved start withholds
+      // it — and its absence must not be written as a value.
+      expect(await readIdentity(sessionId)).toEqual({
+        adapterName: 'lead-adapter',
+        adapterId: 'lead-instance',
+        adapterSessionId: undefined,
+      });
+    });
+
+    it('lets exactly one of two racing writers establish the identity (case 216)', async () => {
+      const { sessionId, backfill } = await seedForBackfill({ leadAgentId: 'lead-1' });
+
+      // Both writers name the same lead and both believe the identity is open,
+      // which is exactly the state a re-read plus a re-check could not tell apart
+      // from the one where a peer had already written. Issued together, so the
+      // arbitration is the predicate's and not the test's ordering.
+      const [first, second] = await Promise.all([
+        backfill({ adapterName: 'winner-adapter', adapterId: 'winner-instance' }, 'lead-1'),
+        backfill({ adapterName: 'loser-adapter', adapterId: 'loser-instance' }, 'lead-1'),
+      ]);
+
+      expect([first, second].filter(Boolean)).toHaveLength(1);
+      const stored = await readIdentity(sessionId);
+      const winner = first ? 'winner' : 'loser';
+      expect(stored.adapterName).toBe(`${winner}-adapter`);
+      expect(stored.adapterId).toBe(`${winner}-instance`);
+    });
+
+    it('refuses a row whose identity is already established (case 217)', async () => {
+      const { sessionId, backfill } = await seedForBackfill({
+        leadAgentId: 'lead-1',
+        adapterName: 'established-adapter',
+        adapterId: 'established-instance',
+      });
+
+      expect(await backfill({ adapterName: 'late-adapter', adapterId: 'late-instance' }, 'lead-1')).toBe(false);
+      expect(await readIdentity(sessionId)).toMatchObject({
+        adapterName: 'established-adapter',
+        adapterId: 'established-instance',
+      });
+    });
+
+    it('refuses a row holding only an instance, with no name beside it (case 217)', async () => {
+      // The arm that fails a predicate testing `adapter_name` alone: a
+      // half-populated row would be completed by a second writer, and a completed
+      // pair whose halves came from two writers is the state the pair exists to
+      // prevent.
+      const { sessionId, backfill } = await seedForBackfill({
+        leadAgentId: 'lead-1',
+        adapterId: 'orphan-instance',
+      });
+
+      expect(await backfill({ adapterName: 'late-adapter', adapterId: 'late-instance' }, 'lead-1')).toBe(false);
+      expect(await readIdentity(sessionId)).toMatchObject({
+        adapterName: undefined,
+        adapterId: 'orphan-instance',
+      });
+    });
+
+    it('refuses a row holding only a name, with no instance beside it (case 217)', async () => {
+      const { sessionId, backfill } = await seedForBackfill({
+        leadAgentId: 'lead-1',
+        adapterName: 'orphan-adapter',
+      });
+
+      expect(await backfill({ adapterName: 'late-adapter', adapterId: 'late-instance' }, 'lead-1')).toBe(false);
+      expect(await readIdentity(sessionId)).toMatchObject({
+        adapterName: 'orphan-adapter',
+        adapterId: undefined,
+      });
+    });
+
+    it('refuses when the row names a different lead (case 217)', async () => {
+      const { sessionId, backfill } = await seedForBackfill({ leadAgentId: 'lead-2' });
+
+      // The designation moved — a replacement lead, or a removal followed by
+      // another start. The identity a superseded lead assembled describes a
+      // conversation the session no longer follows.
+      expect(await backfill({ adapterName: 'stale-adapter', adapterId: 'stale-instance' }, 'lead-1')).toBe(false);
+      expect(await readIdentity(sessionId)).toMatchObject({ adapterName: undefined, adapterId: undefined });
+    });
+
+    it('refuses a designation expectation against a row that carries none (case 217)', async () => {
+      const { sessionId, backfill } = await seedForBackfill({});
+
+      expect(await backfill({ adapterName: 'stale-adapter', adapterId: 'stale-instance' }, 'lead-1')).toBe(false);
+      expect(await readIdentity(sessionId)).toMatchObject({ adapterName: undefined, adapterId: undefined });
+    });
+
+    it('accepts an explicit no-designation expectation, and only while none is stored', async () => {
+      // The composition a host without a designation authority produces: the
+      // column stays unset and the first agent observed establishes the identity.
+      const undesignated = await seedForBackfill({});
+      expect(await undesignated.backfill({ adapterName: 'only-adapter', adapterId: 'only-instance' }, null)).toBe(true);
+      expect(await readIdentity(undesignated.sessionId)).toMatchObject({ adapterName: 'only-adapter' });
+
+      // And where a designation does exist, the same expectation is a false
+      // statement about the row rather than a wildcard.
+      const designated = await seedForBackfill({ leadAgentId: 'lead-1' });
+      expect(await designated.backfill({ adapterName: 'no-adapter', adapterId: 'no-instance' }, null)).toBe(false);
+      expect(await readIdentity(designated.sessionId)).toMatchObject({ adapterName: undefined });
+    });
+
+    it('withholds every field a refused identity write carried', async () => {
+      const session = createSession({
+        sessionId: 'identity-refusal-withholds',
+        leadAgentId: 'lead-2',
+        title: 'original',
+      });
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
+
+      const refused = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        identity: { adapterName: 'stale-adapter', adapterId: 'stale-instance' },
+        expectIdentityOpenForLead: 'lead-1',
+        title: 'renamed',
+      });
+
+      // One statement, one outcome: a caller that wants its unconditional fields
+      // written anyway issues them separately, which is what the announcement
+      // handler does on the refusal path.
+      expect(refused.success).toBe(false);
+      const { session: stored } = await MakaioBus.request(SessionStorageSubjects.get, {
+        sessionId: session.sessionId,
+      });
+      expect(stored?.title).toBe('original');
+    });
+
+    it('rejects an identity write that carries no expectation, and the reverse', async () => {
+      await expect(
+        MakaioBus.request(SessionStorageSubjects.update, {
+          sessionId: 'never-reached',
+          identity: { adapterName: 'unguarded-adapter', adapterId: 'unguarded-instance' },
+        }),
+      ).rejects.toThrow(/expectIdentityOpenForLead is required/i);
+
+      await expect(
+        MakaioBus.request(SessionStorageSubjects.update, {
+          sessionId: 'never-reached',
+          expectIdentityOpenForLead: 'lead-1',
+          title: 'guarded by a condition about columns it never writes',
+        }),
+      ).rejects.toThrow(/identity is required/i);
     });
   });
 }

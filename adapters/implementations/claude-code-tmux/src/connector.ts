@@ -2,7 +2,9 @@
 
 import {
   AIAgentConnector,
+  CONNECTOR_EXIT_OBSERVATION_MS,
   UserMessageQueue,
+  withTimeout,
   type MessageHandle,
   type MessageResult,
   type NormalizedMessageInput,
@@ -14,7 +16,7 @@ import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-a
 import { MakaioBus } from '@makaio/bus-core';
 import { isTmuxAvailable, TmuxBackend } from '@makaio/subsystem-native-session-supervisor';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
-import { McpSubjects } from '@makaio/contracts';
+import { McpSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { TmuxSession } from './session.js';
 import { ClaudeCodeTmuxConnectorSubjects, type ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import { ADAPTER_NAME, DEFAULT_INTERRUPT_SETTLE_MS, TMUX_SERVER_NAME } from './constants.js';
@@ -23,10 +25,10 @@ import { TmuxConnectorSession } from './connector-session.js';
 import { resolveHookEnvPairs } from './utils/hook-env.js';
 import { addMcpServerToProject, removeMcpServerFromProject } from './utils/mcp-settings.js';
 import { buildSpawnArgs } from './utils/spawn-args.js';
-import { withTimeout } from './utils/timeout.js';
 import { prepareLaunchPrerequisites } from './utils/launch-prerequisites.js';
 import { subscribeToEarlySessionStart } from './utils/early-session-start.js';
 import { subscribeConnectorHooks } from './utils/session-hook-subscription.js';
+import { observePaneExit, subscribePaneExit, type PaneExitSubscription } from './utils/pane-exit.js';
 
 /**
  * Connector for the Claude Code tmux adapter.
@@ -36,7 +38,18 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   private connectorSession: TmuxConnectorSession | undefined;
   private userMessageQueue: UserMessageQueue | undefined;
   private backend: TmuxBackend | undefined;
-  private processExitDisposable: ReturnType<ITmuxPtyProcess['onExit']> | undefined;
+  /** This session's pane-exit subscription and the observation it settles. */
+  private paneExit: PaneExitSubscription | undefined;
+  /**
+   * Whether this connector ever asked the backend for a pane process.
+   *
+   * Monotonic, and set *before* the spawn is awaited rather than after it
+   * returns: what a teardown needs to know is not whether a pane handle exists
+   * but whether a process might, and between those two points it might. Never
+   * cleared, because "no process was ever started" cannot become true again — it
+   * is the one fact that entitles a teardown to report `released`.
+   */
+  private paneSpawnStarted = false;
   /** Whether turn event wiring has already been set up. */
   private turnEventsWired = false;
   /** Unsubscribe functions registered by wireSessionEvents(), cleared in teardown(). */
@@ -250,7 +263,16 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         assertLifecycleCurrent: () => this.assertLifecycleCurrent(token),
       });
 
-      this.backend = new TmuxBackend({ serverName: this.config.providerConfig?.tmuxServerName ?? TMUX_SERVER_NAME });
+      // The command budget is this connector's, not the backend's: the backend
+      // cannot know how long its caller is willing to wait for an end it
+      // reports. Passing the exit-observation budget keeps the confirming read
+      // the kill performs inside the window in which an observation is still
+      // worth anything, instead of inheriting the far longer session-start
+      // budget that governs initialization.
+      this.backend = new TmuxBackend({
+        serverName: this.config.providerConfig?.tmuxServerName ?? TMUX_SERVER_NAME,
+        commandTimeoutMs: CONNECTOR_EXIT_OBSERVATION_MS,
+      });
       earlySessionStartUnsubscribe = subscribeToEarlySessionStart(this.claudeSessionId, (sessionId) => {
         earlySessionStartId = sessionId;
         this.tmuxSession?.observeSessionStart(sessionId);
@@ -262,6 +284,10 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         systemPrompt: this.systemPrompt,
         skipPermissions: this.config.providerConfig?.skipPermissions,
       });
+      // Booked before the await, not after it: a close landing inside this window
+      // finds no pane subscription, and it must not conclude from that that
+      // nothing was ever started.
+      this.paneSpawnStarted = true;
       const ptyProcess = await this.backend.spawn(binaryPath, spawnArgs, {
         cwd: projectDir,
         env: mergedEnv,
@@ -271,9 +297,9 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         throw new Error('Claude Code tmux session initialization was superseded by teardown');
       }
 
-      this.processExitDisposable = ptyProcess.onExit((event) => {
-        void this.handleProcessExit(event.exitCode, event.signal);
-      });
+      this.paneExit = subscribePaneExit(ptyProcess as ITmuxPtyProcess, (code, signal) =>
+        this.handleProcessExit(code, signal),
+      );
 
       this.tmuxSession = new TmuxSession({
         ptyProcess: ptyProcess as ITmuxPtyProcess,
@@ -512,13 +538,18 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   }
 
   /**
-   * Gracefully close the session.
+   * Gracefully close the session and report what was observed.
    *
    * Kills the tmux session and disposes the backend. Unlike `abort()`, this
    * is the normal shutdown path and does not trigger abort-controller errors.
+   *
+   * **Class: `exited`,** from the pane process's own published exit;
+   * {@link observePaneExit} states the evidence and each weaker answer, including
+   * which of them a close racing initialization is entitled to.
+   * @returns What this runtime observed about the end of its pane process.
    */
-  public override async close(): Promise<void> {
-    await this.teardown({
+  public override async close(): Promise<ConnectorTeardownResult> {
+    return this.teardown({
       finalizeActiveTurn: true,
       error: new Error('Claude Code tmux session closed'),
       cleanupMcp: true,
@@ -548,14 +579,22 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
 
   /**
    * Tear down session resources: unsubscribe from turn events, unsubscribe from
-   * hooks, dispose the backend, remove MCP bridge state, and drop local handles.
+   * hooks, kill the pane, watch for its end, dispose the backend, remove MCP
+   * bridge state, and drop local handles.
+   *
+   * **The exit subscription now outlives the kill, and that ordering is the
+   * point.** It used to be disposed first, which meant the one event that could
+   * prove the pane's process had ended was thrown away immediately before the
+   * only act that could produce it. The listener is released after the
+   * observation instead, so the kill has something to be observed by.
    * @param options - Teardown policy for active turn finalization and MCP cleanup.
+   * @returns What this teardown observed about the end of the pane process.
    */
   private async teardown(options?: {
     finalizeActiveTurn?: boolean;
     error?: Error;
     cleanupMcp?: boolean;
-  }): Promise<void> {
+  }): Promise<ConnectorTeardownResult> {
     this.lifecycleToken++;
     if (options?.finalizeActiveTurn) {
       await this.connectorSession?.handleTurnError(options.error ?? new Error('Claude Code tmux session terminated'));
@@ -573,12 +612,14 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     this.hookUnsubscribe?.();
     this.hookUnsubscribe = undefined;
 
-    this.processExitDisposable?.dispose();
-    this.processExitDisposable = undefined;
-
     // dispose() kills the PTY process. hookUnsubscribe was already called above.
+    const paneExit = this.paneExit;
+    this.paneExit = undefined;
     this.tmuxSession?.dispose();
     this.tmuxSession = undefined;
+
+    const report = await observePaneExit(paneExit, this.paneSpawnStarted);
+    paneExit?.dispose();
 
     const cleanupTasks = [
       ...(options?.cleanupMcp ? [this.cleanupMcpSession(this.cwd)] : []),
@@ -591,6 +632,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     this.userMessageQueue = undefined;
     this.initializationPromise = undefined;
     throwFirstCleanupError(cleanupResults);
+    return report;
   }
 
   /**

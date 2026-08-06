@@ -28,6 +28,15 @@ export {
   type RehydrateAgentRequest,
   type RehydrateAgentResponse,
 } from './schemas/rehydrate-agent.js';
+export {
+  aggregateTeardownEvidence,
+  aggregateTeardownResults,
+  ConnectorTeardownResultSchema,
+  TeardownEvidenceSchema,
+  teardownWasObserved,
+  type ConnectorTeardownResult,
+  type TeardownEvidence,
+} from './schemas/teardown.js';
 export { SessionUsageSchema, type SessionUsage } from './schemas/session-usage.js';
 export { SessionDiscoveredSchema, type SessionDiscovered } from './schemas/session-discovered.js';
 export {

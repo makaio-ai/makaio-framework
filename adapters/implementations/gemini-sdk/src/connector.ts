@@ -14,7 +14,8 @@ import {
 } from '@makaio/ai-adapters-core';
 import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
 import { type Config, GeminiChat } from '@google/gemini-cli-core';
-import { type SystemPrompt } from '@makaio/contracts';
+import { type ConnectorTeardownResult, type SystemPrompt } from '@makaio/contracts';
+import { abortGeminiAfterInitialization, GEMINI_TEARDOWN_REPORT } from './teardown.js';
 import type { GeminiConnectorConfig } from './types/index.js';
 import { type GeminiConnectorBus, GeminiConnectorNamespace, type SdkEvent } from './namespaces/index.js';
 import { GeminiConnectorSubjects } from './namespaces/index.js';
@@ -284,30 +285,6 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
   }
 
   /**
-   * Create and enqueue a message, initializing the session if needed.
-   * @param message - The user message to send
-   * @param options - Message options including delivery mode and message history
-   * @returns Object containing the message handle
-   */
-  private async createInitialMessage(
-    message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
-  ): Promise<{ handle: MessageHandle }> {
-    await this.ensureSession();
-
-    // Create message handle and enqueue directly to local queue
-    const handle = this.createMessageHandle(message, options);
-    this.sessionMessageQueue.enqueue(handle);
-
-    // Trigger active state transition when starting from idle/paused
-    if (this.getProcessingState() === 'idle' || this.getProcessingState() === 'paused') {
-      await this.updateProcessingState('active');
-    }
-
-    return { handle };
-  }
-
-  /**
    * Start session with initial prompt.
    * @param message - The initial user message
    * @param options - Message options including delivery mode
@@ -318,10 +295,8 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
     options?: ConnectorStartOptions | undefined,
   ): Promise<AgentStartResult> {
     this.captureSystemPrompt(options?.systemPrompt);
-    const { handle } = await this.createInitialMessage(message, options);
-
-    // Process queue - Session will start new turn
-    await this.session!.processQueue(this.sessionMessageQueue);
+    const handle = this.createMessageHandle(message, options);
+    await this.processUserMessages([handle]);
 
     return {
       adapterSessionId: this.adapterSessionId!,
@@ -340,10 +315,8 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
     message: NormalizedMessageInput,
     options?: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
-    const { handle } = await this.createInitialMessage(message, options);
-
-    // Process queue - Session will start new turn or inject into current
-    await this.session!.processQueue(this.sessionMessageQueue);
+    const handle = this.createMessageHandle(message, options);
+    await this.processUserMessages([handle]);
 
     return handle;
   }
@@ -353,9 +326,13 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
     void this.beginTermination();
   }
 
-  /** Gracefully close the session. */
-  public async close(): Promise<void> {
+  /**
+   * Gracefully close the session; {@link GEMINI_TEARDOWN_REPORT} states the evidence and its limit.
+   * @returns The class this teardown may claim.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
     await this.beginTermination();
+    return GEMINI_TEARDOWN_REPORT;
   }
 
   /**
@@ -374,20 +351,12 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
   }
 
   private beginTermination(): Promise<void> {
-    if (this.terminationCleanup === undefined) {
-      this.isTerminated = true;
-      this.terminationCleanup = this.abortAfterInitialization();
-    }
+    this.isTerminated = true;
+    const turnEventDrain = this.closeTurnEventLifecycle();
+    this.terminationCleanup ??= turnEventDrain.then(
+      async () => await abortGeminiAfterInitialization(this.sessionInitialization, () => this.session?.abort()),
+    );
     return this.terminationCleanup;
-  }
-
-  private async abortAfterInitialization(): Promise<void> {
-    try {
-      await this.sessionInitialization;
-    } catch {
-      // A failed initialization cannot own a session, but a partially created one can.
-    }
-    await this.session?.abort();
   }
 
   private assertOpen(): void {

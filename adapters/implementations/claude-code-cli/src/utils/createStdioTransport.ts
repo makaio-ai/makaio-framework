@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { SDKMessage } from '@makaio/client-claude-code';
+import { DeferredPromise } from '@makaio/utils';
 
 /**
  * Callback invoked when a parsed SDK message arrives from stdout.
@@ -218,6 +219,26 @@ export interface CliStdioTransport {
    * Close the subprocess and cleanup resources.
    */
   close(): void;
+
+  /**
+   * Settles once the spawned CLI process has ended, with the exit code it
+   * reported or `null` when it was ended by a signal or never ran.
+   *
+   * The transport already observed the exit through a listener, but a caller
+   * that asked for the close had no way to await that observation — so "the
+   * close path ran" was the only fact available to it. This promise is the
+   * observation itself: awaiting it after {@link close} is the difference
+   * between having requested a termination and having watched one happen.
+   *
+   * Settled by the same `exit` listener that flushes stdout and classifies the
+   * code, and by `close` for the spawn that never produced one: a missing binary
+   * emits `error` and `close` and no `exit`, and an `exit`-only promise would
+   * hang forever for a process that never existed — burning a caller's whole
+   * observation budget and then reporting an unobserved end for nothing. It never
+   * rejects; a failure to spawn is reported on the error channel, and this promise
+   * answers only "is it over".
+   */
+  readonly exited: Promise<number | null>;
 }
 
 /**
@@ -269,6 +290,17 @@ export function createStdioTransport(
     buffered.emitError(error);
   });
 
+  // The exit promise is settled from inside the existing `exit` listener rather
+  // than by a second `once('exit')` subscription, so the observation the transport
+  // already makes is the one callers await. `close` below is not a second
+  // observation of the same event but the answer for the spawn that produced no
+  // `exit` to observe.
+  const settleExited = new DeferredPromise<number | null>();
+  // Last code an `exit` reported, so the `close` fallback answers with what was
+  // observed instead of guessing again. Stays `null` for a process that never ran,
+  // which is the same "ended without a code" a signalled termination reports.
+  let lastExitCode: number | null = null;
+
   subprocess.on('exit', (code: number | null) => {
     watchdog.clear();
     flushPendingStdoutLine();
@@ -277,9 +309,22 @@ export function createStdioTransport(
     if (code !== 0 && code !== null) {
       buffered.emitError(new Error(`claude CLI exited with code ${code}`));
     }
+
+    lastExitCode = code;
+    settleExited.resolve(code);
+  });
+
+  // **The event every spawn attempt reaches**, including one that never produced a
+  // process to exit. After a real exit this is a second resolve on an already
+  // settled promise, which is a no-op — the classification above stays the `exit`
+  // listener's alone.
+  subprocess.on('close', () => {
+    settleExited.resolve(lastExitCode);
   });
 
   return {
+    exited: settleExited.getPromise(),
+
     onMessage(callback: MessageCallback): void {
       buffered.onMessage(callback);
     },

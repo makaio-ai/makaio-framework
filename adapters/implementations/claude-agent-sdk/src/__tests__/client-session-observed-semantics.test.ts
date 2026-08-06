@@ -6,6 +6,7 @@
  * core `agent.*` lifecycle events to the global `client.session.*` surface.
  */
 
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -176,6 +177,7 @@ async function makeAgent(opts: { sessionId?: string; clientId?: string } = {}): 
 
   return new ClaudeCodeAgent({
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'claude-agent-sdk',

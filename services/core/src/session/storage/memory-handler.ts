@@ -14,6 +14,7 @@ import {
   emitSessionClientAccountChangedIfNeeded,
 } from './client-account-change-events.js';
 import { registerMemorySessionImportHandlers } from './memory-import-handlers.js';
+import { isIdentityBackfillRefused } from './session-identity-backfill.js';
 
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines-per-function: ["error", { "max": 145 }] */
@@ -144,6 +145,16 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
   assignDefinedSessionField(session, 'lastActivityAt', update.lastActivityAt);
   assignDefinedSessionField(session, 'machineId', update.machineId);
 
+  // The identity triplet, written as one value because that is what it is. The
+  // caller's authority to write it was checked against the stored row before this
+  // point; an absent `adapterSessionId` means "not confirmed yet" and leaves the
+  // write-once origin alone rather than clearing it.
+  if (update.identity !== undefined) {
+    session.adapterName = update.identity.adapterName;
+    session.adapterId = update.identity.adapterId;
+    assignDefinedSessionField(session, 'adapterSessionId', update.identity.adapterSessionId);
+  }
+
   assignNullableSessionField(session, 'executionTargetId', update.executionTargetId);
   assignNullableSessionField(session, 'approvalPolicyOverride', update.approvalPolicyOverride);
   assignNullableSessionField(session, 'metadata', update.metadata);
@@ -209,6 +220,13 @@ function registerUpdateHandler(bus: IMakaioBus, store: Map<string, IMakaioSessio
     // `success: false` a missing row does, and the caller re-reads to tell them
     // apart.
     if (payload.expectedStatus !== undefined && !payload.expectedStatus.includes(session.status)) {
+      ctx.setResult({ success: false, clientAccountChanged: false });
+      return;
+    }
+    // The identity guard, evaluated the same way and refusing the same way: this
+    // backend has no statement to hang a predicate on, so "atomic with the write"
+    // means evaluated against the stored row inside the handler that writes it.
+    if (isIdentityBackfillRefused(session, payload)) {
       ctx.setResult({ success: false, clientAccountChanged: false });
       return;
     }

@@ -9,20 +9,31 @@
  * `user_message.sent` — the event payload enrichment runs on. Nothing in that
  * window may point the session row back at the abandoned thread.
  */
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
 import type { SDKMessage } from '@makaio/client-claude-code';
 
-const transportStub = vi.hoisted(() => ({
-  transport: {
-    onMessage: vi.fn(),
-    onError: vi.fn(),
-    close: vi.fn(),
-  },
-  createStdioTransport: vi.fn(),
-}));
+const transportStub = vi.hoisted(() => {
+  // Settled from `close()`, exactly as the real transport settles it from the
+  // child's `exit` event after the kill: a teardown here reaches its class
+  // instead of waiting out the whole observation budget.
+  let settleExit: (code: number | null) => void = () => {};
+  const exited = new Promise<number | null>((resolve) => {
+    settleExit = resolve;
+  });
+  return {
+    transport: {
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      close: vi.fn(() => settleExit(null)),
+      exited,
+    },
+    createStdioTransport: vi.fn(),
+  };
+});
 
 vi.mock('../utils/createStdioTransport.js', () => ({
   createStdioTransport: transportStub.createStdioTransport,
@@ -49,6 +60,7 @@ async function makeResumeArmedAgent(): Promise<ClaudeCodeCliAgent> {
   const adapterBus = await ClaudeCodeCliConnectorNamespace.scopedBus();
   return new ClaudeCodeCliAgent({
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     adapterId: ADAPTER_ID,
     adapterName: 'claude-code-cli',

@@ -34,6 +34,14 @@ export { GetAgentSchema } from './get-agent.js';
 export type { GetAgentRequest, GetAgentResponse } from './get-agent.js';
 export { StopAgentSchema } from './stop-agent.js';
 export type { StopAgentRequest, StopAgentResponse } from './stop-agent.js';
+export {
+  aggregateTeardownEvidence,
+  aggregateTeardownResults,
+  ConnectorTeardownResultSchema,
+  TeardownEvidenceSchema,
+  teardownWasObserved,
+} from './teardown.js';
+export type { ConnectorTeardownResult, TeardownEvidence } from './teardown.js';
 export { RehydrateAgentSchema } from './rehydrate-agent.js';
 export type { RehydrateAgentRequest, RehydrateAgentResponse } from './rehydrate-agent.js';
 export { GetConfigSchemaSchema } from './get-config-schema.js';

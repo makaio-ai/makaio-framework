@@ -87,11 +87,12 @@ describe('reserved rehydrate', () => {
   });
 
   it('reads the prior status from the claim, not from the row the claim already moved', async () => {
-    // The stores hand out the row object itself and the transition mutates it in
-    // place, so an `idle` agent's own `status` field reads `starting` the moment
-    // the claim lands. A rollback that re-read it there would restore `dead` —
-    // and would do so only against the backend that aliases, which is the worst
-    // kind of correct-by-accident.
+    // The claim carries the status it replaced, and every exit reads it from
+    // there. A rollback that re-derived it from the stored row would restore
+    // `dead` — the claim moved the row to `starting`, and `dead` is that status's
+    // rollback target — putting an unrecoverable status on an agent that was
+    // `idle`. Both backends materialise their reads now, so this case pins the
+    // design rather than one backend's aliasing.
     const agent = await ctx.seedAgent('session-aliased', 'agent-aliased', { status: 'idle' });
     await ctx.occupyKey(agent.adapterSessionId as string);
     ctx.registerAdapter();

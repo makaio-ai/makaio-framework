@@ -1,13 +1,14 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   AdapterSubjects,
-  SessionSubjects,
   type MakaioSessionAgent,
   type SessionOwnershipReservation,
   type StartAgentRequest,
   type StartAgentResponse,
 } from '@makaio/contracts';
 import { runExclusiveStart } from '../ownership/index.js';
+import { reserveStartFor } from '../utils/start-reservation.js';
+import type { MachineScopedAdapterInstance } from '../utils/resolution.js';
 import { mintClaimToken } from '../ownership/claim-token.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { completeCallerOwnedStart, type CallerOwnedStart } from './caller-owned-start.js';
@@ -30,27 +31,25 @@ const CALLER_OWNED_STATUS: StartCleanupPolicy = { writesAgentStatus: true };
 export interface LeadStartRequest {
   /** Session the agent is started into. */
   readonly sessionId: string;
-  /** Live adapter instance the start is dispatched to and reserved against. */
-  readonly adapterId: string;
+  /**
+   * Instance this start dispatches to, and the machine every one of its
+   * ownership acts names.
+   *
+   * **The two halves arrive together because they are one key.** An adapter
+   * instance ID is a one-way hash of `(machineId, adapterName)`, so a start that
+   * reserves and settles under one machine while dispatching to another
+   * machine's instance builds an ownership key no other actor computes — it
+   * collides with nothing, and therefore protects nothing. A runtime on the
+   * instance's real machine would reserve the same provider session under *its*
+   * identity and win, which is the second writer this whole seam exists to
+   * refuse. The resolver hands out the pair or nothing, so there is no shape in
+   * which this start holds one half.
+   */
+  readonly instance: MachineScopedAdapterInstance;
   /** Adapter type name, carried onto the agent row and any claim. */
   readonly adapterName: string;
   /** Provider config to stamp on the agent's runtime row once the start lands. */
   readonly providerConfigId?: string;
-  /**
-   * Machine identity every ownership act of this start names.
-   *
-   * **It has to come from wherever `adapterId` came from.** An adapter instance
-   * ID is a one-way hash of `(machineId, adapterName)`, so a start that reserves
-   * and settles under one machine while dispatching to another machine's
-   * instance builds an ownership key no other actor computes — it collides with
-   * nothing, and therefore protects nothing. A runtime on the instance's real
-   * machine would reserve the same provider session under *its* identity and
-   * win, which is the second writer this whole seam exists to refuse.
-   *
-   * `undefined` leaves the authority to act under its own identity, which is
-   * right exactly when the instance was resolved for that identity too.
-   */
-  readonly machineId?: string;
   /**
    * Lead the caller observed on the session row, or `null` when it names none.
    *
@@ -131,15 +130,14 @@ async function reserveLeadStart(
   request: LeadStartRequest,
   agentId: string,
 ): Promise<ReservationAttempt> {
-  const reserved = await bus.request(SessionSubjects.ownership.reserveStart, {
+  const reserved = await reserveStartFor(bus, {
     sessionId: request.sessionId,
     agentId,
-    adapterId: request.adapterId,
     adapterName: request.adapterName,
+    instance: request.instance,
     role: 'lead',
     resumeProviderSessionId: null,
     expectedLeadAgentId: request.expectedLeadAgentId,
-    ...(request.machineId !== undefined && { machineId: request.machineId }),
   });
 
   if (reserved.outcome === 'reserved') return { kind: 'reserved', reservation: reserved.reservation };
@@ -173,7 +171,7 @@ async function runLeadStartAttempt(
 ): Promise<LeadStartResult> {
   const agent = buildCallerOwnedAgentRow({
     agentId,
-    adapterId: request.adapterId,
+    adapterId: request.instance.adapterId,
     adapterName: request.adapterName,
     sessionId: request.sessionId,
     role: 'lead',
@@ -268,7 +266,7 @@ async function runLeadStartAttempt(
   const dispatched: CallerOwnedStart = {
     sessionId: request.sessionId,
     agentId,
-    adapterId: request.adapterId,
+    adapterId: request.instance.adapterId,
     adapterName: request.adapterName,
     policy: CALLER_OWNED_STATUS,
     claimTokens,
@@ -277,8 +275,10 @@ async function runLeadStartAttempt(
     // The settlement is the one keyed act a fresh start performs — its
     // reservation is keyless — so this is where naming the wrong machine costs
     // something: the claim lands in a namespace the instance's own runtime never
-    // looks in.
-    ...(request.machineId !== undefined && { machineId: request.machineId }),
+    // looks in. Named unconditionally now, because the instance cannot arrive
+    // here without it: the settlement is keyed, so the machine is not optional
+    // for this path however keyless its reservation was.
+    machineId: request.instance.machineId,
   };
   await completeCallerOwnedStart(bus, dispatched, startResult.adapterSessionId);
   return {

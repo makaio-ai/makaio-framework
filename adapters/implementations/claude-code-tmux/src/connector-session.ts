@@ -31,6 +31,19 @@ export class TmuxConnectorSession {
   private suppressStopUntilPromptSubmit = false;
 
   /**
+   * Finalisation currently in flight, keyed by the turn it is finalising.
+   *
+   * `isCompleted()` only becomes true inside the finalisation, after its first
+   * await, so a guard placed before that await leaves a window in which two
+   * finalisers can both pass it. The tmux connector reaches that window on an
+   * ordinary race: a teardown finalises the active turn while the retained
+   * process-exit listener finalises the same turn for the same reason. Recording
+   * the in-flight promise closes the window — the second caller joins the first
+   * instead of completing one message handle twice.
+   */
+  private activeTurnFinalization: { readonly turn: TmuxConnectorTurn; readonly settled: Promise<void> } | undefined;
+
+  /**
    * Create a TmuxConnectorSession bound to a connector instance.
    * @param config - Bundled session dependencies and callbacks.
    */
@@ -105,20 +118,22 @@ export class TmuxConnectorSession {
     if (!turn || turn.isCompleted() || turn.acknowledgeInterrupt() || turn.shouldIgnoreStop()) return;
     if (this.suppressStopUntilPromptSubmit) return;
 
-    await turn.markStepFinished();
+    await this.finalizeTurnOnce(turn, async () => {
+      await turn.markStepFinished();
 
-    const handle = turn.getMessageHandle();
-    const result: MessageResult = {
-      outcome: 'completed',
-      result: { message: lastAssistantMessage },
-    };
+      const handle = turn.getMessageHandle();
+      const result: MessageResult = {
+        outcome: 'completed',
+        result: { message: lastAssistantMessage },
+      };
 
-    try {
-      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
-      await this.config.emitTurnCompleted({ message: lastAssistantMessage });
-    } finally {
-      await this.finishActiveTurn(turn);
-    }
+      try {
+        await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
+        await this.config.emitTurnCompleted({ message: lastAssistantMessage });
+      } finally {
+        await this.finishActiveTurn(turn);
+      }
+    });
   }
 
   /**
@@ -139,14 +154,48 @@ export class TmuxConnectorSession {
     if (!turn || turn.isCompleted()) return;
 
     const error = errorLike instanceof Error ? errorLike : new Error(String(errorLike));
-    const handle = turn.getMessageHandle();
-    const result: MessageResult = { outcome: 'error', error };
 
+    await this.finalizeTurnOnce(turn, async () => {
+      const handle = turn.getMessageHandle();
+      const result: MessageResult = { outcome: 'error', error };
+
+      try {
+        await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
+      } finally {
+        this.clearAbandonedToolCalls(turn);
+        await this.finishActiveTurn(turn);
+      }
+    });
+  }
+
+  /**
+   * Run a turn's finalisation at most once, joining one already in flight.
+   *
+   * A turn is finalised by whichever cause reaches it first, and every later
+   * cause observes that finalisation rather than performing a second one. This
+   * is what makes the completion guard sufficient: the guard rejects callers
+   * that arrive after the finalisation settled, and this joins the callers that
+   * arrive while it is still running.
+   * @param turn - Turn being finalised.
+   * @param finalize - Finalisation to run when this caller arrived first.
+   */
+  private async finalizeTurnOnce(turn: TmuxConnectorTurn, finalize: () => Promise<void>): Promise<void> {
+    const inFlight = this.activeTurnFinalization;
+    if (inFlight?.turn === turn) {
+      await inFlight.settled;
+      return;
+    }
+
+    // `finalize()` runs synchronously up to its first await, so no other caller
+    // can observe the gap between starting it and recording it.
+    const settled = finalize();
+    this.activeTurnFinalization = { turn, settled };
     try {
-      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
+      await settled;
     } finally {
-      this.clearAbandonedToolCalls(turn);
-      await this.finishActiveTurn(turn);
+      if (this.activeTurnFinalization?.turn === turn) {
+        this.activeTurnFinalization = undefined;
+      }
     }
   }
 

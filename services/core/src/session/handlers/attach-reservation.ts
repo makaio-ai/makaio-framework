@@ -1,5 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, type AgentRole, type SessionOwnershipReservation } from '@makaio/contracts';
+import type { AgentRole, SessionOwnershipReservation } from '@makaio/contracts';
+import { reserveStartFor } from '../utils/start-reservation.js';
+import type { OwnedAdapterInstance } from '../utils/resolution.js';
 
 /**
  * How the reservation an attach runs under was answered.
@@ -61,8 +63,11 @@ export interface AttachReservationRequest {
   readonly sessionId: string;
   /** Caller-minted agent identity, already persisted as `starting`. */
   readonly agentId: string;
-  /** Live adapter instance the start is dispatched to. */
-  readonly adapterId: string;
+  /**
+   * Live adapter instance the start is dispatched to, and the machine its
+   * ownership acts are filed under — one value, because it is one key.
+   */
+  readonly instance: OwnedAdapterInstance;
   /** Adapter type name every ownership act names. */
   readonly adapterName: string;
   /** Role the attach takes; only a lead writes a designation. */
@@ -71,8 +76,6 @@ export interface AttachReservationRequest {
   readonly resumeProviderSessionId: string | null;
   /** Lead the caller observed on the session row, or `null` when it names none. */
   readonly expectedLeadAgentId: string | null;
-  /** Machine identity the reservation acts under, or `undefined` for the authority's own. */
-  readonly machineId?: string;
 }
 
 /**
@@ -165,14 +168,14 @@ async function requestReservation(
   request: AttachReservationRequest,
   resumeProviderSessionId: string | null,
 ) {
-  return bus.request(SessionSubjects.ownership.reserveStart, {
+  return reserveStartFor(bus, {
     sessionId: request.sessionId,
     agentId: request.agentId,
-    adapterId: request.adapterId,
     adapterName: request.adapterName,
-    role: request.role,
+    instance: request.instance,
     resumeProviderSessionId,
-    ...(request.role === 'lead' && { expectedLeadAgentId: request.expectedLeadAgentId }),
-    ...(request.machineId !== undefined && { machineId: request.machineId }),
+    ...(request.role === 'lead'
+      ? { role: request.role, expectedLeadAgentId: request.expectedLeadAgentId }
+      : { role: request.role }),
   });
 }

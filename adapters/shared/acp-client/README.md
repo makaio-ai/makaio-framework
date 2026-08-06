@@ -33,6 +33,7 @@ const handle = await createAcpConnection(() => client, {
   args: ['--acp', '--model', 'qwen3-coder'],
   cwd: '/path/to/project',
   env: { OPENAI_API_KEY: '...' },
+  spawnTimeoutMs: 30_000,
   onStderr: (data) => console.error(data),
   onExit: (code) => console.log('exit', code),
 });
@@ -62,6 +63,12 @@ via Node.js Web Streams (`Readable.toWeb()` / `Writable.toWeb()`). Returns an
 `AcpConnectionHandle` with a live `ClientSideConnection` from
 `@agentclientprotocol/sdk`.
 
+The start is bounded by the required `spawnTimeoutMs` and can be abandoned early
+with the optional `signal`. Either way the failure **owns the child it spawned**:
+a start that expires or is abandoned kills the process and tears down its stdio
+before rejecting, because the caller never receives a handle and would have
+nothing to kill, watch, or report.
+
 ### `MakaioAcpClient`
 
 Implements the ACP `Client` interface and routes each agent-initiated request
@@ -80,8 +87,15 @@ invoked, making misconfigured clients fail fast.
 Manages the full ACP stateful terminal protocol (create → output → wait →
 kill → release) using `node:child_process` directly. Output is buffered per
 terminal with a configurable byte limit (default 1 MiB) and truncated from the
-start when exceeded. Call `releaseAll()` during connector shutdown to prevent
-resource leaks.
+start when exceeded.
+
+Call `releaseAll()` during connector shutdown to prevent resource leaks. It
+kills every managed terminal and **returns one exit promise per terminal it
+released**: these are processes the runtime spawned, so their ends are evidence
+its teardown may claim, and the kill alone proves nothing about whether the
+child died. A caller that reports a teardown class should await them within its
+own budget and weaken its class for any end that never arrived — the manager
+deliberately does not wait, because a shutdown must not be held by a terminal.
 
 ## Installation
 

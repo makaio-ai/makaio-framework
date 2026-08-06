@@ -23,7 +23,7 @@ function preparedRuntime(): PreparedAdapterAuthRuntime {
 describe('ConformanceConnectorRuntimeRegistry', () => {
   it('releases the lease exactly once when connector close and suite cleanup overlap', async () => {
     const release = vi.fn(async () => undefined);
-    const close = vi.fn(async () => undefined);
+    const close = vi.fn(async () => ({ evidence: 'released' }) as const);
     const prepared = preparedRuntime();
     const registry = new ConformanceConnectorRuntimeRegistry();
 
@@ -51,7 +51,7 @@ describe('ConformanceConnectorRuntimeRegistry', () => {
     const releaseError = new Error('lease release failed');
     const prepared = preparedRuntime();
     const registry = new ConformanceConnectorRuntimeRegistry();
-    const connector = await registry.create({
+    await registry.create({
       config: prepared.config,
       prepareAuthRuntime: async () => ({
         ...prepared,
@@ -72,15 +72,20 @@ describe('ConformanceConnectorRuntimeRegistry', () => {
       },
     });
 
+    // The managed close reports instead of rejecting, so `closeAll` is the surface
+    // that still raises: both failures have to survive the conversion, or a
+    // conformance suite would finish green while holding a connector and a lease.
     let captured: unknown;
     try {
-      await connector.close();
+      await registry.closeAll();
     } catch (error) {
       captured = error;
     }
 
     expect(captured).toBeInstanceOf(AggregateError);
     expect((captured as AggregateError).errors).toEqual([closeError, releaseError]);
+    // Idempotent: the connector was closed once, and a second sweep has nothing
+    // left to fail on.
     await expect(registry.closeAll()).resolves.toBeUndefined();
   });
 });

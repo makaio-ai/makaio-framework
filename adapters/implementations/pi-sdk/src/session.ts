@@ -2,6 +2,8 @@
 import {
   BaseConnectorSession,
   UserMessageQueue,
+  reportBestEffortStages,
+  stageFailure,
   markCompletedWithFinalResult,
   processQueueMessages,
   serializeTurnContext,
@@ -14,7 +16,7 @@ import {
 import type { AgentSessionEvent, AgentSession, ToolDefinition } from '@mariozechner/pi-coding-agent';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { Model } from '@mariozechner/pi-ai';
-import type { SystemPrompt, ToolExecutionContextOverrides } from '@makaio/contracts';
+import type { ConnectorTeardownResult, SystemPrompt, ToolExecutionContextOverrides } from '@makaio/contracts';
 import { PiConnectorTurn } from './turn.js';
 import { PiSdkSubjects } from './namespaces/index.js';
 import type { PiSdkBus } from './namespaces/index.js';
@@ -715,24 +717,41 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
   }
 
   /**
-   * Close the session for normal connector shutdown.
+   * Close the session for normal connector shutdown and report what was observed.
    *
    * Pi's `dispose()` only removes listeners; it does not stop active provider
    * work. Close therefore detaches listeners first, pauses the framework turn,
    * and then asks the Pi SDK to stop in-flight work without routing shutdown
    * through the connector's public panic-mode `abort()` path.
+   *
+   * **Class: `released`,** and the evidence is genuinely local: the subscription
+   * to Pi's event stream is one *this* session created and cancels itself, before
+   * anything else runs. Once it is cancelled no callback can reach this runtime
+   * again, which is the whole of what closure means for a resource with no
+   * external end.
+   *
+   * The abort used to fail silently. It still runs best-effort — the listener
+   * detach and disposal behind it must happen regardless — but a session that
+   * could not tell whether its own abort landed has an unaccounted stage, and
+   * `unknown` is the honest report of one.
+   * @returns What this session observed about the end of its Pi session.
    */
-  public async close(): Promise<void> {
+  public async close(): Promise<ConnectorTeardownResult> {
     this.piUnsubscribe?.();
     this.piUnsubscribe = undefined;
     await this.currentTurn?.pause();
+    const unaccounted: string[] = [];
     try {
       await this.piSession?.abort();
     } catch (error) {
       console.warn('[PiConnectorSession] Pi abort failed during close:', error);
+      unaccounted.push(stageFailure('Pi session abort', error));
     }
     this.piSession?.dispose();
     this.toolMessageIds.clear();
+    const unaccountedReport = reportBestEffortStages('Pi session close', unaccounted);
+    if (unaccountedReport !== undefined) return unaccountedReport;
+    return { evidence: 'released' };
   }
 
   /**

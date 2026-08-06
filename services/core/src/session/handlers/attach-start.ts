@@ -6,6 +6,7 @@ import { mintClaimToken } from '../ownership/claim-token.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import { AttachStartError } from './attach-error.js';
 import type { AttachIdentity, AttachLocalityResult } from './attach-execution-types.js';
+import type { OwnedAdapterInstance } from '../utils/resolution.js';
 import { persistAttachAgentRow } from './attach-identity-persistence.js';
 import { reserveAttachStart, type AttachReservationResult } from './attach-reservation.js';
 import { launchAttachAgent, type AttachLaunchTarget } from './attach-runtime-options.js';
@@ -24,8 +25,8 @@ export interface ReservedAttachStart {
   readonly locality: AttachLocalityResult;
   /** Lead the caller observed on the session row, or `null` when it names none. */
   readonly expectedLeadAgentId: string | null;
-  /** Machine identity every ownership act names, or `undefined` for the authority's own. */
-  readonly machineId: string | undefined;
+  /** Instance the dispatch addresses, and the machine every ownership act names. */
+  readonly instance: OwnedAdapterInstance;
 }
 
 /** A dispatched attach, and everything its completion or its unwinding needs. */
@@ -144,7 +145,7 @@ export async function startReservedAttachAgent(
     settlementClaimToken,
     policy: { writesAgentStatus: true, ...(reservation !== undefined && { reservation }) },
     ...(identity.providerConfigId !== undefined && { providerConfigId: identity.providerConfigId }),
-    ...(input.machineId !== undefined && { machineId: input.machineId }),
+    ...(input.instance.machineId !== undefined && { machineId: input.instance.machineId }),
   };
 
   const startResult = await dispatchAttach(bus, input, dispatched, {
@@ -218,18 +219,17 @@ async function reserveOrRollBack(
   bus: IMakaioBus,
   input: ReservedAttachStart,
 ): Promise<Extract<AttachReservationResult, { kind: 'reserved' | 'degrade' }>> {
-  const { agentId, identity, launch } = input;
+  const { agentId, identity } = input;
   let reserved: AttachReservationResult;
   try {
     reserved = await reserveAttachStart(bus, {
       sessionId: identity.sessionId,
       agentId,
-      adapterId: launch.adapterId,
+      instance: input.instance,
       adapterName: identity.adapterName,
       role: identity.role,
       resumeProviderSessionId: input.locality.resumeAdapterSessionId ?? null,
       expectedLeadAgentId: input.expectedLeadAgentId,
-      ...(input.machineId !== undefined && { machineId: input.machineId }),
     });
   } catch (error) {
     await rollbackReservedStart(bus, agentId, undefined);

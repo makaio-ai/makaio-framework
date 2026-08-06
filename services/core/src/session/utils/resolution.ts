@@ -3,7 +3,6 @@ import { type ReasoningLevelMap } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
 import { ProviderStorageSubjects } from '../../settings/storage/providers-namespace.js';
-import type { MakaioSessionAgent } from '@makaio/contracts';
 import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
 import type { ExecutionTarget } from '../../execution-target/schemas.js';
 
@@ -25,89 +24,131 @@ export async function resolveAdapterId(bus: IMakaioBus, adapterName: string, mac
 }
 
 /**
- * Resolve the adapter instance an agent should currently be addressed at, under
- * the runtime's own machine identity.
+ * The adapter instance an ownership act runs against, together with the machine
+ * whose namespace it acts in.
  *
- * A persisted `adapterId` goes stale across a runtime restart or a failover, so
- * every act that names an instance — the capability probe, the ownership
- * reservation, the dispatch, the settlement, the runtime write — resolves it
- * fresh and uses **one** value. The stored ID is the fallback and nothing more:
- * it is the last instance this agent was known to live on, which beats failing
- * the whole recovery because a registry lookup was unavailable.
+ * **One value, because it is one key.** The ownership key is
+ * `(machine, adapter instance, provider session)` and an instance ID is derived
+ * from `(machineId, adapterName)`, so an act that took its instance from one
+ * source and its machine from another files itself under a pair nobody else
+ * computes. Carrying both halves in one object is what makes "instance and
+ * namespace come from one identity" structural rather than a rule every call
+ * site has to remember.
  *
- * Stated once, here, because reserving against one instance and dispatching to
- * another reserves in a namespace the dispatch never uses — a bug the call sites
- * would otherwise have to remember separately.
- *
- * **The fallback is what makes this the unscoped form**, and the signature is
- * the enforcement: there is no machine to pass. A caller acting for a machine it
- * named takes {@link resolveLiveAdapterIdForMachine} instead, which cannot fall
- * back and says so.
- *
- * Reachable only through that function, deliberately: every caller states
- * whether it is acting for a named machine, and the unscoped answer is what it
- * gets when it names none. An export here would be a second door into the
- * fallback, opened without the question being asked.
- * @param bus - Bus the lookup is issued on.
- * @param agent - Agent whose adapter instance is being resolved.
- * @returns The resolved instance, or the agent's persisted one when the lookup
- *   cannot answer.
+ * `machineId` is absent for exactly one caller shape — one that named no machine
+ * and is therefore not acting for any: it gets the unscoped answer, the
+ * authority acts under its own composed identity, and there are no two
+ * identities to mix.
  */
-async function resolveLiveAdapterId(
-  bus: IMakaioBus,
-  agent: Pick<MakaioSessionAgent, 'adapterName' | 'adapterId'>,
-): Promise<string> {
-  return resolveAdapterId(bus, agent.adapterName).catch(() => agent.adapterId);
+export interface OwnedAdapterInstance {
+  /** Live adapter instance every act of the attempt addresses. */
+  readonly adapterId: string;
+  /** Machine whose namespace those acts are filed under, or `undefined` when the caller named none. */
+  readonly machineId?: string;
 }
 
 /**
- * Resolve that instance for a **named** machine, or answer that this runtime
- * cannot.
+ * An owned instance whose machine is named.
  *
- * **The machine is part of the answer.** An adapter instance ID is derived from
- * `(machineId, adapterName)`, so resolving without naming a machine derives it
- * for the runtime's own — which is right in production and wrong the moment a
- * caller is acting for a machine it named. Reserving under machine X while
- * dispatching to the instance ID of machine R builds an ownership key no other
- * actor would ever compute: it collides with nothing, so it protects nothing.
- * Passing the same identity the reservation uses keeps the whole act in one
- * namespace.
- *
- * **And that is why this form has no persisted fallback.** The derivation is
- * one-way — given a stored instance ID, the machine it was derived for cannot be
- * recovered from it — so falling back to the stored value would produce exactly
- * the mixed key above, silently, and precisely in the moment the lookup that
- * could have proven the pair was unavailable. A runtime that cannot derive the
- * named machine's instance may not act for that machine at all; this answers
- * `undefined` and leaves the consequence to the caller, which is the only layer
- * that knows what its own refusal looks like — a modeled deferral, a non-native
- * degrade, a reported non-start.
- *
- * A caller whose machine identity is simply absent is not scoped at all and gets
- * the unscoped answer, fallback included.
- * @param bus - Bus the lookup is issued on.
- * @param agent - Agent whose adapter instance is being resolved.
- * @param machineId - Machine every act of this attempt names, or `undefined`
- *   when the caller names none.
- * @returns The resolved instance, or `undefined` when a named machine has none
- *   resolvable here.
+ * The shape a path that performs a **keyed** ownership act needs, stated as a
+ * type so the requirement is checked rather than remembered: a keyed act files
+ * itself under `(machine, instance, provider session)`, so a path that can reach
+ * one may not hold an instance whose machine is unnamed. Wave 3 left exactly
+ * that hole — a fresh lead start reserves keyless, which hides the machine's
+ * absence, and then settles on the provider session the connector confirms,
+ * which does not.
  */
-export async function resolveLiveAdapterIdForMachine(
+export type MachineScopedAdapterInstance = OwnedAdapterInstance & { readonly machineId: string };
+
+/** What a caller knows about the instance it wants, before it is resolved. */
+export interface OwnedAdapterInstanceTarget {
+  /** Adapter type name the instance belongs to. */
+  readonly adapterName: string;
+  /**
+   * Instance the caller named itself, when it named one.
+   *
+   * Only usable together with {@link OwnedAdapterInstanceTarget.machineId}: the
+   * derivation is one-way, so a named instance whose machine is unnamed is half
+   * an identity, and half an identity is worse than none.
+   */
+  readonly adapterId?: string;
+  /**
+   * Machine every act of this attempt names, or `undefined` when the caller
+   * names none.
+   */
+  readonly machineId?: string;
+  /**
+   * Instance this agent was last known to live on, offered as a fallback for the
+   * unscoped form only.
+   *
+   * A persisted instance goes stale across a runtime restart or a failover, so
+   * it is never preferred — but for a caller that names no machine it beats
+   * failing a whole recovery because a registry lookup was momentarily
+   * unavailable, and it cannot mix two identities because there is only one.
+   */
+  readonly storedAdapterId?: string;
+}
+
+/**
+ * Resolve the instance an attempt addresses **and** the machine it acts for, or
+ * answer that this runtime may not act at all.
+ *
+ * One seam for a rule that was split in three: a fresh resolution for every act
+ * (a persisted instance goes stale across a restart or a failover), the machine
+ * carried alongside it, and the refusal when the two cannot be produced
+ * together. Reserving against one instance and dispatching to another reserves
+ * in a namespace the dispatch never uses, and reserving under machine X while
+ * dispatching to machine R's instance builds a key no other actor computes — it
+ * collides with nothing, so it protects nothing, and the runtime that really
+ * owns that instance claims the same provider session beside it.
+ *
+ * **The three answers, and why each is the honest one:**
+ *
+ * - **A named instance with its machine** is returned unresolved. The caller
+ *   already holds both halves from one source — the selection schema refuses the
+ *   pair any other way — so there is nothing to look up and nothing to second-guess.
+ * - **A named instance without a machine** is `undefined`. This is the handler-side
+ *   half of the schema's refinement, and it is needed as well as the schema:
+ *   the test bus does not validate, and defaulting to this runtime's own identity
+ *   here is precisely the silent mis-key the refinement exists to prevent.
+ * - **No named instance** derives one. With a machine named, a derivation that
+ *   cannot answer is `undefined` — the stored instance may not stand in, because
+ *   the machine it belongs to cannot be recovered from it. With no machine named,
+ *   the attempt is unscoped in every act, so the stored instance is an honest
+ *   fallback.
+ *
+ * `undefined` means *this runtime may not act for that machine*, never *this
+ * failed*. Translating it is the caller's job, because only the caller knows
+ * what its own refusal looks like: a send defers the agent, a restart reports a
+ * non-native recovery, a start refuses to dispatch.
+ * @param bus - Bus the lookup is issued on.
+ * @param target - What the caller knows about the instance and the machine it acts for.
+ * @returns Both halves of the key, or `undefined` when this runtime may not act for that machine.
+ */
+export async function resolveOwnedAdapterInstance(
   bus: IMakaioBus,
-  agent: Pick<MakaioSessionAgent, 'adapterName' | 'adapterId'>,
-  machineId: string | undefined,
-): Promise<string | undefined> {
-  if (machineId === undefined) return resolveLiveAdapterId(bus, agent);
-  return resolveAdapterId(bus, agent.adapterName, machineId).catch((error: unknown) => {
+  target: OwnedAdapterInstanceTarget,
+): Promise<OwnedAdapterInstance | undefined> {
+  const { adapterName, adapterId, machineId, storedAdapterId } = target;
+  if (adapterId !== undefined) {
+    return machineId === undefined ? undefined : { adapterId, machineId };
+  }
+  const resolved = await resolveAdapterId(bus, adapterName, machineId).catch((error: unknown) => {
     // The refusal is modeled by the caller (deferral / non-native degrade), so
-    // the only trace of WHY the named machine had no instance would otherwise
-    // vanish with this catch.
+    // the only trace of WHY no instance was resolvable would otherwise vanish
+    // with this catch.
     console.debug(
-      `[resolveLiveAdapterIdForMachine] no instance of ${agent.adapterName} resolvable for machine ${machineId}:`,
+      `[resolveOwnedAdapterInstance] no instance of ${adapterName} resolvable for machine ${machineId ?? '<unscoped>'}:`,
       error,
     );
     return undefined;
   });
+  // The fallback belongs to the unscoped form alone: with a machine named it
+  // would produce the mixed key above, silently, and exactly in the moment the
+  // lookup that could have proven the pair was unavailable.
+  const effective = resolved ?? (machineId === undefined ? storedAdapterId : undefined);
+  if (effective === undefined) return undefined;
+  return machineId === undefined ? { adapterId: effective } : { adapterId: effective, machineId };
 }
 
 /**

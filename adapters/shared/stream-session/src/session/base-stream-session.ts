@@ -6,6 +6,7 @@ import {
   UserMessageQueue,
   markCompletedWithFinalResult,
   processQueueMessages,
+  rejectQueuedHandles,
   type MessageHandle,
   ProceduralConnectorTurn,
 } from '@makaio/ai-adapters-core';
@@ -190,10 +191,26 @@ export abstract class BaseStreamSession<
    * @param queue - The user message queue to drain
    */
   public async processQueue(queue: UserMessageQueue): Promise<void> {
+    if (this.closing) {
+      rejectQueuedHandles(queue);
+      return;
+    }
     await processQueueMessages(queue, {
       getCurrentTurn: () => this.currentTurn,
       startNewTurn: (handle, mergedContent) => this.startNewTurn(handle, mergedContent),
     });
+  }
+
+  /**
+   * Terminally retire this stream session before pausing active provider work.
+   *
+   * Stream connectors reuse a session after {@link abort} interrupts a turn.
+   * Set the inherited queue gate before the first await only when ownership ends,
+   * so a retained session reference cannot start a turn during connector close.
+   */
+  public async close(): Promise<void> {
+    this.closing = true;
+    await super.abort();
   }
 
   /**
@@ -205,8 +222,9 @@ export abstract class BaseStreamSession<
    * machine always reaches a terminal state.
    * @param handle - The message handle to process
    * @param mergedContent - Optional content from superseded/merged messages
+   * @returns `false` when terminal close prevented provider work from starting
    */
-  protected async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
+  protected async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
     this.config.onTurnStart?.(handle);
 
     // Rotate the adapter-local session ID on every turn (stateless API pattern).
@@ -257,6 +275,7 @@ export abstract class BaseStreamSession<
       eventType: 'agent_started',
       model: this.currentModel,
     });
+    if (this.completeHandleIfClosing(handle)) return false;
 
     // Capture the turn reference — this.currentTurn may be overwritten by an
     // immediate message arriving during the async gap below.

@@ -16,6 +16,7 @@ import type { AIReasoningLevel, NativeForkDirective } from '@makaio/contracts';
 import { CodexAppServerConnector } from '../connector.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 import type { JsonRpcClient, ServerRequestHandler, NotificationHandler } from '../utils/jsonRpcClient.js';
+import type { StdioTransport } from '../utils/createStdioTransport.js';
 import type { ServerRequest } from '../protocol/generated/index.js';
 
 /**
@@ -168,6 +169,11 @@ export interface CreateConnectorTestContextOptions {
   adapterAuth?: ResolvedAdapterAuth;
   /** Optional JSON-RPC client override for failure/reconnect tests. */
   jsonRpcClient?: MockJsonRpcClient;
+  /**
+   * Optional stdio transport override, for tests that drive the connector's exit
+   * observation without spawning a child.
+   */
+  transport?: StdioTransport;
 }
 
 /**
@@ -201,6 +207,7 @@ export async function createConnectorTestContext(
     ...(options.globalBus !== undefined && { globalBus: options.globalBus }),
     ...(options.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: options.resumeAdapterSessionId }),
     ...(options.nativeFork !== undefined && { nativeFork: options.nativeFork }),
+    ...(options.transport !== undefined && { transport: options.transport }),
   });
 
   return { mockBus, mockJsonRpcClient, connector, tempCwd };

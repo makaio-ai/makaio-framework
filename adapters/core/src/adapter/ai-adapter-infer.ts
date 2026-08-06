@@ -35,6 +35,7 @@ import {
   createConnectorRuntime,
   type ConnectorRuntimeHandle,
 } from '../agent/connector-runtime.js';
+import { rethrowTeardownFailure } from '../connector/teardown-report.js';
 import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 import {
   commitAdapterProviderContextActivation,
@@ -193,7 +194,9 @@ async function createReadyInferenceRuntime<TBus extends ScopedBus<string>, TConn
     return await rollbackAdapterProviderContextActivationAfterFailure({
       activation,
       primaryError: error,
-      ...(failedRuntime !== undefined && { cleanup: () => closeConnectorRuntime(failedRuntime) }),
+      ...(failedRuntime !== undefined && {
+        cleanup: () => rethrowTeardownFailure(closeConnectorRuntime(failedRuntime)),
+      }),
       operation: `Ephemeral inference for ${deps.adapterName}`,
       cleanupFailureMessage: `Ephemeral inference setup and connector cleanup both failed for ${deps.adapterName}.`,
     });
@@ -268,12 +271,9 @@ async function completeInferenceRuntime<TConnector extends Pick<AIAgentConnector
     inferenceError = error;
   }
 
-  let cleanupError: unknown;
-  try {
-    await closeConnectorRuntime(runtime);
-  } catch (error) {
-    cleanupError = error;
-  }
+  // The runtime close reports instead of throwing, so the cleanup arm of the
+  // aggregate is read out of the report.
+  const { closeError: cleanupError } = await closeConnectorRuntime(runtime);
   if (inferenceError !== undefined && cleanupError !== undefined) {
     throw new AggregateError(
       [inferenceError, cleanupError],

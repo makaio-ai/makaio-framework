@@ -32,6 +32,14 @@ const initHarness = vi.hoisted(() => {
 });
 
 vi.mock('../src/session-init.js', () => ({
+  CopilotSessionInitializationCleanupError: class CopilotSessionInitializationCleanupError extends Error {
+    public constructor(
+      _initializationError: unknown,
+      public readonly cleanupFailures: readonly { stage: string }[],
+    ) {
+      super('GitHub Copilot session initialization cleanup failed');
+    }
+  },
   performSessionInit: vi.fn((_ctx: unknown, callbacks: InitCall['callbacks'], assertCurrent: () => void) => {
     initHarness.calls.push({ callbacks, assertCurrent });
     return initHarness.deferred?.promise ?? Promise.reject(new Error('performSessionInit deferred was not set'));
@@ -54,6 +62,7 @@ interface MockClient {
 
 interface MockSession {
   abort: ReturnType<typeof vi.fn>;
+  beginClose: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
   processQueue: ReturnType<typeof vi.fn>;
 }
@@ -66,6 +75,7 @@ function makeInitResult(): { adapterSessionId: string; client: MockClient; sessi
     },
     session: {
       abort: vi.fn().mockResolvedValue(undefined),
+      beginClose: vi.fn(),
       destroy: vi.fn().mockResolvedValue(undefined),
       processQueue: vi.fn().mockResolvedValue(undefined),
     },
@@ -115,6 +125,7 @@ describe('github-copilot-sdk connector initialization lifecycle', () => {
 
     const initializePromise = connector.initialize();
     await vi.waitFor(() => expect(initHarness.calls).toHaveLength(1));
+    initHarness.calls[0]?.callbacks.onProvisionalResources?.(initResult.client, initResult.session);
 
     initHarness.deferred?.resolve(initResult);
     await initializePromise;
@@ -129,13 +140,87 @@ describe('github-copilot-sdk connector initialization lifecycle', () => {
 
     const initializePromise = connector.initialize();
     await vi.waitFor(() => expect(initHarness.calls).toHaveLength(1));
+    initHarness.calls[0]?.callbacks.onProvisionalResources?.(initResult.client, initResult.session);
 
     initHarness.deferred?.resolve(initResult);
     await connector.close();
 
     await expect(initializePromise).rejects.toThrow('GitHub Copilot session initialization was cancelled');
     expect(initResult.session.abort).toHaveBeenCalledTimes(1);
+    expect(initResult.session.beginClose).toHaveBeenCalledTimes(1);
     expect(initResult.session.destroy).toHaveBeenCalledTimes(1);
     expect(initResult.client.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports unknown when unpublished cleanup fails after close wins publication', async () => {
+    const connector = await makeConnector();
+    const initResult = makeInitResult();
+    initResult.session.destroy.mockRejectedValueOnce(new Error('destroy failed'));
+
+    const initializePromise = connector.initialize();
+    await vi.waitFor(() => expect(initHarness.calls).toHaveLength(1));
+    initHarness.calls[0]?.callbacks.onProvisionalResources?.(initResult.client, initResult.session);
+
+    initHarness.deferred?.resolve(initResult);
+    await expect(connector.close()).resolves.toMatchObject({
+      evidence: 'unknown',
+      detail: expect.stringContaining('unpublished session destroy'),
+    });
+
+    await expect(initializePromise).rejects.toThrow('GitHub Copilot session initialization cleanup failed');
+    expect(initResult.session.abort).toHaveBeenCalledTimes(1);
+    expect(initResult.session.beginClose).toHaveBeenCalledTimes(1);
+    expect(initResult.session.destroy).toHaveBeenCalledTimes(1);
+    expect(initResult.client.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for a provisional initialization flight to clean up before closing', async () => {
+    const connector = await makeConnector();
+    const initResult = makeInitResult();
+    let closeSettled = false;
+
+    const initializePromise = connector.initialize();
+    await vi.waitFor(() => expect(initHarness.calls).toHaveLength(1));
+    initHarness.calls[0]?.callbacks.onProvisionalResources?.(initResult.client, initResult.session);
+
+    const closePromise = connector.close().finally(() => {
+      closeSettled = true;
+    });
+    const concurrentClosePromise = connector.close();
+    await vi.waitFor(() => expect(initResult.session.abort).toHaveBeenCalledTimes(1));
+
+    expect(closeSettled).toBe(false);
+    expect(connector.sessionSeenDuringWire).toBeUndefined();
+    expect(Reflect.get(connector, 'session')).toBeUndefined();
+
+    initHarness.deferred?.resolve(initResult);
+
+    await expect(initializePromise).rejects.toThrow('GitHub Copilot session initialization was cancelled');
+    await closePromise;
+    await concurrentClosePromise;
+
+    expect(initResult.session.destroy).toHaveBeenCalledTimes(1);
+    expect(initResult.client.stop).toHaveBeenCalledTimes(1);
+    expect(connector.sessionSeenDuringWire).toBeUndefined();
+    expect(Reflect.get(connector, 'session')).toBeUndefined();
+    expect(Reflect.get(connector, 'client')).toBeUndefined();
+  });
+
+  it('rejects sends after close without starting initialization or publishing resources', async () => {
+    const connector = await makeConnector();
+
+    await connector.close();
+
+    await expect(
+      connector.sendMessage({
+        role: 'user',
+        message: 'after close',
+        blocks: [{ type: 'text', content: 'after close' }],
+      }),
+    ).rejects.toThrow('connector is closed');
+    expect(initHarness.calls).toHaveLength(0);
+    expect(connector.sessionSeenDuringWire).toBeUndefined();
+    expect(Reflect.get(connector, 'session')).toBeUndefined();
+    expect(Reflect.get(connector, 'client')).toBeUndefined();
   });
 });

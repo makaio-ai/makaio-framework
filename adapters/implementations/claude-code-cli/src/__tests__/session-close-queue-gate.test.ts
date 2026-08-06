@@ -4,13 +4,24 @@ import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
 import type { SDKMessage } from '@makaio/client-claude-code';
 
-const transportStub = vi.hoisted(() => ({
-  transport: {
-    onMessage: vi.fn(),
-    onError: vi.fn(),
-    close: vi.fn(),
-  },
-}));
+const transportStub = vi.hoisted(() => {
+  // The real transport settles its exit observation from the child's `exit`
+  // event, which follows the kill `close()` sends. Mirroring that here is what
+  // lets a session teardown reach its `exited` class instead of waiting out the
+  // observation budget.
+  let settleExit: (code: number | null) => void = () => {};
+  const exited = new Promise<number | null>((resolve) => {
+    settleExit = resolve;
+  });
+  return {
+    transport: {
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      close: vi.fn(() => settleExit(null)),
+      exited,
+    },
+  };
+});
 
 vi.mock('../utils/createStdioTransport.js', () => ({
   createStdioTransport: vi.fn(() => transportStub.transport),

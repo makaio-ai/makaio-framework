@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createMockScopedBus } from '@makaio/test-utils';
 import { MessageHandle } from '../../message-handle/index.js';
+import type { ConnectorTeardownResult } from '@makaio/contracts';
 import { AIAgentConnector } from '../agent-connector.js';
 import type { AgentStartResult, BaseAgentConnectorConfig, ConnectorStartOptions } from '../../agent/types.js';
 import type { MessageResult } from '../../message-handle/index.js';
@@ -30,7 +31,16 @@ class TurnNumberConnector extends AIAgentConnector<TestBus> {
 
   public abort(): void {}
 
-  public async close(): Promise<void> {}
+  /**
+   * Report a teardown of nothing.
+   *
+   * This double holds no process, connection or subscription, so `released` is
+   * literally true of it: every handle is dropped and no callback can arrive.
+   * @returns The `released` class.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
+    return { evidence: 'released' };
+  }
 
   public async getAdapterSessionId(): Promise<string> {
     return 'adapter-session-1';

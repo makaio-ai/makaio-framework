@@ -18,7 +18,11 @@ import {
   type AIAdapterConfig,
   type AdapterProviderDefinition,
 } from '@makaio/ai-adapters-core';
-import { defineAdapterProviderAuth, type AdapterProviderRef } from '@makaio/contracts';
+import {
+  defineAdapterProviderAuth,
+  type AdapterProviderRef,
+  type ConnectorTeardownResult,
+} from '@makaio/contracts';
 import { DEFAULT_TIMEOUTS } from '@makaio/utils';
 import { providerDefinition } from './provider-fixture.js';
 import { DEVEX_SMOKE_ADAPTER_NAME } from './shared.js';
@@ -93,7 +97,16 @@ class DevexSmokeConnector extends AIAgentConnector<DevexSmokeBus> {
 
   public async interrupt(): Promise<void> {}
 
-  public async close(): Promise<void> {}
+  /**
+   * Report a teardown of nothing.
+   *
+   * This double holds no process, connection or subscription, so `released` is
+   * literally true of it: every handle is dropped and no callback can arrive.
+   * @returns The `released` class.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
+    return { evidence: 'released' };
+  }
 
   public async getAdapterSessionId(): Promise<string> {
     await this.initialize();

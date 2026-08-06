@@ -1,4 +1,7 @@
-export { createClaudeConformanceProviderContext } from './conformance-provider-context.js';
+export {
+  createClaudeConformanceProviderContext,
+  type ClaudeConformanceProviderContextOptions,
+} from './conformance-provider-context.js';
 export {
   acquireClaudeConformanceSessionConfigFixture,
   closeClaudeConformanceConnectorRuntimes,

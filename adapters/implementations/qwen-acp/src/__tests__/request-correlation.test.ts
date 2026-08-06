@@ -1,3 +1,4 @@
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
@@ -93,6 +94,7 @@ async function makeAgent(): Promise<{
     adapterId: TEST_ADAPTER_ID,
     adapterName: 'qwen-acp',
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     sessionId: 'session-1',
     cwd: tmpdir(),
@@ -143,7 +145,7 @@ async function startTurnWithCorrelation(
 
 describe('QwenAcpAgent shared-core usage attribution', () => {
   const usageEvents: Array<Record<string, unknown>> = [];
-  let closeAgent: (() => Promise<void>) | undefined;
+  let closeAgent: (() => Promise<unknown>) | undefined;
 
   beforeEach(() => {
     mockCreateAcpConnection.mockReset();

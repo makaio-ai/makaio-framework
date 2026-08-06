@@ -5,8 +5,10 @@ const capturedClientConfigs = vi.hoisted(() => [] as Array<Record<string, unknow
 const lifecycleControls = vi.hoisted(() => ({
   blockInitialize: false,
   clientStopCalls: 0,
+  clientStopError: undefined as Error | undefined,
   resolveInitialize: undefined as (() => void) | undefined,
   sessionDestroyCalls: 0,
+  sessionDestroyError: undefined as Error | undefined,
 }));
 
 vi.mock('@github/copilot-sdk', () => {
@@ -17,6 +19,7 @@ vi.mock('@github/copilot-sdk', () => {
     public async start(): Promise<void> {}
     public async stop(): Promise<void> {
       lifecycleControls.clientStopCalls += 1;
+      if (lifecycleControls.clientStopError) throw lifecycleControls.clientStopError;
     }
     public async createSession(_config: unknown): Promise<{ sessionId: string; on: (cb: () => void) => void }> {
       return {
@@ -45,8 +48,10 @@ vi.mock('../src/session.js', () => {
     }
     public async processQueue(): Promise<void> {}
     public async abort(): Promise<void> {}
+    public beginClose(): void {}
     public async destroy(): Promise<void> {
       lifecycleControls.sessionDestroyCalls += 1;
+      if (lifecycleControls.sessionDestroyError) throw lifecycleControls.sessionDestroyError;
     }
   }
 
@@ -68,8 +73,10 @@ describe('github-copilot-sdk connector system prompt handling', () => {
     capturedClientConfigs.length = 0;
     lifecycleControls.blockInitialize = false;
     lifecycleControls.clientStopCalls = 0;
+    lifecycleControls.clientStopError = undefined;
     lifecycleControls.resolveInitialize = undefined;
     lifecycleControls.sessionDestroyCalls = 0;
+    lifecycleControls.sessionDestroyError = undefined;
     delete process.env['COPILOT_TOKEN'];
   });
 
@@ -160,16 +167,17 @@ describe('github-copilot-sdk connector system prompt handling', () => {
     const initializePromise = connector.initialize();
     await vi.waitFor(() => expect(lifecycleControls.resolveInitialize).toBeTypeOf('function'));
 
-    await connector.close();
+    const closePromise = connector.close();
     lifecycleControls.resolveInitialize?.();
 
     await expect(initializePromise).rejects.toThrow('GitHub Copilot session initialization was cancelled');
+    await expect(closePromise).resolves.toMatchObject({ evidence: 'detached' });
     expect(lifecycleControls.sessionDestroyCalls).toBe(1);
     expect(lifecycleControls.clientStopCalls).toBe(1);
 
     lifecycleControls.blockInitialize = false;
-    await connector.initialize();
-    expect(capturedSessionConfigs).toHaveLength(2);
+    await expect(connector.initialize()).rejects.toThrow('GitHub Copilot connector is closed');
+    expect(capturedSessionConfigs).toHaveLength(1);
   });
 
   it('does not report in-place reasoning changes as applied during in-flight initialization', async () => {
@@ -192,8 +200,37 @@ describe('github-copilot-sdk connector system prompt handling', () => {
 
     await expect(connector.changeReasoningInPlace('high')).resolves.toBe(false);
 
-    await connector.close();
+    const closePromise = connector.close();
     lifecycleControls.resolveInitialize?.();
     await expect(initializePromise).rejects.toThrow('GitHub Copilot session initialization was cancelled');
+    await closePromise;
+  });
+
+  it.each([
+    ['provisional session destroy', () => (lifecycleControls.sessionDestroyError = new Error('destroy failed'))],
+    ['provisional client stop', () => (lifecycleControls.clientStopError = new Error('stop failed'))],
+  ])('reports unknown when %s fails during cancellation cleanup', async (stage, failCleanup) => {
+    lifecycleControls.blockInitialize = true;
+    failCleanup();
+
+    const connector = new GitHubCopilotConnector({
+      bus: await GitHubCopilotConnectorNamespace.scopedBus(),
+      adapterId: 'adapter-test',
+      adapterName: 'github-copilot-sdk',
+      agentId: 'agent-test',
+      model: 'gpt-4o-mini',
+      cwd: process.cwd(),
+      env: {},
+      adapterAuth: testAdapterAuth,
+    });
+
+    const initializePromise = connector.initialize();
+    await vi.waitFor(() => expect(lifecycleControls.resolveInitialize).toBeTypeOf('function'));
+
+    const closePromise = connector.close();
+    lifecycleControls.resolveInitialize?.();
+
+    await expect(initializePromise).rejects.toThrow('GitHub Copilot session initialization cleanup failed');
+    await expect(closePromise).resolves.toMatchObject({ evidence: 'unknown', detail: expect.stringContaining(stage) });
   });
 });

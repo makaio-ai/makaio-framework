@@ -456,6 +456,8 @@ Purpose: Aborts the agent and removes it from the adapter's tracking.
 
 | Field | Type | Required |
 |-------|------|----------|
+| `detail` | `string \| undefined` | no |
+| `evidence` | `"unknown" \| "released" \| "exited" \| "closed" \| "detached"` | yes |
 | `success` | `boolean` | yes |
 
 ---

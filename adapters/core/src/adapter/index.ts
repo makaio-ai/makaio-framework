@@ -15,3 +15,4 @@ export {
   type AgentUsageTotals,
 } from './types.js';
 export { type ConfigFactoryInput, type IAdapterConfigFactory } from './ai-adapter-config.js';
+export type { AgentDisposalReport, AgentTeardownOptions } from './agent-registry.js';

@@ -8,7 +8,7 @@
  * @packageDocumentation
  */
 
-import { resolveDisabledNativeTools } from '@makaio/ai-adapters-core';
+import { resolveDisabledNativeTools, type GenerationRetirementLedger } from '@makaio/ai-adapters-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { InitializeParams } from '../protocol/generated/index.js';
@@ -79,6 +79,15 @@ export interface ConnectionManagerContext {
   /** Global bus used for cross-namespace harness policy lookup. */
   globalBus: IMakaioBus;
   /**
+   * The connector's record of app-server process generations it superseded
+   * without watching them end (I33).
+   *
+   * Held by the connector rather than by this module so one ledger spans every
+   * reset and the connector's own close, which is what lets a class reported at
+   * close time still carry a predecessor nobody watched.
+   */
+  generations: GenerationRetirementLedger;
+  /**
    * Registers JSON-RPC notification and server-request handlers on the newly created client.
    * Called immediately after the client is assigned so handlers are in place before any
    * messages are sent.
@@ -90,6 +99,32 @@ export interface ConnectionManagerContext {
    * @param terminate - When `true`, the connector should be torn down
    */
   handleError: (error: unknown, terminate: boolean) => void;
+
+  /**
+   * Runs the connector's local finalisation after an exit it requested itself.
+   *
+   * The error channel deliberately stays silent for such an exit, so this is
+   * the only path left that can complete a turn the shutdown interrupted.
+   * @param code - Exit code reported by the child, or `null` for a signalled exit
+   * @param terminate - Whether the connector itself is ending, rather than one of
+   *   its process generations being replaced
+   */
+  finalizeRequestedShutdown: (code: number | null, terminate: boolean) => void;
+}
+
+/**
+ * The transport whose child answers for this connector right now.
+ *
+ * One definition for a question two places ask — the class a close reports, and
+ * whose shutdown an observed exit belongs to — because answering it differently
+ * in the two is exactly how a reset generation gets mistaken for the connector's
+ * own end. Ownership decides who may close a transport; this decides whose end
+ * shows.
+ * @param ctx - Connection manager context
+ * @returns The owned transport, the injected one, or `undefined` when neither exists
+ */
+export function connectorTransport(ctx: ConnectionManagerContext): StdioTransport | undefined {
+  return ctx.getOwnedTransport() ?? ctx.getInjectedTransport();
 }
 
 /**
@@ -121,7 +156,44 @@ async function createClient(ctx: ConnectionManagerContext): Promise<void> {
   }
   ctx.setJsonRpcClient(makeJsonRpcClient(transport));
   transport.onError((error) => ctx.handleError(error, true));
+  wireRequestedShutdownFinalisation(ctx, transport);
   ctx.registerClientHandlers();
+}
+
+/**
+ * Route an exit the connector asked for into local finalisation only.
+ *
+ * Exit evidence and turn finalisation are separate concerns. A close this
+ * connector requested must not surface as a terminal connector error — the
+ * transport withholds it from the error channel for exactly that reason — but
+ * the turn that was in flight across the shutdown still has to be completed,
+ * or its caller waits on a handle nobody will ever settle. So the exit is
+ * consumed here instead, and only for the requested case: an unexpected death
+ * already travelled through `onError` and must not be finalised twice.
+ *
+ * **Requested by whom is the second question, and it decides termination.** A
+ * transport shutdown marker says "somebody in this runtime asked for this exit",
+ * and two very different parties can be that somebody: a `close`/`abort` of the
+ * *connector*, or a {@link resetClient} dropping one app-server generation after
+ * a failed handshake. Terminating on the second is what made a failed handshake
+ * unrecoverable — the retry reconnected without the API-key login the termination
+ * discarded, and the later close reported a repeat teardown instead of closing
+ * the process that retry had spawned. So termination is gated on the exiting
+ * transport still being {@link connectorTransport}: a generation the reset
+ * released is no longer it, and its end finalises the interrupted turn without
+ * ending the connector that outlived it.
+ *
+ * Exported for the suite that drives this seam directly: the wiring happens
+ * inside subprocess creation, which a unit test cannot reach without spawning a
+ * real `codex` binary.
+ * @param ctx - Connection manager context
+ * @param transport - Transport whose child exit is being observed
+ */
+export function wireRequestedShutdownFinalisation(ctx: ConnectionManagerContext, transport: StdioTransport): void {
+  void transport.exited.then((code) => {
+    if (!transport.shutdownRequested()) return;
+    ctx.finalizeRequestedShutdown(code, connectorTransport(ctx) === transport);
+  });
 }
 
 /**
@@ -130,9 +202,18 @@ async function createClient(ctx: ConnectionManagerContext): Promise<void> {
  * Resets connection and handler-registration flags so the next `initializeConnection`
  * call starts fresh. If an injected test client is present it is restored (not closed)
  * so the test can continue using the same mock instance.
+ *
+ * **This is the connector's generation-retirement choke point (I33).** Every
+ * app-server process this connector replaces inside itself is dropped here, and a
+ * replacement may not start before its predecessor's end has been consumed — so
+ * the dropped transport's own exit observation is awaited, bounded by the exit
+ * budget, before the reset returns. An end that does not arrive in that window
+ * does **not** fail the reset: a stuck predecessor must not block a live agent, so
+ * the non-observation is recorded instead and caps every class this connector
+ * reports afterwards.
  * @param ctx - Connection manager context
  */
-export function resetClient(ctx: ConnectionManagerContext): void {
+export async function resetClient(ctx: ConnectionManagerContext): Promise<void> {
   ctx.setIsConnected(false);
   ctx.setClientHandlersRegistered(false);
   ctx.setDisabledNativeTools(new Set());
@@ -165,6 +246,13 @@ export function resetClient(ctx: ConnectionManagerContext): void {
     }
   } finally {
     ctx.setJsonRpcClient(undefined);
+  }
+
+  // Booked before the failures are raised: a reset that could not close cleanly
+  // is exactly the case where the predecessor is most likely still alive, and it
+  // is the one where losing the record would matter most.
+  if (transport !== undefined) {
+    await ctx.generations.retire(ctx.generations.supersede(transport.exited));
   }
 
   if (failures.length === 1) throw failures[0];
@@ -209,7 +297,7 @@ async function performConnectionInit(ctx: ConnectionManagerContext): Promise<voi
     ctx.setIsConnected(true);
   } catch (error) {
     try {
-      resetClient(ctx);
+      await resetClient(ctx);
     } catch (resetError) {
       throw new AggregateError([error, resetError], 'Codex process-ready handshake and reset both failed.', {
         cause: error,

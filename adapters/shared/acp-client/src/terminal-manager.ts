@@ -2,6 +2,20 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type * as acp from '@agentclientprotocol/sdk';
 import { waitForSpawn, cleanupFailedProcess } from './proc-utils.js';
 
+/**
+ * What a terminal process's own end looks like once it has been observed.
+ *
+ * Named because it is the evidence type the manager hands out, not merely the
+ * shape of a promise it keeps: a caller that reports a teardown class for a
+ * connector reads exactly this per terminal it spawned.
+ */
+export interface TerminalExitObservation {
+  /** Exit code, or `null` when the process was ended by a signal. */
+  readonly exitCode: number | null;
+  /** Terminating signal, or `null` when the process exited on its own. */
+  readonly signal: string | null;
+}
+
 /** Internal state for a managed terminal process. */
 interface ManagedTerminal {
   /** The underlying child process */
@@ -19,7 +33,7 @@ interface ManagedTerminal {
   /** True once the `close` event has fired and all I/O streams have been flushed */
   hasExited: boolean;
   /** Promise that resolves with exit code and signal when the process exits */
-  readonly exitPromise: Promise<{ exitCode: number | null; signal: string | null }>;
+  readonly exitPromise: Promise<TerminalExitObservation>;
 }
 
 /**
@@ -31,18 +45,39 @@ interface ManagedTerminal {
  */
 export class TerminalManager {
   private readonly terminals = new Map<string, ManagedTerminal>();
+  /**
+   * Ends of terminals already released one at a time, kept until somebody reads
+   * them.
+   *
+   * An agent-initiated `terminal/release` is an ordinary protocol act, so it books
+   * nothing and caps nothing — but it does end a process this runtime spawned, and
+   * a shutdown that reports a class for this connector is answerable for that end
+   * too. Dropping the exit promise on release let a later close claim `exited` for a
+   * kill nobody ever watched land; keeping it makes the same close either *observe*
+   * the end — the usual case, since the SIGKILL is long since reaped by then — or
+   * report honestly that it did not.
+   *
+   * Bounded by the number of releases between two shutdown collections, and each
+   * collection empties it: what is retained is a settled promise per released
+   * terminal, not the terminal.
+   */
+  private readonly retiredExits: Array<Promise<TerminalExitObservation>> = [];
   private readonly baseEnv: Readonly<Record<string, string>>;
   private readonly scrubEnvVars: ReadonlySet<string>;
+  private readonly spawnTimeoutMs: number;
   private nextId = 0;
 
   /**
    * Create a terminal manager bound to one finalized connector environment.
-   * @param options - Sanitized base environment and variables that terminal requests may not restore
+   * @param options - Sanitized base environment, variables that terminal requests
+   *   may not restore, and the budget a terminal spawn may take
    */
   public constructor(options: {
     readonly baseEnv: Readonly<Record<string, string>>;
     readonly scrubEnvVars?: readonly string[];
+    readonly spawnTimeoutMs: number;
   }) {
+    this.spawnTimeoutMs = options.spawnTimeoutMs;
     this.scrubEnvVars = new Set(options.scrubEnvVars ?? []);
     this.baseEnv = Object.freeze(
       Object.fromEntries(Object.entries(options.baseEnv).filter(([name]) => !this.scrubEnvVars.has(name))),
@@ -69,13 +104,17 @@ export class TerminalManager {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    try {
-      await waitForSpawn(proc);
-    } catch (error) {
-      await cleanupFailedProcess(proc);
-      throw error;
-    }
-
+    // **Observed before it is waited for.** A fired `exit` or `close` is not
+    // replayed to a listener that arrives afterwards, so a terminal whose command
+    // ends while this function is still awaiting something would leave
+    // `exitPromise` unsettled forever — and since connector shutdown now *awaits*
+    // these promises as its exit evidence, an unsettled one costs the whole
+    // observation budget and then reports `detached` for a process that died long
+    // ago. Installing the observation before the first await makes that
+    // impossible by construction instead of by there happening to be no
+    // suspension point in between; it is the ordering `createAcpConnection` uses
+    // for the same reason. The same applies to the output listeners: bytes a fast
+    // command already wrote are equally unrepeatable.
     const terminal: ManagedTerminal = {
       process: proc,
       output: '',
@@ -84,7 +123,7 @@ export class TerminalManager {
       exitCode: undefined,
       signal: undefined,
       hasExited: false,
-      exitPromise: new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
+      exitPromise: new Promise<TerminalExitObservation>((resolve) => {
         proc.on('exit', (code, exitSignal) => {
           terminal.exitCode = code;
           terminal.signal = exitSignal ?? null;
@@ -112,6 +151,16 @@ export class TerminalManager {
 
     proc.stdout?.on('data', appendOutput);
     proc.stderr?.on('data', appendOutput);
+
+    try {
+      await waitForSpawn(proc, { timeoutMs: this.spawnTimeoutMs });
+    } catch (error) {
+      // Registered only after the spawn is proven: a terminal the caller never
+      // received an ID for must not be reachable by ID, and must not be handed
+      // back by `releaseAll` as evidence.
+      await cleanupFailedProcess(proc);
+      throw error;
+    }
 
     this.terminals.set(terminalId, terminal);
 
@@ -166,9 +215,16 @@ export class TerminalManager {
   }
 
   /**
-   * Releases a terminal, killing the process and freeing all associated resources.
+   * Releases a terminal, killing the process and keeping its end to be read.
    *
-   * After this call the terminal ID is no longer valid.
+   * After this call the terminal ID is no longer valid. The release itself does not
+   * wait — an agent asked for it and is owed a prompt response — but the process's
+   * exit promise moves to {@link retiredExits} rather than being dropped, so the
+   * connector shutdown that later reports a class for this runtime collects this
+   * kill's end alongside the ends of the terminals still open. That is the whole of
+   * what this release owes: it is a normal protocol act and books no generation, so
+   * it can cap no class on its own — an end already landed is simply *observed* by
+   * the collection instead of being assumed.
    * @param params - ACP release terminal request
    * @returns Empty response object
    */
@@ -177,20 +233,42 @@ export class TerminalManager {
     if (terminal) {
       terminal.process.kill('SIGKILL');
       this.terminals.delete(params.terminalId);
+      this.retiredExits.push(terminal.exitPromise);
     }
     return {};
   }
 
   /**
-   * Kills and removes all managed terminals.
+   * Kills and removes all managed terminals, handing back their ends to watch.
    *
-   * Should be called during connector shutdown to prevent resource leaks.
+   * Called during connector shutdown. The kill is a signal, not an observation:
+   * these are processes this runtime spawned, so their ends are evidence its
+   * teardown is entitled to — and evidence it already holds, since every terminal
+   * carries its own exit promise from the moment it was created. Returning them is
+   * what lets the caller decide the honest class instead of assuming a SIGKILL
+   * landed.
+   *
+   * **Terminals released one at a time count too.** An agent-initiated
+   * `terminal/release` already killed its process and kept its end
+   * ({@link retiredExits}); those ends belong to this runtime's shutdown just as
+   * much as the ones killed here, because the class the caller reports covers every
+   * process this runtime spawned — not only the ones that happened to still be open
+   * at the end. Consuming the retained ends empties the list, so a second call
+   * reports each end once.
+   *
+   * The manager itself does not wait: a shutdown must not be held by a terminal,
+   * and the caller is the party with a budget and a class to report.
+   * @returns One exit observation per terminal this runtime ended and nobody has
+   *   read yet — the ends released earlier first, then the ones killed here.
    */
-  public releaseAll(): void {
+  public releaseAll(): ReadonlyArray<Promise<TerminalExitObservation>> {
+    const released: Array<Promise<TerminalExitObservation>> = this.retiredExits.splice(0);
     for (const [id, terminal] of this.terminals) {
       terminal.process.kill('SIGKILL');
+      released.push(terminal.exitPromise);
       this.terminals.delete(id);
     }
+    return released;
   }
 
   /**

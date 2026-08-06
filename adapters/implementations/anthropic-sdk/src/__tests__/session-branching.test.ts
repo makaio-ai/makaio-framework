@@ -159,7 +159,7 @@ class TestAnthropicSdkSession extends AnthropicSdkSession {
    * @param handle - The message handle to process
    * @param mergedContent - Optional merged content from superseded messages
    */
-  public override async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
+  public override async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
     return super.startNewTurn(handle, mergedContent);
   }
 

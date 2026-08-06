@@ -22,7 +22,7 @@ export {
 } from './storage-test-schema.js';
 
 /** Groups a test can leave out because it serves those rows from a real backend. */
-export type MockStorageHandlerGroup = 'agent' | 'session';
+export type MockStorageHandlerGroup = 'adapter' | 'agent' | 'session';
 
 /**
  * Register mock storage handlers for framework-core storage subjects.
@@ -40,7 +40,7 @@ export function registerMockStorageHandlers(options?: { omit?: readonly MockStor
   registerTurnHandlers(unsubs);
   registerMessageHandlers(unsubs);
   registerRoutingHandlers(unsubs);
-  registerAdapterHandlers(unsubs);
+  if (!omit.has('adapter')) registerAdapterHandlers(unsubs);
   if (!omit.has('agent')) registerAgentHandlers(unsubs);
   if (!omit.has('session')) registerSessionContextHandlers(unsubs);
   return () => unsubs.forEach((u) => u());
@@ -212,7 +212,12 @@ function registerRoutingHandlers(unsubs: Array<() => void>): void {
 }
 
 /**
- * Register mock adapter storage handlers.
+ * Register the mock adapter identity handlers.
+ *
+ * Omitted by a suite that composes the **real** identity registry: the mock
+ * derives instance IDs from a fixed test machine, so a suite whose subject is
+ * *which machine an instance was derived for* would be answering its own question
+ * with a stub.
  * @param unsubs - Array to collect cleanup functions
  */
 function registerAdapterHandlers(unsubs: Array<() => void>): void {

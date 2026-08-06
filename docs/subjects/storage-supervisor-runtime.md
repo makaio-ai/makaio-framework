@@ -70,7 +70,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `runtime` | `{ supervisorSessionId: string; clientId: string; pid: number \| null; status: "unknown" \| "running" \| "stopped" \| "exited"; cwd: string; command: string; args: string[]; startedAt: number; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; adapterSessionId?: string \| undefined; stoppedAt?: number \| undefined; metadata?: Record<string, unknown> \| undefined; } \| null` | yes |
+| `runtime` | `{ supervisorSessionId: string; clientId: string; pid: number \| null; status: "unknown" \| "exited" \| "running" \| "stopped"; cwd: string; command: string; args: string[]; startedAt: number; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; adapterSessionId?: string \| undefined; stoppedAt?: number \| undefined; metadata?: Record<string, unknown> \| undefined; } \| null` | yes |
 
 ### <a id="storage:supervisor-runtime.list"></a>`storage:supervisor-runtime.list` (rpc)
 
@@ -87,13 +87,13 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `limit` | `number \| undefined` | no |
-| `status` | `"unknown" \| "running" \| "stopped" \| "exited" \| undefined` | no |
+| `status` | `"unknown" \| "exited" \| "running" \| "stopped" \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `runtimes` | `{ supervisorSessionId: string; clientId: string; pid: number \| null; status: "unknown" \| "running" \| "stopped" \| "exited"; cwd: string; command: string; args: string[]; startedAt: number; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; adapterSessionId?: string \| undefined; stoppedAt?: number \| undefined; metadata?: Record<string, unknown> \| undefined; }[]` | yes |
+| `runtimes` | `{ supervisorSessionId: string; clientId: string; pid: number \| null; status: "unknown" \| "exited" \| "running" \| "stopped"; cwd: string; command: string; args: string[]; startedAt: number; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; adapterSessionId?: string \| undefined; stoppedAt?: number \| undefined; metadata?: Record<string, unknown> \| undefined; }[]` | yes |
 
 ### <a id="storage:supervisor-runtime.set"></a>`storage:supervisor-runtime.set` (rpc)
 
@@ -116,7 +116,7 @@ Type: Request (RPC)
 | `pid` | `number \| null` | yes |
 | `sessionId` | `string \| undefined` | no |
 | `startedAt` | `number` | yes |
-| `status` | `"unknown" \| "running" \| "stopped" \| "exited"` | yes |
+| `status` | `"unknown" \| "exited" \| "running" \| "stopped"` | yes |
 | `stoppedAt` | `number \| undefined` | no |
 | `supervisorSessionId` | `string` | yes |
 
@@ -141,7 +141,7 @@ Type: Request (RPC)
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 | `pid` | `number \| null \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
-| `status` | `"unknown" \| "running" \| "stopped" \| "exited" \| undefined` | no |
+| `status` | `"unknown" \| "exited" \| "running" \| "stopped" \| undefined` | no |
 | `stoppedAt` | `number \| undefined` | no |
 | `supervisorSessionId` | `string` | yes |
 

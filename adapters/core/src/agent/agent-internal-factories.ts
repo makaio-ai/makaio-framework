@@ -25,6 +25,10 @@ import {
   type AdapterSessionPublicationSink,
   type ConnectorSwapCommitGuard,
 } from './agent-connector-lifecycle-manager.js';
+import {
+  AgentConnectorSwapCoordinator,
+  type AgentConnectorSwapCoordinatorConfig,
+} from './agent-connector-swap-coordinator.js';
 import type { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import type { ToolCallTracker } from './tool-call-tracker.js';
 import type { ConnectorRuntimeHandle } from './connector-runtime.js';
@@ -271,4 +275,22 @@ export function createAgentConnectorLifecycleManager<
         { includeEventMetadata: false },
       ),
   });
+}
+
+/**
+ * Create the connector-replacement coordinator bound to one agent.
+ *
+ * Its own factory beside the lifecycle-manager one, for the same reason: the
+ * coordinator's dependency set is where the agent's runtime reads and the
+ * adapter-instance arbiter meet, and assembling it inside the agent's constructor
+ * put eight collaborator wirings in a composition root that is already at its
+ * reviewed size.
+ * @param config - Lifecycle owner, arbiter, runtime reads and publication sinks
+ * @returns Configured connector-replacement coordinator
+ */
+export function createAgentConnectorSwapCoordinator<
+  TBus extends ScopedBus<string>,
+  TConnector extends AIAgentConnector<TBus>,
+>(config: AgentConnectorSwapCoordinatorConfig<TBus, TConnector>): AgentConnectorSwapCoordinator<TBus, TConnector> {
+  return new AgentConnectorSwapCoordinator(config);
 }

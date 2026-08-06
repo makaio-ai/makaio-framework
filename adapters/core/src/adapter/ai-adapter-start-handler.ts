@@ -19,6 +19,7 @@ import type { AgentCreationOptions, AgentUsageTotals, StartAgentRequestPayload }
 import type { MessageHandle } from '../message-handle/index.js';
 import type { PlatformDefaults } from '../types/index.js';
 import type { ActiveAgentRegistry } from './agent-registry.js';
+import { rethrowTeardownFailure } from '../connector/teardown-report.js';
 import type { RequestContext } from '@makaio/core';
 import {
   ProviderContextSchema,
@@ -341,7 +342,7 @@ async function createAndStartAgentWithClaim<
       activation,
       primaryError: error,
       ...(failedAgent !== undefined && {
-        cleanup: () => failedAgent.close({ emitSessionClosed: !payload.ephemeral }),
+        cleanup: () => rethrowTeardownFailure(failedAgent.close({ emitSessionClosed: !payload.ephemeral })),
       }),
       operation: `[AIAdapter:${adapterName}] startAgent`,
       cleanupFailureMessage: `[AIAdapter:${adapterName}] startAgent and connector cleanup both failed.`,

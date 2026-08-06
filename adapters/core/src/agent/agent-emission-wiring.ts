@@ -12,7 +12,8 @@
  * the raw connector accessor instead.
  */
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ProviderContext } from '@makaio/contracts';
+import { AgentSubjects, type ProviderContext } from '@makaio/contracts';
+import type { MessageHandle } from '../message-handle/index.js';
 import type { AgentPayloadEmitter } from './agent-payload-emitter.js';
 import type { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import { createAgentPayloadEmitter } from './agent-internal-factories.js';
@@ -108,4 +109,39 @@ export function createAgentEmissionWiring(input: {
       occurredAt: Date.now(),
     }),
   });
+}
+
+/**
+ * Create the callback every connector generation reports a submitted message
+ * through.
+ *
+ * Emission wiring rather than agent state: it stamps one outbound event from the
+ * handle it is given and reads nothing else, which is why the connector lifecycle
+ * owner can build a fresh one per generation from the same emitter.
+ * @param emitGlobal - Enriched global event emitter
+ * @returns Callback publishing `user_message.sent` for a submitted handle
+ */
+export function createOnMessageSentEmitter(
+  emitGlobal: AgentPayloadEmitter['emitGlobal'],
+): (handle: MessageHandle) => void {
+  return (handle) => {
+    // user_message.sent describes the message being submitted, not the
+    // executing turn — and it fires before the handle is tracked. Neither
+    // enrichment's getCurrentTurnId() (resolves to the still-executing
+    // turn) nor any shared tracker field (mutable — overlapping sends
+    // overwrite it before a hook-delayed first send emits) is safe here.
+    // The handle carries its lifecycle turnId (threaded from
+    // agent.sendMessage.turnId at dispatch); requestCorrelation.turnId is
+    // deliberately NOT used — it is transport correlation and may exist
+    // when no lifecycle turn does, which would leave sent unpaired with
+    // acknowledged/completed. The key is set even when undefined so a
+    // no-turn submission stays turn-less instead of inheriting the
+    // executing turn's id via enrichment.
+    void emitGlobal(AgentSubjects.user_message.sent, {
+      messageId: handle.messageId,
+      content: handle.message,
+      deliveryMode: handle.deliveryMode,
+      turnId: handle.turnId,
+    });
+  };
 }

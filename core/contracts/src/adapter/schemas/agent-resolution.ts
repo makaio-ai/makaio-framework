@@ -113,11 +113,18 @@ export type AgentSelectionBase = z.infer<typeof AgentSelectionBaseSchema>;
  * Specifies the adapter driver to use. `adapterName` may be omitted when an
  * `adapterId` is provided for unambiguous multi-host targeting; startup paths
  * backfill the name when the runtime already knows it.
+ *
+ * **Naming an instance means naming its machine, and naming a machine means
+ * naming an instance.** The two are one key: an instance ID cannot be inverted
+ * back to the machine it was derived for, and a machine named on its own is read
+ * by nothing — see {@link AdapterSelectionSchema.machineId}. Either half alone is
+ * refused.
  * @example
  * ```typescript
  * const selection: AdapterSelection = {
  *   kind: 'adapter',
  *   adapterId: 'adapter-123',
+ *   machineId: 'machine-a',
  *   model: 'sonnet',
  * };
  * ```
@@ -148,9 +155,42 @@ export const AdapterSelectionSchema = AgentSelectionBaseSchema.extend({
    * `adapterName` is backfilled from adapter storage when omitted.
    */
   adapterId: z.string().trim().min(1).optional(),
-}).refine((value) => Boolean(value.adapterName) || Boolean(value.adapterId), {
-  message: "AdapterSelection requires at least one of 'adapterName' or 'adapterId'",
-});
+
+  /**
+   * Machine the named instance belongs to.
+   *
+   * **Required whenever `adapterId` is supplied, and omitted otherwise.** An
+   * instance ID is derived from `(machineId, adapterName)` and the derivation is
+   * one-way, so an instance cannot name its own machine. An ownership act keyed
+   * on a caller-named instance under the *resolving* runtime's machine therefore
+   * builds a key unique to the mistake: no other actor computes it, so it
+   * collides with nothing and protects nothing, and the runtime that really owns
+   * that instance claims the same provider session beside it.
+   *
+   * Omitted with only `adapterName`, resolution derives the instance for the
+   * resolving runtime's own machine and every ownership act names that same
+   * identity — the existing and correct behaviour.
+   *
+   * **Refused without `adapterId`, rather than ignored.** Resolution reads this
+   * field only on the branch a named instance takes, so the other branch would
+   * accept it and derive the instance for the *resolving* runtime's machine
+   * anyway. A caller left believing its machine was honoured is one step from a
+   * caller whose belief becomes a real mis-key, which is the defect the
+   * requirement above exists to refuse.
+   */
+  machineId: z.string().trim().min(1).optional(),
+})
+  .refine((value) => Boolean(value.adapterName) || Boolean(value.adapterId), {
+    message: "AdapterSelection requires at least one of 'adapterName' or 'adapterId'",
+  })
+  .refine((value) => !value.adapterId || Boolean(value.machineId), {
+    message: "AdapterSelection requires 'machineId' when 'adapterId' is supplied",
+    path: ['machineId'],
+  })
+  .refine((value) => !value.machineId || Boolean(value.adapterId), {
+    message: "AdapterSelection requires 'adapterId' when 'machineId' is supplied",
+    path: ['adapterId'],
+  });
 
 export type AdapterSelection = z.infer<typeof AdapterSelectionSchema>;
 

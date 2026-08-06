@@ -927,7 +927,7 @@ function recordStoppedAgents(ctx: AttachHandlerTestContext): Array<{ adapterId: 
   ctx.trackUnsubscribe(
     MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
       stoppedAgents.push(context.payload);
-      context.setResult({ success: true });
+      context.setResult({ success: true, evidence: 'released' });
     }),
   );
   return stoppedAgents;

@@ -9,6 +9,7 @@ import {
   type MessageHandle,
   UserMessageQueue,
 } from '@makaio/ai-adapters-core';
+import type { ConnectorTeardownResult } from '@makaio/contracts';
 import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
 import { type ClaudeCodeCliConnectorBus, ClaudeCodeCliConnectorSubjects } from './namespace/index.js';
 import { ClaudeCliSession } from './session.js';
@@ -366,12 +367,23 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
   }
 
   /**
-   * Gracefully close the session.
+   * Gracefully close the session and report what was observed.
+   *
+   * **Class: `exited`.** The local evidence is the CLI process this connector
+   * spawned for the turn: the transport settles its own `exit` observation and
+   * the close awaits it inside the exit-observation budget. A kill whose exit
+   * does not arrive in that window reports `detached`, a session that never
+   * spawned a process reports `released`, and a close whose finalisation or
+   * transport-close stage failed reports `unknown` rather than a class it cannot
+   * stand behind.
+   * @returns What this runtime observed about the end of its CLI process.
    */
-  public async close(): Promise<void> {
-    if (this.session) {
-      await this.session.close();
+  public async close(): Promise<ConnectorTeardownResult> {
+    if (!this.session) {
+      // No session was ever constructed, so no process and no handle exist.
+      return { evidence: 'released' };
     }
+    return this.session.close();
   }
 
   /**

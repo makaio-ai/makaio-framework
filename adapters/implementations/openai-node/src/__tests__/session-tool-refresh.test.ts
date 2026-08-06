@@ -44,7 +44,7 @@ class TestOpenAIConnectorSession extends OpenAIConnectorSession {
     this.getHistory().push(...messages);
   }
 
-  public startNewTurnForTest(handle: MessageHandle): Promise<void> {
+  public startNewTurnForTest(handle: MessageHandle): Promise<void | false> {
     return this.startNewTurn(handle);
   }
 

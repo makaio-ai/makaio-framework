@@ -14,6 +14,7 @@ import {
 import type { AgentTestLifecycle } from './helpers/mock-agent.js';
 import type { AIAgentConfig } from '../types.js';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 
 /** Request payload type for `model.change`, derived from the subject definition. */
 type ModelChangeRequest = (typeof AgentSubjects.model.change)['$meta']['payload']['request'];
@@ -588,6 +589,7 @@ describe('AIAgent Model change handler', () => {
       capabilities: [],
       nativeTools: [],
       adapterBus: mockBus,
+      teardownArbiter: new AgentTeardownArbiter(),
       globalBus: MakaioBus,
       model: 'test-model-1',
       cwd: '/test/cwd',

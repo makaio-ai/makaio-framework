@@ -487,7 +487,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
 
     // Free the registered occupancy — only a stranded pending claim could
     // still lock the provider session afterwards.
-    expect(adapter.disposeAgent('agent-divergent')).toBe(true);
+    expect((await adapter.disposeAgent('agent-divergent')).found).toBe(true);
 
     const startResult = await MakaioBus.request(AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,

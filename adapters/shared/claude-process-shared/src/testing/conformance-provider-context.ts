@@ -1,7 +1,19 @@
 import type { ProviderContext, ProviderDefinitionInput } from '@makaio/contracts';
 import { AuthCredentialRefSchema } from '@makaio/contracts/auth';
-import { createTestProviderContext, normalizeEnvValue } from '@makaio/ai-adapters-core';
+import { type ConformanceAuthSelection, createTestProviderContext, normalizeEnvValue } from '@makaio/ai-adapters-core';
 import { clientDefinition } from '@makaio/client-claude-code';
+
+/** Inputs that decide which declared Claude auth method a config selects. */
+export interface ClaudeConformanceProviderContextOptions {
+  /** Environment presence reader, injectable for deterministic tests. */
+  readonly readEnv?: (name: string) => string | undefined;
+  /**
+   * Selection policy requested by the harness. `declared-credentials` selects
+   * the OAuth method regardless of environment presence, leaving its credential
+   * ref for the harness to materialize.
+   */
+  readonly authSelection?: ConformanceAuthSelection;
+}
 
 /**
  * Build the refs-only provider context used by Claude conformance connectors.
@@ -10,14 +22,21 @@ import { clientDefinition } from '@makaio/client-claude-code';
  * `anthropic-oauth` surface explicitly selects the declared OAuth env ref when
  * it is present; otherwise it selects the declared native method. Merely
  * inheriting ambient vendor auth is never a third implicit option.
+ *
+ * The native method is `inferred`: it can only be materialized where the vendor
+ * client is already logged in, which no clean machine is. A harness that must
+ * construct this connector everywhere asks for `declared-credentials` instead
+ * and supplies the OAuth credential itself, so that the selected method is the
+ * same one on a developer machine and on a bare runner.
  * @param provider - Provider selected by the conformance preset
- * @param readEnv - Environment presence reader, injectable for deterministic tests
+ * @param options - Environment reader and auth-method selection policy
  * @returns Resolved refs-only provider context
  */
 export function createClaudeConformanceProviderContext(
   provider: ProviderDefinitionInput,
-  readEnv: (name: string) => string | undefined = (name) => process.env[name],
+  options: ClaudeConformanceProviderContextOptions = {},
 ): ProviderContext {
+  const { readEnv = (name: string) => process.env[name], authSelection = 'config-default' } = options;
   const defaultAuth = clientDefinition.defaultAuth;
   if (defaultAuth === undefined || provider.id !== defaultAuth.providerDefinitionId) {
     return createTestProviderContext(provider);
@@ -42,7 +61,7 @@ export function createClaudeConformanceProviderContext(
     ...(provider.endpoints ? { endpointOverrides: { ...provider.endpoints } } : {}),
     ...(provider.capabilities ? { capabilities: structuredClone(provider.capabilities) } : {}),
   };
-  if (normalizeEnvValue(readEnv(oauthSource.variable)) !== undefined) {
+  if (authSelection === 'declared-credentials' || normalizeEnvValue(readEnv(oauthSource.variable)) !== undefined) {
     return {
       ...base,
       auth: {

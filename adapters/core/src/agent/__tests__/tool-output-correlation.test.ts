@@ -5,6 +5,7 @@ import { AgentSubjects, AdapterSubjects } from '@makaio/contracts';
 import type { ResolveHints } from '../tool-call-tracker.js';
 import type { AIAgentConfig } from '../types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 
 class TestAgent extends AIAgent {
   public constructor(private readonly mockGlobalBusInstance: IMakaioBus) {
@@ -16,6 +17,7 @@ class TestAgent extends AIAgent {
       capabilities: [],
       nativeTools: [],
       adapterBus: mockBus,
+      teardownArbiter: new AgentTeardownArbiter(),
       globalBus: mockGlobalBusInstance,
       configFactory: async () => ({
         bus: mockBus,

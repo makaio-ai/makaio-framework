@@ -238,7 +238,7 @@ describe('registerAttachHandler', () => {
       ctx.trackUnsubscribe(
         MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
           stoppedAgents.push(context.payload);
-          context.setResult({ success: true });
+          context.setResult({ success: true, evidence: 'released' });
         }),
       );
       ctx.trackUnsubscribe(ctx.registerHandler());
@@ -307,7 +307,7 @@ describe('registerAttachHandler', () => {
       ctx.trackUnsubscribe(
         MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
           lifecycleOrder.push('agent-stopped');
-          context.setResult({ success: true });
+          context.setResult({ success: true, evidence: 'released' });
         }),
       );
       ctx.trackUnsubscribe(
@@ -591,8 +591,11 @@ describe('registerAttachHandler', () => {
       ctx.trackUnsubscribe(ctx.registerHandler());
 
       const result = await MakaioBus.request(SessionSubjects.agent.attach, {
+        // The machine travels with the instance: an instance ID cannot be
+        // inverted, so naming one without it is refused before the backfill this
+        // case is about is ever reached.
+        agent: { kind: 'adapter', adapterId: 'machine-1:resolved-adapter-name', machineId: 'machine-1' },
         sessionId,
-        agent: { kind: 'adapter', adapterId: 'machine-1:resolved-adapter-name' },
       });
 
       expect(receivedRequests).toHaveLength(1);
@@ -616,6 +619,9 @@ describe('registerAttachHandler', () => {
           kind: 'adapter',
           adapterName: 'wrong-adapter-name',
           adapterId: 'machine-1:actual-adapter-name',
+          // Named so the mismatch is what this case reaches, rather than the
+          // half-named-pair refusal that now precedes every instance lookup.
+          machineId: 'machine-1',
         },
       }).catch((err: unknown) => err);
 

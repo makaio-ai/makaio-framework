@@ -9,6 +9,16 @@ export interface TransportStub {
   onMessage: ReturnType<typeof vi.fn>;
   onError: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  /**
+   * The child's exit observation, which a session teardown now consumes.
+   *
+   * Required rather than optional: a stub without one leaves a real close waiting
+   * out its whole observation budget for an end that can never arrive, which is a
+   * slow suite rather than a failing one — exactly the kind of omission a required
+   * field prevents. Stubs whose tests never close may settle it eagerly; stubs
+   * driving a close should settle it from `close()`, as the real transport does.
+   */
+  exited: Promise<number | null>;
 }
 
 /**

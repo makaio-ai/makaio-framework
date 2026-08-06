@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
 import { createBusInstance, MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentSubjects, CredentialSubjects, SessionSubjects } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  AgentSubjects,
+  CredentialSubjects,
+  SessionSubjects,
+  type ConnectorTeardownResult,
+} from '@makaio/contracts';
 import type {
   ProviderAuthMethodDefinition,
   ResolvedProviderContext,
@@ -147,12 +153,13 @@ class ConfigurableConnector extends AIAgentConnector {
     return null;
   }
   public async interrupt(): Promise<void> {}
-  public async close(): Promise<void> {
+  public async close(): Promise<ConnectorTeardownResult> {
     this.closeCalls += 1;
     this.behavior.onClose?.();
     if (this.behavior.throwOnClose) {
       throw this.behavior.throwOnClose;
     }
+    return { evidence: 'released' };
   }
   public async getAdapterSessionId(): Promise<string> {
     return 'infer-session';

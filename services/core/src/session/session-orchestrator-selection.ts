@@ -16,10 +16,20 @@ import {
   type AgentSelectionBase,
   type CanonicalModelSelection,
   type MessageInput,
+  type ResolvedProviderContext,
   type SessionContext,
 } from '@makaio/contracts';
 import { extractTextContent } from './session-orchestrator-helpers-core.js';
-import { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
+import type { AdapterRegistry } from './adapter-registry.js';
+import { SessionStartError } from './handlers/session-start-error.js';
+import { resolveOwnedAdapterInstance, type MachineScopedAdapterInstance } from './utils/resolution.js';
+import { resolveRuntimeProviderContext } from '../provider-context/index.js';
+import {
+  describeHalfNamedInstanceRefusal,
+  normalizeSelectionString,
+  resolveAdapterNameById,
+  type NamedSelectionInstance,
+} from './selection-utils.js';
 
 /**
  * Resolve the adapter name for a direct adapter selection.
@@ -151,5 +161,141 @@ async function resolveCanonicalModelSelection(
     ...resolved,
     kind: 'adapter',
     providerConfigId: selection.providerConfigId ?? resolved.providerConfigId,
+  };
+}
+
+/** What resolving a fresh start's instance needs beyond the selection itself. */
+export interface SelectionInstanceContext {
+  /** Adapter type name already resolved for the selection. */
+  readonly adapterName: string;
+  /** Session identity, for the refusal message. */
+  readonly sessionId: string;
+  /** This runtime's machine identity, used when it resolves the instance itself. */
+  readonly machineId: string;
+  /** Registry that resolves an adapter name to a live instance for a named machine. */
+  readonly registry: Pick<AdapterRegistry, 'resolveAvailable'>;
+}
+
+/**
+ * Resolve the instance a fresh lead start dispatches to, together with the
+ * machine every one of its ownership acts names.
+ *
+ * **A fresh start always has a machine, and that is what closes the last hole
+ * in the degrade matrix.** Its *reservation* is keyless and therefore cannot
+ * see the machine's absence — but its *settlement* is keyed, on the provider
+ * session the connector confirms, so an unnamed machine surfaced there as an
+ * outcome no caller on this path had a policy for. Naming the machine here
+ * removes the case by construction rather than by a new branch.
+ *
+ * Two shapes, and the asymmetry is deliberate:
+ *
+ * - **No instance named:** resolve one for this runtime's own machine, and
+ *   hand that same machine to the start. The instance ID is derived from
+ *   `(machineId, adapterName)`, so passing one identity to the resolution and
+ *   the other to the start is the mixed key; passing the same value to both is
+ *   what makes them provably agree.
+ * - **An instance named:** its machine comes from the caller, because the
+ *   derivation is one-way and this runtime must not invent one.
+ *
+ * **A selection that named one half without the other is refused before either
+ * branch runs**, by the rule {@link describeHalfNamedInstanceRefusal} states for
+ * every path that reads the pair. Refusing first is what makes the two branches
+ * above total: each one holds a pair it can honour, so neither has to decide what
+ * to do with half of one.
+ * @param bus - Bus the resolution is issued on.
+ * @param selection - Direct adapter selection this start runs from.
+ * @param context - Adapter name, session identity, this runtime's machine and its instance registry.
+ * @returns The instance and the machine, as one key.
+ * @throws A {@link SessionStartError} when a named instance carries no machine, or
+ *   a named machine carries no instance.
+ */
+export async function resolveSelectionOwnedInstance(
+  bus: IMakaioBus,
+  selection: AdapterSelection,
+  context: SelectionInstanceContext,
+): Promise<MachineScopedAdapterInstance> {
+  const { adapterName, sessionId, machineId, registry } = context;
+  const named: NamedSelectionInstance = {
+    adapterId: normalizeSelectionString(selection.adapterId),
+    machineId: normalizeSelectionString(selection.machineId),
+  };
+  const refusal = describeHalfNamedInstanceRefusal(named, {
+    sessionId,
+    errorPrefix: '[SessionOrchestrator.sendMessage] ',
+  });
+  if (refusal !== undefined) throw new SessionStartError('start-failed', refusal);
+  if (named.adapterId === undefined) {
+    return { adapterId: await registry.resolveAvailable(adapterName, machineId), machineId };
+  }
+  const owned = await resolveOwnedAdapterInstance(bus, {
+    adapterName,
+    adapterId: named.adapterId,
+    ...(named.machineId !== undefined && { machineId: named.machineId }),
+  });
+  if (owned?.machineId === undefined) {
+    // Unreachable, and kept as the narrowing rather than as a guard: the resolver
+    // returns a named instance with its machine unresolved, and the refusal above
+    // already excluded the one input that makes it answer otherwise. What it
+    // narrows is the resolver's optional machine, which is optional because its
+    // *unscoped* callers have none.
+    throw new SessionStartError(
+      'start-failed',
+      `[SessionOrchestrator.sendMessage] agent instance resolution for ${named.adapterId} produced no machine (sessionId=${sessionId})`,
+    );
+  }
+  return { adapterId: owned.adapterId, machineId: owned.machineId };
+}
+
+/** The target a fresh lead start dispatches to, resolved from its selection. */
+export interface FreshStartTarget {
+  /** Canonical adapter type name the start is dispatched under. */
+  readonly adapterName: string;
+  /** Instance the dispatch addresses, and the machine its ownership acts name. */
+  readonly instance: MachineScopedAdapterInstance;
+  /** Resolved provider credentials, when the selection named a provider config. */
+  readonly providerContext: ResolvedProviderContext | undefined;
+  /** Provider config the agent row is stamped with, from the selection or the resolution. */
+  readonly providerConfigId: string | undefined;
+}
+
+/**
+ * Resolve everything about *where* a fresh lead start runs, in one place.
+ *
+ * The name, the instance, the machine and the credentials are all read off one
+ * selection, and every one of them has to describe the same target: the row is
+ * stamped with the name, the dispatch addresses the instance, the ownership acts
+ * name the machine, and the connector authenticates with the credentials. Reading
+ * them at four call sites is how three of them can end up describing a target the
+ * fourth does not.
+ * @param bus - Bus every resolution round trip is issued on.
+ * @param selection - Direct adapter selection this start runs from.
+ * @param context - Session identity, this runtime's machine and its instance registry.
+ * @returns The resolved target of the start.
+ */
+export async function resolveFreshStartTarget(
+  bus: IMakaioBus,
+  selection: AdapterSelection,
+  context: Omit<SelectionInstanceContext, 'adapterName'>,
+): Promise<FreshStartTarget> {
+  const adapterName = await resolveSelectionAdapterName(bus, selection, context.sessionId);
+  // Both round trips need only the name, so they are issued together rather than
+  // one behind the other: two sequential bus requests cost a start two latencies
+  // to answer one question. They are still *awaited* in order, so a selection that
+  // is wrong about both its instance and its provider config keeps failing with the
+  // instance error rather than with whichever request lost the race.
+  const providerContextResolution =
+    selection.providerConfigId === undefined
+      ? undefined
+      : resolveRuntimeProviderContext(bus, { adapterName, providerConfigId: selection.providerConfigId });
+  // The provider resolution has no consumer left once the instance fails, and an
+  // unobserved rejection must not escape the start. Awaiting it below is unaffected.
+  providerContextResolution?.catch(() => undefined);
+  const instance = await resolveSelectionOwnedInstance(bus, selection, { ...context, adapterName });
+  const providerContext = await providerContextResolution;
+  return {
+    adapterName,
+    instance,
+    providerContext,
+    providerConfigId: selection.providerConfigId ?? providerContext?.providerConfigId,
   };
 }

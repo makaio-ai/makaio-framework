@@ -1,9 +1,5 @@
 import { z } from 'zod';
-import {
-  AdapterSelectionSchema,
-  AgentSelectionBaseSchema,
-  AgentSelectionSchema,
-} from '../../adapter/schemas/agent-resolution.js';
+import { AdapterSelectionSchema, AgentSelectionBaseSchema } from '../../adapter/schemas/agent-resolution.js';
 import { ProviderContextSchema } from '../../adapter/schemas/provider-context.js';
 import { CanonicalModelSelectionSchema } from '../../canonical-model/selection.js';
 import { MessageInputSchema, MessageOutcomeSchema, ResponseSchemaDescriptorSchema } from '../../shared/index.js';
@@ -324,9 +320,16 @@ export const OrchestratorSchemas = {
        * Same discriminated union as `sendMessage.agent` — e.g.
        * `{ kind: 'adapter', adapterName: 'claude-code' }` or
        * `{ kind: 'persona', personaId: 'p-123' }`.
+       *
+       * **Validated through the same union `sendMessage.agent` uses**, so an
+       * attach that names an adapter instance must name its machine with it
+       * exactly as a send does. Accepting the open base here instead let a
+       * machine-less `adapterId` reach the handler, where the only honest answer
+       * was to refuse native resume outright — the attach face of the one-identity
+       * rule.
        * @see AgentSelectionSchema
        */
-      agent: AgentSelectionSchema,
+      agent: SessionAgentSelectionSchema,
 
       /** Initial message to send (optional — can attach without sending). */
       initialMessage: MessageInputSchema.optional(),

@@ -8,8 +8,9 @@ import {
   type MessageResult,
   type NormalizedMessageInput,
   UserMessageQueue,
+  GenerationRetirementLedger,
 } from '@makaio/ai-adapters-core';
-import type { AIReasoningLevel } from '@makaio/contracts';
+import type { AIReasoningLevel, ConnectorTeardownResult } from '@makaio/contracts';
 import type { ThreadStartedNotification, TurnCompletedNotification } from '../protocol/generated/v2/index.js';
 import type { CodexAppServerBus } from '../namespaces/index.js';
 import { CodexAppServerThread } from '../thread.js';
@@ -24,9 +25,17 @@ import {
   type DynamicToolCallServerRequest,
   type DynamicToolCallResponse,
 } from '../dynamic-tool-handling.js';
-import { initializeConnection, type ConnectionManagerContext } from './connection-manager.js';
+import { connectorTransport, initializeConnection, type ConnectionManagerContext } from './connection-manager.js';
 import { resolveCodexApiKeyAccountLogin, type CodexApiKeyAccountLogin } from './account-login.js';
-import { abortCodexConnection, closeCodexConnection } from './connector-shutdown.js';
+import {
+  abortCodexConnection,
+  archiveCodexThread,
+  closeCodexConnection,
+  reportAfterCodexTermination,
+  reportCodexShutdown,
+  requestedShutdownExitError,
+  type CodexTerminalTeardownNote,
+} from './connector-shutdown.js';
 import { CommandInfoRegistry } from './command-info-registry.js';
 import {
   startThread,
@@ -54,6 +63,10 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   /** Handlers are registered once per client instance to avoid duplicate listeners on retries. */
   private clientHandlersRegistered = false;
   private isTerminated = false;
+  /** How the teardown that set {@link isTerminated} ended, read by every later one. */
+  private readonly terminalTeardown: CodexTerminalTeardownNote = {};
+  /** Superseded app-server generations (I33): retired at `resetClient`, read by every teardown. */
+  private readonly generations = new GenerationRetirementLedger('codex app-server process');
   private agentMessageContent: string = '';
   private notificationQueue: Promise<void> = Promise.resolve();
   private threadStartedDeferred?: {
@@ -138,8 +151,10 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       getAccountLogin: () => this.accountLogin,
       harnessId: this.config.harnessId,
       globalBus: this.globalBus,
+      generations: this.generations,
       registerClientHandlers: () => this.registerClientHandlers(),
       handleError: (error, terminate) => this.handleError(error, terminate),
+      finalizeRequestedShutdown: (code, terminate) => this.handleError(requestedShutdownExitError(code), terminate),
     };
   }
 
@@ -387,36 +402,36 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     this.isTerminated = true;
     abortCodexConnection({
       closeClient: () => this.jsonRpcClient?.close(),
-      discardAuth: () => {
-        this.accountLogin = undefined;
-      },
+      discardAuth: () => void (this.accountLogin = undefined),
+      note: this.terminalTeardown,
     });
   }
 
-  public async close(): Promise<void> {
-    if (this.isTerminated) return;
+  /**
+   * Gracefully close the connector and report what was observed.
+   *
+   * **Class: `exited`,** from the spawned process's own exit observation;
+   * {@link reportCodexShutdown} states the evidence and the two weaker answers. A
+   * failing stage still throws, which the layer above reads as `unknown`. A caller
+   * arriving after the marker inherits how *that* teardown ended, so a known-failed
+   * one is not laundered into `detached` — see {@link reportAfterCodexTermination}.
+   * @returns What this runtime observed about the end of its app-server process.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
+    if (this.isTerminated) return this.generations.capReport(reportAfterCodexTermination(this.terminalTeardown));
     this.isTerminated = true;
+    // Read before the close: the reset paths clear the reference.
+    const transport = connectorTransport(this.connCtx);
     await closeCodexConnection({
-      archive: () => this.archiveThread(),
+      archive: () =>
+        archiveCodexThread(this.thread?.threadId, (id) =>
+          this.jsonRpcClient?.request('thread/archive', { threadId: id }),
+        ),
       closeClient: () => this.jsonRpcClient?.close(),
-      discardAuth: () => {
-        this.accountLogin = undefined;
-      },
+      discardAuth: () => void (this.accountLogin = undefined),
+      note: this.terminalTeardown,
     });
-  }
-
-  // jsonRpcClient is guaranteed initialized: archiveThread is only called
-  // from close(), which is only reachable after initialize()/start() have run.
-  private async archiveThread(): Promise<void> {
-    const threadId = this.thread?.threadId;
-    if (!threadId) return;
-    const archiveRequest = this.jsonRpcClient?.request('thread/archive', { threadId });
-    if (!archiveRequest) return;
-
-    await Promise.race([
-      archiveRequest,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('archive timeout')), 2000)),
-    ]);
+    return reportCodexShutdown(transport, this.generations);
   }
 
   protected acceptsImmediate(): boolean {
