@@ -6,6 +6,7 @@ import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-webso
 import type { BridgeBrowserOptions } from './create-static-mount.js';
 import type {
   ExtensionConfigProvider,
+  MakaioNodeExtension,
   TrayManifest,
   WorkerContributionManifest,
   WorkerNodeDispatch,
@@ -293,6 +294,21 @@ export interface CoreBootOptions {
    * persistence contract.
    */
   readonly adapterConfigRepository?: IAdapterConfigRepository;
+
+  /**
+   * Host-selected automation cron scheduler provider package.
+   *
+   * `makaio.cron` bindings own no timers: they delegate to the single provider
+   * registered under `AutomationCronSchedulerToken`. Supply this option when the
+   * host schedules somewhere other than in-process — for example centrally,
+   * through a relay — so exactly one host decides when a cron binding fires.
+   *
+   * When omitted, boot registers the framework's local in-process provider,
+   * unless a loaded extension already registers one. Boot fails when the
+   * supplied package does not register the scheduler service, and when two
+   * providers would be active at once.
+   */
+  readonly automationCronSchedulerPackage?: MakaioNodeExtension<IMakaioBus>;
 
   /**
    * Host-provided persisted runtime machine identity.

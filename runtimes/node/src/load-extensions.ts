@@ -4,32 +4,51 @@ import { pathToFileURL } from 'node:url';
 import { versionSatisfies } from '@makaio/contracts';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import type { CliContribution, CliSubcommandEntry } from '@makaio/kernel/cli';
+import { AutomationCronSchedulerToken } from '@makaio/services-core/automation-trigger';
 import { descriptorToBasePackage } from './descriptor-to-package.js';
-import type { DiscoveredExtension } from './extension-discovery.js';
+import type { DiscoveredExtension, ExtensionEntrypointModule } from './extension-discovery.js';
+import { retainExtensionPackageProvenance } from './extension-package-provenance.js';
 
-/**
- * Options for {@link loadExtensions}.
- */
+/** Invalid host policy export that must fail boot instead of silently selecting the wrong scheduler. */
+export class InvalidAutomationCronSchedulerHostPolicyError extends Error {}
+
+/** Scheduler provider contribution exported by one descriptor server module. */
+export interface AutomationCronSchedulerHostPolicy {
+  /** Name of the normalized default package that owns this policy. */
+  readonly ownerPackageName: string;
+  /** Scheduler provider package contributed while the owner remains boot-eligible. */
+  readonly package: KernelMakaioExtension;
+}
+
+/** Scheduler provider policy coupled to its exact normalized owner package. */
+export interface LoadedAutomationCronSchedulerHostPolicy {
+  /** Exact normalized package instance that exported the policy. */
+  readonly ownerPackage: KernelMakaioExtension;
+  /** Scheduler provider package contributed while the owner remains boot-eligible. */
+  readonly package: KernelMakaioExtension;
+}
+
+/** Options for {@link loadExtensions}. */
 export interface LoadExtensionsOptions {
   /** Current framework version for framework range gating. */
   readonly frameworkVersion: string;
   /**
    * Override for filesystem-based dynamic import — used in tests and dev hosts.
    * @param entryPath - Absolute path to the extension entry module.
-   * @returns Module with a default export.
+   * @returns Server module with its descriptor-owned default and optional host-provider export.
    */
-  readonly importModule?: (entryPath: string) => Promise<{ default: unknown }>;
+  readonly importModule?: (entryPath: string) => Promise<ExtensionEntrypointModule>;
 }
 
 /** Options for descriptor-backed CLI contribution loading. */
 export type AttachExtensionCliContributionsOptions = Pick<LoadExtensionsOptions, 'importModule' | 'frameworkVersion'>;
 
-/**
- * Result returned by {@link loadExtensions}.
- */
+/** Result returned by {@link loadExtensions}. */
 export interface ExtensionLoadResult {
   /** Successfully loaded packages ready for `coordinator.load()`. */
   readonly packages: KernelMakaioExtension[];
+  /** Host cron scheduler policies coupled to their normalized descriptor package owners. */
+  readonly automationCronSchedulerHostPolicies: LoadedAutomationCronSchedulerHostPolicy[];
   /**
    * Config defaults from descriptors, keyed by extension name.
    *
@@ -83,8 +102,9 @@ export interface DescriptorSourcePackageGroup {
  *    {@link MakaioExtension} array
  * 6. Verify the imported package identity is anchored to the descriptor name
  *
- * Extensions that fail any step are skipped with a warning. This function
- * never throws — boot continues even if all extensions fail.
+ * Descriptor-owned extension failures are skipped with a warning. An invalid
+ * host cron scheduler export throws because silently falling back to a local
+ * scheduler would change timer authority.
  * @param discovered - Extensions found by a {@link ExtensionDiscovery}.
  * @param options - Framework version and optional import override.
  * @returns Successfully loaded packages and their config defaults.
@@ -95,6 +115,7 @@ export async function loadExtensions(
 ): Promise<ExtensionLoadResult> {
   const { frameworkVersion, importModule = defaultImport } = options;
   const packages: KernelMakaioExtension[] = [];
+  const automationCronSchedulerHostPolicies: LoadedAutomationCronSchedulerHostPolicy[] = [];
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
   let createDetachedExtensionPackage:
@@ -138,7 +159,7 @@ export async function loadExtensions(
       continue;
     }
 
-    let mod: { default: unknown };
+    let mod: ExtensionEntrypointModule;
     if (ext.preloadedModule) {
       mod = ext.preloadedModule;
     } else {
@@ -162,12 +183,59 @@ export async function loadExtensions(
 
     packages.push(...loadedPackages);
 
+    collectAutomationCronSchedulerHostPolicy(mod, loadedPackages, label, automationCronSchedulerHostPolicies);
+
     if (descriptor.config?.defaults) {
       configDefaults.set(descriptor.name, descriptor.config.defaults);
     }
   }
 
-  return { packages, configDefaults };
+  return { packages, automationCronSchedulerHostPolicies, configDefaults };
+}
+
+/**
+ * Validate and collect an optional owner-anchored host scheduler policy from one server module.
+ * @param mod - Imported descriptor server module.
+ * @param ownerPackages - Normalized descriptor-owned packages eligible to own the policy.
+ * @param label - Descriptor-specific diagnostic prefix.
+ * @param policies - Mutable host-policy accumulator.
+ */
+function collectAutomationCronSchedulerHostPolicy(
+  mod: ExtensionEntrypointModule,
+  ownerPackages: ReadonlyArray<KernelMakaioExtension>,
+  label: string,
+  policies: LoadedAutomationCronSchedulerHostPolicy[],
+): void {
+  const candidate = mod.automationCronSchedulerHostPolicy;
+  if (candidate === undefined) return;
+  if (!isAutomationCronSchedulerHostPolicyLike(candidate)) {
+    throw new InvalidAutomationCronSchedulerHostPolicyError(
+      `${label}: named export 'automationCronSchedulerHostPolicy' is not a valid owner-anchored scheduler policy`,
+    );
+  }
+  const ownerPackage = ownerPackages.find(({ name }) => name === candidate.ownerPackageName);
+  if (!ownerPackage) {
+    throw new InvalidAutomationCronSchedulerHostPolicyError(
+      `${label}: automation cron scheduler policy owner '${candidate.ownerPackageName}' is not a normalized descriptor default package`,
+    );
+  }
+  if (candidate.package.name !== AutomationCronSchedulerToken.name) {
+    throw new InvalidAutomationCronSchedulerHostPolicyError(
+      `${label}: automation cron scheduler policy package '${candidate.package.name}' must be named '${AutomationCronSchedulerToken.name}'`,
+    );
+  }
+  policies.push({ ownerPackage, package: candidate.package });
+}
+
+/**
+ * Narrow an unknown server-module export to the host-policy contract.
+ * @param value - Named export value to validate.
+ * @returns Whether the value carries an owner package name and valid scheduler package shape.
+ */
+function isAutomationCronSchedulerHostPolicyLike(value: unknown): value is AutomationCronSchedulerHostPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  return typeof record['ownerPackageName'] === 'string' && isMakaioExtensionLike(record['package']);
 }
 
 /**
@@ -293,10 +361,8 @@ export async function attachExtensionCliContributions(
     }
 
     if (existing) {
-      packagesByName.set(ext.descriptor.name, {
-        ...existing,
-        cli: mod.default,
-      });
+      const withCli = { ...existing, cli: mod.default };
+      packagesByName.set(ext.descriptor.name, retainExtensionPackageProvenance(withCli, existing));
       continue;
     }
 

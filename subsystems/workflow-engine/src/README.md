@@ -1,6 +1,7 @@
 # @makaio/subsystem-workflow-engine
 
-Workflow definition storage, DAG-based execution, and trigger evaluation.
+Workflow definition storage, DAG-based execution, and declarative trigger
+consumption.
 
 ## Architecture
 
@@ -11,13 +12,12 @@ Workflow definition storage, DAG-based execution, and trigger evaluation.
 │  Dependency resolution, forEach expansion, step runners     │
 └─────────────────────────────────────────────────────────────┘
          │
-         ├─ BusEventTriggerEvaluator  — `on: { subject: '...' }`
-         ├─ CronTriggerEvaluator      — `on: { cron: '...' }`
-         └─ RelayCronFiredHandler     — receives cron events from relay
-                  │
+         └─ WorkflowTriggerReconciler
+                  │  one consumer subscription per persisted
+                  │  WorkflowAutomationTriggerBinding
                   ▼
-         WorkflowTriggerTypeRegistry
-         (extensible trigger types)
+         AutomationTriggerBindingRuntime
+         (reference-counted trigger activations)
 ```
 
 ## Components
@@ -55,13 +55,24 @@ Drizzle-backed storage for workflow definitions, executions, spans, and executio
 
 **Subjects:** `storage:workflow.*` (get/set/delete/list for each table)
 
-### Trigger Evaluators
+### WorkflowTriggerReconciler
+`src/workflow-trigger-reconciler.ts`
 
-| Class | Trigger type |
-|-------|-------------|
-| `BusEventTriggerEvaluator` | Bus subject events |
-| `CronTriggerEvaluator` | Cron expressions via `croner` |
-| `RelayCronFiredHandler` | Relay-side cron fired events |
+The engine owns no trigger sources. Every persisted
+`WorkflowAutomationTriggerBinding` becomes one consumer subscription on the
+automation trigger binding runtime; the runtime decides how many live sources
+that requires, so two workflows bound to the same source share one activation.
+
+The reconciler reads the persisted definitions as its source of truth and treats
+workflow CRUD events and `automation-triggers.changed` events as refresh signals.
+Refreshes acquire the replacement binding before releasing the previous one, so a
+shared source is never torn down mid-refresh.
+
+`filter` and `filterExpression` are consumer-owned: they narrow an event a trigger
+has already validated, and are compiled by
+`src/workflow-trigger-binding-consumer.ts` (also exported from the
+`@makaio/subsystem-workflow-engine/workflow-trigger-binding-consumer` subpath so the
+worker's await mode applies identical semantics).
 
 ## Usage
 
@@ -83,6 +94,6 @@ contracts live in `@makaio/contracts`; the package manifest is available from th
 
 ## Dependencies
 
-- `croner` — cron scheduling
-- `@makaio/expression` — expression evaluation for conditions
+- `@makaio/expression` — expression evaluation for conditions and trigger filters
+- `@makaio/services-core` — automation trigger binding runtime
 - `@makaio/storage-core`, `@makaio/storage-handlers`

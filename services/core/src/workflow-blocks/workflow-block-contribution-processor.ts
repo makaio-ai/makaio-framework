@@ -2,10 +2,11 @@ import type { ContributionProcessor } from '@makaio/kernel';
 import { WorkflowBlockRegistryToken } from '../framework-packages.js';
 
 /**
- * Processes workflow block contributions from extensions.
+ * Processes workflow step block contributions from extensions.
  *
- * Registers and deregisters blocks with the {@link WorkflowBlockRegistry}
- * as extensions activate and stop.
+ * Registers and deregisters step blocks with the {@link WorkflowBlockRegistry}
+ * as extensions activate and stop. Workflow start conditions travel through the
+ * automation trigger contribution processor instead.
  * @returns Contribution processor that manages workflow block registration.
  */
 export function createWorkflowBlockContributionProcessor(): ContributionProcessor {

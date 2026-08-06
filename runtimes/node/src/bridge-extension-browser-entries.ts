@@ -6,6 +6,7 @@ import {
   buildExtensionBrowserRuntimeEntrypoint,
   buildExtensionBrowserUrlPrefix,
 } from './extension-browser-entry-paths.js';
+import { retainExtensionPackageProvenance } from './extension-package-provenance.js';
 import { entrypointStem, resolveConventionEntrypoint } from './load-extensions.js';
 
 export type { BridgeBrowserOptions };
@@ -61,13 +62,16 @@ export function bridgeExtensionBrowserEntries(
     const urlPrefix = buildExtensionBrowserUrlPrefix(pkg.name);
     const entrypoint = buildExtensionBrowserRuntimeEntrypoint(pkg.name, browserStem);
 
-    return {
-      ...pkg,
-      browser: { entrypoint },
-      http: {
-        prefix: urlPrefix,
-        mount: createMount(serveRoot, urlPrefix),
+    return retainExtensionPackageProvenance(
+      {
+        ...pkg,
+        browser: { entrypoint },
+        http: {
+          prefix: urlPrefix,
+          mount: createMount(serveRoot, urlPrefix),
+        },
       },
-    };
+      pkg,
+    );
   });
 }

@@ -60,6 +60,10 @@ import {
   FrameworkServicesCoreNamespaces,
 } from '@makaio/services-core';
 import {
+  createAutomationTriggerContributionProcessor,
+  selectAutomationCronSchedulerPackage,
+} from '@makaio/services-core/automation-trigger';
+import {
   createArtifactViewBuilderContributionProcessor,
   createSurfaceBindingContributionProcessor,
 } from '@makaio/services-core/materialization';
@@ -88,6 +92,7 @@ import {
   normalizeNodeHostCapabilities,
   parseSkipExtensions,
   registerExtensionBootContributions,
+  selectEligibleAutomationCronSchedulerHostPackages,
   selectBootEligibleExtensionPackages,
   selectFrameworkCorePackages,
 } from './boot-extension-selection.js';
@@ -507,6 +512,27 @@ export async function bootMakaioRuntimeCore(
       frameworkPackages.push(platformMacOSPackage);
     }
 
+    // `makaio.cron` bindings delegate to the single registered cron scheduler
+    // provider. Resolve that provider against everything this boot is about to
+    // load, so a duplicate or mis-registered provider fails here rather than
+    // leaving cron bindings silently unscheduled: framework-only boot falls back
+    // to the framework's local in-process provider.
+    const automationCronSchedulerPackage = selectAutomationCronSchedulerPackage({
+      hostPackages: [
+        ...(options.automationCronSchedulerPackage ? [options.automationCronSchedulerPackage] : []),
+        ...selectEligibleAutomationCronSchedulerHostPackages(extensionLoadResult.automationCronSchedulerHostPolicies, {
+          packages: allExtensionPackages,
+          configProvider: options.extensionConfigProvider,
+          surface: options.surface ?? 'headless',
+          runtimeEnvironment,
+        }),
+      ],
+      loadedPackages: [...frameworkPackages, ...bootEligibleExtensionPackages],
+    });
+    if (automationCronSchedulerPackage) {
+      frameworkPackages.push(automationCronSchedulerPackage);
+    }
+
     // Merge server-entry, browser-only, and CLI-only config defaults. Name
     // collisions are structurally impossible across these three sources:
     // - extensionLoadResult: server-entry extensions only
@@ -549,6 +575,11 @@ export async function bootMakaioRuntimeCore(
     coordinator.registerContributionProcessor(createTransitionContributionProcessor());
     coordinator.registerContributionProcessor(
       createReactionContributionProcessor({
+        forEachActiveExtension: (callback) => coordinator.forEachActiveExtension(callback),
+      }),
+    );
+    coordinator.registerContributionProcessor(
+      createAutomationTriggerContributionProcessor({
         forEachActiveExtension: (callback) => coordinator.forEachActiveExtension(callback),
       }),
     );

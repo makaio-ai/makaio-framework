@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_run_contexts` ADD `trigger_mode` text DEFAULT 'immediate' NOT NULL;

@@ -1,6 +1,7 @@
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import {
   attachExtensionCliContributions,
+  InvalidAutomationCronSchedulerHostPolicyError,
   isDescriptorFrameworkCompatible,
   loadExtensions,
   type ExtensionCliAttachResult,
@@ -46,6 +47,7 @@ export async function loadBootExtensions(options: {
 }): Promise<BootExtensionLoadingResult> {
   let extensionLoadResult: ExtensionLoadResult = {
     packages: [],
+    automationCronSchedulerHostPolicies: [],
     configDefaults: new Map(),
   };
   let discovered: ReadonlyArray<DiscoveredExtension> = [];
@@ -73,6 +75,9 @@ export async function loadBootExtensions(options: {
         frameworkVersion,
       });
     } catch (err) {
+      if (err instanceof InvalidAutomationCronSchedulerHostPolicyError) {
+        throw err;
+      }
       console.warn('[boot] Extension loading failed, skipping:', err instanceof Error ? err.message : err);
     }
   }

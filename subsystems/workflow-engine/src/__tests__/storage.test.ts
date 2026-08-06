@@ -11,6 +11,7 @@ import {
   EXECUTIONS_BY_ARTIFACT_REFS_MAX_LIMIT_PER_REF,
   EXECUTIONS_BY_ARTIFACT_REFS_MAX_REFS,
   ExecutionsByArtifactRefsQuerySchema,
+  CRON_AUTOMATION_TRIGGER_KIND,
   WorkflowExecutionScopeSchema,
   ExecutionListQuerySchema,
   WorkflowRunContextSchema,
@@ -306,7 +307,7 @@ describe('workflow storage handlers', () => {
       ...createWorkflowDefinition({
         id: 'workflow-preserve-optionals',
         description: 'Initial description',
-        triggers: [{ type: 'manual' }],
+        triggers: [{ kind: CRON_AUTOMATION_TRIGGER_KIND, params: { schedule: '0 9 * * 1' } }],
       }),
       source: {
         kind: 'extension',
@@ -331,7 +332,7 @@ describe('workflow storage handlers', () => {
       id: workflow.id,
       name: 'Updated name',
       description: 'Initial description',
-      triggers: [{ type: 'manual' }],
+      triggers: [{ kind: CRON_AUTOMATION_TRIGGER_KIND, params: { schedule: '0 9 * * 1' } }],
       source: workflow.source,
     });
   });

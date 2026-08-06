@@ -44,11 +44,22 @@ import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
 import { loadBootExtensions } from '../boot-extension-loading.js';
 import {
+  type BootExtensionEligibilityOptions,
+  buildRuntimeEnvironment,
+  selectBootEligibleExtensionPackages,
+  selectEligibleAutomationCronSchedulerHostPackages,
+} from '../boot-extension-selection.js';
+import {
   artifactSchemaRegistryPackage,
   createToolContributionProcessor,
   SessionOrchestratorToken,
   toolRegistryPackage,
 } from '@makaio/services-core';
+import {
+  AutomationCronSchedulerToken,
+  localAutomationCronSchedulerPackage,
+  selectAutomationCronSchedulerPackage,
+} from '@makaio/services-core/automation-trigger';
 import {
   artifactViewBuilderRegistryPackage,
   artifactViewServicePackage,
@@ -565,6 +576,113 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
     expect(result.packages).toHaveLength(0);
   });
 
+  it('preserves descriptor host cron scheduler candidates through boot extension loading', async () => {
+    const schedulerPackage = makePackage(AutomationCronSchedulerToken.name);
+    const serverPackage = makePackage('my-ext');
+    const extension = makeDiscovered('my-ext');
+    if (extension.descriptor.execution === 'detached') {
+      throw new Error('Expected embedded extension fixture');
+    }
+    fs.writeFileSync(path.join(extension.extensionPath, 'dist', 'browser.mjs'), 'export default {};\n');
+    fs.writeFileSync(
+      path.join(extension.extensionPath, 'dist', 'cli.mjs'),
+      "export default { name: 'my-ext', description: 'Test CLI', subcommands: [], interactive: async () => undefined };\n",
+    );
+    const discovered: DiscoveredExtension = {
+      ...extension,
+      descriptor: {
+        ...extension.descriptor,
+        entrypoints: { server: true as const, browser: true as const, cli: true as const },
+      },
+      preloadedModule: {
+        default: serverPackage,
+        automationCronSchedulerHostPolicy: {
+          ownerPackageName: 'my-ext',
+          package: schedulerPackage,
+        },
+      },
+    };
+
+    const result = await loadBootExtensions({
+      extensionOptions: resolveExtensionOptions(
+        minimalBootOptions({ discovery: new ExplicitDescriptorDiscovery([discovered]) }),
+        TEST_MAKAIO_HOME,
+      ),
+      skipExtensions: new Set(),
+      frameworkVersion: FRAMEWORK_VERSION,
+    });
+
+    expect(result.extensionLoadResult.automationCronSchedulerHostPolicies).toHaveLength(1);
+    expect(result.extensionLoadResult.automationCronSchedulerHostPolicies[0]).toMatchObject({
+      package: schedulerPackage,
+    });
+    expect(result.extensionLoadResult.automationCronSchedulerHostPolicies[0]?.ownerPackage).toBe(serverPackage);
+    expect(result.allExtensionPackages[0]).not.toBe(serverPackage);
+    expect(result.allExtensionPackages.map(({ name }) => name)).toEqual(['my-ext']);
+    expect(
+      selectEligibleAutomationCronSchedulerHostPackages(
+        result.extensionLoadResult.automationCronSchedulerHostPolicies,
+        {
+          packages: result.allExtensionPackages,
+          configProvider: undefined,
+          surface: 'headless',
+          runtimeEnvironment: buildRuntimeEnvironment('linux', ['node']),
+        },
+      ),
+    ).toEqual([schedulerPackage]);
+  });
+
+  it('drops a server child policy when later browser composition replaces its owner', async () => {
+    const schedulerPackage = makePackage(AutomationCronSchedulerToken.name);
+    const serverChild = makePackage('example.parent.child');
+    const server = {
+      ...makeDiscovered('example.parent'),
+      preloadedModule: {
+        default: [makePackage('example.parent'), serverChild],
+        automationCronSchedulerHostPolicy: {
+          ownerPackageName: serverChild.name,
+          package: schedulerPackage,
+        },
+      },
+    };
+    const browserChildRoot = createExtensionRoot(serverChild.name);
+    fs.writeFileSync(path.join(browserChildRoot, 'dist', 'browser.mjs'), 'export default {};\n');
+    const browserChild: DiscoveredExtension = {
+      ...makeDiscovered(serverChild.name),
+      descriptor: {
+        name: serverChild.name,
+        displayName: `${serverChild.name} Display`,
+        version: '1.0.0',
+        makaio: { framework: '>=1.0.0' },
+        entrypoints: { browser: true },
+      },
+      extensionPath: browserChildRoot,
+    };
+
+    const result = await loadBootExtensions({
+      extensionOptions: resolveExtensionOptions(
+        minimalBootOptions({ discovery: new ExplicitDescriptorDiscovery([server, browserChild]) }),
+        TEST_MAKAIO_HOME,
+      ),
+      skipExtensions: new Set(),
+      frameworkVersion: FRAMEWORK_VERSION,
+    });
+    const eligibility: BootExtensionEligibilityOptions = {
+      packages: result.allExtensionPackages,
+      configProvider: undefined,
+      surface: 'headless',
+      runtimeEnvironment: buildRuntimeEnvironment('linux', ['node']),
+    };
+
+    expect(result.allExtensionPackages.find(({ name }) => name === serverChild.name)).not.toBe(serverChild);
+    expect(
+      selectEligibleAutomationCronSchedulerHostPackages(
+        result.extensionLoadResult.automationCronSchedulerHostPolicies,
+        eligibility,
+      ),
+    ).toEqual([]);
+  });
+
   it('synthesizes a managed package for detached execution mode', async () => {
     const importModule = vi.fn(async () => {
       throw new Error('detached extensions must not use embedded import fallback');
@@ -592,6 +710,130 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
     expect(result.packages).toHaveLength(1);
     expect(result.packages[0]?.name).toBe('detached-ext');
     expect(importModule).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner-anchored automation cron scheduler host policy', () => {
+  const scheduler = (displayName: string): KernelMakaioExtension => ({
+    ...makePackage(AutomationCronSchedulerToken.name),
+    displayName,
+  });
+  const owner = (name: string): KernelMakaioExtension => ({ ...makePackage(name), surface: 'headless' });
+  const environment = buildRuntimeEnvironment('linux', ['node']);
+
+  function selectForBoot(options: {
+    packages: KernelMakaioExtension[];
+    policies: Array<{ ownerPackage: KernelMakaioExtension; package: KernelMakaioExtension }>;
+    surface?: 'headless' | 'interactive';
+    disabled?: ReadonlySet<string>;
+  }): KernelMakaioExtension | undefined {
+    const disabled = options.disabled;
+    const eligibility: BootExtensionEligibilityOptions = {
+      packages: options.packages,
+      configProvider: disabled
+        ? {
+            loadConfig: () => undefined,
+            loadEnabled: (name) => !disabled.has(name),
+          }
+        : undefined,
+      surface: options.surface ?? 'headless',
+      runtimeEnvironment: environment,
+    };
+    return selectAutomationCronSchedulerPackage({
+      hostPackages: [...selectEligibleAutomationCronSchedulerHostPackages(options.policies, eligibility)],
+      loadedPackages: selectBootEligibleExtensionPackages(eligibility),
+    });
+  }
+
+  it('falls back to the local scheduler when the policy owner is disabled', () => {
+    const relayOwner = owner('example.relay');
+    expect(
+      selectForBoot({
+        packages: [relayOwner],
+        policies: [{ ownerPackage: relayOwner, package: scheduler('Relay Scheduler') }],
+        disabled: new Set([relayOwner.name]),
+      }),
+    ).toBe(localAutomationCronSchedulerPackage);
+  });
+
+  it('falls back to the local scheduler when a headless policy owner is ineligible on an interactive surface', () => {
+    const relayOwner = owner('example.relay');
+    expect(
+      selectForBoot({
+        packages: [relayOwner],
+        policies: [{ ownerPackage: relayOwner, package: scheduler('Relay Scheduler') }],
+        surface: 'interactive',
+      }),
+    ).toBe(localAutomationCronSchedulerPackage);
+  });
+
+  it('selects the contributed scheduler while its exact owner is eligible', () => {
+    const relayOwner = owner('example.relay');
+    const relayScheduler = scheduler('Relay Scheduler');
+    expect(
+      selectForBoot({
+        packages: [relayOwner],
+        policies: [{ ownerPackage: relayOwner, package: relayScheduler }],
+      }),
+    ).toBe(relayScheduler);
+  });
+
+  it('falls back to the local scheduler when a later server package replaces the policy owner by name', () => {
+    const oldOwner = owner('example.relay');
+    const replacementOwner = owner('example.relay');
+
+    expect(
+      selectForBoot({
+        packages: [oldOwner, replacementOwner],
+        policies: [{ ownerPackage: oldOwner, package: scheduler('Old Relay Scheduler') }],
+      }),
+    ).toBe(localAutomationCronSchedulerPackage);
+  });
+
+  it('selects the later policy when a later server package replaces the policy owner by name', () => {
+    const oldOwner = owner('example.relay');
+    const replacementOwner = owner('example.relay');
+    const replacementScheduler = scheduler('Replacement Relay Scheduler');
+
+    expect(
+      selectForBoot({
+        packages: [oldOwner, replacementOwner],
+        policies: [
+          { ownerPackage: oldOwner, package: scheduler('Old Relay Scheduler') },
+          { ownerPackage: replacementOwner, package: replacementScheduler },
+        ],
+      }),
+    ).toBe(replacementScheduler);
+  });
+
+  it('ignores an ineligible competing policy', () => {
+    const relayOwner = owner('example.relay');
+    const disabledOwner = owner('example.disabled-relay');
+    const relayScheduler = scheduler('Relay Scheduler');
+    expect(
+      selectForBoot({
+        packages: [relayOwner, disabledOwner],
+        policies: [
+          { ownerPackage: relayOwner, package: relayScheduler },
+          { ownerPackage: disabledOwner, package: scheduler('Disabled Scheduler') },
+        ],
+        disabled: new Set([disabledOwner.name]),
+      }),
+    ).toBe(relayScheduler);
+  });
+
+  it('rejects duplicate policies when both owners are eligible', () => {
+    const firstOwner = owner('example.first-relay');
+    const secondOwner = owner('example.second-relay');
+    expect(() =>
+      selectForBoot({
+        packages: [firstOwner, secondOwner],
+        policies: [
+          { ownerPackage: firstOwner, package: scheduler('First Scheduler') },
+          { ownerPackage: secondOwner, package: scheduler('Second Scheduler') },
+        ],
+      }),
+    ).toThrow(/Multiple automation cron scheduler providers/);
   });
 });
 

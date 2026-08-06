@@ -4,6 +4,7 @@ import { AgentNamespace } from './agent/namespace.js';
 import { AgentResolutionNamespace } from './agent-resolution/namespace.js';
 import { ApprovalNamespace } from './approval/namespace.js';
 import { ArtifactNamespace } from './artifact/index.js';
+import { AutomationTriggerNamespace } from './automation-trigger/namespace.js';
 import { CanonicalModelNamespace } from './canonical-model/namespace.js';
 import { CapabilityNamespace } from './capability/namespace.js';
 import { ClientNamespace } from './client/namespace.js';
@@ -62,6 +63,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   AgentResolutionNamespace,
   ApprovalNamespace,
   ArtifactNamespace,
+  AutomationTriggerNamespace,
   CanonicalModelNamespace,
   CapabilityNamespace,
   ClientNamespace,

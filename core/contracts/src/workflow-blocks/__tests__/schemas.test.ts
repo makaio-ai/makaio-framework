@@ -11,7 +11,6 @@ const StepMetadata = {
 describe('WorkflowBlocksSchemas', () => {
   it('includes step block runs metadata in list responses', () => {
     const response = WorkflowBlocksSchemas.list.response.parse({
-      triggers: [],
       steps: [
         {
           metadata: StepMetadata,
@@ -37,7 +36,6 @@ describe('WorkflowBlocksSchemas', () => {
   it('rejects zero timeout values that primitive nodes cannot execute', () => {
     expect(() =>
       WorkflowBlocksSchemas.list.response.parse({
-        triggers: [],
         steps: [
           {
             metadata: StepMetadata,

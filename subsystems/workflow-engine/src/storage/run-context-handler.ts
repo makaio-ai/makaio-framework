@@ -84,6 +84,7 @@ function mapRunContext(row: DbRunContextRow): WorkflowRunContext {
     inputs: row.inputs,
     config: (row.config as Record<string, unknown> | null) ?? {},
     triggerPayload: row.triggerPayload as Record<string, unknown>,
+    triggerMode: row.triggerMode,
     ...(row.artifactRef !== null ? { artifactRef: row.artifactRef } : {}),
     scope: fromScopeColumns(row),
     ...(row.dispatchMetadata !== null
@@ -118,6 +119,7 @@ function toRunContextDbValues(runContext: WorkflowRunContext): InsertWorkflowRun
     inputs: runContext.inputs,
     config: (runContext.config ?? {}) as Record<string, JsonValue>,
     triggerPayload: runContext.triggerPayload as Record<string, JsonValue>,
+    triggerMode: runContext.triggerMode ?? 'immediate',
     artifactRef: runContext.artifactRef ?? null,
     dispatchMetadata: runContext.dispatchMetadata ?? null,
     ...scopeColumns,

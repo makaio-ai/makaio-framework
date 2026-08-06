@@ -660,7 +660,7 @@ describe('WorkflowDefinitionSchema', () => {
           { id: 'implement', type: 'station', prompt: 'Implement' },
         ],
       },
-      triggers: [{ type: 'manual' }],
+      triggers: [{ kind: 'makaio.cron', params: { schedule: '0 * * * *', timezone: 'UTC' } }],
       scope: { type: 'external', kind: 'project', id: 'proj-1' },
     });
     expect(def.id).toBe('advanced-flow');

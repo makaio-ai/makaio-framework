@@ -24,8 +24,15 @@ export {
   defaultTransports,
   isDefaultTransportsSchema,
   unwrapSchema,
+  createNamespaceWildcardSubject,
+  splitSubjectKey,
 } from './subject-helpers/index.js';
-export type { BusSubjects, NestedSubjectDefinitions, FlatSubjectDefinitions } from './subject-helpers/index.js';
+export type {
+  BusSubjects,
+  NestedSubjectDefinitions,
+  FlatSubjectDefinitions,
+  SubjectKeySegments,
+} from './subject-helpers/index.js';
 
 // Context
 export type { MakaioContext } from './context/index.js';

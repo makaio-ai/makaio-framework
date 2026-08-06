@@ -2,11 +2,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
-import type { ExtensionService, NodeExtensionContext } from '@makaio/contracts';
+import type { ExtensionService, ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { makeStubExtensionContext } from '@makaio/test-utils';
 import { z } from 'zod';
-import { WorkflowNamespace, WorkflowSubjects } from '@makaio/contracts';
+import {
+  BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+  CRON_AUTOMATION_TRIGGER_KIND,
+  WorkflowNamespace,
+  WorkflowSubjects,
+} from '@makaio/contracts';
+import {
+  AUTOMATION_TRIGGER_BUILTINS_OWNER,
+  AutomationTriggerBindingRuntime,
+  AutomationTriggerBindingRuntimeToken,
+  AutomationTriggerRegistry,
+  LocalAutomationCronScheduler,
+  createBusEventAutomationTrigger,
+  createCronAutomationTrigger,
+} from '@makaio/services-core/automation-trigger';
 import { WorkflowEngineService } from '../workflow-engine-service.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { workflowEnginePackage, WorkflowEngineToken } from '../package.js';
@@ -18,7 +32,13 @@ const { subjects: PackageLifecycleSubjects } = MakaioBus.registerNamespace(
   }),
 );
 
-function createNodeContext(): NodeExtensionContext<IMakaioBus> {
+/**
+ * Builds a Node extension context that exposes an automation trigger binding
+ * runtime, the way a booted host does.
+ * @param runtime - Live binding runtime, or `undefined` for a host without one.
+ * @returns Node extension context for `workflowEnginePackage.create`.
+ */
+function createNodeContext(runtime?: AutomationTriggerBindingRuntime): NodeExtensionContext<IMakaioBus> {
   return {
     ...makeStubExtensionContext(MakaioBus),
     bus: MakaioBus,
@@ -26,6 +46,8 @@ function createNodeContext(): NodeExtensionContext<IMakaioBus> {
     homedir: '/tmp',
     makaioHome: '/tmp/.makaio-test',
     username: 'test',
+    getService: <T>(token: ExtensionToken<T>): T | undefined =>
+      token.name === AutomationTriggerBindingRuntimeToken.name ? (runtime as T | undefined) : undefined,
   };
 }
 
@@ -36,11 +58,41 @@ function expectWorkflowEngineService(service: ExtensionService | undefined): ass
 describe('workflowEnginePackage', () => {
   let dbContext: TestDbContext | undefined;
   let service: WorkflowEngineService | undefined;
+  let registry: AutomationTriggerRegistry | undefined;
+  let runtime: AutomationTriggerBindingRuntime | undefined;
+  let cronScheduler: LocalAutomationCronScheduler | undefined;
   let cleanupFns: Array<() => void> = [];
+
+  /**
+   * Boots a real automation trigger registry plus binding runtime and registers
+   * the framework's built-in trigger types under their canonical owner.
+   * @returns The live binding runtime a host would expose to the engine.
+   */
+  async function bootAutomationTriggers(): Promise<AutomationTriggerBindingRuntime> {
+    registry = new AutomationTriggerRegistry(MakaioBus);
+    await registry.init();
+    const liveRegistry = registry;
+    runtime = new AutomationTriggerBindingRuntime({
+      resolveRegistration: (kind) => liveRegistry.resolveRegistration(kind),
+    });
+    cronScheduler = new LocalAutomationCronScheduler();
+    const scheduler = cronScheduler;
+    await registry.register(AUTOMATION_TRIGGER_BUILTINS_OWNER, [
+      createBusEventAutomationTrigger(MakaioBus),
+      createCronAutomationTrigger(() => scheduler),
+    ]);
+    return runtime;
+  }
 
   afterEach(async () => {
     await service?.destroy();
     service = undefined;
+    await runtime?.close();
+    runtime = undefined;
+    await cronScheduler?.shutdown();
+    cronScheduler = undefined;
+    await registry?.destroy();
+    registry = undefined;
     cleanupFns.forEach((fn) => fn());
     cleanupFns = [];
     dbContext?.cleanup();
@@ -107,11 +159,16 @@ describe('workflowEnginePackage', () => {
 
     const workflow = createWorkflowDefinition({
       id: 'workflow-package-bus-event',
-      triggers: [{ type: 'bus-event', subject: 'workflowEnginePackageLifecycle.changed' }],
+      triggers: [
+        {
+          kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+          params: { subject: 'workflowEnginePackageLifecycle.changed' },
+        },
+      ],
     });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
-    const created = await workflowEnginePackage.create?.(createNodeContext());
+    const created = await workflowEnginePackage.create?.(createNodeContext(await bootAutomationTriggers()));
     expectWorkflowEngineService(created);
     service = created;
     await service.init();
@@ -132,20 +189,60 @@ describe('workflowEnginePackage', () => {
     const workflow = createWorkflowDefinition({
       id: 'workflow-package-cron',
       scope: { type: 'external', kind: 'project', id: 'project-1' },
-      triggers: [{ type: 'cron', schedule: '* * * * *' }],
+      triggers: [{ kind: CRON_AUTOMATION_TRIGGER_KIND, params: { schedule: '* * * * *' } }],
     });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const created = await workflowEnginePackage.create?.(createNodeContext(await bootAutomationTriggers()));
+    expectWorkflowEngineService(created);
+    service = created;
+    await service.init();
+
+    expect(service.triggerReconciler.activeConsumerCount()).toBe(1);
+    expect(cronScheduler?.activeScheduleCount()).toBe(1);
+
+    await service.destroy();
+
+    expect(service.triggerReconciler.activeConsumerCount()).toBe(0);
+    expect(cronScheduler?.activeScheduleCount()).toBe(0);
+    service = undefined;
+  });
+
+  it('does not activate a global cron trigger without single-host execution authority', async () => {
+    MakaioBus.__resetHandlers?.();
+    dbContext = await createTestDb();
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-package-global-cron',
+      scope: { type: 'global' },
+      triggers: [{ kind: CRON_AUTOMATION_TRIGGER_KIND, params: { schedule: '* * * * *' } }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const created = await workflowEnginePackage.create?.(createNodeContext(await bootAutomationTriggers()));
+    expectWorkflowEngineService(created);
+    service = created;
+    await service.init();
+
+    expect(service.triggerReconciler.activeConsumerCount()).toBe(0);
+    expect(cronScheduler?.activeScheduleCount()).toBe(0);
+  });
+
+  it('leaves declarative triggers inactive when the host exposes no binding runtime', async () => {
+    MakaioBus.__resetHandlers?.();
+    dbContext = await createTestDb();
+    await MakaioBus.request(WorkflowStorageSubjects.set, {
+      workflow: createWorkflowDefinition({
+        id: 'workflow-package-no-runtime',
+        triggers: [{ kind: CRON_AUTOMATION_TRIGGER_KIND, params: { schedule: '* * * * *' } }],
+      }),
+    });
 
     const created = await workflowEnginePackage.create?.(createNodeContext());
     expectWorkflowEngineService(created);
     service = created;
     await service.init();
 
-    expect(service.cronTriggers.activeJobCount()).toBe(1);
-
-    await service.destroy();
-
-    expect(service.cronTriggers.activeJobCount()).toBe(0);
-    service = undefined;
+    // Invocation mode still works; only the declarative binding stays inactive.
+    expect(service.triggerReconciler.activeConsumerCount()).toBe(0);
   });
 });

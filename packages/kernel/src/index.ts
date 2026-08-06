@@ -2,9 +2,7 @@
 export { KernelSchemas } from './namespace/index.js';
 /** @public */
 export { KernelNamespace } from './namespace/index.js';
-export { KernelSubjects, setWorkflowTriggerTypeRegistry } from './namespace/index.js';
-/** @public */
-export { getWorkflowTriggerTypeRegistry } from './namespace/index.js';
+export { KernelSubjects } from './namespace/index.js';
 
 export { WindowRegistry, STYLE_DEFAULTS } from './window/index.js';
 export type { WindowRegistration, WindowStyle } from './window/index.js';

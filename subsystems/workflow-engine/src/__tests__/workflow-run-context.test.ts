@@ -56,6 +56,31 @@ describe('WorkflowRunContext storage round-trip', () => {
     expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
   });
 
+  it('persists the explicit trigger mode for isolated worker reconstruction', async () => {
+    const runContext = buildWorkflowRunContext(
+      {
+        executionId: 'exec-rc-await-trigger',
+        workflowId: 'wf-await-trigger',
+        coordinatorSessionId: 'session-await-trigger',
+        source: { kind: 'definition', workflowId: 'wf-await-trigger' },
+        definitionSnapshot: createWorkflowDefinition({ id: 'wf-await-trigger' }),
+        inputs: {},
+        config: {},
+        scope: { type: 'global' },
+        triggerPayload: {},
+        triggerMode: 'await-trigger',
+      },
+      DEFAULT_EXECUTOR_CONFIG,
+    );
+
+    await persistRunContext(runContext);
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      executionId: runContext.executionId,
+    });
+    expect(fetched?.triggerMode).toBe('await-trigger');
+  });
+
   it('persists a materializationSpec set by the builder and retrieves it byte-identically', async () => {
     const materializationSpec = {
       kind: 'workspace-snapshot' as const,

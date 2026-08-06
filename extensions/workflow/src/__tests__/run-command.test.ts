@@ -242,6 +242,7 @@ describe('handleWorkflowRun with --payload', () => {
     expect(capturedRequests[0]).toMatchObject({
       filePath: resolve(process.cwd(), './wf.ts'),
       triggerPayload: { branch: 'main' },
+      triggerMode: 'immediate',
     });
     expect(stdoutChunks.join('')).toContain('exec-1');
     expect(ctx.setExitCodeSpy).not.toHaveBeenCalled();
@@ -275,6 +276,7 @@ describe('handleWorkflowRun with --payload', () => {
     expect(capturedRequests[0]).toMatchObject({
       filePath: resolve('/repo/project', './workflows/review.ts'),
       triggerPayload: {},
+      triggerMode: 'immediate',
     });
   });
 
@@ -440,7 +442,9 @@ describe('handleWorkflowRun in await-trigger mode', () => {
   });
 
   it('registers the workflow and waits for completion in await-trigger mode when stdin is TTY and no --payload', async () => {
+    const capturedRequests: Array<Record<string, unknown>> = [];
     const cleanupRunFile = bus.on(WorkflowSubjects.runFile, (ctx) => {
+      capturedRequests.push(ctx.payload as Record<string, unknown>);
       ctx.setResult({ executionId: 'exec-await-1' });
     });
 
@@ -462,6 +466,7 @@ describe('handleWorkflowRun in await-trigger mode', () => {
     expect(stdout).toContain('Awaiting trigger for workflow');
     expect(stdout).toContain('Execution exec-await-1 waiting for trigger');
     expect(stdout).toContain('Ctrl-C');
+    expect(capturedRequests).toEqual([expect.objectContaining({ triggerMode: 'await-trigger' })]);
     expect(ctx.setExitCodeSpy).not.toHaveBeenCalled();
   });
 });

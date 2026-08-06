@@ -6,12 +6,12 @@ export {
   ArtifactLifecycleHookManifestSchema,
   ClientManifestSchema,
   ContributionManifestSchema,
+  HashTriggerManifestSchema,
   LogImporterManifestSchema,
   ProtocolConfigSchema,
   ProtocolRefSchema,
   ProviderManifestSchema,
   SessionEventActionManifestSchema,
-  TriggerManifestSchema,
   UiSurfaceFlagsSchema,
 } from './contribution-manifest.js';
 export type {
@@ -21,13 +21,13 @@ export type {
   ArtifactLifecycleHookManifest,
   ClientManifest,
   ContributionManifest,
+  HashTriggerManifest,
+  HashTriggerStageManifest,
   LogImporterManifest,
   ProtocolConfig,
   ProtocolRef,
   ProviderManifest,
   SessionEventActionManifest,
-  TriggerManifest,
-  TriggerStage,
   UiSurfaceFlags,
 } from './contribution-manifest.js';
 export {
@@ -83,10 +83,10 @@ export type { ExtensionRuntimeOwnership } from './extension-runtime-boot.js';
 export type {
   AdapterContribution,
   ExtensionClientHookResponsesContribution,
+  ExtensionHashTriggersContribution,
   ExtensionNamespaceContribution,
   ExtensionSessionEventActionsContribution,
   ExtensionToolsContribution,
-  ExtensionTriggersContribution,
   ExtensionUiContribution,
   LogImportContribution,
 } from './extension-contributions.js';

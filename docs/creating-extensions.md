@@ -273,6 +273,137 @@ For full bus documentation, see [Bus Architecture](./architecture/bus/).
 
 ---
 
+## Automation Triggers
+
+An **Automation Trigger Type** answers *when should something happen*. Your extension owns the
+executable half; consumers such as the workflow engine own the *what happens* half. Contribute
+types through the `automationTriggers` surface:
+
+```typescript
+import { defineAutomationTrigger, type MakaioExtension } from '@makaio/contracts';
+import { z } from 'zod';
+
+const stormWarning = defineAutomationTrigger({
+  // Must be prefixed with your extension name.
+  kind: 'my-extension.storm-warning',
+  label: 'Storm Warning',
+  description: 'Fires when the forecast reports a storm for a region.',
+  categories: ['Weather'],
+  // Consumer-supplied configuration for one binding.
+  paramsSchema: z.object({ region: z.string().min(1) }),
+  // Shape of every event this trigger emits.
+  eventSchema: z.object({ region: z.string(), severity: z.number() }),
+  // Called once per distinct parameter set; returns its own cleanup.
+  activate: async (context, params) => {
+    const watcher = watchRegion(params.region, (severity) => {
+      void context.emit({ region: params.region, severity });
+    });
+    context.signal.addEventListener('abort', () => watcher.pause());
+    return () => watcher.close();
+  },
+});
+
+const extension: MakaioExtension = {
+  name: 'my-extension',
+  displayName: 'My Extension',
+  automationTriggers: {
+    createAutomationTriggers: (ctx) => [stormWarning],
+  },
+};
+```
+
+`defineAutomationTrigger` infers `params` and the `emit` payload from your schemas, so
+`activate` is fully typed without casts.
+
+### What the runtime guarantees
+
+- **Namespaced kinds.** `kind` must be `<your-extension-name>.<local-name>`. A batch that claims
+  another owner's namespace is rejected whole.
+- **Atomic batches.** `createAutomationTriggers` returns your *complete* set. It replaces any
+  previous batch registered under your extension name in one step, and deregisters on stop. A
+  binding acquired after a replacement activates the new implementation; the superseded activation
+  is retired rather than shared, and its consumers re-acquire on `automation-triggers.changed`.
+- **Named activations.** `context.bindingKey` is the canonical key the runtime indexed this
+  activation under — use it when a collaborator or a log line has to name the binding, instead of
+  deriving a key of your own. It is not unique over time: a retiring and a fresh activation of one
+  key can briefly coexist.
+- **One activation per distinct parameter set.** Parameters are parsed through `paramsSchema` and
+  canonicalized (recursively sorted keys). Consumers whose parameters canonicalize identically
+  share a single `activate` call and receive the same events. `activate` runs once, not once per
+  consumer.
+- **Validated emissions.** Every payload passed to `context.emit` is checked against
+  `eventSchema` and for JSON compatibility before any consumer sees it. A rejected payload is not
+  delivered.
+- **Independent fan-out.** Consumer failures are isolated; one throwing consumer never breaks
+  another or your emitter.
+- **Deterministic teardown.** When the last consumer detaches, `context.signal` is aborted and
+  then your cleanup is awaited. Emits after teardown are discarded, so a late emit cannot
+  resurrect a retired source.
+
+### Consuming a trigger
+
+Consumers bind by data, not by code — `{ kind, params }`, plus whatever conditions that consumer
+supports. A workflow, for example, declares:
+
+```typescript
+AutomationWorkflowTrigger(stormWarning, {
+  params: { region: 'eu-west' },
+  filterExpression: 'payload.severity > 3',
+});
+```
+
+The framework ships `makaio.bus-event` (params `{ subject }`) and `makaio.cron`
+(params `{ schedule, timezone }`), so extensions rarely need to reimplement either.
+
+### Discovering trigger types
+
+The registry publishes its catalog on the bus:
+
+| Subject | Kind | Purpose |
+|---------|------|---------|
+| `automation-triggers.list` | request | Serializable descriptors, including JSON Schema projections of both schemas |
+| `automation-triggers.changed` | event | Emitted on registration and deregistration, with the new revision and exact affected kinds |
+
+Listing never runs extension code, so a UI catalog can poll it safely.
+
+---
+
+## Hash Triggers
+
+Hash triggers are a different surface with a similar name. They are **interactive** — `#` or `@`
+prefixed actions that expand what a user typed in a composer before the message is sent:
+
+```typescript
+const extension: MakaioExtension = {
+  name: 'my-extension',
+  hashTriggers: {
+    createHashTriggers: (bus) => [
+      {
+        metadata: {
+          prefix: '@forecast',
+          description: 'Insert a regional forecast',
+          version: '1.0.0',
+          stage: 'gather',
+        },
+        suggest: async (query, context) => ({ suggestions: await lookupRegions(query) }),
+        execute: async (value, context) => renderForecast(value),
+      },
+    ],
+  },
+};
+```
+
+`suggest` drives autocomplete as the user types; the optional `execute` turns the chosen value
+into text. `metadata.stage` (`'gather' | 'transform' | 'action'`) and `metadata.runAfter` order
+triggers within one composition pass, so a `transform` trigger can read what a `gather` trigger
+already collected through `context.gathered`. Prefixes must be unique across all loaded
+extensions.
+
+Use hash triggers for user-initiated input expansion, and automation triggers for autonomous
+starts. They never substitute for one another.
+
+---
+
 ## Artifact View Builders
 
 Extensions can shape how artifacts render as provider-neutral views. There are two

@@ -18,6 +18,11 @@ import {
 import { CapabilityService } from './capability/capability-service.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import { reactionRegistryPackage } from './reaction/packages.js';
+import {
+  automationTriggerRegistryPackage,
+  automationTriggerBindingRuntimePackage,
+} from './automation-trigger/packages.js';
+import { automationTriggerBuiltinsPackage } from './automation-trigger/builtins/package.js';
 import type { IModelRegistryFetcher } from './model-registry/types.js';
 import { ModelRegistryService } from './model-registry/model-registry-service.js';
 import { ObservedSessionIngestionService } from './session/observed-session-ingestion.js';
@@ -359,6 +364,9 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   frameworkShellWindowPackage,
   workflowBlockRegistryPackage,
   reactionRegistryPackage,
+  automationTriggerRegistryPackage,
+  automationTriggerBindingRuntimePackage,
+  automationTriggerBuiltinsPackage,
   transitionPipelinePackage,
   gitPackage,
   fileSystemPackage,

@@ -141,23 +141,6 @@ export interface WorkflowBlockMetadata {
 }
 
 /**
- * A trigger block declaration — determines WHEN a workflow starts.
- * @typeParam TConfig - Zod shape for the builder configuration form.
- * @typeParam TOutput - Zod type for the payload passed into the workflow as input.
- */
-export interface WorkflowTriggerBlock<
-  TConfig extends z.ZodRawShape = z.ZodRawShape,
-  TOutput extends z.ZodType = z.ZodType,
-> {
-  /** Shared metadata used in the builder palette and catalog. */
-  metadata: WorkflowBlockMetadata;
-  /** Drives the configuration form in the builder UI. */
-  configSchema: z.ZodObject<TConfig>;
-  /** The payload shape passed into the workflow when this trigger fires. */
-  outputSchema: TOutput;
-}
-
-/**
  * A step block declaration — determines WHAT happens inside a workflow.
  *
  * The `runs` field specifies which primitive node type this block compiles to
@@ -193,10 +176,12 @@ export interface WorkflowStepBlock<
 
 /**
  * Collection of workflow blocks contributed by an extension.
+ *
+ * Blocks describe WHAT happens inside a workflow. WHEN a workflow starts is
+ * modelled by executable automation trigger types contributed through the
+ * `automationTriggers` extension surface, so this collection carries steps only.
  */
 export interface WorkflowBlockCollection {
-  /** Trigger block declarations — each determines WHEN a workflow starts. */
-  readonly triggers?: readonly WorkflowTriggerBlock[];
   /** Step block declarations — each determines WHAT happens inside a workflow. */
   readonly steps?: readonly WorkflowStepBlock[];
 }
@@ -204,21 +189,6 @@ export interface WorkflowBlockCollection {
 // ─────────────────────────────────────────────────────────────
 // Registered Block Shapes (serialized catalog entries)
 // ─────────────────────────────────────────────────────────────
-
-/**
- * Serialized trigger block as stored in the registry and served via bus.
- *
- * Schema fields are stored as JSON Schema objects for transport and builder
- * catalog rendering.
- */
-export interface RegisteredTriggerBlock {
-  /** Trigger metadata combined with the owning extension name. */
-  metadata: WorkflowBlockMetadata & { extensionName: string };
-  /** JSON Schema representation of the builder configuration form. */
-  configSchema: Record<string, unknown>;
-  /** JSON Schema representation of the trigger output payload. */
-  outputSchema: Record<string, unknown>;
-}
 
 /**
  * Serialized step block as stored in the registry and served via bus.

@@ -63,7 +63,7 @@ const ExtensionSchemas = {
       .object({
         adapters: z.boolean(),
         tools: z.boolean(),
-        triggers: z.boolean(),
+        hashTriggers: z.boolean(),
         providers: z.boolean(),
         clients: z.boolean(),
         ui: z.boolean(),

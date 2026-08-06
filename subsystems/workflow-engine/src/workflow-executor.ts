@@ -6,7 +6,6 @@ import {
   WorkflowError,
   createWorkflowCancelSubject,
   type IWorkflowRunner,
-  type IWorkflowTriggerTypeRegistry,
   type JsonValue,
   type WorkflowDefinition,
   type WorkflowExecution,
@@ -27,7 +26,6 @@ import {
 import {
   registerWorkflowStorageDelegationHandlers,
   registerWorkflowStateHandlers,
-  registerWorkflowTriggerTypeHandlers,
 } from './workflow-executor-handlers.js';
 import {
   cancelExecution,
@@ -100,7 +98,6 @@ export class WorkflowExecutor extends BaseService {
   private readonly workflowRunner?: IWorkflowRunner;
   private readonly executionAttemptAuthority?: ExecutionAttemptAuthority;
   private readonly materializationSpecResolvers = new Set<WorkflowMaterializationSpecResolver>();
-  private triggerTypeRegistry?: IWorkflowTriggerTypeRegistry;
 
   /**
    * Create a new workflow executor.
@@ -122,25 +119,6 @@ export class WorkflowExecutor extends BaseService {
     this.gateTimeoutScheduler = new WorkflowGateTimeoutScheduler(bus, (executionId) =>
       this.resumePausedExecution(executionId),
     );
-  }
-
-  /**
-   * Set the trigger type registry for listTriggerTypes support.
-   * @param registry - Trigger type registry instance
-   */
-  public setTriggerTypeRegistry(registry: IWorkflowTriggerTypeRegistry): void {
-    this.triggerTypeRegistry = registry;
-  }
-
-  /**
-   * Retrieve the registry set via {@link setTriggerTypeRegistry}.
-   *
-   * The composition root calls this after boot to wire
-   * `setWorkflowTriggerTypeRegistry` from `@makaio/kernel`.
-   * @returns The trigger type registry, or `undefined` if not yet set.
-   */
-  public getTriggerTypeRegistry(): IWorkflowTriggerTypeRegistry | undefined {
-    return this.triggerTypeRegistry;
   }
 
   /**
@@ -335,9 +313,6 @@ export class WorkflowExecutor extends BaseService {
       this.addCleanup(cleanup);
     }
     for (const cleanup of registerWorkflowStateHandlers(this.bus)) {
-      this.addCleanup(cleanup);
-    }
-    for (const cleanup of registerWorkflowTriggerTypeHandlers(this.bus, () => this.triggerTypeRegistry)) {
       this.addCleanup(cleanup);
     }
     await this.rehydratePausedGateTimeouts();
@@ -536,11 +511,12 @@ export class WorkflowExecutor extends BaseService {
           'workflow.runFile requires a workflow runner — configure a ThinWorkflowPiscinaRunner or equivalent.',
         );
       }
-      const { filePath, materializationSpec, triggerPayload, scope } = ctx.payload;
+      const { filePath, materializationSpec, triggerPayload, triggerMode, scope } = ctx.payload;
       try {
         const executionId = await startFileExecution(this.buildStartDeps(), filePath, {
           ...(materializationSpec !== undefined ? { materializationSpec } : {}),
           triggerPayload,
+          triggerMode,
           scopeOverride: scope,
         });
         ctx.setResult({ executionId });

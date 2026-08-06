@@ -76,7 +76,11 @@ Type: Request (RPC)
 
 ### <a id="review.findings.arrived"></a>`review.findings.arrived` (event)
 
-New/updated findings available.
+New/updated findings available from a single review source.
+
+Emitted once per source that produced changes during a fetch, so that
+subscribers can attribute the change to a concrete source and reviewer
+family instead of receiving one aggregate count for a whole fetch.
 
 Subject: `review.findings.arrived`
 
@@ -85,6 +89,8 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `created` | `number` | yes |
+| `reviewer` | `string` | yes |
+| `sourceId` | `string` | yes |
 | `target` | `{ repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }` | yes |
 | `updated` | `number` | yes |
 

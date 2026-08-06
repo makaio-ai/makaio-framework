@@ -1,8 +1,8 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IWorkflowRunner, IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
+import type { IWorkflowRunner } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
-import { BusEventTriggerEvaluator } from './bus-event-trigger-evaluator.js';
-import { CronTriggerEvaluator } from './cron-trigger-evaluator.js';
+import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
+import { WorkflowTriggerReconciler } from './workflow-trigger-reconciler.js';
 import { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { ExecutionAttemptRepository } from './execution-attempt-repository.js';
 import type { ExecutorConfig, WorkflowMaterializationSpecResolver, WorkflowWorkspaceRootResolver } from './types.js';
@@ -51,18 +51,30 @@ export interface WorkflowEngineServiceOptions {
   executionAttemptAuthority?: ExecutionAttemptAuthority;
   /** Host-owned resolvers that create portable specs for path-backed starts. */
   workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
+  /**
+   * Resolves the host-owned automation trigger binding runtime.
+   *
+   * Declarative workflow triggers are consumer subscriptions on that runtime, so
+   * this is the seam through which the engine reaches trigger sources it does not
+   * own. Resolved per reconciliation rather than captured, so a runtime that
+   * restarts is picked up by the next refresh.
+   *
+   * When omitted — or when the resolver returns `undefined` — the engine runs
+   * without declarative triggers: direct `WorkflowSubjects.start` requests still
+   * work, which is the invocation-only mode a workflow with `triggers: []` uses.
+   */
+  automationTriggerBindingRuntime?: () => AutomationTriggerBindingRuntime | undefined;
 }
 
 /**
  * Workflow engine package service.
  *
- * Owns the boot lifecycle for the workflow executor and trigger evaluators so
+ * Owns the boot lifecycle for the workflow executor and the trigger reconciler so
  * stored triggers become active during normal runtime package startup.
  */
 export class WorkflowEngineService extends BaseService {
   private readonly workflowExecutor: WorkflowExecutor;
-  private readonly busEventTriggerEvaluator: BusEventTriggerEvaluator;
-  private readonly cronTriggerEvaluator: CronTriggerEvaluator;
+  private readonly triggerReconcilerInstance: WorkflowTriggerReconciler;
   private readonly attemptAuthority: ExecutionAttemptAuthority | undefined;
   private readonly workspaceRootResolvers = new Set<WorkflowWorkspaceRootResolver>();
 
@@ -86,8 +98,8 @@ export class WorkflowEngineService extends BaseService {
     for (const resolver of options?.workflowMaterializationSpecResolvers ?? []) {
       this.workflowExecutor.registerWorkflowMaterializationSpecResolver(resolver);
     }
-    this.busEventTriggerEvaluator = new BusEventTriggerEvaluator(bus);
-    this.cronTriggerEvaluator = new CronTriggerEvaluator(bus);
+    const resolveRuntime = options?.automationTriggerBindingRuntime;
+    this.triggerReconcilerInstance = new WorkflowTriggerReconciler(bus, () => resolveRuntime?.());
   }
 
   /**
@@ -137,27 +149,11 @@ export class WorkflowEngineService extends BaseService {
   }
 
   /**
-   * Cron evaluator owned by this package service.
-   * @returns Cron trigger evaluator instance.
+   * Declarative trigger reconciler owned by this package service.
+   * @returns Workflow trigger reconciler instance.
    */
-  public get cronTriggers(): CronTriggerEvaluator {
-    return this.cronTriggerEvaluator;
-  }
-
-  /**
-   * Set the trigger type registry used by executor request handlers.
-   * @param registry - Trigger type registry instance.
-   */
-  public setTriggerTypeRegistry(registry: IWorkflowTriggerTypeRegistry): void {
-    this.workflowExecutor.setTriggerTypeRegistry(registry);
-  }
-
-  /**
-   * Retrieve the executor trigger type registry.
-   * @returns Trigger type registry, or `undefined` when none is set.
-   */
-  public getTriggerTypeRegistry(): IWorkflowTriggerTypeRegistry | undefined {
-    return this.workflowExecutor.getTriggerTypeRegistry();
+  public get triggerReconciler(): WorkflowTriggerReconciler {
+    return this.triggerReconcilerInstance;
   }
 
   /**
@@ -196,14 +192,13 @@ export class WorkflowEngineService extends BaseService {
   }
 
   /**
-   * Initialize executor handlers before trigger evaluators can fire starts.
+   * Initialize executor handlers before the trigger reconciler can fire starts.
    * @returns Promise that resolves once all child services are initialized.
    */
   protected async onInit(): Promise<void> {
     this.addCleanup(() => this.destroyOwnedServices());
     await this.workflowExecutor.init();
-    await this.busEventTriggerEvaluator.init();
-    await this.cronTriggerEvaluator.init();
+    await this.triggerReconcilerInstance.init();
   }
 
   /**
@@ -212,11 +207,7 @@ export class WorkflowEngineService extends BaseService {
    */
   private async destroyOwnedServices(): Promise<void> {
     const errors: unknown[] = [];
-    for (const destroy of [
-      () => this.cronTriggerEvaluator.destroy(),
-      () => this.busEventTriggerEvaluator.destroy(),
-      () => this.workflowExecutor.destroy(),
-    ]) {
+    for (const destroy of [() => this.triggerReconcilerInstance.destroy(), () => this.workflowExecutor.destroy()]) {
       try {
         await destroy();
       } catch (error) {

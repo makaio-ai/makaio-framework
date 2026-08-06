@@ -10,6 +10,7 @@ import {
   type WorkflowExecution,
   type WorkflowExecutionScope,
   type WorkflowRunContext,
+  type WorkflowTriggerMode,
   type WorkflowWorkerSource,
   WorkflowError,
   WorkflowErrorCode,
@@ -63,6 +64,7 @@ export interface StartExecutionDeps {
     config: WorkflowRunContext['config'];
     scope: WorkflowRunContext['scope'];
     triggerPayload: WorkflowRunContext['triggerPayload'];
+    triggerMode?: WorkflowRunContext['triggerMode'];
     artifactRef?: WorkflowRunContext['artifactRef'];
     suspensionStrategy?: WorkflowRunContext['suspensionStrategy'];
     materializationSpec?: WorkflowRunContext['materializationSpec'];
@@ -531,6 +533,7 @@ export async function startResolvedDefinitionExecution(
       config: boundConfig,
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
+      triggerMode: 'immediate',
       ...(artifactRef !== undefined ? { artifactRef } : {}),
       ...(materializationSpec !== undefined ? { materializationSpec } : {}),
     });
@@ -640,6 +643,30 @@ async function createFileCoordinatorSession(
 }
 
 /**
+ * Require the runner needed by file-backed workflow execution.
+ * @param runner - Configured workflow runner, when available.
+ * @returns Configured workflow runner.
+ */
+function requireFileWorkflowRunner(runner: IWorkflowRunner | undefined): IWorkflowRunner {
+  if (runner === undefined) throw new Error('[WorkflowExecutor] startFileExecution called without a workflow runner');
+  return runner;
+}
+
+/**
+ * Require a portable materialization specification for a path-backed workflow.
+ * @param spec - Resolved materialization specification, when available.
+ * @returns Resolved materialization specification.
+ */
+function requireFileMaterializationSpec(
+  spec: WorkflowRunContext['materializationSpec'],
+): NonNullable<WorkflowRunContext['materializationSpec']> {
+  if (spec === undefined) {
+    throw new Error('[WorkflowExecutor] path-backed execution requires a resolved materializationSpec');
+  }
+  return spec;
+}
+
+/**
  * Start a new workflow execution from a file path on disk.
  *
  * Unlike {@link startExecution}, this variant does not look up the workflow
@@ -661,6 +688,8 @@ export async function startFileExecution(
     DefinitionStartOptions,
     'artifactRef' | 'config' | 'executionLinks' | 'input' | 'parentSessionId' | 'scopeOverride' | 'triggerPayload'
   > & {
+    /** Whether the worker executes immediately or waits for a declared trigger. */
+    readonly triggerMode?: WorkflowTriggerMode;
     /**
      * Portable materialization specification for the path-backed workflow.
      *
@@ -672,6 +701,7 @@ export async function startFileExecution(
 ): Promise<string> {
   const { bus, activeExecutions, executionTasks } = deps;
   const { artifactRef, parentSessionId, triggerPayload, scopeOverride } = options;
+  const triggerMode = options.triggerMode ?? 'immediate';
   const executionId = generateId('wfx');
   const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
   const boundInputs = options.input === undefined ? {} : options.input;
@@ -679,17 +709,17 @@ export async function startFileExecution(
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? { type: 'global' };
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
 
-  if (deps.workflowRunner === undefined) {
-    throw new Error('[WorkflowExecutor] startFileExecution called without a workflow runner');
-  }
+  const workflowRunner = requireFileWorkflowRunner(deps.workflowRunner);
 
   // Ephemeral execution: use the execution ID as workflowId so storage does
   // not require a persisted file/source workflow definition row.
   const workflowId = executionId;
-  const materializationSpec = await resolveMaterializationSpec(
-    deps,
-    { executionId, workflowId, source: { kind: 'path', path: filePath }, workspaceRoot },
-    options.materializationSpec,
+  const materializationSpec = requireFileMaterializationSpec(
+    await resolveMaterializationSpec(
+      deps,
+      { executionId, workflowId, source: { kind: 'path', path: filePath }, workspaceRoot },
+      options.materializationSpec,
+    ),
   );
   const coordinatorSessionId = await createFileCoordinatorSession(bus, parentSessionId, filePath, workspaceRoot);
   const execution: WorkflowExecution = {
@@ -707,11 +737,6 @@ export async function startFileExecution(
 
   let launched = false;
   try {
-    const { workflowRunner } = deps;
-    if (materializationSpec === undefined) {
-      throw new Error('[WorkflowExecutor] path-backed execution requires a resolved materializationSpec');
-    }
-
     const runContext = deps.buildRunContext({
       executionId,
       workflowId,
@@ -721,6 +746,7 @@ export async function startFileExecution(
       config: boundConfig,
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
+      triggerMode,
       ...(artifactRef !== undefined ? { artifactRef } : {}),
       materializationSpec,
     });
@@ -741,6 +767,7 @@ export async function startFileExecution(
       filePath,
       coordinatorSessionId,
       sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
+      triggerMode,
       boundInputs,
       boundConfig,
       ...(artifactRef !== undefined ? { artifactRef } : {}),

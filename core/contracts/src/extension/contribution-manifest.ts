@@ -1,7 +1,7 @@
 /**
  * Pure-data contribution manifest types and Zod schemas for Makaio extensions.
  *
- * Extensions may declare which adapters, clients, providers, triggers, log
+ * Extensions may declare which adapters, clients, providers, hash triggers, log
  * importers, session event actions, and artifact lifecycle hooks they contribute
  * through the `contributions` field on
  * {@link ExtensionManifest}. This is discovery-time metadata only — fully
@@ -18,7 +18,7 @@
  * @see {@link AdapterManifest} for adapter contribution declarations.
  * @see {@link ClientManifest} for client contribution declarations.
  * @see {@link ProviderManifest} for provider contribution declarations.
- * @see {@link TriggerManifest} for hash trigger contribution declarations.
+ * @see {@link HashTriggerManifest} for hash trigger contribution declarations.
  * @see {@link LogImporterManifest} for log importer contribution declarations.
  * @see {@link SessionEventActionManifest} for session event action declarations.
  * @see {@link ArtifactLifecycleHookManifest} for artifact lifecycle hook declarations.
@@ -311,7 +311,7 @@ export const ProviderManifestSchema = z.object({
 }) satisfies z.ZodType<ProviderManifest>;
 
 // ---------------------------------------------------------------------------
-// TriggerManifest
+// HashTriggerManifest
 // ---------------------------------------------------------------------------
 
 /**
@@ -320,16 +320,16 @@ export const ProviderManifestSchema = z.object({
  * Mirrors {@link HashTriggerStage} from the runtime contribution types.
  * Kept as a local type alias so this manifest module remains self-contained.
  */
-export type TriggerStage = 'gather' | 'transform' | 'action';
+export type HashTriggerStageManifest = 'gather' | 'transform' | 'action';
 
 /**
  * Describes a hash trigger contributed by an extension.
  *
  * Serializable metadata for discovery and introspection. The executable
- * runtime source is `MakaioExtension.triggers.createTriggers()`; descriptor
+ * runtime source is `MakaioExtension.hashTriggers.createHashTriggers()`; descriptor
  * contributions are not a registration fallback.
  */
-export interface TriggerManifest {
+export interface HashTriggerManifest {
   /**
    * Prefix token this trigger responds to (e.g., `'loop'`, `'file'`).
    *
@@ -344,15 +344,15 @@ export interface TriggerManifest {
    *
    * Defaults to `'action'` when omitted.
    */
-  readonly stage?: TriggerStage;
+  readonly stage?: HashTriggerStageManifest;
 }
 
-/** Zod schema for {@link TriggerManifest}. */
-export const TriggerManifestSchema = z.object({
+/** Zod schema for {@link HashTriggerManifest}. */
+export const HashTriggerManifestSchema = z.object({
   prefix: z.string().min(1),
   description: z.string().optional(),
   stage: z.enum(['gather', 'transform', 'action']).optional(),
-}) satisfies z.ZodType<TriggerManifest>;
+}) satisfies z.ZodType<HashTriggerManifest>;
 
 // ---------------------------------------------------------------------------
 // LogImporterManifest
@@ -544,7 +544,7 @@ export const UiSurfaceFlagsSchema = z.object({
  * executable contribution fields only for pre-load introspection.
  *
  * Rich metadata fields ({@link adapters}, {@link clients}, {@link providers},
- * {@link triggers}, {@link logImporters}, {@link sessionEventActions}) carry
+ * {@link hashTriggers}, {@link logImporters}, {@link sessionEventActions}) carry
  * structured data for discovery and filtering. Boolean surface flags
  * ({@link create}, {@link tools}, {@link bootstrap}, etc.) declare which
  * executable surfaces the extension contributes without duplicating runtime
@@ -570,7 +570,7 @@ export const UiSurfaceFlagsSchema = z.object({
  * ```json
  * {
  *   "contributions": {
- *     "triggers": [
+ *     "hashTriggers": [
  *       { "prefix": "loop", "description": "Retry-until-success execution", "stage": "action" }
  *     ],
  *     "create": true,
@@ -589,7 +589,7 @@ export interface ContributionManifest {
   /** Provider contributions declared by this extension. */
   readonly providers?: readonly ProviderManifest[];
   /** Hash trigger contributions declared by this extension. */
-  readonly triggers?: readonly TriggerManifest[];
+  readonly hashTriggers?: readonly HashTriggerManifest[];
   /** Log importer contribution declared by this extension. */
   readonly logImporters?: readonly LogImporterManifest[];
   /** Session event action contributions declared by this extension. */
@@ -626,7 +626,7 @@ type ContributionArrayPath =
   | 'adapters'
   | 'clients'
   | 'providers'
-  | 'triggers'
+  | 'hashTriggers'
   | 'logImporters'
   | 'sessionEventActions'
   | 'artifactLifecycleHooks';
@@ -638,7 +638,7 @@ const CONTRIBUTION_SINGULAR_LABELS: Record<ContributionArrayPath, string> = {
   adapters: 'adapter',
   clients: 'client',
   providers: 'provider',
-  triggers: 'trigger',
+  hashTriggers: 'hash trigger',
   logImporters: 'log importer',
   sessionEventActions: 'session event action',
   artifactLifecycleHooks: 'artifact lifecycle hook',
@@ -691,7 +691,7 @@ export const ContributionManifestSchema = z
     adapters: z.array(AdapterManifestSchema).readonly().optional(),
     clients: z.array(ClientManifestSchema).readonly().optional(),
     providers: z.array(ProviderManifestSchema).readonly().optional(),
-    triggers: z.array(TriggerManifestSchema).readonly().optional(),
+    hashTriggers: z.array(HashTriggerManifestSchema).readonly().optional(),
     logImporters: z.array(LogImporterManifestSchema).readonly().optional(),
     sessionEventActions: z.array(SessionEventActionManifestSchema).readonly().optional(),
     artifactLifecycleHooks: z.array(ArtifactLifecycleHookManifestSchema).readonly().optional(),
@@ -703,6 +703,7 @@ export const ContributionManifestSchema = z
     uiConfig: z.boolean().optional(),
     ui: UiSurfaceFlagsSchema.optional(),
   })
+  .strict()
   .superRefine((manifest, ctx) => {
     for (const duplicateAdapterName of findDuplicateIdentifiers(manifest.adapters, (adapter) => adapter.name)) {
       addDuplicateIssue(ctx, 'adapters', duplicateAdapterName);
@@ -716,8 +717,8 @@ export const ContributionManifestSchema = z
       addDuplicateIssue(ctx, 'providers', duplicateProviderId);
     }
 
-    for (const duplicateTriggerPrefix of findDuplicateIdentifiers(manifest.triggers, (trigger) => trigger.prefix)) {
-      addDuplicateIssue(ctx, 'triggers', duplicateTriggerPrefix);
+    for (const duplicateTriggerPrefix of findDuplicateIdentifiers(manifest.hashTriggers, (trigger) => trigger.prefix)) {
+      addDuplicateIssue(ctx, 'hashTriggers', duplicateTriggerPrefix);
     }
 
     for (const duplicateImporterName of findDuplicateIdentifiers(

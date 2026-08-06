@@ -1,5 +1,4 @@
 export {
-  BusEventTriggerSchema,
   ExecutionListCursorSchema,
   ExecutionListQuerySchema,
   ExecutionStatusSchema,
@@ -10,7 +9,6 @@ export {
   EXECUTIONS_BY_ARTIFACT_REFS_DEFAULT_LIMIT_PER_REF,
   EXECUTIONS_BY_ARTIFACT_REFS_MAX_LIMIT_PER_REF,
   EXECUTIONS_BY_ARTIFACT_REFS_MAX_REFS,
-  ExtensionWorkflowTriggerSchema,
   GateInstanceListQuerySchema,
   WorkflowArtifactBindingSchema,
   WorkflowArtifactWriteDeclarationSchema,
@@ -42,7 +40,7 @@ export {
   WorkflowSourceLocationSchema,
   WorkflowStateDefinitionSchema,
   WorkflowStationNodeSchema,
-  WorkflowTriggerSchema,
+  WorkflowAutomationTriggerBindingSchema,
 } from './schemas.js';
 export {
   WorkflowDelegateResultFinalizerIdSchema,
@@ -61,12 +59,10 @@ export type {
   WorkflowDelegateToolObservation,
 } from './finalization.js';
 export type {
-  BusEventTrigger,
   ExecutionListCursor,
   ExecutionListQuery,
   ExecutionsByArtifactRefsQuery,
   ExecutionStatus,
-  ExtensionWorkflowTrigger as ExtensionWorkflowTriggerShape,
   GateInstanceListQuery,
   WorkflowArtifactBinding,
   WorkflowArtifactWriteDeclaration,
@@ -98,9 +94,8 @@ export type {
   WorkflowSourceLocation,
   WorkflowStateDefinition,
   WorkflowStationNode,
-  WorkflowTrigger,
+  WorkflowAutomationTriggerBinding,
 } from './schemas.js';
-export type { IWorkflowTriggerTypeRegistry, WorkflowTriggerTypeRecord } from './trigger-type-registry.js';
 export {
   WORKFLOW_CANCELLED_REASON,
   WorkflowStepTypeSchema,
@@ -167,13 +162,11 @@ export type {
   DelegateAgentNodeBlockRun,
   DelegateRoleNodeBlockRun,
   RegisteredStepBlock,
-  RegisteredTriggerBlock,
   StationNodeBlockRun,
   WorkflowBlockCollection,
   WorkflowBlockMetadata,
   WorkflowStepBlock,
   WorkflowStepBlockRun,
-  WorkflowTriggerBlock,
 } from './blocks.js';
 export { WorkflowNamespace, WorkflowProgressUpdateSchema, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 export { WorkflowArtifactRefSchema, serializeArtifactRef, parseArtifactRef } from './artifact-ref.js';
@@ -209,6 +202,7 @@ export type {
 export {
   WorkflowWorkerBusAuthSchema,
   WorkflowWorkerSourceSchema,
+  WorkflowTriggerModeSchema,
   WorkflowWorkerConfigSchema,
   WorkflowRunResultSchema,
   WorkerContributionManifestSchema,
@@ -216,6 +210,7 @@ export {
 export type {
   WorkflowWorkerBusAuth,
   WorkflowWorkerSource,
+  WorkflowTriggerMode,
   WorkflowWorkerConfig,
   WorkerRuntimeContext,
   WorkflowRunResult,
@@ -256,18 +251,20 @@ export type {
   WorkLogDynamicNodeMaterialization,
 } from './worklog.js';
 export {
+  AutomationWorkflowTrigger,
   BusEventWorkflowTrigger,
+  BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+  CronAutomationTriggerParamsSchema,
   CronWorkflowTrigger,
+  CRON_AUTOMATION_TRIGGER_KIND,
+  DEFAULT_CRON_TIMEZONE,
   delegateToAgent,
   delegateToRole,
-  ExtensionWorkflowTrigger,
   gate,
   iterate,
   iterateChain,
   loop,
-  ManualWorkflowTrigger,
   station,
-  WebhookWorkflowTrigger,
 } from './authoring-exports.js';
 export { defineWorkflow } from './authoring.js';
 export type {
@@ -293,7 +290,6 @@ export type {
   StationHandler,
   StationStepContext,
   StepContext,
-  WebhookTriggerPayload,
   WorkflowBuilder,
   WorkflowContext,
   WorkflowContextBase,

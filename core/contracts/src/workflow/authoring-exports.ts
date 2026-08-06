@@ -2,15 +2,16 @@ export type {
   CronTriggerPayload,
   ExtractTriggerPayload,
   TriggerPayloadFromTriggers,
-  WebhookTriggerPayload,
   WorkflowTriggerDef,
 } from './authoring-triggers.js';
 export {
+  AutomationWorkflowTrigger,
   BusEventWorkflowTrigger,
+  BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+  CronAutomationTriggerParamsSchema,
   CronWorkflowTrigger,
-  ExtensionWorkflowTrigger,
-  ManualWorkflowTrigger,
-  WebhookWorkflowTrigger,
+  CRON_AUTOMATION_TRIGGER_KIND,
+  DEFAULT_CRON_TIMEZONE,
 } from './authoring-triggers.js';
 export type {
   ArtifactContext,

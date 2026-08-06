@@ -7,6 +7,8 @@ import { type ExtensionDescriptor, parseExtensionDescriptor } from '@makaio/cont
 export interface ExtensionEntrypointModule {
   /** Server entry default export, validated by the extension loader. */
   readonly default: unknown;
+  /** Optional owner-anchored host cron scheduler policy, validated separately from descriptor-owned packages. */
+  readonly automationCronSchedulerHostPolicy?: unknown;
 }
 
 /**

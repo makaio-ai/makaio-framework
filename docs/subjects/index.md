@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 102 |
-| Subjects | 980 (396 events, 584 RPCs) |
-| framework | 98 |
+| Namespaces | 106 |
+| Subjects | 990 (403 events, 587 RPCs) |
+| framework | 102 |
 | extension | 4 |
-| kind: bus | 71 |
+| kind: bus | 75 |
 | kind: adapter | 9 |
 | kind: client | 2 |
 | kind: extension | 2 |
@@ -50,6 +50,7 @@ next: false
 | [`agentResolution`](./agentresolution.md) | bus | 1 | 0E / 1R |
 | [`approval`](./approval.md) | bus | 2 | 0E / 2R |
 | [`artifact`](./artifact.md) | bus | 16 | 6E / 10R |
+| [`automation-triggers`](./automation-triggers.md) | bus | 2 | 1E / 1R |
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
@@ -72,6 +73,7 @@ next: false
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |
 | [`native-session-supervisor`](./native-session-supervisor.md) | bus | 4 | 0E / 4R |
+| [`pages`](./pages.md) | bus | 1 | 0E / 1R |
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
@@ -88,13 +90,15 @@ next: false
 | [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
 | [`tool`](./tool.md) | bus | 7 | 5E / 2R |
+| [`ui`](./ui.md) | bus | 4 | 2E / 2R |
 | [`vcs`](./vcs.md) | bus | 11 | 0E / 11R |
 | [`vcs:events`](./vcs-events.md) | bus | 2 | 2E / 0R |
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
+| [`widget`](./widget.md) | bus | 4 | 4E / 0R |
 | [`worker-node`](./worker-node.md) | bus | 12 | 9E / 3R |
-| [`workflow`](./workflow.md) | bus | 59 | 26E / 33R |
+| [`workflow`](./workflow.md) | bus | 58 | 26E / 32R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

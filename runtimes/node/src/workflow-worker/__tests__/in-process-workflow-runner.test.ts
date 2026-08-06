@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
+import { BUS_EVENT_AUTOMATION_TRIGGER_KIND } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { InProcessWorkflowRunner } from '../in-process-workflow-runner.js';
@@ -75,6 +76,29 @@ describe('InProcessWorkflowRunner', () => {
     }
   });
 
+  it('executes immediately when an empty object is the explicit trigger payload', async () => {
+    const [bus, cleanup] = makeBusWithStorage();
+    try {
+      bus.registerNamespace(createBusNamespace('demo', { started: z.object({ buildId: z.string() }) }));
+      const runner = new InProcessWorkflowRunner({ bus });
+
+      const result = await runner.run(
+        makeConfig({
+          triggerPayload: {},
+          triggerMode: 'immediate',
+          definition: makeDefinition({
+            triggers: [{ kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND, params: { subject: 'demo.started' } }],
+          }),
+        }),
+        new AbortController().signal,
+      );
+
+      expect(result.result.status).toBe('completed');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('rejects with a schema error when workflowId is the wrong type', async () => {
     const [bus, cleanup] = makeBusWithStorage();
     try {
@@ -114,8 +138,9 @@ describe('InProcessWorkflowRunner', () => {
       const runPromise = runner.run(
         makeConfig({
           triggerPayload: {},
+          triggerMode: 'await-trigger',
           definition: makeDefinition({
-            triggers: [{ type: 'bus-event', subject: 'demo.started' }],
+            triggers: [{ kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND, params: { subject: 'demo.started' } }],
           }),
         }),
         controller.signal,
@@ -142,17 +167,26 @@ describe('InProcessWorkflowRunner', () => {
       const runPromise = runner.run(
         makeConfig({
           triggerPayload: {},
+          triggerMode: 'await-trigger',
           definition: makeDefinition({
-            triggers: [{ type: 'bus-event', subject: 'demo.started' }],
+            triggers: [{ kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND, params: { subject: 'demo.started' } }],
           }),
         }),
         new AbortController().signal,
       );
 
-      await Promise.resolve();
-      await bus.emit(subjects.started, { buildId: 'build-001' });
+      // Retried: the await-mode subscription becomes live only once the binding
+      // runtime has activated the trigger source, which takes several microtasks.
+      let settled = false;
+      const observed = runPromise.finally(() => {
+        settled = true;
+      });
+      await vi.waitFor(async () => {
+        await bus.emit(subjects.started, { buildId: 'build-001' });
+        expect(settled).toBe(true);
+      });
 
-      const result = await runPromise;
+      const result = await observed;
       expect(result.state).toBe('uncommitted');
       expect(result.result.status).toBe('completed');
     } finally {

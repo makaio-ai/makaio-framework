@@ -5,8 +5,8 @@ import {
   type SubjectSchema,
   type TransportRoutingDefault,
   type WildcardSubjectDefinition,
-  WildcardSubjectKey,
 } from '../types/index.js';
+import { createNamespaceWildcardSubject } from './namespace-wildcard-subject.js';
 import { isRequestSchema } from './is-request-schema.js';
 import { isChannelSchema } from './is-channel-schema.js';
 import { isLocalSchema } from './is-local-schema.js';
@@ -124,15 +124,7 @@ export function nestSubjectDefinitions<Domain extends string, T extends Record<s
   }
 
   // register wildcard
-  nested['$all'] = {
-    subject: WildcardSubjectKey,
-    $meta: {
-      namespace,
-      isRequest: false,
-      local: false,
-      channel: false,
-    },
-  };
+  nested['$all'] = createNamespaceWildcardSubject(namespace);
 
   return nested as NestedSubjectDefinitions<FlatSubjectDefinitions<Domain, T>> & {
     $all: WildcardSubjectDefinition<Domain>;

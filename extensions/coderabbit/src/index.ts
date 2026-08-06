@@ -21,12 +21,18 @@ import {
   registerReviewerProcessor,
   unregisterReviewerProcessor,
 } from '@makaio/contracts';
+import { createCodeRabbitReviewPostedTrigger } from './automation-trigger.js';
 import { codeRabbitProcessor } from './processor.js';
 import { CodeRabbitSource } from './source.js';
-import { codeRabbitBlocks } from './workflow-blocks.js';
 
+export {
+  CODERABBIT_REVIEW_POSTED_TRIGGER_KIND,
+  CodeRabbitReviewPostedEventSchema,
+  createCodeRabbitReviewPostedTrigger,
+} from './automation-trigger.js';
+export type { CodeRabbitReviewPostedEvent } from './automation-trigger.js';
 export { codeRabbitProcessor } from './processor.js';
-export { CodeRabbitSource } from './source.js';
+export { CODERABBIT_REVIEWER, CodeRabbitSource } from './source.js';
 
 /**
  * Makaio extension descriptor for the CodeRabbit integration.
@@ -34,7 +40,9 @@ export { CodeRabbitSource } from './source.js';
  * Registers {@link CodeRabbitSource} and {@link codeRabbitProcessor} with the
  * capability bus during extension initialization so the review service can
  * discover and use them for fetching and transforming CodeRabbit review data
- * into normalized findings.
+ * into normalized findings, and contributes the executable
+ * `coderabbit.review-posted` automation trigger that turns arrived CodeRabbit
+ * findings into a workflow start condition.
  */
 export const coderabbitPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'coderabbit',
@@ -89,8 +97,8 @@ export const coderabbitPackage: MakaioNodeExtension<IMakaioBus> = {
     };
   },
 
-  workflowBlocks: {
-    blocks: codeRabbitBlocks,
+  automationTriggers: {
+    createAutomationTriggers: (ctx) => [createCodeRabbitReviewPostedTrigger(ctx.bus)],
   },
 };
 

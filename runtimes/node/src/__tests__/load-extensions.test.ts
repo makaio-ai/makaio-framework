@@ -8,6 +8,7 @@ import { defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { attachExtensionCliContributions, loadExtensions, isWithinDirectory } from '../load-extensions.js';
 import { z } from 'zod';
+import { AutomationCronSchedulerToken } from '@makaio/services-core/automation-trigger';
 
 const FRAMEWORK_VERSION = '3.0.0';
 let fixtureRoot: string | undefined;
@@ -651,6 +652,69 @@ describe('loadExtensions', () => {
     });
 
     expect(result.configDefaults.size).toBe(0);
+  });
+
+  it('extracts an owner-anchored cron scheduler policy outside the descriptor package namespace', async () => {
+    const schedulerPackage = makePackage(AutomationCronSchedulerToken.name);
+    const result = await loadExtensions([makeExtension()], {
+      frameworkVersion: FRAMEWORK_VERSION,
+      importModule: async () => ({
+        default: [makePackage('test-ext'), makePackage('test-ext.worker')],
+        automationCronSchedulerHostPolicy: {
+          ownerPackageName: 'test-ext.worker',
+          package: schedulerPackage,
+        },
+      }),
+    });
+
+    expect(result.packages.map(({ name }) => name)).toEqual(['test-ext', 'test-ext.worker']);
+    expect(result.automationCronSchedulerHostPolicies).toHaveLength(1);
+    expect(result.automationCronSchedulerHostPolicies[0]).toMatchObject({ package: schedulerPackage });
+    expect(result.automationCronSchedulerHostPolicies[0]?.ownerPackage).toBe(result.packages[1]);
+  });
+
+  it('rejects a malformed host cron scheduler policy export', async () => {
+    await expect(
+      loadExtensions([makeExtension()], {
+        frameworkVersion: FRAMEWORK_VERSION,
+        importModule: async () => ({
+          default: makePackage('test-ext'),
+          automationCronSchedulerHostPolicy: { ownerPackageName: 'test-ext' },
+        }),
+      }),
+    ).rejects.toThrow(
+      "named export 'automationCronSchedulerHostPolicy' is not a valid owner-anchored scheduler policy",
+    );
+  });
+
+  it('rejects a scheduler policy whose owner is absent from the normalized default export', async () => {
+    await expect(
+      loadExtensions([makeExtension()], {
+        frameworkVersion: FRAMEWORK_VERSION,
+        importModule: async () => ({
+          default: makePackage('test-ext'),
+          automationCronSchedulerHostPolicy: {
+            ownerPackageName: 'test-ext.missing',
+            package: makePackage(AutomationCronSchedulerToken.name),
+          },
+        }),
+      }),
+    ).rejects.toThrow("owner 'test-ext.missing' is not a normalized descriptor default package");
+  });
+
+  it('rejects a scheduler policy package registered under the wrong token', async () => {
+    await expect(
+      loadExtensions([makeExtension()], {
+        frameworkVersion: FRAMEWORK_VERSION,
+        importModule: async () => ({
+          default: makePackage('test-ext'),
+          automationCronSchedulerHostPolicy: {
+            ownerPackageName: 'test-ext',
+            package: makePackage('test-ext.scheduler'),
+          },
+        }),
+      }),
+    ).rejects.toThrow("policy package 'test-ext.scheduler' must be named 'automation-cron-scheduler'");
   });
 });
 

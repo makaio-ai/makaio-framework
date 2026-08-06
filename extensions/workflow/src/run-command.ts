@@ -463,6 +463,7 @@ async function runOnce(
       WorkflowSubjects.runFile,
       {
         filePath,
+        triggerMode: isAwaitTrigger ? 'await-trigger' : 'immediate',
         ...(resolvedPayload.triggerPayload !== undefined && { triggerPayload: resolvedPayload.triggerPayload }),
       },
       { signal: ctx.signal },

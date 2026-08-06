@@ -1,102 +1,157 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
-import type { BusEventTrigger, WorkflowWorkerConfig } from '@makaio/contracts';
+import type { JsonValue, WorkflowAutomationTriggerBinding, WorkflowWorkerConfig } from '@makaio/contracts';
+import type { AutomationTriggerResolver } from '@makaio/services-core/automation-trigger';
+import {
+  AUTOMATION_TRIGGER_BUILTINS_OWNER,
+  AutomationTriggerBindingRuntime,
+  busBackedAutomationTriggers,
+} from '@makaio/services-core/automation-trigger';
+import {
+  compileWorkflowTriggerBindingFilter,
+  assertWorkflowTriggerPayload,
+} from '@makaio/subsystem-workflow-engine/workflow-trigger-binding-consumer';
 import type { RuntimeLoadedWorkflow } from './types.js';
 
-type AdHocEventPayload = EventMessagePayload;
-type AdHocEventSubject = SubjectDefinition<Record<string, AdHocEventPayload>, string, string>;
+// ─────────────────────────────────────────────────────────────
+// Module overview
+//
+// Await mode lets a worker start with an empty trigger payload and block until
+// one of the workflow's declared trigger bindings fires. It is a *consumer* of
+// automation triggers, exactly like the engine's reconciler, and applies the same
+// binding semantics: canonical parameter validation by the trigger type, then the
+// consumer-owned `filter` and `filterExpression`.
+//
+// The worker is an isolated process with no extension host, so it activates
+// bus-backed trigger types over its own bus rather than resolving a host-owned
+// registry. Every other kind — extension-contributed types, and schedules whose
+// placement the host owns — is skipped: the worker has no way to activate a source
+// it does not carry, and no way to know where a source it does not own already
+// runs.
+// ─────────────────────────────────────────────────────────────
+
+/** Log prefix for await-mode diagnostics. */
+const LOG_PREFIX = '[WorkflowWorkerAwaitTrigger]';
 
 /**
- * Build an ad-hoc event subject definition from a fully qualified subject string.
+ * Creates the resolver over the trigger types a worker can activate itself.
  *
- * Same pattern as the workflow cancel subject helper: construct a subject
- * definition without requiring the namespace schema to be registered locally.
- * @param fullSubject - Fully qualified subject in `namespace.subject` form.
- * @returns Ad-hoc subject definition suitable for bus subscriptions.
+ * Every bus-backed built-in, and nothing else: those need nothing but the
+ * worker's bus, so activating them here observes exactly the events this worker's
+ * bus carries and starts no source anyone else shares. Taking the whole
+ * bus-backed set rather than naming individual factories is what keeps a future
+ * bus-backed built-in awaitable without touching the worker.
+ *
+ * Cron is deliberately absent. Where a schedule runs is a host-composition
+ * decision — a host may place it on one elected machine through a relay
+ * scheduler — and a worker that built its own scheduler would fire the same
+ * schedule a second time, locally, for as long as the await lasts. A worker
+ * cannot know which placement its host chose, so it carries no scheduler at all
+ * and cron bindings take the unresolvable-kind skip path.
+ * @param bus - Worker bus used by bus-backed trigger sources.
+ * @returns Resolver reporting the worker's own trigger types.
  */
-function createAdHocEventSubject(fullSubject: string): AdHocEventSubject {
-  const separator = fullSubject.indexOf('.');
-  if (separator <= 0 || separator === fullSubject.length - 1) {
-    throw new Error(`Invalid trigger subject: ${fullSubject}`);
-  }
+function createWorkerTriggerResolver(bus: IMakaioBus): AutomationTriggerResolver {
+  const types = busBackedAutomationTriggers(bus);
 
   return {
-    subject: fullSubject.slice(separator + 1),
-    $meta: {
-      namespace: fullSubject.slice(0, separator),
-      isRequest: false,
-      payload: {} as AdHocEventPayload,
-      local: false,
-      channel: false,
+    resolveRegistration: (kind) => {
+      const type = types.find((candidate) => candidate.kind === kind);
+      return type === undefined ? undefined : { owner: AUTOMATION_TRIGGER_BUILTINS_OWNER, type };
     },
   };
 }
 
 /**
- * Subscribe to declared bus-event triggers and wait for the first matching event.
+ * Subscribes the workflow's trigger bindings and resolves with the first
+ * matching event payload.
  *
- * Returns the event payload of the first trigger that fires. All subscriptions
- * are cleaned up before returning. Rejects if the abort signal fires first.
- * @param bus - Bus used for trigger subscriptions.
- * @param triggers - Bus-event trigger definitions from the loaded workflow.
+ * Every subscription is temporary: the runtime is closed before this function
+ * returns, on success, failure, and abort alike, so a worker never leaves a
+ * source running. Aborting therefore detaches the subscriptions as part of
+ * rejecting. A workflow whose bindings are all unsubscribable here returns before
+ * a runtime exists at all.
+ * @param bus - Worker bus used by bus-backed trigger sources.
+ * @param bindings - Declarative trigger bindings of the loaded workflow.
  * @param signal - Abort signal for cooperative cancellation.
- * @returns Matched event payload to use as `triggerPayload` for the orchestrator.
+ * @returns The first matching payload, or `undefined` when no binding could be
+ *   subscribed in this worker.
+ * @throws When a resolvable binding cannot be subscribed, when a
+ *   `filterExpression` cannot be compiled, or when `signal` aborts first.
  */
-function awaitBusEventTrigger(
+async function awaitFirstTriggerEvent(
   bus: IMakaioBus,
-  triggers: readonly BusEventTrigger[],
+  bindings: readonly WorkflowAutomationTriggerBinding[],
   signal: AbortSignal,
-): Promise<Record<string, unknown>> {
-  return new Promise<Record<string, unknown>>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason ?? new Error('Await-trigger aborted'));
-      return;
+): Promise<Record<string, JsonValue> | undefined> {
+  const resolver = createWorkerTriggerResolver(bus);
+  const runtime = new AutomationTriggerBindingRuntime(resolver);
+  const subscribable = bindings.flatMap((binding) => {
+    const prepared = runtime.prepareBinding(binding);
+    if (prepared === undefined) {
+      console.warn(
+        `${LOG_PREFIX} skipping binding '${binding.kind}': awaiting it inside a worker is unsupported. ` +
+          `A worker carries only bus-backed trigger types; schedules and extension-contributed sources are ` +
+          `activated by the host that owns their placement.`,
+      );
+      return [];
     }
-
-    const cleanups: Array<() => void> = [];
-
-    /** Unsubscribe all active trigger subscriptions and clear the array. */
-    function cleanup(): void {
-      for (const fn of cleanups) fn();
-      cleanups.length = 0;
+    if (!prepared.workflowCompatible) {
+      console.warn(`${LOG_PREFIX} skipping binding '${binding.kind}': its event payload does not have an object root.`);
+      return [];
     }
+    return [{ binding, prepared }];
+  });
+  if (subscribable.length === 0) {
+    await runtime.close();
+    return undefined;
+  }
 
+  try {
+    if (signal.aborted) throw signal.reason ?? new Error('Await-trigger aborted');
+
+    const matched = Promise.withResolvers<Record<string, JsonValue>>();
+    // The promise must stay handled from the moment it exists: an abort can reject
+    // it while the subscriptions below are still being acquired, and it is only
+    // awaited once they have all settled.
+    void matched.promise.catch(() => undefined);
     const onAbort = (): void => {
-      cleanup();
-      reject(signal.reason ?? new Error('Await-trigger aborted'));
+      matched.reject(signal.reason ?? new Error('Await-trigger aborted'));
     };
     signal.addEventListener('abort', onAbort, { once: true });
-    cleanups.push(() => signal.removeEventListener('abort', onAbort));
 
     try {
-      for (const trigger of triggers) {
-        const subject = createAdHocEventSubject(trigger.subject);
-        const unsubscribe = bus.on(
-          subject,
-          (ctx) => {
-            cleanup();
-            resolve(ctx.payload as Record<string, unknown>);
-          },
-          trigger.filter ? { filter: trigger.filter } : undefined,
-        );
-        cleanups.push(unsubscribe);
-      }
-    } catch (error) {
-      cleanup();
-      reject(error);
+      // Every binding is subscribed before the first event is awaited, so an
+      // unsubscribable binding fails the await instead of silently narrowing it.
+      await Promise.all(
+        subscribable.map(async ({ binding, prepared }) => {
+          const matches = compileWorkflowTriggerBindingFilter(binding);
+          await prepared.subscribe((event) => {
+            if (!matches(event.payload)) return;
+            matched.resolve(assertWorkflowTriggerPayload(event.payload));
+          });
+        }),
+      );
+
+      return await matched.promise;
+    } finally {
+      signal.removeEventListener('abort', onAbort);
     }
-  });
+  } finally {
+    await runtime.close();
+  }
 }
 
 /**
- * Apply workflow await-trigger semantics to a worker config.
+ * Applies workflow await-trigger semantics to a worker config.
  *
- * When the config has an empty `triggerPayload` and the loaded workflow declares
- * bus-event triggers, wait for the first matching event and return a config
- * with that event payload. Otherwise return the original config unchanged.
+ * When the config explicitly selects `await-trigger` mode and the loaded
+ * workflow declares trigger bindings, the worker blocks until one of them fires and
+ * returns a config carrying that payload. Otherwise the original config is
+ * returned unchanged — which is also what happens when none of the declared
+ * bindings can be activated inside a worker.
  * @param config - Validated workflow worker configuration.
  * @param loaded - Loaded workflow definition and runtime step map.
- * @param bus - Bus used for trigger subscriptions.
+ * @param bus - Worker bus used by bus-backed trigger sources.
  * @param signal - Abort signal for cooperative cancellation.
  * @returns Original config or a copy with the matched trigger payload.
  */
@@ -106,15 +161,9 @@ export async function resolveAwaitTriggerConfig(
   bus: IMakaioBus,
   signal: AbortSignal,
 ): Promise<WorkflowWorkerConfig> {
-  const busEventTriggers = (loaded.definition.triggers ?? []).filter(
-    (trigger): trigger is BusEventTrigger => trigger.type === 'bus-event',
-  );
-  const hasEmptyTriggerPayload = Object.keys(config.triggerPayload).length === 0;
+  const bindings = loaded.definition.triggers ?? [];
+  if (config.triggerMode !== 'await-trigger' || bindings.length === 0) return config;
 
-  if (!hasEmptyTriggerPayload || busEventTriggers.length === 0) {
-    return config;
-  }
-
-  const matchedPayload = await awaitBusEventTrigger(bus, busEventTriggers, signal);
-  return { ...config, triggerPayload: matchedPayload };
+  const triggerPayload = await awaitFirstTriggerEvent(bus, bindings, signal);
+  return triggerPayload === undefined ? config : { ...config, triggerPayload };
 }

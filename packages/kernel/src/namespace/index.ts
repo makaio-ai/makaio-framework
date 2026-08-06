@@ -1,11 +1,9 @@
 /**
- * Kernel namespace definition and workflow trigger type registry.
+ * Kernel namespace definition.
  *
- * Defines the kernel subjects for explicit registration and provides
- * module-level state for the workflow trigger type registry.
+ * Defines the kernel subjects for explicit registration by composition roots.
  */
 import { createBusNamespace } from '@makaio/core';
-import type { IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
 import { KernelSchemas } from './kernel-schemas.js';
 
 export { KernelSchemas } from './kernel-schemas.js';
@@ -30,26 +28,3 @@ export const KernelNamespace = createBusNamespace('kernel', KernelSchemas);
  * - restart: Request a host restart (RPC)
  */
 export const KernelSubjects = KernelNamespace.subjects;
-
-let workflowTriggerTypeRegistry: IWorkflowTriggerTypeRegistry | undefined;
-
-/**
- * Set the workflow trigger type registry reference.
- * @param value - Workflow trigger type registry instance or undefined.
- */
-export function setWorkflowTriggerTypeRegistry(value: IWorkflowTriggerTypeRegistry | undefined): void {
-  if (value !== undefined && workflowTriggerTypeRegistry !== undefined && workflowTriggerTypeRegistry !== value) {
-    throw new Error(
-      'Workflow trigger type registry is already set. Clear it with setWorkflowTriggerTypeRegistry(undefined) before replacing it.',
-    );
-  }
-  workflowTriggerTypeRegistry = value;
-}
-
-/**
- * Get the workflow trigger type registry reference.
- * @returns Workflow trigger type registry instance or undefined.
- */
-export function getWorkflowTriggerTypeRegistry(): IWorkflowTriggerTypeRegistry | undefined {
-  return workflowTriggerTypeRegistry;
-}

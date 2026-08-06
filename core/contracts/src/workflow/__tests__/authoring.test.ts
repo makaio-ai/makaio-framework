@@ -1,12 +1,10 @@
 import { expect, expectTypeOf, it, describe } from 'vitest';
-import { createBusNamespace } from '@makaio/core';
+import { createBusNamespace, getFullSubjectForSubjectDefinition } from '@makaio/core';
 import { z } from 'zod';
 import {
+  AutomationWorkflowTrigger,
   BusEventWorkflowTrigger,
   CronWorkflowTrigger,
-  ManualWorkflowTrigger,
-  WebhookWorkflowTrigger,
-  ExtensionWorkflowTrigger,
   defineWorkflow,
   station,
   delegateToAgent,
@@ -25,6 +23,8 @@ import type { WorkflowGateNode, WorkflowLoopNode, WorkflowParallelNode, Workflow
 import { WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js';
 import { validateNoNestedLoops } from '../loop.js';
 import { defineWorkflowBundle } from '../bundle.js';
+import { defineAutomationTrigger } from '../../automation-trigger/definition.js';
+import type { ExtractTriggerPayload } from '../authoring-triggers.js';
 
 const GitNamespace = createBusNamespace('git', {
   checkout: z.object({
@@ -34,48 +34,137 @@ const GitNamespace = createBusNamespace('git', {
   }),
 });
 
+const ScalarNamespace = createBusNamespace('scalar', {
+  changed: z.string(),
+});
+
 // ─────────────────────────────────────────────────────────────
 // Trigger helpers
 // ─────────────────────────────────────────────────────────────
 
 describe('workflow trigger helpers', () => {
-  it('serializes typed bus event triggers to workflow trigger schema', () => {
+  it('serializes typed bus event triggers to an automation trigger binding', () => {
     const trigger = BusEventWorkflowTrigger({
       subject: GitNamespace.subjects.checkout,
       filter: { isNewWorktree: true },
+      filterExpression: "payload.mainWorktree == '/repos/makaio'",
     });
 
-    expect(trigger.type).toBe('bus-event');
-    expect(trigger.subject).toBe('git.checkout');
+    expect(trigger).toEqual({
+      kind: 'makaio.bus-event',
+      params: { subject: getFullSubjectForSubjectDefinition(GitNamespace.subjects.checkout) },
+      filter: { isNewWorktree: true },
+      filterExpression: "payload.mainWorktree == '/repos/makaio'",
+    });
   });
 
-  it('creates a manual trigger', () => {
-    expect(ManualWorkflowTrigger().type).toBe('manual');
+  it('omits consumer-owned filter fields when they are not supplied', () => {
+    expect(BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout })).toEqual({
+      kind: 'makaio.bus-event',
+      params: { subject: 'git.checkout' },
+    });
   });
 
-  it('creates a cron trigger with schedule', () => {
-    const t = CronWorkflowTrigger({ schedule: '0 9 * * 1' });
-    expect(t.type).toBe('cron');
-    if (t.type === 'cron') {
-      expect(t.schedule).toBe('0 9 * * 1');
-    }
+  it('creates a cron trigger binding with a default timezone', () => {
+    expect(CronWorkflowTrigger({ schedule: '0 9 * * 1' })).toEqual({
+      kind: 'makaio.cron',
+      params: { schedule: '0 9 * * 1', timezone: 'UTC' },
+    });
   });
 
-  it('creates a webhook trigger with event', () => {
-    const t = WebhookWorkflowTrigger({ event: 'push', branch: 'main' });
-    expect(t.type).toBe('webhook');
-    if (t.type === 'webhook') {
-      expect(t.event).toBe('push');
-      expect(t.branch).toBe('main');
-    }
+  it('honours an explicit cron timezone', () => {
+    expect(CronWorkflowTrigger({ schedule: '0 9 * * 1', timezone: 'Europe/Berlin' }).params).toEqual({
+      schedule: '0 9 * * 1',
+      timezone: 'Europe/Berlin',
+    });
   });
 
-  it('creates an extension trigger', () => {
-    const t = ExtensionWorkflowTrigger({ extensionType: 'github:pr.opened' });
-    expect(t.type).toBe('extension');
-    if (t.type === 'extension') {
-      expect(t.extensionType).toBe('github:pr.opened');
-    }
+  it('rejects a cron binding that could never schedule', () => {
+    // Authoring-time, not activation-time: an empty schedule or timezone would
+    // otherwise persist a binding that fails only when a host activates it.
+    expect(() => CronWorkflowTrigger({ schedule: '' })).toThrow();
+    expect(() => CronWorkflowTrigger({ schedule: '0 9 * * 1', timezone: '' })).toThrow();
+  });
+
+  it('binds an arbitrary defined automation trigger and infers its event payload', () => {
+    const definition = defineAutomationTrigger({
+      kind: 'demo.pinged',
+      label: 'Pinged',
+      description: 'Emits a ping observation.',
+      categories: ['demo'],
+      paramsSchema: z.object({ endpoint: z.string(), retries: z.number().default(3) }),
+      eventSchema: z.object({ latencyMs: z.number() }),
+      activate: async () => async () => undefined,
+    });
+
+    const trigger = AutomationWorkflowTrigger(definition, {
+      params: { endpoint: 'https://example.test' },
+      filter: { latencyMs: { $exists: true } },
+    });
+
+    expect(trigger).toEqual({
+      kind: 'demo.pinged',
+      params: { endpoint: 'https://example.test' },
+      filter: { latencyMs: { $exists: true } },
+    });
+    expectTypeOf<ExtractTriggerPayload<typeof trigger>>().toEqualTypeOf<{ latencyMs: number }>();
+  });
+
+  it('rejects params that violate the trigger parameter schema', () => {
+    const definition = defineAutomationTrigger({
+      kind: 'demo.pinged',
+      label: 'Pinged',
+      description: 'Emits a ping observation.',
+      categories: [],
+      paramsSchema: z.object({ endpoint: z.string().min(8) }),
+      eventSchema: z.object({ latencyMs: z.number() }),
+      activate: async () => async () => undefined,
+    });
+
+    expect(() => AutomationWorkflowTrigger(definition, { params: { endpoint: 'short' } })).toThrow();
+  });
+
+  it('persists detached schema input without applying transforms or defaults', () => {
+    const definition = defineAutomationTrigger({
+      kind: 'demo.normalized',
+      label: 'Normalized',
+      description: 'Normalizes activation parameters.',
+      categories: [],
+      paramsSchema: z.object({
+        project: z.string().transform((value) => `${value}!`),
+        retries: z.number().default(3),
+      }),
+      eventSchema: z.object({}),
+      activate: async () => async () => undefined,
+    });
+    const params = { project: 'shop' };
+
+    const trigger = AutomationWorkflowTrigger(definition, { params });
+    params.project = 'changed';
+
+    expect(trigger.params).toEqual({ project: 'shop' });
+  });
+
+  it('rejects scalar automation and bus-event payloads at the typed workflow authoring boundary', () => {
+    const scalarDefinition = defineAutomationTrigger({
+      kind: 'demo.scalar',
+      label: 'Scalar',
+      description: 'Generic scalar automation source.',
+      categories: [],
+      paramsSchema: z.object({}),
+      eventSchema: z.string(),
+      activate: async () => async () => undefined,
+    });
+
+    const assertRejectedAtCompileTime = (): void => {
+      // @ts-expect-error Workflows require an object-root event schema.
+      AutomationWorkflowTrigger(scalarDefinition, { params: {} });
+      // @ts-expect-error A scalar bus subject cannot author a workflow binding.
+      BusEventWorkflowTrigger({ subject: ScalarNamespace.subjects.changed });
+    };
+
+    expect(assertRejectedAtCompileTime).toBeTypeOf('function');
+    expect(scalarDefinition.eventSchema.parse('event')).toBe('event');
   });
 });
 

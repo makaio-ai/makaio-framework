@@ -57,6 +57,12 @@ describe('@makaio/contracts publish build entries', () => {
     });
   });
 
+  it('keeps the automation-trigger subpath aligned with its published entrypoint', () => {
+    expect(tsdownConfig.entry).toMatchObject({
+      'automation-trigger/index': './src/automation-trigger/index.ts',
+    });
+  });
+
   it.each([
     './dist/../escape.mjs',
     './dist/nested/../../escape.mjs',

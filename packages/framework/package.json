@@ -236,6 +236,10 @@
       "types": "./dist/services/index.d.mts",
       "default": "./dist/services/index.mjs"
     },
+    "./services/automation-trigger": {
+      "types": "./dist/services/automation-trigger/index.d.mts",
+      "default": "./dist/services/automation-trigger/index.mjs"
+    },
     "./services/capability": {
       "types": "./dist/services/capability/index.d.mts",
       "default": "./dist/services/capability/index.mjs"
@@ -555,6 +559,10 @@
     "./workflow-engine/package": {
       "types": "./dist/workflow-engine/package.d.mts",
       "default": "./dist/workflow-engine/package.mjs"
+    },
+    "./workflow-engine/workflow-trigger-binding-consumer": {
+      "types": "./dist/workflow-engine/workflow-trigger-binding-consumer.d.mts",
+      "default": "./dist/workflow-engine/workflow-trigger-binding-consumer.mjs"
     },
     "./workflow-engine/workflow-orchestrator": {
       "types": "./dist/workflow-engine/workflow-orchestrator.d.mts",

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
-import { WorkerContributionManifestSchema } from './worker.js';
+import { WorkerContributionManifestSchema, WorkflowTriggerModeSchema } from './worker.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { SuspensionStrategySchema } from '../worker-node/suspension.js';
 import { WorkerMaterializationSpecSchema } from '../capabilities/worker-node/types.js';
@@ -68,6 +68,8 @@ export const WorkflowRunContextSchema = z
     scope: WorkflowExecutionScopeSchema.default({ type: 'global' }),
     /** Trigger payload from cron/event/manual start. */
     triggerPayload: JsonObjectContractSchema.default({}),
+    /** Explicitly selects immediate execution or trigger-awaiting execution. */
+    triggerMode: WorkflowTriggerModeSchema.optional(),
     /**
      * Explicit artifact reference supplied by the execution starter.
      *

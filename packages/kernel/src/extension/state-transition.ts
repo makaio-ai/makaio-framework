@@ -20,8 +20,8 @@ export interface ContributionFlags {
   adapters: boolean;
   /** Whether the extension contributes tools. */
   tools: boolean;
-  /** Whether the extension contributes triggers. */
-  triggers: boolean;
+  /** Whether the extension contributes hash triggers. */
+  hashTriggers: boolean;
   /** Whether the extension contributes providers. */
   providers: boolean;
   /** Whether the extension contributes clients. */
@@ -47,7 +47,7 @@ function deriveContributes(pkg: KernelMakaioExtension): ContributionFlags {
   return {
     adapters: !!pkg.adapters?.length,
     tools: !!pkg.tools,
-    triggers: !!pkg.triggers,
+    hashTriggers: !!pkg.hashTriggers,
     providers: !!pkg.providers?.length,
     clients: !!pkg.clients?.length,
     ui: !!pkg.ui,
