@@ -242,14 +242,25 @@ export const ReviewSchemas = {
   },
 
   /**
-   * New/updated findings available.
+   * New/updated findings available from a single review source.
+   *
+   * Emitted once per source that produced changes during a fetch, so that
+   * subscribers can attribute the change to a concrete source and reviewer
+   * family instead of receiving one aggregate count for a whole fetch.
    *
    * Subject: `review.findings.arrived`
    */
   'findings.arrived': z.object({
+    /** Target repository/PR/branch the findings belong to. */
     target: FindingTargetSchema,
-    created: z.number(),
-    updated: z.number(),
+    /** Identity of the review source that produced the change. */
+    sourceId: z.string().min(1),
+    /** Reviewer family of the source (e.g. `coderabbit`). */
+    reviewer: z.string().min(1),
+    /** Number of findings newly created by this source during the fetch. */
+    created: z.number().int().nonnegative(),
+    /** Number of existing findings updated by this source during the fetch. */
+    updated: z.number().int().nonnegative(),
   }),
 
   /**

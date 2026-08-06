@@ -3,7 +3,6 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import {
   JsonPatchOperationSchema,
   EXTERNAL_EXECUTION_ID_PREFIX,
-  type IWorkflowTriggerTypeRegistry,
   type JsonValue,
   type WorkLogFrameEntry,
   type WorkflowDefinition,
@@ -366,24 +365,6 @@ export function registerWorkflowStateHandlers(bus: IMakaioBus): Array<() => void
           // observer failures must not reject the RPC after state is persisted
         });
       ctx.setResult({ executionId: result.executionId, sequence: result.sequence, value: result.value });
-    }),
-  ];
-}
-
-/**
- * Register trigger type query handlers.
- * @param bus - Message bus
- * @param getRegistry - Lazy trigger registry accessor
- * @returns Cleanup functions for registered handlers
- */
-export function registerWorkflowTriggerTypeHandlers(
-  bus: IMakaioBus,
-  getRegistry: () => IWorkflowTriggerTypeRegistry | undefined,
-): Array<() => void> {
-  return [
-    bus.on(WorkflowSubjects.listTriggerTypes, (ctx) => {
-      const triggerTypes = getRegistry()?.getAll() ?? [];
-      ctx.setResult({ triggerTypes });
     }),
   ];
 }

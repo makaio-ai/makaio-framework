@@ -251,6 +251,104 @@ describe('ReviewFindingsService', () => {
     expect(harness.store.get('source-b:inline:1')?.status).toBe('open');
   });
 
+  it('announces arrived findings once per contributing source, never as an aggregate', async () => {
+    const arrivals: Array<{
+      sourceId: string;
+      reviewer: string;
+      created: number;
+      updated: number;
+      repository: string;
+    }> = [];
+    const stopListening = harness.bus.on(ReviewSubjects.findings.arrived, (ctx) => {
+      const { sourceId, reviewer, created, updated, target } = ctx.payload;
+      arrivals.push({ sourceId, reviewer, created, updated, repository: target.repository });
+    });
+
+    for (const [sourceId, reviewer, commentId] of [
+      ['source-a', 'alpha', 1],
+      ['source-b', 'beta', 2],
+    ] as const) {
+      await harness.bus.emit(CapabilitySubjects.register, {
+        capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
+        provider: makeSource(sourceId, reviewer, [makeComment(commentId)]),
+      });
+      await harness.bus.emit(CapabilitySubjects.register, {
+        capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
+        provider: makeProcessor(reviewer),
+      });
+    }
+
+    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+      target: TARGET,
+      repoPath: '/repo',
+    });
+
+    expect({ created: result.created, updated: result.updated }).toEqual({ created: 2, updated: 0 });
+    expect(arrivals).toEqual([
+      { sourceId: 'source-a', reviewer: 'alpha', created: 1, updated: 0, repository: TARGET.repository },
+      { sourceId: 'source-b', reviewer: 'beta', created: 1, updated: 0, repository: TARGET.repository },
+    ]);
+
+    stopListening();
+  });
+
+  it('keeps reconciling remaining sources when an arrival subscriber throws', async () => {
+    const arrivals: string[] = [];
+    const stopListening = harness.bus.on(ReviewSubjects.findings.arrived, (ctx) => {
+      arrivals.push(ctx.payload.sourceId);
+      if (ctx.payload.sourceId === 'source-a') throw new Error('subscriber exploded');
+    });
+
+    for (const [sourceId, reviewer, commentId] of [
+      ['source-a', 'alpha', 1],
+      ['source-b', 'beta', 2],
+    ] as const) {
+      await harness.bus.emit(CapabilitySubjects.register, {
+        capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
+        provider: makeSource(sourceId, reviewer, [makeComment(commentId)]),
+      });
+      await harness.bus.emit(CapabilitySubjects.register, {
+        capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
+        provider: makeProcessor(reviewer),
+      });
+    }
+
+    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+      target: TARGET,
+      repoPath: '/repo',
+    });
+
+    expect(arrivals).toEqual(['source-a', 'source-b']);
+    expect(result.created).toBe(2);
+    expect(harness.store.get('source-b:inline:2')).toBeDefined();
+
+    stopListening();
+  });
+
+  it('stays silent for a source that produced no change', async () => {
+    harness.store.set('source-a:inline:1', makeFinding({ id: 'source-a:inline:1', sourceId: 'source-a' }));
+
+    let arrivalCount = 0;
+    const stopListening = harness.bus.on(ReviewSubjects.findings.arrived, () => {
+      arrivalCount += 1;
+    });
+
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
+      provider: makeSource('source-a', 'alpha', [makeComment(1)]),
+    });
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
+      provider: makeProcessor('alpha'),
+    });
+
+    await harness.bus.request(ReviewSubjects.findings.fetch, { target: TARGET, repoPath: '/repo' });
+
+    expect(arrivalCount).toBe(0);
+
+    stopListening();
+  });
+
   it('updates an existing open finding when the fresh source marks the same ID verified', async () => {
     harness.store.set('source-a:inline:1', makeFinding({ id: 'source-a:inline:1', sourceId: 'source-a' }));
 

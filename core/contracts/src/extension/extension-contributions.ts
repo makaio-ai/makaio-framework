@@ -72,13 +72,13 @@ export interface ExtensionToolsContribution<THostContext extends ExtensionContex
  * Hash trigger contribution surface declared by an extension.
  * @typeParam TBus - Host bus shape supplied by the runtime.
  */
-export interface ExtensionTriggersContribution<TBus extends MakaioBusLike = MakaioBusLike> {
+export interface ExtensionHashTriggersContribution<TBus extends MakaioBusLike = MakaioBusLike> {
   /**
    * Create hash triggers for this extension.
    * @param bus - The bus instance for trigger operations.
    * @returns Array of hash triggers to register with `HashTriggerService`.
    */
-  readonly createTriggers: (bus: TBus) => HashTrigger<TBus>[];
+  readonly createHashTriggers: (bus: TBus) => HashTrigger<TBus>[];
 }
 
 /**

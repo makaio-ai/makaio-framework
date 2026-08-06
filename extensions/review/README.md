@@ -29,7 +29,9 @@ When findings are fetched from an external source and compared to stored state:
 | Open finding absent from fresh snapshot | Transitioned to `verified` (resolved externally) |
 | Verified or addressed finding re-appears in fresh snapshot | Transitioned back to `open` (re-raised) |
 
-A `review.findings.arrived` event is emitted on the bus whenever findings are created or updated.
+A `review.findings.arrived` event is emitted on the bus once per source that created or updated findings during a
+fetch. The payload carries `sourceId` and `reviewer` alongside that source's own `created`/`updated` counts, so
+subscribers can attribute the change to a concrete source instead of receiving one aggregate count per fetch.
 
 ## `review_findings` Tool
 
@@ -115,7 +117,7 @@ Returns each source's ID, reviewer family, display name, capabilities (`canTrigg
 
 | Subject | When |
 |---------|------|
-| `review.findings.arrived` | After a fetch creates or updates findings |
+| `review.findings.arrived` | Once per source, after that source creates or updates findings during a fetch |
 | `review.finding.statusChanged` | After `update_status` transitions a finding |
 | `review.started` | After a review is successfully triggered |
 

@@ -43,7 +43,10 @@ Type: Event
 
 ### <a id="workflow-blocks.list"></a>`workflow-blocks.list` (rpc)
 
-List all registered trigger and step blocks.
+List all registered step blocks.
+
+Workflow start conditions are not blocks: they are executable automation
+trigger types discovered through `automation-triggers.list`.
 
 Subject: `workflow-blocks.list`
 
@@ -58,7 +61,6 @@ _Empty object._
 | Field | Type | Required |
 |-------|------|----------|
 | `steps` | `{ metadata: { name: string; label: string; description: string; extensionName: string; categories?: string[] \| undefined; }; configSchema: Record<string, unknown>; inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>; runs: { type: "station"; prompt: string; role?: string \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; timeoutMs?: number \| undefined; } \| { type: "delegate-agent"; agentId: string; inputExpression?: string \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; allowedTools?: string[] \| undefined; resultFinalizerId?: string \| undefined; } \| { type: "delegate-role"; role: string; prompt: string; outputSchema?: Record<string, JsonValue> \| undefined; allowedTools?: string[] \| undefined; resultFinalizerId?: string \| undefined; timeoutMs?: number \| undefined; }; }[]` | yes |
-| `triggers` | `{ metadata: { name: string; label: string; description: string; extensionName: string; categories?: string[] \| undefined; }; configSchema: Record<string, unknown>; outputSchema: Record<string, unknown>; }[]` | yes |
 
 ---
 

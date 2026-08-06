@@ -396,6 +396,13 @@ describe('portable WorkflowWorkerConfig', () => {
 
     expect(config.suspensionStrategy).toBe('exit-and-redispatch');
   });
+
+  it('accepts only explicit workflow trigger modes', () => {
+    expect(WorkflowWorkerConfigSchema.parse(minimalWorkerConfig({ triggerMode: 'await-trigger' })).triggerMode).toBe(
+      'await-trigger',
+    );
+    expect(() => WorkflowWorkerConfigSchema.parse(minimalWorkerConfig({ triggerMode: 'empty-payload' }))).toThrow();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -426,6 +433,13 @@ describe('portable WorkflowRunContext', () => {
     );
 
     expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
+  });
+
+  it('persists only explicit workflow trigger modes', () => {
+    expect(WorkflowRunContextSchema.parse(minimalRunContext({ triggerMode: 'await-trigger' })).triggerMode).toBe(
+      'await-trigger',
+    );
+    expect(() => WorkflowRunContextSchema.parse(minimalRunContext({ triggerMode: 'empty-payload' }))).toThrow();
   });
 
   it('rejects an Authority-local path before persistence', () => {

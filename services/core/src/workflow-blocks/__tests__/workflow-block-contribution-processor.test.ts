@@ -35,17 +35,6 @@ function makePackage(): KernelMakaioExtension {
     version: '0.1.0',
     workflowBlocks: {
       blocks: {
-        triggers: [
-          {
-            metadata: {
-              name: 'alpha.review-posted',
-              label: 'Review Posted',
-              description: 'A review was posted.',
-            },
-            configSchema: z.object({}),
-            outputSchema: z.object({ findingCount: z.number() }),
-          },
-        ],
         steps: [
           {
             metadata: {
@@ -75,7 +64,7 @@ describe('createWorkflowBlockContributionProcessor', () => {
     const processor = createWorkflowBlockContributionProcessor();
 
     await processor.processActivated('alpha', makePackage(), makeContext(registry));
-    expect(registry.listTriggers().map((trigger) => trigger.metadata.name)).toEqual(['alpha.review-posted']);
+    expect(registry.listSteps().map((step) => step.metadata.name)).toEqual(['alpha.create-issue']);
     expect(registry.listSteps()[0]?.runs).toEqual({
       type: 'station',
       prompt: 'Create an issue with title {{ config.title }} and body {{ input.body }}.',
@@ -83,7 +72,7 @@ describe('createWorkflowBlockContributionProcessor', () => {
     });
 
     await processor.processStopped?.('alpha');
-    expect(registry.listTriggers()).toEqual([]);
+    expect(registry.listSteps()).toEqual([]);
 
     await registry.destroy();
   });

@@ -143,7 +143,7 @@ boot progress UI, adapter subsystem) subscribe to track extension health.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `contributes` | `{ adapters: boolean; tools: boolean; triggers: boolean; providers: boolean; clients: boolean; ui: boolean; storage: boolean; sessionEventActions: boolean; } \| undefined` | no |
+| `contributes` | `{ adapters: boolean; tools: boolean; hashTriggers: boolean; providers: boolean; clients: boolean; ui: boolean; storage: boolean; sessionEventActions: boolean; } \| undefined` | no |
 | `displayName` | `string` | yes |
 | `error` | `string \| undefined` | no |
 | `from` | `"active" \| "discovered" \| "skipped" \| "failed" \| "stopped" \| "initializing"` | yes |

@@ -11,6 +11,8 @@ import {
 } from '@makaio/kernel';
 import { frameworkCorePackages, SessionOrchestratorToken } from '@makaio/services-core';
 import type { ShutdownStep } from './boot-phase.js';
+import { getExtensionPackageSource } from './extension-package-provenance.js';
+import type { LoadedAutomationCronSchedulerHostPolicy } from './load-extensions.js';
 
 /**
  * Add host-provided cleanup callbacks to the shared shutdown list.
@@ -101,18 +103,23 @@ export function normalizeNodeHostCapabilities(
 /** Host capability input accepted by Node runtime composition roots. */
 export type HostCapabilityDeclaration = string | RuntimeCapability;
 
+/** Inputs used to determine which descriptor-backed packages can contribute during boot. */
+export interface BootExtensionEligibilityOptions {
+  readonly packages: ReadonlyArray<KernelMakaioExtension>;
+  readonly configProvider: ExtensionConfigProvider | undefined;
+  readonly surface: ExtensionRuntimeSurface;
+  readonly runtimeEnvironment: RuntimeEnvironment;
+}
+
 /**
  * Select descriptor-backed extension packages that are allowed to contribute
  * during this boot.
  * @param options - Package set, persisted enablement source, surface, and runtime environment.
  * @returns Loaded extension packages eligible for coordinator boot.
  */
-export function selectBootEligibleExtensionPackages(options: {
-  readonly packages: ReadonlyArray<KernelMakaioExtension>;
-  readonly configProvider: ExtensionConfigProvider | undefined;
-  readonly surface: ExtensionRuntimeSurface;
-  readonly runtimeEnvironment: RuntimeEnvironment;
-}): ReadonlyArray<KernelMakaioExtension> {
+export function selectBootEligibleExtensionPackages(
+  options: BootExtensionEligibilityOptions,
+): ReadonlyArray<KernelMakaioExtension> {
   return coalesceExtensionOverrides(
     filterEligibleExtensions(
       filterPersistentlyEnabledExtensionPackages(options.packages, options.configProvider),
@@ -120,6 +127,21 @@ export function selectBootEligibleExtensionPackages(options: {
       options.runtimeEnvironment,
     ),
   );
+}
+
+/**
+ * Select scheduler provider packages whose exact server-package owner survived final boot composition and eligibility filtering.
+ * @param policies - Owner-anchored policies collected from descriptor server modules.
+ * @param options - Final packages and the boot eligibility inputs shared with the coordinator.
+ * @returns Provider packages contributed by still-eligible owners, preserving discovery order.
+ */
+export function selectEligibleAutomationCronSchedulerHostPackages(
+  policies: ReadonlyArray<LoadedAutomationCronSchedulerHostPolicy>,
+  options: BootExtensionEligibilityOptions,
+): ReadonlyArray<KernelMakaioExtension> {
+  const eligiblePackages = selectBootEligibleExtensionPackages(options);
+  const eligibleSources = new Set(eligiblePackages.map(getExtensionPackageSource));
+  return policies.filter(({ ownerPackage }) => eligibleSources.has(ownerPackage)).map(({ package: pkg }) => pkg);
 }
 
 /**

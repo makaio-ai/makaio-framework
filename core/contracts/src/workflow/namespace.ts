@@ -27,7 +27,7 @@ import {
   CompleteExternalExecutionRequestSchema,
   RegisterExternalExecutionRequestSchema,
 } from './external-execution.js';
-import { WorkflowRunResultSchema } from './worker.js';
+import { WorkflowRunResultSchema, WorkflowTriggerModeSchema } from './worker.js';
 import {
   WorkflowDelegateResultFinalizationGatewayRequestSchema,
   WorkflowDelegateResultFinalizationResponseSchema,
@@ -327,23 +327,6 @@ export const WorkflowSchemas = {
     request: z.object({ executionId: z.string().min(1) }),
     response: z.object({ frames: z.array(WorkflowFrameStateSchema) }),
   },
-  listTriggerTypes: {
-    request: z.object({}),
-    response: z.object({
-      triggerTypes: z.array(
-        z.object({
-          type: z.string(),
-          displayName: z.string(),
-          icon: z.string(),
-          category: z.string(),
-          description: z.string().optional(),
-          configJsonSchema: JsonSchemaRecordSchema,
-          outputJsonSchema: JsonSchemaRecordSchema,
-          source: z.string(),
-        }),
-      ),
-    }),
-  },
 
   /**
    * Run a workflow from a TypeScript or JavaScript source file.
@@ -373,6 +356,8 @@ export const WorkflowSchemas = {
        * CLI flag or stdin rather than a named bus trigger.
        */
       triggerPayload: JsonObjectContractSchema.optional(),
+      /** Explicitly selects immediate execution or trigger-awaiting execution. */
+      triggerMode: WorkflowTriggerModeSchema.default('immediate'),
       /**
        * Scope override for the execution.
        * Defaults to `{ type: 'global' }` when omitted.

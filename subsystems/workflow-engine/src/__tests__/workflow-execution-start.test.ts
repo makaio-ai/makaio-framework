@@ -21,6 +21,7 @@ function makeRunContext(params: Parameters<StartExecutionDeps['buildRunContext']
     config: params.config,
     scope: params.scope,
     triggerPayload: params.triggerPayload,
+    triggerMode: params.triggerMode,
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
     env: {},

@@ -11,6 +11,12 @@
  */
 
 export { WorkflowExecutor } from './workflow-executor.js';
+export { WorkflowTriggerReconciler } from './workflow-trigger-reconciler.js';
+export {
+  compileWorkflowTriggerBindingFilter,
+  assertWorkflowTriggerPayload,
+} from './workflow-trigger-binding-consumer.js';
+export type { WorkflowTriggerPayloadPredicate } from './workflow-trigger-binding-consumer.js';
 export { WorkflowEngineService } from './workflow-engine-service.js';
 export type { WorkflowEngineServiceOptions } from './workflow-engine-service.js';
 export type {

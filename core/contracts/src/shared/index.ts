@@ -3,6 +3,7 @@ export {
   JsonValueSchema,
   JsonObjectSchema,
   JsonObjectContractSchema,
+  JsonRecordSchema,
   JsonSchemaRecordSchema,
   type JsonValue,
 } from './json-value.js';

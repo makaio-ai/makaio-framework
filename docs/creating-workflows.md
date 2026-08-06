@@ -5,8 +5,8 @@ description: Build typed, event-driven workflows using the factory pipeline API 
 
 Workflows are multi-step automations that combine typed handler functions, agent delegations,
 approval gates, and collection iterators into a linear pipeline. Each workflow declares
-triggers (bus events, cron, manual) and a sequence of nodes that the workflow engine executes
-in order.
+automation trigger bindings (bus events, schedules, or any extension-contributed trigger type) and
+a sequence of nodes that the workflow engine executes in order.
 
 Workflows are authored as TypeScript files using the `defineWorkflow()` builder API. The
 builder produces two outputs:
@@ -30,12 +30,14 @@ team workflows.
 
 ```typescript
 // .makaio/personal/workflows/hello.ts
-import { defineWorkflow, ManualWorkflowTrigger } from '@makaio/contracts';
+import { defineWorkflow } from '@makaio/contracts';
 import { z } from 'zod';
 
+// No declared triggers: this workflow is only ever started by invoking it
+// directly — `makaio workflow run`, or a `workflow.start` bus request.
 const workflow = defineWorkflow('hello', {
   name: 'Hello World',
-  triggers: [ManualWorkflowTrigger()],
+  triggers: [],
 });
 
 workflow.station('greet', async (ctx) => {
@@ -549,8 +551,14 @@ export const blockPlanOnRejection: TransitionRuleDefinition = {
 
 ## Triggers
 
-Triggers determine when a workflow executes. A workflow can declare multiple triggers — any
-one of them can start an execution.
+A declared trigger says which *automation trigger* starts the workflow. A workflow can
+declare several — any one of them can start an execution — and a workflow that declares none
+is started only by invoking it directly.
+
+Every declared trigger is a binding onto a registered automation trigger type: the type owns
+the live source (a bus subscription, a schedule, a webhook listener) and validates the
+binding's `params`, while `filter` and `filterExpression` stay with the workflow. Two
+workflows binding the same type with the same params share one source.
 
 ### Bus Event Trigger
 
@@ -569,14 +577,43 @@ BusEventWorkflowTrigger({
 The trigger payload type is inferred from the subject's Zod schema — `ctx.trigger` is fully
 typed in station handlers.
 
-### Other Triggers
+### Cron Trigger
 
-| Trigger | Factory | Notes |
-|---------|---------|-------|
-| Manual | `ManualWorkflowTrigger()` | Used for `makaio workflow run` without `--payload` |
-| Cron | `CronWorkflowTrigger({ schedule: '0 9 * * 1' })` | Standard cron syntax |
-| Webhook | `WebhookWorkflowTrigger({ event: 'push' })` | HTTP webhook events |
-| Extension | `ExtensionWorkflowTrigger({ extensionType: 'ext:event' })` | Extension-emitted events |
+Fires on a schedule. `ctx.trigger.scheduledFor` carries the occurrence that fired.
+
+```typescript
+import { CronWorkflowTrigger } from '@makaio/contracts';
+
+CronWorkflowTrigger({ schedule: '0 9 * * 1', timezone: 'Europe/Berlin' })
+```
+
+### Extension-Contributed Triggers
+
+Any other trigger type — webhooks, provider events, anything an extension contributes —
+is bound with `AutomationWorkflowTrigger`, using the trigger definition the contributing
+extension exports. Params and payload are typed from that definition's schemas.
+
+```typescript
+import { AutomationWorkflowTrigger } from '@makaio/contracts';
+import { GithubWebhookTrigger } from 'some-extension/triggers';
+
+AutomationWorkflowTrigger(GithubWebhookTrigger, {
+  params: { event: 'push' },
+  filterExpression: 'payload.ref == "refs/heads/main"',
+})
+```
+
+### Manual Invocation
+
+There is no manual trigger type: a workflow with `triggers: []` is simply one that nothing
+starts on its own. Run it with `makaio workflow run`, or start it over the bus with
+`workflow.start`.
+
+### Filtering
+
+`filter` (structural) and `filterExpression` (a jexl expression over `payload`) are evaluated
+by the workflow engine after the source has emitted, so they never change what the shared
+source observes. Both are optional, and both must pass when both are present.
 
 ---
 

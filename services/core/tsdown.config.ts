@@ -8,6 +8,7 @@ export default defineConfig({
     './src/adapter-runtime/index.ts',
     './src/adapter-runtime/schemas.ts',
     './src/adapter-runtime/namespace.ts',
+    './src/automation-trigger/index.ts',
     './src/capability/index.ts',
     './src/cli-detection/namespace.ts',
     './src/context-rules/index.ts',

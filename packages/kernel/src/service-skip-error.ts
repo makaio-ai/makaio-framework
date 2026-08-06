@@ -14,10 +14,10 @@
  * ```typescript
  * factory: async (ctx) => {
  *   const { config } = await ctx.bus.request(ConfigSubjects.get, {});
- *   if (config.role !== 'main-dev-machine') {
- *     throw new ServiceSkipError(`role=${String(config.role)}, expected main-dev-machine`);
+ *   if (config.telemetry?.endpoint === undefined) {
+ *     throw new ServiceSkipError('no telemetry endpoint is configured');
  *   }
- *   return new CronTriggerEvaluator(ctx.bus);
+ *   return new TelemetryExporter(ctx.bus, config.telemetry.endpoint);
  * }
  * ```
  */

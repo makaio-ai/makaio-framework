@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
+import { splitSubjectKey } from '@makaio/core';
 import { WorkflowStationNodeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 
@@ -129,15 +130,15 @@ export type StepCancelSubject = SubjectDefinition<Record<string, StepCancelPaylo
  * @returns Event subject definition for bus emit/on calls.
  */
 export function createStepCancelSubject(fullSubject: string): StepCancelSubject {
-  const separator = fullSubject.indexOf('.');
-  if (separator <= 0 || separator === fullSubject.length - 1) {
+  const segments = splitSubjectKey(fullSubject);
+  if (segments === undefined) {
     throw new Error(`Invalid step cancel subject: ${fullSubject}`);
   }
 
   return {
-    subject: fullSubject.slice(separator + 1),
+    subject: segments.subject,
     $meta: {
-      namespace: fullSubject.slice(0, separator),
+      namespace: segments.namespace,
       isRequest: false,
       payload: {} as EventMessagePayload<StepCancelPayload>,
       local: false,
@@ -174,15 +175,15 @@ export type WorkflowCancelSubject = SubjectDefinition<Record<string, WorkflowCan
  * @returns Event subject definition for bus emit/on calls.
  */
 export function createWorkflowCancelSubject(fullSubject: string): WorkflowCancelSubject {
-  const separator = fullSubject.indexOf('.');
-  if (separator <= 0 || separator === fullSubject.length - 1) {
+  const segments = splitSubjectKey(fullSubject);
+  if (segments === undefined) {
     throw new Error(`Invalid workflow cancel subject: ${fullSubject}`);
   }
 
   return {
-    subject: fullSubject.slice(separator + 1),
+    subject: segments.subject,
     $meta: {
-      namespace: fullSubject.slice(0, separator),
+      namespace: segments.namespace,
       isRequest: false,
       payload: {} as EventMessagePayload<WorkflowCancelPayload>,
       local: false,

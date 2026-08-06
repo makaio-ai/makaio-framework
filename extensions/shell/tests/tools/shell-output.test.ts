@@ -282,12 +282,15 @@ describe('shellOutputTool', () => {
       });
 
       // Wait for output to appear in buffer (condition-based, not arbitrary timeout)
-      await vi.waitFor(() => {
-        const output = instance.getOutput('stdout', 0, 10000);
-        if (!output.content.includes('immediate output')) {
-          throw new Error('Output not yet available');
-        }
-      });
+      await vi.waitFor(
+        () => {
+          const output = instance.getOutput('stdout', 0, 10000);
+          if (!output.content.includes('immediate output')) {
+            throw new Error('Output not yet available');
+          }
+        },
+        { timeout: 5000, interval: 50 },
+      );
 
       const result = await ctx.registry.execute(
         'shell_output',

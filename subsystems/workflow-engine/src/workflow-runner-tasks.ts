@@ -5,6 +5,7 @@ import {
   type SuspensionStrategy,
   type WorkflowDefinition,
   type WorkflowRunContext,
+  type WorkflowTriggerMode,
   type WorkflowRunnerCompletion,
   type WorkflowRunnerRunOptions,
   type WorkflowRunResult,
@@ -283,6 +284,8 @@ export interface FileRunnerTaskParams {
   filePath: string;
   coordinatorSessionId: string;
   sanitizedTriggerPayload: Record<string, unknown>;
+  /** Whether the worker executes immediately or waits for a declared trigger. */
+  triggerMode: WorkflowTriggerMode;
   boundInputs: JsonValue;
   boundConfig: Record<string, unknown>;
   artifactRef?: WorkflowWorkerConfig['artifactRef'];
@@ -342,6 +345,7 @@ function buildFileWorkerConfig(deps: RunnerTaskDeps, params: FileRunnerTaskParam
     executionId: params.executionId,
     workflowId: params.workflowId,
     triggerPayload: params.sanitizedTriggerPayload,
+    triggerMode: params.triggerMode,
     inputs: params.boundInputs,
     config: params.boundConfig,
     ...(params.artifactRef !== undefined ? { artifactRef: params.artifactRef } : {}),

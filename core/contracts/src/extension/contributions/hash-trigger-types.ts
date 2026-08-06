@@ -87,7 +87,7 @@ export interface HashTriggerSuggestResult {
  * A registered hash trigger that can suggest completions and execute values.
  *
  * Implement this interface and return instances from
- * `MakaioExtension.triggers.createTriggers` so the runtime registers them
+ * `MakaioExtension.hashTriggers.createHashTriggers` so the runtime registers them
  * with the HashTriggerService.
  * @typeParam TBus - Host bus shape supplied by the runtime.
  */

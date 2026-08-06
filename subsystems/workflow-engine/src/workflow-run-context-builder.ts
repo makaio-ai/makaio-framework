@@ -23,6 +23,8 @@ export interface BuildWorkflowRunContextParams {
   readonly scope: WorkflowRunContext['scope'];
   /** Trigger payload that started this execution. */
   readonly triggerPayload: WorkflowRunContext['triggerPayload'];
+  /** Whether execution starts immediately or waits for a declared trigger. */
+  readonly triggerMode?: WorkflowRunContext['triggerMode'];
   /** Optional artifact bound at start. */
   readonly artifactRef?: WorkflowRunContext['artifactRef'];
   /** Suspension strategy selected by the caller for this execution. */
@@ -63,6 +65,7 @@ export function buildWorkflowRunContext(
     config: params.config,
     scope: params.scope,
     triggerPayload: params.triggerPayload,
+    triggerMode: params.triggerMode ?? 'immediate',
     ...(params.artifactRef !== undefined ? { artifactRef: params.artifactRef } : {}),
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,

@@ -44,6 +44,7 @@
     "./facet": "./src/facet/index.ts",
     "./materialization": "./src/materialization/index.ts",
     "./reaction": "./src/reaction/index.ts",
+    "./automation-trigger": "./src/automation-trigger/index.ts",
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -188,6 +189,10 @@
       "./reaction": {
         "types": "./dist/reaction/index.d.ts",
         "default": "./dist/reaction/index.mjs"
+      },
+      "./automation-trigger": {
+        "types": "./dist/automation-trigger/index.d.ts",
+        "default": "./dist/automation-trigger/index.mjs"
       },
       "./package.json": "./package.json"
     }

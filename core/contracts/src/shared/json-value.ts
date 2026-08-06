@@ -53,6 +53,23 @@ export const JsonObjectSchema: z.ZodType<Record<string, unknown>> = z.record(z.s
 export const JsonObjectContractSchema = JsonObjectSchema as z.ZodType<Record<string, unknown>, Record<string, unknown>>;
 
 /**
+ * Generic JSON-compatible parameter record.
+ *
+ * Use this schema when the field carries arbitrary JSON key-value pairs that
+ * are NOT a JSON Schema document — for example, binding parameter maps or
+ * opaque configuration payloads. The underlying validator rejects functions,
+ * `undefined`, and other non-serializable values.
+ *
+ * Distinct from {@link JsonSchemaRecordSchema}, which carries the narrower
+ * semantic of "a JSON Schema document" used for `inputSchema` / `outputSchema`
+ * / `configSchema` fields.
+ */
+export const JsonRecordSchema: z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>> = z.record(
+  z.string(),
+  JsonValueSchema,
+) as z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>>;
+
+/**
  * Serializable JSON Schema record used for `inputSchema`, `outputSchema`, and
  * `configSchema` fields on persisted workflow definitions and node primitives.
  *
@@ -64,8 +81,7 @@ export const JsonObjectContractSchema = JsonObjectSchema as z.ZodType<Record<str
  * The underlying `z.record(z.string(), JsonValueSchema)` validator rejects
  * functions, `undefined`, and other non-serializable values, keeping persisted
  * workflow definitions purely JSON-safe.
+ *
+ * For non-schema JSON records (e.g. parameter maps), use {@link JsonRecordSchema}.
  */
-export const JsonSchemaRecordSchema: z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>> = z.record(
-  z.string(),
-  JsonValueSchema,
-) as z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>>;
+export const JsonSchemaRecordSchema: z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>> = JsonRecordSchema;

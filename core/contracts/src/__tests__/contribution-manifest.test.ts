@@ -479,6 +479,50 @@ describe('ContributionManifestSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('parses every supported extension contribution field, including hash triggers', () => {
+    const result = ContributionManifestSchema.safeParse({
+      adapters: [{ name: 'claude-code', protocols: ['anthropic'] }],
+      clients: [{ id: 'claude-code', name: 'Claude Code' }],
+      providers: [{ id: 'anthropic', name: 'Anthropic' }],
+      hashTriggers: [
+        { prefix: 'context', description: 'Attach context', stage: 'gather' },
+        { prefix: 'loop', description: 'Repeat execution', stage: 'action' },
+      ],
+      logImporters: [{ adapterName: 'claude-code', displayName: 'Claude Code' }],
+      sessionEventActions: [{ id: 'pin-message', label: 'Pin message', selectionMode: 'single' }],
+      artifactLifecycleHooks: [{ id: 'audit', event: 'afterCreate' }],
+      create: true,
+      tools: true,
+      bootstrap: true,
+      namespace: true,
+      configSchema: true,
+      uiConfig: true,
+      ui: { tiles: true, widgets: true, pages: true, routes: true },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hashTriggers).toEqual([
+        { prefix: 'context', description: 'Attach context', stage: 'gather' },
+        { prefix: 'loop', description: 'Repeat execution', stage: 'action' },
+      ]);
+    }
+  });
+
+  it('rejects hash triggers with invalid prefix and stage fields at their field paths', () => {
+    const result = ContributionManifestSchema.safeParse({
+      hashTriggers: [{ prefix: '', stage: 'invalid-stage' }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(({ path }) => path)).toEqual([
+        ['hashTriggers', 0, 'prefix'],
+        ['hashTriggers', 0, 'stage'],
+      ]);
+    }
+  });
+
   it('parses artifact lifecycle hook metadata for every lifecycle event', () => {
     const events: readonly ArtifactLifecycleHookEvent[] = [
       'beforeCreate',
@@ -598,6 +642,23 @@ describe('ContributionManifestSchema', () => {
     }
   });
 
+  it('rejects duplicate hash trigger prefixes with the contribution array path', () => {
+    const result = ContributionManifestSchema.safeParse({
+      hashTriggers: [
+        { prefix: 'loop', stage: 'action' },
+        { prefix: 'context', stage: 'gather' },
+        { prefix: 'loop', stage: 'transform' },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(({ path, message }) => ({ path, message }))).toEqual([
+        { path: ['hashTriggers'], message: 'Duplicate hash trigger contribution identifier "loop"' },
+      ]);
+    }
+  });
+
   it('rejects duplicate artifact lifecycle hook IDs with exact issue paths and messages', () => {
     const result = ContributionManifestSchema.safeParse({
       artifactLifecycleHooks: [
@@ -696,6 +757,20 @@ describe('ExtensionManifestSchema with contributions field', () => {
 
     expect(result.success).toBe(false);
   });
+
+  it('rejects retired contribution keys instead of stripping them', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      contributions: { triggers: true },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({ code: 'unrecognized_keys', path: ['contributions'] }),
+      );
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -741,6 +816,20 @@ describe('ExtensionDescriptorSchema with contributions field', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributions).toBeUndefined();
+    }
+  });
+
+  it('rejects a legacy descriptor using contributions.triggers', () => {
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      contributions: { triggers: true },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({ code: 'unrecognized_keys', path: ['contributions'] }),
+      );
     }
   });
 });

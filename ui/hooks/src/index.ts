@@ -96,6 +96,12 @@ export { useWindowIdPages } from './pages/use-window-id-pages.js';
 export { usePageComponent } from './pages/use-page-component.js';
 
 // ---------------------------------------------------------------------------
+// Workflow hooks
+// ---------------------------------------------------------------------------
+export { useAutomationTriggerTypes } from './workflow/useAutomationTriggerTypes.js';
+export type { UseAutomationTriggerTypesResult } from './workflow/useAutomationTriggerTypes.js';
+
+// ---------------------------------------------------------------------------
 // Onboarding hooks
 // ---------------------------------------------------------------------------
 export {

@@ -8,10 +8,10 @@ import type { ExtensionCliContribution } from './extension-cli.js';
 import type {
   AdapterContribution,
   ExtensionClientHookResponsesContribution,
+  ExtensionHashTriggersContribution,
   ExtensionNamespaceContribution,
   ExtensionSessionEventActionsContribution,
   ExtensionToolsContribution,
-  ExtensionTriggersContribution,
   ExtensionUiContribution,
   LogImportContribution,
 } from './extension-contributions.js';
@@ -25,6 +25,7 @@ import type { ArtifactLifecycleHookRegistration } from '../artifact/lifecycle-ho
 import type { FacetNamespaceDefinition } from '../facet/index.js';
 import type { ExtensionReactionsContribution } from '../reaction/index.js';
 import type { SurfaceBindingDefinition } from '../materialization/definition.js';
+import type { ExtensionAutomationTriggersContribution } from '../automation-trigger/contribution.js';
 import type { ExtensionArtifactViewBuildersContribution } from '../materialization/view-builder.js';
 import type {
   ExtensionTransitionActionsContribution,
@@ -407,14 +408,14 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
   /**
    * Hash trigger factory for this extension.
    *
-   * When present, the runtime calls `createTriggers(bus)` after all
+   * When present, the runtime calls `createHashTriggers(bus)` after all
    * dependencies are loaded, then registers the returned triggers with
    * `HashTriggerService`.
    *
-   * Extensions declaring triggers should depend on `'hash-trigger'` to ensure
-   * the service exists when triggers are registered.
+   * Extensions declaring hash triggers should depend on `'hash-trigger'` to
+   * ensure the service exists when triggers are registered.
    */
-  readonly triggers?: ExtensionTriggersContribution<THostContext['bus']>;
+  readonly hashTriggers?: ExtensionHashTriggersContribution<THostContext['bus']>;
 
   /**
    * Session event action factory for this extension.
@@ -436,12 +437,13 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
   readonly bootstrap?: ExtensionBootstrap<THostContext['bus']>;
 
   /**
-   * Workflow trigger and step block declarations for the workflow builder.
+   * Workflow step block declarations for the workflow builder.
    *
    * When present, the runtime reads `blocks` during extension activation and
    * registers each block with the workflow block registry. Blocks are purely
-   * declarative — no runtime context is required. Use {@link WorkflowTriggerBlock}
-   * and {@link WorkflowStepBlock} to define blocks with typed Zod schemas.
+   * declarative — no runtime context is required. Use {@link WorkflowStepBlock}
+   * to define blocks with typed Zod schemas. Workflow start conditions are
+   * contributed through {@link automationTriggers} instead.
    */
   readonly workflowBlocks?: ExtensionWorkflowBlocksContribution;
 
@@ -530,6 +532,23 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * Reaction for discovery, but only this executable surface installs it.
    */
   readonly reactions?: ExtensionReactionsContribution<THostContext>;
+
+  /**
+   * Automation trigger factory contributed by this extension.
+   *
+   * When present, the runtime calls `createAutomationTriggers(ctx)` during
+   * extension activation and registers the returned
+   * {@link AutomationTriggerType}s with the automation trigger registry.
+   * Trigger `kind` values must be prefixed with the contributing extension's
+   * name; the registry enforces this at contribution time.
+   *
+   * Trigger definitions carry live Zod parameter and event schemas plus a
+   * trusted `activate` factory — they are runtime values and must never be
+   * included in serializable descriptor metadata. Use
+   * {@link createAutomationTriggerDescriptor} to produce the serializable
+   * representation for Builder discovery.
+   */
+  readonly automationTriggers?: ExtensionAutomationTriggersContribution<THostContext>;
 
   // ---------------------------------------------------------------------------
   // Transition Pipeline contribution surfaces

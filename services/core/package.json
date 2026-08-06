@@ -22,6 +22,7 @@
     "./agent-runtime": "./src/agent-runtime/index.ts",
     "./agent-runtime/namespace": "./src/agent-runtime/namespace.ts",
     "./agent-runtime/schemas": "./src/agent-runtime/schemas.ts",
+    "./automation-trigger": "./src/automation-trigger/index.ts",
     "./capability": "./src/capability/index.ts",
     "./harness": "./src/harness/index.ts",
     "./harness/storage/schema": "./src/harness/storage/schema.ts",
@@ -125,6 +126,7 @@
     "@makaio/subsystem-git": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
+    "croner": "^10.0.1",
     "drizzle-orm": "0.45.2",
     "zod": "4.4.3"
   },
@@ -145,6 +147,7 @@
       "./agent-runtime": "./dist/agent-runtime/index.mjs",
       "./agent-runtime/namespace": "./dist/agent-runtime/namespace.mjs",
       "./agent-runtime/schemas": "./dist/agent-runtime/schemas.mjs",
+      "./automation-trigger": "./dist/automation-trigger/index.mjs",
       "./capability": "./dist/capability/index.mjs",
       "./harness": "./dist/harness/index.mjs",
       "./harness/storage/schema": "./dist/harness/storage/schema.mjs",

@@ -44,6 +44,15 @@ export const WorkflowWorkerSourceSchema = z.discriminatedUnion('kind', [
 
 export type WorkflowWorkerSource = z.infer<typeof WorkflowWorkerSourceSchema>;
 
+/**
+ * Determines whether a workflow worker executes immediately or first waits for
+ * one of the workflow's declared automation triggers.
+ */
+export const WorkflowTriggerModeSchema = z.enum(['immediate', 'await-trigger']);
+
+/** Explicit workflow trigger execution mode. */
+export type WorkflowTriggerMode = z.infer<typeof WorkflowTriggerModeSchema>;
+
 // ─────────────────────────────────────────────────────────────
 // Worker Config
 // ─────────────────────────────────────────────────────────────
@@ -75,6 +84,8 @@ export const WorkflowWorkerConfigSchema = z.object({
    * Available to workflow expressions as `trigger.*`.
    */
   triggerPayload: JsonObjectContractSchema.default({}),
+  /** Explicitly selects immediate execution or trigger-awaiting execution. */
+  triggerMode: WorkflowTriggerModeSchema.optional(),
   /**
    * Bound workflow input value for this execution.
    * Available to workflow expressions as `inputs`.

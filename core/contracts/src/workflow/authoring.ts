@@ -10,7 +10,7 @@ import type {
   WorkflowParallelNode,
   WorkflowSequenceNode,
   WorkflowStationNode,
-  WorkflowTrigger,
+  WorkflowAutomationTriggerBinding,
 } from './schemas.js';
 import type { IterateHandler, StationHandler } from './authoring-context.js';
 import type { LoopGateHandler } from './loop.js';
@@ -279,7 +279,7 @@ interface BuilderState {
     readonly gates: Record<string, z.ZodTypeAny>;
   };
   readonly definition: WorkflowDefinition;
-  readonly triggers: WorkflowTrigger[];
+  readonly triggers: WorkflowAutomationTriggerBinding[];
 }
 
 /**
@@ -520,7 +520,7 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
   const zodGates: Record<string, z.ZodTypeAny> = {};
   const zodSchemas: BuilderState['zodSchemas'] = { gates: zodGates };
   const runtimeFactories = new Map<string, () => WorkflowNode[]>();
-  const triggers: WorkflowTrigger[] = options?.triggers ? [...options.triggers] : [];
+  const triggers: WorkflowAutomationTriggerBinding[] = options?.triggers ? [...options.triggers] : [];
   const definition: WorkflowDefinition = {
     id,
     ...(options?.name !== undefined && { name: options.name }),
@@ -548,11 +548,9 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
 }
 
 export {
+  AutomationWorkflowTrigger,
   BusEventWorkflowTrigger,
   CronWorkflowTrigger,
-  ExtensionWorkflowTrigger,
-  ManualWorkflowTrigger,
-  WebhookWorkflowTrigger,
   delegateToAgent,
   delegateToRole,
   gate,

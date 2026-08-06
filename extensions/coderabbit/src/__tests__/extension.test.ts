@@ -1,18 +1,30 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
   CapabilitySubjects,
+  createAutomationTriggerDescriptor,
   parseExtensionDescriptor,
+  type AutomationTriggerType,
   type ProviderRegistration,
   REVIEWER_PROCESSOR_CAPABILITY_ID,
   REVIEW_SOURCE_CAPABILITY_ID,
   type ProviderUnregistration,
-  WorkflowBlocksSubjects,
 } from '@makaio/contracts';
 import { CapabilityService } from '@makaio/services-core/capability';
-import { WorkflowBlockRegistry } from '@makaio/services-core';
 import { codeRabbitProcessor, coderabbitPackage } from '../index.js';
+
+/**
+ * Invokes the package's automation trigger contribution with a bus-only context.
+ * @param bus - Bus handed to the contribution.
+ * @returns The contributed registry-boundary trigger types.
+ */
+async function contributeTriggers(bus: IMakaioBus): Promise<readonly AutomationTriggerType[]> {
+  const contribution = coderabbitPackage.automationTriggers;
+  if (!contribution) throw new Error('coderabbitPackage must contribute automation triggers');
+  type TriggerContext = Parameters<typeof contribution.createAutomationTriggers>[0];
+  return contribution.createAutomationTriggers({ bus } as TriggerContext);
+}
 
 describe('coderabbitPackage', () => {
   it('declares the review extension dependency', () => {
@@ -39,10 +51,6 @@ describe('coderabbitPackage', () => {
     expect(capabilityService.getProviders(REVIEWER_PROCESSOR_CAPABILITY_ID).map((provider) => provider.id)).toEqual([
       'makaio/coderabbit',
     ]);
-    expect(coderabbitPackage.workflowBlocks?.blocks.triggers?.map((block) => block.metadata.name)).toEqual([
-      'coderabbit.review-posted',
-    ]);
-    expect(coderabbitPackage.workflowBlocks?.blocks.steps).toEqual([]);
 
     await service.destroy?.();
     expect(capabilityService.getProviders(REVIEW_SOURCE_CAPABILITY_ID)).toEqual([]);
@@ -131,51 +139,28 @@ describe('coderabbitPackage', () => {
     ]);
   });
 
-  it('registers real workflow block schemas through the registry catalog', async () => {
+  it('contributes an executable review-posted trigger whose parameters carry no severity threshold', async () => {
     const bus = createBusInstance();
-    const registry = new WorkflowBlockRegistry(bus);
-    await registry.init();
 
-    await registry.register(coderabbitPackage.name, coderabbitPackage.workflowBlocks!.blocks);
+    const triggers = await contributeTriggers(bus);
 
-    const listed = await bus.request(WorkflowBlocksSubjects.list, {});
+    expect(triggers.map((trigger) => trigger.kind)).toEqual(['coderabbit.review-posted']);
 
-    expect(listed.triggers).toHaveLength(1);
-    expect(listed.triggers[0]?.metadata).toEqual({
-      name: 'coderabbit.review-posted',
-      label: 'CodeRabbit Review Posted',
-      description: 'Fires when CodeRabbit submits a review on a PR.',
-      categories: ['review', 'vcs'],
-      extensionName: 'coderabbit',
+    const descriptor = createAutomationTriggerDescriptor(triggers[0]!);
+    expect(descriptor.label).toBe('CodeRabbit review posted');
+    expect(descriptor.categories).toEqual(['Code review']);
+    expect(descriptor.parameterSchema).toMatchObject({
+      type: 'object',
+      properties: { repository: { type: 'string' } },
+      required: ['repository'],
     });
-    expect(listed.triggers[0]?.configSchema).toMatchObject({
-      properties: {
-        minSeverity: {
-          default: 'minor',
-          enum: ['critical', 'major', 'minor', 'nitpick'],
-        },
-        repository: {
-          type: 'string',
-        },
-      },
-    });
-    expect(listed.triggers[0]?.outputSchema).toMatchObject({
-      properties: {
-        findingCount: { type: 'number' },
-        severityCounts: {
-          properties: {
-            critical: { type: 'number' },
-            major: { type: 'number' },
-            minor: { type: 'number' },
-            nitpick: { type: 'number' },
-          },
-        },
-      },
-    });
+    expect(Object.keys(descriptor.parameterSchema.properties ?? {})).not.toContain('minSeverity');
+    expect(JSON.stringify(descriptor)).not.toContain('minSeverity');
+    expect(triggers[0]!.activate).toBeTypeOf('function');
+  });
 
-    expect(listed.steps).toEqual([]);
-
-    await registry.destroy();
+  it('declares no workflow block collection now that start conditions are triggers', () => {
+    expect(coderabbitPackage.workflowBlocks).toBeUndefined();
   });
 });
 

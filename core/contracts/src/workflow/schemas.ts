@@ -1,6 +1,14 @@
 /* eslint max-lines: ["error", { "max": 420, "skipBlankLines": true, "skipComments": true }] */
 import { z } from 'zod';
-import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
+import type { PayloadFilter } from '@makaio/core';
+import {
+  JsonObjectContractSchema,
+  JsonRecordSchema,
+  JsonSchemaRecordSchema,
+  JsonValueSchema,
+} from '../shared/json-value.js';
+import { AutomationTriggerKindSchema } from '../automation-trigger/schemas.js';
+import type { AutomationTriggerBinding } from '../automation-trigger/definition.js';
 import { ArtifactScopeSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js';
@@ -10,7 +18,7 @@ import { WorkflowDelegateResultFinalizerIdSchema, WorkflowFinalizerIdSchema } fr
 import { WorkerNodeRequirementsSchema } from '../capabilities/worker-node/index.js';
 
 // ─────────────────────────────────────────────────────────────
-// Workflow Trigger
+// Workflow Automation Trigger Binding
 // ─────────────────────────────────────────────────────────────
 
 /** Primitive value union shared by filter operators. */
@@ -39,88 +47,51 @@ const FilterOperatorSchema = z.union([
 const PayloadFilterSchema = z.record(z.string(), FilterOperatorSchema);
 
 /**
- * Bus-event workflow trigger variant.
- * Fires when a bus subject emits a matching event.
+ * Persisted workflow trigger binding.
+ *
+ * A workflow references an automation trigger by canonical {@link AutomationTriggerBinding.kind}
+ * and supplies the trigger-type parameters in `params`. `filter` and
+ * `filterExpression` are **consumer-owned**: they narrow an already-validated
+ * event after the trigger source activated, so they never belong to the trigger
+ * type's own parameter schema.
+ *
+ * Unknown keys are stripped rather than rejected so the compile-time-only
+ * phantom payload carrier on authored triggers never reaches storage.
  */
-export const BusEventTriggerSchema = z.object({
-  type: z.literal('bus-event'),
-  /**
-   * Bus subject pattern to match.
-   * Supports exact match ('build.started') and wildcards ('build.*', 'repo.branch.*').
-   * Matched via matchesSubscription() from bus-core.
-   */
-  subject: z.string(),
+export const WorkflowAutomationTriggerBindingSchema = z.object({
+  /** Canonical trigger kind: `<extension-name>.<local-name>`. */
+  kind: AutomationTriggerKindSchema,
+  /** JSON-safe parameter schema input parsed before trigger activation. */
+  params: JsonRecordSchema,
   /**
    * Structural payload filter using `PayloadFilter` operators.
    *
    * Supports equality, `$in`, `$ne`, `$exists`, `$startsWith`, `$endsWith`.
    * All key-operator pairs must match (AND logic).
    * Supports dot-notation paths for nested fields (e.g., `'raw.msg.type'`).
-   * Omit to match all payloads for the subject.
+   * Omit to accept every event the trigger emits.
    */
   filter: PayloadFilterSchema.optional(),
   /**
    * jexl expression for complex filter conditions.
    * Evaluated after `filter` passes (AND semantics).
    * The expression context provides a `payload` variable
-   * containing the incoming event payload.
+   * containing the emitted trigger event payload.
    * @example `"payload.count > 5 && payload.branch == 'main'"`
    */
   filterExpression: z.string().optional(),
 });
 
-export type BusEventTrigger = z.infer<typeof BusEventTriggerSchema>;
-
 /**
- * Extension-contributed workflow trigger variant.
- * Uses `type: 'extension'` as the discriminant with the actual extension trigger type in `extensionType`.
+ * Persisted workflow trigger binding — an automation trigger binding plus the
+ * consumer-owned event filters applied by the workflow engine.
  */
-export const ExtensionWorkflowTriggerSchema = z.object({
-  type: z.literal('extension'),
-  /**
-   * Extension-specific trigger type identifier.
-   * Convention: '<extensionName>:<eventName>' (e.g., 'github:pr.opened').
-   */
-  extensionType: z.string().regex(/^[a-z0-9-]+:[a-z0-9._-]+$/),
-  /**
-   * Runtime trigger configuration as an opaque JSON object.
-   * Validated against the extension's configSchema before storage.
-   */
-  config: JsonObjectContractSchema.optional(),
-});
-
-export type ExtensionWorkflowTrigger = z.infer<typeof ExtensionWorkflowTriggerSchema>;
-
-/**
- * Workflow trigger configuration.
- * Discriminated union supporting built-in types (manual, cron, webhook) and extension-contributed types.
- */
-export const WorkflowTriggerSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('manual') }),
-  z.object({
-    type: z.literal('cron'),
-    /** Cron expression (e.g., '0 * * * *'). */
-    schedule: z.string(),
-    /**
-     * Timezone for cron evaluation.
-     * Defaults to 'UTC' at execution time when omitted.
-     */
-    timezone: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal('webhook'),
-    /** Webhook event name. */
-    event: z.string(),
-    /** Branch filter for webhook events. */
-    branch: z.string().optional(),
-    /** Repository filter (owner/name). */
-    repo: z.string().optional(),
-  }),
-  ExtensionWorkflowTriggerSchema,
-  BusEventTriggerSchema,
-]);
-
-export type WorkflowTrigger = z.infer<typeof WorkflowTriggerSchema>;
+export interface WorkflowAutomationTriggerBinding extends AutomationTriggerBinding {
+  /** Structural payload filter applied to the emitted trigger event. */
+  readonly filter?: PayloadFilter;
+  /** jexl expression evaluated after {@link filter} passes. */
+  readonly filterExpression?: string;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Execution Scope
@@ -940,11 +911,13 @@ export const WorkflowDefinitionSchema = z.object({
    */
   root: WorkflowSequenceNodeSchema,
   /**
-   * Trigger configurations for this workflow.
-   * Multiple triggers may fire independently; one execution is created per firing trigger.
-   * Defaults to manual-only when omitted.
+   * Automation trigger bindings for this workflow.
+   *
+   * Multiple bindings may fire independently; one execution is created per
+   * firing binding. An empty or omitted list means the workflow is only started
+   * directly — direct invocation is an invocation mode, not a trigger type.
    */
-  triggers: z.array(WorkflowTriggerSchema).optional(),
+  triggers: z.array(WorkflowAutomationTriggerBindingSchema).optional(),
   /**
    * Scope this workflow definition is bound to.
    * Use `{ type: 'global' }` for framework-wide workflow definitions.

@@ -36,6 +36,7 @@ import {
   type IAdapterConfigRepository,
   type ProviderConfigFileSet,
 } from '@makaio/services-core/adapter-subsystem';
+import { localAutomationCronSchedulerPackage } from '@makaio/services-core/automation-trigger';
 import { AdapterSubsystemToken } from '@makaio/subsystem-adapter';
 import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
@@ -66,6 +67,9 @@ const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
   createPackageManagerPackage().name,
   AdapterSubsystemToken.name,
   ...frameworkCorePackages.filter(isHeadlessPackage).map((pkg) => pkg.name),
+  // Framework-only boot has no host-supplied cron provider, so `makaio.cron`
+  // bindings fall back to the framework's local in-process scheduler.
+  localAutomationCronSchedulerPackage.name,
   WorkflowEngineToken.name,
   ModelRegistryToken.name,
   LogImportRegistryToken.name,

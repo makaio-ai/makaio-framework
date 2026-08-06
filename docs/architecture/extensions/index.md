@@ -53,7 +53,8 @@ interface MakaioExtension<THostContext extends ExtensionContext = NodeExtensionC
   clients?: readonly ClientDefinition[];
   providers?: readonly ProviderDefinitionInput[];
   tools?: ExtensionToolsContribution<THostContext>;
-  triggers?: ExtensionTriggersContribution;
+  hashTriggers?: ExtensionHashTriggersContribution<THostContext['bus']>;
+  automationTriggers?: ExtensionAutomationTriggersContribution<THostContext>;
   sessionEventActions?: ExtensionSessionEventActionsContribution;
   logImport?: LogImportContribution;
   ui?: ExtensionUiContribution; // declarative metadata unless bridged by a browser factory
@@ -380,6 +381,118 @@ export const myExtension: MakaioExtension = {
 See [Browser & UI](./browser) for the full browser extension architecture,
 renderer lifecycle, and framework web primitives.
 
+### 8. Automation trigger types (`automationTriggers`)
+
+An **Automation Trigger Type** is an executable description of *when something should happen*. It
+is contributed by an extension, registered globally, and consumed by any number of automation
+consumers — the workflow engine is one of them, not the owner.
+
+```ts
+export const weatherExtension: MakaioExtension = {
+  name: 'weather-tools',
+  automationTriggers: {
+    createAutomationTriggers: (ctx) => [
+      defineAutomationTrigger({
+        kind: 'weather-tools.storm-warning',
+        label: 'Storm Warning',
+        description: 'Fires when the forecast reports a storm for a region.',
+        categories: ['Weather'],
+        paramsSchema: z.object({ region: z.string().min(1) }),
+        eventSchema: z.object({ region: z.string(), severity: z.number() }),
+        activate: async (context, params) => {
+          const stop = watchRegion(params.region, (severity) => {
+            void context.emit({ region: params.region, severity });
+          });
+          return stop;
+        },
+      }),
+    ],
+  },
+};
+```
+
+The `kind` must be `<extension-name>.<local-name>`; the registry rejects a batch that claims a
+kind outside the contributing extension's namespace. `createAutomationTriggers` returns the
+extension's **complete** batch, which atomically replaces any prior batch under that name.
+
+`activate` receives an `AutomationTriggerActivationContext` — a `bindingKey`, an `AbortSignal`, and
+an `emit(payload, metadata?)` function — plus the params already parsed through `paramsSchema`. It
+returns a cleanup function. The runtime aborts the signal before awaiting cleanup, so an
+`activate` that parks on the signal always settles.
+
+`bindingKey` is the canonical key the runtime indexed this activation under, for a trigger that has
+to name its activation to a collaborator or in a log line. It is not a unique index over time: a
+retiring and a fresh activation of one key can briefly coexist, so a collaborator keys its own state
+on the activation it was handed rather than on the string.
+
+Re-registering a batch replaces the implementation of every kind in it. A binding that is acquired
+afterwards activates the **new** implementation rather than joining the previous activation of the
+same key; the superseded activation is retired, and its consumers re-acquire on
+`automation-triggers.changed`.
+
+**End-to-end lifecycle:**
+
+```
+extension activation
+  → register Automation Trigger Types                    one atomic batch per extension name
+       │                                                 automation-triggers.changed emitted
+consumer definition reconciliation
+  → parse and canonicalize binding parameters            paramsSchema, then sorted-key canonical form
+  → acquire or share ONE source activation               equal canonical params ⇒ one activation
+  → validate emitted payload                             eventSchema, then JSON-compatibility
+  → fan out Automation Trigger Events                    every attached listener, independently
+  → consumer-specific condition and action                e.g. filter → start a workflow
+       │
+final consumer detach
+  → source cleanup                                       signal aborted, cleanup awaited
+```
+
+The activation is **shared, not duplicated**: two consumers binding the same `kind` with
+parameters that canonicalize identically attach to a single live activation, and the source is torn
+down only when the last consumer detaches. Emits from a retired or superseded activation are
+discarded rather than delivered.
+
+Consumers subscribe with an **Automation Trigger Binding** — `{ kind, params }` plus whatever
+consumer-side conditions that consumer supports. Bindings are data, so they survive persistence
+and editing; the executable half lives only in the contributing extension.
+
+Two trigger types ship with the framework: `makaio.bus-event` (params `{ subject }`) and
+`makaio.cron` (params `{ schedule, timezone }`, delegating to the host-selected
+`AutomationCronScheduler`).
+
+The registry exposes its catalog over the bus — `automation-triggers.list` returns serializable
+`AutomationTriggerDescriptor` records (JSON Schema projections of both schemas) and
+`automation-triggers.changed` announces registration and deregistration with the exact union of
+the previous and replacement batch's kinds. Listing never executes extension code, so UI catalogs
+can read it safely.
+
+### 9. Hash triggers (`hashTriggers`)
+
+Hash triggers are unrelated to automation triggers. They are **interactive** input-time actions
+bound to a `#` or `@` prefix in a composer, expanding what the user typed before the message is
+sent.
+
+```ts
+export const weatherExtension: MakaioExtension = {
+  name: 'weather-tools',
+  hashTriggers: {
+    createHashTriggers: (bus) => [
+      {
+        metadata: { prefix: '@forecast', description: 'Insert a forecast', version: '1.0.0', stage: 'gather' },
+        suggest: async (query, context) => ({ suggestions: await lookupRegions(query) }),
+        execute: async (value, context) => renderForecast(value),
+      },
+    ],
+  },
+};
+```
+
+`suggest` powers autocomplete as the user types; the optional `execute` resolves the selected
+value into text. `metadata.stage` (`'gather' | 'transform' | 'action'`) and `metadata.runAfter`
+order triggers within one composition pass, so a `transform` trigger can consume what a `gather`
+trigger already collected via `context.gathered`. Prefixes must be unique across the resolved
+manifest.
+
 ---
 
 ## `surface` — execution affinity
@@ -516,5 +629,8 @@ export const greeterExtension: MakaioExtension<ExtensionContext> = {
 | `../packages/contracts/src/extension/extension-runtime-boot.ts` | `ExtensionRuntimeOwnership` single-owner runtime declarations |
 | `../packages/kernel/src/cli/types.ts` | `CliContribution`, `defineCliSubcommand` |
 | `../packages/kernel/src/extension/extension-coordinator.ts` | `ExtensionCoordinator` |
+| `../packages/contracts/src/automation-trigger/` | `AutomationTriggerType`, `defineAutomationTrigger`, bindings, bus namespace |
+| `../packages/services/core/src/automation-trigger/` | `AutomationTriggerRegistry`, `AutomationTriggerBindingRuntime`, built-ins, cron scheduler |
+| `../packages/contracts/src/extension/contributions/hash-trigger-types.ts` | `HashTrigger`, `HashTriggerMetadata`, suggest/execute contract |
 
 <!-- /web:hide -->

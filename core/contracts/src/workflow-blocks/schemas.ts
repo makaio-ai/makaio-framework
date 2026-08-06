@@ -4,7 +4,7 @@ import { JsonSchemaRecordSchema } from '../shared/json-value.js';
 import { WorkflowDelegateResultFinalizerIdSchema } from '../workflow/finalization.js';
 
 /**
- * Shared metadata schema for registered workflow blocks (trigger or step).
+ * Shared metadata schema for registered workflow step blocks.
  */
 const RegisteredBlockMetadataSchema = z.object({
   name: z.string(),
@@ -12,15 +12,6 @@ const RegisteredBlockMetadataSchema = z.object({
   description: z.string(),
   categories: z.array(z.string()).optional(),
   extensionName: z.string(),
-});
-
-/**
- * Zod schema for registered trigger block metadata (including owning extension).
- */
-const RegisteredTriggerBlockSchema = z.object({
-  metadata: RegisteredBlockMetadataSchema,
-  configSchema: z.record(z.string(), z.unknown()),
-  outputSchema: z.record(z.string(), z.unknown()),
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -124,14 +115,16 @@ const RegisteredStepBlockSchema = z.object({
  */
 export const WorkflowBlocksSchemas = {
   /**
-   * List all registered trigger and step blocks.
+   * List all registered step blocks.
+   *
+   * Workflow start conditions are not blocks: they are executable automation
+   * trigger types discovered through `automation-triggers.list`.
    *
    * Subject: `workflow-blocks.list`
    */
   list: {
     request: z.object({}),
     response: z.object({
-      triggers: z.array(RegisteredTriggerBlockSchema),
       steps: z.array(RegisteredStepBlockSchema),
     }),
   },

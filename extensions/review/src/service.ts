@@ -424,14 +424,27 @@ export class ReviewFindingsService extends BaseService {
       const { c, u } = await this.reconcile(sourceExisting, fresh);
       created += c;
       updated += u;
-    }
 
-    if (created > 0 || updated > 0) {
-      await this.bus.emit(ReviewSubjects.findings.arrived, {
-        target,
-        created,
-        updated,
-      });
+      // Emitted per source rather than once per fetch: subscribers (e.g. the
+      // CodeRabbit automation trigger) must be able to tell which source and
+      // reviewer family produced the change, which an aggregate count erases.
+      //
+      // A failing subscriber is logged rather than propagated: the announcement
+      // now sits between two source fetches, and reconciliation of one source
+      // must not be cancelled by a subscriber reacting to another source.
+      if (c > 0 || u > 0) {
+        try {
+          await this.bus.emit(ReviewSubjects.findings.arrived, {
+            target,
+            sourceId: source.id,
+            reviewer: source.reviewer,
+            created: c,
+            updated: u,
+          });
+        } catch (error) {
+          console.error(`[review] findings.arrived subscriber failed for source '${source.id}':`, error);
+        }
+      }
     }
 
     return { created, updated };

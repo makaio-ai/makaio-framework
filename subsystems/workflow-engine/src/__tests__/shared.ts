@@ -7,7 +7,7 @@ import type {
   WorkflowFrameState,
   WorkflowSequenceNode,
   WorkflowStationNode,
-  WorkflowTrigger,
+  WorkflowAutomationTriggerBinding,
 } from '@makaio/contracts';
 import type { WorkflowExecution as StorageWorkflowExecution } from '../storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from '../storage/handler.js';
@@ -61,8 +61,8 @@ export interface WorkflowDefinitionOptions {
   inputs?: Array<{ name: string; type: string; required?: boolean; default?: unknown }>;
   /** Optional description. */
   description?: string;
-  /** Optional trigger configurations for this workflow definition. */
-  triggers?: WorkflowTrigger[];
+  /** Optional declarative automation trigger bindings for this definition. */
+  triggers?: WorkflowAutomationTriggerBinding[];
 }
 
 /**

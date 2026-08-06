@@ -8,7 +8,7 @@ import type {
   WorkflowExecutionScope,
   WorkflowFrameState,
   WorkflowGateInstance,
-  WorkflowTrigger,
+  WorkflowAutomationTriggerBinding,
   ExecutionLinkType,
   SpanStatus,
   WorkerContributionManifest,
@@ -70,8 +70,11 @@ export const workflowDefinitionsDual = defineDualTable(
     state: c.jsonCol<NonNullable<WorkflowDefinition['state']>>('state'),
     /** Primary artifact binding declared by the workflow (JSON object). */
     artifact: c.jsonCol<WorkflowDefinition['artifact']>('artifact'),
-    /** Trigger configuration (JSON array). Null means manual-only default. */
-    triggers: c.jsonCol<WorkflowTrigger[]>('triggers'),
+    /**
+     * Declarative automation trigger bindings (JSON array).
+     * Null means manual-only: the workflow starts through invocation.
+     */
+    triggers: c.jsonCol<WorkflowAutomationTriggerBinding[]>('triggers'),
     ...scopeColumns(c),
     /** Creation timestamp. */
     createdAt: c.epochMs('created_at').notNull(),
@@ -475,6 +478,12 @@ export const workflowRunContextsDual = defineDualTable(
     config: c.jsonCol<Record<string, JsonValue>>('config').notNull().default(sql`'{}'`),
     /** Trigger payload from the firing trigger (JSON object). */
     triggerPayload: c.jsonCol<Record<string, JsonValue>>('trigger_payload').notNull(),
+    /** Whether execution starts immediately or waits for a declared trigger. */
+    triggerMode: c
+      .textEnum('trigger_mode', { enum: ['immediate', 'await-trigger'] as const })
+      .notNull()
+      .default('immediate')
+      .$type<NonNullable<WorkflowRunContext['triggerMode']>>(),
     /** Explicit artifact reference supplied by the execution starter. */
     artifactRef: c.jsonCol<WorkflowRunContext['artifactRef']>('artifact_ref'),
     /** Opaque dispatch metadata that must survive pause/resume boundaries. */

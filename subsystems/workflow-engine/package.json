@@ -12,6 +12,7 @@
     "./testing/sqlite": "./src/testing/sqlite.ts",
     "./package": "./src/package.ts",
     "./workflow-orchestrator": "./src/workflow-orchestrator.ts",
+    "./workflow-trigger-binding-consumer": "./src/workflow-trigger-binding-consumer.ts",
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -26,7 +27,6 @@
     "@makaio/storage-handlers": "workspace:*",
     "@makaio/utils": "workspace:*",
     "ajv": "^8.18.0",
-    "croner": "^9.0.0",
     "drizzle-orm": "0.45.2",
     "zod": "4.4.3"
   },
@@ -51,6 +51,7 @@
       "./testing/sqlite": "./dist/testing/sqlite.mjs",
       "./package": "./dist/package.mjs",
       "./workflow-orchestrator": "./dist/workflow-orchestrator.mjs",
+      "./workflow-trigger-binding-consumer": "./dist/workflow-trigger-binding-consumer.mjs",
       "./package.json": "./package.json"
     }
   },

@@ -2,6 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { WorkflowNamespace, dep, extensionToken, type MakaioNodeExtension } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { SessionToken } from '@makaio/services-core';
+import { AutomationTriggerBindingRuntimeToken } from '@makaio/services-core/automation-trigger';
 import { WorkflowEngineService, type WorkflowEngineServiceOptions } from './workflow-engine-service.js';
 import { WorkflowStorageNamespace } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
@@ -16,6 +17,13 @@ export const WorkflowEngineToken = extensionToken<WorkflowEngineService>('makaio
  * service, wires Drizzle storage handlers, and forwards the provided options
  * to the executor so that composition roots can inject a workflow-level runner
  * or executor configuration (e.g. busUrl, busAuth, platformDefaults).
+ *
+ * Declarative triggers are reached through the automation trigger binding
+ * runtime, resolved lazily from the extension context. The dependency on that
+ * runtime is declared **optional**: it orders startup so the runtime is present
+ * by the time the engine reconciles stored triggers, without making the runtime
+ * undisableable while the engine is active. A host that runs without it keeps
+ * invocation-mode workflow starts.
  * @param options - Optional workflow runner and executor config overrides.
  * @returns A `MakaioNodeExtension` manifest for the workflow engine subsystem.
  */
@@ -24,7 +32,7 @@ export function createWorkflowEnginePackage(options?: WorkflowEngineServiceOptio
     name: WorkflowEngineToken.name,
     displayName: 'Workflow Engine',
     version: '0.1.0',
-    dependencies: [dep(SessionToken.name)],
+    dependencies: [dep(SessionToken.name), dep(AutomationTriggerBindingRuntimeToken.name, undefined, true)],
     critical: true,
     namespaces: [WorkflowNamespace, WorkflowStorageNamespace],
     storage: {
@@ -35,7 +43,11 @@ export function createWorkflowEnginePackage(options?: WorkflowEngineServiceOptio
      * @param ctx - Runtime package context.
      * @returns Uninitialized workflow engine service instance.
      */
-    create: (ctx) => new WorkflowEngineService(ctx.bus, options),
+    create: (ctx) =>
+      new WorkflowEngineService(ctx.bus, {
+        ...options,
+        automationTriggerBindingRuntime: () => ctx.getService(AutomationTriggerBindingRuntimeToken),
+      }),
   };
 }
 

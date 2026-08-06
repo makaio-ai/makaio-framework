@@ -6,22 +6,6 @@ import { WorkflowBlockRegistry } from '../workflow-block-registry.js';
 
 function makeBlocks(extensionName = 'alpha'): WorkflowBlockCollection {
   return {
-    triggers: [
-      {
-        metadata: {
-          name: `${extensionName}.review-posted`,
-          label: 'Review Posted',
-          description: 'A review was posted.',
-          categories: ['review'],
-        },
-        configSchema: z.object({
-          minSeverity: z.enum(['major', 'minor']).default('minor'),
-        }),
-        outputSchema: z.object({
-          findingCount: z.number(),
-        }),
-      },
-    ],
     steps: [
       {
         metadata: {
@@ -57,15 +41,14 @@ describe('WorkflowBlockRegistry', () => {
     await registry.register('alpha', makeBlocks('alpha'));
 
     const listed = await bus.request(WorkflowBlocksSubjects.list, {});
-    expect(listed.triggers.map((trigger) => trigger.metadata.name)).toEqual(['alpha.review-posted']);
     expect(listed.steps.map((step) => step.metadata.name)).toEqual(['alpha.fetch-findings']);
-    expect(listed.triggers[0]?.metadata.extensionName).toBe('alpha');
-    expect(listed.triggers[0]?.configSchema).toMatchObject({
+    expect(listed.steps[0]?.metadata.extensionName).toBe('alpha');
+    expect(listed.steps[0]?.configSchema).toMatchObject({
       type: 'object',
       properties: {
-        minSeverity: {
-          default: 'minor',
-          enum: ['major', 'minor'],
+        includeResolved: {
+          default: false,
+          type: 'boolean',
         },
       },
     });
@@ -77,7 +60,7 @@ describe('WorkflowBlockRegistry', () => {
     });
 
     await registry.deregister('alpha');
-    expect(await bus.request(WorkflowBlocksSubjects.list, {})).toEqual({ triggers: [], steps: [] });
+    expect(await bus.request(WorkflowBlocksSubjects.list, {})).toEqual({ steps: [] });
 
     await registry.destroy();
   });
@@ -116,7 +99,7 @@ describe('WorkflowBlockRegistry', () => {
     });
 
     await expect(registry.register('alpha', makeBlocks('alpha'))).rejects.toThrow('changed failed');
-    expect(await bus.request(WorkflowBlocksSubjects.list, {})).toEqual({ triggers: [], steps: [] });
+    expect(await bus.request(WorkflowBlocksSubjects.list, {})).toEqual({ steps: [] });
 
     failChanged();
     const events: Array<{ extensionName: string; revision: number; reason: 'registered' | 'deregistered' }> = [];
@@ -143,7 +126,6 @@ describe('WorkflowBlockRegistry', () => {
 
     await expect(registry.deregister('alpha')).rejects.toThrow('changed failed');
     const listed = await bus.request(WorkflowBlocksSubjects.list, {});
-    expect(listed.triggers.map((trigger) => trigger.metadata.name)).toEqual(['alpha.review-posted']);
     expect(listed.steps.map((step) => step.metadata.name)).toEqual(['alpha.fetch-findings']);
 
     failChanged();
@@ -159,16 +141,16 @@ describe('WorkflowBlockRegistry', () => {
     await registry.destroy();
   });
 
-  it('rejects duplicate block names across triggers and steps', async () => {
+  it('rejects duplicate step block names', async () => {
     const bus = createBusInstance();
     const registry = new WorkflowBlockRegistry(bus);
     await registry.init();
-    const duplicateBlocks = makeBlocks('alpha');
-    duplicateBlocks.steps![0]!.metadata.name = 'alpha.review-posted';
+    const [step] = makeBlocks('alpha').steps ?? [];
+    if (!step) throw new Error('Test fixture must include a step block');
 
-    await expect(Promise.resolve().then(() => registry.register('alpha', duplicateBlocks))).rejects.toThrow(
-      "Workflow block name collision: 'alpha.review-posted' is already registered",
-    );
+    await expect(
+      Promise.resolve().then(() => registry.register('alpha', { steps: [step, { ...step }] })),
+    ).rejects.toThrow("Workflow block name collision: 'alpha.fetch-findings' is already registered");
 
     await registry.destroy();
   });
@@ -179,7 +161,7 @@ describe('WorkflowBlockRegistry', () => {
     await registry.init();
 
     await expect(Promise.resolve().then(() => registry.register('alpha', makeBlocks('beta')))).rejects.toThrow(
-      "Workflow block 'beta.review-posted' must be namespaced by extension 'alpha.'",
+      "Workflow block 'beta.fetch-findings' must be namespaced by extension 'alpha.'",
     );
 
     await registry.destroy();
@@ -209,7 +191,6 @@ describe('WorkflowBlockRegistry', () => {
     });
 
     const parsed = WorkflowBlocksSchemas.list.response.safeParse({
-      triggers: registry.listTriggers(),
       steps: registry.listSteps(),
     });
     expect(parsed.success).toBe(false);
@@ -240,7 +221,6 @@ describe('WorkflowBlockRegistry', () => {
     });
 
     const parsed = WorkflowBlocksSchemas.list.response.safeParse({
-      triggers: registry.listTriggers(),
       steps: registry.listSteps(),
     });
     expect(parsed.success).toBe(false);
@@ -271,7 +251,6 @@ describe('WorkflowBlockRegistry', () => {
     });
 
     const parsed = WorkflowBlocksSchemas.list.response.safeParse({
-      triggers: registry.listTriggers(),
       steps: registry.listSteps(),
     });
     expect(parsed.success).toBe(false);
@@ -288,18 +267,18 @@ describe('WorkflowBlockRegistry', () => {
     await registry.init();
 
     await registry.register('alpha', makeBlocks('alpha'));
-    const listed = registry.listTriggers();
+    const listed = registry.listSteps();
     listed[0]!.metadata.label = 'Mutated Label';
     listed[0]!.configSchema['x-mutated'] = true;
 
-    const fresh = registry.listTriggers();
-    expect(fresh[0]?.metadata.label).toBe('Review Posted');
+    const fresh = registry.listSteps();
+    expect(fresh[0]?.metadata.label).toBe('Fetch Findings');
     expect(fresh[0]?.configSchema).not.toHaveProperty('x-mutated');
 
     await registry.destroy();
   });
 
-  it('serializes trigger and step schemas to JSON Schema for catalog responses', async () => {
+  it('serializes step schemas to JSON Schema for catalog responses', async () => {
     const bus = createBusInstance();
     const registry = new WorkflowBlockRegistry(bus);
     await registry.init();
@@ -307,12 +286,6 @@ describe('WorkflowBlockRegistry', () => {
     await registry.register('alpha', makeBlocks('alpha'));
 
     const listed = await bus.request(WorkflowBlocksSubjects.list, {});
-    expect(listed.triggers[0]?.outputSchema).toMatchObject({
-      type: 'object',
-      properties: {
-        findingCount: { type: 'number' },
-      },
-    });
     expect(listed.steps[0]?.configSchema).toMatchObject({
       type: 'object',
       properties: {
@@ -382,7 +355,6 @@ describe('WorkflowBlockRegistry', () => {
     expect(listed.steps.map((s) => s.runs.type)).toEqual(['station', 'delegate-agent', 'delegate-role']);
 
     const parsed = WorkflowBlocksSchemas.list.response.safeParse({
-      triggers: registry.listTriggers(),
       steps: registry.listSteps(),
     });
     expect(parsed.success).toBe(true);

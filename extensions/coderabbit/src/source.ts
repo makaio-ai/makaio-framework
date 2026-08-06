@@ -10,6 +10,14 @@ import { VCSSubjects } from '@makaio/contracts';
 import { codeRabbitProcessor } from './processor.js';
 
 /**
+ * Reviewer family carried by every CodeRabbit finding.
+ *
+ * Shared with the CodeRabbit automation trigger so the source that produces
+ * findings and the trigger that observes them cannot disagree about the family.
+ */
+export const CODERABBIT_REVIEWER = 'coderabbit';
+
+/**
  * CodeRabbit review source — fetches CodeRabbit findings from any VCS provider.
  *
  * Decoupled from GitHub-specific APIs; uses VCS bus subjects for portability
@@ -19,7 +27,7 @@ export class CodeRabbitSource implements IReviewSource {
   public readonly id = 'coderabbit';
   public readonly displayName = 'CodeRabbit';
   public readonly capabilityId = 'review-source' as const;
-  public readonly reviewer = 'coderabbit';
+  public readonly reviewer = CODERABBIT_REVIEWER;
   public readonly preferredProcessorKey = 'makaio/coderabbit';
 
   /**
