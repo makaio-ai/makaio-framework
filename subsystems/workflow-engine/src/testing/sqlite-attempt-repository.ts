@@ -573,11 +573,11 @@ export async function createSqliteAttemptRepository(db: MakaioDatabase): Promise
    * @typeParam TResult - Decision type produced by the transition.
    */
   const transact = async <TResult>(work: (session: RawSqlSession) => Promise<TResult>): Promise<TResult> => {
-    if (invalidatedBy !== undefined) {
-      throw new Error('This repository was retired by a failed transaction rollback', { cause: invalidatedBy });
-    }
     return serializeDatabaseOperation(db, () =>
       withTransactionGate(gateKey, async () => {
+        if (invalidatedBy !== undefined) {
+          throw new Error('This repository was retired by a failed transaction rollback', { cause: invalidatedBy });
+        }
         for (let retries = 0; ; retries += 1) {
           try {
             return await executor.withSession(async (session) => {
