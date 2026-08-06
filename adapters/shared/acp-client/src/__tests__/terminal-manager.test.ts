@@ -3,7 +3,7 @@ import { TerminalManager } from '../terminal-manager.js';
 
 describe('TerminalManager', () => {
   it('waits for stream closure before reporting exit and returning output', async () => {
-    const manager = new TerminalManager({ baseEnv: {} });
+    const manager = new TerminalManager({ baseEnv: {}, spawnTimeoutMs: 10_000 });
     const payload = 'x'.repeat(1024 * 1024);
 
     const { terminalId } = await manager.createTerminal({
@@ -25,8 +25,35 @@ describe('TerminalManager', () => {
     });
   });
 
+  it('settles the exit observation of a command that ends as soon as it starts', async () => {
+    // The contract the exit observation has to hold at its hardest edge: node does
+    // not replay a fired `exit` or `close`, so a terminal whose command is already
+    // gone by the time creation finishes must still be able to say so. Nothing
+    // else can — a shutdown awaiting this promise has no second source of truth,
+    // and an unsettled one costs it the full observation budget before it reports
+    // `detached` for a process that died at once.
+    const manager = new TerminalManager({ baseEnv: {}, spawnTimeoutMs: 10_000 });
+
+    const { terminalId } = await manager.createTerminal({
+      command: process.execPath,
+      args: ['-e', 'process.stdout.write("bye"); process.exit(3)'],
+      outputByteLimit: 1024,
+      env: [],
+      sessionId: 'session-1',
+    });
+
+    await expect(manager.waitForExit({ terminalId, sessionId: 'session-1' })).resolves.toEqual({
+      exitCode: 3,
+      signal: undefined,
+    });
+    await expect(manager.getOutput({ terminalId, sessionId: 'session-1' })).resolves.toMatchObject({
+      output: 'bye',
+      exitStatus: { exitCode: 3, signal: null },
+    });
+  });
+
   it('truncates buffered output without splitting UTF-8 characters', async () => {
-    const manager = new TerminalManager({ baseEnv: {} });
+    const manager = new TerminalManager({ baseEnv: {}, spawnTimeoutMs: 10_000 });
     const repeated = '€'.repeat(10);
 
     const { terminalId } = await manager.createTerminal({
@@ -47,7 +74,7 @@ describe('TerminalManager', () => {
   });
 
   it('rejects terminal creation when the command cannot be spawned', async () => {
-    const manager = new TerminalManager({ baseEnv: {} });
+    const manager = new TerminalManager({ baseEnv: {}, spawnTimeoutMs: 10_000 });
 
     await expect(
       manager.createTerminal({
@@ -70,6 +97,7 @@ describe('TerminalManager', () => {
         MAKAIO_REQUEST_OVERRIDE: 'base-value',
       },
       scrubEnvVars: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
+      spawnTimeoutMs: 10_000,
     });
 
     try {
@@ -106,5 +134,49 @@ describe('TerminalManager', () => {
       delete process.env[ambientName];
       manager.releaseAll();
     }
+  });
+
+  // I33's evidence for terminal children: they are processes this runtime spawned,
+  // so their ends are observable and the caller that reports a class is entitled to
+  // them. `releaseAll` signals; only the returned promises say the signal landed.
+  it('hands back one settling exit observation per terminal it released', async () => {
+    const manager = new TerminalManager({ baseEnv: {}, spawnTimeoutMs: 10_000 });
+    for (const _ of [0, 1]) {
+      await manager.createTerminal({
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1_000)'],
+        outputByteLimit: 1024,
+        env: [],
+        sessionId: 'session-1',
+      });
+    }
+
+    const released = manager.releaseAll();
+
+    expect(released).toHaveLength(2);
+    // Long-lived children that only end because of the kill: awaiting these is the
+    // difference between having signalled an end and having watched one.
+    for (const exited of await Promise.all(released)) {
+      expect(exited.signal).toBe('SIGKILL');
+    }
+    expect(manager.releaseAll()).toHaveLength(0);
+  });
+
+  it('hands a one-at-a-time release to the next shutdown collection exactly once', async () => {
+    const manager = new TerminalManager({ baseEnv: {}, spawnTimeoutMs: 10_000 });
+    const { terminalId } = await manager.createTerminal({
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1_000)'],
+      outputByteLimit: 1024,
+      env: [],
+      sessionId: 'session-1',
+    });
+
+    await manager.releaseTerminal({ terminalId, sessionId: 'session-1' });
+
+    const released = manager.releaseAll();
+    expect(released).toHaveLength(1);
+    await expect(released[0]).resolves.toEqual({ exitCode: null, signal: 'SIGKILL' });
+    expect(manager.releaseAll()).toHaveLength(0);
   });
 });

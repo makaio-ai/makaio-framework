@@ -368,12 +368,11 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
     const read = (await MakaioBus.request(SessionSubjects.get, { sessionId })).session;
     if (!read) throw new Error('seeded session is missing');
-    // Detached from the store on purpose. The memory backend hands out the row
-    // object itself and mutates it in place, so a caller holding it sees writes
-    // it never read — which would make this case pass without the refresh and
-    // hide the defect entirely. A backend that materialises rows per query, as
-    // the SQL ones do, gives the caller a snapshot; that is what a send actually
-    // holds, and it is the only shape in which this bug is observable.
+    // Detached explicitly, which is what a send holds: a snapshot taken before
+    // the attempt ran. Both backends materialise their reads now, so the copy is
+    // no longer a workaround for one of them handing out its stored row — it
+    // states what the case is about, which is that nothing refreshes this
+    // snapshot except the join.
     const session: IMakaioSession = { ...read, agents: read.agents.map((agent) => ({ ...agent })) };
     expect(session.agents[0]?.adapterId).not.toBe('rebound-adapter');
 

@@ -4,6 +4,29 @@ import { AgentStorageSubjects } from './agent-namespace.js';
 import { type SessionStorageMemoryState, createSessionStorageMemoryState, deleteClaimsWhere } from './memory-store.js';
 
 /**
+ * Detach an agent row from the store.
+ *
+ * Every read this backend answers goes through here, because a reader that
+ * receives the stored object can write the store without asking it. A local bus
+ * request hands the handler's value straight to the caller, and payload
+ * validation cannot help: it discards the clone it parses, and skips parsing
+ * altogether in production. So an in-place mutation of a returned row would
+ * bypass the terminal-`disposed` guard and the ownership-column preservation that
+ * exist to make those columns writable only through the subjects that own them.
+ *
+ * The SQL backends materialise every row they return and therefore already have
+ * these semantics; the sibling memory stores — sessions and ownership — already
+ * clone on read. This is the directory's own convention rather than a new rule,
+ * and applying it here removes the divergence that let a test written against
+ * this backend pass vacuously.
+ * @param agent - Stored agent row.
+ * @returns A copy the caller may do anything with.
+ */
+function cloneAgent(agent: MakaioSessionAgent): MakaioSessionAgent {
+  return structuredClone(agent);
+}
+
+/**
  * Named options for {@link applyRuntimeUpdate}.
  *
  * Every field is optional; omitting a field leaves the corresponding agent
@@ -58,6 +81,50 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
 }
 
 /**
+ * The stored columns a whole-record `set` carries across, detached from the row.
+ *
+ * A projection rather than a record, because these six are all
+ * {@link storeAgentPreservingOwnership} reads and every one of them is a
+ * primitive — so copying the fields *is* detaching them, with no route left by
+ * which the incoming write could alias a stored value. The alternative it
+ * replaces was a `structuredClone` of the whole agent, which detached the same
+ * six by deep-copying every column beside them, on every write.
+ *
+ * Adding a preserved column means adding it here too: a field read from `previous`
+ * that this does not carry is a compile error rather than a silent alias.
+ */
+interface PreservedOwnership {
+  /** Stored lifecycle status, whose terminal `disposed` wins over the snapshot. */
+  readonly status: MakaioSessionAgent['status'];
+  /** Stored origin provider session, which wins whenever a previous row exists. */
+  readonly adapterSessionId: MakaioSessionAgent['adapterSessionId'];
+  /** Stored currency ID, owned exclusively by the `storage:sessionOwnership` seam. */
+  readonly currentAdapterSessionId: MakaioSessionAgent['currentAdapterSessionId'];
+  /** Stored currency state, owned by the same seam. */
+  readonly currentAdapterSessionIdState: MakaioSessionAgent['currentAdapterSessionIdState'];
+  /** Stored currency revision, owned by the same seam. */
+  readonly revision: MakaioSessionAgent['revision'];
+  /** Stored currency fence, owned by the same seam. */
+  readonly currencyFence: MakaioSessionAgent['currencyFence'];
+}
+
+/**
+ * Detach the stored columns a whole-record `set` must preserve.
+ * @param stored - Agent row as storage holds it.
+ * @returns The preserved columns, sharing nothing with the stored row.
+ */
+function detachPreservedOwnership(stored: MakaioSessionAgent): PreservedOwnership {
+  return {
+    status: stored.status,
+    adapterSessionId: stored.adapterSessionId,
+    currentAdapterSessionId: stored.currentAdapterSessionId,
+    currentAdapterSessionIdState: stored.currentAdapterSessionIdState,
+    revision: stored.revision,
+    currencyFence: stored.currencyFence,
+  };
+}
+
+/**
  * Carry the stored ownership columns across a whole-record `set`.
  *
  * Mirrors the Drizzle backend, whose conflict-update column list omits the
@@ -83,6 +150,14 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
  * removal would revive the row and, with it, every ownership predicate that
  * refuses a disposed agent. Any other stored status is the caller's to
  * overwrite, and a first write has no previous row at all.
+ *
+ * **`previous` is detached before any of that is decided.** Every preserved field
+ * is read from it, so it has to be the row as storage holds it and not a value
+ * the incoming write can reach. Detaching the reads is what removes the route
+ * that could alias the two; detaching here is what makes this function's
+ * guarantee local, so it holds however its `next` was obtained. Detaching *only
+ * the preserved columns* is what keeps it from costing a second deep clone of a
+ * whole record on every write — see {@link detachPreservedOwnership}.
  * @param store - In-memory agent store
  * @param agentId - Agent being written
  * @param next - Incoming agent record about to be stored
@@ -92,7 +167,8 @@ function storeAgentPreservingOwnership(
   agentId: string,
   next: MakaioSessionAgent,
 ): void {
-  const previous = store.get(agentId);
+  const stored = store.get(agentId);
+  const previous = stored === undefined ? undefined : detachPreservedOwnership(stored);
   store.set(agentId, {
     ...structuredClone(next),
     status: previous?.status === 'disposed' ? 'disposed' : next.status,
@@ -220,8 +296,8 @@ export function registerMemoryAgentStorage(
   // storage:agent.get
   unsubs.push(
     bus.on(AgentStorageSubjects.get, (ctx) => {
-      const agent = store.get(ctx.payload.agentId) ?? null;
-      ctx.setResult({ agent });
+      const stored = store.get(ctx.payload.agentId);
+      ctx.setResult({ agent: stored === undefined ? null : cloneAgent(stored) });
     }),
   );
 
@@ -248,7 +324,7 @@ export function registerMemoryAgentStorage(
       if (status && status !== 'all') {
         agents = agents.filter((a) => a.status === status);
       }
-      ctx.setResult({ agents });
+      ctx.setResult({ agents: agents.map(cloneAgent) });
     }),
   );
 
@@ -256,7 +332,7 @@ export function registerMemoryAgentStorage(
   unsubs.push(
     bus.on(AgentStorageSubjects.listBySession, (ctx) => {
       const agents = Array.from(store.values()).filter((a) => a.sessionId === ctx.payload.sessionId);
-      ctx.setResult({ agents });
+      ctx.setResult({ agents: agents.map(cloneAgent) });
     }),
   );
 

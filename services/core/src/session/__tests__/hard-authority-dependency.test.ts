@@ -176,7 +176,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
   function startLead(sessionId: string): ReturnType<typeof startLeadAgent> {
     return startLeadAgent(bus, {
       sessionId,
-      adapterId: ADAPTER_ID,
+      instance: { adapterId: ADAPTER_ID, machineId: MACHINE_ID },
       adapterName: ADAPTER_NAME,
       expectedLeadAgentId: null,
       startRequest: { adapterId: ADAPTER_ID, sessionId, role: 'lead' },

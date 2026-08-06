@@ -10,6 +10,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { IPtyProcess } from '@makaio/subsystem-native-session-supervisor';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
+import { CONNECTOR_EXIT_OBSERVATION_MS } from '@makaio/ai-adapters-core';
 import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_SESSION_START } from '@makaio/client-claude-code/runtime';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { HookEventCallbacks } from '../utils/hook-event-router.js';
@@ -29,6 +30,25 @@ const mockState = vi.hoisted(() => ({
   subscribeUnsubscribe: vi.fn(),
   tmuxAvailable: true,
   callOrder: [] as string[],
+  /** Exit listeners the connector registered on the mocked pane process. */
+  exitListeners: [] as Array<(event: { exitCode: number; signal?: number }) => void>,
+  /**
+   * Whether killing the session publishes the pane's exit.
+   *
+   * The real backend publishes an exit synchronously from `kill()` whenever a
+   * server established the session's absence, and publishes none when nothing
+   * could be established. Both are normal, so the mock models both and a test
+   * chooses which one it is driving.
+   */
+  publishExitOnKill: true,
+  /**
+   * Delay before a kill publishes the pane exit.
+   *
+   * Zero mirrors the backend's synchronous publication when absence is proven at
+   * the kill; a positive value lets a test prove the teardown *waited* rather
+   * than merely happening to resolve after a synchronous event.
+   */
+  publishExitDelayMs: 0,
   hooks: {
     onSessionStart: undefined as ((sessionId: string, model: string) => void) | undefined,
     onUserPromptSubmit: undefined as ((sessionId: string) => Promise<void> | void) | undefined,
@@ -70,6 +90,13 @@ vi.mock('../session.js', () => {
     }
     public dispose(): void {
       mockState.dispose();
+      if (!mockState.publishExitOnKill) return;
+      const publish = (): void => {
+        mockState.callOrder.push('exit-published');
+        for (const listener of mockState.exitListeners) listener({ exitCode: 0 });
+      };
+      if (mockState.publishExitDelayMs === 0) publish();
+      else setTimeout(publish, mockState.publishExitDelayMs);
     }
     public getClaudeSessionId(): string | undefined {
       return undefined;
@@ -106,7 +133,14 @@ const mockSpawn = vi.hoisted(() =>
     resize: vi.fn(),
     kill: vi.fn(),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
-    onExit: vi.fn(() => ({ dispose: vi.fn() })),
+    onExit: vi.fn((listener: (event: { exitCode: number; signal?: number }) => void) => {
+      mockState.exitListeners.push(listener);
+      return {
+        dispose: () => {
+          mockState.exitListeners = mockState.exitListeners.filter((registered) => registered !== listener);
+        },
+      };
+    }),
   } as IPtyProcess),
 );
 
@@ -185,6 +219,9 @@ describe('ClaudeCodeTmuxConnector', () => {
     mockState.observeSessionStart.mockClear();
     mockState.tmuxAvailable = true;
     mockState.callOrder = [];
+    mockState.exitListeners = [];
+    mockState.publishExitOnKill = true;
+    mockState.publishExitDelayMs = 0;
   });
 
   afterEach(() => {
@@ -899,15 +936,54 @@ describe('ClaudeCodeTmuxConnector', () => {
       fireSessionStart();
       await connector.initialize();
 
-      await expect(connector.close()).resolves.toBeUndefined();
+      // The class is asserted rather than the old "resolved with nothing": the
+      // connector-owned lease question this test protects is unchanged, and the
+      // report is what replaced the `void` return.
+      await expect(connector.close()).resolves.toEqual({ evidence: 'exited' });
       expect(mockBackendDispose).toHaveBeenCalled();
       expect(destroyRequests).not.toHaveBeenCalled();
     });
 
-    it('is safe to call without initialization', async () => {
+    it('is safe to call without initialization, and reports that nothing was spawned', async () => {
       const connector = await makeConnector();
 
-      await expect(connector.close()).resolves.toBeUndefined();
+      await expect(connector.close()).resolves.toEqual({ evidence: 'released' });
+    });
+
+    it('caps a close that raced the spawn at detached, rather than claiming nothing was started', async () => {
+      // The one window in which a pane process can exist while no subscription to
+      // its exit does: `backend.spawn()` is in flight, so `paneExit` is still
+      // unassigned. A teardown reading that as "no session" reported `released` —
+      // "nothing was spawned, so nothing can still be speaking" — about a process
+      // whose only kill happens later, through `backend.dispose()`, unobserved.
+      // `released` may stand only when no process was ever asked for.
+      const connector = await makeConnector();
+      let spawnEntered: () => void = () => undefined;
+      const entered = new Promise<void>((resolve) => {
+        spawnEntered = resolve;
+      });
+      let releaseSpawn: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        releaseSpawn = resolve;
+      });
+      mockSpawn.mockImplementationOnce(async () => {
+        spawnEntered();
+        await gate;
+        throw new Error('spawn abandoned after the close');
+      });
+
+      const initialization = connector.initialize().catch((error: unknown) => error);
+      await entered;
+
+      const report = await connector.close();
+
+      expect(mockState.exitListeners).toEqual([]);
+      expect(report).toEqual({
+        evidence: 'detached',
+        detail: 'The tmux pane process was spawned before this teardown could subscribe to its exit.',
+      });
+      releaseSpawn();
+      await initialization;
     });
   });
 
@@ -951,5 +1027,86 @@ describe('ClaudeCodeTmuxConnector', () => {
       await expect(connector.interrupt()).resolves.toBeUndefined();
       expect(mockState.sendEscape).toHaveBeenCalledOnce();
     });
+  });
+});
+
+// Cases 206b and 206c — the class comes from an awaited pane exit, the wait is
+// bounded, and a crash racing a stop finalises the turn exactly once.
+describe('ClaudeCodeTmuxConnector teardown evidence', () => {
+  beforeEach(() => {
+    MakaioBus.__resetHandlers?.();
+    vi.clearAllMocks();
+    MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+      ctx.setResult({ applied: 1, skipped: 0 });
+    });
+    mockState.hooks.onSessionStart = undefined;
+    mockState.hooks.onStop = undefined;
+    mockState.callOrder = [];
+    mockState.exitListeners = [];
+    mockState.publishExitOnKill = true;
+    mockState.publishExitDelayMs = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    MakaioBus.__resetHandlers?.();
+  });
+
+  it('206b arm 1 — resolves `exited` only after the pane exit has been published', async () => {
+    const connector = await makeConnector();
+    fireSessionStart();
+    await connector.initialize();
+
+    // Delayed publication, so "resolves only after the exit" is an ordering fact
+    // rather than a coincidence of both happening in the same synchronous turn.
+    mockState.publishExitDelayMs = 5;
+    mockState.callOrder = [];
+
+    const report = await connector.close();
+    mockState.callOrder.push('close-resolved');
+
+    expect(report).toEqual({ evidence: 'exited' });
+    expect(mockState.callOrder).toEqual(['exit-published', 'close-resolved']);
+  });
+
+  it('206b arm 2 — a kill whose exit never arrives resolves `detached` at the budget', async () => {
+    const connector = await makeConnector();
+    fireSessionStart();
+    await connector.initialize();
+    mockState.publishExitOnKill = false;
+
+    vi.useFakeTimers();
+    const closing = connector.close();
+    await vi.advanceTimersByTimeAsync(CONNECTOR_EXIT_OBSERVATION_MS);
+    const report = await closing;
+
+    // Neither hanging nor claiming an end nobody established.
+    expect(report.evidence).toBe('detached');
+    expect(report.detail).toContain('tmux pane process');
+  });
+
+  it('206c — a crash arriving inside the teardown finalisation finalises the turn once', async () => {
+    const connector = await makeConnector();
+    fireSessionStart();
+    await connector.initialize();
+
+    const turnFinished: unknown[] = [];
+    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus();
+    let injectedCrash = false;
+    bus.on(ClaudeCodeTmuxConnectorSubjects.turn.turn_finished, (ctx) => {
+      turnFinished.push(ctx.payload);
+      if (injectedCrash) return;
+      injectedCrash = true;
+      // The exit lands *inside* the first finalisation, after the completion
+      // guard has already been passed — the interleaving a guard alone cannot
+      // cover. Asserted on the finalisation count, not on an absent error.
+      for (const listener of mockState.exitListeners) listener({ exitCode: 1, signal: 9 });
+    });
+
+    await connector.sendMessage({ role: 'user', blocks: [], message: 'Q?' });
+    await connector.close();
+
+    expect(turnFinished).toHaveLength(1);
   });
 });

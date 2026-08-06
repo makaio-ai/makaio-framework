@@ -15,6 +15,7 @@
  * - Unhandled observations remain retryable from the next lifecycle signal.
  */
 
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import os from 'node:os';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
@@ -63,6 +64,7 @@ async function makeAgent(opts: { sessionId?: string; clientId?: string } = {}): 
   const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus();
   return new ClaudeCodeAgent({
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'claude-agent-sdk',

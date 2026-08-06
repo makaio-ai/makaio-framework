@@ -19,6 +19,7 @@ import type { AIReasoningLevel, AIModel, ReasoningLevelMap } from '../types/ai-m
 import type { SetRequired } from 'type-fest';
 import { z } from 'zod';
 import type { AIAgentConnector } from '../connector/agent-connector.js';
+import type { AgentTeardownArbiter } from './agent-teardown-arbiter.js';
 import type { ConfigFactoryInput } from '../adapter/ai-adapter-config.js';
 import { AgentSchemas, AgentSubjects } from '@makaio/contracts';
 import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
@@ -266,6 +267,16 @@ export interface AIAgentConfig<
   globalBus?: IMakaioBus;
   /** Scoped bus for adapter-specific events */
   adapterBus: TBus;
+  /**
+   * Adapter-instance arbiter between teardowns and connector replacements.
+   *
+   * **Required**, and that is the point: the arbiter is what makes "replacements
+   * refuse when they find a teardown, teardowns wait when they find a
+   * replacement" a property of the module rather than a convention. An agent
+   * constructed without one would replace connectors with no arbitration at all,
+   * so it does not compile.
+   */
+  teardownArbiter: AgentTeardownArbiter;
 
   // Adapter metadata
   /** Adapter capabilities (e.g., ['streaming', 'tools', 'vision']) */

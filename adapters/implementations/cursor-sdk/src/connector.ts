@@ -1,5 +1,6 @@
 import {
   ProceduralAgentConnector,
+  reportRepeatTeardown,
   UserMessageQueue,
   type NormalizedMessageInput,
   type AgentStartResult,
@@ -10,6 +11,7 @@ import {
   type WireSessionSubjects,
   type MessageResult,
 } from '@makaio/ai-adapters-core';
+import type { ConnectorTeardownResult } from '@makaio/contracts';
 import { CursorSdkAdapterName } from './constants.js';
 import type { CursorSdkBus } from './namespaces/index.js';
 import { CursorSdkSubjects } from './namespaces/index.js';
@@ -240,13 +242,28 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
   }
 
   /**
-   * Close the connector and release all resources.
+   * Close the connector, release all resources, and report what was observed.
    *
    * Awaits any in-flight session init before disposing to avoid teardown races.
+   *
+   * **Class: `detached`.** The local evidence stops at the disposal. The Cursor
+   * Agent is an SDK object whose delta and step callbacks were handed *to* the
+   * SDK rather than held here, so there is no subscription this runtime can
+   * cancel and no end of one it can prove; whatever the SDK keeps behind the
+   * agent it disposes is not this runtime's to observe. A disposal whose outcome
+   * the session could not establish reports `unknown` instead.
+   *
+   * A connector that never built a session reports `released`: nothing was
+   * created, so nothing can still be running.
+   * @returns What this runtime observed about the end of its Cursor Agent.
    */
-  public override async close(): Promise<void> {
-    if (this.closed) return;
+  public override async close(): Promise<ConnectorTeardownResult> {
+    if (this.closed) return reportRepeatTeardown();
     this.closed = true;
+    // A closed connector must stop receiving turn events, whatever class it
+    // reports: a live subscription keeps it reachable from the bus, and a later
+    // generation on this agent id would drive its state machine.
+    const turnEventDrain = this.closeTurnEventLifecycle();
     const initPromise = this.sessionInitPromise;
     if (initPromise) {
       try {
@@ -255,9 +272,15 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
         // Initialization failed — there may be no session to clean up.
       }
     }
-    await this.session?.close();
-    this.session = undefined;
-    this.sessionInitPromise = undefined;
+    await turnEventDrain;
+    const session = this.session;
+    try {
+      // No session means nothing was created, so nothing can still be running.
+      return session === undefined ? { evidence: 'released' } : await session.close();
+    } finally {
+      this.session = undefined;
+      this.sessionInitPromise = undefined;
+    }
   }
 
   /**

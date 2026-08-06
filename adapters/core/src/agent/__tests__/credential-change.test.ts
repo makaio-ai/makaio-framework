@@ -5,6 +5,7 @@ import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import { createMockScopedBus } from '@makaio/test-utils';
 
 import type { AIAgentConfig } from '../types.js';
+import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 import {
   asAgentConnector,
   createAgentTestLifecycle,
@@ -488,6 +489,7 @@ describe('AIAgent credential.change handler', () => {
       capabilities: [],
       nativeTools: [],
       adapterBus: mockBus,
+      teardownArbiter: new AgentTeardownArbiter(),
       globalBus: MakaioBus,
       model: 'test-model-1',
       cwd: '/test/cwd',

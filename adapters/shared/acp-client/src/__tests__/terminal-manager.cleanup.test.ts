@@ -47,7 +47,7 @@ describe('TerminalManager cleanup', () => {
       return spawned.proc;
     });
 
-    const manager = new TerminalManager({ baseEnv: {} });
+    const manager = new TerminalManager({ baseEnv: {}, spawnTimeoutMs: 10_000 });
 
     await expect(
       manager.createTerminal({

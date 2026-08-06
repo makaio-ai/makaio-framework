@@ -52,7 +52,7 @@ describe('start cleanup release discipline (I15b)', () => {
       ...registerMemorySessionBackends(bus),
       bus.on(AdapterSubjects.stopAgent, (ctx) => {
         stoppedAgentIds.push(ctx.payload.agentId);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, evidence: 'released' });
       }),
     ];
     service = new MakaioSessionService(bus, { machineId: MACHINE_ID });

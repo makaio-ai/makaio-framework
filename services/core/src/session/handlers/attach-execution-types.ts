@@ -10,6 +10,7 @@ import type {
   TurnInitiator,
 } from '@makaio/contracts';
 import type { AttachLaunchTarget } from './attach-runtime-options.js';
+import type { OwnedAdapterInstance } from '../utils/resolution.js';
 
 /** Identity metadata carried onto the agent row an attach owns. */
 export interface AttachIdentity {
@@ -46,8 +47,15 @@ export interface ResolvedAttachExecution {
   locality: AttachLocalityResult;
   /** Lead the caller observed on the session row, or `null` when it names none. */
   expectedLeadAgentId: string | null;
-  /** Machine identity every ownership act names, or `undefined` for the authority's own. */
-  machineId: string | undefined;
+  /**
+   * Instance the attach dispatches to, and the machine every one of its ownership
+   * acts names — one value, because it is one key.
+   *
+   * `machineId` is absent only when this runtime named no machine of its own and
+   * the caller named none either, in which case the authority acts under its
+   * composed identity and there are no two identities to mix.
+   */
+  instance: OwnedAdapterInstance;
   session: IMakaioSession;
   initialMessage: MessageInput | undefined;
   responseSchema: ResponseSchemaDescriptor | undefined;

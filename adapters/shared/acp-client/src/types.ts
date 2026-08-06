@@ -19,6 +19,25 @@ export interface AcpConnectionOptions {
   onError?: (error: Error) => void;
   /** Callback for subprocess exit */
   onExit?: (code: number | null) => void;
+  /**
+   * Milliseconds to wait for the subprocess to start before failing.
+   *
+   * Required rather than optional: the wait for a `spawn` event has no natural
+   * end, and every caller of this function already declares an initialization
+   * budget. Making the budget an argument is what stops that declaration from
+   * being decorative.
+   */
+  spawnTimeoutMs: number;
+  /**
+   * Signal that abandons the start before its budget expires.
+   *
+   * The budget answers "how long may this take"; the signal answers "we no longer
+   * want it" — a caller whose own start was superseded or cancelled has no reason
+   * to keep waiting out a full budget. An abandoned start kills the child it
+   * spawned, exactly as an expired one does, so neither leaves an unwatched
+   * process behind.
+   */
+  signal?: AbortSignal;
 }
 
 /**

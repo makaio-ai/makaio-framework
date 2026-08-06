@@ -99,6 +99,47 @@ export interface SessionInitCallbacks {
   onProvisionalResources: (client: CopilotClient, session: CopilotConnectorSession) => void;
 }
 
+/** A provisional release that failed while an initialization flight was ending. */
+export interface SessionInitializationCleanupFailure {
+  /** Resource release stage that did not complete. */
+  stage:
+    | 'provisional session destroy'
+    | 'provisional client stop'
+    | 'unpublished session destroy'
+    | 'unpublished client stop';
+  /** Error returned by the SDK release operation. */
+  error: unknown;
+}
+
+/**
+ * Initialization failure with unaccounted provisional-resource cleanup.
+ *
+ * The aggregate preserves the original initialization failure and every release
+ * failure so terminal close can report unknown evidence rather than masking a
+ * failed SDK cleanup as ordinary cancellation.
+ */
+export class CopilotSessionInitializationCleanupError extends AggregateError {
+  /** Initialization or cancellation failure that began cleanup. */
+  public readonly initializationError: unknown;
+  /** Provisional release stages that rejected. */
+  public readonly cleanupFailures: readonly SessionInitializationCleanupFailure[];
+
+  /**
+   * Create an aggregate initialization failure.
+   * @param initializationError - Failure that caused provisional cleanup
+   * @param cleanupFailures - Cleanup stages that rejected while releasing resources
+   */
+  public constructor(initializationError: unknown, cleanupFailures: readonly SessionInitializationCleanupFailure[]) {
+    super(
+      [initializationError, ...cleanupFailures.map((failure) => failure.error)],
+      'GitHub Copilot session initialization cleanup failed',
+    );
+    this.name = 'CopilotSessionInitializationCleanupError';
+    this.initializationError = initializationError;
+    this.cleanupFailures = cleanupFailures;
+  }
+}
+
 /**
  * Perform a single session initialization flight.
  *
@@ -192,9 +233,20 @@ export async function performSessionInit(
 
     return { adapterSessionId, client, session };
   } catch (err) {
-    // Best-effort cleanup of provisional resources.
-    await session?.destroy().catch(() => undefined);
-    await client?.stop().catch(() => undefined);
+    const cleanupFailures: SessionInitializationCleanupFailure[] = [];
+    try {
+      await session?.destroy();
+    } catch (error) {
+      cleanupFailures.push({ stage: 'provisional session destroy', error });
+    }
+    try {
+      await client?.stop();
+    } catch (error) {
+      cleanupFailures.push({ stage: 'provisional client stop', error });
+    }
+    if (cleanupFailures.length > 0) {
+      throw new CopilotSessionInitializationCleanupError(err, cleanupFailures);
+    }
     throw err;
   }
 }

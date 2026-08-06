@@ -42,6 +42,12 @@ export {
   getOrCreateSession,
   resolveTargetAgents,
   resolveAdapterId,
+  resolveOwnedAdapterInstance,
+  reserveStartFor,
+  type MachineScopedAdapterInstance,
+  type OwnedAdapterInstance,
+  type OwnedAdapterInstanceTarget,
+  type StartReservationRequest,
   ensureAgentCwd,
   ensureAgentModel,
   resolveModelCapabilities,
@@ -60,6 +66,15 @@ export {
 // The modeled start failures, so a host or product path can raise and branch on
 // the same outcomes the framework's own start paths do.
 export { SessionStartError, type SessionStartFailureCode } from './handlers/session-start-error.js';
+
+// The fresh-start ownership seam. A host start path that resolves its own
+// selection still has to answer the same question this one does — which instance
+// does the dispatch address, and which machine do its ownership acts name — and
+// answering it a second time is how the two halves come from two identities.
+export {
+  resolveSelectionOwnedInstance,
+  type SelectionInstanceContext,
+} from './session-orchestrator-selection.js';
 
 // Optional session handlers used by hosts that opt into richer session operations.
 export {
@@ -86,7 +101,13 @@ export {
   resetBuiltInActionsRegistration,
 } from './session-editor/index.js';
 // Workstream/project link resolution is host-owned.
-export { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
+export {
+  describeHalfNamedInstanceRefusal,
+  normalizeSelectionString,
+  resolveAdapterNameById,
+  type NamedSelectionInstance,
+  type SelectionRefusalContext,
+} from './selection-utils.js';
 export { CONNECTOR_SWAP_DEFAULT_PIPELINE } from './constants.js';
 // Connector swap warning policy is host-owned.
 export { pickFallbackRuntimeOptions, type FallbackRuntimeOptions } from './fallback-runtime-options.js';

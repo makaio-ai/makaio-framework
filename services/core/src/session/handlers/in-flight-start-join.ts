@@ -2,7 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { IMakaioSession, MakaioSessionAgent } from '@makaio/contracts';
 import { peekInFlightStart, runExclusiveStart, type StartAttemptOutcome } from '../ownership/index.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
-import { resolveLiveAdapterIdForMachine } from '../utils/resolution.js';
+import { resolveOwnedAdapterInstance } from '../utils/resolution.js';
 import {
   failedRehydrateError,
   runReservedRehydrate,
@@ -397,32 +397,38 @@ async function consumeJoinedAttempt(
       joinedFailure.error,
     );
   }
-  // The attempt's own verdict, before the row and outranking it. A modeled
-  // non-success — a recovery that deferred, a reservation that was refused, a
-  // start that lost its designation race — is a *resolution*, so it looks
-  // exactly like success to anyone watching only for a rejection. And the row it
-  // leaves behind is deliberately the row it found: the rollback rule restores
-  // the `idle` an untouched agent had, which reads `use` while no connector was
-  // ever built. This consumer asks the question for itself instead.
+  // **The row is read before anything is decided, and the caller's snapshot is
+  // refreshed from it.** The attempt this call joined ran to completion, so every
+  // field of the pre-join snapshot is a statement about a row somebody else has
+  // since written — and the one this function's own callers act on hardest is
+  // `status`: a re-entry claims the recovery by compare-and-swap *against the
+  // status it believes it is leaving*, so a stale snapshot claims from a state
+  // the row left and loses a claim it should have won. That is not a peer
+  // arbitrating; it is this call arguing with the attempt it waited for.
+  //
+  // Refreshed in place because the caller's object *is* the session's agent: the
+  // send that owns it keeps routing at it after this returns. And refreshed
+  // whole, not field by field — the attempt is a *rehydrate*, which persisted the
+  // cwd and the model it was dispatched with, the provider session its connector
+  // confirmed, and the instance it bound the agent to. A joiner that copied one
+  // of those and kept its snapshot for the rest would hand the caller an identity
+  // that never existed, and the consumers act on all of it: the cwd and model
+  // decide whether a connector swap is issued, and the next recovery's rollback
+  // target is read off the status.
+  const row = await readAgentRow(bus, agent.agentId, agent);
+  if (row !== null) Object.assign(agent, row);
+
+  // The attempt's own verdict, after the refresh but ahead of the
+  // classification, and outranking it. A modeled non-success — a recovery that
+  // deferred, a reservation that was refused, a start that lost its designation
+  // race — is a *resolution*, so it looks exactly like success to anyone watching
+  // only for a rejection. The row such an attempt leaves behind may be the row it
+  // found, whose `idle` reads `use` while no connector was ever built. This
+  // consumer therefore asks the question for itself, from the refreshed snapshot.
   if (attempt === 'no-connector') return 'retry';
 
-  const row = await readAgentRow(bus, agent.agentId, agent);
   switch (classifyJoinedRow(row)) {
     case 'use':
-      // **The row that classified is the identity this call hands on**, whole
-      // and not field by field. The attempt this one joined is a *rehydrate*:
-      // it persisted the cwd and the model it was dispatched with and the
-      // provider session its connector confirmed, alongside the instance it
-      // bound the agent to. A joiner that copied one of those four and kept its
-      // pre-join snapshot for the rest would hand the caller an identity that
-      // never existed — half what the attempt made true, half what this call
-      // read before it ran — and the consumers act on all of it: the cwd and
-      // model decide whether a connector swap is issued, and the next recovery's
-      // rollback target is read off the status.
-      //
-      // Refreshed in place because the caller's object *is* the session's
-      // agent: the send that owns it keeps routing at it after this returns.
-      if (row !== null) Object.assign(agent, row);
       return { kind: 'joined', agent };
     case 'drop':
       return { kind: 'refused', outcome: row === null ? 'not-found' : 'agent-disposed' };
@@ -488,14 +494,17 @@ export async function recoverDeadAgentExclusively(
   agent: MakaioSessionAgent,
   request: { readonly resumeProviderSessionId: string | null; readonly machineId?: string },
 ): Promise<LazyRecoveryResult> {
-  const adapterId = await resolveLiveAdapterIdForMachine(bus, agent, request.machineId);
-  if (adapterId === undefined) return { deferred: true };
+  const instance = await resolveOwnedAdapterInstance(bus, {
+    adapterName: agent.adapterName,
+    storedAdapterId: agent.adapterId,
+    ...(request.machineId !== undefined && { machineId: request.machineId }),
+  });
+  if (instance === undefined) return { deferred: true };
   const outcome = await runOrJoinReservedRehydrate(bus, {
     agent,
     sessionId: agent.sessionId,
-    adapterId,
+    instance,
     resumeProviderSessionId: request.resumeProviderSessionId,
-    ...(request.machineId !== undefined && { machineId: request.machineId }),
   });
   return classifyRecoveryOutcome(agent.agentId, outcome);
 }

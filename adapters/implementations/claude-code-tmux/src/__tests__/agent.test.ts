@@ -1,6 +1,7 @@
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import { ClientSubjects } from '@makaio/contracts/client';
@@ -17,7 +18,16 @@ const TEST_CWD = '/tmp';
 class TestTmuxConnector extends ClaudeCodeTmuxConnector {
   public override async initialize(): Promise<void> {}
 
-  public override async close(): Promise<void> {}
+  /**
+   * Report a teardown of nothing.
+   *
+   * This double holds no process, connection or subscription, so `released` is
+   * literally true of it: every handle is dropped and no callback can arrive.
+   * @returns The `released` class.
+   */
+  public override async close(): Promise<ConnectorTeardownResult> {
+    return { evidence: 'released' };
+  }
 
   public async emitToolStarted(payload: { toolName: string; toolUseId: string; toolInput: unknown }): Promise<void> {
     await this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.started, { ...payload, messageId: 'message-tmux-test' });
@@ -41,6 +51,7 @@ async function makeAgent(): Promise<{ agent: ClaudeCodeTmuxAgent; connector: Tes
     adapterId: TEST_ADAPTER_ID,
     adapterName: TEST_ADAPTER_NAME,
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     sessionId: 'framework-session-1',
     clientId: 'claude-code',

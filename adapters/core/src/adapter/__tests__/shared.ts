@@ -6,7 +6,7 @@
  */
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionSubjects } from '@makaio/contracts';
+import { SessionSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { createMockScopedBus } from '@makaio/test-utils';
 import { AIAdapter } from '../ai-adapter.js';
@@ -18,6 +18,12 @@ import type { AIAgentConfig, AgentStartResult, BaseAgentConnectorConfig } from '
 import type { ConfigFactoryInput } from '../ai-adapter-config.js';
 import type { AIAdapterConfig } from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
+import {
+  runConfiguredClose,
+  runConfiguredInitialize,
+  type ConfiguredClose,
+  type ConfiguredInitialize,
+} from '../../agent/__tests__/helpers/configured-close.js';
 
 export type TestBus = ReturnType<typeof createMockScopedBus>['bus'];
 
@@ -27,14 +33,36 @@ export type TestBus = ReturnType<typeof createMockScopedBus>['bus'];
  * Subclass or extend via constructor options for test-specific behavior
  * (e.g., tracking close calls, throwing on specific models).
  */
-export class MockConnector extends AIAgentConnector {
-  public closeCalled = false;
+export class MockConnector extends AIAgentConnector implements ConfiguredClose, ConfiguredInitialize {
+  /** How many times this generation's close ran; see {@link ConfiguredClose}. */
+  public closeCount = 0;
+  /** Class this close reports, or the failure it raises; see {@link ConfiguredClose}. */
+  public closeOutcome: ConnectorTeardownResult | Error = { evidence: 'released' };
+  /** Held until the test releases it; see {@link ConfiguredClose}. */
+  public closeGate: Promise<void> | undefined;
+  /** Held until the test releases it; see {@link ConfiguredInitialize}. */
+  public initializeGate: Promise<void> | undefined;
+  /** Raised by `initialize()`; see {@link ConfiguredInitialize}. */
+  public initializeFailure: Error | undefined;
+
+  /**
+   * Whether this generation's close ran at all.
+   *
+   * Derived from the count rather than tracked beside it, so the two can never
+   * disagree about whether a close happened.
+   * @returns Whether close ran at least once.
+   */
+  public get closeCalled(): boolean {
+    return this.closeCount > 0;
+  }
 
   public constructor(config: BaseAgentConnectorConfig<TestBus> & { adapterId: string }) {
     super(config);
   }
 
-  public async initialize(): Promise<void> {}
+  public async initialize(): Promise<void> {
+    return runConfiguredInitialize(this);
+  }
 
   public async start(message: NormalizedMessageInput): Promise<AgentStartResult> {
     return {
@@ -53,8 +81,8 @@ export class MockConnector extends AIAgentConnector {
     return null;
   }
   public async interrupt(): Promise<void> {}
-  public async close(): Promise<void> {
-    this.closeCalled = true;
+  public async close(): Promise<ConnectorTeardownResult> {
+    return runConfiguredClose(this);
   }
   public async getAdapterSessionId(): Promise<string> {
     return 'mock-adapter-session-id';

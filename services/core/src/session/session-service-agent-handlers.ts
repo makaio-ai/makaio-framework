@@ -51,13 +51,13 @@ function logRefusedDesignation(agentId: string, result: SessionOwnershipClaimRes
 /**
  * Registers the `session.agent.added` event handler.
  *
- * The lead designation is **not** part of the whole-record write this handler
- * ends with. It goes through the keyless reserving transaction, which takes the
- * lead the handler read as its expectation, so a designation that landed between
- * the read and the write survives instead of being overwritten by a snapshot
- * that predates it. The whole-record `set` carries the remaining fields and no
- * longer decides who leads — both backends preserve the stored designation
- * across it.
+ * **This handler writes no record.** The lead designation goes through the
+ * keyless reserving transaction, which takes the lead the handler read as its
+ * expectation; the adapter identity goes through a conditional partial write
+ * carrying its own predicate; and the ordinary path writes the single field this
+ * announcement produces. Every one of the three states what it expects to be
+ * true, so nothing here can carry a snapshot back over a decision taken after
+ * the read it came from.
  * @param bus - Message bus used by the session service
  * @returns Cleanup function
  */
@@ -101,17 +101,17 @@ export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
     const thisAgentLeads = designation?.outcome === 'claimed' || designation?.outcome === 'idempotent';
     const noDesignationWriter = resolvedRole === 'lead' && designation === undefined;
     if (!session.adapterName && (thisAgentLeads || noDesignationWriter)) {
-      // **The re-read's expectation is derived per case, not shared.** Two
+      // **The predicate's expectation is derived per case, not shared.** Two
       // different facts lead here and they expect different leads:
       //
       // - `thisAgentLeads` — the compare-and-swap made *this* agent the lead, so
       //   the only reading that still speaks for the session is this agent's own
       //   id. A `session.agent.removed` landing between the designation and the
-      //   re-read clears the designation under a swap naming the departing
-      //   agent, and on a fresh session that leaves `leadAgentId` back at
-      //   `undefined` — which is what this handler *observed*. Accepting the
-      //   observed value here stamped the identity for an agent that had just
-      //   been removed, and write-once left no later lead able to correct it.
+      //   write clears the designation under a swap naming the departing agent,
+      //   and on a fresh session that leaves `leadAgentId` back at `undefined` —
+      //   which is what this handler *observed*. Accepting the observed value
+      //   here stamped the identity for an agent that had just been removed, and
+      //   write-once left no later lead able to correct it.
       // - `noDesignationWriter` — nothing in this host can designate, so nothing
       //   can have changed the lead either; the expectation is the value this
       //   handler read, and it is the only case where that is a statement about
@@ -140,53 +140,51 @@ export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
 /**
  * Publish the adapter identity a session's first lead establishes.
  *
- * **The one write here that still carries a whole record**, because the identity
- * triplet has no narrow operation: `storage:session.update` covers activity,
- * status and provenance, and deliberately not the adapter pair — so an
- * establishing lead has `set` or nothing.
+ * **One conditional write, and no snapshot of the session at all.** The identity
+ * triplet is a narrow operation on `storage:session.update`, guarded by
+ * `expectIdentityOpenForLead` — the identity is still open and the row still
+ * names this agent as its lead — so the check the write rests on is evaluated by
+ * the same statement that writes. What this removes is the window a re-read left
+ * behind it: a peer that established the identity, or a designation that moved,
+ * after the read and before the write used to be overwritten by a record this
+ * handler had already assembled. Now such a write matches nothing and reports
+ * `success: false`.
  *
- * Two consequences, both narrowed as far as a handler can:
- *
- * - The row is **re-read immediately before the write**, so the record carried
- *   back is the freshest one this handler can obtain. A `session.close` that
- *   landed before that read is preserved; only one landing inside the gap
- *   between the read and the write is undone.
- * - The identity and the designation are **re-checked against that read**, so a
- *   lead that paused while another lead established the identity and replaced it
- *   writes nothing. The check is not atomic with the write, and cannot be made
- *   so from here: closing it needs the conditional identity write that
- *   `session.update` does not have — see the Wave-4 watchlist.
- * @param bus - Bus the read and the write are issued on.
+ * Activity travels **with** the guarded write, so a refusal withholds it too, and
+ * the refusal path writes it separately: the announcement happened either way,
+ * and the row's last activity is the one fact it produces unconditionally.
+ * @param bus - Bus the writes are issued on.
  * @param payload - The announcement whose adapter identity is published.
- * @param expectedLeadAgentId - The lead the re-read must still name for this
+ * @param expectedLeadAgentId - The designation the row must still carry for this
  *   agent to speak for the session — derived from the designation's outcome by
- *   the caller, never from the snapshot it read.
+ *   the caller, never from the snapshot it read. `undefined` becomes an explicit
+ *   "no designation" expectation, which is the state of a host that has no
+ *   designation authority at all.
  */
 async function establishSessionAdapterIdentity(
   bus: IMakaioBus,
   payload: { sessionId: string; agentId: string; adapterId: string; adapterName: string; adapterSessionId?: string },
   expectedLeadAgentId: string | undefined,
 ): Promise<void> {
-  const reread = await bus.requestOptional(SessionStorageSubjects.get, { sessionId: payload.sessionId });
-  const session = reread.handled ? reread.data.session : undefined;
-  if (!session) return;
-  // Somebody established the identity while this handler worked, or the
-  // designation this write rests on is no longer standing — a replacement, or a
-  // removal that cleared it. Either way this agent no longer speaks for the
-  // session's identity, and the activity write below is all that is left.
-  if (session.adapterName || session.leadAgentId !== expectedLeadAgentId) {
-    await bus.requestOptional(SessionStorageSubjects.update, {
-      sessionId: payload.sessionId,
-      lastActivityAt: Date.now(),
-    });
-    return;
-  }
+  const established = await bus.requestOptional(SessionStorageSubjects.update, {
+    sessionId: payload.sessionId,
+    lastActivityAt: Date.now(),
+    identity: {
+      adapterName: payload.adapterName,
+      adapterId: payload.adapterId,
+      adapterSessionId: payload.adapterSessionId,
+    },
+    expectIdentityOpenForLead: expectedLeadAgentId ?? null,
+  });
+  if (!established.handled || established.data.success) return;
 
-  session.adapterSessionId = payload.adapterSessionId;
-  session.adapterName = payload.adapterName;
-  session.adapterId = payload.adapterId;
-  session.lastActivityAt = Date.now();
-  await bus.request(SessionStorageSubjects.set, { sessionId: payload.sessionId, session });
+  // Refused, or the row is gone — storage does not distinguish them and this
+  // handler does not need it to: neither leaves an identity for this agent to
+  // publish, and an activity write against a missing row is a no-op.
+  await bus.requestOptional(SessionStorageSubjects.update, {
+    sessionId: payload.sessionId,
+    lastActivityAt: Date.now(),
+  });
 }
 
 /**
@@ -233,14 +231,29 @@ export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
     // and are swallowed, so the previous writer can still be speaking to the
     // provider session while the next claimant takes it.
     //
-    // Not narrowed here, and deliberately not narrowed at all. Proving a
-    // connector closed is the capability this aggregate does not have — it is
-    // OQ-E, cut from this wave with the rest of the liveness complex (§17), and
-    // every partial mitigation available here (a delay, a poll, a
-    // stop-confirmation flag) rebuilds a piece of that proof from evidence that
-    // is exactly as weak as the return value already is. Wave 4 closes it by
-    // giving `stopAgent` a real completion contract — a close that reports
-    // *observed* teardown — after which this release moves behind it.
+    // **`stopAgent` now reports observed teardown, and this release deliberately
+    // does not read it yet.** Gating the disposition on `teardownWasObserved`
+    // here would document a guarantee the surrounding mechanism cannot keep, and
+    // it would do so twice over:
+    //
+    // - **A weak class does not mean the previous writer is live.** `success:
+    //   false` — and with it the weakest classes — is the ordinary answer of a
+    //   peer that does not host this agent: the instance is deterministic, the
+    //   registry answer is local, and the dispatch is first-result-wins. A
+    //   disposition derived from that answer refuses releases for agents that are
+    //   simply somewhere else.
+    // - **And the alternative disposition would protect nothing.** Step 1 above
+    //   writes `disposed` first, and a takeover accepts a disposed incumbent with
+    //   no condition on its claim's disposition. So `abandoned` blocks no second
+    //   writer on the path that actually produces one; the gate would only make
+    //   the release fail while the takeover it was supposed to stop still
+    //   succeeds.
+    //
+    // What the consumer needs is therefore not evidence but *owner-process
+    // identity* — a stop that provably reaches **the** owner, plus a takeover
+    // predicate for which `disposed` is not sufficient. Both are Wave 5's core,
+    // and this wave built the evidence Wave 5 will read here rather than a half
+    // gate that reads like a guarantee.
     //
     // What bounds it today: the release is a deliberate teardown of an agent the
     // caller has stopped, and the next claimant is refused nothing — so the
@@ -284,10 +297,18 @@ export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
  * is skipped whichever adapter it runs, and so is a sibling *instance* of the
  * session's own adapter. Where the identity is already established the write
  * must also match it, name and instance; where it is not, the lead establishes
- * the whole triplet at once, exactly as `registerAgentAddedHandler` does.
+ * the whole triplet at once.
  *
  * Idempotent: only writes when the stored value is missing.
  * Write-once: the first qualifying `agent.started` event wins.
+ *
+ * **Still a read-check-write, and deliberately so.** The condition this handler
+ * writes under is not the announcement's: it fills the provider key while *that*
+ * column is unset, against an identity that may already be established and must
+ * then match. `expectIdentityOpenForLead` states the opposite condition — the
+ * identity is open — so the guarded write is not the predicate this path needs,
+ * and giving it one is a separate composite condition with its own arms rather
+ * than a reuse of this one.
  * @param bus - Message bus used by the session service
  * @returns Cleanup function
  */

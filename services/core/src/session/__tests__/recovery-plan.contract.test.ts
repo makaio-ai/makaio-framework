@@ -156,7 +156,7 @@ async function executeRecovery(
   });
 
   await bus.request(AgentStorageSubjects.set, { agentId: AGENT_ID, agent });
-  await recoverAgent(bus, agent, { plan }, agent.adapterId);
+  await recoverAgent(bus, agent, { plan }, { adapterId: agent.adapterId });
   const context = await buildPlannedRecoveryContext(bus, session, plan);
 
   const payload = rehydratePayloads.at(-1);

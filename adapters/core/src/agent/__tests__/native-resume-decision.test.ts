@@ -3,6 +3,7 @@ import { createMockGlobalBus, createMockScopedBus } from '@makaio/test-utils';
 import { AIAgent } from '../ai-agent.js';
 import type { SessionContext } from '@makaio/contracts';
 import type { AIAgentConfig } from '../types.js';
+import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 
 /**
  * Concrete test agent to access protected shouldUseNativeResume method.
@@ -60,6 +61,7 @@ function createTestAgent(AgentCtor: typeof TestAgent = TestAgent): TestAgent {
     capabilities: [],
     nativeTools: [],
     adapterBus: mockBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: mockGlobalBus,
     configFactory: async () => ({
       bus: mockBus,

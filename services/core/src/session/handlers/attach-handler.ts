@@ -11,12 +11,12 @@ import type {
   AgentSelectionBase,
   IMakaioSession,
   MessageInput,
-  NativeLocalityReason,
   NativeLocalityVerdict,
   ResolvedAgentConfig,
 } from '@makaio/contracts';
-import { buildTurnInitiator, extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
-import { normalizeSelectionString, resolveAdapterNameById } from '../selection-utils.js';
+import { buildTurnInitiator, extractTextContent } from '../session-orchestrator-helpers.js';
+import type { OwnedAdapterInstance } from '../utils/resolution.js';
+import { resolveAttachAdapterTarget } from './attach-adapter-target.js';
 import { resolveAttachProviderSelection } from './attach-provider-selection.js';
 import type { AttachAgentParams, AttachLocalityResult, ResolvedAttachExecution } from './attach-execution-types.js';
 import {
@@ -90,11 +90,6 @@ export function registerAttachHandler(
     attachResolvedCleanup();
     closeMiddlewareCleanup();
   };
-}
-
-interface AdapterCandidate {
-  readonly adapterName: string | undefined;
-  readonly adapterId: string | undefined;
 }
 
 /**
@@ -180,31 +175,25 @@ async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promis
  */
 async function resolveAttachLocality(input: {
   bus: IMakaioBus;
-  adapterId: string;
+  instance: OwnedAdapterInstance;
   adapterName: string;
   session: IMakaioSession;
-  machineId: string | undefined;
   effectiveCwd: string | undefined;
-  callerNamedInstance: boolean;
 }): Promise<AttachLocalityResult> {
-  const { bus, adapterId, adapterName, session, machineId, effectiveCwd } = input;
-  // **A named instance cannot be resumed natively, because its machine cannot be
-  // named with it.** An instance ID is a one-way hash of `(machineId,
-  // adapterName)`, so a caller that hands one over hands over an instance
-  // without its owner. Every ownership act this attach performs would then run
-  // under *this* runtime's identity against another machine's instance — a claim
-  // keyed `(local machine, remote instance, provider session)`, which the runtime
-  // that really owns that instance computes differently and therefore never
-  // sees. That is not a window; it is a claim that protects nothing while
-  // looking like it does.
+  const { bus, adapterName, session, effectiveCwd } = input;
+  const { adapterId, machineId } = input.instance;
+  // **The instance arrives with the machine it belongs to, or the attach never got
+  // here.** An instance ID is a one-way hash of `(machineId, adapterName)`, so a
+  // caller that hands over an instance and nothing else hands over an instance
+  // without its owner — and {@link resolveAttachAdapterTarget} refuses that pair
+  // outright rather than letting the attempt proceed under a guessed machine. So
+  // the whole attach runs in one machine's namespace: the verdict below is
+  // evaluated against it, and so are the reservation and the settlement.
   //
-  // Decided before anything is read: neither the session's resume identity nor
-  // the adapter's capability can change the answer. Resuming a named remote
-  // instance honestly needs the machine alongside it, which is a payload change
-  // and belongs with the rest of the identity work.
-  if (input.callerNamedInstance) {
-    return degradedAttachLocality(bus, session, adapterId, 'missing-machine-id');
-  }
+  // `machineId` can still be absent here, for the one shape that is honest about
+  // it — a runtime with no machine identity at all, deriving an unscoped instance
+  // for itself. The evaluator answers that with its own `missing-machine-id`
+  // degrade, which is why this function no longer decides one of its own.
 
   // Independent reads: the session's own row and what the adapter can do.
   const [current, adapterCanResume] = await Promise.all([
@@ -231,28 +220,26 @@ async function resolveAttachLocality(input: {
 /**
  * Announce a non-native verdict and shape the context the attach seeds from.
  *
- * One place, so every degrade — the evaluator's and this handler's own — is
- * announced and carried the same way.
+ * One place, so every non-native verdict is announced and carried the same way.
  * @param bus - Bus the event is emitted on.
  * @param session - Session the attach is for.
  * @param adapterId - Adapter instance the attach targets.
- * @param verdict - The non-native verdict, or the reason to build a degrade from.
+ * @param verdict - The non-native verdict the evaluator returned.
  * @returns The locality result: no resume target, and the verdict to seed with.
  */
 function degradedAttachLocality(
   bus: IMakaioBus,
   session: IMakaioSession,
   adapterId: string,
-  verdict: NativeLocalityVerdict | NativeLocalityReason,
+  verdict: NativeLocalityVerdict,
 ): AttachLocalityResult {
-  const resolved: NativeLocalityVerdict = typeof verdict === 'string' ? { kind: 'degrade', reason: verdict } : verdict;
   void emitLocalityDegradeEvent(bus, {
     sessionId: session.sessionId,
     intent: 'resume',
-    verdict: resolved,
+    verdict,
     adapterId,
   });
-  return { resumeAdapterSessionId: undefined, attachSessionContext: { nativeLocality: resolved } };
+  return { resumeAdapterSessionId: undefined, attachSessionContext: { nativeLocality: verdict } };
 }
 
 /**
@@ -284,13 +271,12 @@ async function attachAgent(
   const explicitRuntime = extractRuntimeOptions(agentSelection);
   const session = await validateSession(bus, sessionId);
   const resolved = await resolveAttachSelection(bus, sessionId, initialMessage, agentSelection);
-  const adapterCandidate = resolveAdapterCandidate(agentSelection, resolved);
-  const { adapterName, adapterId, callerNamedInstance } = await resolveAdapterTarget(
-    bus,
-    adapterCandidate.adapterName,
-    adapterCandidate.adapterId,
-    machineId,
-  );
+  const { adapterName, instance } = await resolveAttachAdapterTarget(bus, {
+    selection: agentSelection,
+    resolved,
+    sessionId,
+    localMachineId: machineId,
+  });
 
   const { providerConfigId: mergedProviderConfigId, providerContext } = await resolveAttachProviderSelection(
     bus,
@@ -306,11 +292,16 @@ async function attachAgent(
     runtimeOptions,
   );
   const role = determineRole(session, requestedRole);
-  const localityInput = { bus, session, machineId, effectiveCwd, adapterId, adapterName, callerNamedInstance };
-  const locality = await resolveAttachLocality(localityInput);
+  const locality = await resolveAttachLocality({
+    bus,
+    session,
+    effectiveCwd,
+    instance,
+    adapterName,
+  });
   return executeResolvedAttach(bus, turnManager, {
     launch: {
-      adapterId,
+      adapterId: instance.adapterId,
       sessionId,
       role,
       effectiveRuntimeOptions,
@@ -330,7 +321,7 @@ async function attachAgent(
     },
     locality,
     expectedLeadAgentId: session.leadAgentId ?? null,
-    machineId,
+    instance,
     session,
     initialMessage,
     responseSchema,
@@ -412,7 +403,7 @@ async function runAttachAttempt(
         identity: input.identity,
         locality: input.locality,
         expectedLeadAgentId: input.expectedLeadAgentId,
-        machineId: input.machineId,
+        instance: input.instance,
       });
     } catch (error) {
       throw new SessionAgentAttachError('agent_attach', error);
@@ -489,80 +480,6 @@ async function runAttachAttempt(
  */
 function getPersonaId(selection: AgentSelectionBase): string | undefined {
   return selection.kind === 'persona' ? (selection as { personaId?: string }).personaId : undefined;
-}
-
-/**
- * Select explicit adapter fields before falling back to resolved agent metadata.
- * @param selection - Agent selection from the attach request
- * @param resolved - Host-resolved agent metadata, or null for direct adapter selections
- * @returns Candidate adapter name and instance ID for runtime resolution
- */
-function resolveAdapterCandidate(
-  selection: AgentSelectionBase,
-  resolved: ResolvedAgentConfig | null,
-): AdapterCandidate {
-  return {
-    adapterName:
-      selection.kind === 'adapter' && 'adapterName' in selection
-        ? (selection.adapterName as string | undefined)
-        : resolved?.adapterName,
-    adapterId:
-      selection.kind === 'adapter' && 'adapterId' in selection
-        ? (selection.adapterId as string | undefined)
-        : undefined,
-  };
-}
-
-/**
- * Resolves a concrete adapter target from the candidate adapter selection.
- *
- * At least one of `candidateAdapterName` or `candidateAdapterId` must be
- * non-empty; the function throws otherwise.
- *
- * When `candidateAdapterId` is provided, adapter storage is consulted to
- * obtain the canonical `adapterName`. If `candidateAdapterName` is also
- * provided and differs from the stored name, an error is thrown to prevent
- * silent identity mismatches (F7 guard).
- *
- * When only `candidateAdapterName` is provided, resolution falls back to the
- * name-based registry lookup via `resolveAdapterId`.
- * @param bus - Bus instance for adapter resolution
- * @param candidateAdapterName - Explicit or persona-resolved adapter name
- * @param candidateAdapterId - Explicit adapter instance UUID, bypasses name resolution when present
- * @param machineId - Optional machine ID for deterministic adapter resolution
- * @returns Resolved adapterName and adapterId
- */
-async function resolveAdapterTarget(
-  bus: IMakaioBus,
-  candidateAdapterName: string | undefined,
-  candidateAdapterId: string | undefined,
-  machineId: string | undefined,
-): Promise<{ adapterName: string; adapterId: string; callerNamedInstance: boolean }> {
-  const normalizedAdapterName = normalizeSelectionString(candidateAdapterName);
-  const normalizedAdapterId = normalizeSelectionString(candidateAdapterId);
-
-  if (!normalizedAdapterName && !normalizedAdapterId) {
-    throw new Error(
-      '[attach-handler] adapterName or adapterId is required — provide one explicitly or via persona/profile/virtualModel resolution',
-    );
-  }
-
-  if (normalizedAdapterId) {
-    const adapterName = await resolveAdapterNameById(
-      bus,
-      normalizedAdapterId,
-      normalizedAdapterName,
-      '[attach-handler] ',
-    );
-    return { adapterName, adapterId: normalizedAdapterId, callerNamedInstance: true };
-  }
-
-  // At this point normalizedAdapterId is undefined and the early guard ensures
-  // normalizedAdapterName is non-undefined — TS cannot narrow through thrown
-  // guards at the top of the function, so we re-assert here to keep strict mode happy.
-  const resolvedName = normalizedAdapterName as string;
-  const adapterId = await resolveAdapterId(bus, resolvedName, machineId);
-  return { adapterName: resolvedName, adapterId, callerNamedInstance: false };
 }
 
 /**

@@ -19,14 +19,21 @@ import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
 const TEST_PROVIDER_CONTEXT = createNoAuthTestProviderContext('test-config', 'provider-1');
 
-/** Mock connector that can fail on close for specific models. */
-class FailableConnector extends MockConnector {
-  public override async close(): Promise<void> {
-    this.closeCalled = true;
-    if (this.model === 'fail-close') {
-      throw new Error('connector close failed');
-    }
+/**
+ * Build a connector whose close fails for one model.
+ *
+ * Configured through the base double's `closeOutcome` rather than by overriding
+ * `close`, so the failing close still counts itself and still honours a gate — an
+ * override that reimplemented the body would silently opt out of both.
+ * @param config - Connector config the adapter constructed this generation with.
+ * @returns The connector, primed to fail its close when its model says to.
+ */
+function createFailableConnector(config: BaseAgentConnectorConfig<TestBus> & { adapterId: string }): MockConnector {
+  const connector = new MockConnector(config);
+  if (connector.model === 'fail-close') {
+    connector.closeOutcome = new Error('connector close failed');
   }
+  return connector;
 }
 
 describe('AIAdapter - Session close-driven agent eviction', () => {
@@ -122,7 +129,7 @@ describe('AIAdapter - Session close-driven agent eviction', () => {
   it('evicts multiple agents from the same session', async () => {
     const result = createTestAdapter('test-adapter', {
       connectorFactory: async (config: BaseAgentConnectorConfig<TestBus> & { adapterId: string }) =>
-        new FailableConnector(config),
+        createFailableConnector(config),
     });
     adapter = result.adapter;
     await adapter.init();

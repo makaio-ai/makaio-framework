@@ -79,6 +79,12 @@ it through `BusClient` constructor options (`auth` parameter) and environment va
 Payload validation remains server-side. SDKs trust the wire format and do not re-validate schemas
 locally; the server's Zod schemas remain authoritative.
 
+Cross-field rules are a specific case of that: refinements such as "an adapter selection that names
+an instance must name its machine, and vice versa" are not exported by `z.toJSONSchema`, so they
+appear in neither the manifest nor the generated types even though JSON Schema itself could express
+them — the generator is the limit, not the format. Read such pairing rules from the schema
+documentation of the subject you are calling; the server is the only place they are enforced.
+
 `@makaio/sdk` may re-export explicit framework-owned subject namespaces from `@makaio/contracts`
 when that keeps the external TypeScript entrypoint coherent. Those exports are TypeScript framework
 API and are not automatically part of the language-neutral protocol manifest.

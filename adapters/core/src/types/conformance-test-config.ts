@@ -22,6 +22,25 @@ export interface TestModelRef {
 }
 
 /**
+ * Which of an adapter's declared authentication methods a conformance config
+ * should select.
+ *
+ * `config-default` is the live-harness order: a config picks whatever it would
+ * pick for a real conformance run, including an `inferred` method that inherits
+ * a developer's native client login.
+ *
+ * `declared-credentials` forbids that inheritance. It asks the config for a
+ * method whose credentials come from declared sources, so that a caller which
+ * supplies those sources can construct the connector identically on every
+ * machine. Cases in the default test run need this: an `inferred` method is only
+ * materializable where somebody has logged the vendor client in, and a gate that
+ * is green only on a logged-in developer machine is not a gate. Configs whose
+ * adapters declare nothing but credential-backed methods already satisfy it and
+ * may ignore it.
+ */
+export type ConformanceAuthSelection = 'config-default' | 'declared-credentials';
+
+/**
  * Provider definitions supplied by the conformance harness.
  *
  * Adapter packages should declare provider compatibility by stable provider ID
@@ -30,6 +49,11 @@ export interface TestModelRef {
 export interface CreateConformanceTestConfigOptions {
   /** Full provider definitions available to conformance tests. */
   providerDefinitions?: readonly ProviderDefinitionInput[];
+  /**
+   * Auth-method selection policy for this config. Defaults to
+   * `config-default` when the harness expresses no requirement.
+   */
+  authSelection?: ConformanceAuthSelection;
 }
 
 /**

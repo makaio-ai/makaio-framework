@@ -150,7 +150,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       bus,
       deadAgent,
       { cwd: '/new/path', model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN },
-      'current-adapter-id',
+      { adapterId: 'current-adapter-id' },
     );
 
     expect(payloads[0]).toMatchObject({
@@ -174,7 +174,12 @@ describe('SessionOrchestrator recovery helpers', () => {
     });
     const payloads = captureRehydrates();
 
-    await recoverAgent(bus, deadAgent, { model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN }, 'test-adapter');
+    await recoverAgent(
+      bus,
+      deadAgent,
+      { model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN },
+      { adapterId: 'test-adapter' },
+    );
 
     expect(payloads[0]?.model).toBe('new-model');
   });
@@ -187,7 +192,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     });
     const payloads = captureRehydrates();
 
-    await recoverAgent(bus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN }, 'test-adapter');
+    await recoverAgent(bus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN }, { adapterId: 'test-adapter' });
 
     expect(payloads[0]?.model).toBe('existing-model');
   });

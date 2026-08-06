@@ -30,8 +30,7 @@ import { SessionStartError } from './handlers/session-start-error.js';
 import { SessionTurnManager, USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR } from './session-turn-manager.js';
 import type { TurnCompletionResult } from './turn-completion.js';
 import { emitSessionTurnStarted, emitSessionUserMessageSent } from './session-lifecycle-events.js';
-import { normalizeSelectionString } from './selection-utils.js';
-import { resolveInitialAdapterSelection, resolveSelectionAdapterName } from './session-orchestrator-selection.js';
+import { resolveFreshStartTarget, resolveInitialAdapterSelection } from './session-orchestrator-selection.js';
 
 /** Log prefix every refusal this orchestrator's send path raises carries. */
 const SEND_MESSAGE_CALLER = '[session.sendMessage]';
@@ -78,7 +77,6 @@ import {
 import type { Turn } from './entities/turn.js';
 import { registerAttachHandler } from './handlers/attach-handler.js';
 import { routeToAgentsCore } from './handlers/route-to-agents-core.js';
-import { resolveRuntimeProviderContext } from '../provider-context/index.js';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN, recoveryPlanResumeTarget } from './recovery-plan.js';
 
 /** What re-resolving a send's targets after a deferral needs from the send. */
@@ -596,7 +594,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
     const adopted = await this.startLeadAgent(
       session,
       sessionId,
-      context.agentSelection ?? inheritAgentSelection(deferredAgents[0]),
+      context.agentSelection ?? inheritAgentSelection(deferredAgents[0], this.machineId),
       context.message,
       context.sessionContext,
     );
@@ -645,38 +643,27 @@ export class SessionOrchestrator implements ISessionOrchestrator {
       message,
       sessionContext,
     );
-    const adapterName = await resolveSelectionAdapterName(this.bus, selection, sessionId);
-    // When the caller already knows the exact adapter instance (multi-host
-    // topology), bypass the name-based registry lookup entirely.
-    const namedAdapterId = normalizeSelectionString(selection.adapterId);
-    const adapterId = namedAdapterId ?? (await this.adapterRegistry.resolveAvailable(adapterName, this.machineId));
-    // **Named alongside the instance, or not at all.** An instance ID is a
-    // one-way hash of `(machineId, adapterName)`, so the machine an ownership
-    // act names has to be the one its instance was derived from. Resolved here,
-    // that is this runtime's — passed to the resolution *and* to the start, so
-    // the two provably agree. Supplied by the caller, the owning machine is not
-    // recoverable from the ID and this runtime must not invent one: it leaves
-    // the authority to act under its own identity, exactly as before, and a
-    // caller targeting another machine's instance carries the pre-existing
-    // exposure rather than a newly minted mis-keyed claim.
-    const startMachineId = namedAdapterId === undefined ? this.machineId : undefined;
-    const providerContext =
-      selection.providerConfigId !== undefined
-        ? await resolveRuntimeProviderContext(this.bus, { adapterName, providerConfigId: selection.providerConfigId })
-        : undefined;
-    const providerConfigId = selection.providerConfigId ?? providerContext?.providerConfigId;
+    const { adapterName, instance, providerContext, providerConfigId } = await resolveFreshStartTarget(
+      this.bus,
+      selection,
+      { sessionId, machineId: this.machineId, registry: this.adapterRegistry },
+    );
 
     const result = await startLeadAgent(this.bus, {
       sessionId,
-      adapterId,
+      instance,
       adapterName,
       // What this send actually read. A session can reach the fresh-start branch
       // with a designation still standing — the in-flight resolution drops an
       // agent from the target set without touching the lead it may have been.
       expectedLeadAgentId: session.leadAgentId ?? null,
       ...(providerConfigId !== undefined && { providerConfigId }),
-      ...(startMachineId !== undefined && { machineId: startMachineId }),
-      startRequest: buildLeadStartRequest(selection, { adapterId, sessionId, providerContext, sessionContext }),
+      startRequest: buildLeadStartRequest(selection, {
+        adapterId: instance.adapterId,
+        sessionId,
+        providerContext,
+        sessionContext,
+      }),
     });
 
     if (result.outcome === 'started') {

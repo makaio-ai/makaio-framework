@@ -6,7 +6,7 @@ import { planAgentRecovery, recoveryPlanRequiresHistory, type RecoveryPlan } fro
 import { resolveAgentResumeIdentity } from '../session-resume-identity.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
-import { resolveLiveAdapterIdForMachine } from '../utils/resolution.js';
+import { resolveOwnedAdapterInstance } from '../utils/resolution.js';
 import { runOrJoinReservedRehydrate, type ExclusiveRehydrateOutcome } from './in-flight-start-join.js';
 
 /** One agent's outcome, as `session.restartAgents` reports it. */
@@ -193,8 +193,12 @@ async function restartAgent(
   // instance — and one *machine*, since the instance ID is derived from it. A
   // caller that named a machine gets its whole restart in that machine's
   // namespace rather than a key mixing its identity with this runtime's.
-  const adapterId = await resolveLiveAdapterIdForMachine(bus, agent, machineId);
-  if (adapterId === undefined) {
+  const instance = await resolveOwnedAdapterInstance(bus, {
+    adapterName: agent.adapterName,
+    storedAdapterId,
+    ...(machineId !== undefined && { machineId }),
+  });
+  if (instance === undefined) {
     // No instance of this agent's adapter is derivable for the machine this
     // restart acts under, so there is none this restart could both reserve
     // under and dispatch to — the persisted ID cannot stand in, because the
@@ -205,21 +209,18 @@ async function restartAgent(
     return { agentId, adapterId: storedAdapterId, success: true };
   }
 
-  const plan = await planRestart(bus, session, agent, adapterId, machineId);
+  // The plan is decided for the same machine the reservation files under, which
+  // is what the pair guarantees: deciding for one and reserving in another's
+  // namespace was how a plan could be native for a machine whose key nobody
+  // checked.
+  const plan = await planRestart(bus, session, agent, instance.adapterId, instance.machineId);
   if (recoveryPlanRequiresHistory(plan)) return { agentId, adapterId: storedAdapterId, success: true };
 
   const outcome = await runOrJoinReservedRehydrate(bus, {
     agent,
     sessionId: agent.sessionId,
-    adapterId,
+    instance,
     resumeProviderSessionId: plan.resumeAdapterSessionId,
-    // The effective identity, which is the composed one unless the caller named
-    // a machine. Omitting it here would let the plan be decided for one machine
-    // and the key reserved in another's namespace — and a handler asked to act
-    // for a named machine would answer `machine-identity-unavailable` on a host
-    // that has no identity of its own, refusing the very operation the override
-    // exists to make possible.
-    ...(machineId !== undefined && { machineId }),
     ...(agent.cwd !== undefined && { cwd: agent.cwd }),
     ...(agent.model !== undefined && { model: agent.model }),
   });

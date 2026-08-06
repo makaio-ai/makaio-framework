@@ -27,9 +27,19 @@ class FakePiSession {
     await new Promise<void>(() => undefined);
   }
 
-  public async abort(): Promise<void> {}
+  /** Failure this session's abort raises, when a test injects one. */
+  public abortFailure: Error | undefined;
 
-  public dispose(): void {}
+  /** How many times the SDK-side disposal ran, so a stage cannot be skipped silently. */
+  public disposeCalls = 0;
+
+  public async abort(): Promise<void> {
+    if (this.abortFailure !== undefined) throw this.abortFailure;
+  }
+
+  public dispose(): void {
+    this.disposeCalls += 1;
+  }
 
   public async setModel(): Promise<void> {}
 
@@ -119,5 +129,55 @@ describe('PiConnectorSession tool event ownership', () => {
       unsubscribe();
       await session.close();
     }
+  });
+});
+
+// Case 206 — no observed class survives a swallowed failure (I29).
+describe('PiConnectorSession teardown evidence', () => {
+  /**
+   * Build a session over a fake Pi session the test controls.
+   * @param piSession - Fake Pi session to inject.
+   * @returns The initialized connector session.
+   */
+  async function makeSession(piSession: FakePiSession): Promise<PiConnectorSession> {
+    const session = new PiConnectorSession({
+      bus: await PiSdkNamespace.scopedBus(),
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      adapterName: 'pi-sdk',
+      cwd: process.cwd(),
+      model: 'test-model',
+      env: {},
+      requestToolApproval: async () => ({ action: 'allow' }),
+      createPiSession: async () => piSession,
+    });
+    await session.initialize();
+    return session;
+  }
+
+  it('reports `released` when every stage was accounted for', async () => {
+    const piSession = new FakePiSession();
+    const session = await makeSession(piSession);
+
+    const report = await session.close();
+
+    // `released` rests on local evidence: the subscription this session created is
+    // cancelled by this session, so no callback can reach it again.
+    expect(report).toEqual({ evidence: 'released' });
+    expect(piSession.disposeCalls).toBe(1);
+  });
+
+  it('claims no observed class when its own abort failed unaccounted for', async () => {
+    const piSession = new FakePiSession();
+    piSession.abortFailure = new Error('pi abort rejected');
+    const session = await makeSession(piSession);
+
+    const report = await session.close();
+
+    // The disposal behind the abort still ran, which is why the failure is caught
+    // at all; what may not survive it is the observed class.
+    expect(piSession.disposeCalls).toBe(1);
+    expect(report.evidence).toBe('unknown');
+    expect(report.detail).toContain('Pi session abort failed');
   });
 });

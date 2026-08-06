@@ -6,6 +6,7 @@ import {
   formatMessageHistoryAsTranscript,
   markCompletedWithFinalResult,
   processQueueMessages,
+  rejectQueuedHandles,
   serializeTurnContext,
   formatContextBlockAsText,
   formatContextBlocksAsText,
@@ -15,6 +16,7 @@ import { CopilotConnectorTurn } from './turn.js';
 import { type CopilotSessionEvent, type AssistantMessageEvent } from './namespaces/index.js';
 import { normalizedMessageToPrompt } from './utils/normalizedMessageToPrompt.js';
 import { CopilotSessionConfig } from './types';
+import { initializeCopilotSdkSession } from './sdk-session-initialization.js';
 
 /** Default delay (ms) when rate-limit response doesn't specify retry-after. */
 const DEFAULT_RATE_LIMIT_DELAY = 3000;
@@ -75,10 +77,8 @@ function parseRetryDelay(message: string): number | undefined {
  * - Handles immediate mode via SDK's native mode:'immediate'
  * - Processes message queue with merge support
  *
- * Key difference from Claude/Gemini:
- * - SDK Session has its own event system (session.on('*', callback))
- * - Events are callbacks, not async iteration
- * - session.send() with mode: 'immediate' | 'enqueue'
+ * SDK events are callback-based; messages use `session.send()` with immediate
+ * or enqueue mode.
  */
 export class CopilotConnectorSession extends BaseConnectorSession<CopilotSessionConfig> {
   private sdkSession?: CopilotSession;
@@ -93,11 +93,9 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
   private lastSendMode?: 'immediate' | 'enqueue';
   /** Timer handle for stuck-turn inactivity watchdog. */
   private inactivityTimer?: ReturnType<typeof setTimeout>;
-
   public constructor(config: CopilotSessionConfig) {
     super(config);
   }
-
   /**
    * Initialize the SDK Session.
    * Called lazily on first message. The session persists across turns —
@@ -105,12 +103,11 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
    */
   public async initialize(): Promise<void> {
     if (this.sdkSession) return;
-
-    // Start the client if not already started
-    await this.config.client.start();
-
-    // Create session via CopilotClient
-    this.sdkSession = await this.config.client.createSession(this.config.sessionConfig);
+    this.sdkSession = await initializeCopilotSdkSession({
+      client: this.config.client,
+      sessionConfig: this.config.sessionConfig,
+      isClosing: () => this.closing,
+    });
     this.sessionId = this.sdkSession.sessionId;
 
     this.sdkSession.on((event: SessionEvent) => {
@@ -120,7 +117,6 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
       });
     });
   }
-
   /**
    * Process messages from the queue.
    * Creates new turn or handles immediate injection via SDK's mode:'immediate'.
@@ -128,6 +124,10 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
    * @returns Promise that resolves when queue processing is complete
    */
   public async processQueue(queue: UserMessageQueue): Promise<void> {
+    if (this.closing) {
+      rejectQueuedHandles(queue);
+      return;
+    }
     await processQueueMessages(queue, {
       getCurrentTurn: () => this.currentTurn,
       startNewTurn: (handle, mergedContent) => this.startNewTurn(handle, mergedContent),
@@ -138,8 +138,9 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
    * Start a new turn with the given message.
    * @param handle - Message handle to process
    * @param mergedContent - Optional content from superseded/merged messages
+   * @returns `false` when terminal close completed the handle before SDK send
    */
-  private async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
+  private async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
     if (!this.sdkSession) {
       await this.initialize();
     }
@@ -184,10 +185,9 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
     // Store send params for retry
     this.lastSendPrompt = prompt;
     this.lastSendMode = handle.deliveryMode === 'immediate' ? 'immediate' : 'enqueue';
-
     // Start turn state machine
     await this.currentTurn.start();
-
+    if (this.completeHandleIfClosing(handle)) return false;
     // Send message asynchronously
     queueMicrotask(async () => {
       // Guard: Don't send if turn was superseded/paused before microtask ran
@@ -437,37 +437,41 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
   }
 
   /**
-   * Abort the current message and clean up resources.
-   * Uses SDK's session.abort() for proper cancellation.
+   * Abort the current message without ending the reusable session.
+   *
+   * SDK rejection propagates so teardown can report an unaccounted abort;
+   * interrupt callers handle that failure at their own boundary.
+   * @throws When the SDK rejects the abort.
    */
   public async abort(): Promise<void> {
     this.clearInactivityTimer();
     await this.currentTurn?.pause();
 
     // Call SDK abort to cancel in-flight request
-    if (this.sdkSession) {
-      try {
-        await this.sdkSession.abort();
-      } catch {
-        // Ignore abort errors (session may already be idle)
-      }
-    }
+    await this.sdkSession?.abort();
+  }
+
+  /**
+   * Permanently prevent new queue work during connector shutdown.
+   * @param queue - Connector queue whose unstarted handles must be completed
+   */
+  public beginClose(queue?: UserMessageQueue): void {
+    this.closing = true;
+    if (queue) rejectQueuedHandles(queue);
   }
 
   /**
    * Destroy the session and release resources.
-   * Called during connector shutdown.
+   * The handle is dropped even if the SDK rejects, while the rejection propagates
+   * so teardown can report the unaccounted release.
+   * @throws When the SDK rejects the destroy.
    */
   public async destroy(): Promise<void> {
     this.clearInactivityTimer();
-    if (this.sdkSession) {
-      try {
-        await this.sdkSession.destroy();
-      } catch {
-        // Ignore destroy errors
-      }
-      this.sdkSession = undefined;
-    }
+    const sdkSession = this.sdkSession;
+    if (!sdkSession) return;
+    this.sdkSession = undefined;
+    await sdkSession.destroy();
   }
 
   /**

@@ -499,7 +499,10 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
         sessionId,
-        agent: { kind: 'adapter', adapterId: 'machine-1:resolved-adapter-name' },
+        // The machine travels with the instance: an instance ID is a one-way hash
+        // of `(machineId, adapterName)`, so naming one without the other leaves
+        // every ownership act of the start without a namespace.
+        agent: { kind: 'adapter', adapterId: 'machine-1:resolved-adapter-name', machineId: MACHINE_ID },
         message: 'Hello!',
       });
 
@@ -520,7 +523,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       await expect(
         MakaioBus.request(SessionSubjects.sendMessage, {
           sessionId,
-          agent: { kind: 'adapter', adapterName: 'foo', adapterId: 'machine-1:bar' },
+          agent: { kind: 'adapter', adapterName: 'foo', adapterId: 'machine-1:bar', machineId: MACHINE_ID },
           message: 'Hello!',
         }),
       ).rejects.toThrow(/adapterName "foo" does not match adapterId "machine-1:bar"/);

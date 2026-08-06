@@ -2,6 +2,7 @@
 /* eslint max-lines: ["error", { "max": 540 }] */
 import {
   ProceduralAgentConnector,
+  reportRepeatTeardown,
   UserMessageQueue,
   type NormalizedMessageInput,
   type AgentStartResult,
@@ -12,23 +13,27 @@ import {
   type WireSessionSubjects,
 } from '@makaio/ai-adapters-core';
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
-  ModelRegistry,
   SessionManager,
   SettingsManager,
 } from '@mariozechner/pi-coding-agent';
-import type { Model } from '@mariozechner/pi-ai';
-import type { AIReasoningLevel, ProtocolId, ResolvedProviderContext, SystemPrompt } from '@makaio/contracts';
+import type {
+  AIReasoningLevel,
+  ConnectorTeardownResult,
+  ProtocolId,
+  ResolvedProviderContext,
+  SystemPrompt,
+} from '@makaio/contracts';
 import type { PiSdkBus } from './namespaces/index.js';
 import { PiSdkSubjects } from './namespaces/index.js';
 import { PiConnectorSession } from './session.js';
 import type { PiConnectorConfig, PiThinkingLevel } from './types/index.js';
 import { PiSdkAdapterName } from './constants.js';
 import { fetchToolsForPi, type PiToolHandlerContext } from './tool-conversion.js';
-import { registerMakaioProviderModel, REASONING_TO_THINKING } from './provider-registry.js';
+import { REASONING_TO_THINKING } from './provider-registry.js';
+import { buildPiModelRegistry, resolvePiModel, type PiRegistryIdentity } from './model-registry.js';
 import { requirePiProviderContext, requirePiProviderProtocol, resolvePiProviderApiKey } from './provider-auth.js';
 
 /**
@@ -171,7 +176,8 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    * then wires turn lifecycle events. Called once via `ensureSession()`.
    */
   private async initializeSession(): Promise<void> {
-    const { authStorage, modelRegistry } = await this.buildModelRegistry(this.model);
+    const registry = buildPiModelRegistry(this.registryIdentity, this.model);
+    const { authStorage, modelRegistry } = registry;
 
     const sessionManager = SessionManager.inMemory();
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
@@ -197,7 +203,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     // Run independent I/O operations in parallel to reduce initialization latency.
     const [, piModel, customTools] = await Promise.all([
       resourceLoader.reload(),
-      this.resolvePiModel(modelRegistry),
+      resolvePiModel(registry, this.model),
       fetchToolsForPi(this.globalBus, this.adapterId, this.adapterName, this.toolContext, {
         allowedTools: this.config.allowedTools,
         disallowedTools: this.config.disallowedTools,
@@ -273,50 +279,15 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
   }
 
   /**
-   * Build an `AuthStorage`-backed `ModelRegistry` from the selected auth snapshot.
-   *
-   * Registers the Makaio provider so `getAvailable()` includes the requested
-   * model. Shared by `initializeSession()` and `changeModelInPlace()`.
-   * @param modelId - The model ID to register in the registry
-   * @returns Ready-to-use `authStorage`, `modelRegistry`, and resolved `providerName`
+   * The resolved provider identity every model registry here is built for.
+   * @returns Provider context, protocol and key, as the registry builder takes them
    */
-  private async buildModelRegistry(
-    modelId: string,
-  ): Promise<{ authStorage: AuthStorage; modelRegistry: ModelRegistry; providerName: string }> {
-    const authStorage = AuthStorage.create();
-    const providerName = this.providerContext.definitionId;
-    authStorage.setRuntimeApiKey(providerName, this.apiKey);
-
-    const modelRegistry = ModelRegistry.create(authStorage);
-    registerMakaioProviderModel(
-      modelRegistry,
-      providerName,
-      modelId,
-      this.providerProtocol,
-      this.providerContext.endpointOverrides,
-      this.apiKey,
-    );
-
-    return { authStorage, modelRegistry, providerName };
-  }
-
-  /**
-   * Resolve the Pi SDK model object from the model registry.
-   *
-   * Falls back to undefined (Pi SDK default) when no match is found so that
-   * a missing model entry does not block session creation.
-   * @param modelRegistry - Pi's ModelRegistry instance with auth storage
-   * @returns Resolved Pi Model, or undefined if no match found
-   */
-  private async resolvePiModel(modelRegistry: ModelRegistry): Promise<Model<never> | undefined> {
-    const available = await modelRegistry.getAvailable();
-    const providerName = this.providerContext.definitionId;
-    const modelId = this.model;
-    const found = available.find((m) => m.id === modelId && m.provider === providerName);
-    if (!found) {
-      console.warn(`[PiConnector] Model '${providerName}/${modelId}' not found in registry — using Pi SDK default`);
-    }
-    return found as Model<never> | undefined;
+  private get registryIdentity(): PiRegistryIdentity {
+    return {
+      providerContext: this.providerContext,
+      protocol: this.providerProtocol,
+      apiKey: this.apiKey,
+    };
   }
 
   /**
@@ -432,14 +403,23 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
   }
 
   /**
-   * Close the connector and release Pi session resources.
+   * Close the connector, release Pi session resources, and report what was
+   * observed.
    *
-   * Disposes the underlying Pi session, unsubscribing from events and
-   * releasing any held references.
+   * **Class: `released`.** The evidence is genuinely local: the subscription to
+   * Pi's event stream is one this session created and cancels itself, and the turn
+   * subscriptions this connector registered on the bus are cancelled here, so once
+   * both are gone no callback can reach this runtime — which for an in-process
+   * object with no external end is the whole of what closure means. An abort whose
+   * outcome the session could not establish reports `unknown` instead.
+   * @returns What this runtime observed about the end of its Pi session.
    */
-  public override async close(): Promise<void> {
-    if (this.closed) return;
+  public override async close(): Promise<ConnectorTeardownResult> {
+    if (this.closed) return reportRepeatTeardown();
     this.closed = true;
+    // Before anything is awaited: the claim below is that no callback can arrive
+    // afterwards, and a turn subscription left standing is one that can.
+    const turnEventDrain = this.closeTurnEventLifecycle();
     const initPromise = this.sessionInitPromise;
     if (initPromise) {
       try {
@@ -448,9 +428,15 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
         // Initialization failed; there may be no session to clean up.
       }
     }
-    await this.session?.close();
-    this.session = undefined;
-    this.sessionInitPromise = undefined;
+    await turnEventDrain;
+    const session = this.session;
+    try {
+      // No session means nothing was created, so nothing can still be running.
+      return session === undefined ? { evidence: 'released' } : await session.close();
+    } finally {
+      this.session = undefined;
+      this.sessionInitPromise = undefined;
+    }
   }
 
   /**
@@ -477,15 +463,11 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
   public override async changeModelInPlace(newModel: string): Promise<boolean> {
     if (!this.session) return false;
 
-    const { modelRegistry, providerName } = await this.buildModelRegistry(newModel);
-
-    const available = await modelRegistry.getAvailable();
-    const piModel = available.find((m) => m.id === newModel && m.provider === providerName) as Model<never> | undefined;
-
-    if (!piModel) {
-      console.warn(`[PiConnector] changeModelInPlace: model '${providerName}/${newModel}' not found`);
-      return false;
-    }
+    // The same build and the same lookup the session was created with, so a
+    // switched model is registered exactly as the initial one was; the lookup
+    // reports a miss and this path refuses on it rather than falling back.
+    const piModel = await resolvePiModel(buildPiModelRegistry(this.registryIdentity, newModel), newModel);
+    if (!piModel) return false;
 
     await this.session.setModelOnPiSession(piModel);
     return true;

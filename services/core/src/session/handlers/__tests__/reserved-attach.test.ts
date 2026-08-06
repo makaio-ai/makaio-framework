@@ -95,32 +95,32 @@ describe('reserved attach', () => {
     expect(ctx.getStoredAgent(result.agentId)?.status).toBe('idle');
   });
 
-  it('refuses to resume natively onto an instance the caller named', async () => {
+  it('refuses to start at all on an instance the caller named without its machine', async () => {
     // An instance ID is a one-way hash of `(machineId, adapterName)`, so a
     // caller handing one over hands over an instance without its owner. Claiming
     // the provider session under *this* runtime's identity against another
     // machine's instance writes a key that machine's runtime never computes —
-    // it protects nothing while looking like it does. So the attach degrades and
-    // takes no key at all.
+    // it protects nothing while looking like it does.
+    //
+    // This used to be answered with a locality degrade: the attach started fresh
+    // and reserved keylessly. But a fresh start still *settles*, on the provider
+    // session its connector confirms, and that settlement is keyed — so the
+    // mis-key arrived one step later instead of not at all. The protected fact,
+    // that no key of that shape is ever taken, now holds because nothing starts.
     seedSession();
-    // The reverse lookup has to answer, so the instance is one this runtime
-    // knows by name — the case is about the *machine* being unrecoverable from
-    // the ID, not about the ID being unknown.
+    // The reverse lookup would have to answer, so the instance is one this
+    // runtime knows by name — the case is about the *machine* being unrecoverable
+    // from the ID, not about the ID being unknown.
     await ctx.registerKnownAdapter(adapterName, adapterId);
     registerAdapter();
 
-    const result = await attach({ agent: { kind: 'adapter', adapterName, adapterId }, role: 'member' });
+    const failure = await attach({ agent: { kind: 'adapter', adapterName, adapterId }, role: 'member' }).catch(
+      (error: unknown) => error,
+    );
 
-    expect(dispatched).toHaveLength(1);
-    // No native resume target, and the conversation is carried as history
-    // instead — the same shape every other degrade produces.
-    expect(dispatched[0]).not.toHaveProperty('adapterSessionId');
-    expect(dispatched[0].sessionContext?.nativeLocality).toEqual({
-      kind: 'degrade',
-      reason: 'missing-machine-id',
-    });
-    // The reservation was keyless, so the session's key is still free.
-    expect(ctx.getAgentClaims(result.agentId).every((claim) => claim.providerSessionId !== PROVIDER)).toBe(true);
+    expect(String(failure)).toContain(`named adapter instance ${adapterId} without its machine`);
+    expect(dispatched).toEqual([]);
+    // And the session's key is still free for the runtime that really owns it.
     await expect(tryClaim(PROVIDER)).resolves.toMatchObject({ outcome: 'reserved' });
   });
 

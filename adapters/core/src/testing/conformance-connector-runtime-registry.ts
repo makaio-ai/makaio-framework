@@ -6,13 +6,19 @@ import {
   createConnectorRuntime,
   type CreateConnectorRuntimeOptions,
 } from '../agent/connector-runtime.js';
+import type { TeardownReport } from '../connector/teardown-report.js';
 
 /** Managed connector close operation retained by a conformance config. */
 interface ManagedConnectorRuntime<TConnector extends AIAgentConnector> {
   /** Connector returned to the conformance harness. */
   readonly connector: TConnector;
-  /** Idempotent close operation that also releases the client config lease. */
-  readonly close: () => Promise<void>;
+  /**
+   * Idempotent close that also releases the client config lease.
+   *
+   * Reports rather than rejecting, like the runtime close it wraps, so the
+   * connector this replaces keeps the contract's own shape.
+   */
+  readonly close: () => Promise<TeardownReport>;
 }
 
 /**
@@ -40,7 +46,7 @@ export class ConformanceConnectorRuntimeRegistry<
   ): Promise<TConnector> {
     const runtime = await createConnectorRuntime(options);
     const originalClose = runtime.connector.close.bind(runtime.connector);
-    let closePromise: Promise<void> | undefined;
+    let closePromise: Promise<TeardownReport> | undefined;
 
     const managed: ManagedConnectorRuntime<TConnector> = {
       connector: runtime.connector,
@@ -66,13 +72,17 @@ export class ConformanceConnectorRuntimeRegistry<
 
   /**
    * Close every connector still owned by this configuration.
+   *
+   * The managed close reports instead of rejecting, so the failures are read out
+   * of the reports; a suite teardown that swallowed them would hide exactly the
+   * lease leak this registry exists to catch.
    * @throws The single close failure, or an AggregateError containing all failures
    */
   public async closeAll(): Promise<void> {
-    const results = await Promise.allSettled([...this.runtimes].map(({ close }) => close()));
-    const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map(({ reason }) => reason);
+    const reports = await Promise.all([...this.runtimes].map(({ close }) => close()));
+    const failures = reports
+      .map((report) => report.closeError)
+      .filter((error): error is unknown => error !== undefined);
 
     if (failures.length === 1) {
       throw failures[0];

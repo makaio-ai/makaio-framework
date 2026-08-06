@@ -15,6 +15,8 @@
  * - getChildren: parentSessionId FK links are traversed correctly.
  * - getSessionAncestorChain: recursive CTE returns root→leaf chain.
  * - agent upsert: writing the same agentId twice keeps exactly one row.
+ * - identity backfill: the guarded update matches only while both identity
+ *   columns are null and the row still names the expected designation.
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
@@ -268,6 +270,72 @@ describeStorageConformance('handlers-sessions', (config) => {
       const { agent: stored } = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
       expect(stored?.status).toBe('disposed');
       expect(stored?.allowedDirectories).toEqual(['/tmp']);
+    });
+  });
+
+  // ─── 8. identity backfill predicate ─────────────────────────────────────
+
+  describe('identity backfill — the predicate travels inside the update statement', () => {
+    /**
+     * Seed one session row and attempt the guarded identity write against it.
+     * @param seed - Session fields that decide whether the predicate matches.
+     * @param expectIdentityOpenForLead - Designation the write expects to find.
+     * @returns Whether the write landed, and the row it landed on or did not.
+     */
+    async function attemptBackfill(
+      seed: Partial<IMakaioSession>,
+      expectIdentityOpenForLead: string | null,
+    ): Promise<{ success: boolean; stored: IMakaioSession | null }> {
+      const sessionId = `sess-identity-${crypto.randomUUID()}`;
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session: makeSession({ sessionId, ...seed }) });
+      const { success } = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId,
+        identity: { adapterName: 'backfilled-adapter', adapterId: 'backfilled-instance' },
+        expectIdentityOpenForLead,
+      });
+      const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      return { success, stored: session };
+    }
+
+    it('writes the identity while both columns are null and the row names the lead', async () => {
+      const { success, stored } = await attemptBackfill({ leadAgentId: 'lead-1' }, 'lead-1');
+
+      expect(success).toBe(true);
+      expect(stored?.adapterName).toBe('backfilled-adapter');
+      expect(stored?.adapterId).toBe('backfilled-instance');
+    });
+
+    it('refuses on either identity column alone, and on a designation that moved', async () => {
+      // Three arms in one case because they are three conjuncts of one WHERE
+      // clause, and the dialects differ in how they render `IS NULL` against an
+      // indexed text column — which is exactly what a conformance run answers
+      // that a single-dialect backend suite cannot.
+      const halfName = await attemptBackfill({ leadAgentId: 'lead-1', adapterName: 'established' }, 'lead-1');
+      expect(halfName.success).toBe(false);
+      expect(halfName.stored?.adapterName).toBe('established');
+      expect(halfName.stored?.adapterId).toBeUndefined();
+
+      const halfInstance = await attemptBackfill(
+        { leadAgentId: 'lead-1', adapterId: 'established-instance' },
+        'lead-1',
+      );
+      expect(halfInstance.success).toBe(false);
+      expect(halfInstance.stored?.adapterName).toBeUndefined();
+      expect(halfInstance.stored?.adapterId).toBe('established-instance');
+
+      const movedLead = await attemptBackfill({ leadAgentId: 'lead-2' }, 'lead-1');
+      expect(movedLead.success).toBe(false);
+      expect(movedLead.stored?.adapterName).toBeUndefined();
+    });
+
+    it('renders a null expectation as IS NULL rather than as an unsatisfiable equality', async () => {
+      const undesignated = await attemptBackfill({}, null);
+      expect(undesignated.success).toBe(true);
+      expect(undesignated.stored?.adapterName).toBe('backfilled-adapter');
+
+      const designated = await attemptBackfill({ leadAgentId: 'lead-1' }, null);
+      expect(designated.success).toBe(false);
+      expect(designated.stored?.adapterName).toBeUndefined();
     });
   });
 });

@@ -7,6 +7,7 @@ import type {
   SessionContext,
   StartAgentRequest,
 } from '@makaio/contracts';
+import { buildDeterministicAdapterId } from '../../adapter-runtime/identity.js';
 
 /** Identity and context a lead start carries independently of the selection. */
 export interface LeadStartDispatchContext {
@@ -146,25 +147,30 @@ export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSess
  * caller-owned row carries by name (case 83): a field the replacement omits is
  * written by nobody.
  *
- * **The adapter *instance* is deliberately not inherited, and that is a
- * substitution this function is making on purpose.** The row names one
- * (`adapterId`), and carrying it over looks like the more faithful answer — the
- * replacement would land on the very instance the conversation ran on. It is
- * not: an instance ID is a one-way hash of `(machineId, adapterName)`, so the
- * row names an instance without naming the machine that owns it, and the
- * machine is not recoverable from the ID. A start that dispatched to an
- * inherited instance while reserving and settling under this runtime's identity
- * would build an ownership key no other actor computes — the mixed key the start
- * paths were just cleaned of. Half an identity is worse than none.
+ * **The adapter *instance* is inherited only with the machine that owns it, and
+ * the row does not name one.** An instance ID is a one-way hash of
+ * `(machineId, adapterName)`, so the row names an instance without naming its
+ * owner, and a start that dispatched to an inherited instance while reserving and
+ * settling under this runtime's identity would build an ownership key no other
+ * actor computes — the mixed key the start paths were cleaned of. Half an
+ * identity is worse than none.
  *
- * So the replacement resolves `adapterName` on **this** runtime, and a
- * conversation whose agent was pinned to another host's instance continues on
- * the local one. That is a real substitution and it is stated here rather than
- * left to be discovered: the degrade already replaces the *agent*, and replacing
- * the instance with one this runtime can actually own is the same decision
- * carried through. Inheriting the instance honestly needs the machine alongside
- * it, which means a machine on `AgentSelectionBase` — a contract change, not a
- * fix.
+ * What *is* available is the derivation in the forward direction. Given a
+ * candidate machine, the instance it would own is computable, so the caller's own
+ * machine can be **checked** against the row rather than assumed for it — the
+ * same proof the container runtime already requires of an adapter config before
+ * it will act on it. The check is one-directional, which is what makes it safe:
+ * a match proves the row's instance belongs to the caller's machine, and a
+ * mismatch proves nothing beyond "not provably this one" — an adapter may carry
+ * an explicitly configured instance ID that no derivation reproduces. So a
+ * mismatch falls back to the substitution below rather than refusing.
+ *
+ * **When the pair cannot be proven, the replacement resolves `adapterName` on
+ * the caller's machine**, and a conversation whose agent was pinned to another
+ * host's instance continues on the local one. That is a real substitution and it
+ * is stated here rather than left to be discovered: the degrade already replaces
+ * the *agent*, and replacing the instance with one the caller can actually own is
+ * the same decision carried through.
  *
  * **What else cannot be inherited, checked once against the row builder.** The
  * row also carries `clientId`, `harnessId`, `personaId`, `profileId` and
@@ -174,12 +180,17 @@ export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSess
  * here so the next reader does not have to re-derive it: everything the
  * selection *can* express and the row *does* hold is inherited above.
  * @param agent - The agent whose configuration is inherited.
- * @returns A direct adapter selection naming the same adapter, model, cwd, provider config and directory limits.
+ * @param machineId - Machine the replacement start will act under; the instance is
+ *   inherited only when this machine provably owns it.
+ * @returns A direct adapter selection naming the same adapter, model, cwd, provider config and
+ *   directory limits — and the same instance when its machine can be proven.
  */
-export function inheritAgentSelection(agent: MakaioSessionAgent): AdapterSelection {
+export function inheritAgentSelection(agent: MakaioSessionAgent, machineId: string): AdapterSelection {
+  const ownsInstance = buildDeterministicAdapterId(machineId, agent.adapterName) === agent.adapterId;
   return {
     kind: 'adapter',
     adapterName: agent.adapterName,
+    ...(ownsInstance && { adapterId: agent.adapterId, machineId }),
     ...(agent.model !== undefined && { model: agent.model }),
     ...(agent.cwd !== undefined && { cwd: agent.cwd }),
     ...(agent.allowedDirectories !== undefined && { allowedDirectories: agent.allowedDirectories }),

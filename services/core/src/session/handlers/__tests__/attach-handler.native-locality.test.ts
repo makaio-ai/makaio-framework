@@ -304,6 +304,195 @@ describe('registerAttachHandler - native locality', () => {
     });
   });
 
+  /**
+   * The attach face of the one-identity rule (#1140 Wave 4 Step 5, case 213/214).
+   *
+   * A caller-named instance used to be refused native resume outright, whatever
+   * the session said, because an instance ID is a one-way hash of
+   * `(machineId, adapterName)` and the machine could not be recovered from it —
+   * so every ownership act would have run under *this* runtime's identity against
+   * somebody else's instance. With the machine named alongside the instance the
+   * whole attach runs in that machine's namespace, and locality is decided on its
+   * merits instead.
+   *
+   * Either half named without the other is refused before the attach starts
+   * anything — one rule, the same one the send and fresh-start paths raise.
+   */
+  describe('when the caller names an adapter instance', () => {
+    /**
+     * Announce an instance so the reverse lookup can name its adapter type.
+     * @param machineId - Machine the instance belongs to.
+     * @returns The announced instance ID.
+     */
+    async function announceInstance(machineId: string): Promise<string> {
+      const adapterId = buildDeterministicAdapterId(machineId, adapterName);
+      await ctx.registerKnownAdapter(adapterName, adapterId);
+      return adapterId;
+    }
+
+    it('resumes natively on a named instance whose machine owns the session', async () => {
+      const receivedRequests = setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+      const adapterId = await announceInstance(localMachine);
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName, adapterId, machineId: localMachine },
+      });
+
+      // The named instance is both the dispatch target and the identity the
+      // verdict was evaluated under — one pair, and native because the pair is
+      // provable rather than because the handler stopped asking.
+      expect(receivedRequests[0]).toMatchObject({
+        adapterId,
+        mode: 'resume',
+        adapterSessionId: nativeAdapterSessionId,
+      });
+      expect(receivedRequests[0]).not.toHaveProperty('sessionContext');
+    });
+
+    it('reports a named instance on another machine as foreign, not as a missing machine', async () => {
+      const receivedRequests = setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+      const adapterId = await announceInstance(remoteMachine);
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName, adapterId, machineId: remoteMachine },
+      });
+
+      // The verdict is evaluated under the machine the caller named, so the
+      // session's own machine is what it is compared against — a precise answer
+      // where the old short-circuit could only say "no machine".
+      expect(receivedRequests[0]).not.toHaveProperty('mode');
+      expect(receivedRequests[0].sessionContext?.nativeLocality).toEqual({
+        kind: 'foreign',
+        machineId: localMachine,
+      });
+    });
+
+    it('refuses an instance named without its machine, rather than starting on a guessed one', async () => {
+      // The shape the selection schema forbids, dispatched over a bus that does
+      // not validate — the composition in which only the handler answers.
+      //
+      // This half used to be served as a `missing-machine-id` locality degrade,
+      // on the grounds that a fresh-with-history conversation is still worth
+      // offering. It is not worth offering on a guessed machine: the degraded
+      // attach *starts*, and the settlement that follows files the provider
+      // session the connector confirms under this runtime's own machine while the
+      // dispatch addressed the named instance. The claim then sits under a pair
+      // no owner computes, so the runtime that really owns the instance can claim
+      // the same provider session beside it. The protected fact survives as the
+      // refusal: an attach with no provable instance does not start.
+      const receivedRequests = setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+      const adapterId = await announceInstance(remoteMachine);
+
+      const failure = await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName, adapterId },
+      }).catch((error: unknown) => error);
+
+      expect(String(failure)).toContain(`named adapter instance ${adapterId} without its machine`);
+      expect(receivedRequests).toEqual([]);
+      // And no claim was filed on the way out. The reservation precedes the
+      // dispatch, so an absent start does not on its own prove an untouched key —
+      // a foreign generation still taking the session's native key does.
+      await holdProviderSession({
+        sessionId,
+        agentId: 'later-owner',
+        adapterId: buildDeterministicAdapterId(localMachine, adapterName),
+        adapterName,
+        machineId: localMachine,
+        providerSessionId: nativeAdapterSessionId,
+      });
+    });
+
+    it('names the half-identity even when the adapter could not have resumed anyway', async () => {
+      // Why the refusal stays a decision of its own instead of being left to the
+      // locality evaluator: the evaluator checks capability and currency *first*,
+      // so it would report `adapter-unsupported` here and say nothing about the
+      // caller having named half an identity — and it would say it about an attach
+      // that already started. Decided before anything is read, the diagnosis does
+      // not depend on which unrelated check happens to come first.
+      ctx.setDefaultAdapterCapabilities([]);
+      const receivedRequests = setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+      const adapterId = await announceInstance(localMachine);
+
+      const failure = await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName, adapterId },
+      }).catch((error: unknown) => error);
+
+      expect(String(failure)).toContain(`named adapter instance ${adapterId} without its machine`);
+      expect(receivedRequests).toEqual([]);
+    });
+
+    it('refuses a machine named with no instance on it, rather than attaching on this one', async () => {
+      // The pair's *other* half, over the same non-validating bus — and the one
+      // that has no degrade to offer. The branch a selection without an instance
+      // takes derives one for the machine this runtime runs on and reads the named
+      // machine nowhere, so the alternative to refusing is an attach on this host
+      // for a caller that chose another. Same rule as the send path's refusal, and
+      // the reason it needs stating on both is that each path has its own branch
+      // that ignores the field.
+      const receivedRequests = setupLocalityTest(
+        ctx,
+        ctx.createMockSession({
+          machineId: localMachine,
+          adapterSessionId: nativeAdapterSessionId,
+          isImported: true,
+          isOrchestrated: false,
+        }),
+        localMachine,
+      );
+      await announceInstance(remoteMachine);
+
+      const failure = await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName, machineId: remoteMachine },
+      }).catch((error: unknown) => error);
+
+      expect(String(failure)).toContain(`named machine ${remoteMachine} without an adapter instance on it`);
+      // Refused before the start: nothing was dispatched anywhere, least of all to
+      // the local instance the ignored machine used to land on.
+      expect(receivedRequests).toEqual([]);
+    });
+  });
+
   describe('occupancy (agent-already-started)', () => {
     /**
      * Take a generation for a foreign agent on the session's native key.

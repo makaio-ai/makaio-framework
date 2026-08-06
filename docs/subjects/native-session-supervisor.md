@@ -115,7 +115,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `runtimes` | `{ supervisorSessionId: string; clientId: string; pid: number \| null; status: "unknown" \| "running" \| "stopped" \| "exited"; cwd: string; startedAt: number; sessionId?: string \| undefined; adapterSessionId?: string \| undefined; stoppedAt?: number \| undefined; }[]` | yes |
+| `runtimes` | `{ supervisorSessionId: string; clientId: string; pid: number \| null; status: "unknown" \| "exited" \| "running" \| "stopped"; cwd: string; startedAt: number; sessionId?: string \| undefined; adapterSessionId?: string \| undefined; stoppedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="native-session-supervisor.stop"></a>`native-session-supervisor.stop` (rpc)
 

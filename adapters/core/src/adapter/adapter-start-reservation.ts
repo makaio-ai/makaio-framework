@@ -23,7 +23,7 @@ import {
   type AdapterSessionClaimDisposition,
   type SessionOwnershipReserveStartServiceResult,
 } from '@makaio/contracts';
-import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { AgentStorageSubjects, reserveStartFor } from '@makaio/services-core/session';
 import {
   callerOwnsAgentRow,
   writePreDispatchAgentRow,
@@ -83,9 +83,13 @@ export interface StartAcquisitionRegistry {
   releaseAgentIdentityClaim(agentId: string): void;
   /**
    * Close and deregister a live agent without writing its storage status.
+   *
+   * The reported class is unconstrained here: a give-back has nothing to decide on
+   * it, and pinning the shape would couple this structural dependency to the
+   * teardown taxonomy for no consumer.
    * @param agentId - Agent to evict
    */
-  evictSilently(agentId: string): Promise<void>;
+  evictSilently(agentId: string): Promise<unknown>;
 }
 
 /**
@@ -217,11 +221,15 @@ export async function reserveAdapterOwnedStart(
     readonly resumeProviderSessionId: string;
   },
 ): Promise<AdapterStartReservationResult> {
-  const reserved = await bus.request(SessionSubjects.ownership.reserveStart, {
+  const reserved = await reserveStartFor(bus, {
     sessionId: request.sessionId,
     agentId: request.agentId,
-    adapterId: request.adapterId,
     adapterName: request.adapterName,
+    // **No machine, deliberately.** The adapter is not acting *for* a machine
+    // some caller named; it is the runtime that owns the instance, so the
+    // authority decides under the identity it was composed with and there are no
+    // two identities to mix (Wave 3 §5.1, Path C).
+    instance: { adapterId: request.adapterId },
     role: 'member',
     resumeProviderSessionId: request.resumeProviderSessionId,
   });

@@ -359,7 +359,9 @@ Type: Request (RPC)
 | `createdAt` | `number \| undefined` | no |
 | `executionTargetId` | `string \| null \| undefined` | no |
 | `expectedStatus` | `("active" \| "archived" \| "closed" \| "discovered")[] \| undefined` | no |
+| `expectIdentityOpenForLead` | `string \| null \| undefined` | no |
 | `forkPointMessageId` | `string \| undefined` | no |
+| `identity` | `{ adapterName: string; adapterId: string; adapterSessionId?: string \| undefined; } \| undefined` | no |
 | `isOrchestrated` | `boolean \| undefined` | no |
 | `lastActivityAt` | `number \| undefined` | no |
 | `lastClientIdentityObservation` | `{ clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined` | no |

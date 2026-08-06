@@ -277,9 +277,19 @@ describeWithTmux('TmuxBackend — real tmux integration', { timeout: REAL_TMUX_T
 
   // ── kill ───────────────────────────────────────────────────────────────────
 
-  it('kill() terminates the session and triggers onExit', async () => {
+  it('kill() removes the session and reports the exit it could confirm', async () => {
+    // Rewritten against the exit-evidence contract. The previous version passed
+    // because kill() stopped polling and then wrote an exit unconditionally, so
+    // it pinned a claim nothing had observed. What kill() now owes is narrower
+    // and checkable: the session is really gone, and an exit is published only
+    // when a live server confirmed its absence. A second session keeps the
+    // server up so the confirmation has somebody to ask — killing the last
+    // session takes the server with it, and that case is covered as its own arm
+    // in tmux-exit-evidence.test.ts.
+    const keepAlive = `keepalive-${randomBytes(3).toString('hex')}`;
+    execFileSync('tmux', ['-L', serverName, 'new-session', '-d', '-s', keepAlive, '/bin/cat'], { stdio: 'ignore' });
+
     const proc = await backend.spawn('/bin/cat', [], { cols: 80, rows: 24 });
-    spawned.push(proc);
 
     let exitEvent: { exitCode: number; signal?: number } | undefined;
     const disposable = proc.onExit((e) => {
@@ -288,12 +298,9 @@ describeWithTmux('TmuxBackend — real tmux integration', { timeout: REAL_TMUX_T
 
     proc.kill();
 
-    await vi.waitFor(
-      () => {
-        expect(exitEvent).toBeDefined();
-      },
-      { timeout: 10_000 },
-    );
+    expect(exitEvent).toBeDefined();
+    expect(exitEvent!.exitCode).toBe(0);
+    expect(listSessionNames(serverName)).toEqual([keepAlive]);
 
     disposable.dispose();
   });

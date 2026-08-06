@@ -90,20 +90,19 @@ describe('connector runtime lifecycle', () => {
       throw closeError;
     });
 
-    let captured: unknown;
-    try {
-      await closeConnectorRuntime({
-        connector: { close } as never,
-        lease: { clientId: 'codex', leaseId: 'lease-1', release },
-      });
-    } catch (error) {
-      captured = error;
-    }
+    // The runtime close reports instead of rejecting, so the aggregate travels in
+    // the report rather than out of a throw — and the class it caps is `unknown`,
+    // because neither the connector nor the lease could be proven released.
+    const report = await closeConnectorRuntime({
+      connector: { close } as never,
+      lease: { clientId: 'codex', leaseId: 'lease-1', release },
+    });
 
     expect(close).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
-    expect(captured).toBeInstanceOf(AggregateError);
-    expect((captured as AggregateError).errors).toEqual([closeError, releaseError]);
+    expect(report.evidence).toBe('unknown');
+    expect(report.closeError).toBeInstanceOf(AggregateError);
+    expect((report.closeError as AggregateError).errors).toEqual([closeError, releaseError]);
   });
 
   it('initializes the replacement before publishing it and releasing the previous runtime', async () => {
@@ -123,6 +122,7 @@ describe('connector runtime lifecycle', () => {
     const oldConnector = new MockConnector('old-model', '/work/project');
     oldConnector.close = vi.fn(async () => {
       events.push('old-connector-closed');
+      return { evidence: 'released' } as const;
     });
     const oldLeaseRelease = vi.fn(async () => {
       events.push('old-lease-released');

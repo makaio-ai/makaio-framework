@@ -1,6 +1,8 @@
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type MessageHandle, type ProcessingState } from '@makaio/ai-adapters-core';
 import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
+import { createTestBusInstance } from '@makaio/test-utils';
 import { AuthType, type Config, GeminiChat } from '@google/gemini-cli-core';
 import type { GeminiInitConfig, GeminiInitResult } from '../src/utils/init-gemini.js';
 import type { SdkEvent } from '../src/namespaces/index.js';
@@ -93,6 +95,8 @@ import { GeminiConnectorNamespace } from '../src/namespaces/index.js';
 
 class TestGeminiConnector extends GeminiConnector {
   private readonly sdkEvents: SdkEvent[] = [];
+  public activeStateGate?: () => Promise<void>;
+  public lastCreatedHandle?: MessageHandle;
 
   public async initializeForTest(): Promise<void> {
     await this.ensureSession();
@@ -102,6 +106,10 @@ class TestGeminiConnector extends GeminiConnector {
     return this.getSession() !== undefined;
   }
 
+  public getSessionForTest() {
+    return this.getSession();
+  }
+
   public getSdkEventsForTest(): readonly SdkEvent[] {
     return this.sdkEvents;
   }
@@ -109,11 +117,22 @@ class TestGeminiConnector extends GeminiConnector {
   protected override async emitSdkEvent(event: SdkEvent): Promise<void> {
     this.sdkEvents.push(event);
   }
+
+  protected override async processUserMessages(messageHandles: MessageHandle[]): Promise<Set<MessageHandle>> {
+    this.lastCreatedHandle = messageHandles[0];
+    return await super.processUserMessages(messageHandles);
+  }
+
+  protected override async updateProcessingState(state: ProcessingState): Promise<void> {
+    if (state === 'active') await this.activeStateGate?.();
+    await super.updateProcessingState(state);
+  }
 }
 
-async function createConnector(agentId: string): Promise<TestGeminiConnector> {
+async function createConnector(agentId: string, hostBus = createTestBusInstance()): Promise<TestGeminiConnector> {
   return new TestGeminiConnector({
-    bus: await GeminiConnectorNamespace.scopedBus(),
+    bus: await GeminiConnectorNamespace.scopedBus(hostBus.getContext()),
+    globalBus: hostBus,
     adapterId: 'adapter-lifecycle',
     adapterName: 'gemini-sdk',
     agentId,
@@ -192,6 +211,21 @@ describe('GeminiConnector initialization lifecycle', () => {
     expect(connector.hasSessionForTest()).toBe(true);
   });
 
+  it('completes the send handle with an error when initialization fails', async () => {
+    const connector = await createConnector('agent-send-init-error');
+    initHarness.initGemini.mockRejectedValueOnce(new Error('initialization failed'));
+
+    await expect(
+      connector.sendMessage({
+        role: 'user',
+        blocks: [{ type: 'text', content: 'cannot initialize' }],
+        message: 'cannot initialize',
+      }),
+    ).rejects.toThrow('initialization failed');
+
+    await expect(connector.lastCreatedHandle!.waitForCompletion()).resolves.toMatchObject({ outcome: 'error' });
+  });
+
   it('makes close await an already-running initialization and prevents session publication', async () => {
     const connector = await createConnector('agent-terminated-running');
     const initialization = deferred<GeminiInitResult>();
@@ -264,5 +298,59 @@ describe('GeminiConnector initialization lifecycle', () => {
     expect(initHarness.initGemini).not.toHaveBeenCalled();
     expect(connector.getSdkEventsForTest()).toEqual([]);
     expect(connector.hasSessionForTest()).toBe(false);
+  });
+
+  it('terminally unwires an aborted connector before a same-agent successor receives turn events', async () => {
+    const hostBus = createTestBusInstance();
+    const connector = await createConnector('agent-aborted-same-bus', hostBus);
+    await connector.initializeForTest();
+
+    connector.abort();
+
+    const successor = await createConnector('agent-aborted-same-bus', hostBus);
+    await successor.initializeForTest();
+    const bus = await GeminiConnectorNamespace.scopedBus(hostBus.getContext());
+    await bus.emit(GeminiConnectorNamespace.subjects.turn.turn_started, {
+      adapterId: 'adapter-lifecycle',
+      agentId: 'agent-aborted-same-bus',
+      oldState: 'idle',
+      newState: 'turn_started',
+      timestamp: Date.now(),
+    });
+
+    expect(connector.getProcessingState()).toBe('idle');
+    expect(successor.getProcessingState()).toBe('turn_started');
+    await Promise.all([connector.close(), successor.close()]);
+  });
+
+  it('rejects an initialized send when close wins during its active-state transition', async () => {
+    const connector = await createConnector('agent-send-close-race');
+    await connector.initializeForTest();
+    const session = connector.getSessionForTest();
+    expect(session).toBeDefined();
+    const processQueue = vi.spyOn(session!, 'processQueue');
+    let releaseActiveState: (() => void) | undefined;
+    const activeStateEntered = new Promise<void>((resolve) => {
+      connector.activeStateGate = async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseActiveState = release;
+        });
+      };
+    });
+
+    const sending = connector.sendMessage({
+      role: 'user',
+      blocks: [{ type: 'text', content: 'must not reach Gemini' }],
+      message: 'must not reach Gemini',
+    });
+    await activeStateEntered;
+    const closing = connector.close();
+    releaseActiveState?.();
+
+    await expect(sending).rejects.toThrow('Cannot send through a closed connector');
+    await closing;
+    expect(processQueue).not.toHaveBeenCalled();
+    await expect(connector.lastCreatedHandle!.waitForCompletion()).resolves.toMatchObject({ outcome: 'error' });
   });
 });

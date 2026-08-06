@@ -21,8 +21,14 @@ export interface ProviderContextActivationFailureOptions {
   readonly activation: ProviderContextActivationLifecycle;
   /** Failure that prevented startup from completing. */
   readonly primaryError: unknown;
-  /** Runtime cleanup that must finish before native account rollback. */
-  readonly cleanup?: () => Promise<void>;
+  /**
+   * Runtime cleanup that must finish before native account rollback.
+   *
+   * Its resolved value is deliberately unconstrained: a teardown reports what it
+   * observed, and this rollback consumes only whether the cleanup *failed* — the
+   * class belongs to whoever asked for the teardown, not to an activation rollback.
+   */
+  readonly cleanup?: () => Promise<unknown>;
   /** Credential-free operation label used in diagnostics. */
   readonly operation: string;
   /** Existing aggregate message preserved for auth modes without activation. */

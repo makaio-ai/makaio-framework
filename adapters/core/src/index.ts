@@ -24,6 +24,7 @@ export type {
   McpSessionResources,
   McpIntegrationStrategy,
   TestModelRef,
+  ConformanceAuthSelection,
   CreateConformanceTestConfigOptions,
   CreateTestAgentOptions,
   ConformanceTestConfig,
@@ -35,6 +36,8 @@ export { createAdapterNamespace } from './factory/index.js';
 export type { AdapterNamespace, ScopedBusFor, AIAdapterContext } from './factory/index.js';
 
 // Utilities
+/** @public */
+export { withTimeout } from './utils/index.js';
 /** @public */
 export { cleanEnvForAdapter } from './utils/index.js';
 /** @public */
@@ -112,6 +115,35 @@ export { AIAgentConnector } from './agent/index.js';
 /** @public */
 export { AIAgent } from './agent/index.js';
 /** @public */
+export { CONNECTOR_EXIT_OBSERVATION_MS, SWAP_SETTLEMENT_WAIT_MS } from './agent/index.js';
+/** @public */
+export { AgentTeardownArbiter, ConnectorSwapVetoedError } from './agent/index.js';
+/** @public */
+export { aggregateTeardownReports, rethrowTeardownFailure, unknownTeardown } from './agent/index.js';
+/** @public */
+export {
+  capTeardownEvidence,
+  describeTeardownFailure,
+  exitWasObserved,
+  reportBestEffortStages,
+  reportObservedExit,
+  reportRepeatTeardown,
+  runBestEffortStage,
+  stageFailure,
+} from './agent/index.js';
+/** @public */
+export { GenerationRetirementLedger } from './agent/index.js';
+export type { ObservedExitOptions, SupersededGeneration } from './agent/index.js';
+export type {
+  ClosableConnectorRuntime,
+  ConnectorReplacementSettlement,
+  ConnectorSwapAdmission,
+  ConnectorSwapHandover,
+  ConnectorSwapVetoReason,
+  TeardownReport,
+  TeardownSubject,
+} from './agent/index.js';
+/** @public */
 export { AgentRuntimeMutationManager } from './agent/index.js';
 /** @public */
 export { MessageLifecycleTracker } from './agent/index.js';
@@ -122,7 +154,6 @@ export {
   ProceduralAgentConnector,
   AgentEventBridge,
   AgentTurnExecutor,
-  AgentConnectorLifecycleManager,
   AgentLifecycleEmitter,
   AgentPayloadEmitter,
   registerAgentBusHandlers,
@@ -143,7 +174,6 @@ export type {
   AgentEventBridgeConfig,
   AgentTurnExecutorConfig,
   ShouldUseNativeResumeFn,
-  AgentConnectorLifecycleManagerConfig,
   AgentLifecycleEmitterConfig,
   AgentPayloadEmitterConfig,
   AgentBusHandlerRegistrarConfig,
@@ -176,6 +206,8 @@ export {
 export { AIAdapter } from './adapter/index.js';
 export type {
   ActiveAgentHandle,
+  AgentDisposalReport,
+  AgentTeardownOptions,
   AIAdapterConfig,
   AIAdapterConstructorConfig,
   AgentRuntimeCreationResult,

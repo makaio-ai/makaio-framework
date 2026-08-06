@@ -22,6 +22,7 @@ export type {
 export type { McpToolChange, McpSessionResources, McpIntegrationStrategy } from './mcp-integration.js';
 export type {
   TestModelRef,
+  ConformanceAuthSelection,
   CreateConformanceTestConfigOptions,
   CreateTestAgentOptions,
   ConformanceTestConfig,

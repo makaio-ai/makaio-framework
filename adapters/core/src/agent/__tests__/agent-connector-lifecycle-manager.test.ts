@@ -44,7 +44,9 @@ describe('AgentConnectorLifecycleManager', () => {
 
   it('removes replacement wiring when initialization rolls back', async () => {
     const replacementUnsubscribe = vi.fn();
-    const replacementClose = vi.fn(async () => {});
+    // Reports a class, because the connector contract requires one: this double
+    // holds nothing, so `released` is literally true of it.
+    const replacementClose = vi.fn(async () => ({ evidence: 'released' }) as const);
     const previousConnector = {
       cwd: '/workspace',
       model: 'model-a',

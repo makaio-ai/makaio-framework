@@ -84,61 +84,160 @@ const MachineIdFieldSchema = z.string().nullable().optional();
 /** Lifecycle status a stored session row can carry. */
 const SessionStorageStatusSchema = z.enum(['active', 'closed', 'archived', 'discovered']);
 
-const SessionStorageUpdateRequestPayloadSchema = z.object({
-  sessionId: z.string(),
-  status: SessionStorageStatusSchema.optional(),
-  /**
-   * Only apply this update when the stored status is one of these.
-   *
-   * Makes a status transition a compare-and-swap, which is what a caller acting
-   * on an *observation* needs: it read a row, decided the observation implies a
-   * transition, and by the time it writes, a concurrent archive or delete may
-   * have made that decision wrong. Without the guard the write lands anyway and
-   * silently undoes the newer state. Same shape and same reason as
-   * `storage:agent.updateStatus`'s `expectedStatus`.
-   *
-   * Omitted, the update is unconditional — the existing behavior every current
-   * caller relies on. Supplied, a refused write reports `success: false`, which
-   * a caller distinguishes from a missing row by re-reading; storage will not
-   * guess which of the two it was.
-   */
-  expectedStatus: z.array(SessionStorageStatusSchema).nonempty().optional(),
-  parentSessionId: z.string().optional(),
-  contextInheritance: SessionContextInheritanceSchema.optional(),
-  rootSessionId: z.string().optional(),
-  forkPointMessageId: z.string().optional(),
-  branchKind: BranchKindSchema.optional(),
-  isOrchestrated: z.boolean().optional(),
-  clientId: z.string().optional(),
-  clientAccountId: z.string().optional(),
-  lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
-  executionTargetId: z.string().nullable().optional(),
-  approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
-  title: z.string().optional(),
-  targetWorkingDirectory: z.string().optional(),
-  createdAt: z.number().finite().optional(),
-  lastActivityAt: z.number().finite().optional(),
-  /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
-  metadata: SessionRecordMetadataSchema.nullable().optional(),
-  /**
-   * Write-once spawn provenance. Non-null updates fill missing values without
-   * overwriting an existing tool-call assignment; null explicitly clears it.
-   */
-  spawningToolCallId: z.string().nullable().optional(),
-  /** {@inheritDoc MachineIdFieldSchema} */
-  machineId: MachineIdFieldSchema,
-  // The adapter-session currency pair is deliberately absent. Resume currency
-  // has exactly one writer — the `storage:sessionOwnership` seam — because it
-  // is the only surface that states who is allowed to write it: a claim
-  // generation, checked in the same transaction as the write. A partial-update
-  // surface has no notion of authority at all, so a caller holding a
-  // pre-movement view could resurrect an abandoned provider session through
-  // it, past every fence the ownership seam maintains.
-  //
-  // `leadAgentId` is absent for the same reason and one more: the designation
-  // is a compare-and-swap the reserving transaction owns end to end (I11), and
-  // an unconditional partial write is not one.
+/**
+ * Adapter identity of the session's lead conversation — **both or neither**.
+ *
+ * The pair is nested rather than spread across two optional fields, so
+ * "both or neither" holds by construction instead of by refinement. The row
+ * schema accepts `adapterName` and `adapterId` independently, and that is
+ * exactly why the *request* must not: `adapterName` without `adapterId` names a
+ * type with no instance, and the reverse names an instance whose type must then
+ * be inferred. Neither is the invariant, which is about the *pair* describing one
+ * conversation.
+ *
+ * `adapterSessionId` rides along optionally because it is the third member of
+ * the triplet one establishing write publishes, and it is genuinely unknown on
+ * the path that matters most: a reserved start withholds the provider session
+ * from the announcement that establishes the identity, and the settlement that
+ * claims the key publishes it later. Omitting it therefore means "not known
+ * yet", never "clear it" — the origin identity is write-once and no write may
+ * erase it.
+ */
+const SessionAdapterIdentitySchema = z.object({
+  /** Adapter type name the lead conversation runs on. */
+  adapterName: z.string(),
+  /** Adapter *instance* the lead conversation was minted inside. */
+  adapterId: z.string(),
+  /** Provider session the lead conversation started as, when it is known. */
+  adapterSessionId: z.string().optional(),
 });
+
+/**
+ * Require the identity write and its authority to travel together.
+ *
+ * The adapter identity pair is admitted onto a partial-update surface only
+ * because it arrives with the predicate that decides whether it may land.
+ * Without one it would be an unfenced writer of the same columns a re-read plus
+ * a re-check could not protect — the very state this pair was added to remove,
+ * and the reason the currency and the designation stay out of this payload
+ * altogether. The converse is refused too: a predicate about the identity
+ * columns guarding a write that does not touch them describes a condition
+ * nothing in the payload depends on.
+ * @param value - Candidate update payload carrying either, neither or both.
+ * @param ctx - Zod refinement context.
+ */
+function validateIdentityBackfillPairing(
+  value: {
+    identity?: unknown;
+    expectIdentityOpenForLead?: unknown;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.identity !== undefined && value.expectIdentityOpenForLead === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['expectIdentityOpenForLead'],
+      message: 'expectIdentityOpenForLead is required when identity is provided',
+    });
+  }
+
+  if (value.expectIdentityOpenForLead !== undefined && value.identity === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['identity'],
+      message: 'identity is required when expectIdentityOpenForLead is provided',
+    });
+  }
+}
+
+const SessionStorageUpdateRequestPayloadSchema = z
+  .object({
+    sessionId: z.string(),
+    status: SessionStorageStatusSchema.optional(),
+    /**
+     * Only apply this update when the stored status is one of these.
+     *
+     * Makes a status transition a compare-and-swap, which is what a caller acting
+     * on an *observation* needs: it read a row, decided the observation implies a
+     * transition, and by the time it writes, a concurrent archive or delete may
+     * have made that decision wrong. Without the guard the write lands anyway and
+     * silently undoes the newer state. Same shape and same reason as
+     * `storage:agent.updateStatus`'s `expectedStatus`.
+     *
+     * Omitted, the update is unconditional — the existing behavior every current
+     * caller relies on. Supplied, a refused write reports `success: false`, which
+     * a caller distinguishes from a missing row by re-reading; storage will not
+     * guess which of the two it was.
+     */
+    expectedStatus: z.array(SessionStorageStatusSchema).nonempty().optional(),
+    parentSessionId: z.string().optional(),
+    contextInheritance: SessionContextInheritanceSchema.optional(),
+    rootSessionId: z.string().optional(),
+    forkPointMessageId: z.string().optional(),
+    branchKind: BranchKindSchema.optional(),
+    isOrchestrated: z.boolean().optional(),
+    clientId: z.string().optional(),
+    clientAccountId: z.string().optional(),
+    lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
+    executionTargetId: z.string().nullable().optional(),
+    approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
+    title: z.string().optional(),
+    targetWorkingDirectory: z.string().optional(),
+    createdAt: z.number().finite().optional(),
+    lastActivityAt: z.number().finite().optional(),
+    /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
+    metadata: SessionRecordMetadataSchema.nullable().optional(),
+    /**
+     * Write-once spawn provenance. Non-null updates fill missing values without
+     * overwriting an existing tool-call assignment; null explicitly clears it.
+     */
+    spawningToolCallId: z.string().nullable().optional(),
+    /** {@inheritDoc MachineIdFieldSchema} */
+    machineId: MachineIdFieldSchema,
+    /** {@inheritDoc SessionAdapterIdentitySchema} */
+    identity: SessionAdapterIdentitySchema.optional(),
+    /**
+     * Only write the identity pair while the row still has none **and** names this
+     * agent as its lead.
+     *
+     * This is the identity invariant as a predicate instead of a re-read: the check
+     * and the write become one statement, so a peer that establishes the identity
+     * between another writer's read and its write can no longer be overwritten.
+     *
+     * The "identity open" half tests **both** columns — testing only `adapterName`
+     * would let a half-populated row be completed by a second writer, which is the
+     * state the pair exists to prevent. The lead half is the designation, asked of
+     * the stored designation and never of the caller's snapshot.
+     *
+     * `null` expects **no** designation, and it is a real composition rather than a
+     * convenience: a host that cannot designate a lead at all leaves the column
+     * unset, and there the first agent observed establishes the identity. Where a
+     * designation authority exists it has already run by the time this write is
+     * issued, so `null` refuses there — which is the correct answer.
+     *
+     * A refused write reports `success: false`, the same answer a missing row
+     * gives; the caller tells them apart by re-reading. The refusal covers every
+     * field the update carries, so a caller that wants its unconditional fields
+     * written anyway issues them as a second, unguarded update.
+     */
+    expectIdentityOpenForLead: z.string().nullable().optional(),
+    // The adapter-session currency pair is deliberately absent. Resume currency
+    // has exactly one writer — the `storage:sessionOwnership` seam — because it
+    // is the only surface that states who is allowed to write it: a claim
+    // generation, checked in the same transaction as the write. A partial-update
+    // surface has no notion of authority at all, so a caller holding a
+    // pre-movement view could resurrect an abandoned provider session through
+    // it, past every fence the ownership seam maintains.
+    //
+    // `leadAgentId` is absent for the same reason and one more: the designation
+    // is a compare-and-swap the reserving transaction owns end to end (I11), and
+    // an unconditional partial write is not one. The adapter identity pair above is
+    // the one exception, and it is admitted on exactly that condition: it arrives
+    // with its own authority, checked in the same statement as the write.
+  })
+  .superRefine((value, ctx) => {
+    validateIdentityBackfillPairing(value, ctx);
+  });
 // Intentionally no `validateClientAccountObservationRequirement(...)` here:
 // partial updates have no previous-row context, so the authoritative transition
 // invariant is enforced in storage handlers after loading the persisted session.

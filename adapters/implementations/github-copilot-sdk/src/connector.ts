@@ -9,8 +9,10 @@ import {
   MessageHandle,
   type NormalizedMessageInput,
   UserMessageQueue,
+  reportBestEffortStages,
+  runBestEffortStage,
 } from '@makaio/ai-adapters-core';
-import type { AIReasoningLevel } from '@makaio/contracts';
+import type { AIReasoningLevel, ConnectorTeardownResult } from '@makaio/contracts';
 import {
   type CopilotSessionEvent,
   type GitHubCopilotConnectorBus,
@@ -23,8 +25,13 @@ import { GitHubCopilotSdkAdapterName } from './adapter.js';
 import { CopilotConnectorSession } from './session.js';
 import { toSdkReasoningEffort } from './reasoning.js';
 import { buildPermissionHandler } from './permission.js';
-import { performSessionInit } from './session-init.js';
+import {
+  CopilotSessionInitializationCleanupError,
+  type SessionInitializationCleanupFailure,
+  performSessionInit,
+} from './session-init.js';
 import { resolveCopilotGithubToken } from './constructor-auth.js';
+import { COPILOT_SESSION_INITIALIZATION_CANCELLED } from './sdk-session-initialization.js';
 
 // Re-export so external code (including tests) can import toSdkReasoningEffort
 // from the connector module without needing to know about the reasoning module.
@@ -68,6 +75,8 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
 
   /** In-flight session initialization promise for single-flight deduplication. */
   private initSessionPromise?: Promise<void>;
+  /** In-flight terminal close operation for concurrent callers. */
+  private closePromise?: Promise<ConnectorTeardownResult>;
   /** Epoch used to invalidate in-flight session initialization during close(). */
   private sessionLifecycleEpoch = 0;
   /** Provisional client created during session initialization, before publication. */
@@ -259,6 +268,9 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
    * @returns Promise that resolves when the session is ready
    */
   private initializeSession(): Promise<void> {
+    if (this.isTurnEventLifecycleClosed) {
+      return Promise.reject(new Error('GitHub Copilot connector is closed'));
+    }
     if (this.session) return Promise.resolve();
     this.initSessionPromise ??= this.doInitializeSession().finally(() => {
       this.initSessionPromise = undefined;
@@ -316,15 +328,19 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
           },
         },
         () => {
-          if (initEpoch !== this.sessionLifecycleEpoch) {
-            throw new Error('GitHub Copilot session initialization was cancelled');
+          if (this.isTurnEventLifecycleClosed || initEpoch !== this.sessionLifecycleEpoch) {
+            throw new Error(COPILOT_SESSION_INITIALIZATION_CANCELLED);
           }
         },
       );
 
-      if (initEpoch !== this.sessionLifecycleEpoch) {
-        await this.closeUnpublishedSession(result);
-        throw new Error('GitHub Copilot session initialization was cancelled');
+      if (this.isTurnEventLifecycleClosed || initEpoch !== this.sessionLifecycleEpoch) {
+        const cleanupFailures = await this.closeUnpublishedSession(result);
+        const cancellation = new Error(COPILOT_SESSION_INITIALIZATION_CANCELLED);
+        if (cleanupFailures.length > 0) {
+          throw new CopilotSessionInitializationCleanupError(cancellation, cleanupFailures);
+        }
+        throw cancellation;
       }
 
       this.adapterSessionId = result.adapterSessionId;
@@ -344,26 +360,24 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
   /**
    * Close initialized resources that lost the lifecycle race before publication.
    * @param result - Initialized resources that must not be published
+   * @returns Cleanup stages the SDK did not confirm
    */
   private async closeUnpublishedSession(result: {
     client: CopilotClient;
     session: CopilotConnectorSession;
-  }): Promise<void> {
-    try {
-      await result.session.abort();
-    } catch {
-      /* best-effort */
-    }
+  }): Promise<SessionInitializationCleanupFailure[]> {
+    const cleanupFailures: SessionInitializationCleanupFailure[] = [];
     try {
       await result.session.destroy();
-    } catch {
-      /* best-effort */
+    } catch (error) {
+      cleanupFailures.push({ stage: 'unpublished session destroy', error });
     }
     try {
       await result.client.stop();
-    } catch {
-      /* best-effort */
+    } catch (error) {
+      cleanupFailures.push({ stage: 'unpublished client stop', error });
     }
+    return cleanupFailures;
   }
 
   /**
@@ -400,15 +414,32 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
       await this.updateProcessingState('active');
     }
 
+    if (this.isTurnEventLifecycleClosed) {
+      this.session.beginClose(this.sessionQueue);
+      return handle;
+    }
+
     // Process queue - Session will emit turn events
     await this.session.processQueue(this.sessionQueue);
 
     return handle;
   }
 
-  /** Interrupt the current message processing. Delegates to Session for abort handling. */
+  /**
+   * Interrupt the current message processing. Delegates to Session for abort handling.
+   *
+   * The session's abort propagates its SDK rejection so a *teardown* can report an
+   * unaccounted stage. An interrupt has no class to report and no caller who could
+   * act on the difference — an SDK that refuses to abort an already-idle session
+   * has still left nothing to interrupt — so the failure is logged and the
+   * interrupt succeeds.
+   */
   public async interrupt(): Promise<void> {
-    await this.session?.abort();
+    try {
+      await this.session?.abort();
+    } catch (error) {
+      console.warn('[GitHubCopilotConnector] Session abort during interrupt failed:', error);
+    }
   }
 
   /**
@@ -419,40 +450,98 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
     void this.close();
   }
 
-  /** Gracefully close the session and release resources. */
-  public async close(): Promise<void> {
+  /**
+   * Gracefully close the session, release resources, and report what was
+   * observed.
+   *
+   * **Class: `detached`.** The local evidence stops at the handles. Every stage
+   * here is a request *to the SDK* — abort the session, destroy it, stop the
+   * client — and none of them hands this runtime an end it can watch: no process,
+   * no acknowledged connection shutdown, and no subscription of its own to
+   * cancel. What is proven is that this connector let go.
+   *
+   * All four stages were silent before. They still run best-effort, because each
+   * one releases something the ones after it cannot, and stopping at the first
+   * failure would leak the rest. What changes is that a failure is no longer
+   * invisible: a connector that cannot say whether its own session was destroyed
+   * has an unaccounted stage, and `unknown` is the honest report of one — never a
+   * class dressed up as an observation.
+   * @returns What this runtime observed about the end of its Copilot session.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
+    this.closePromise ??= this.doClose();
+    return await this.closePromise;
+  }
+
+  /**
+   * Close this connector's resources after invalidating session initialization.
+   * @returns What this runtime observed about the end of its Copilot session
+   */
+  private async doClose(): Promise<ConnectorTeardownResult> {
+    // A closed connector must stop receiving turn events, whatever class it
+    // reports: a live subscription keeps it reachable from the bus, and a later
+    // generation on this agent id would drive its state machine.
+    const turnEventDrain = this.closeTurnEventLifecycle();
     this.sessionLifecycleEpoch += 1;
-    void this.initSessionPromise?.catch(() => undefined);
+    const initFlight = this.initSessionPromise;
 
     const initializingSession = this.initializingSession;
     this.initializingSession = undefined;
     this.initializingClient = undefined;
+    initializingSession?.beginClose();
+    this.session?.beginClose(this.sessionQueue);
 
     // Abort the in-flight session to interrupt any blocking SDK call.
     // The session-init catch block handles destroy/stop for provisional resources
     // after the epoch assertion fires — do not duplicate that cleanup here.
-    try {
-      await initializingSession?.abort();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await this.session?.abort();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await this.session?.destroy();
-    } catch {
-      /* best-effort */
-    }
+    const unaccounted = [
+      await runBestEffortStage('in-flight session abort', () => initializingSession?.abort()),
+      await this.waitForInitializationCleanup(initFlight),
+    ];
+
+    await turnEventDrain;
+
+    unaccounted.push(
+      await runBestEffortStage('session abort', () => this.session?.abort()),
+      await runBestEffortStage('session destroy', () => this.session?.destroy()),
+    );
     this.session = undefined;
-    try {
-      await this.client?.stop();
-    } catch {
-      /* best-effort */
-    }
+    unaccounted.push(await runBestEffortStage('client stop', () => this.client?.stop()));
     this.client = undefined;
+
+    const unaccountedReport = reportBestEffortStages(
+      'Copilot close',
+      unaccounted.filter((stage): stage is string => stage !== undefined),
+    );
+    if (unaccountedReport !== undefined) return unaccountedReport;
+    return {
+      evidence: 'detached',
+      detail: 'The Copilot session and client were released; the SDK owns what sits behind them.',
+    };
+  }
+
+  /**
+   * Wait for the initialization flight captured when close began.
+   *
+   * Cancellation is the expected result after close invalidates the lifecycle
+   * epoch; every other rejection is teardown evidence that cannot be accounted
+   * for as a successful release.
+   * @param initFlight - Initialization flight captured before provisional state is cleared
+   * @returns An unaccounted teardown stage, if initialization failed unexpectedly
+   */
+  private async waitForInitializationCleanup(initFlight: Promise<void> | undefined): Promise<string | undefined> {
+    try {
+      await initFlight;
+      return undefined;
+    } catch (error) {
+      if (error instanceof CopilotSessionInitializationCleanupError) {
+        return `session initialization cleanup (${error.cleanupFailures.map((failure) => failure.stage).join(', ')})`;
+      }
+      if (error instanceof Error && error.message === COPILOT_SESSION_INITIALIZATION_CANCELLED) {
+        return undefined;
+      }
+      return 'session initialization cleanup';
+    }
   }
 
   /**

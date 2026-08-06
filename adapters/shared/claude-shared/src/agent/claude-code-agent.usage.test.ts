@@ -8,10 +8,11 @@
  * @packageDocumentation
  */
 
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import {
   AIAgentConnector,
   type AgentStartResult,
@@ -76,8 +77,16 @@ class TestClaudeConnector extends AIAgentConnector<TestBus> {
   /** No-op abort. */
   public override abort(): void {}
 
-  /** No-op close. */
-  public override async close(): Promise<void> {}
+  /**
+   * Report a teardown of nothing.
+   *
+   * This double holds no process, connection or subscription, so `released` is
+   * literally true of it: every handle is dropped and no callback can arrive.
+   * @returns The `released` class.
+   */
+  public override async close(): Promise<ConnectorTeardownResult> {
+    return { evidence: 'released' };
+  }
 
   /** @returns The fixed adapter session id for this stub. */
   public override async getAdapterSessionId(): Promise<string> {
@@ -123,6 +132,7 @@ async function makeAgent(): Promise<{ agent: TestClaudeAgent; connector: TestCla
     adapterId: TEST_ADAPTER_ID,
     adapterName: 'claude-shared-test',
     adapterBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,
     sessionId: 'framework-session-1',
     cwd: os.tmpdir(),

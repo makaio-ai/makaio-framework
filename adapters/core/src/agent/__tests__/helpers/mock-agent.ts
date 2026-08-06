@@ -14,9 +14,21 @@ import { MessageHandle } from '../../../message-handle/index.js';
 import type { ProcessingState } from '../../../message-handle/types.js';
 import type { AIModel, AIReasoningLevel, ReasoningLevelMap } from '../../../types/ai-model.js';
 import type { NormalizedMessageInput } from '../../../utils/index.js';
-import type { McpSessionContext, NativeForkDirective, ProviderContext } from '@makaio/contracts';
+import type {
+  ConnectorTeardownResult,
+  McpSessionContext,
+  NativeForkDirective,
+  ProviderContext,
+} from '@makaio/contracts';
 import type { LedgerSessionContext } from '../../session-tool-ledger.js';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { AgentTeardownArbiter } from '../../agent-teardown-arbiter.js';
+import {
+  runConfiguredClose,
+  runConfiguredInitialize,
+  type ConfiguredClose,
+  type ConfiguredInitialize,
+} from './configured-close.js';
 
 /**
  * Register the durable-runtime collaborator used by successful mutation tests.
@@ -36,7 +48,7 @@ export function registerSuccessfulRuntimeMutationPersistence(): () => void {
  * Mock connector that satisfies the AIAgentConnector interface for testing.
  * Tracks model, cwd, processing state, and close calls.
  */
-export class MockConnector implements Partial<AIAgentConnector> {
+export class MockConnector implements Partial<AIAgentConnector>, ConfiguredClose, ConfiguredInitialize {
   public model: string;
   public cwd: string;
   public currentReasoningEffort?: AIReasoningLevel;
@@ -49,14 +61,42 @@ export class MockConnector implements Partial<AIAgentConnector> {
   public startedHandles: MessageHandle[] = [];
   public sentHandles: MessageHandle[] = [];
   private processingState: ProcessingState = 'idle';
-  public closeCalled = false;
+  /** How many times this generation's close ran; see {@link ConfiguredClose}. */
+  public closeCount = 0;
+  /** Class this close reports, or the failure it raises; see {@link ConfiguredClose}. */
+  public closeOutcome: ConnectorTeardownResult | Error = { evidence: 'released' };
+  /** Held until the test releases it; see {@link ConfiguredClose}. */
+  public closeGate: Promise<void> | undefined;
+  /** Held until the test releases it; see {@link ConfiguredInitialize}. */
+  public initializeGate: Promise<void> | undefined;
+  /** Raised by `initialize()`; see {@link ConfiguredInitialize}. */
+  public initializeFailure: Error | undefined;
   public interruptCalled = false;
+
+  /**
+   * Whether this generation's close ran at all.
+   *
+   * Derived from the count rather than tracked beside it, so the two can never
+   * disagree about whether a close happened.
+   * @returns Whether close ran at least once.
+   */
+  public get closeCalled(): boolean {
+    return this.closeCount > 0;
+  }
   private processingStateListeners: Array<(state: ProcessingState) => void> = [];
 
   /** Whether changeModelInPlace returns true (native path) or false (swap path) */
   public changeModelInPlaceResult = false;
   /** Whether changeCwdInPlace returns true (native path) or false (swap path) */
   public changeCwdInPlaceResult = false;
+  /**
+   * Held until released, parking a mutation *inside* its own handler.
+   *
+   * The in-place attempt is the last step before a producer reaches the arbitration
+   * door, and it runs while the agent's mutation barrier is held — which makes it
+   * the one place a test can pause a producer that has already been dispatched.
+   */
+  public changeCwdInPlaceGate: Promise<void> | undefined;
   /** Whether changeReasoningInPlace returns true (native path) or false (swap path) */
   public changeReasoningInPlaceResult = true;
 
@@ -119,10 +159,11 @@ export class MockConnector implements Partial<AIAgentConnector> {
   }
 
   /**
-   * Close the connector (tracks call).
+   * Close the connector, reporting whatever the test configured.
+   * @returns The configured teardown result, or nothing when none was configured
    */
-  public async close(): Promise<void> {
-    this.closeCalled = true;
+  public async close(): Promise<ConnectorTeardownResult> {
+    return runConfiguredClose(this);
   }
 
   /**
@@ -147,6 +188,7 @@ export class MockConnector implements Partial<AIAgentConnector> {
    * @returns The configured result (default: false → swap required)
    */
   public async changeCwdInPlace(_newCwd: string): Promise<boolean> {
+    await this.changeCwdInPlaceGate;
     return this.changeCwdInPlaceResult;
   }
 
@@ -172,7 +214,7 @@ export class MockConnector implements Partial<AIAgentConnector> {
    * Required by AIAgentConnector contract.
    */
   public async initialize(): Promise<void> {
-    // No-op: real connectors set adapterSessionId here
+    return runConfiguredInitialize(this);
   }
 
   /**
@@ -301,6 +343,19 @@ export class TestableAgent extends AIAgent {
   }
 
   /**
+   * Register a bus-handler cleanup from a test.
+   *
+   * The protected registration point, exposed because the asymmetry between a
+   * failing *handler* cleanup and a failing *lease* release is only assertable
+   * from outside — and a test that reached into the private array instead would
+   * stop exercising the registration path the agent actually uses.
+   * @param cleanup - Cleanup the agent must run, and survive, during close
+   */
+  public addBusHandlerCleanupForTest(cleanup: () => void): void {
+    this.addBusHandlerCleanup(cleanup);
+  }
+
+  /**
    * Required abstract implementation - assigns currentConnector for test access.
    * @param connector - The connector to wire events for
    */
@@ -360,6 +415,14 @@ export interface CreateTestableAgentOptions {
   /** Resume adapter session ID for native-resume scenarios. */
   resumeAdapterSessionId?: string;
   /**
+   * Arbiter this agent's connector replacements are admitted through.
+   *
+   * A suite that drives a teardown *and* a replacement for one agent must give
+   * both sides the same arbiter — with a private one per agent the two acts never
+   * see each other and every arbitration assertion goes vacuous.
+   */
+  teardownArbiter?: AgentTeardownArbiter;
+  /**
    * Observe every config-factory input the agent builds.
    *
    * The only way to assert what a connector *generation* was constructed with —
@@ -388,6 +451,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     mcpSessionContext,
     nativeFork,
     resumeAdapterSessionId,
+    teardownArbiter = new AgentTeardownArbiter(),
     onConfigFactoryInput,
   } = options;
   const { bus: mockBus } = createMockScopedBus();
@@ -402,6 +466,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     nativeTools: [],
     sessionId,
     adapterBus: mockBus,
+    teardownArbiter,
     globalBus: MakaioBus,
     model: initialModel,
     cwd: initialCwd,

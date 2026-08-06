@@ -4,7 +4,7 @@ import type { HandlerForSubjectDefinition, ScopedSubjectDefinition } from '@maka
 import type { MessageHandle, MessageResult } from '../message-handle/index.js';
 import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
 import type { AgentStartResult, ConnectorSendMessageOptions, ConnectorStartOptions } from '../agent/types.js';
-import type { QueueableTurn } from '../session/process-queue.js';
+import { rejectQueuedHandles, SESSION_CLOSED_QUEUE_ERROR, type QueueableTurn } from '../session/process-queue.js';
 import type { UserMessageQueue } from '../session/user-message-queue.js';
 
 /**
@@ -92,6 +92,25 @@ export abstract class ProceduralAgentConnector<
 > extends AIAgentConnector<TBus, TConfig> {
   /** Whether turn event wiring has been setup. */
   private turnEventsWired = false;
+  /**
+   * Terminal lifecycle latch. Once a connector starts closing, initialization
+   * that resumes later must not install fresh turn handlers.
+   */
+  private turnEventLifecycleClosed = false;
+  /**
+   * Unsubscribe functions for the turn subscriptions {@link wireSessionEvents}
+   * installed.
+   *
+   * Held here, at the wiring, because that is the only place that knows what was
+   * subscribed. A subclass owns *when* its connector ends; it cannot own the
+   * undoing of subscriptions it never registered — and every connector on this base
+   * needs them undone, whatever class its teardown reports: a subscription outliving
+   * its connector keeps that connector reachable from the bus, so a later generation
+   * on the same agent id delivers turn events into an object that already closed.
+   */
+  private turnEventCleanups: Array<() => void> = [];
+  /** Turn handlers that already started and must settle before provider teardown. */
+  private activeTurnEventHandlers = new Set<Promise<void>>();
 
   /**
    * Get the adapter's session instance (may be undefined if not yet initialized).
@@ -136,9 +155,13 @@ export abstract class ProceduralAgentConnector<
    *
    * Default turn_finished behavior: transition through processing_finished to idle,
    * or drain the queue if messages are pending. Override via `getWireSessionConfig()`.
+   *
+   * Every subscription's unsubscribe function is retained so
+   * {@link unwireSessionEvents} can undo the whole set; a connector that closes
+   * without undoing them stays reachable from the bus for the rest of the process.
    */
   protected wireSessionEvents(): void {
-    if (this.turnEventsWired) return;
+    if (this.turnEventLifecycleClosed || this.turnEventsWired) return;
     this.turnEventsWired = true;
 
     const subjects = this.getTurnSubjects();
@@ -150,22 +173,37 @@ export abstract class ProceduralAgentConnector<
     // a safe cast — all turn subjects use TurnStateChangedSchema (event, not request).
     type TurnHandler = HandlerForSubjectDefinition<(typeof subjects)['turn_started']>;
 
-    this.on(subjects.turn_started, (async () => {
+    /**
+     * Subscribe one turn subject and keep the way back out.
+     *
+     * One place that registers, so one place that remembers: a call site that
+     * subscribed without retaining its cleanup would leak silently, and the cast
+     * the type helper above explains is needed once rather than per subject.
+     * @param subject - Turn subject to subscribe to
+     * @param handler - What to run when it fires
+     */
+    const subscribe = (subject: ScopedSubjectDefinition<TBus['namespace']>, handler: () => Promise<void>): void => {
+      this.turnEventCleanups.push(this.on(subject, (() => this.dispatchTurnEvent(handler)) as TurnHandler));
+    };
+
+    subscribe(subjects.turn_started, async () => {
       try {
         await wireConfig?.onTurnStarted?.();
       } catch (error) {
         // Hook failure must not block the state machine — log and continue
         console.error('[ProceduralAgentConnector] onTurnStarted hook failed:', error);
       }
+      if (this.turnEventLifecycleClosed) return;
       await this.updateProcessingState('turn_started');
-    }) as TurnHandler);
+    });
 
-    this.on(subjects.step_started, (async () => {
+    subscribe(subjects.step_started, async () => {
       await this.updateProcessingState('step_started');
-    }) as TurnHandler);
+    });
 
-    this.on(subjects.step_finished, (async () => {
+    subscribe(subjects.step_finished, async () => {
       await this.updateProcessingState('step_finished');
+      if (this.turnEventLifecycleClosed) return;
 
       // Process queue on step_finished for immediate messages
       const session = this.getSession();
@@ -173,13 +211,15 @@ export abstract class ProceduralAgentConnector<
       if (session && !queue.isEmpty()) {
         await session.processQueue(queue);
       }
-    }) as TurnHandler);
+    });
 
-    this.on(subjects.turn_finished, (async () => {
+    subscribe(subjects.turn_finished, async () => {
       await this.updateProcessingState('turn_finished');
 
       const drainQueue = async () => {
+        if (this.turnEventLifecycleClosed) return;
         await this.updateProcessingState('processing_finished');
+        if (this.turnEventLifecycleClosed) return;
         const session = this.getSession();
         const queue = this.getSessionQueue();
         if (session && !queue.isEmpty()) {
@@ -194,7 +234,70 @@ export abstract class ProceduralAgentConnector<
       } else {
         await drainQueue();
       }
-    }) as TurnHandler);
+    });
+  }
+
+  /**
+   * Run a turn handler only while this connector owns its lifecycle.
+   *
+   * The bus snapshots handlers before it begins invoking them, so unsubscribe
+   * alone cannot stop a snapshotted callback. This second terminal check rejects
+   * that callback when it eventually starts, while the active set lets close
+   * wait for callbacks that started before the terminal latch.
+   * @param handler - Turn callback registered with the scoped bus
+   */
+  private async dispatchTurnEvent(handler: () => Promise<void>): Promise<void> {
+    if (this.turnEventLifecycleClosed) return;
+
+    const activeHandler = handler();
+    this.activeTurnEventHandlers.add(activeHandler);
+    try {
+      await activeHandler;
+    } finally {
+      this.activeTurnEventHandlers.delete(activeHandler);
+    }
+  }
+
+  /**
+   * Cancel every turn subscription {@link wireSessionEvents} installed.
+   *
+   * **What makes a connector's end total.** §2.2's `released` is the claim that no
+   * callback can arrive afterwards, and a turn subscription is precisely a way for
+   * one to: the bus keeps the closed connector alive, and a later connector
+   * generation on the same agent id emits into the filtered bus both of them are
+   * subscribed to, so the dead one advances its own state machine and touches a
+   * session it already dropped. That is the same defect for a connector reporting
+   * `detached` — it merely has a weaker claim to overstate.
+   *
+   * Idempotent. The separate terminal lifecycle latch decides whether wiring may
+   * be installed again; close paths set that latch before calling this cleanup.
+   */
+  protected unwireSessionEvents(): void {
+    for (const cleanup of this.turnEventCleanups) {
+      cleanup();
+    }
+    this.turnEventCleanups = [];
+    this.turnEventsWired = false;
+  }
+
+  /**
+   * Permanently prevent turn wiring and remove any handlers already installed.
+   *
+   * Close implementations call this before awaiting provider teardown so an
+   * initialization that was already in flight cannot re-wire afterwards.
+   */
+  protected async closeTurnEventLifecycle(): Promise<void> {
+    this.turnEventLifecycleClosed = true;
+    this.unwireSessionEvents();
+    await Promise.allSettled(this.activeTurnEventHandlers);
+  }
+
+  /**
+   * Whether connector initialization lost the terminal close race.
+   * @returns `true` once close permanently claimed the wiring lifecycle
+   */
+  protected get isTurnEventLifecycleClosed(): boolean {
+    return this.turnEventLifecycleClosed;
   }
 
   /**
@@ -212,7 +315,23 @@ export abstract class ProceduralAgentConnector<
   protected async processUserMessages(messageHandles: MessageHandle[]): Promise<Set<MessageHandle>> {
     const [first] = messageHandles;
 
-    const session = await this.ensureSession();
+    let session: ProceduralConnectorSession;
+    try {
+      session = await this.ensureSession();
+    } catch (error) {
+      const sessionError = error instanceof Error ? error : new Error(String(error));
+      if (!first.isProcessed) {
+        first.markCompleted({ outcome: 'error', error: sessionError });
+      }
+      throw sessionError;
+    }
+    if (this.turnEventLifecycleClosed) {
+      first.markCompleted({
+        outcome: 'error',
+        error: new Error(SESSION_CLOSED_QUEUE_ERROR),
+      });
+      throw new Error(`[${this.config.adapterName}] Cannot send through a closed connector`);
+    }
     const queue = this.getSessionQueue();
 
     queue.enqueue(first);
@@ -220,6 +339,10 @@ export abstract class ProceduralAgentConnector<
 
     if (this.getProcessingState() === 'idle' || this.getProcessingState() === 'paused') {
       await this.updateProcessingState('active');
+    }
+    if (this.turnEventLifecycleClosed) {
+      rejectQueuedHandles(queue);
+      throw new Error(`[${this.config.adapterName}] Cannot send through a closed connector`);
     }
 
     await session.processQueue(queue);

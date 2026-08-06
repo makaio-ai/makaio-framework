@@ -45,7 +45,9 @@ export const createTestConfig = async (
     providerDefinitions: options?.providerDefinitions,
     reasoningEffort: 'low',
   });
-  const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider);
+  const testProviderContext = createClaudeConformanceProviderContext(testPreset.provider, {
+    ...(options?.authSelection !== undefined && { authSelection: options.authSelection }),
+  });
   const sessionConfigFixture = await acquireClaudeConformanceSessionConfigFixture();
   const definitionProviders = resolveConformanceDefinitionProviders({
     adapterName: ClaudeCodeCliAdapterName,

@@ -22,6 +22,8 @@ import {
   type RehydrateAgentRefusal,
   type RehydrateRuntime,
 } from './ai-adapter-rehydrate-preflight.js';
+import { ConnectorSwapVetoedError } from '../agent/connector-swap-vetoed-error.js';
+import { rethrowTeardownFailure } from '../connector/teardown-report.js';
 import {
   providerKeyIsPublishable,
   providerKeyPublicationFor,
@@ -168,11 +170,41 @@ export class AgentRehydrationManager<
    *
    * Resolves MCP context, provider credentials, system prompt, and usage
    * baseline before creating a new agent instance and registering it.
+   * **The identity claim covers the whole pre-registration region.** A cold
+   * rehydrate has neither a registry entry nor an identity claim until
+   * `registry.set` lands, so without one "nothing here" was answerable for an agent
+   * this call is about to resurrect — and a teardown answering it would report
+   * "provably nothing speaking" about a connector arriving one await later. The
+   * release is a single `try`/`finally` around the region rather than a catch per
+   * exit: round after round found the enumerated list already incomplete, and a
+   * leaked identity claim makes the agent permanently un-stoppable, which is worse
+   * than the window the claim closes. Success needs no special case — `registry.set`
+   * settles the claim, and the `finally`'s release then deletes nothing.
    * @param agentId - Agent identifier to rehydrate
    * @param runtime - Runtime overrides and ownership mode from the rehydrate RPC payload
    * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
    */
   private async rehydrateFromStorage(
+    agentId: string,
+    runtime: RehydrateRuntime,
+  ): Promise<RehydrateAgentResponsePayload> {
+    if (!this.registry.claimAgentIdentity(agentId)) {
+      return notDispatched(`Agent ${agentId} is already claimed by another in-flight start or rehydrate`);
+    }
+    try {
+      return await this.rehydrateClaimedFromStorage(agentId, runtime);
+    } finally {
+      this.registry.releaseAgentIdentityClaim(agentId);
+    }
+  }
+
+  /**
+   * Resurrect an agent from storage while this call holds its identity claim.
+   * @param agentId - Agent identifier to rehydrate
+   * @param runtime - Runtime overrides and ownership mode from the rehydrate RPC payload
+   * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
+   */
+  private async rehydrateClaimedFromStorage(
     agentId: string,
     runtime: RehydrateRuntime,
   ): Promise<RehydrateAgentResponsePayload> {
@@ -373,7 +405,7 @@ export class AgentRehydrationManager<
           activation,
           primaryError: error,
           ...(failedAgent !== undefined && {
-            cleanup: () => failedAgent.close({ emitSessionClosed: false }),
+            cleanup: () => rethrowTeardownFailure(failedAgent.close({ emitSessionClosed: false })),
           }),
           operation: `Cold rehydrate for agent ${agentId}`,
           cleanupFailureMessage: `Cold rehydrate and connector cleanup both failed for agent ${agentId}.`,
@@ -465,6 +497,25 @@ export class AgentRehydrationManager<
       if (refreshedAdapterSessionId) {
         entry.adapterSessionId = refreshedAdapterSessionId;
       }
+    } catch (error) {
+      // **Only this type, and only here.** A refusal at the arbitration door means
+      // no replacement runtime was built, no provider thread was started and no
+      // account transition was committed, so the honest answer is the modelled
+      // `not-dispatched` a reserving caller can act on. The conversion has to
+      // happen inside this `try`: the handler's outer catch rewraps every failure
+      // into a new error and would destroy the type identity before anyone could
+      // read it.
+      //
+      // Every other failure keeps propagating and stays uncertain by construction —
+      // including a compound one. When a producer's own rollback also fails the veto
+      // is known but whether a replacement connector closed is not, and an aggregate
+      // is never a safe veto.
+      if (error instanceof ConnectorSwapVetoedError) {
+        return notDispatched(
+          `Agent ${agentId} is being torn down on this adapter instance and cannot be rehydrated in place`,
+        );
+      }
+      throw error;
     } finally {
       // Released after the entry update so occupancy of the resumed session
       // stays continuous on success; on failure the claim simply frees up.

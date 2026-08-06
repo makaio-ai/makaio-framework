@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
 import { TmuxConnectorSession } from '../connector-session.js';
 import { TmuxSession } from '../session.js';
-import { ClaudeCodeTmuxConnectorNamespace } from '../namespace/index.js';
+import { ClaudeCodeTmuxConnectorNamespace, ClaudeCodeTmuxConnectorSubjects } from '../namespace/index.js';
 import type { ITmuxPtyProcess } from '../types.js';
 
 function makeHandle(message = 'hello'): MessageHandle {
@@ -101,6 +101,50 @@ describe('TmuxConnectorSession', () => {
 
     await expect(session.processQueue(queue)).rejects.toThrow('start callback failed');
 
+    expect(session.getCurrentTurn()).toBeUndefined();
+  });
+
+  it('finalises a turn once when an exit arrives while a teardown is already finalising it', async () => {
+    // The completion guard sits before the first await, so two finalisers can
+    // both pass it and the count — not the guard — is what proves the fix. This
+    // is a reachable race, not a constructed one: teardown finalises the active
+    // turn, and the retained process-exit listener finalises the same turn
+    // through the same method when the process dies during that teardown.
+    let releaseFirstFinalisation: () => void = () => {};
+    const firstFinalisationGate = new Promise<void>((resolve) => {
+      releaseFirstFinalisation = resolve;
+    });
+    const onTurnComplete = vi.fn(async () => {
+      await firstFinalisationGate;
+    });
+
+    // The turn's own terminal transition is the count that matters. The message
+    // handle refuses a second completion on its own, so counting handle
+    // callbacks would pass without any fix at all; the turn transition does not
+    // refuse, and emits `turn.turn_finished` every time it is driven.
+    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus();
+    const turnFinishedEvents: unknown[] = [];
+    await bus.on(ClaudeCodeTmuxConnectorSubjects.turn.turn_finished, (payload) => {
+      turnFinishedEvents.push(payload);
+    });
+
+    const session = await makeSession({ bus, onTurnComplete });
+    const queue = new UserMessageQueue();
+    queue.enqueue(makeHandle());
+    await session.processQueue(queue);
+
+    const fromTeardown = session.handleTurnError(new Error('session terminated'));
+    // Let the first finalisation reach the await it blocks on, so the second
+    // caller provably arrives mid-finalisation rather than after it.
+    await vi.waitFor(() => {
+      expect(onTurnComplete).toHaveBeenCalled();
+    });
+    const fromProcessExit = session.handleTurnError(new Error('process exited before turn completion'));
+
+    releaseFirstFinalisation();
+    await Promise.all([fromTeardown, fromProcessExit]);
+
+    expect(turnFinishedEvents).toHaveLength(1);
     expect(session.getCurrentTurn()).toBeUndefined();
   });
 

@@ -2,21 +2,22 @@
 import { MakaioBus, type ScopedBus, type IMakaioBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AdapterNamespace } from '../factory/index.js';
-import { AIAgentConnector, SessionToolLedger, type BaseAgentConnectorConfig } from '../agent/index.js';
+import { AIAgentConnector, type BaseAgentConnectorConfig } from '../agent/index.js';
 import type { AIAgentConfig } from '../agent/types.js';
 import type { ConfigFactoryInput } from './ai-adapter-config.js';
 import type { AdapterProviderDefinition, PlatformDefaults } from '../types/index.js';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { ActiveAgentHandle, AgentCreationOptions, AIAdapterConstructorConfig } from './types.js';
-import { ActiveAgentRegistry, toAgentSummary } from './agent-registry.js';
+import {
+  ActiveAgentRegistry,
+  toAgentSummary,
+  type AgentDisposalReport,
+  type AgentTeardownOptions,
+} from './agent-registry.js';
+import { AgentTeardownArbiter } from '../agent/agent-teardown-arbiter.js';
 import { AgentRehydrationManager } from './ai-adapter-rehydration.js';
 import { handleInfer } from './ai-adapter-infer.js';
-import {
-  buildNativeForkDirective,
-  buildOptionalAgentConfig,
-  resolveExecutionModels,
-} from './ai-adapter-create-utils.js';
-import { providerKeyIsPublishable } from './adapter-provider-key-publication.js';
+import { buildAgentConfig } from './ai-adapter-agent-config.js';
 import { createStartAgentHandler } from './ai-adapter-start-handler.js';
 import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
 
@@ -60,6 +61,14 @@ export abstract class AIAdapter<
   protected readonly globalBus: IMakaioBus;
   /** Scoped bus for adapter-specific communication. Created in init(). */
   protected adapterBus: TBus;
+  /**
+   * The one place a teardown and a connector replacement meet on this instance.
+   *
+   * Constructed here because one adapter instance is exactly its scope, and
+   * declared before the registry so it can be handed to it as a required
+   * dependency — see {@link AgentTeardownArbiter}.
+   */
+  private readonly teardownArbiter = new AgentTeardownArbiter();
   /** Registry of active agents with session info and usage totals. */
   private readonly registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   /** Cleanup functions for bus subscriptions. */
@@ -105,7 +114,11 @@ export abstract class AIAdapter<
     this.platformDefaults = config.platformDefaults;
     this.definitionProviders = config.definitionProviders ?? [];
     this.prepareAuthRuntime = config.prepareAuthRuntime as AdapterAuthRuntimePreparer<TBus> | undefined;
-    this.registry = new ActiveAgentRegistry({ globalBus: this.globalBus, adapterName: this.name });
+    this.registry = new ActiveAgentRegistry({
+      globalBus: this.globalBus,
+      adapterName: this.name,
+      arbiter: this.teardownArbiter,
+    });
     this.rehydrationManager = new AgentRehydrationManager({
       globalBus: this.globalBus,
       registry: this.registry,
@@ -158,8 +171,15 @@ export abstract class AIAdapter<
         const entry = this.registry.get(ctx.payload.agentId);
         ctx.setResult({ agent: entry ? toAgentSummary(entry) : null });
       }),
-      filteredBus.on(AdapterSubjects.stopAgent, (ctx) => {
-        ctx.setResult({ success: this.disposeAgent(ctx.payload.agentId) });
+      filteredBus.on(AdapterSubjects.stopAgent, async (ctx) => {
+        // The deadline travels in: a teardown that waits for a connector
+        // replacement ends its wait inside the deadline of whoever awaits it.
+        const report = await this.disposeAgent(ctx.payload.agentId, { deadline: ctx.deadline });
+        ctx.setResult({
+          success: report.found,
+          evidence: report.evidence,
+          ...(report.detail !== undefined && { detail: report.detail }),
+        });
       }),
       filteredBus.on(AdapterSubjects.getCapabilities, (ctx) => {
         ctx.setResult({ capabilities: this.capabilities, nativeTools: this.nativeTools });
@@ -291,67 +311,27 @@ export abstract class AIAdapter<
     if (!this.adapterBus) {
       throw new Error('Adapter bus not initialized. Did you forget to call init()?');
     }
-
-    // Extract runtime options only — avoid leaking mode/initialMessage/sourceSessionId.
-    const { model, cwd, env, allowedTools, disallowedTools, reasoningEffort, mcpSessionContext, harnessId, ephemeral } =
-      request;
-    const clientId = request.clientId ?? this.clientId; // payload carries it; adapter is authoritative fallback
-    const resumeAdapterSessionId =
-      request.resumeAdapterSessionId ?? (request.mode === 'resume' ? request.adapterSessionId : undefined);
-    const nativeFork = buildNativeForkDirective(request);
-    // Provider-scoped models only — cross-provider flattening is ambiguous for metadata.
-    const availableModels = resolveExecutionModels(
-      this.definitionProviders,
-      model,
-      request.providerContext?.state === 'resolved' ? request.providerContext.definitionId : undefined,
-    );
-    const toolLedger = mcpSessionContext !== undefined ? new SessionToolLedger() : undefined;
-
-    const config: AIAgentConfig<TBus, TConnector> = {
-      agentId,
-      adapterId: this.adapterId,
-      adapterName: this.name,
-      globalBus: this.globalBus,
-      adapterBus: this.adapterBus,
-      capabilities: this.capabilities,
-      nativeTools: this.nativeTools,
-      availableModels,
-      definitionProviders: this.definitionProviders,
-      configFactory: this.configFactory,
-      connectorFactory: this.connectorFactory,
-      ...(this.prepareAuthRuntime !== undefined && { prepareAuthRuntime: this.prepareAuthRuntime }),
-      sessionId: sessionId,
-      ...(request.providerContext !== undefined && { providerContext: request.providerContext }),
-      // The attempt's publication gate, read live: the routes inside this agent
-      // ask the same question its start's own routes ask, and the answer changes
-      // once — when the start hands the key over.
-      ...(request.providerKeyPublication !== undefined && {
-        isProviderKeyPublishable: (): boolean => providerKeyIsPublishable(request.providerKeyPublication),
+    return this.agentFactory(
+      buildAgentConfig<TBus, TConnector>(request, {
+        agentId,
+        sessionId,
+        adapterId: this.adapterId,
+        adapterName: this.name,
+        globalBus: this.globalBus,
+        adapterBus: this.adapterBus,
+        // One arbiter per instance: the agents replace connectors against the
+        // same maps the registry tears them down through.
+        teardownArbiter: this.teardownArbiter,
+        capabilities: this.capabilities,
+        nativeTools: this.nativeTools,
+        definitionProviders: this.definitionProviders,
+        configFactory: this.configFactory,
+        connectorFactory: this.connectorFactory,
+        prepareAuthRuntime: this.prepareAuthRuntime,
+        platformDefaults: this.platformDefaults,
+        clientId: this.clientId,
       }),
-      ...buildOptionalAgentConfig({
-        platformCwd: this.platformDefaults?.cwd,
-        platformEnv: this.platformDefaults?.env,
-        model,
-        cwd,
-        env,
-        allowedTools,
-        disallowedTools,
-        allowedDirectories: request.allowedDirectories,
-        adapterSessionId: request.adapterSessionId,
-        reasoningEffort,
-        adapterConfig: request.adapterConfig,
-        resumeAdapterSessionId,
-        harnessId,
-        clientId,
-        clientProfileName: request.clientProfileName,
-        mcpSessionContext,
-        toolLedger,
-        ephemeral,
-        nativeFork,
-      }),
-    };
-
-    return this.agentFactory(config) as TAgent;
+    ) as TAgent;
   }
 
   /**
@@ -364,15 +344,17 @@ export abstract class AIAdapter<
       // Close agents FIRST — this interrupts SDK queries and drains connections
       // (e.g., MCP HTTP server connections held by the Claude Agent SDK).
       // onClose() waits for connection drain; agents must be closed before that.
-      // Uses allSettled so one failing agent does not skip onClose() and cleanup.
-      const results = await Promise.allSettled([...this.registry.values()].map((entry) => entry.agent.close()));
-      this.registry.clear();
+      // Every close goes through the registry's teardown flight rather than
+      // straight at the agents: an instance shutdown overlapping a stop used to
+      // close one connector twice, and no failing agent may skip onClose() —
+      // which the flight preserves by reporting instead of rejecting.
+      const reports = await this.registry.closeAll();
 
       await this.onClose();
 
-      const closeErrors = results
-        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-        .map((r) => (r.reason instanceof Error ? r.reason : new Error(String(r.reason))));
+      const closeErrors = reports
+        .map((report) => report.closeError)
+        .filter((error): error is unknown => error !== undefined);
       if (closeErrors.length > 0) {
         console.warn(`[AIAdapter] ${closeErrors.length} agent(s) failed to close:`, closeErrors);
       }
@@ -407,23 +389,21 @@ export abstract class AIAdapter<
    */
   public getAgent(agentId: string): ActiveAgentHandle<TAgent> | undefined {
     const entry = this.registry.get(agentId);
-    if (!entry) return undefined;
-    return {
-      agent: entry.agent,
-      sessionId: entry.sessionId,
-      adapterSessionId: entry.adapterSessionId,
-    };
+    return entry === undefined ? undefined : toActiveAgentHandle(entry);
   }
 
   /**
-   * Dispose resources for an agent.
+   * Dispose resources for an agent and report what the teardown observed.
    *
-   * Aborts the agent and removes it from the tracking map.
+   * `found` answers the question the boolean return always answered — was there an
+   * agent here — and the class answers the one it could not: whether anything of
+   * ours provably stopped speaking to the provider.
    * @param agentId - Agent identifier
-   * @returns true if agent was found and disposed, false otherwise
+   * @param options - The driving request's deadline, when there is one
+   * @returns Whether an agent was found, and what its teardown observed
    */
-  public disposeAgent(agentId: string): boolean {
-    return this.registry.dispose(agentId);
+  public async disposeAgent(agentId: string, options: AgentTeardownOptions = {}): Promise<AgentDisposalReport> {
+    return this.registry.dispose(agentId, options);
   }
 
   /**
@@ -431,11 +411,7 @@ export abstract class AIAdapter<
    * @returns Active agent handles
    */
   public getActiveAgents(): Array<ActiveAgentHandle<TAgent>> {
-    return Array.from(this.registry.values()).map((entry) => ({
-      agent: entry.agent,
-      sessionId: entry.sessionId,
-      adapterSessionId: entry.adapterSessionId,
-    }));
+    return Array.from(this.registry.values()).map(toActiveAgentHandle);
   }
 
   /**
@@ -445,4 +421,20 @@ export abstract class AIAdapter<
   public isInitialized(): boolean {
     return this.initialized;
   }
+}
+
+/**
+ * Project a registry entry onto the handle both public agent reads return.
+ *
+ * Shared so the single-agent and the list read cannot drift on which fields a
+ * handle carries — the same reason the summary projection beside it is shared.
+ * @param entry - Registry entry to project
+ * @returns Handle exposing the agent and its registry-owned session metadata
+ */
+function toActiveAgentHandle<TAgent>(entry: {
+  readonly agent: TAgent;
+  readonly sessionId: string;
+  readonly adapterSessionId: string | undefined;
+}): ActiveAgentHandle<TAgent> {
+  return { agent: entry.agent, sessionId: entry.sessionId, adapterSessionId: entry.adapterSessionId };
 }

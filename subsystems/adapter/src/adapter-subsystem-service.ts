@@ -2,7 +2,7 @@ import { type IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
-import { ProviderDefinitionSchema } from '@makaio/contracts';
+import { ProviderDefinitionSchema, teardownWasObserved } from '@makaio/contracts';
 import { ExtensionSubjects, type ExtensionCoordinator } from '@makaio/kernel';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { AdapterConfigStore } from './adapter-config-store.js';
@@ -313,9 +313,21 @@ export class AdapterSubsystemService extends BaseService {
 
   /**
    * Shut down adapter instances and clear in-memory state on destroy.
+   *
+   * The registry reports what its instance closes actually proved, and this is the
+   * top of that chain: nothing above `onDestroy` can act on the report, so an
+   * unproven shutdown either becomes a log line here or becomes nothing at all.
+   * Recording it is what makes the whole reporting path worth having — a host
+   * whose adapters may still be holding provider connections after teardown is a
+   * fact somebody triaging a stuck process needs, and it is only knowable here.
    */
   protected override async onDestroy(): Promise<void> {
-    await this.registry.shutdownAll();
+    const shutdown = await this.registry.shutdownAll();
+    if (!teardownWasObserved(shutdown.evidence)) {
+      console.warn(
+        `[AdapterSubsystemService] Adapter instance shutdown reported "${shutdown.evidence}": ${shutdown.detail ?? 'no detail reported.'}`,
+      );
+    }
     this.configStore.clear();
   }
 

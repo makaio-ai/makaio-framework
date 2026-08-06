@@ -15,6 +15,7 @@ import {
   type NormalizedMessageInput,
 } from '@makaio/ai-adapters-core';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { ConnectorTeardownResult } from '@makaio/contracts';
 import {
   AgentSubjects,
   ToolSubjects,
@@ -127,8 +128,16 @@ class DeterministicConnector extends AIAgentConnector<FixtureBus> {
     return null;
   }
   public async interrupt(): Promise<void> {}
-  public async close(): Promise<void> {
+  /**
+   * Report a teardown of nothing.
+   *
+   * This double holds no process, connection or subscription, so `released` is
+   * literally true of it: every handle is dropped and no callback can arrive.
+   * @returns The `released` class.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
     this.capture.connectorClosed = true;
+    return { evidence: 'released' };
   }
   public async getAdapterSessionId(): Promise<string> {
     return 'deterministic-session';

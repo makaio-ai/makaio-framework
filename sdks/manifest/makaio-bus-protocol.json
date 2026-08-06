@@ -7698,6 +7698,10 @@
                     "const": "adapter",
                     "type": "string"
                   },
+                  "machineId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "mcpSessionContext": {
                     "additionalProperties": false,
                     "properties": {

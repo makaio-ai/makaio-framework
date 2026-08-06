@@ -10,6 +10,7 @@
  * agent event-wiring path is exercised without a live subprocess.
  */
 
+import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, ClientSubjects } from '@makaio/contracts';
@@ -45,6 +46,7 @@ async function createAgentForContext(ctx: ConnectorTestContext, clientId = 'code
     capabilities: ['tools', 'streaming'],
     nativeTools: ['bash', 'patch'],
     adapterBus: ctx.mockBus,
+    teardownArbiter: new AgentTeardownArbiter(),
     clientId,
     globalBus: MakaioBus,
     model: 'claude-3-5-sonnet-20241022',

@@ -7,6 +7,8 @@ import {
 } from '@makaio/contracts';
 import { mintClaimToken } from '../ownership/claim-token.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { reserveStartFor } from '../utils/start-reservation.js';
+import type { OwnedAdapterInstance } from '../utils/resolution.js';
 import { failDispatchedStart, readCallerOwnedCommit } from './caller-owned-start.js';
 import {
   abandonDispatchedStart,
@@ -130,10 +132,16 @@ export interface ReservedRehydrateRequest {
   readonly agent: MakaioSessionAgent;
   /** Session the agent belongs to. */
   readonly sessionId: string;
-  /** Live adapter instance resolved for THIS attempt, never the persisted one. */
-  readonly adapterId: string;
-  /** Machine identity every ownership act names, or `undefined` to let the authority decide. */
-  readonly machineId?: string;
+  /**
+   * Live instance resolved for THIS attempt — never the persisted one — and the
+   * machine every ownership act of the attempt names.
+   *
+   * One value, because it is one key: the instance ID is derived from
+   * `(machineId, adapterName)`, so an attempt holding the two halves separately
+   * can reserve in one namespace and dispatch into another. `machineId` is absent
+   * only for a caller that named no machine and is therefore acting for none.
+   */
+  readonly instance: OwnedAdapterInstance;
   /** Provider session to reserve and resume, or `null` for a keyless rehydrate. */
   readonly resumeProviderSessionId: string | null;
   /** Working directory the replacement connector runs in. */
@@ -221,13 +229,17 @@ async function claimRecoveryRow(
   bus: IMakaioBus,
   agent: MakaioSessionAgent,
 ): Promise<RecoveryRowClaim | 'lost' | 'not-found'> {
-  // Captured **before** the swap, and never read again afterwards. The stores
-  // hand out the row object itself rather than a copy, and the transition
-  // mutates it in place, so `agent.status` becomes `starting` the moment this
-  // call lands — reading the prior status after the claim would read the claim's
-  // own work. That is a property of one backend today, which makes it worse
-  // rather than better: a rollback that depended on it would be correct against
-  // Drizzle and wrong against memory, or the reverse.
+  // Captured **before** the swap, and never re-derived from the agent object
+  // afterwards. The claim is what moved the status, so anything read from this
+  // snapshot after it lands describes the claim's own work rather than what it
+  // replaced — and the rollback needs what it replaced. The claim therefore
+  // carries the value out with it (see {@link RecoveryRowClaim}) instead of
+  // letting each exit ask the object again.
+  //
+  // What this snapshot must be is a status *this caller observed*: the swap
+  // refuses when the row has moved on, which is the whole point, so a caller that
+  // waited for someone else's attempt has to refresh before it gets here rather
+  // than argue with the attempt it waited for.
   const priorStatus = rollbackTarget(agent.status);
   const claimed = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
     agentId: agent.agentId,
@@ -338,17 +350,16 @@ async function reserveRehydrate(
   request: ReservedRehydrateRequest,
   claim: RecoveryRowClaim,
 ): Promise<ReservationStep> {
-  const { agent, adapterId, machineId, resumeProviderSessionId, sessionId } = request;
+  const { agent, instance, resumeProviderSessionId, sessionId } = request;
   let reserved;
   try {
-    reserved = await bus.request(SessionSubjects.ownership.reserveStart, {
+    reserved = await reserveStartFor(bus, {
       sessionId,
       agentId: agent.agentId,
-      adapterId,
       adapterName: agent.adapterName,
+      instance,
       role: 'member',
       resumeProviderSessionId,
-      ...(machineId !== undefined && { machineId }),
     });
   } catch (error) {
     await releaseRecoveryRow(bus, claim);
@@ -388,7 +399,8 @@ async function dispatchReservedRehydrate(
   reservation: SessionOwnershipReservation,
   claim: RecoveryRowClaim,
 ): Promise<ReservedRehydrateOutcome> {
-  const { agent, adapterId, resumeProviderSessionId } = request;
+  const { agent, resumeProviderSessionId } = request;
+  const { adapterId } = request.instance;
   const agentId = agent.agentId;
   // Minted *before* the settle call and releasable from the moment it exists: a
   // settlement whose transaction commits and whose response is then lost leaves
@@ -536,7 +548,8 @@ async function settleConfirmedKey(
   providerSessionId: string,
   claimToken: string,
 ): Promise<SessionOwnershipSettleMovementServiceResult> {
-  const { agent, adapterId, machineId, sessionId } = request;
+  const { agent, sessionId } = request;
+  const { adapterId, machineId } = request.instance;
   return bus.request(SessionSubjects.ownership.settleMovement, {
     sessionId,
     agentId: agent.agentId,
@@ -566,7 +579,8 @@ async function commitRehydratedRow(
   request: ReservedRehydrateRequest,
   claimTokens: StartClaimTokens,
 ): Promise<ReservedRehydrateOutcome> {
-  const { agent, adapterId, resumeProviderSessionId } = request;
+  const { agent, resumeProviderSessionId } = request;
+  const { adapterId } = request.instance;
   if ((await readCallerOwnedCommit(bus, agent.agentId)) !== 'lost') {
     return { kind: 'rehydrated', agent, native: resumeProviderSessionId !== null };
   }

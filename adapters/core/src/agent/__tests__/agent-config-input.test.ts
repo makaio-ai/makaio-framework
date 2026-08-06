@@ -4,6 +4,7 @@ import type { AIAgentConnector } from '../../connector/index.js';
 import { buildConfigFactoryInput } from '../agent-config-input.js';
 import { ToolCallTracker } from '../tool-call-tracker.js';
 import type { AIAgentConfig } from '../types.js';
+import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 
 describe('buildConfigFactoryInput error cleanup', () => {
   it('preserves message-owned correlations for recoverable errors and clears all on fatal teardown', () => {
@@ -16,6 +17,7 @@ describe('buildConfigFactoryInput error cleanup', () => {
       capabilities: [],
       nativeTools: [],
       adapterBus,
+      teardownArbiter: new AgentTeardownArbiter(),
       globalBus,
       configFactory: async () => ({
         bus: adapterBus,
@@ -62,6 +64,7 @@ describe('buildConfigFactoryInput resume override semantics', () => {
       capabilities: [],
       nativeTools: [],
       adapterBus,
+      teardownArbiter: new AgentTeardownArbiter(),
       globalBus,
       resumeAdapterSessionId: 'start-time-resume',
       configFactory: async () => ({

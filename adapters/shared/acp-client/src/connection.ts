@@ -51,9 +51,41 @@ export async function createAcpConnection(
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
+  // **Observed before it is waited for.** A fired `exit` is not replayed to a
+  // listener that arrives afterwards, and an `exited` that never settles is not a
+  // slow answer but a permanent one: retirement *awaits* this promise as its exit
+  // evidence, so an unsettled one costs the whole observation budget and then
+  // reports an unobserved end for a process that is already gone.
+  //
+  // Installing it after the wait below would leave that guarantee resting on
+  // scheduling — today the wait resumes in the same event-loop turn as the `spawn`
+  // event, so no real child's exit can arrive in between, and every future await
+  // added to this prologue silently spends that margin. Installed here it holds by
+  // construction instead; it is the ordering `TerminalManager.createTerminal` uses
+  // for the same reason.
+  //
+  // On the failure paths below this promise has no consumer — the caller never
+  // receives a handle — so it is simply dropped, and `onExit` describes the end of
+  // a connection that was never published. Consumers key that callback on the
+  // handle they were given, which those paths never hand out.
+  const exited = new Promise<number | null>((resolve) => {
+    proc.once('exit', (code) => {
+      options.onExit?.(code);
+      resolve(code);
+    });
+  });
+
   try {
-    await waitForSpawn(proc);
+    await waitForSpawn(proc, {
+      timeoutMs: options.spawnTimeoutMs,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    });
   } catch (error) {
+    // The child is this function's to clean up, and on this path nothing else can:
+    // `waitForSpawn` removed its own listeners and the caller never receives a
+    // handle, so a process that *does* start after the budget expired would run
+    // with nobody holding anything to kill it, and nothing to book or retire.
+    await cleanupFailedProcess(proc);
     options.onError?.(error as Error);
     throw error;
   }
@@ -64,12 +96,6 @@ export async function createAcpConnection(
     });
   }
 
-  const exited = new Promise<number | null>((resolve) => {
-    proc.once('exit', (code) => {
-      options.onExit?.(code);
-      resolve(code);
-    });
-  });
   proc.on('error', (error) => {
     options.onError?.(error);
   });

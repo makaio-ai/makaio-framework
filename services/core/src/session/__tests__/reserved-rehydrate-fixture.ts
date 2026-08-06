@@ -113,7 +113,7 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
   cleanups.push(
     bus.on(AdapterSubjects.stopAgent, (ctx) => {
       stopped.push(ctx.payload.agentId);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, evidence: 'released' });
     }),
   );
 
@@ -174,7 +174,7 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
       const { agent } = await bus.request(AgentStorageSubjects.get, { agentId });
       return agent?.status;
     },
-    recover: (agent, plan) => recoverAgent(bus, agent, { plan }, ADAPTER_ID),
+    recover: (agent, plan) => recoverAgent(bus, agent, { plan }, { adapterId: ADAPTER_ID }),
     destroy: () => {
       service.destroy();
       for (let index = cleanups.length - 1; index >= 0; index -= 1) cleanups[index]?.();

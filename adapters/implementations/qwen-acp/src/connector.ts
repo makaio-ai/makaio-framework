@@ -21,7 +21,9 @@ import {
   type ConnectorSendMessageOptions,
   type ConnectorStartOptions,
   type MessageHandle,
+  reportRepeatTeardown,
 } from '@makaio/ai-adapters-core';
+import type { ConnectorTeardownResult } from '@makaio/contracts';
 import { createAcpConnection, MakaioAcpClient, TerminalManager } from '@makaio/ai-adapters-acp-client';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
 import { QwenAcpTurn } from './turn.js';
@@ -29,36 +31,25 @@ import { QwenAcpSubjects } from './namespaces/index.js';
 import type { QwenAcpBus } from './namespaces/index.js';
 import { mapApprovalToAcpResponse } from './permission.js';
 import { QwenAcpProviderConfigSchema } from './schemas.js';
-import { getSystemPromptText, shouldReinitializeSystemPrompt } from './system-prompt.js';
+import {
+  removeSystemPromptTempFile,
+  shouldReinitializeSystemPrompt,
+  writeSystemPromptTempFile,
+} from './system-prompt.js';
+import { SessionIdWaiters } from './session-id-waiters.js';
+import { mergeUsageFromMeta, type TurnUsageAccumulator } from './turn-usage.js';
+import { awaitCancelAcknowledgement, QwenRetirementLedgers, type QwenSupersededGenerations } from './teardown.js';
 import { executeAcpReadTextFile, executeAcpWriteTextFile } from './tool-execution.js';
 import { buildCliArgs } from './utils/build-cli-args.js';
 import { buildPromptContent } from './utils/build-prompt.js';
 import { toAcpMcpServers } from './utils/mcp-servers.js';
+import { performAcpHandshake } from './utils/acp-handshake.js';
 import type { QwenAcpConnectorConfig } from './types.js';
 import { assertQwenNativeAuth } from './native-auth.js';
 import { QWEN_ACP_AUTH_SCRUB_ENV_VARS } from './provider.js';
 
-/** Pending entry for a `getAdapterSessionId()` caller waiting for session establishment. */
-type SessionIdWaiter = {
-  resolve: (id: string) => void;
-  reject: (err: Error) => void;
-  interval: ReturnType<typeof setInterval>;
-};
-
-/**
- * Accumulated token usage for the current turn.
- *
- * Qwen ACP sends running totals in every `agent_message_chunk._meta.usage`.
- * We keep the last-seen non-undefined value for each field (last-wins semantics)
- * and emit a single consolidated event at turn-end.
- */
-type TurnUsageAccumulator = {
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  thoughtTokens?: number;
-  cachedReadTokens?: number;
-};
+/** Refusal a caller receives when it asks a terminated connector to do work. */
+const TERMINATED = 'QwenAcpConnector has already been terminated';
 
 /** Connector for the Qwen ACP adapter. Turn finalization MUST remain in `finally`. */
 export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
@@ -78,8 +69,16 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
   /** Per-turn, last-wins usage totals; null when no active turn has reported usage. */
   private turnUsageAccumulator: TurnUsageAccumulator | null = null;
 
-  /** Pending `getAdapterSessionId()` waiters — cleared on termination to prevent interval leaks. */
-  private sessionIdWaiters: SessionIdWaiter[] = [];
+  /** Callers polling for the session ID; released on every termination path. */
+  private readonly sessionIdWaiters = new SessionIdWaiters();
+
+  /**
+   * Processes this connector spawned, took out of service, and did not watch end
+   * (I33) — the ACP agent and its terminal children alike. Neither leaves a runtime
+   * handle for the layers above, so this connector is the last party that can report
+   * them, and the ledgers are how it remembers to.
+   */
+  private readonly retirements = new QwenRetirementLedgers();
 
   /**
    * Create a new QwenAcpConnector instance.
@@ -92,6 +91,7 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     this.terminalManager = new TerminalManager({
       baseEnv: this.env,
       scrubEnvVars: QWEN_ACP_AUTH_SCRUB_ENV_VARS,
+      spawnTimeoutMs: this.getTimeoutMs('initialization'),
     });
   }
 
@@ -101,14 +101,17 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
    * @returns Resolves after the ACP session is ready
    */
   public async initialize(options?: ConnectorStartOptions): Promise<void> {
-    if (this.isTerminated) throw new Error('QwenAcpConnector has already been terminated');
+    if (this.isTerminated) throw new Error(TERMINATED);
     if (this.shouldReinitializeForSystemPrompt(options?.systemPrompt)) await this.resetConnection();
+    // Re-checked after the reset: it awaits the predecessor's end, and a teardown
+    // landing inside that window would otherwise be followed by a fresh spawn.
+    if (this.isTerminated) throw new Error(TERMINATED);
     this.captureSystemPrompt(options?.systemPrompt);
     if (this.isInitialized) return;
     this.initializingPromise ??= this.initializeConnection()
       .catch((error) => {
         const err = error instanceof Error ? error : new Error(String(error));
-        this.rejectSessionIdWaiters(err);
+        this.sessionIdWaiters.rejectAll(err);
         throw err;
       })
       .finally(() => {
@@ -151,7 +154,13 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     return handle;
   }
 
-  /** Interrupt the current turn via ACP `session/cancel` (best-effort). */
+  /**
+   * Interrupt the current turn via ACP `session/cancel` (best-effort).
+   *
+   * Also the cancel stage of {@link close}, which bounds this call rather than
+   * repeating its guards: it resolves on every path — no live session means
+   * nothing to cancel — so the budget lives with the caller that has one.
+   */
   public async interrupt(): Promise<void> {
     if (!this.acpConnectionHandle || !this.acpSessionId) return;
     try {
@@ -161,51 +170,54 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     }
   }
 
-  /** Abort the connector immediately (panic mode). Kills subprocess. */
+  /**
+   * Abort the connector immediately (panic mode). Kills subprocess.
+   *
+   * Synchronous by the connector contract, so it cannot await the ends it just
+   * signalled. It therefore books every one of them as **unretired**, which caps
+   * every class this connector reports afterwards at `detached` — the cap is what
+   * keeps a synchronous retirement from quietly claiming what an asynchronous one
+   * has to prove.
+   */
   public abort(): void {
     if (this.isTerminated) return;
     this.isTerminated = true;
-    this.clearConnectionState();
+    this.retirements.abandon(this.clearConnectionState());
     if (this.currentTurn) this.currentTurn.markCompleted({ outcome: 'cancelled' });
-    this.drainSessionIdWaiters();
+    this.sessionIdWaiters.rejectAll();
     void this.cleanupSystemPromptTempFile();
   }
 
-  /** Gracefully shut down: cancel then kill. */
-  public async close(): Promise<void> {
-    if (this.isTerminated) return;
+  /**
+   * Gracefully shut down — cancel, kill, then watch — and report what was
+   * observed.
+   *
+   * **Class: `exited`.** The local evidence is every process this connector spawned
+   * — the `qwen` agent and the terminal children the shared ACP client opened for
+   * it — each of which settles its own exit observation, and this close consumes
+   * them inside the exit budget instead of discarding them. A signalled process
+   * whose end does not arrive in that window reports `detached`, a connector that
+   * never spawned one reports `released`, and any generation superseded earlier
+   * without an observation caps the class however clean this close was (I33). The
+   * cancel it asks for first is bounded and never reported — see
+   * {@link awaitCancelAcknowledgement}.
+   * @returns What this runtime observed about the ends of the processes it spawned.
+   */
+  public async close(): Promise<ConnectorTeardownResult> {
+    if (this.isTerminated) return this.retirements.cap(reportRepeatTeardown());
     this.isTerminated = true;
-    this.drainSessionIdWaiters();
-    if (this.acpConnectionHandle && this.acpSessionId) {
-      try {
-        await Promise.race([
-          this.acpConnectionHandle.connection.cancel({ sessionId: this.acpSessionId }),
-          new Promise<void>((r) => setTimeout(r, 2_000)),
-        ]);
-      } catch {
-        // ignore
-      }
-    }
-    this.clearConnectionState();
+    this.sessionIdWaiters.rejectAll();
+    await awaitCancelAcknowledgement(() => this.interrupt());
+    const superseded = this.clearConnectionState();
     await this.cleanupSystemPromptTempFile();
-  }
-
-  private drainSessionIdWaiters(): void {
-    this.rejectSessionIdWaiters(new Error('Connector terminated before session ID was established'));
-  }
-  private rejectSessionIdWaiters(err: Error): void {
-    for (const w of this.sessionIdWaiters) {
-      clearInterval(w.interval);
-      w.reject(err);
-    }
-    this.sessionIdWaiters = [];
+    return this.retirements.reportClose(superseded);
   }
 
   private async cleanupSystemPromptTempFile(): Promise<void> {
     if (!this.systemPromptTempFile) return;
     const path = this.systemPromptTempFile;
     this.systemPromptTempFile = undefined;
-    await this.cleanupTempFile(path);
+    await removeSystemPromptTempFile(path);
   }
 
   /**
@@ -214,17 +226,8 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
    */
   public getAdapterSessionId(): Promise<string> {
     if (this.acpSessionId) return Promise.resolve(this.acpSessionId);
-    if (this.isTerminated) return Promise.reject(new Error('Connector terminated before session ID was established'));
-    return new Promise((resolve, reject) => {
-      const interval = setInterval(() => {
-        if (this.acpSessionId) {
-          clearInterval(interval);
-          this.sessionIdWaiters = this.sessionIdWaiters.filter((w) => w.interval !== interval);
-          resolve(this.acpSessionId);
-        }
-      }, 50);
-      this.sessionIdWaiters.push({ resolve, reject, interval });
-    });
+    if (this.isTerminated) return Promise.reject(SessionIdWaiters.terminatedError());
+    return this.sessionIdWaiters.wait();
   }
 
   /**
@@ -274,10 +277,16 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
 
     const spawnEnv = { ...this.env };
     const command = this.config.clientExecution?.binaryPath ?? 'qwen';
-    const tempPath = capturedSystemPrompt ? await this.createSystemPromptTempFile(capturedSystemPrompt) : undefined;
+    const tempPath = capturedSystemPrompt ? await writeSystemPromptTempFile(capturedSystemPrompt) : undefined;
     if (tempPath) spawnEnv['QWEN_SYSTEM_MD'] = tempPath;
 
     const args = buildCliArgs({ model: this.model, providerConfig });
+    // Every phase below waits on a counterparty that may never answer, so each
+    // is bounded by the initialization budget this adapter already declares.
+    // The budget was previously read only as definition metadata, which left the
+    // spawn wait and both ACP round trips able to hang a start indefinitely —
+    // and a teardown queued behind such a start hangs with it.
+    const initializationTimeoutMs = this.getTimeoutMs('initialization');
     let handle: AcpConnectionHandle | undefined;
     try {
       handle = await createAcpConnection(() => client, {
@@ -285,38 +294,45 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
         args,
         cwd: this.cwd,
         env: spawnEnv,
+        spawnTimeoutMs: initializationTimeoutMs,
         onStderr: (data: string) => console.error(`[qwen-acp stderr] ${data}`),
         onError: (error: Error) => console.error('[qwen-acp spawn error]', error),
         onExit: (code: number | null) => {
-          if (!this.isTerminated) this.handleError(new Error(`Qwen ACP exited: ${String(code)}`), true);
+          // Only the *current* generation's exit is a fault. A superseded one is
+          // expected — the rebuild asked for it and is waiting on it. An exit before
+          // `handle` is assigned belongs to a generation nobody published, and the
+          // handshake failure is what reports that one.
+          if (this.isTerminated) return;
+          if (handle === undefined || this.acpConnectionHandle !== handle) return;
+          this.handleError(new Error(`Qwen ACP exited: ${String(code)}`), true);
         },
       });
 
-      await handle.connection.initialize({
-        clientInfo: { name: 'makaio', version: '0.1.0' },
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: {
-            readTextFile: true,
-            writeTextFile: true,
-          },
-          terminal: true,
-        },
-      });
       // Thread upstream MCP servers from the session context into the ACP session.
       // Only the full McpSessionContext carries `servers`; narrow via property check.
       const mcpCtx = (this.config as QwenAcpConnectorConfig).mcpSessionContext;
-      const mcpServers = toAcpMcpServers(mcpCtx && 'servers' in mcpCtx ? mcpCtx.servers : undefined);
-      const session = await handle.connection.newSession({ cwd: this.cwd, mcpServers });
+      const session = await performAcpHandshake(handle.connection, {
+        cwd: this.cwd,
+        mcpServers: toAcpMcpServers(mcpCtx && 'servers' in mcpCtx ? mcpCtx.servers : undefined),
+        budgetMs: initializationTimeoutMs,
+      });
 
       this.acpConnectionHandle = handle;
       this.systemPromptTempFile = tempPath;
       this.acpSessionId = session.sessionId;
       this.adapterSessionId = this.acpSessionId;
+      // The single statement that establishes a session ID, so it is also where the
+      // callers that asked before it existed are released. No await between the two.
+      this.sessionIdWaiters.resolveAll(this.acpSessionId);
       this.isInitialized = true;
     } catch (error) {
-      handle?.kill();
-      await this.cleanupTempFile(tempPath);
+      // A failed init has spawned a `qwen` process whenever the connection was
+      // established, so killing it is a retirement like any other and goes through
+      // the choke point (I33). Booked without waiting, like `abort()` and for the
+      // same reason: this path owes its caller an error promptly, so it signals the
+      // end and gives up on observing it. The cap is what keeps giving up honest.
+      if (handle !== undefined) this.retirements.abandonProcess(handle);
+      await removeSystemPromptTempFile(tempPath);
       throw error;
     }
   }
@@ -345,10 +361,21 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     );
   }
 
+  /**
+   * Retire the live ACP generation so a replacement may start (I33).
+   *
+   * The rebuild path a late system prompt takes. It awaits the predecessor's own
+   * end inside the exit budget rather than merely signalling it — starting a
+   * second `qwen` while the first is unobserved is the hidden orphan this rule
+   * exists for. Expiry does not fail the rebuild: a stuck predecessor must not
+   * block a live agent, so the non-observation is booked and caps every class
+   * this connector reports from then on.
+   */
   private async resetConnection(): Promise<void> {
-    this.clearConnectionState();
-    this.drainSessionIdWaiters();
+    const superseded = this.clearConnectionState();
+    this.sessionIdWaiters.rejectAll();
     await this.cleanupSystemPromptTempFile();
+    await this.retirements.retire(superseded);
   }
 
   private async processQueue(): Promise<boolean> {
@@ -422,28 +449,15 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
 
   /**
    * Merge per-chunk `_meta.usage` fields into the turn accumulator (last-wins).
-   * Qwen ACP emits running totals on every `agent_message_chunk`, so the last
-   * non-undefined value for each field is the correct per-turn total.
-   * Actual emission is deferred to {@link flushAccumulatedUsage}.
+   *
+   * Outside a turn there is no accumulator and the update is dropped; the merge
+   * itself lives in `turn-usage.ts` as a pure function of the two values.
+   * Emission is deferred to {@link flushAccumulatedUsage}.
    * @param meta - The `_meta` record from an ACP session update, if present
    */
   private accumulateUsageFromMeta(meta: Record<string, unknown> | null | undefined): void {
     if (this.turnUsageAccumulator === null) return;
-    const usage = meta?.['usage'];
-    if (usage == null || typeof usage !== 'object') return;
-    const u = usage as Record<string, unknown>;
-    const num = (key: string): number | undefined => (typeof u[key] === 'number' ? (u[key] as number) : undefined);
-    const acc = this.turnUsageAccumulator;
-    const inputTokens = num('inputTokens');
-    const outputTokens = num('outputTokens');
-    const totalTokens = num('totalTokens');
-    const thoughtTokens = num('thoughtTokens');
-    const cachedReadTokens = num('cachedReadTokens');
-    if (inputTokens !== undefined) acc.inputTokens = inputTokens;
-    if (outputTokens !== undefined) acc.outputTokens = outputTokens;
-    if (totalTokens !== undefined) acc.totalTokens = totalTokens;
-    if (thoughtTokens !== undefined) acc.thoughtTokens = thoughtTokens;
-    if (cachedReadTokens !== undefined) acc.cachedReadTokens = cachedReadTokens;
+    mergeUsageFromMeta(this.turnUsageAccumulator, meta);
   }
 
   /**
@@ -609,38 +623,28 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     return executeAcpWriteTextFile(params, this.fsExecutionContext);
   }
 
-  private async createSystemPromptTempFile(
-    systemPrompt: NonNullable<ConnectorStartOptions['systemPrompt']>,
-  ): Promise<string> {
-    const { randomUUID } = await import('node:crypto');
-    const { writeFile } = await import('node:fs/promises');
-    const { join } = await import('node:path');
-    const { tmpdir } = await import('node:os');
-    const promptText = getSystemPromptText(systemPrompt);
-    const tempPath = join(tmpdir(), `qwen-acp-system-${randomUUID()}.md`);
-    await writeFile(tempPath, promptText, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-    return tempPath;
-  }
-
-  private async cleanupTempFile(path: string | undefined): Promise<void> {
-    if (!path) return;
-    try {
-      const { unlink } = await import('node:fs/promises');
-      await unlink(path);
-    } catch {
-      // best-effort: file may already be removed
-    }
-  }
-
-  private clearConnectionState(): void {
+  /**
+   * Signal the live ACP generation's end and drop every reference to it.
+   *
+   * The path taken by every act that ends the connector's **published** generation
+   * — `abort()`, `close()` and `resetConnection()`. It resets the session-scoped
+   * state and then hands both spawned resources — the ACP process and every terminal
+   * child released with it — to the retirement choke points, where the kill and the
+   * bookkeeping live together. What this method deliberately does *not* do is wait:
+   * the synchronous caller cannot, and the two asynchronous ones differ only in how
+   * they consume what it hands back.
+   * @returns Every generation taken out of service, to retire or abandon.
+   */
+  private clearConnectionState(): QwenSupersededGenerations {
     this.lastToolCallId = undefined;
     this.toolCallMessageIds.clear();
-    this.terminalManager.releaseAll();
-    this.acpConnectionHandle?.kill();
+    const terminals = this.retirements.supersedeTerminals(this.terminalManager.releaseAll());
+    const handle = this.acpConnectionHandle;
     this.acpConnectionHandle = undefined;
     this.acpSessionId = undefined;
     this.adapterSessionId = undefined;
     this.isInitialized = false;
+    return { process: handle === undefined ? undefined : this.retirements.supersedeProcess(handle), terminals };
   }
 
   private async startTurnStep(stepType: 'text' | 'tool_use'): Promise<void> {

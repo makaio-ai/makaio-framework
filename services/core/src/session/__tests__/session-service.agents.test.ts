@@ -152,13 +152,14 @@ describe('MakaioSessionService - Agent Management', () => {
     });
 
     it('stamps no identity for a lead the session lost while the handler worked', async () => {
-      // The designation made this agent the lead, and the re-read is what the
-      // identity write rests on — so the lead it must still name is *this*
-      // agent's. A `session.agent.removed` in between clears the designation
-      // under a swap naming the departing agent, which on a fresh session leaves
-      // `leadAgentId` back at the `undefined` this handler observed. Accepting
-      // that observed value stamped the identity for an agent that was already
-      // gone, and write-once left no later lead able to correct it.
+      // The designation made this agent the lead, and the identity write rests on
+      // that designation still standing — so the lead the predicate names is
+      // *this* agent's. A `session.agent.removed` in between clears the
+      // designation under a swap naming the departing agent, which on a fresh
+      // session leaves `leadAgentId` back at the `undefined` this handler
+      // observed. Accepting that observed value stamped the identity for an agent
+      // that was already gone, and write-once left no later lead able to correct
+      // it.
       const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
       await persistAgent({
         sessionId,
@@ -168,7 +169,7 @@ describe('MakaioSessionService - Agent Management', () => {
         adapterSessionId: 'doomed-provider-session',
       });
 
-      const gate = suspendSessionReread();
+      const gate = suspendAfterDesignation();
       const announced = emitAgentAdded({
         sessionId,
         agentId: 'lead-removed-mid-handler',
@@ -179,13 +180,10 @@ describe('MakaioSessionService - Agent Management', () => {
       });
 
       // The removal's effect on the designation, driven through the one writer
-      // that produces it. Emitting `session.agent.removed` here would deadlock
-      // the case rather than sharpen it: that handler reads the session too, and
-      // the gate cannot tell its read from the one it is holding open. What the
-      // window is about is the designation being cleared under the swap that
-      // names the departing agent, which is exactly this call.
-      // Awaited, so the interleaving is the one under test and not a guess about
-      // scheduling: the handler has designated and is now held on its re-read.
+      // that produces it. Emitting `session.agent.removed` here would widen the
+      // case rather than sharpen it: that handler disposes the agent and releases
+      // its claims too, and what this window is about is the designation being
+      // cleared under the swap that names the departing agent — exactly this call.
       await gate.reached;
       const cleared = await designateSessionLead(MakaioBus, {
         sessionId,
@@ -205,6 +203,55 @@ describe('MakaioSessionService - Agent Management', () => {
       expect(session?.adapterName).toBeUndefined();
       expect(session?.adapterId).toBeUndefined();
       expect(session?.adapterSessionId).toBeUndefined();
+    });
+
+    it('leaves a peer’s identity standing when it lands inside the write window', async () => {
+      // The atomicity the predicate buys, at the seam that used to lack it. Two
+      // writers legitimately speak for the same lead — this announcement, and the
+      // reconciliation of the same agent's first confirmed turn — and the loser
+      // used to carry back a record it had assembled before the winner wrote.
+      // The check now travels inside the write, so the loser matches nothing.
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      await persistAgent({
+        sessionId,
+        agentId: 'lead-outraced',
+        adapterId: 'slow-adapter-instance',
+        adapterName: 'slow-adapter',
+        adapterSessionId: 'slow-provider-session',
+      });
+
+      const gate = suspendAfterDesignation();
+      const announced = emitAgentAdded({
+        sessionId,
+        agentId: 'lead-outraced',
+        adapterId: 'slow-adapter-instance',
+        adapterName: 'slow-adapter',
+        adapterSessionId: 'slow-provider-session',
+        role: 'lead',
+      });
+
+      await gate.reached;
+      const peer = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId,
+        identity: {
+          adapterName: 'peer-adapter',
+          adapterId: 'peer-adapter-instance',
+          adapterSessionId: 'peer-provider-session',
+        },
+        expectIdentityOpenForLead: 'lead-outraced',
+      });
+      expect(peer.success).toBe(true);
+      gate.release();
+      await announced;
+      gate.unsubscribe();
+
+      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+      expect(session?.adapterName).toBe('peer-adapter');
+      expect(session?.adapterId).toBe('peer-adapter-instance');
+      expect(session?.adapterSessionId).toBe('peer-provider-session');
+      // The announcement still happened, and its one unconditional product is
+      // written on the refusal path rather than lost with the identity.
+      expect(session?.lastActivityAt).toBeGreaterThan(0);
     });
 
     it('leaves the identity open for the lead when a member arrives first', async () => {
@@ -360,12 +407,11 @@ describe('MakaioSessionService - Agent Management', () => {
      *
      * Two things this models, both load-bearing. The window under test is
      * *inside* the handler — it reads the session, and the close lands before it
-     * writes — so the read has to be held open. And the snapshot has to be a
-     * copy: the memory backend hands out the stored object itself, so a handler
-     * holding it sees writes it never read, and a whole-record write back would
-     * carry the *new* status by accident. A backend that materialises rows per
-     * query, as the SQL ones do, gives the caller a copy — which is the only
-     * shape in which this bug exists at all.
+     * writes — so the read has to be held open. And the answer has to be the
+     * snapshot the caller supplied rather than a delegated read: what the case is
+     * about is a handler acting on a row it observed *before* the interleaved
+     * write, and a handler that saw the newer value would carry it back by
+     * accident and hide the defect.
      * @param snapshot - The session as the handler's read observed it.
      * @returns The release callback and the injector's unsubscribe.
      */
@@ -392,16 +438,22 @@ describe('MakaioSessionService - Agent Management', () => {
     }
 
     /**
-     * Hold the handler's **second** session read open — its re-read — and let
-     * every other read through.
+     * Hold the announcement handler open **between its designation and its
+     * identity write**, and let every later designation through.
      *
-     * The window this opens is the one between the designation and the re-read
-     * it rests on. The read itself is delegated rather than answered from a
-     * snapshot, because what the case is about is the state the re-read finds
-     * *after* the interleaved removal, not a stale copy of what preceded it.
-     * @returns The release callback and the injector's unsubscribe.
+     * This is the window the conditional identity write exists for. The handler
+     * has designated a lead, has assembled the identity it means to publish, and
+     * has not written it yet; whatever a peer does to the row in that gap is what
+     * the write must be measured against. Suspending after the *designation*
+     * rather than after a read is what makes the window real: the write no longer
+     * re-reads, so there is no second read to hold.
+     *
+     * The gate opens after `ctx.next()`, so the designation has already been
+     * written by the real reserving transaction by the time the caller acts —
+     * the interleaving under test, not a guess about scheduling.
+     * @returns The reached signal, the release callback and the unsubscribe.
      */
-    function suspendSessionReread(): { reached: Promise<void>; release: () => void; unsubscribe: () => void } {
+    function suspendAfterDesignation(): { reached: Promise<void>; release: () => void; unsubscribe: () => void } {
       let release!: () => void;
       const gate = new Promise<void>((resolve) => {
         release = resolve;
@@ -410,40 +462,22 @@ describe('MakaioSessionService - Agent Management', () => {
       const reached = new Promise<void>((resolve) => {
         announceReached = resolve;
       });
-      let designated = false;
       let suspended = false;
-      const unsubscribes = [
-        // Positively identified rather than counted: the read this case is about
-        // is the one that follows the designation, and counting reads catches
-        // whichever handler happens to read second.
-        MakaioBus.on(
-          SessionOwnershipStorageSubjects.claim,
-          (ctx) => {
-            designated = true;
-            ctx.next();
-          },
-          { priority: 100 },
-        ),
-        MakaioBus.on(
-          SessionStorageSubjects.get,
-          async (ctx) => {
-            if (designated && !suspended) {
-              suspended = true;
-              announceReached();
-              await gate;
-            }
-            ctx.next();
-          },
-          { priority: 100 },
-        ),
-      ];
-      return {
-        reached,
-        release,
-        unsubscribe: () => {
-          for (const unsubscribe of unsubscribes) unsubscribe();
+      const unsubscribe = MakaioBus.on(
+        SessionOwnershipStorageSubjects.claim,
+        async (ctx) => {
+          await ctx.next();
+          // Only the first designation — the announcement's own. The peer acts
+          // through this same subject while the gate is held, and it must not be
+          // held by it.
+          if (suspended) return;
+          suspended = true;
+          announceReached();
+          await gate;
         },
-      };
+        { priority: 100 },
+      );
+      return { reached, release, unsubscribe };
     }
 
     it('does not revive a session that closed while the announcement was handled', async () => {

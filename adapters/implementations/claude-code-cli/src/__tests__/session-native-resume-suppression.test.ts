@@ -33,6 +33,9 @@ const transportHarness = vi.hoisted(() => {
           entry.errorCallback = cb;
         }),
         close: vi.fn(),
+        // This harness drives turn plumbing, not process lifetime: the child is
+        // never spawned, so its exit is never observed.
+        exited: new Promise<number | null>(() => {}),
       },
     };
     transports.push(entry);

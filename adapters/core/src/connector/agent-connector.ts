@@ -8,7 +8,7 @@ import {
   type ScopedSubjectDefinition,
   type SubjectRecord,
 } from '@makaio/core';
-import type { SystemPrompt, AIReasoningLevel } from '@makaio/contracts';
+import type { SystemPrompt, AIReasoningLevel, ConnectorTeardownResult } from '@makaio/contracts';
 import type {
   AgentStartResult,
   ConnectorSendMessageOptions,
@@ -238,11 +238,14 @@ export abstract class AIAgentConnector<
   public abstract abort(): void;
 
   /**
-   * Gracefully close the agent session.
-   * Unlike abort(), this doesn't trigger AbortController errors.
-   * Use this for normal shutdown; use abort() for emergency termination.
+   * Tear this connector down and report what was observed; unlike `abort()` this
+   * triggers no AbortController errors. **Return the class you can prove** — `TeardownEvidenceSchema` says what each
+   * asserts, and only *local* evidence counts: a third-party `dispose`, a wrapper type or the absence of a thrown
+   * error prove no provider-side end. Unobservable ⇒ `detached` with a `detail`;
+   * an unaccounted failed stage ⇒ `unknown`, named. Throwing also means `unknown`.
+   * @returns What this runtime observed about the end of its resources
    */
-  public abstract close(): Promise<void>;
+  public abstract close(): Promise<ConnectorTeardownResult>;
 
   /**
    * Get session ID, waiting for provider to generate it if not yet available.

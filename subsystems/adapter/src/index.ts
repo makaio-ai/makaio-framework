@@ -145,3 +145,12 @@ export {
   shutdownAdapterInstances,
   toAvailableAdapter,
 } from './adapter-runtime-lifecycle.js';
+export {
+  AdapterInstanceCloseTimeoutError,
+  aggregateAdapterInstanceTeardowns,
+  classifyAdapterInstanceClose,
+} from './adapter-instance-teardown.js';
+export type {
+  AdapterInstanceShutdownReport,
+  AdapterInstanceTeardownResult,
+} from './adapter-instance-teardown.js';

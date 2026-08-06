@@ -18,7 +18,12 @@ import {
 } from '@makaio/ai-adapters-claude-process-shared';
 import { type SDKMessage } from '@makaio/ai-adapters-claude-shared';
 import { MakaioBus, NoHandlerError, RequestError } from '@makaio/bus-core';
-import { McpSubjects, type McpSessionContext, type SystemPrompt } from '@makaio/contracts';
+import {
+  McpSubjects,
+  type ConnectorTeardownResult,
+  type McpSessionContext,
+  type SystemPrompt,
+} from '@makaio/contracts';
 import { type ClaudeCodeConnectorBus, ClaudeCodeConnectorSubjects } from './namespace/index.js';
 import { InvalidModelError } from '@makaio/core';
 import type { ClaudeAgentConfig, ClaudeSessionConfig } from './types/index.js';
@@ -504,14 +509,30 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
   }
 
   /**
-   * Gracefully close the session.
-   * Unlike abort(), this doesn't cause SDK errors.
-   * Use this for normal shutdown; use abort() for emergency termination.
+   * Gracefully close the session and report what was observed.
+   *
+   * Unlike abort(), this doesn't cause SDK errors. Use this for normal shutdown;
+   * use abort() for emergency termination.
+   *
+   * **Class: `detached`.** The local evidence stops short of an end. The close
+   * interrupts the active query and waits for the *turn's* terminal result — a
+   * boolean about a turn, not about a peer — and the subprocess the SDK runs
+   * behind `query()` is never handed to this runtime, so there is no handle whose
+   * end it could watch and no exit event it could receive. Reporting `closed`
+   * here would be an inference about a third party's internals, which is exactly
+   * what this taxonomy refuses. What is proven is that this runtime released its
+   * query; whether the SDK's process outlives it is not ours to say.
+   * @returns `detached`, naming the end this runtime is not entitled to observe.
    */
-  public async close(): Promise<void> {
+  public async close(): Promise<ConnectorTeardownResult> {
     if (this.session) {
       await this.session.close();
     }
+    return {
+      evidence: 'detached',
+      detail:
+        'The Claude Agent SDK query was released and its turn drained; the SDK owns the subprocess, so its end is not observable here.',
+    };
   }
 
   /**

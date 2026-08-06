@@ -5,6 +5,7 @@ import {
   AdapterSubjects,
   CredentialSubjects,
   defineAdapterProviderAuth,
+  type ConnectorTeardownResult,
   type ResolvedProviderContext,
 } from '@makaio/contracts';
 import {
@@ -48,10 +49,13 @@ class RehydrateLifecycleConnector extends MockConnector {
     this.events.push('initialize');
   }
 
-  /** Record runtime cleanup before delegating to the shared connector. */
-  public override async close(): Promise<void> {
+  /**
+   * Record runtime cleanup before delegating to the shared connector.
+   * @returns Whatever the shared mock connector reports.
+   */
+  public override async close(): Promise<ConnectorTeardownResult> {
     this.events.push('close');
-    await super.close();
+    return super.close();
   }
 }
 
