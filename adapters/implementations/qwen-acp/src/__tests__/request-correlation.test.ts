@@ -93,6 +93,8 @@ async function makeAgent(): Promise<{
     agentId: TEST_AGENT_ID,
     adapterId: TEST_ADAPTER_ID,
     adapterName: 'qwen-acp',
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     adapterBus,
     teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,

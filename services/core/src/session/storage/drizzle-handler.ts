@@ -1,8 +1,7 @@
-import { eq, desc, count, inArray, and, isNull, sql, type SQL } from 'drizzle-orm';
+import { eq, desc, count, inArray, and, sql, type SQL } from 'drizzle-orm';
 import { didAffectRows, executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionStorageSetRequestSchema, SessionStorageUpdateSchema, type IMakaioSession } from '@makaio/contracts';
-import type { z } from 'zod';
 import { SessionStorageSubjects, type SessionWithPreview } from './namespace.js';
 import { sessionStorageSchema } from './schema.variants.js';
 import {
@@ -18,7 +17,12 @@ import { buildNextSessionClientAccountState, touchesClientAccountState } from '.
 import { registerGetByAdapterSessionIdHandler } from './drizzle-get-by-adapter-session-id-handler.js';
 import { registerGetChildrenHandler } from './drizzle-get-children-handler.js';
 import { registerDrizzleSessionImportHandlers } from './drizzle-import-handlers.js';
-import { isIdentityBackfillRefused } from './session-identity-backfill.js';
+import { isAdapterSessionReconciliationRefused, isIdentityBackfillRefused } from './session-identity-backfill.js';
+import {
+  buildSessionIdentityUpdateFields,
+  buildSessionUpdateGuards,
+  type SessionUpdatePayload,
+} from './drizzle-session-update.js';
 
 /**
  * Handler dependencies for session storage handlers.
@@ -35,7 +39,6 @@ type SessionUpdateFields = Partial<Omit<SessionInsertValues, 'spawningToolCallId
   spawningToolCallId?: SessionInsertValues['spawningToolCallId'] | SQL;
 };
 type ClientIdentityObservation = IMakaioSession['lastClientIdentityObservation'];
-type SessionUpdatePayload = z.infer<typeof SessionStorageUpdateSchema.request>;
 
 /**
  * Convert an optional API field into a nullable database column value.
@@ -123,7 +126,7 @@ function toSessionConflictValues<T extends { leadAgentId: string | null }>(value
 }
 
 /**
- * Serializes the latest client identity observation for persistence.
+ * Serialize the latest client identity observation for persistence.
  * @param observation - Latest observed client identity payload, if any
  * @returns JSON string for storage, or null when no observation is present
  */
@@ -174,7 +177,7 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: Sessi
   const updateFields: SessionUpdateFields = {};
 
   assignDefinedField(updateFields, 'status', payload.status);
-  assignDefinedField(updateFields, 'parentSessionId', payload.parentSessionId);
+  assignNullableField(updateFields, 'parentSessionId', payload.parentSessionId);
   assignDefinedField(updateFields, 'contextInheritance', payload.contextInheritance);
   assignDefinedField(updateFields, 'rootSessionId', payload.rootSessionId);
   assignDefinedField(updateFields, 'forkPointMessageId', payload.forkPointMessageId);
@@ -191,15 +194,9 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: Sessi
   // `storage:sessionOwnership` seam, which is the only writer that carries an
   // authority (a claim generation) into the write.
 
-  // The identity triplet. Written unguarded here and guarded in the statement's
-  // predicate instead — see {@link buildIdentityOpenPredicate} — because that is
-  // what makes the check and the write one statement. An absent
-  // `adapterSessionId` leaves the write-once origin column alone.
-  if (payload.identity !== undefined) {
-    updateFields.adapterName = payload.identity.adapterName;
-    updateFields.adapterId = payload.identity.adapterId;
-    assignDefinedField(updateFields, 'adapterSessionId', payload.identity.adapterSessionId);
-  }
+  // Identity projection and its matching authority predicates live together in
+  // drizzle-session-update so additions cannot drift into an unguarded write.
+  Object.assign(updateFields, buildSessionIdentityUpdateFields(payload));
 
   assignNullableField(updateFields, 'executionTargetId', payload.executionTargetId);
   assignNullableField(updateFields, 'approvalPolicyOverride', payload.approvalPolicyOverride);
@@ -327,50 +324,6 @@ function registerDeleteHandler(deps: SessionHandlerDeps): () => void {
 }
 
 /**
- * Build the compare-and-swap conjunct for an expected-status guard.
- * @param expectedStatus - Statuses the caller will accept, or `undefined` for an unconditional write.
- * @param sessions - Dialect-resolved sessions table object.
- * @returns The predicate, or `undefined` when the write is unconditional.
- */
-function buildExpectedStatusPredicate(
-  expectedStatus: SessionUpdatePayload['expectedStatus'],
-  sessions: SessionsTable,
-): SQL | undefined {
-  return expectedStatus === undefined ? undefined : inArray(sessions.status, expectedStatus);
-}
-
-/**
- * Build the conjunct that guards an identity backfill.
- *
- * Three conditions in one predicate, travelling **inside** the update statement:
- * both identity columns are still unpopulated, and the stored designation is the
- * one the caller wrote for. Together they are the reason this write needs no
- * re-read — a peer that establishes the identity, or a designation that moves,
- * between the caller's read and this statement makes the statement match nothing
- * instead of overwriting what it never saw.
- *
- * `null` expects **no** designation, which is the shape a host without a
- * designation authority produces; it compiles to `lead_agent_id IS NULL` rather
- * than to an equality no row can satisfy.
- * @param expectIdentityOpenForLead - The designation the row must still carry, `null` for none, or `undefined` for an update that writes no identity.
- * @param sessions - Dialect-resolved sessions table object.
- * @returns The predicate, or `undefined` when the write carries no identity.
- */
-function buildIdentityOpenPredicate(
-  expectIdentityOpenForLead: SessionUpdatePayload['expectIdentityOpenForLead'],
-  sessions: SessionsTable,
-): SQL | undefined {
-  if (expectIdentityOpenForLead === undefined) return undefined;
-  return and(
-    isNull(sessions.adapterName),
-    isNull(sessions.adapterId),
-    expectIdentityOpenForLead === null
-      ? isNull(sessions.leadAgentId)
-      : eq(sessions.leadAgentId, expectIdentityOpenForLead),
-  );
-}
-
-/**
  * Register handler for storage:session.update.
  *
  * Performs partial update of session fields without touching agents. A supplied
@@ -401,13 +354,16 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
     // The compare-and-swap guard travels with the write, in the same predicate:
     // a caller acting on an observation must not be able to overwrite a status
     // that changed after it read the row.
-    const statusGuard = buildExpectedStatusPredicate(payload.expectedStatus, sessions);
-    const identityGuard = buildIdentityOpenPredicate(payload.expectIdentityOpenForLead, sessions);
+    const {
+      status: statusGuard,
+      identity: identityGuard,
+      reconciliation: reconciliationGuard,
+    } = buildSessionUpdateGuards(payload, sessions);
     if (!updatesClientAccountState) {
       const result = await db
         .update(sessions)
         .set(updateFields)
-        .where(and(eq(sessions.sessionId, sessionId), statusGuard, identityGuard));
+        .where(and(eq(sessions.sessionId, sessionId), statusGuard, identityGuard, reconciliationGuard));
       ctx.setResult({ success: didAffectRows(result), clientAccountChanged: false });
       return;
     }
@@ -436,6 +392,10 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
         ctx.setResult({ success: false, clientAccountChanged: false });
         return;
       }
+      if (isAdapterSessionReconciliationRefused(previousSession, payload)) {
+        ctx.setResult({ success: false, clientAccountChanged: false });
+        return;
+      }
       const result = await db
         .update(sessions)
         .set(updateFields)
@@ -444,6 +404,7 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
             eq(sessions.sessionId, sessionId),
             statusGuard,
             identityGuard,
+            reconciliationGuard,
             buildClientAccountBaselinePredicate(previousRow, sessions),
           ),
         );

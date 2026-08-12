@@ -157,6 +157,7 @@ export type { AdapterSessionCurrencyState, AgentRole, BranchKind } from './schem
 // `Service` infix so it can never be confused with the storage schema of the
 // same name.
 export {
+  normalizeSessionOwnershipReserveStartServiceRequest,
   OwnershipTopologySchema,
   SessionOwnershipContinuationServiceRequestSchema,
   SessionOwnershipContinuationServiceResponseSchema,

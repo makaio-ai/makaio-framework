@@ -191,6 +191,7 @@ export const AgentStorageNamespace = createStorageNamespaceDefinition('agent', {
         .object({
           agentId: z.string(),
           adapterId: z.string().optional(),
+          runtimeOwner: z.object({ machineId: z.string(), instanceId: z.string() }).optional(),
           /** Provider-confirmed adapter session ID. Set during reconciliation when the provider confirms an idle fork child's session. */
           adapterSessionId: z.string().optional(),
           cwd: z.string().optional(),
@@ -202,6 +203,7 @@ export const AgentStorageNamespace = createStorageNamespaceDefinition('agent', {
         .refine(
           (payload) =>
             payload.adapterId !== undefined ||
+            payload.runtimeOwner !== undefined ||
             payload.adapterSessionId !== undefined ||
             payload.cwd !== undefined ||
             payload.model !== undefined ||
@@ -209,7 +211,7 @@ export const AgentStorageNamespace = createStorageNamespaceDefinition('agent', {
             payload.providerConfigId !== undefined,
           {
             message:
-              'At least one runtime field (adapterId, adapterSessionId, cwd, model, allowedDirectories, or providerConfigId) must be provided',
+              'At least one runtime field (adapterId, runtimeOwner, adapterSessionId, cwd, model, allowedDirectories, or providerConfigId) must be provided',
           },
         ),
       response: z.object({

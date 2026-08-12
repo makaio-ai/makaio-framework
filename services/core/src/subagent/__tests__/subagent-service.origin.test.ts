@@ -301,6 +301,7 @@ describe('SubagentService — origin guard on spawn', () => {
         success: true,
         agentId: 'agent-remote-execute',
         adapterId: ctx.payload.adapterId,
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-remote-execute',
         sessionId: ctx.payload.sessionId ?? 'child-remote-execute',
       });
@@ -352,6 +353,7 @@ describe('SubagentService — origin guard on spawn', () => {
         success: true,
         agentId: 'agent-workflow-execute',
         adapterId: ctx.payload.adapterId,
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-workflow-execute',
         sessionId: ctx.payload.sessionId ?? 'child-workflow-execute',
       });

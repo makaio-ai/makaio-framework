@@ -16,6 +16,11 @@ export { postgresStorageEngine } from './engine.js';
 export { isPostgresDuplicateObjectError, isPostgresUniqueViolationError } from './errors.js';
 export { postgresFtsSearchStrategy } from './fts-strategy.js';
 export { buildPostgresLedgerDdl, migrationAdvisoryLockKey, POSTGRES_MIGRATION_BEGIN } from './migrations.js';
+export {
+  postgresTransactionLockExpressions,
+  postgresTransactionLockKey,
+  postgresTransactionLocks,
+} from './transaction-locks.js';
 
 import { postgresStorageEngine } from './engine.js';
 

@@ -77,6 +77,69 @@ describe('activateAdapterRuntimeIdentity', () => {
     expect(adapterId).toBe(buildDeterministicAdapterId('explicit-machine', 'claude-code-cli'));
   });
 
+  it('uses the supplied live resolver for local requests, including an explicit live adapter ID', async () => {
+    const bus = makeBus();
+    const resolvedNames: string[] = [];
+    const { cleanup } = activateAdapterRuntimeIdentity({
+      bus,
+      currentMachineId: 'runtime-machine',
+      resolveLiveAdapterId: (adapterName) => {
+        resolvedNames.push(adapterName);
+        return 'host-configured-live-adapter-id';
+      },
+    });
+    cleanups.push(cleanup);
+
+    await expect(bus.request(AdapterRuntimeSubjects.resolveId, { adapterName: 'claude-code-cli' })).resolves.toEqual({
+      adapterId: 'host-configured-live-adapter-id',
+    });
+    await expect(
+      bus.request(AdapterRuntimeSubjects.resolveId, {
+        adapterName: 'claude-code-cli',
+        machineId: 'runtime-machine',
+      }),
+    ).resolves.toEqual({ adapterId: 'host-configured-live-adapter-id' });
+    expect(resolvedNames).toEqual(['claude-code-cli', 'claude-code-cli']);
+  });
+
+  it('refuses a local name when the authoritative live resolver has no instance', async () => {
+    const bus = makeBus();
+    const { cleanup } = activateAdapterRuntimeIdentity({
+      bus,
+      currentMachineId: 'runtime-machine',
+      resolveLiveAdapterId: () => undefined,
+    });
+    cleanups.push(cleanup);
+
+    await expect(bus.request(AdapterRuntimeSubjects.resolveId, { adapterName: 'not-live' })).rejects.toThrow(
+      /No live local adapter is registered/,
+    );
+  });
+
+  it('derives explicitly foreign requests without reading a local live instance', async () => {
+    const bus = makeBus();
+    let resolverCalls = 0;
+    const { cleanup } = activateAdapterRuntimeIdentity({
+      bus,
+      currentMachineId: 'runtime-machine',
+      resolveLiveAdapterId: () => {
+        resolverCalls += 1;
+        return 'local-live-adapter-id';
+      },
+    });
+    cleanups.push(cleanup);
+
+    await expect(
+      bus.request(AdapterRuntimeSubjects.resolveId, {
+        adapterName: 'claude-code-cli',
+        machineId: 'foreign-machine',
+      }),
+    ).resolves.toEqual({
+      adapterId: buildDeterministicAdapterId('foreign-machine', 'claude-code-cli'),
+    });
+    expect(resolverCalls).toBe(0);
+  });
+
   it('cleanup unregisters the identity handlers (resolveId + resolveName)', async () => {
     const bus = makeBus();
     const { cleanup } = activateAdapterRuntimeIdentity({ bus, currentMachineId: 'm' });

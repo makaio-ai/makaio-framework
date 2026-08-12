@@ -22,7 +22,9 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `acknowledgeCallerSettlement` | [`adapter.acknowledgeCallerSettlement`](#adapter.acknowledgeCallerSettlement) | rpc | [`acknowledge-caller-settlement.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/adapter/schemas/acknowledge-caller-settlement.ts) |
 | `agent.created` | [`adapter.agent.created`](#adapter.agent.created) | event | [`agent-created.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/adapter/schemas/agent-created.ts) |
+| `deinitialized` | [`adapter.deinitialized`](#adapter.deinitialized) | event | [`deinitialized.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/adapter/schemas/deinitialized.ts) |
 | `error` | [`adapter.error`](#adapter.error) | event | [`error.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/adapter/schemas/error.ts) |
 | `getAgent` | [`adapter.getAgent`](#adapter.getAgent) | rpc | [`get-agent.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/adapter/schemas/get-agent.ts) |
 | `getCapabilities` | [`adapter.getCapabilities`](#adapter.getCapabilities) | rpc | [`get-capabilities.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/adapter/schemas/get-capabilities.ts) |
@@ -42,6 +44,35 @@ next: false
 
 ## Subject Details
 
+### <a id="adapter.acknowledgeCallerSettlement"></a>`adapter.acknowledgeCallerSettlement` (rpc)
+
+Acknowledge that a caller-owned start or rehydrate durably settled ownership.
+
+The opaque token binds the acknowledgement to the exact hosted generation
+returned by `adapter.startAgent` or `adapter.rehydrateAgent`. The adapter
+opens provider-key publication and accepts responsibility for later terminal
+row writes only after this RPC succeeds.
+
+Subject: `adapter.acknowledgeCallerSettlement`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string` | yes |
+| `agentId` | `string` | yes |
+| `ownerInstanceId` | `string` | yes |
+| `recovery` | `true \| undefined` | no |
+| `settlementAckToken` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `acknowledged` | `true \| false` | yes |
+| `reason` | `"not-hosted" \| "stale-token" \| "teardown-in-flight" \| "status-refused" \| undefined` | no |
+
 ### <a id="adapter.agent.created"></a>`adapter.agent.created` (event)
 
 Agent execution unit created.
@@ -57,6 +88,20 @@ Emitted when: Adapter spawns a new agent execution unit
 | `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `sessionId` | `string` | yes |
+
+### <a id="adapter.deinitialized"></a>`adapter.deinitialized` (event)
+
+Exact adapter identity withdrawn from routing when its runtime removes the instance.
+
+Subject: `adapter.deinitialized`
+Type: Event
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string` | yes |
+| `adapterName` | `string` | yes |
+| `machineId` | `string` | yes |
+| `ownerInstanceId` | `string` | yes |
 
 ### <a id="adapter.error"></a>`adapter.error` (event)
 
@@ -88,6 +133,7 @@ Purpose: Returns details for a specific agent, or null if not found.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `agentId` | `string` | yes |
+| `ownerInstanceId` | `string` | yes |
 
 **Response:**
 
@@ -193,7 +239,9 @@ adapters are ready.
 | `adapterId` | `string` | yes |
 | `adapterName` | `string` | yes |
 | `capabilities` | `string[]` | yes |
+| `machineId` | `string` | yes |
 | `nativeTools` | `string[] \| undefined` | no |
+| `ownerInstanceId` | `string` | yes |
 
 ### <a id="adapter.listAgents"></a>`adapter.listAgents` (rpc)
 
@@ -287,6 +335,7 @@ swap.
 | `callerOwnsAgentRow` | `true \| undefined` | no |
 | `cwd` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
+| `ownerInstanceId` | `string \| undefined` | no |
 | `resumeAdapterSessionId` | `string \| undefined` | no |
 
 **Response:**
@@ -296,6 +345,8 @@ swap.
 | `adapterSessionId` | `string \| undefined` | no |
 | `dispatch` | `"not-dispatched" \| undefined` | no |
 | `message` | `string \| undefined` | no |
+| `ownerInstanceId` | `string \| undefined` | no |
+| `settlementAckToken` | `string \| undefined` | no |
 | `success` | `true \| false` | yes |
 
 ### <a id="adapter.session.closed"></a>`adapter.session.closed` (event)
@@ -413,6 +464,7 @@ For `resume` mode, `sessionId` and `adapterSessionId` are REQUIRED.
 | `mcpSessionContext` | `{ sessionId: string; projectId: string \| null; profileId: string \| null; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; } \| { sessionId: string; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; } \| undefined` | no |
 | `mode` | `"fork" \| "resume" \| "create" \| undefined` | no |
 | `model` | `string \| undefined` | no |
+| `ownerInstanceId` | `string \| undefined` | no |
 | `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: Record<string, unknown> \| undefined; } \| { state: "unresolved"; } \| undefined` | no |
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `responseSchema` | `{ schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined` | no |
@@ -434,7 +486,9 @@ For `resume` mode, `sessionId` and `adapterSessionId` are REQUIRED.
 | `dispatch` | `"not-dispatched" \| "dispatch-uncertain" \| undefined` | no |
 | `message` | `string \| undefined` | no |
 | `messageId` | `string \| undefined` | no |
+| `ownerInstanceId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
+| `settlementAckToken` | `string \| undefined` | no |
 | `success` | `true \| false` | yes |
 
 ### <a id="adapter.stopAgent"></a>`adapter.stopAgent` (rpc)
@@ -451,13 +505,15 @@ Purpose: Aborts the agent and removes it from the adapter's tracking.
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `agentId` | `string` | yes |
+| `ownerInstanceId` | `string` | yes |
+| `teardown` | `"connector-only" \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
 | `detail` | `string \| undefined` | no |
-| `evidence` | `"unknown" \| "released" \| "exited" \| "closed" \| "detached"` | yes |
+| `evidence` | `"unknown" \| "closed" \| "released" \| "exited" \| "detached"` | yes |
 | `success` | `boolean` | yes |
 
 ---

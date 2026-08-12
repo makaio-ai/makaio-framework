@@ -74,6 +74,9 @@ function buildExplicitPostgresEngine(): StorageEngine {
       beginTransactionStatement: 'BEGIN',
       extensionLedgerName: (sourceHash) => `__makaio_migrations_${sourceHash}`,
     },
+    transactionLocks: {
+      lockExpressions: () => [],
+    },
     fts: {
       dialect: 'postgres',
       provisionSearchIndex: () => Promise.resolve(),

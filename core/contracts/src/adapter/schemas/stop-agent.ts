@@ -12,8 +12,12 @@ export const StopAgentSchema = {
   request: z.object({
     /** Target adapter instance ID */
     adapterId: z.string(),
+    /** Exact runtime incarnation that owns the agent. */
+    ownerInstanceId: z.string(),
     /** Agent to stop */
     agentId: z.string(),
+    /** Recovery cleanup closes only the hosted connector; ownership writes the row. */
+    teardown: z.enum(['connector-only']).optional(),
   }),
   response: z.object({
     /**
@@ -31,20 +35,8 @@ export const StopAgentSchema = {
      * consumer asking "may I claim this key" gets the same answer from "it is
      * gone" as from "it closed cleanly", and that equivalence is the point.
      *
-     * **Nothing decides anything on this field today, and that is deliberate.**
-     * It is read by conformance and by diagnostics; every existing caller still
-     * reads `success` alone, as "was it there", which stays true under this
-     * response. The field exists so the *next* consumer does not have to invent
-     * the evidence first — an ownership release that frees a provider session
-     * only once nothing can still be speaking on it.
-     *
-     * That consumer needs one thing more than this field, which is why it is not
-     * built here: a stop that provably reaches **the** owner. A release gated on
-     * this class alone would refuse whenever the peer that answered does not host
-     * the agent — the ordinary case, since the dispatch is first-result-wins —
-     * and it would still not stop the second writer it aimed at, because a
-     * takeover accepts a disposed incumbent regardless of its claim's
-     * disposition. Owner-process identity is what closes both halves.
+     * A response is attributable to the exact runtime owner named by the
+     * request, so an absent agent is terminal for that owner.
      */
     evidence: TeardownEvidenceSchema,
     /** Why the class is not stronger. Present for `detached` and `unknown`. */

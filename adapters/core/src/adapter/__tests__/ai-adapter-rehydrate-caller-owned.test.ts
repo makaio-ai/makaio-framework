@@ -3,10 +3,10 @@
  *
  * Two contract changes are pinned here (#1140 Wave 3, cases 64 and 99):
  *
- * - `callerOwnsAgentRow` suppresses the adapter's `agent.updateStatus` write on
- *   both the cold and the warm path, and nothing else. The connector is still
- *   registered and the runtime is still published, because a caller that owns
- *   the row owns the `starting → idle` transition only — not the rehydrate.
+ * - `callerOwnsAgentRow` suppresses publication and status settlement until the
+ *   caller returns the adapter-minted acknowledgement token. A successful Ack
+ *   performs the guarded `starting | dead → idle` transition and transfers row
+ *   responsibility back to the hosted adapter generation.
  * - The response is a disposition union. A refusal the adapter takes before
  *   anything reaches the provider is modeled as `dispatch: 'not-dispatched'`,
  *   and a caller that joins an in-flight rehydrate is answered with the owning
@@ -64,7 +64,11 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
   let adapter: TestAdapter;
   let cleanupFns: Array<() => void> = [];
   let statusWrites: Array<{ agentId: string; status: string }>;
-  let runtimeWrites: Array<{ agentId: string; adapterSessionId: string | undefined }>;
+  let runtimeWrites: Array<{
+    agentId: string;
+    runtimeOwner: { machineId: string; instanceId: string } | undefined;
+    adapterSessionId: string | undefined;
+  }>;
   let agentReads: number;
 
   beforeEach(async () => {
@@ -83,7 +87,11 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         ctx.setResult({ success: true, transitioned: true });
       }),
       MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
-        runtimeWrites.push({ agentId: ctx.payload.agentId, adapterSessionId: ctx.payload.adapterSessionId });
+        runtimeWrites.push({
+          agentId: ctx.payload.agentId,
+          runtimeOwner: ctx.payload.runtimeOwner,
+          adapterSessionId: ctx.payload.adapterSessionId,
+        });
         ctx.setResult({ success: true });
       }),
       MakaioBus.on(AgentStorageSubjects.set, (ctx) => {
@@ -154,6 +162,16 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
       // exists, so writing it here would advertise a provider session no
       // generation holds — before the caller that reserved it has settled.
       expect(runtimeWrites).toEqual([]);
+      if (result.settlementAckToken === undefined) throw new Error('caller-owned rehydrate omitted ack token');
+      await expect(
+        MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+          adapterId: adapter.adapterId,
+          ownerInstanceId: adapter.ownerInstanceId,
+          agentId: 'cold-caller-owned',
+          settlementAckToken: result.settlementAckToken,
+        }),
+      ).resolves.toEqual({ acknowledged: true });
+      expect(statusWrites).toEqual([{ agentId: 'cold-caller-owned', status: 'idle' }]);
     });
 
     it('writes idle exactly as before when the flag is absent', async () => {
@@ -209,7 +227,13 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         agentId: 'cold-seam-settles',
       });
       expect(announced).toEqual(['cold-seam-settles']);
-      expect(runtimeWrites).toEqual([{ agentId: 'cold-seam-settles', adapterSessionId: 'mock-adapter-session-id' }]);
+      expect(runtimeWrites).toEqual([
+        {
+          agentId: 'cold-seam-settles',
+          runtimeOwner: { machineId: 'test-machine', instanceId: adapter.ownerInstanceId },
+          adapterSessionId: 'mock-adapter-session-id',
+        },
+      ]);
     });
 
     it('refuses a disposed agent as not-dispatched instead of throwing', async () => {
@@ -333,10 +357,20 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         // publish, and it publishes after its settlement claims it. The runtime
         // write still lands for the fields this rehydrate does own.
         expect(runtimeWrites.filter((write) => write.agentId === started.agentId)).toEqual([
-          { agentId: started.agentId, adapterSessionId: undefined },
+          { agentId: started.agentId, runtimeOwner: undefined, adapterSessionId: undefined },
         ]);
+        if (owned.settlementAckToken === undefined) throw new Error('caller-owned rehydrate omitted ack token');
+        await expect(
+          MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+            adapterId: swapping.adapterId,
+            ownerInstanceId: swapping.ownerInstanceId,
+            agentId: started.agentId,
+            settlementAckToken: owned.settlementAckToken,
+          }),
+        ).resolves.toEqual({ acknowledged: true });
 
-        // The adapter-owned twin: nobody else settles it, so the seam must.
+        // The adapter-owned twin runs only after Ack opened the host predicate:
+        // nobody else settles it, so the seam must publish the next movement.
         const unowned = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
           adapterId: swapping.adapterId,
           agentId: started.agentId,
@@ -354,8 +388,12 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         expect(liveDuringAnnouncement).toEqual(['warm-session-2']);
         // The adapter-owned twin publishes both ways, as it always has.
         expect(runtimeWrites.filter((write) => write.agentId === started.agentId)).toEqual([
-          { agentId: started.agentId, adapterSessionId: undefined },
-          { agentId: started.agentId, adapterSessionId: 'warm-session-3' },
+          { agentId: started.agentId, runtimeOwner: undefined, adapterSessionId: undefined },
+          {
+            agentId: started.agentId,
+            runtimeOwner: { machineId: 'test-machine', instanceId: swapping.ownerInstanceId },
+            adapterSessionId: 'warm-session-3',
+          },
         ]);
       } finally {
         await swapping.closeAsync();

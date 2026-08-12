@@ -50,6 +50,8 @@ async function makeAgent(): Promise<{ agent: ClaudeCodeTmuxAgent; connector: Tes
     agentId: TEST_AGENT_ID,
     adapterId: TEST_ADAPTER_ID,
     adapterName: TEST_ADAPTER_NAME,
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     adapterBus,
     teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,

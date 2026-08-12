@@ -48,6 +48,7 @@ describe('registerAttachHandler - runtime options', () => {
           });
         }),
       );
+      await ctx.registerKnownAdapter('resolved-from-virtual-model');
       const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
       ctx.trackUnsubscribe(unsubscribe);
       ctx.trackUnsubscribe(ctx.registerHandler());

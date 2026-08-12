@@ -1,4 +1,4 @@
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
 import type { DiscoveredAIModel } from '@makaio/contracts';
 import { OpenAIAgent } from './agent.js';
@@ -39,26 +39,27 @@ export class OpenAIModelFetchAuthError extends Error {
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new OpenAIAdapter();
+ * const adapter = new OpenAIAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createOpenAINodeAdapter();
+ * const adapter = await createOpenAINodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * ```
  */
 export class OpenAIAdapter extends AIAdapter<OpenAINodeConnectorBus, OpenAINodeConnector, OpenAIAgent> {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: OpenAINodeAdapterName,
       capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append', 'structuredOutput'],
-      ...config,
+      nativeTools: [],
       namespace: OpenAINodeConnectorNamespace,
       agentFactory: (agentConfig) => {
         return new OpenAIAgent(agentConfig);
       },
       configFactory: OpenAINodeConfig.getConfig,
       connectorFactory: (fullConfig) => new OpenAINodeConnector(fullConfig),
-      definitionProviders: config?.definitionProviders,
+      definitionProviders: config.definitionProviders,
     });
   }
 
@@ -120,17 +121,17 @@ export class OpenAIAdapter extends AIAdapter<OpenAINodeConnectorBus, OpenAINodeC
  * Factory function to create and initialize an OpenAI adapter.
  *
  * Convenience wrapper that creates the adapter and calls init() for you.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized OpenAIAdapter instance
  * @example
  * ```typescript
- * const adapter = await createOpenAINodeAdapter();
+ * const adapter = await createOpenAINodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle requests via bus
  * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
-export async function createOpenAINodeAdapter(config?: Partial<AIAdapterConfig>): Promise<OpenAIAdapter> {
+export async function createOpenAINodeAdapter(config: AIAdapterRuntimeConfig): Promise<OpenAIAdapter> {
   const adapter = new OpenAIAdapter(config);
   await adapter.init();
   return adapter;

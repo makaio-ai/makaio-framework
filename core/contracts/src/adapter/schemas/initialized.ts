@@ -20,6 +20,10 @@ import { BaseAdapterEventSchema } from './base-event.js';
  * ```
  */
 export const InitializedSchema = BaseAdapterEventSchema.extend({
+  /** Canonical runtime machine identity hosting this adapter instance. */
+  machineId: z.string(),
+  /** Exact ownership-authority incarnation hosting this live adapter instance. */
+  ownerInstanceId: z.string(),
   /** Adapter capabilities (e.g., ['streaming', 'tools', 'vision']). */
   capabilities: z.array(z.string()),
   /** Native tools built into the adapter (e.g., ['shell_command', 'apply_patch']). */

@@ -32,7 +32,8 @@ describe('ObservedSessionIngestionService - continuation reopen', () => {
     bus = createBusInstance();
     cleanups = [
       registerMemorySessionStorage(bus),
-      registerSessionOwnershipAuthority({ bus, machineId: 'continuation-machine', topology: 'shared-machine' }),
+      ...registerSessionOwnershipAuthority({ bus, machineId: 'continuation-machine', topology: 'shared-machine' })
+        .cleanups,
       bus.on(LogImportTriggerSubjects.listImporters, (ctx) => {
         ctx.setResult({ importers: [{ adapterName: ADAPTER_NAME, clientId: CLIENT_ID }] });
       }),

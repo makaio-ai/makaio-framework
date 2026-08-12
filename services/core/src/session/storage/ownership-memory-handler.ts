@@ -18,11 +18,22 @@
  */
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { AdapterSessionClaimRecord } from '@makaio/contracts';
-import { SessionOwnershipStorageSubjects } from '@makaio/contracts';
+import { SessionOwnershipSettleMovementRequestSchema, SessionOwnershipStorageSubjects } from '@makaio/contracts';
 import { type SessionStorageMemoryState, createSessionStorageMemoryState } from './memory-store.js';
 import { runClaim } from './ownership-memory-claim.js';
-import { agentCurrencySnapshot, findClaimByToken } from './ownership-memory-rows.js';
-import { applySettle, resolveMovementTarget, runMovementClaimsPhase } from './ownership-memory-settle.js';
+import {
+  agentCurrencySnapshot,
+  ensureMemoryRuntimeInstance,
+  findClaimByToken,
+  runtimeInstanceKey,
+} from './ownership-memory-rows.js';
+import {
+  applySettle,
+  adoptSettledLegacyGeneration,
+  resolveMovementTarget,
+  runMovementClaimsPhase,
+  type IdentifiedMovementRequest,
+} from './ownership-memory-settle.js';
 
 // ─── Per-subject registration ────────────────────────────────────────────────
 
@@ -75,6 +86,47 @@ function registerSettleCurrencyHandler(bus: IMakaioBus, state: SessionStorageMem
 }
 
 /**
+ * Register the attempt-fenced terminal recovery transition.
+ * @param bus - Bus that receives terminal recovery requests.
+ * @param state - Shared in-memory ownership state.
+ * @returns Cleanup function that unregisters the terminal recovery handler.
+ */
+function registerFinalizeRecoveryHandler(bus: IMakaioBus, state: SessionStorageMemoryState): () => void {
+  return bus.on(SessionOwnershipStorageSubjects.finalizeRecovery, (ctx) => {
+    const { agentId, attemptId, binding, action } = ctx.payload;
+    const agent = state.agents.get(agentId);
+    if (
+      agent === undefined ||
+      agent.status !== 'starting' ||
+      agent.recoveryAttemptId !== attemptId ||
+      agent.adapterId !== binding.adapterId ||
+      agent.runtimeOwner?.machineId !== binding.ownerMachineId ||
+      agent.runtimeOwner?.instanceId !== binding.ownerInstanceId
+    ) {
+      ctx.setResult({ applied: false });
+      return;
+    }
+    if (action.kind === 'rollback') {
+      agent.status = action.preimage.status;
+      agent.adapterId = action.preimage.adapterId;
+      agent.runtimeOwner =
+        action.preimage.binding === undefined
+          ? undefined
+          : {
+              machineId: action.preimage.binding.ownerMachineId,
+              instanceId: action.preimage.binding.ownerInstanceId,
+            };
+      agent.recoveryAttemptId = action.preimage.recoveryAttemptId;
+    } else {
+      agent.status = action.kind === 'succeeded' ? 'idle' : 'dead';
+      agent.recoveryAttemptId = undefined;
+    }
+    agent.lastActivityAt = Date.now();
+    ctx.setResult({ applied: true });
+  });
+}
+
+/**
  * Register the handler for `storage:sessionOwnership.settleMovement`.
  *
  * One provider-session movement, one act: acquire (or recognize) the successor
@@ -88,21 +140,33 @@ function registerSettleCurrencyHandler(bus: IMakaioBus, state: SessionStorageMem
  */
 function registerSettleMovementHandler(bus: IMakaioBus, state: SessionStorageMemoryState): () => void {
   return bus.on(SessionOwnershipStorageSubjects.settleMovement, (ctx) => {
-    const payload = ctx.payload;
+    const payload = SessionOwnershipSettleMovementRequestSchema.parse(ctx.payload);
+    const ownerInstance = payload.ownerInstance;
+    if (ownerInstance === undefined) throw new Error('session ownership movement requires ownerInstance');
+    const ownerKey = runtimeInstanceKey(ownerInstance.instanceId, payload.machineId);
+    const ownerAlreadyExisted = state.runtimeInstances.has(ownerKey);
+    ensureMemoryRuntimeInstance(state, ownerInstance.instanceId, payload.machineId, Date.now());
+    const identifiedPayload: IdentifiedMovementRequest = {
+      ...payload,
+      ownerInstance,
+    };
     const agent = state.agents.get(payload.agentId);
     if (agent === undefined || agent.sessionId !== payload.sessionId) {
+      if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
       ctx.setResult({ outcome: 'not-found' });
       return;
     }
     if (agent.status === 'disposed') {
+      if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
       ctx.setResult({ outcome: 'agent-disposed' });
       return;
     }
 
-    const target = resolveMovementTarget(payload.movement, agent);
+    const target = resolveMovementTarget(identifiedPayload.movement, agent);
     if (target === null) {
       // A demotion of an agent with nothing resumable resolves no key, so it
       // names no generation and there is nothing to write.
+      if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
       ctx.setResult({
         outcome: 'idempotent',
         revision: agent.revision ?? 0,
@@ -113,8 +177,9 @@ function registerSettleMovementHandler(bus: IMakaioBus, state: SessionStorageMem
       return;
     }
 
-    const phase = runMovementClaimsPhase(state, payload, target.providerSessionId);
+    const phase = runMovementClaimsPhase(state, identifiedPayload, target.providerSessionId);
     if (!('generation' in phase)) {
+      if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
       ctx.setResult(phase);
       return;
     }
@@ -128,19 +193,21 @@ function registerSettleMovementHandler(bus: IMakaioBus, state: SessionStorageMem
     });
     if (settled.outcome !== 'settled') {
       phase.rollback();
+      if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
       ctx.setResult(
         settled.outcome === 'idempotent' ? { ...settled, claim: structuredClone(phase.generation) } : settled,
       );
       return;
     }
 
+    const persistedGeneration = adoptSettledLegacyGeneration(state, phase.generation, ownerInstance.instanceId);
     ctx.setResult({
       outcome: 'settled',
       revision: settled.revision,
       currency: settled.currency,
       sessionSnapshotUpdated: settled.sessionSnapshotUpdated,
       releasedProviderSessionIds: phase.releasedProviderSessionIds,
-      claim: structuredClone(phase.generation),
+      claim: structuredClone(persistedGeneration),
     });
   });
 }
@@ -274,6 +341,38 @@ function registerListClaimsHandler(bus: IMakaioBus, state: SessionStorageMemoryS
   });
 }
 
+/**
+ * Register runtime-instance retirement without releasing any claims.
+ * @param bus - The bus instance to register the handler on.
+ * @param state - Shared in-memory state.
+ * @returns Cleanup function to unsubscribe the handler.
+ */
+function registerRetireInstanceHandler(bus: IMakaioBus, state: SessionStorageMemoryState): () => void {
+  return bus.on(SessionOwnershipStorageSubjects.retireInstance, (ctx) => {
+    const now = Date.now();
+    let retiredMachines = 0;
+    for (const [key, instance] of state.runtimeInstances) {
+      if (instance.instanceId !== ctx.payload.instanceId || instance.retiredAt !== null) continue;
+      state.runtimeInstances.set(key, { ...instance, retiredAt: now });
+      retiredMachines += 1;
+    }
+    ctx.setResult({ retiredMachines });
+  });
+}
+
+/**
+ * Register the runtime-instance diagnostic read.
+ * @param bus - The bus instance to register the handler on.
+ * @param state - Shared in-memory state.
+ * @returns Cleanup function to unsubscribe the handler.
+ */
+function registerGetRuntimeInstanceHandler(bus: IMakaioBus, state: SessionStorageMemoryState): () => void {
+  return bus.on(SessionOwnershipStorageSubjects.getRuntimeInstance, (ctx) => {
+    const instance = state.runtimeInstances.get(runtimeInstanceKey(ctx.payload.instanceId, ctx.payload.machineId));
+    ctx.setResult({ instance: instance === undefined ? null : structuredClone(instance) });
+  });
+}
+
 // ─── Handler registration ─────────────────────────────────────────────────────
 
 /**
@@ -294,6 +393,7 @@ export function registerMemorySessionOwnershipStorage(
 ): () => void {
   const unsubs = [
     registerReadHandler(bus, state),
+    registerFinalizeRecoveryHandler(bus, state),
     bus.on(SessionOwnershipStorageSubjects.claim, (ctx) => {
       ctx.setResult(runClaim(state, ctx.payload));
     }),
@@ -302,6 +402,8 @@ export function registerMemorySessionOwnershipStorage(
     registerReleaseHandler(bus, state),
     registerReleaseAgentClaimsHandler(bus, state),
     registerListClaimsHandler(bus, state),
+    registerRetireInstanceHandler(bus, state),
+    registerGetRuntimeInstanceHandler(bus, state),
   ];
 
   return () => {

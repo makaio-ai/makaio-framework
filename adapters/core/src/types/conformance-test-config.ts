@@ -1,6 +1,6 @@
 import type { BaseAgentConnectorConfig, AIAgentConnector } from '../agent/index.js';
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
-import type { AIAdapterInitOptions } from './ai-adapter-init-options.js';
+import type { AIAdapterRuntimeInitOptions } from './ai-adapter-init-options.js';
 import type { AIAdapter } from '../adapter/ai-adapter.js';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { ToolApprovalContext } from '../utils/tool-approval.js';
@@ -367,12 +367,12 @@ export interface ConformanceTestConfig<
    * @example
    * ```typescript
    * createAdapter: (options) => createClaudeAdapter({
-   *   adapterId: options?.adapterId ?? `test-${crypto.randomUUID()}`,
-   *   ...options
+   *   ...options,
+   *   adapterId: options.adapterId,
    * })
    * ```
    */
-  createAdapter?: (options?: AIAdapterInitOptions) => Promise<AIAdapter<TBus, TConnector, TAgent>>;
+  createAdapter?: (options: AIAdapterRuntimeInitOptions) => Promise<AIAdapter<TBus, TConnector, TAgent>>;
 
   /**
    * Adapter type name for orchestration tests (e.g., 'claude-code').

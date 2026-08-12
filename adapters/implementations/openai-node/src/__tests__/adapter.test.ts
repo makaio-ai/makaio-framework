@@ -36,7 +36,10 @@ describe('OpenAIAdapter.fetchModels', () => {
     });
     vi.stubGlobal('fetch', fetchStub);
 
-    const models = await new OpenAIAdapter().fetchModels('https://example.test/v1', SELECTED_AUTH);
+    const models = await new OpenAIAdapter({
+      machineId: 'test-machine',
+      ownerInstanceId: 'test-owner-instance',
+    }).fetchModels('https://example.test/v1', SELECTED_AUTH);
 
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
     expect(models).toMatchObject([{ name: 'name-only-model', friendlyName: 'name-only-model' }]);
@@ -53,7 +56,10 @@ describe('OpenAIAdapter.fetchModels', () => {
     });
     vi.stubGlobal('fetch', fetchStub);
 
-    const result = new OpenAIAdapter().fetchModels('https://example.test/v1', SELECTED_AUTH);
+    const result = new OpenAIAdapter({ machineId: 'test-machine', ownerInstanceId: 'test-owner-instance' }).fetchModels(
+      'https://example.test/v1',
+      SELECTED_AUTH,
+    );
     const expectation = expect(result).rejects.toThrow(`timed out after ${MODEL_FETCH_TIMEOUT_MS}ms`);
     await vi.advanceTimersByTimeAsync(MODEL_FETCH_TIMEOUT_MS);
 
@@ -67,9 +73,12 @@ describe('OpenAIAdapter.fetchModels', () => {
       createFetchStub(async () => new Response('', { status: 500, statusText: 'Server Error' })),
     );
 
-    await expect(new OpenAIAdapter().fetchModels('https://example.test/v1', SELECTED_AUTH)).rejects.toThrow(
-      /500 Server Error/,
-    );
+    await expect(
+      new OpenAIAdapter({ machineId: 'test-machine', ownerInstanceId: 'test-owner-instance' }).fetchModels(
+        'https://example.test/v1',
+        SELECTED_AUTH,
+      ),
+    ).rejects.toThrow(/500 Server Error/);
 
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -79,7 +88,7 @@ describe('OpenAIAdapter.fetchModels', () => {
     vi.stubGlobal('fetch', createFetchStub(fetchStub));
 
     await expect(
-      new OpenAIAdapter().fetchModels(undefined, {
+      new OpenAIAdapter({ machineId: 'test-machine', ownerInstanceId: 'test-owner-instance' }).fetchModels(undefined, {
         processEnv: {},
         connectorDeliveries: [],
         configInheritance: 'empty',

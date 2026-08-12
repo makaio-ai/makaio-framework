@@ -92,7 +92,12 @@ describe('reserved attach', () => {
     // the whole guarantee, and it is asserted from inside the dispatch.
     expect(claimsAtDispatch).toEqual([1]);
     expect(dispatched[0].agentId).toBe(result.agentId);
+    expect(dispatched[0].ownerInstanceId).toEqual(expect.any(String));
     expect(ctx.getStoredAgent(result.agentId)?.status).toBe('idle');
+    expect(ctx.getStoredAgent(result.agentId)?.runtimeOwner).toEqual({
+      machineId: MACHINE,
+      instanceId: expect.any(String),
+    });
   });
 
   it('refuses to start at all on an instance the caller named without its machine', async () => {
@@ -366,7 +371,7 @@ describe('reserved attach', () => {
     await expect(tryClaim(PROVIDER)).resolves.toMatchObject({ outcome: 'reserved' });
   });
 
-  it('cases 81 and 91: a throwing start keeps the row as dead and retires the key', async () => {
+  it('cases 81 and 91: a throwing start stops the target, keeps the row dead, and retires the key', async () => {
     seedSession();
     recordStorageOrder();
     registerAdapter(() => {
@@ -381,11 +386,10 @@ describe('reserved attach', () => {
     expect(storageOrder).not.toContain('row-delete');
     expect(storageOrder).toContain('release:abandoned');
     expect(ctx.getAgentClaims(agentId).map((claim) => claim.status)).toEqual(['abandoned']);
-    // The key stays blocked for the next claimant: nothing proved the provider
-    // session is closed, and `stopAgent` answering `true` proves nothing — so
-    // it is never asked. Asserted against the fixture's own recorder, which is
-    // the one registration this composition routes to.
-    expect(stopped).toEqual([]);
+    // The key stays blocked for the next claimant: `stopAgent` is best-effort
+    // rather than proof that the provider session closed, so the claim remains
+    // retired even after the selected runtime was asked to close its connector.
+    expect(stopped).toEqual([agentId]);
     await expect(tryClaim(PROVIDER)).resolves.toMatchObject({ outcome: 'occupied' });
   });
 
@@ -401,8 +405,10 @@ describe('reserved attach', () => {
         adapterId,
         adapterName,
         role: 'member',
+        ownerInstanceId: ATTACH_TEST_IDS.ownerInstanceId,
         resumeProviderSessionId: 'concurrent-provider-session',
         machineId: MACHINE,
+        claimToken: crypto.randomUUID(),
       });
       if (reserved.outcome === 'reserved') concurrentToken = reserved.reservation.claim?.claimToken;
       throw new Error('provider start exploded');

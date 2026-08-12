@@ -510,6 +510,147 @@ describe('GitService', { timeout: 30_000 }, () => {
         await fs.rm(repoBDir, { recursive: true, force: true });
       }
     });
+
+    it('returns current refs after worktree branch creation and removal', async () => {
+      const { repoPath, cleanup } = await createTestRepoWithCommit('git-log-cache-ref-mutations-');
+      const worktreePath = path.join(path.dirname(repoPath), `${path.basename(repoPath)}-worktree`);
+
+      try {
+        const getLog = () => bus.request(GitSubjects.getLog, { repoPath });
+
+        const initial = await getLog();
+        expect(initial.refs.branches).not.toHaveProperty('worktree-feature');
+
+        const createWorktreeResult = await bus.request(GitSubjects.createWorktree, {
+          repoPath,
+          path: worktreePath,
+          branch: 'worktree-feature',
+          createBranch: true,
+        });
+        expect(createWorktreeResult.success).toBe(true);
+        expect((await getLog()).refs.branches).toHaveProperty('worktree-feature');
+        expect(await bus.request(GitSubjects.localBranchExists, { repoPath, name: 'worktree-feature' })).toEqual({
+          exists: true,
+        });
+
+        const removeWorktreeResult = await bus.request(GitSubjects.removeWorktree, {
+          repoPath,
+          path: worktreePath,
+          deleteBranch: true,
+        });
+        expect(removeWorktreeResult.success).toBe(true);
+        expect((await getLog()).refs.branches).not.toHaveProperty('worktree-feature');
+        expect(await bus.request(GitSubjects.localBranchExists, { repoPath, name: 'worktree-feature' })).toEqual({
+          exists: false,
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('invalidates cached refs after an unsuccessful worktree branch creation attempt', async () => {
+      const { repoPath, git, cleanup } = await createTestRepoWithCommit('git-log-cache-partial-mutation-');
+      const fs = await import('node:fs/promises');
+      const nonDirectoryPath = path.join(repoPath, 'not-a-directory');
+
+      try {
+        await bus.request(GitSubjects.getLog, { repoPath });
+        await git.branch(['created-outside-service']);
+        await fs.writeFile(nonDirectoryPath, 'not a directory');
+
+        const result = await bus.request(GitSubjects.createWorktree, {
+          repoPath,
+          path: path.join(nonDirectoryPath, 'worktree'),
+          branch: 'possibly-created',
+          createBranch: true,
+        });
+
+        expect(result.success).toBe(false);
+        expect((await bus.request(GitSubjects.getLog, { repoPath })).refs.branches).toHaveProperty(
+          'created-outside-service',
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('returns current refs immediately after deleting a branch', async () => {
+      const { repoPath, git, cleanup } = await createTestRepoWithCommit('git-log-cache-delete-branch-');
+
+      try {
+        await git.branch(['delete-me']);
+        expect((await bus.request(GitSubjects.getLog, { repoPath })).refs.branches).toHaveProperty('delete-me');
+
+        const result = await bus.request(GitSubjects.deleteBranch, { repoPath, name: 'delete-me', force: true });
+
+        expect(result).toMatchObject({ success: true });
+        expect((await bus.request(GitSubjects.getLog, { repoPath })).refs.branches).not.toHaveProperty('delete-me');
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('rejects local branch existence requests from non-host transports', async () => {
+      const { repoPath, cleanup } = await createTestRepoWithCommit('git-local-branch-exists-auth-');
+      const inbound = createInboundTransport('websocket');
+      bus.registerTransport(inbound.transport);
+
+      try {
+        await inbound.simulateReceive({
+          type: 'request',
+          namespace: 'git',
+          subject: 'localBranchExists',
+          payload: { repoPath, name: 'main' },
+          correlationId: 'corr-local-branch-exists',
+          messageId: 'msg-local-branch-exists',
+        });
+
+        const response = inbound.responses.find((message) => message.type === 'response');
+        expect(response).toMatchObject({
+          type: 'response',
+          correlationId: 'corr-local-branch-exists',
+          error: { message: expect.stringContaining('requires a host-owned request') },
+        });
+      } finally {
+        bus.unregisterTransport('websocket');
+        await cleanup();
+      }
+    });
+
+    it('rejects branch deletion requests from remote worker peers', async () => {
+      const { repoPath, git, cleanup } = await createTestRepoWithCommit('git-delete-branch-auth-');
+      const inbound = createInboundTransport('worker');
+      bus.registerTransport(inbound.transport);
+
+      try {
+        await git.branch(['protected-branch']);
+        await inbound.simulateReceive(
+          {
+            type: 'request',
+            namespace: 'git',
+            subject: 'deleteBranch',
+            payload: { repoPath, name: 'protected-branch', force: true },
+            correlationId: 'corr-delete-branch',
+            messageId: 'msg-delete-branch',
+          },
+          {
+            transportName: 'worker',
+            peer: { kind: 'workflow-execution', id: 'wfx-peer', authenticated: true },
+          },
+        );
+
+        const response = inbound.responses.find((message) => message.type === 'response');
+        expect(response).toMatchObject({
+          type: 'response',
+          correlationId: 'corr-delete-branch',
+          error: { message: expect.stringContaining('requires a host-owned request') },
+        });
+        expect((await git.branchLocal()).all).toContain('protected-branch');
+      } finally {
+        bus.unregisterTransport('worker');
+        await cleanup();
+      }
+    });
   });
 
   describe('getFileAtRevision', () => {

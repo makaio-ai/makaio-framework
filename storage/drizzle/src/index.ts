@@ -71,6 +71,8 @@ export {
   type StorageEngineConstraintSuspension,
   type StorageEngineErrorClassifiers,
   type StorageEngineMigrationBehavior,
+  type StorageEngineTransactionLocks,
+  type TransactionLock,
 } from './engine/types';
 export {
   findStorageEngine,
@@ -93,6 +95,7 @@ export { sqliteStorageEngine } from './engine/sqlite/engine';
 // build their own classifiers from. Consumers go through StorageEngine.errors.
 export { isSqliteDuplicateObjectError, isSqliteUniqueViolationError, readErrorCode, someInCauseChain } from './errors';
 
+export { acquireTransactionLocks, type TransactionLockTransaction } from './transaction-locks';
 export {
   executeTransaction,
   serializeByKey,

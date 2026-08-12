@@ -67,7 +67,7 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (options) => createAnthropicSdkAdapter({ adapterId: options?.adapterId, definitionProviders }),
+    createAdapter: async (options) => createAnthropicSdkAdapter({ ...options, definitionProviders }),
     adapterName: AnthropicSdkAdapterName,
     testProviderContext: testPreset.providerContext,
     cleanup: () => connectorRuntimes.closeAll(),

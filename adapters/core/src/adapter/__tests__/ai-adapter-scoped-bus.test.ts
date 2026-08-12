@@ -14,6 +14,8 @@ import {
   type AIAgentConfig,
 } from './shared.js';
 
+const OWNER_INSTANCE_ID = 'scoped-bus-test-owner';
+
 describe('AIAdapter scoped bus context', () => {
   it('creates adapterBus from injected globalBus context when no scopedBus is provided', async () => {
     const hostBus = createBusInstance();
@@ -27,6 +29,8 @@ describe('AIAdapter scoped bus context', () => {
       );
 
     const adapter = new TestAdapter({
+      ownerInstanceId: OWNER_INSTANCE_ID,
+      machineId: 'scoped-bus-test-machine',
       name: 'scoped-bus-ctx-test',
       capabilities: [],
       nativeTools: [],
@@ -59,6 +63,8 @@ describe('AIAdapter scoped bus context', () => {
     );
 
     const adapter = new TestAdapter({
+      ownerInstanceId: OWNER_INSTANCE_ID,
+      machineId: 'scoped-bus-test-machine',
       name: 'scoped-bus-host-registration-test',
       capabilities: [],
       nativeTools: [],
@@ -85,7 +91,7 @@ describe('AIAdapter scoped bus context', () => {
     ).toBe('skip');
   });
 
-  it('passes the injected globalBus to created agents', async () => {
+  it('passes the injected runtime identity and globalBus to created agents', async () => {
     const hostBus = createBusInstance();
     const namespace = createAdapterNamespace('agent-bus-ctx-test', {});
     const { bus: mockScopedBus } = createMockScopedBus();
@@ -98,6 +104,8 @@ describe('AIAdapter scoped bus context', () => {
     }
 
     const adapter = new ExposedTestAdapter({
+      ownerInstanceId: OWNER_INSTANCE_ID,
+      machineId: 'scoped-bus-test-machine',
       name: 'agent-bus-ctx-test',
       capabilities: [],
       nativeTools: [],
@@ -124,5 +132,9 @@ describe('AIAdapter scoped bus context', () => {
     await adapter.createForTest('agent-1', 'session-1');
 
     expect(capturedConfig?.globalBus).toBe(hostBus);
+    expect(capturedConfig).toMatchObject({
+      machineId: 'scoped-bus-test-machine',
+      ownerInstanceId: OWNER_INSTANCE_ID,
+    });
   });
 });

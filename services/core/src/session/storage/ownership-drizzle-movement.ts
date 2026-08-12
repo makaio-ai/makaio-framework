@@ -8,11 +8,11 @@
  * transactions with two windows in which a crash strands an ownership key or
  * leaves the session advertising a currency no generation owns.
  *
- * **Statement order is `agents` → `claims` → `agents` (guarded) → `sessions`**,
- * the same order every other operation of this aggregate takes, and it locks
- * only its *own* agent's row. So a movement and a concurrent claim, settle or
- * release meet on the claim row alone, which both take after their agents row.
- * There is no cycle.
+ * **Statement order is incarnation counters → `runtime_instances` → `agents`
+ * → stable claim keys (complete mutable set) → `agents` (guarded) → `sessions`
+ * → `claims` (legacy adoption)**. The movement acquires its target key and
+ * every held predecessor key before it can take over or delete either, so
+ * crossed movements use the same engine-defined key order.
  *
  * **The effective generation, and why it is keyed on `claim_id`.** An agent that
  * already holds the target key is settled under the generation it already has,
@@ -25,8 +25,13 @@
  * caller sent.
  * @packageDocumentation
  */
-import { and, eq, ne } from 'drizzle-orm';
-import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { and, eq, isNull, ne, or } from 'drizzle-orm';
+import {
+  acquireTransactionLocks,
+  executeTransaction,
+  resolveSchema,
+  type MakaioDatabase,
+} from '@makaio/storage-drizzle';
 import {
   resolveResumableAdapterSessionId,
   type AdapterSessionCurrencyTarget,
@@ -36,14 +41,19 @@ import {
 } from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
 import { readClaimByKey } from './ownership-drizzle-reads.js';
+import {
+  acquisitionOwnershipClaimTransactionLock,
+  readHeldOwnershipClaimTransactionLocks,
+} from './ownership-drizzle-claim-keys.js';
 import { runSettleStatements } from './ownership-drizzle-settle.js';
 import {
   insertClaimGeneration,
-  isIncumbentUnusable,
   resolveClaimTargets,
+  resolveTakeoverAuthorization,
   takeOverClaimRow,
 } from './ownership-drizzle-acquire.js';
 import {
+  ensureRuntimeInstance,
   lockAgentAllocation,
   mapClaim,
   mapCurrency,
@@ -111,26 +121,23 @@ function resolveMovementTarget(
 /**
  * Take the generation the agent already holds on the target key, if it has one.
  *
- * The lookup and the claim-row lock are **one statement**: a self-assignment of
- * `updated_at` changes nothing, holds the row until the transaction ends, and
- * returns it. A read followed by a lock would leave a window in which a takeover
- * of that very generation commits in between, after which the settle would write
- * under a generation that has already been fenced out — the same window
- * `touchClaimGeneration` closes for the single-step settle.
+ * The movement acquired the target's stable key before this lookup, so this is
+ * deliberately a non-locking read. Reacquiring a row-specific lock here would
+ * reintroduce the target-churn race the stable key closes.
  * @param tx - Open transaction.
  * @param tables - Dialect-resolved session storage tables.
  * @param acquisition - The key and agent the movement resolves to.
  * @returns The agent's own live generation on that key, or `undefined`.
  */
-async function touchOwnGeneration(
+async function readOwnGeneration(
   tx: OwnershipTransaction,
   tables: OwnershipTables,
   acquisition: ClaimAcquisition,
 ): Promise<ClaimRow | undefined> {
   const { adapterSessionClaims } = tables;
-  const [touched] = await tx
-    .update(adapterSessionClaims)
-    .set({ updatedAt: adapterSessionClaims.updatedAt })
+  const [generation] = await tx
+    .select()
+    .from(adapterSessionClaims)
     .where(
       and(
         eq(adapterSessionClaims.machineId, acquisition.machineId),
@@ -138,19 +145,53 @@ async function touchOwnGeneration(
         eq(adapterSessionClaims.providerSessionId, acquisition.providerSessionId),
         eq(adapterSessionClaims.agentId, acquisition.agentId),
         eq(adapterSessionClaims.status, 'held'),
+        or(
+          eq(adapterSessionClaims.ownerInstanceId, acquisition.ownerInstanceId),
+          isNull(adapterSessionClaims.ownerInstanceId),
+        ),
       ),
     )
+    .limit(1);
+  return generation;
+}
+
+/**
+ * Adopt the legacy generation only after its movement has settled.
+ *
+ * The movement's stable key locked this row's ownership identity for the transaction,
+ * so this write cannot lose a concurrent takeover. Deferring it until after the
+ * guarded settle also keeps every refusal's response and persisted state on the
+ * same pre-adoption generation.
+ * @param tx - Open transaction.
+ * @param tables - Dialect-resolved session storage tables.
+ * @param generation - Generation that successfully settled the movement.
+ * @param ownerInstanceId - Runtime instance that settled the movement.
+ * @returns The persisted generation, adopted when it was legacy.
+ */
+async function adoptSettledLegacyGeneration(
+  tx: OwnershipTransaction,
+  tables: OwnershipTables,
+  generation: ClaimRow,
+  ownerInstanceId: string,
+): Promise<ClaimRow> {
+  if (generation.ownerInstanceId !== null) return generation;
+  const { adapterSessionClaims } = tables;
+  const [adopted] = await tx
+    .update(adapterSessionClaims)
+    .set({ ownerInstanceId })
+    .where(and(eq(adapterSessionClaims.claimId, generation.claimId), isNull(adapterSessionClaims.ownerInstanceId)))
     .returning();
-  return touched;
+  if (adopted === undefined) throw new Error('locked legacy movement generation disappeared before adoption');
+  return adopted;
 }
 
 /**
  * Allocate the successor generation on a key the agent does not yet hold.
  *
- * The same acquisition `claim` performs, including the unusable-incumbent
- * takeover: a key whose incumbent's agent row is `disposed` is repointed rather
- * than reported, because a removed agent can never legitimately hold one. Still
- * refused ⇒ `already-claimed`, and the whole movement rolls back.
+ * The same acquisition `claim` performs. Disposing an incumbent agent alone is
+ * not liveness evidence for its runtime connector, so takeover requires an
+ * owner-identity authorization. Still refused ⇒ `already-claimed`, and the whole
+ * movement rolls back.
  *
  * The retry loop exists for the one case that is neither success nor a holder to
  * report: a competitor took the key and released it again between the insert and
@@ -188,8 +229,9 @@ async function allocateSuccessor(
       continue;
     }
 
-    if (await isIncumbentUnusable(tx, tables, incumbent)) {
-      const taken = await takeOverClaimRow(tx, tables, acquisition, incumbent, 'incumbent-disposed', now);
+    const authorization = await resolveTakeoverAuthorization(tx, tables, acquisition, incumbent, false);
+    if (authorization !== undefined) {
+      const taken = await takeOverClaimRow(tx, tables, acquisition, incumbent, authorization, now);
       if (taken !== undefined) return taken;
       // The takeover matched nothing, so the key is no longer what the read
       // above described. Classify against the key as it stands *now*, never
@@ -273,6 +315,46 @@ function asMovementRefusal(
 }
 
 /**
+ * Return a pre-generation outcome without retaining a newly allocated runtime row.
+ * @param result - Outcome reached before any generation was usable.
+ * @param ownerInserted - Whether this transaction allocated the runtime row.
+ * @returns The outcome when no rollback is necessary.
+ * @throws {@link MovementRollbackSignal} when the runtime allocation must roll back.
+ */
+function refuseBeforeGeneration(
+  result: SessionOwnershipSettleMovementResult,
+  ownerInserted: boolean,
+): SessionOwnershipSettleMovementResult {
+  if (ownerInserted) throw new MovementRollbackSignal(result);
+  return result;
+}
+
+/**
+ * Build the claim identity allocated by a provider-session movement.
+ * @param payload - Movement whose successor is being allocated.
+ * @param ownerInstanceId - Runtime instance allocating the generation.
+ * @param providerSessionId - Successor provider key.
+ * @returns Claim identity used by the acquisition statements.
+ */
+function movementAcquisition(
+  payload: SessionOwnershipSettleMovementRequest,
+  ownerInstanceId: string,
+  providerSessionId: string,
+): ClaimAcquisition {
+  return {
+    machineId: payload.machineId,
+    adapterId: payload.adapterId,
+    adapterName: payload.adapterName,
+    providerSessionId,
+    sessionId: payload.sessionId,
+    agentId: payload.agentId,
+    ownerInstanceId,
+    topology: payload.topology,
+    claimToken: payload.movement.claimToken,
+  };
+}
+
+/**
  * Record a provider-session movement in full.
  * @param db - Database handle.
  * @param payload - Movement request.
@@ -284,42 +366,55 @@ export async function runSettleMovement(
 ): Promise<SessionOwnershipSettleMovementResult> {
   const tables = resolveSchema(db, sessionStorageSchema);
   const now = Date.now();
+  const ownerInstance = payload.ownerInstance;
+  if (ownerInstance === undefined) throw new Error('session ownership movement requires ownerInstance');
 
   try {
     return await executeTransaction(db, async (tx): Promise<SessionOwnershipSettleMovementResult> => {
+      const owner = await ensureRuntimeInstance(
+        tx,
+        tables,
+        { instanceId: ownerInstance.instanceId, machineId: payload.machineId },
+        now,
+      );
+
       // The agent row is locked for the whole transaction, so the membership and
       // liveness guards below are stated against a row no other transaction can
       // change until this one ends. The claim-table statements still carry their
       // own guards — those rows are not locked here.
       const agent = await lockAgentAllocation(tx, tables, payload.agentId);
-      if (agent === undefined || agent.sessionId !== payload.sessionId) return { outcome: 'not-found' };
-      if (agent.status === 'disposed') return { outcome: 'agent-disposed' };
+      if (agent === undefined || agent.sessionId !== payload.sessionId) {
+        return refuseBeforeGeneration({ outcome: 'not-found' }, owner.inserted);
+      }
+      if (agent.status === 'disposed') {
+        return refuseBeforeGeneration({ outcome: 'agent-disposed' }, owner.inserted);
+      }
 
       const target = resolveMovementTarget(payload.movement, agent);
       if (target === null) {
         // A demotion of an agent with nothing resumable resolves no key, so it
         // names no generation and there is nothing to write.
-        return {
-          outcome: 'idempotent',
-          revision: agent.revision,
-          currency: mapCurrency(agent),
-          sessionSnapshotUpdated: false,
-          claim: null,
-        };
+        return refuseBeforeGeneration(
+          {
+            outcome: 'idempotent',
+            revision: agent.revision,
+            currency: mapCurrency(agent),
+            sessionSnapshotUpdated: false,
+            claim: null,
+          },
+          owner.inserted,
+        );
       }
 
-      const acquisition: ClaimAcquisition = {
-        machineId: payload.machineId,
-        adapterId: payload.adapterId,
-        adapterName: payload.adapterName,
-        providerSessionId: target.providerSessionId,
-        sessionId: payload.sessionId,
-        agentId: payload.agentId,
-        claimToken: payload.movement.claimToken,
-      };
+      const acquisition = movementAcquisition(payload, ownerInstance.instanceId, target.providerSessionId);
+
+      await acquireTransactionLocks(db, tx, [
+        acquisitionOwnershipClaimTransactionLock(acquisition),
+        ...(await readHeldOwnershipClaimTransactionLocks(tx, tables, payload.agentId)),
+      ]);
 
       const generation =
-        (await touchOwnGeneration(tx, tables, acquisition)) ?? (await allocateSuccessor(tx, tables, acquisition, now));
+        (await readOwnGeneration(tx, tables, acquisition)) ?? (await allocateSuccessor(tx, tables, acquisition, now));
 
       const releasedProviderSessionIds =
         payload.movement.kind === 'confirmed'
@@ -335,13 +430,14 @@ export async function runSettleMovement(
       });
       if (settled.outcome !== 'settled') throw new MovementRollbackSignal(asMovementRefusal(settled, generation));
 
+      const persistedGeneration = await adoptSettledLegacyGeneration(tx, tables, generation, ownerInstance.instanceId);
       return {
         outcome: 'settled',
         revision: settled.revision,
         currency: settled.currency,
         sessionSnapshotUpdated: settled.sessionSnapshotUpdated,
         releasedProviderSessionIds,
-        claim: mapClaim(generation),
+        claim: mapClaim(persistedGeneration),
       };
     });
   } catch (error) {

@@ -23,15 +23,15 @@
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new CursorSdkAdapter();
+ * const adapter = new CursorSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createCursorSdkAdapter();
+ * const adapter = await createCursorSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * ```
  */
 
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import type { CursorSdkBus } from './namespaces/index.js';
 import { CursorSdkNamespace } from './namespaces/index.js';
 import { CursorSdkAdapterName } from './constants.js';
@@ -49,13 +49,14 @@ import { CursorSdkAgent } from './agent.js';
 export class CursorSdkAdapter extends AIAdapter<CursorSdkBus, CursorSdkConnector, CursorSdkAgent> {
   /**
    * Creates a Cursor SDK adapter instance.
-   * @param config - Optional adapter configuration overrides
+   * @param config - Runtime configuration, including the owning authority.
    */
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
       ...config,
       name: CursorSdkAdapterName,
       capabilities: ['tools', 'streaming', 'modelSwitchInSession', 'session:resume'],
+      nativeTools: [],
       namespace: CursorSdkNamespace,
       agentFactory: (agentConfig) => new CursorSdkAgent(agentConfig),
       configFactory: CursorSdkConfig.getConfig,
@@ -68,17 +69,17 @@ export class CursorSdkAdapter extends AIAdapter<CursorSdkBus, CursorSdkConnector
  * Factory function to create and initialize a Cursor SDK adapter.
  *
  * Convenience wrapper that creates the adapter and calls init() for you.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized CursorSdkAdapter instance
  * @example
  * ```typescript
- * const adapter = await createCursorSdkAdapter();
+ * const adapter = await createCursorSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle requests via bus
  * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
-export async function createCursorSdkAdapter(config?: Partial<AIAdapterConfig>): Promise<CursorSdkAdapter> {
+export async function createCursorSdkAdapter(config: AIAdapterRuntimeConfig): Promise<CursorSdkAdapter> {
   const adapter = new CursorSdkAdapter(config);
   await adapter.init();
   return adapter;

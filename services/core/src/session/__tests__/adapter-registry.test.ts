@@ -35,6 +35,8 @@ describe('AdapterRegistry', () => {
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'adapter-instance-abc',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-openai-a',
         capabilities: [],
       });
 
@@ -47,11 +49,15 @@ describe('AdapterRegistry', () => {
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'adapter-openai-1',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-openai-a',
         capabilities: ['streaming'],
       });
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'adapter-claude-2',
         adapterName: 'claude-agent-sdk',
+        machineId: 'machine-b',
+        ownerInstanceId: 'owner-claude-b',
         capabilities: ['streaming', 'tools'],
       });
 
@@ -63,6 +69,8 @@ describe('AdapterRegistry', () => {
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'adapter-openai-1',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-openai-a',
         capabilities: [],
       });
 
@@ -75,11 +83,15 @@ describe('AdapterRegistry', () => {
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'adapter-instance-v1',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-openai-v1',
         capabilities: [],
       });
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'adapter-instance-v2',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-openai-v2',
         capabilities: ['streaming'],
       });
 
@@ -106,6 +118,8 @@ describe('AdapterRegistry', () => {
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'event-cache-id',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-event-cache',
         capabilities: [],
       });
 
@@ -150,14 +164,12 @@ describe('AdapterRegistry', () => {
       }
     });
 
-    it('does not answer a machine-scoped lookup from the unattributed event cache', async () => {
-      // `adapter.initialized` carries no machine, and the bus can span hosts, so
-      // the instance it announces belongs to nobody in particular. It may serve
-      // the unscoped lookup it always served; a caller careful enough to name a
-      // machine gets a failure instead of a guess about that very identity.
+    it('answers a machine-scoped lookup only from the matching initialized event cache', async () => {
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'unattributed-id',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-unattributed',
         capabilities: [],
       });
       const cleanup = MakaioBus.on(AdapterRuntimeSubjects.resolveId, () => {
@@ -165,7 +177,8 @@ describe('AdapterRegistry', () => {
       });
 
       try {
-        await expect(registry.resolveAvailable('openai-node', 'machine-a')).rejects.toThrow('machineId="machine-a"');
+        await expect(registry.resolveAvailable('openai-node', 'machine-a')).resolves.toBe('unattributed-id');
+        await expect(registry.resolveAvailable('openai-node', 'machine-b')).rejects.toThrow('machineId="machine-b"');
         await expect(registry.resolveAvailable('openai-node')).resolves.toBe('unattributed-id');
       } finally {
         cleanup();
@@ -181,6 +194,8 @@ describe('AdapterRegistry', () => {
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterId: 'adapter-late',
         adapterName: 'openai-node',
+        machineId: 'machine-a',
+        ownerInstanceId: 'owner-late',
         capabilities: [],
       });
 

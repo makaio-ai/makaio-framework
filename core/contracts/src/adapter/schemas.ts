@@ -10,6 +10,7 @@ import {
   GetAgentSchema,
   StopAgentSchema,
   RehydrateAgentSchema,
+  AcknowledgeCallerSettlementSchema,
   GetConfigSchemaSchema,
   AgentCreatedSchema,
   SessionCreatedSchema,
@@ -19,6 +20,7 @@ import {
   LogSchema,
   ErrorSchema,
   InitializedSchema,
+  DeinitializedSchema,
   QuotaSchema,
 } from './schemas/index.js';
 
@@ -52,6 +54,7 @@ export const AdapterSchemas = {
   getAgent: GetAgentSchema,
   stopAgent: StopAgentSchema,
   rehydrateAgent: RehydrateAgentSchema,
+  acknowledgeCallerSettlement: AcknowledgeCallerSettlementSchema,
   getConfigSchema: GetConfigSchemaSchema,
   'agent.created': AgentCreatedSchema,
   'session.created': SessionCreatedSchema,
@@ -61,5 +64,6 @@ export const AdapterSchemas = {
   log: LogSchema,
   error: ErrorSchema,
   initialized: InitializedSchema,
+  deinitialized: DeinitializedSchema,
   quota: QuotaSchema,
 } satisfies SchemaRecord;

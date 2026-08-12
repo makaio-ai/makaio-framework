@@ -109,7 +109,11 @@ describe('case 204c: the reentrant close joins its own emitter', () => {
     // `agent.session.closed` is emitted before the connector teardown and the
     // adapter's own handler evicts on it, so this stop provokes a reentrant
     // teardown of the very agent it is tearing down.
-    await MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    await MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     // Let the fire-and-forget eviction the emission triggered run to completion.
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -130,7 +134,11 @@ describe('case 204c: the reentrant close joins its own emitter', () => {
     if (connector === undefined) throw new Error('the start built no connector');
     connector.closeGate = closeGate.getPromise();
 
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     // The close is held open, so the emission's handler provably reaches the
     // registry while the first teardown is still inside its close.
     await new Promise((resolve) => setImmediate(resolve));
@@ -143,6 +151,43 @@ describe('case 204c: the reentrant close joins its own emitter', () => {
   });
 });
 
+describe('case G7: instance shutdown drains unregistered starts', () => {
+  it('waits for a runtime-minted start and closes its registered agent', async () => {
+    const initializeGate = new DeferredPromise<void>();
+    await adapter.closeAsync();
+    ({ adapter } = createTestAdapter('flight-adapter-g7', {
+      connectorFactory: (config) => {
+        const connector = new MockConnector(config);
+        connector.initializeGate = initializeGate.getPromise();
+        connectors.push(connector);
+        return connector;
+      },
+    }));
+    await adapter.init();
+
+    const start = MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, role: 'lead' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(connectors).toHaveLength(1);
+
+    const close = adapter.closeAsync();
+    let closed = false;
+    void close.then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+
+    initializeGate.resolve();
+    const started = await start;
+    expect(started.success).toBe(true);
+    await close;
+
+    expect(connectors[0]?.closeCount).toBe(1);
+    if (!started.success) throw new Error('the admitted start unexpectedly refused');
+    expect(adapter.getAgent(started.agentId)).toBeUndefined();
+  });
+});
+
 describe('case 207: the `stopAgent` answer carries evidence beside its unchanged `success`', () => {
   it('reports the class the connector observed for a live agent', async () => {
     const agentId = await startAgent();
@@ -152,6 +197,7 @@ describe('case 207: the `stopAgent` answer carries evidence beside its unchanged
 
     const response = await MakaioBus.request(AdapterSubjects.stopAgent, {
       adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
       agentId,
     });
 
@@ -163,6 +209,7 @@ describe('case 207: the `stopAgent` answer carries evidence beside its unchanged
     // as "it closed cleanly".
     const response = await MakaioBus.request(AdapterSubjects.stopAgent, {
       adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
       agentId: 'never-started',
     });
 
@@ -177,6 +224,7 @@ describe('case 207: the `stopAgent` answer carries evidence beside its unchanged
 
     const response = await MakaioBus.request(AdapterSubjects.stopAgent, {
       adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
       agentId,
     });
 
@@ -193,6 +241,7 @@ describe('case 207: the `stopAgent` answer carries evidence beside its unchanged
 
     const response = await MakaioBus.request(AdapterSubjects.stopAgent, {
       adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
       agentId,
     });
 

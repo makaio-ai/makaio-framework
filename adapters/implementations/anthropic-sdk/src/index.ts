@@ -10,11 +10,11 @@
  * import { AnthropicSdkAdapter, createAnthropicSdkAdapter } from '@makaio/adapter-anthropic-sdk';
  *
  * // Using the class-based adapter
- * const adapter = new AnthropicSdkAdapter();
+ * const adapter = new AnthropicSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Or using the convenience factory
- * const adapter = await createAnthropicSdkAdapter();
+ * const adapter = await createAnthropicSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle adapter.startAgent RPC via bus
  * // Start agents via MakaioBus.request(AdapterSubjects.startAgent, { adapterId, ... })

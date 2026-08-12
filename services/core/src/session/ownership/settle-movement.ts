@@ -60,6 +60,9 @@ export async function runSettleMovement(
   context: OwnershipAuthorityContext,
   request: SessionOwnershipSettleMovementServiceRequest,
 ): Promise<SessionOwnershipSettleMovementServiceResult> {
+  if (request.ownerInstanceId !== context.instanceId) {
+    throw new Error(`settleMovement routed to owner ${context.instanceId} for target ${request.ownerInstanceId}`);
+  }
   const machineId = resolveOwnershipMachineId(context, request.machineId);
   if (machineId === undefined) return { outcome: 'machine-identity-unavailable' };
   const claimToken = request.claimToken ?? mintClaimToken();
@@ -80,6 +83,8 @@ export async function runSettleMovement(
       agentId: request.agentId,
       expectedRevision: ownership.revision,
       movement: toDurableMovement(request.movement, claimToken),
+      ownerInstance: { instanceId: request.ownerInstanceId },
+      topology: context.topology,
     });
 
     if (result.outcome !== 'currency-changed' || attempt >= CURRENCY_CHANGED_RETRY_BUDGET) return result;

@@ -54,7 +54,7 @@ const makeMessageRecord = (overrides: Record<string, unknown> = {}) => ({
 const createSessionRuntime = () => {
   const bus = createTestBusInstance();
   const cleanups = [
-    ...registerCoreSessionServiceHandlers({ bus }),
+    ...registerCoreSessionServiceHandlers({ bus }).cleanups,
     registerMemorySessionStorage(bus),
     registerMemoryMessageStorage(bus),
   ];

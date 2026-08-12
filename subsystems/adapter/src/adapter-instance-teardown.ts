@@ -72,12 +72,14 @@ export class AdapterInstanceCloseTimeoutError extends Error {
  * @param adapterId - Runtime adapter ID being closed.
  * @param failure - Failure the attempt produced, or `undefined` when it returned.
  * @param hadCloseHook - Whether the instance exposed a close hook at all.
+ * @param reported - Evidence returned directly by the close hook, when available.
  * @returns The class this attempt proves, with a `detail` for the weak ones.
  */
 export function classifyAdapterInstanceClose(
   adapterId: string,
   failure: unknown,
   hadCloseHook: boolean,
+  reported: ConnectorTeardownResult | void,
 ): AdapterInstanceTeardownResult {
   if (failure instanceof AdapterInstanceCloseTimeoutError) {
     return {
@@ -95,6 +97,9 @@ export function classifyAdapterInstanceClose(
   }
   if (!hadCloseHook) {
     return { adapterId, evidence: 'released' };
+  }
+  if (reported !== undefined) {
+    return { adapterId, ...reported };
   }
   return {
     adapterId,

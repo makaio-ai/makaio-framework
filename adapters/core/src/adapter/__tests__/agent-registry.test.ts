@@ -26,6 +26,7 @@ describe('ActiveAgentRegistry', () => {
     return new ActiveAgentRegistry({
       globalBus: MakaioBus,
       adapterName: 'test-adapter',
+      ownerInstanceId: 'test-owner-instance',
       arbiter: new AgentTeardownArbiter(),
     });
   }
@@ -204,6 +205,8 @@ describe('ActiveAgentRegistry', () => {
         agentId: 'agent-1',
         adapterId: 'adapter-1',
         adapterName: 'claude-code',
+        machineId: 'test-machine',
+        ownerInstanceId: 'test-owner-instance',
         sessionId: 'session-1',
       });
       const agent = {
@@ -303,6 +306,41 @@ describe('ActiveAgentRegistry', () => {
     });
   });
 
+  describe('start admission', () => {
+    it('reopens admission only after entered starts drain and shutdown settles', async () => {
+      const registry = createRegistry();
+      const endStart = registry.beginStart();
+      if (endStart === undefined) throw new Error('fresh registry refused a start');
+
+      const close = registry.closeAll();
+      expect(registry.beginStart()).toBeUndefined();
+      expect(() => registry.reopen()).toThrow(/cannot reopen before shutdown fully settles/);
+      endStart();
+
+      await expect(close).resolves.toEqual([]);
+      registry.reopen();
+      const endReopenedStart = registry.beginStart();
+      expect(endReopenedStart).toBeTypeOf('function');
+      endReopenedStart?.();
+    });
+  });
+
+  it('never strengthens weak teardown evidence after the registry entry is gone', async () => {
+    const registry = createRegistry();
+    registry.set('agent-weak', {
+      agent: createCloseOnlyAgent(async () => ({ evidence: 'detached', detail: 'exit was not observed' })),
+      sessionId: 'session-weak',
+      adapterSessionId: undefined,
+      usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
+    });
+
+    await expect(registry.dispose('agent-weak')).resolves.toMatchObject({ found: true, evidence: 'detached' });
+    await expect(registry.dispose('agent-weak')).resolves.toMatchObject({ found: false, evidence: 'detached' });
+    await expect(registry.closeAll()).resolves.toEqual([
+      expect.objectContaining({ evidence: 'detached', detail: 'exit was not observed' }),
+    ]);
+  });
+
   it('persists dead status before rethrowing an evicted agent close failure', async () => {
     const closeError = new Error('close failed');
     const updates: Array<{ agentId: string; status: string }> = [];
@@ -315,6 +353,7 @@ describe('ActiveAgentRegistry', () => {
       const registry = new ActiveAgentRegistry({
         globalBus: MakaioBus,
         adapterName: 'test-adapter',
+        ownerInstanceId: 'test-owner-instance',
         arbiter: new AgentTeardownArbiter(),
       });
       registry.set('agent-1', {

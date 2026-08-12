@@ -20,12 +20,14 @@ export class AttachStartError extends Error {
    *   default would silently strand a row and a key for a start that never
    *   reached a provider.
    * @param options - Underlying failure, when one exists.
+   * @param sessionStatus - Stored non-active session status observed by a refused reservation.
    */
   public constructor(
-    public readonly code: 'lead-conflict' | 'reservation-refused' | 'start-failed',
+    public readonly code: 'lead-conflict' | 'reservation-refused' | 'session-not-active' | 'start-failed',
     message: string,
     public readonly dispatch: AdapterStartDisposition,
     options?: ErrorOptions,
+    public readonly sessionStatus?: 'closed' | 'archived' | 'discovered',
   ) {
     super(message, options);
     this.name = 'AttachStartError';

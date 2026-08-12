@@ -73,10 +73,20 @@ export function registerResumeHandler(deps: SessionLifecycleDeps): () => void {
       return;
     }
 
-    session.status = 'active';
-    session.lastActivityAt = Date.now();
-    await bus.request(SessionStorageSubjects.set, { sessionId, session });
-    await bus.emit(SessionSubjects.resumed, { sessionId });
-    ctx.setResult({ success: true });
+    const resumed = await bus.requestOptional(SessionStorageSubjects.update, {
+      sessionId,
+      status: 'active',
+      lastActivityAt: Date.now(),
+      expectedStatus: ['closed'],
+    });
+    if (resumed.handled && resumed.data.success) {
+      await bus.emit(SessionSubjects.resumed, { sessionId });
+      ctx.setResult({ success: true });
+      return;
+    }
+    // A competing resume is idempotently successful, but this losing CAS must
+    // not revive an archive or emit a second event.
+    const current = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    ctx.setResult({ success: current.handled && current.data.session?.status === 'active' });
   });
 }

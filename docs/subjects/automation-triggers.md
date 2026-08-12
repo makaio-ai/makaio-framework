@@ -66,7 +66,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `triggers` | `{ kind: string; label: string; description: string; categories: readonly string[]; parameterSchema: Record<string, JsonValue>; eventSchema: Record<string, JsonValue>; }[]` | yes |
+| `triggers` | `{ kind: string; label: string; description: string; categories: readonly string[]; parameterSchema: Record<string, JsonValue>; eventSchema: Record<string, JsonValue>; workflowCompatible: boolean; }[]` | yes |
 
 ---
 

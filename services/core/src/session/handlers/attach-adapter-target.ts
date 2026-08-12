@@ -10,8 +10,13 @@
  */
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { AgentSelectionBase, ResolvedAgentConfig } from '@makaio/contracts';
+import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { resolveAdapterId } from '../session-orchestrator-helpers.js';
-import { resolveOwnedAdapterInstance, type OwnedAdapterInstance } from '../utils/resolution.js';
+import {
+  resolveOwnedAdapterInstance,
+  toMachineScopedAdapterInstance,
+  type MachineScopedAdapterInstance,
+} from '../utils/resolution.js';
 import {
   describeHalfNamedInstanceRefusal,
   normalizeSelectionString,
@@ -40,7 +45,7 @@ export interface AttachAdapterTarget {
   /** Canonical adapter type name the attach starts under. */
   readonly adapterName: string;
   /** Instance the attach addresses, with the machine its acts name. */
-  readonly instance: OwnedAdapterInstance;
+  readonly instance: MachineScopedAdapterInstance;
 }
 
 /**
@@ -77,8 +82,9 @@ export interface AttachAdapterTarget {
  *   and the session identity the refusals name
  * @returns The adapter name and the instance with the machine its acts are filed under
  * @throws Error When neither a name nor an instance is available, when a named
- *   instance disagrees with a named adapter name, or when either half of the
- *   instance/machine pair is named without the other
+ *   instance disagrees with a named adapter name, when either half of the
+ *   instance/machine pair is named without the other, or when no live
+ *   announcement proves a complete explicit pair
  */
 export async function resolveAttachAdapterTarget(
   bus: IMakaioBus,
@@ -110,34 +116,42 @@ export async function resolveAttachAdapterTarget(
 
   if (named.adapterId !== undefined) {
     const adapterName = await resolveAdapterNameById(bus, named.adapterId, normalizedAdapterName, ERROR_PREFIX);
-    const owned = await resolveOwnedAdapterInstance(bus, {
-      adapterName,
-      adapterId: named.adapterId,
-      ...(named.machineId !== undefined && { machineId: named.machineId }),
-    });
-    if (owned === undefined) {
-      // Unreachable, and kept as the narrowing rather than as a guard: the
-      // resolver answers a named instance with its machine unresolved, and the
-      // refusal above already excluded the one input that makes it answer
-      // otherwise. What it narrows is the resolver's optional answer, which is
-      // optional because its *deriving* callers can fail to derive.
+    const instance = toMachineScopedAdapterInstance(
+      await resolveOwnedAdapterInstance(bus, {
+        adapterName,
+        adapterId: named.adapterId,
+        ...(named.machineId !== undefined && { machineId: named.machineId }),
+      }),
+    );
+    if (instance === undefined) {
+      // A complete selection still needs a matching live announcement. The
+      // resolver also serves deriving callers, so its optional return cannot be
+      // narrowed at the shared boundary.
       throw new Error(
         `${ERROR_PREFIX}adapter instance resolution for ${named.adapterId} produced no machine (sessionId=${input.sessionId})`,
       );
     }
-    return { adapterName, instance: owned };
+    return { adapterName, instance };
   }
 
   // The early guard proved the name is present; TypeScript cannot narrow through a
   // thrown guard, so the assertion restates what the guard established.
   const resolvedName = normalizedAdapterName as string;
-  const adapterId = await resolveAdapterId(bus, resolvedName, input.localMachineId);
-  return {
-    adapterName: resolvedName,
-    // The same identity the resolution was scoped for, carried out with it: a
-    // machine passed to one and not the other is how the two halves drift apart.
-    instance: { adapterId, ...(input.localMachineId !== undefined && { machineId: input.localMachineId }) },
-  };
+  const machineId = input.localMachineId ?? (await bus.request(AdapterRuntimeSubjects.getMachineId, {})).machineId;
+  if (machineId === undefined) {
+    // Preserve the runtime identity seam's diagnostic when no host composed a
+    // machine. A successful name lookup without it would still not produce a
+    // dispatchable ownership key.
+    await resolveAdapterId(bus, resolvedName);
+    throw new Error(`${ERROR_PREFIX}adapter runtime resolved an adapter without a machine identity`);
+  }
+  const instance = toMachineScopedAdapterInstance(
+    await resolveOwnedAdapterInstance(bus, { adapterName: resolvedName, machineId }),
+  );
+  if (instance === undefined) {
+    throw new Error(`${ERROR_PREFIX}adapter runtime did not prove a live owner for ${resolvedName}`);
+  }
+  return { adapterName: resolvedName, instance };
 }
 
 /**

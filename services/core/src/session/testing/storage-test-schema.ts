@@ -71,6 +71,9 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       adapter_id TEXT NOT NULL,
       adapter_name TEXT NOT NULL,
       session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+      owner_machine_id TEXT,
+      owner_instance_id TEXT,
+      recovery_attempt_id TEXT,
       adapter_session_id TEXT,
       current_adapter_session_id TEXT,
       current_adapter_session_id_state TEXT NOT NULL DEFAULT 'inherited' CHECK (
@@ -92,13 +95,34 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       role TEXT NOT NULL CHECK (role IN ('lead', 'member')),
       status TEXT NOT NULL CHECK (status IN ('starting', 'idle', 'active', 'dead', 'disposed')),
       created_at INTEGER NOT NULL,
-      last_activity_at INTEGER NOT NULL
+      last_activity_at INTEGER NOT NULL,
+      CHECK ((owner_machine_id IS NULL) = (owner_instance_id IS NULL))
     )
   `,
   sql`CREATE INDEX IF NOT EXISTS agents_session_id_idx ON agents(session_id)`,
   sql`CREATE INDEX IF NOT EXISTS agents_adapter_name_idx ON agents(adapter_name)`,
   sql`CREATE INDEX IF NOT EXISTS agents_status_idx ON agents(status)`,
   sql`CREATE INDEX IF NOT EXISTS agents_client_id_idx ON agents(client_id)`,
+  sql`
+    CREATE TABLE IF NOT EXISTS runtime_instance_incarnation_counters (
+      machine_id TEXT PRIMARY KEY NOT NULL,
+      last_allocated_incarnation INTEGER NOT NULL
+    )
+  `,
+  sql`
+    CREATE TABLE IF NOT EXISTS runtime_instances (
+      instance_id TEXT NOT NULL,
+      machine_id TEXT NOT NULL,
+      incarnation INTEGER NOT NULL,
+      started_at INTEGER NOT NULL,
+      retired_at INTEGER,
+      PRIMARY KEY (instance_id, machine_id)
+    )
+  `,
+  sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_runtime_instances_incarnation
+    ON runtime_instances(machine_id, incarnation)
+  `,
   sql`
     CREATE TABLE IF NOT EXISTS adapter_session_claims (
       claim_id TEXT PRIMARY KEY NOT NULL,
@@ -108,11 +132,14 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       provider_session_id TEXT NOT NULL,
       session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
       agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+      owner_instance_id TEXT,
       claim_token TEXT NOT NULL,
       fence INTEGER NOT NULL CHECK (fence >= 1),
       status TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'releasing', 'abandoned')),
       claimed_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (owner_instance_id, machine_id)
+        REFERENCES runtime_instances(instance_id, machine_id) ON DELETE RESTRICT
     )
   `,
   sql`

@@ -1,15 +1,19 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
+  SessionOwnershipStorageSubjects,
   type MakaioSessionAgent,
+  type SessionOwnershipRecoveryReservation,
+  type SessionOwnershipRecoveryPreimage,
+  type SessionOwnershipRecoveryGuard,
   type SessionOwnershipReservation,
   type SessionOwnershipSettleMovementServiceResult,
+  type RuntimeBinding,
 } from '@makaio/contracts';
 import { mintClaimToken } from '../ownership/claim-token.js';
-import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { reserveStartFor } from '../utils/start-reservation.js';
-import type { OwnedAdapterInstance } from '../utils/resolution.js';
-import { failDispatchedStart, readCallerOwnedCommit } from './caller-owned-start.js';
+import { toMachineScopedAdapterInstance, type MachineScopedAdapterInstance } from '../utils/resolution.js';
+import { acknowledgeCallerSettlement, failDispatchedStart } from './caller-owned-start.js';
 import {
   abandonDispatchedStart,
   applySettlementOutcome,
@@ -20,6 +24,7 @@ import {
 } from './lead-start-cleanup.js';
 import { dispatchAgentRehydrate } from './rehydrate-dispatch.js';
 import { SessionStartError } from './session-start-error.js';
+import { assertSessionActiveAfterStart } from './attach-turn-tracking.js';
 
 /**
  * The reserved rehydrate owns the agent row it drives.
@@ -29,16 +34,16 @@ import { SessionStartError } from './session-start-error.js';
  * this caller's. An unconditional adapter write would revive a row that was
  * removed mid-rehydrate and strand a live connector on it.
  */
-const CALLER_OWNED_STATUS: StartCleanupPolicy = { writesAgentStatus: true };
+const CALLER_OWNED_STATUS: StartCleanupPolicy = { writesAgentStatus: false, connectorOnlyTeardown: true };
 
 /**
  * What a **pre-dispatch** exit lets the shared cleanup write: no status at all.
  *
  * The shared cleanup's only status write is the terminal `starting → dead`,
  * which is right for an attempt that may have reached the provider and wrong for
- * one that provably did not. A rollback restores what the claim replaced
- * instead — see {@link releaseRecoveryRow} — and that value lives with the
- * claim, where this module can reach it and the shared cleanup cannot.
+ * one that provably did not. A rollback restores the reservation's exact
+ * preimage through the ownership finalizer, so this cleanup never writes the
+ * recovery row itself.
  */
 const PRE_DISPATCH_ROLLBACK: StartCleanupPolicy = { writesAgentStatus: false };
 
@@ -77,17 +82,20 @@ export type ReservedRehydrateOutcome =
       /**
        * Which gate refused.
        *
-       * The first three are the reservation's own modeled refusals.
+       * The first four are the reservation's own modeled refusals.
        * `rehydrate-refused` is the adapter's — a disposed agent or a denied
        * in-process claim, answered as `dispatch: 'not-dispatched'`, which is
        * evidence that nothing reached the provider and the key was released
        * rather than retired.
        */
-      readonly outcome: 'agent-disposed' | 'not-found' | 'lead-conflict' | 'rehydrate-refused';
+      readonly outcome: 'agent-disposed' | 'not-found' | 'lead-conflict' | 'session-not-active' | 'rehydrate-refused';
+      /** Stored lifecycle status when the reservation's session gate refused. */
+      readonly status?: 'closed' | 'archived' | 'discovered';
       /** What the refusing gate said, when it said anything beyond its outcome. */
       readonly message?: string;
     }
-  | { readonly kind: 'lost' };
+  | { readonly kind: 'lost' }
+  | { readonly kind: 'stale-plan' };
 
 /**
  * The error a consumer raises for an outcome that produced no connector.
@@ -108,7 +116,7 @@ export type ReservedRehydrateOutcome =
  */
 export function failedRehydrateError(
   agentId: string,
-  outcome: Extract<ReservedRehydrateOutcome, { kind: 'lost' | 'refused' }> | undefined,
+  outcome: Extract<ReservedRehydrateOutcome, { kind: 'lost' | 'refused' | 'stale-plan' }> | undefined,
 ): SessionStartError {
   if (outcome === undefined) {
     // Unreachable: the caller registered the attempt, so its callback ran.
@@ -120,9 +128,22 @@ export function failedRehydrateError(
       `[session.start] agent ${agentId} was removed or claimed by another runtime while it was recovered`,
     );
   }
+  if (outcome.kind === 'stale-plan') {
+    return new SessionStartError(
+      'start-unresolved',
+      `[session.start] recovery plan for agent ${agentId} remained stale after its bounded retry`,
+    );
+  }
   return new SessionStartError(
-    outcome.outcome === 'agent-disposed' || outcome.outcome === 'not-found' ? 'agent-unavailable' : 'start-failed',
+    outcome.outcome === 'session-not-active'
+      ? 'session-not-active'
+      : outcome.outcome === 'agent-disposed' || outcome.outcome === 'not-found'
+        ? 'agent-unavailable'
+        : 'start-failed',
     `[session.start] recovery of agent ${agentId} was refused: ${outcome.message ?? outcome.outcome}`,
+    undefined,
+    undefined,
+    outcome.status,
   );
 }
 
@@ -138,12 +159,14 @@ export interface ReservedRehydrateRequest {
    *
    * One value, because it is one key: the instance ID is derived from
    * `(machineId, adapterName)`, so an attempt holding the two halves separately
-   * can reserve in one namespace and dispatch into another. `machineId` is absent
-   * only for a caller that named no machine and is therefore acting for none.
+   * can reserve in one namespace and dispatch into another. A missing machine
+   * is deferred by the resolver before this connector-producing seam runs.
    */
-  readonly instance: OwnedAdapterInstance;
+  readonly instance: MachineScopedAdapterInstance;
   /** Provider session to reserve and resume, or `null` for a keyless rehydrate. */
   readonly resumeProviderSessionId: string | null;
+  /** Atomic plan snapshot, required by every keyed recovery. */
+  readonly recoveryGuard?: SessionOwnershipRecoveryGuard;
   /** Working directory the replacement connector runs in. */
   readonly cwd?: string;
   /** Model the replacement connector runs. */
@@ -179,145 +202,19 @@ export async function runReservedRehydrate(
   bus: IMakaioBus,
   request: ReservedRehydrateRequest,
 ): Promise<ReservedRehydrateOutcome> {
+  if (toMachineScopedAdapterInstance(request.instance) === undefined) {
+    return { kind: 'deferred', reason: 'machine-identity-unavailable' };
+  }
   const { agent } = request;
   // No round trip: ownership is absorbing on `disposed`, so every operation
   // below would refuse it by predicate anyway.
   if (agent.status === 'disposed') return { kind: 'refused', outcome: 'agent-disposed' };
-  const claimed = await claimRecoveryRow(bus, agent);
-  if (claimed === 'not-found') return { kind: 'refused', outcome: 'not-found' };
-  if (claimed === 'lost') return { kind: 'lost' };
-
-  const reserved = await reserveRehydrate(bus, request, claimed);
+  if (request.recoveryGuard === undefined) {
+    throw new Error(`[session.start] recovery of agent ${agent.agentId} omitted its atomic recovery guard`);
+  }
+  const reserved = await reserveRehydrate(bus, request);
   if (reserved.kind === 'settled') return reserved.outcome;
-  return dispatchReservedRehydrate(bus, request, reserved.reservation, claimed);
-}
-
-/**
- * Claim this agent's recovery by compare-and-swap.
- *
- * `starting` is deliberately absent from the expectation: a row already in it
- * belongs to a recovery someone else claimed, and this attempt must lose rather
- * than open a second lifecycle beside it. What the swap does **not** prove is
- * that nobody is driving the agent — an `idle`/`active` row is exactly what a
- * live driver leaves behind. The reservation decides that, against the claim
- * row.
- *
- * **The swap requires the status the rollback would restore.** Accepting any of
- * `idle`/`active`/`dead` while the rollback restores what the *caller observed*
- * is two different facts pretending to be one: a peer that moved the row between
- * the caller's read and this swap — `restoreProbedLiveAgent` putting a live agent
- * back to `idle` is the standing example — would have this attempt claim from
- * `active` and, on a refused reservation, put `dead` back on an agent whose
- * connector answers. Naming the expectation makes the claim and its undo the same
- * statement, and a caller whose snapshot has been overtaken loses the claim
- * instead of writing a status it never saw.
- *
- * A **refused** swap and an **absent row** are reported apart, because they are
- * different facts: the first is a peer that got there first — including one that
- * moved the row out from under this caller's observation — and the second is a
- * removal that landed before this attempt started and is the same refusal the
- * reservation would have produced a round trip later.
- *
- * A host with no agent storage has no row to arbitrate over, so the claim is
- * treated as taken: refusing there would make the whole path unavailable to a
- * composition that never had the column in the first place.
- * @param bus - Bus the compare-and-swap is issued on.
- * @param agent - Agent whose recovery is being claimed, carrying the status the caller observed.
- * @returns The claim this attempt now holds, or why it holds none.
- */
-async function claimRecoveryRow(
-  bus: IMakaioBus,
-  agent: MakaioSessionAgent,
-): Promise<RecoveryRowClaim | 'lost' | 'not-found'> {
-  // Captured **before** the swap, and never re-derived from the agent object
-  // afterwards. The claim is what moved the status, so anything read from this
-  // snapshot after it lands describes the claim's own work rather than what it
-  // replaced — and the rollback needs what it replaced. The claim therefore
-  // carries the value out with it (see {@link RecoveryRowClaim}) instead of
-  // letting each exit ask the object again.
-  //
-  // What this snapshot must be is a status *this caller observed*: the swap
-  // refuses when the row has moved on, which is the whole point, so a caller that
-  // waited for someone else's attempt has to refresh before it gets here rather
-  // than argue with the attempt it waited for.
-  const priorStatus = rollbackTarget(agent.status);
-  const claimed = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
-    agentId: agent.agentId,
-    status: 'starting',
-    expectedStatus: [priorStatus],
-  });
-  if (!claimed.handled || claimed.data.transitioned) return { agentId: agent.agentId, priorStatus };
-  return claimed.data.success ? 'lost' : 'not-found';
-}
-
-/**
- * A recovery claim this attempt holds, and everything undoing it needs.
- *
- * The claim is the only thing that knows what it replaced, so it carries that
- * fact rather than letting each exit re-derive it from an agent object whose
- * status the claim itself has already moved on.
- */
-interface RecoveryRowClaim {
-  /** Agent whose recovery this attempt owns. */
-  readonly agentId: string;
-  /** Status the claim swapped out, captured before the swap. */
-  readonly priorStatus: 'idle' | 'active' | 'dead';
-}
-
-/**
- * The status a claim would have to undo, given what the caller observed.
- *
- * The claim swaps in from `idle`, `active` or `dead`, so those three are the
- * only states it can be undoing. Anything else — a caller view stale enough to
- * name `starting` or `disposed` — is not a state this attempt could have swapped
- * out of, so it falls back to the one answer that is always safe to write over a
- * row this attempt put into `starting`.
- * @param observed - Status the caller read before it claimed the recovery.
- * @returns The status a rollback restores.
- */
-function rollbackTarget(observed: MakaioSessionAgent['status']): 'idle' | 'active' | 'dead' {
-  return observed === 'idle' || observed === 'active' ? observed : 'dead';
-}
-
-/**
- * Put the row back where the claim found it — the one rollback rule.
- *
- * \> **A claimed row returns to the status the claim swapped out, unless this
- * \> attempt has evidence it dispatched.**
- *
- * Both halves are load-bearing, and three separate defects came from having
- * neither stated in one place.
- *
- * *Where the claim found it, not `dead`.* A recovery is not only ever run for a
- * dead agent: the liveness-verification helper claims a row that still reads
- * `idle` because the *connector* is gone, and the restart handler claims live
- * agents by design. Writing `dead` on the way out tells every later consumer
- * that a running agent is recoverable, and nothing corrects it — the per-turn
- * activity stamp only moves a row between `idle` and `active`, so it cannot lift
- * one back out of `dead`.
- *
- * *Unless it dispatched.* Only an attempt that may have reached the provider
- * writes the terminal `dead`, because only then is "this agent has no connector
- * anyone accounts for" true. Every exit before the dispatch — a throwing
- * reservation, a refused reservation, and a modeled `not-dispatched` refusal
- * from the adapter — is a rollback and uses this. Everything from the dispatch
- * onward is a retirement and uses the shared cleanup's status write instead.
- *
- * Compare-and-swapped from `starting` so a peer that has since claimed the
- * recovery keeps it; a refusal is the better outcome and is accepted silently.
- * While this attempt holds `starting` no peer can claim the recovery — their own
- * swap excludes it — so the only writer this can lose to is the in-flight
- * consumer rule's `starting → dead`, which is exactly the arbitration that
- * should win (I21′: the status write is advisory, and this one yields).
- * @param bus - Bus the compare-and-swap is issued on.
- * @param claim - The claim being given back, carrying what it replaced.
- */
-async function releaseRecoveryRow(bus: IMakaioBus, claim: RecoveryRowClaim): Promise<void> {
-  await bus.requestOptional(AgentStorageSubjects.updateStatus, {
-    agentId: claim.agentId,
-    status: claim.priorStatus,
-    expectedStatus: ['starting'],
-  });
+  return dispatchReservedRehydrate(bus, request, reserved.reservation);
 }
 
 /** Either a committed reservation, or the outcome the attempt ends on. */
@@ -345,12 +242,13 @@ type ReservationStep =
  * @param claim - The recovery claim to give back on every refusal.
  * @returns The committed reservation, or the outcome the attempt ends on.
  */
-async function reserveRehydrate(
-  bus: IMakaioBus,
-  request: ReservedRehydrateRequest,
-  claim: RecoveryRowClaim,
-): Promise<ReservationStep> {
+async function reserveRehydrate(bus: IMakaioBus, request: ReservedRehydrateRequest): Promise<ReservationStep> {
   const { agent, instance, resumeProviderSessionId, sessionId } = request;
+  const recoveryGuard = request.recoveryGuard;
+  if (recoveryGuard === undefined)
+    throw new Error(`[session.start] recovery of agent ${agent.agentId} omitted its guard`);
+  const claimToken = mintClaimToken();
+  const recoveryAttemptId = mintClaimToken();
   let reserved;
   try {
     reserved = await reserveStartFor(bus, {
@@ -360,14 +258,23 @@ async function reserveRehydrate(
       instance,
       role: 'member',
       resumeProviderSessionId,
+      claimToken,
+      recoveryGuard,
+      recoveryAttemptId,
     });
   } catch (error) {
-    await releaseRecoveryRow(bus, claim);
+    await releaseUnknownReservation(bus, agent.agentId, claimToken);
+    await finalizeUnknownRecovery(
+      bus,
+      agent.agentId,
+      request.instance,
+      recoveryAttemptId,
+      recoveryGuard.expectedPreimage,
+    );
     throw error;
   }
 
   if (reserved.outcome === 'reserved') return { kind: 'reserved', reservation: reserved.reservation };
-  await releaseRecoveryRow(bus, claim);
   if (reserved.outcome === 'occupied' || reserved.outcome === 'machine-identity-unavailable') {
     // Terminal for this agent in this attempt (I23a): storage has said the key
     // is held by a generation this runtime does not own, and dispatching after
@@ -376,7 +283,38 @@ async function reserveRehydrate(
     // precisely when the gate that exists has just refused.
     return { kind: 'settled', outcome: { kind: 'deferred', reason: reserved.outcome } };
   }
+  if (reserved.outcome === 'currency-changed') return { kind: 'settled', outcome: { kind: 'stale-plan' } };
+  if (reserved.outcome === 'recovery-conflict') {
+    return {
+      kind: 'settled',
+      outcome: reserved.status === 'disposed' ? { kind: 'refused', outcome: 'agent-disposed' } : { kind: 'lost' },
+    };
+  }
+  if (reserved.outcome === 'session-not-active') {
+    return { kind: 'settled', outcome: { kind: 'refused', outcome: reserved.outcome, status: reserved.status } };
+  }
   return { kind: 'settled', outcome: { kind: 'refused', outcome: reserved.outcome } };
+}
+
+/**
+ * Release a reservation whose transaction may have committed before its reply
+ * was lost.
+ * @param bus - Bus carrying the token-scoped release.
+ * @param agentId - Agent the reservation belonged to.
+ * @param claimToken - Caller-minted reservation generation.
+ * @returns Whether storage confirmed that exact generation was released.
+ */
+async function releaseUnknownReservation(bus: IMakaioBus, agentId: string, claimToken: string): Promise<boolean> {
+  try {
+    const released = await bus.request(SessionSubjects.ownership.release, {
+      agentId,
+      claimToken,
+      disposition: 'released',
+    });
+    return released.releasedProviderSessionIds.length > 0 && !released.claimTokenNotFound;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -397,11 +335,15 @@ async function dispatchReservedRehydrate(
   bus: IMakaioBus,
   request: ReservedRehydrateRequest,
   reservation: SessionOwnershipReservation,
-  claim: RecoveryRowClaim,
 ): Promise<ReservedRehydrateOutcome> {
   const { agent, resumeProviderSessionId } = request;
   const { adapterId } = request.instance;
   const agentId = agent.agentId;
+  const { ownerInstanceId } = reservation;
+  const recovery = recoveryReservation(reservation);
+  if (recovery === undefined) {
+    throw new Error(`[session.start] recovery reservation for agent ${agentId} omitted its terminal authority`);
+  }
   // Minted *before* the settle call and releasable from the moment it exists: a
   // settlement whose transaction commits and whose response is then lost leaves
   // the caller holding nothing else that names the successor generation, and a
@@ -414,6 +356,7 @@ async function dispatchReservedRehydrate(
     response = await dispatchAgentRehydrate(bus, {
       agentId,
       adapterId,
+      ownerInstanceId,
       resumeProviderSessionId,
       callerOwnsAgentRow: true,
       ...(request.cwd !== undefined && { cwd: request.cwd }),
@@ -423,6 +366,7 @@ async function dispatchReservedRehydrate(
     // A throw carries no disposition, so the key is retired rather than freed:
     // the provider may hold a live session behind it.
     await abandonDispatchedStart(bus, agentId, CALLER_OWNED_STATUS, claimTokens);
+    await finalizeRecovery(bus, agentId, recovery, 'failed');
     // **And the connector is stopped, which the fresh-start paths do not do
     // here.** They can rely on the adapter unwinding its own dispatch: a
     // `startAgent` that throws after registering evicts the agent it registered.
@@ -439,7 +383,7 @@ async function dispatchReservedRehydrate(
     // recovers the agent, whereas an unowned writer is not recoverable at all.
     // The stop is best-effort and idempotent: an agent with no registry entry is
     // a no-op, and the response is never read as evidence (I15).
-    await stopStartedConnector(bus, adapterId, agentId);
+    await stopStartedConnector(bus, adapterId, agentId, ownerInstanceId, true);
     throw error;
   }
   if (!response.success) {
@@ -450,8 +394,21 @@ async function dispatchReservedRehydrate(
     // goes back where the claim found it rather than to the `dead` the shared
     // cleanup writes for a start that did dispatch.
     await releaseUndispatchedStart(bus, agentId, PRE_DISPATCH_ROLLBACK, claimTokens);
-    await releaseRecoveryRow(bus, claim);
+    await finalizeRecovery(bus, agentId, recovery, 'rollback');
     return { kind: 'refused', outcome: 'rehydrate-refused', message: response.message };
+  }
+  if (response.ownerInstanceId !== ownerInstanceId) {
+    throw await failPostDispatch(
+      bus,
+      adapterId,
+      agentId,
+      claimTokens,
+      new Error(
+        `Adapter owner mismatch for rehydrated agent ${agentId}: expected ${ownerInstanceId}, received ${response.ownerInstanceId ?? 'none'}`,
+      ),
+      ownerInstanceId,
+      recovery,
+    );
   }
 
   const confirmed = response.adapterSessionId ?? resumeProviderSessionId;
@@ -480,48 +437,26 @@ async function dispatchReservedRehydrate(
   try {
     if (confirmed !== null) settled = await settleConfirmedKey(bus, request, confirmed, settlementCandidate);
   } catch (error) {
-    throw await failPostDispatch(bus, adapterId, agentId, claimTokens, error);
+    throw await failPostDispatch(bus, adapterId, agentId, claimTokens, error, ownerInstanceId, recovery);
   }
   // Deliberately unguarded: this cleans and throws for itself, and a `try`
   // spanning it would clean a second time and relabel a precisely classified
-  // ownership refusal as an unresolved settlement.
+  // ownership refusal as an unresolved settlement. The recovery finalizer is
+  // separate from that cleanup: it terminalizes the row's exact attempt, but
+  // never releases or stops a second time.
   if (settled !== undefined) {
-    await applySettlementOutcome(bus, adapterId, agentId, settled, CALLER_OWNED_STATUS, claimTokens);
+    try {
+      await applySettlementOutcome(bus, adapterId, agentId, ownerInstanceId, settled, CALLER_OWNED_STATUS, claimTokens);
+    } catch (error) {
+      await finalizeRecovery(bus, agentId, recovery, 'failed');
+      throw error;
+    }
   }
 
   try {
-    await persistLiveAdapterId(bus, agentId, adapterId);
-    return await commitRehydratedRow(bus, request, claimTokens);
+    return await commitRehydratedRow(bus, request, response.settlementAckToken, ownerInstanceId, recovery);
   } catch (error) {
-    throw await failPostDispatch(bus, adapterId, agentId, claimTokens, error);
-  }
-}
-
-/**
- * Record the instance the agent now lives on, and refuse to proceed silently
- * when the write does not land.
- *
- * A hard request whose response is checked, because the movement observer drops
- * every announcement whose `agent.adapterId` differs from the principal's: a
- * row left on a stale instance makes the connector's own movements
- * unrecordable, and the currency silently stops tracking a session that is very
- * much alive. Both failure forms — a refusal and an unhandled subject — are
- * post-dispatch failures of the attempt, not warnings.
- *
- * It runs *after* the settlement, which briefly leaves the row naming the old
- * instance. An announcement landing in that window is dropped by the observer as
- * a mismatch — and parked, not lost: the tracker holds an unacknowledged
- * movement and re-drives it on the agent's next event. A window the seam already
- * heals is the cheaper of the two, against a window in which the confirmed key
- * is held by nobody.
- * @param bus - Bus the write is issued on.
- * @param agentId - Agent whose runtime binding is written.
- * @param adapterId - Live adapter instance the connector lives on.
- */
-async function persistLiveAdapterId(bus: IMakaioBus, agentId: string, adapterId: string): Promise<void> {
-  const written = await bus.request(AgentStorageSubjects.updateRuntime, { agentId, adapterId });
-  if (!written.success) {
-    throw new Error(`[session.start] binding agent ${agentId} to adapter instance ${adapterId} was refused`);
+    throw await failPostDispatch(bus, adapterId, agentId, claimTokens, error, ownerInstanceId, recovery);
   }
 }
 
@@ -555,6 +490,7 @@ async function settleConfirmedKey(
     agentId: agent.agentId,
     adapterId,
     adapterName: agent.adapterName,
+    ownerInstanceId: request.instance.ownerInstanceId,
     movement: { confirmed: true, providerSessionId },
     claimToken,
     ...(machineId !== undefined && { machineId }),
@@ -562,32 +498,33 @@ async function settleConfirmedKey(
 }
 
 /**
- * Close this attempt's own start through the binding I21′ table.
- *
- * The table itself lives with the other caller-owned start — a rehydrate that
- * carries `callerOwnsAgentRow` *is* one — because a refused `starting → idle` is
- * one fact with one classification, and two copies of it are two chances to
- * decide differently whether a peer's status write costs a healthy connector.
- * Only what a `lost` verdict means for *this* consumer is decided here.
- * @param bus - Bus the commit and the re-read are issued on.
+ * Return the adapter-minted token after this rehydrate's durable settlement.
+ * @param bus - Bus carrying the targeted acknowledgement RPC.
  * @param request - The attempt's resolved identity and resume target.
- * @param claimTokens - The generations this attempt is answerable for.
- * @returns The recovered agent, or `lost` when the row was removed under it.
+ * @param settlementAckToken - Adapter-minted token for the hosted generation.
+ * @param ownerInstanceId - Runtime incarnation that hosted the generation.
+ * @param recovery - Exact recovery attempt to finalize after acknowledgement.
+ * @returns The recovered agent after the adapter accepts responsibility.
  */
 async function commitRehydratedRow(
   bus: IMakaioBus,
   request: ReservedRehydrateRequest,
-  claimTokens: StartClaimTokens,
+  settlementAckToken: string | undefined,
+  ownerInstanceId: string,
+  recovery: RecoveryTerminalReservation | undefined,
 ): Promise<ReservedRehydrateOutcome> {
   const { agent, resumeProviderSessionId } = request;
   const { adapterId } = request.instance;
-  if ((await readCallerOwnedCommit(bus, agent.agentId)) !== 'lost') {
-    return { kind: 'rehydrated', agent, native: resumeProviderSessionId !== null };
-  }
-
-  await abandonDispatchedStart(bus, agent.agentId, CALLER_OWNED_STATUS, claimTokens);
-  await stopStartedConnector(bus, adapterId, agent.agentId);
-  return { kind: 'lost' };
+  await assertSessionActiveAfterStart(bus, request.sessionId);
+  await acknowledgeCallerSettlement(
+    bus,
+    { adapterId, agentId: agent.agentId },
+    settlementAckToken,
+    ownerInstanceId,
+    true,
+  );
+  await finalizeRecovery(bus, agent.agentId, recovery, 'succeeded');
+  return { kind: 'rehydrated', agent, native: resumeProviderSessionId !== null };
 }
 
 /**
@@ -602,6 +539,8 @@ async function commitRehydratedRow(
  * @param agentId - Agent whose start is unwound.
  * @param claimTokens - The generations this attempt is answerable for.
  * @param cause - Whatever the failing step threw.
+ * @param ownerInstanceId - Exact runtime incarnation selected by the reservation.
+ * @param recovery - Exact recovery attempt to finalize after cleanup.
  * @returns The error the caller reports, so the call site stays a single `throw`.
  */
 async function failPostDispatch(
@@ -610,10 +549,99 @@ async function failPostDispatch(
   agentId: string,
   claimTokens: StartClaimTokens,
   cause: unknown,
+  ownerInstanceId: string,
+  recovery?: RecoveryTerminalReservation,
 ): Promise<SessionStartError> {
-  return failDispatchedStart(
+  const failure = await failDispatchedStart(
     bus,
-    { adapterId, agentId, attemptKind: 'rehydrate', policy: CALLER_OWNED_STATUS, claimTokens },
+    {
+      adapterId,
+      ownerInstanceId,
+      agentId,
+      attemptKind: 'rehydrate',
+      policy: CALLER_OWNED_STATUS,
+      claimTokens,
+    },
     cause,
   );
+  await finalizeRecovery(bus, agentId, recovery, 'failed');
+  return failure;
+}
+
+/** Exact recovery terminal authority created by a guarded reservation. */
+interface RecoveryTerminalReservation extends SessionOwnershipRecoveryReservation {
+  readonly binding: RuntimeBinding;
+}
+
+/**
+ * Extract the exact terminal authority carried by a guarded reservation.
+ * @param reservation - Reservation whose recovery authority is inspected.
+ * @returns The terminal authority, or `undefined` for an ordinary reservation.
+ */
+function recoveryReservation(reservation: SessionOwnershipReservation): RecoveryTerminalReservation | undefined {
+  if (reservation.recovery === undefined || reservation.machineId === undefined) return undefined;
+  return {
+    ...reservation.recovery,
+    binding: {
+      adapterId: reservation.adapterId,
+      ownerMachineId: reservation.machineId,
+      ownerInstanceId: reservation.ownerInstanceId,
+    },
+  };
+}
+
+/**
+ * Apply one terminal action under the reservation's exact attempt and binding.
+ * @param bus - Bus carrying the storage finalization request.
+ * @param agentId - Agent whose recovery attempt is terminalized.
+ * @param recovery - Exact attempt and binding captured by the reservation.
+ * @param terminal - Terminal recovery outcome to apply.
+ */
+async function finalizeRecovery(
+  bus: IMakaioBus,
+  agentId: string,
+  recovery: RecoveryTerminalReservation | undefined,
+  terminal: 'rollback' | 'succeeded' | 'failed',
+): Promise<void> {
+  if (recovery === undefined) return;
+  const action =
+    terminal === 'rollback' ? { kind: 'rollback' as const, preimage: recovery.preimage } : { kind: terminal };
+  const finalized = await bus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+    agentId,
+    attemptId: recovery.attemptId,
+    binding: recovery.binding,
+    action,
+  });
+  if (terminal === 'succeeded' && !finalized.applied) {
+    throw new Error(
+      `[session.start] recovery ${recovery.attemptId} for agent ${agentId} was superseded before ${terminal}`,
+    );
+  }
+}
+
+/**
+ * Terminalize a reservation whose commit succeeded but whose response was lost.
+ * @param bus - Bus carrying the storage finalization request.
+ * @param agentId - Agent whose response-lost attempt is rolled back.
+ * @param instance - Exact adapter binding installed by the attempt.
+ * @param attemptId - Durable recovery fence minted for the attempt.
+ * @param preimage - Transaction-validated row state to restore.
+ */
+async function finalizeUnknownRecovery(
+  bus: IMakaioBus,
+  agentId: string,
+  instance: MachineScopedAdapterInstance,
+  attemptId: string,
+  preimage: SessionOwnershipRecoveryPreimage,
+): Promise<void> {
+  await bus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+    agentId,
+    attemptId,
+    binding: {
+      adapterId: instance.adapterId,
+      ownerMachineId: instance.machineId,
+      ownerInstanceId: instance.ownerInstanceId,
+    },
+    action: { kind: 'rollback', preimage },
+  });
 }

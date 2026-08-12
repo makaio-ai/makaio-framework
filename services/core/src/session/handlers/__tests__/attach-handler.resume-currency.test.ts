@@ -45,6 +45,7 @@ describe('registerAttachHandler - resume currency', () => {
     currentAdapterSessionId?: string;
     currentAdapterSessionIdState?: 'inherited' | 'moved' | 'confirmed';
   }): StartAgentRequestPayload[] {
+    void ctx.registerKnownAdapter(adapterName, buildDeterministicAdapterId(localMachine, adapterName), localMachine);
     ctx.trackUnsubscribe(
       ctx.registerSessionGetHandler(
         ctx.createMockSession({
@@ -211,6 +212,7 @@ describe('registerAttachHandler - resume currency', () => {
         context.setResult({ session: reads === 1 ? confirmedRow : movedRow });
       }),
     );
+    await ctx.registerKnownAdapter(adapterName, buildDeterministicAdapterId(localMachine, adapterName), localMachine);
     const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
     ctx.trackUnsubscribe(unsubscribe);
     ctx.trackUnsubscribe(ctx.registerHandler(localMachine));

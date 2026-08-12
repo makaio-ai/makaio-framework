@@ -1,4 +1,4 @@
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import { CodexAppServerAgent } from './agent.js';
 import { CodexAppServerConnector } from './connector.js';
 import { CodexAppServerNamespace, type CodexAppServerBus } from './namespaces/index.js';
@@ -28,16 +28,17 @@ export { CodexAppServerAdapterName };
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new CodexAppServerAdapter();
+ * const adapter = new CodexAppServerAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createCodexAppServerAdapter();
+ * const adapter = await createCodexAppServerAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * ```
  */
 export class CodexAppServerAdapter extends AIAdapter<CodexAppServerBus, CodexAppServerConnector, CodexAppServerAgent> {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: CodexAppServerAdapterName,
       capabilities: [
         'tools',
@@ -49,14 +50,13 @@ export class CodexAppServerAdapter extends AIAdapter<CodexAppServerBus, CodexApp
         'session:fork',
       ],
       nativeTools: ['bash', 'patch'],
-      ...config,
       namespace: CodexAppServerNamespace,
       agentFactory: (agentConfig) => {
         return new CodexAppServerAgent(agentConfig);
       },
       configFactory: CodexAppServerConfig.getConfig,
       connectorFactory: (fullConfig) => new CodexAppServerConnector(fullConfig as CodexConnectorConfig),
-      definitionProviders: config?.definitionProviders,
+      definitionProviders: config.definitionProviders,
     });
   }
 }
@@ -65,17 +65,17 @@ export class CodexAppServerAdapter extends AIAdapter<CodexAppServerBus, CodexApp
  * Factory function to create and initialize a Codex App-Server adapter.
  *
  * Convenience wrapper that creates the adapter and calls init() for you.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized CodexAppServerAdapter instance
  * @example
  * ```typescript
- * const adapter = await createCodexAppServerAdapter();
+ * const adapter = await createCodexAppServerAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle requests via bus
  * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
-export async function createCodexAppServerAdapter(config?: Partial<AIAdapterConfig>): Promise<CodexAppServerAdapter> {
+export async function createCodexAppServerAdapter(config: AIAdapterRuntimeConfig): Promise<CodexAppServerAdapter> {
   const adapter = new CodexAppServerAdapter(config);
   await adapter.init();
   return adapter;

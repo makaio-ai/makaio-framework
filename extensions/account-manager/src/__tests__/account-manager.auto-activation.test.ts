@@ -22,6 +22,7 @@ const PROVIDER_CONFIG_ID = 'cfg-service-auto-activation';
 const DEFINITION_ID = 'openai';
 const ADAPTER_NAME = 'codex-app-server';
 const ADAPTER_ID = 'adapter-service-auto-activation';
+const OWNER_INSTANCE_ID = 'owner-service-auto-activation';
 const MODEL = 'gpt-5.4-mini';
 
 afterEach(() => {
@@ -148,6 +149,7 @@ describe('AccountManager auto-activation wiring', () => {
           success: true,
           agentId: 'agent-service-auto-activation',
           adapterId: ADAPTER_ID,
+          ownerInstanceId: OWNER_INSTANCE_ID,
           adapterSessionId: 'adapter-session-service-auto-activation',
           sessionId: 'session-service-auto-activation',
         });

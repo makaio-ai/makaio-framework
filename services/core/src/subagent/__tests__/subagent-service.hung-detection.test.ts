@@ -100,6 +100,7 @@ describe('SubagentService — hung detection and adapter session close', () => {
         success: true,
         agentId: 'mock-agent',
         adapterId: 'default',
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-1',
         sessionId: 'child-sess-1',
         messageId: 'msg-1',

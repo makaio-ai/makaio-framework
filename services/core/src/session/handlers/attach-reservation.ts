@@ -1,7 +1,8 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { AgentRole, SessionOwnershipReservation } from '@makaio/contracts';
+import { SessionSubjects, type AgentRole, type SessionOwnershipReservation } from '@makaio/contracts';
+import { mintClaimToken } from '../ownership/claim-token.js';
 import { reserveStartFor } from '../utils/start-reservation.js';
-import type { OwnedAdapterInstance } from '../utils/resolution.js';
+import type { MachineScopedAdapterInstance } from '../utils/resolution.js';
 
 /**
  * How the reservation an attach runs under was answered.
@@ -31,12 +32,10 @@ export type AttachReservationResult =
       readonly kind: 'degrade';
       readonly reason: 'agent-already-started';
       /**
-       * The keyless reservation the designation was taken under, for a lead.
-       *
-       * A degraded **member** attach reserves nothing at all: it takes no key,
-       * and it has no designation to write.
+       * Keyless authorization selecting the runtime incarnation for the fresh dispatch.
+       * A lead also takes its designation through this reservation.
        */
-      readonly reservation: SessionOwnershipReservation | undefined;
+      readonly reservation: SessionOwnershipReservation;
     }
   | {
       /** Another start holds the designation this attach expected to take. */
@@ -55,6 +54,13 @@ export type AttachReservationResult =
        */
       readonly kind: 'refused';
       readonly outcome: 'agent-disposed' | 'not-found';
+    }
+  | {
+      /** The session's lifecycle gate closed before this start was admitted. */
+      readonly kind: 'refused';
+      readonly outcome: 'session-not-active';
+      /** Actual non-active session status observed by the reservation. */
+      readonly status: 'closed' | 'archived' | 'discovered';
     };
 
 /** Everything a reserved attach's reservation is taken for. */
@@ -67,7 +73,7 @@ export interface AttachReservationRequest {
    * Live adapter instance the start is dispatched to, and the machine its
    * ownership acts are filed under — one value, because it is one key.
    */
-  readonly instance: OwnedAdapterInstance;
+  readonly instance: MachineScopedAdapterInstance;
   /** Adapter type name every ownership act names. */
   readonly adapterName: string;
   /** Role the attach takes; only a lead writes a designation. */
@@ -113,30 +119,33 @@ export async function reserveAttachStart(
     case 'agent-disposed':
     case 'not-found':
       return { kind: 'refused', outcome: reserved.outcome };
+    case 'session-not-active':
+      return { kind: 'refused', outcome: reserved.outcome, status: reserved.status };
     case 'occupied':
     case 'machine-identity-unavailable':
       return degradeAttachStart(bus, request);
+    case 'currency-changed':
+    case 'recovery-conflict':
+      // Unreachable: attach reservations never carry a recovery guard.
+      return { kind: 'refused', outcome: 'not-found' };
   }
 }
 
 /**
- * Take the keyless reservation a degraded attach still needs, if any.
+ * Take the keyless authorization every degraded attach still needs.
  *
- * A member has nothing left to reserve — its keyed attempt was the whole of its
- * ownership interest — so it degrades with no second round trip. A lead still
- * has to be designated, and the designation is the one thing a keyless
- * reservation exists to write.
+ * A member has no key or designation left to reserve, but still needs the
+ * authority's current incarnation to target its fresh dispatch exactly. A lead
+ * additionally takes its designation through the same keyless reservation.
  * @param bus - Bus the reservation is issued on.
  * @param request - The attach being reserved for.
- * @returns The degrade, carrying the designation's reservation for a lead.
+ * @returns The degrade carrying the authority-selected runtime incarnation.
  */
 async function degradeAttachStart(
   bus: IMakaioBus,
   request: AttachReservationRequest,
 ): Promise<AttachReservationResult> {
   const degraded = { kind: 'degrade', reason: 'agent-already-started' } as const;
-  if (request.role !== 'lead') return { ...degraded, reservation: undefined };
-
   const reserved = await requestReservation(bus, request, null);
   switch (reserved.outcome) {
     case 'reserved':
@@ -146,12 +155,18 @@ async function degradeAttachStart(
     case 'agent-disposed':
     case 'not-found':
       return { kind: 'refused', outcome: reserved.outcome };
+    case 'session-not-active':
+      return { kind: 'refused', outcome: reserved.outcome, status: reserved.status };
     case 'occupied':
     case 'machine-identity-unavailable':
       // Unreachable: a keyless reservation takes no key and reads no
       // machine-scoped triple. Reported as a refusal rather than narrowed away,
       // because to a caller it means what the other refusals mean — the
       // designation this attach asked for was not written.
+      return { kind: 'refused', outcome: 'not-found' };
+    case 'currency-changed':
+    case 'recovery-conflict':
+      // Unreachable: the keyless designation carries no recovery guard.
       return { kind: 'refused', outcome: 'not-found' };
   }
 }
@@ -168,14 +183,27 @@ async function requestReservation(
   request: AttachReservationRequest,
   resumeProviderSessionId: string | null,
 ) {
-  return reserveStartFor(bus, {
-    sessionId: request.sessionId,
-    agentId: request.agentId,
-    adapterName: request.adapterName,
-    instance: request.instance,
-    resumeProviderSessionId,
-    ...(request.role === 'lead'
-      ? { role: request.role, expectedLeadAgentId: request.expectedLeadAgentId }
-      : { role: request.role }),
-  });
+  const claimToken = mintClaimToken();
+  try {
+    return await reserveStartFor(bus, {
+      sessionId: request.sessionId,
+      agentId: request.agentId,
+      adapterName: request.adapterName,
+      instance: request.instance,
+      resumeProviderSessionId,
+      claimToken,
+      ...(request.role === 'lead'
+        ? { role: request.role, expectedLeadAgentId: request.expectedLeadAgentId }
+        : { role: request.role }),
+    });
+  } catch (error) {
+    await bus
+      .requestOptional(SessionSubjects.ownership.release, {
+        agentId: request.agentId,
+        claimToken,
+        disposition: 'released',
+      })
+      .catch(() => undefined);
+    throw error;
+  }
 }

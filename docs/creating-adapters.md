@@ -47,7 +47,7 @@ lifecycle. Your adapter subclass wires the three factories that tell the
 framework how to create agents and connectors:
 
 ```ts
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import { MyNamespace } from './namespace.js';
 import { MyAgent } from './agent.js';
 import { MyConnector } from './connector.js';
@@ -56,15 +56,15 @@ import { MyConfig } from './config.js';
 type MyBus = Awaited<ReturnType<typeof MyNamespace.scopedBus>>;
 
 export class MyAdapter extends AIAdapter<MyBus, MyConnector, MyAgent> {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: 'my-provider',
       capabilities: ['tools', 'systemPrompt:override'],
       namespace: MyNamespace,
       agentFactory: (agentConfig) => new MyAgent(agentConfig),
       configFactory: MyConfig.getConfig,
       connectorFactory: (config) => new MyConnector(config),
-      ...config,
     });
   }
 }
@@ -386,15 +386,15 @@ export class OpenAIAdapter extends AIAdapter<
   OpenAINodeConnector,
   OpenAIAgent
 > {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: OpenAINodeAdapterName,
       capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append'],
       agentFactory: (config) => new OpenAIAgent(config),
       configFactory: OpenAINodeConfig.getConfig,
       connectorFactory: (config) => new OpenAINodeConnector(config),
       namespace: OpenAINs,
-      ...config,
     });
   }
 }
@@ -457,6 +457,7 @@ import {
   createTestProviderContext,
   resolveTestConfig,
   type ConformanceTestConfig,
+  type AIAdapterRuntimeInitOptions,
 } from '@makaio/ai-adapters-core';
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { providerDefinitions } from './provider.js';
@@ -488,8 +489,8 @@ export async function createTestConfig(): Promise<
       secondaryModel: { definitionId: 'my-provider', modelName: 'my-default-model' },
     },
     // For orchestration tests:
-    createAdapter: async (options) => {
-      const adapter = new MyAdapter({ adapterId: options?.adapterId });
+    createAdapter: async (options: AIAdapterRuntimeInitOptions) => {
+      const adapter = new MyAdapter(options);
       await adapter.init();
       return adapter;
     },
@@ -599,7 +600,7 @@ response.
 | File | Purpose |
 |------|---------|
 | `../adapters/core/src/adapter/ai-adapter.ts` | `AIAdapter` base class |
-| `../adapters/core/src/adapter/types.ts` | `AIAdapterConfig`, `AIAdapterConstructorConfig` |
+| `../adapters/core/src/adapter/types.ts` | `AIAdapterRuntimeConfig`, `AIAdapterConstructorConfig` |
 | `../adapters/core/src/agent/ai-agent.ts` | `AIAgent` base class |
 | `../adapters/core/src/agent/agent-turn-executor.ts` | `AgentTurnExecutor` shared pipeline |
 | `../adapters/core/src/connector/agent-connector.ts` | `AIAgentConnector` abstract class |

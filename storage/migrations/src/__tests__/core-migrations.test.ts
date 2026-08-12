@@ -192,6 +192,48 @@ describe('core migrations', () => {
     await expect(withMigratedMemoryDatabase(async () => undefined)).resolves.toBeUndefined();
   });
 
+  it('adds agent runtime owners without deleting existing claim children', async () => {
+    const migration = splitBeforeMigration(readMigrations(), '0035_m_mshgj6x7');
+
+    await withMemoryDatabaseAtMigrations(migration.before, async ({ db, rawSql }) => {
+      await rawSql.run(sql`
+        INSERT INTO sessions (session_id, created_at, last_activity_at, status)
+        VALUES ('session-before-owner', 1, 1, 'active')
+      `);
+      await rawSql.run(sql`
+        INSERT INTO agents (
+          agent_id, adapter_id, adapter_name, session_id, role, status, created_at, last_activity_at
+        ) VALUES ('agent-before-owner', 'adapter-1', 'test-adapter', 'session-before-owner', 'lead', 'idle', 1, 1)
+      `);
+      await rawSql.run(sql`
+        INSERT INTO runtime_instances (instance_id, machine_id, incarnation, started_at)
+        VALUES ('instance-before-owner', 'machine-1', 1, 1)
+      `);
+      await rawSql.run(sql`
+        INSERT INTO adapter_session_claims (
+          claim_id, machine_id, adapter_id, adapter_name, provider_session_id, session_id, agent_id,
+          owner_instance_id, claim_token, fence, status, claimed_at, updated_at
+        ) VALUES (
+          'claim-before-owner', 'machine-1', 'adapter-1', 'test-adapter', 'provider-1',
+          'session-before-owner', 'agent-before-owner', 'instance-before-owner', 'token-1', 1, 'held', 1, 1
+        )
+      `);
+
+      await applyMigrations(db, [migration.target]);
+
+      expect(
+        await rawSql.all<{ owner_machine_id: string | null; owner_instance_id: string | null }>(sql`
+          SELECT owner_machine_id, owner_instance_id FROM agents WHERE agent_id = 'agent-before-owner'
+        `),
+      ).toEqual([{ owner_machine_id: null, owner_instance_id: null }]);
+      expect(
+        await rawSql.all<{ claim_id: string }>(sql`
+          SELECT claim_id FROM adapter_session_claims WHERE agent_id = 'agent-before-owner'
+        `),
+      ).toEqual([{ claim_id: 'claim-before-owner' }]);
+    });
+  });
+
   it('preserves workflow rows while making inputs nullable and adding execution hints', async () => {
     const migrations = readMigrations();
     const migration = splitBeforeMigration(migrations, '0005_round_calypso');

@@ -3,13 +3,14 @@ import type { StartAgentRequest } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import type { AttachIdentity } from './attach-execution-types.js';
 import { buildCallerOwnedAgentRow } from './lead-start-request.js';
+import type { MachineScopedAdapterInstance } from '../utils/resolution.js';
 
 /** Identity and runtime facts one attach persists before it dispatches. */
 export interface AttachAgentRowInput {
   /** Caller-minted agent identity; attach owns this row. */
   readonly agentId: string;
-  /** Live adapter instance the start is dispatched to. */
-  readonly adapterId: string;
+  /** Exact runtime instance the row is reserved and dispatched against. */
+  readonly instance: MachineScopedAdapterInstance;
   /** Identity metadata resolved for the attach. */
   readonly identity: AttachIdentity;
   /** The runtime facts the dispatch will carry. */
@@ -43,7 +44,7 @@ export async function persistAttachAgentRow(bus: IMakaioBus, input: AttachAgentR
     agentId: input.agentId,
     agent: buildCallerOwnedAgentRow({
       agentId: input.agentId,
-      adapterId: input.adapterId,
+      instance: input.instance,
       adapterName: identity.adapterName,
       sessionId: identity.sessionId,
       role: identity.role,

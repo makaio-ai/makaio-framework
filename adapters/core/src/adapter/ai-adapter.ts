@@ -6,7 +6,7 @@ import { AIAgentConnector, type BaseAgentConnectorConfig } from '../agent/index.
 import type { AIAgentConfig } from '../agent/types.js';
 import type { ConfigFactoryInput } from './ai-adapter-config.js';
 import type { AdapterProviderDefinition, PlatformDefaults } from '../types/index.js';
-import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import { AdapterSubjects, AgentSubjects, SessionSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import type { ActiveAgentHandle, AgentCreationOptions, AIAdapterConstructorConfig } from './types.js';
 import {
   ActiveAgentRegistry,
@@ -15,12 +15,16 @@ import {
   type AgentTeardownOptions,
 } from './agent-registry.js';
 import { AgentTeardownArbiter } from '../agent/agent-teardown-arbiter.js';
+import { aggregateTeardownReports } from '../connector/teardown-report.js';
 import { AgentRehydrationManager } from './ai-adapter-rehydration.js';
 import { handleInfer } from './ai-adapter-infer.js';
 import { buildAgentConfig } from './ai-adapter-agent-config.js';
 import { createStartAgentHandler } from './ai-adapter-start-handler.js';
 import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
-
+import { createStopAgentHandler } from './ai-adapter-stop-handler.js';
+import { createGetAgentHandler } from './ai-adapter-get-agent-handler.js';
+import { createAcknowledgeCallerSettlementHandler } from './ai-adapter-caller-settlement-handler.js';
+import * as AdapterInitialization from './ai-adapter-initialization.js';
 /**
  * Base class for AI adapters.
  *
@@ -49,6 +53,10 @@ export abstract class AIAdapter<
 > {
   /** Unique identifier for this adapter instance. */
   public readonly adapterId: string;
+  /** Session-ownership authority incarnation hosting this adapter. */
+  public readonly ownerInstanceId: string;
+  /** Stable machine identity hosting this adapter runtime. */
+  public readonly machineId: string;
   /** Adapter name (e.g., 'openai-node', 'claude-code'). */
   public readonly name: string;
   /** Adapter capabilities for runtime feature detection. */
@@ -63,10 +71,7 @@ export abstract class AIAdapter<
   protected adapterBus: TBus;
   /**
    * The one place a teardown and a connector replacement meet on this instance.
-   *
-   * Constructed here because one adapter instance is exactly its scope, and
-   * declared before the registry so it can be handed to it as a required
-   * dependency — see {@link AgentTeardownArbiter}.
+   * One adapter instance is exactly its scope; see {@link AgentTeardownArbiter}.
    */
   private readonly teardownArbiter = new AgentTeardownArbiter();
   /** Registry of active agents with session info and usage totals. */
@@ -75,8 +80,7 @@ export abstract class AIAdapter<
   private cleanupFns: Array<() => void> = [];
   /** Manages agent rehydration with single-flight deduplication. */
   private readonly rehydrationManager: AgentRehydrationManager<TBus, TConnector, TAgent>;
-  /** Tracks whether the adapter has been initialized. */
-  private initialized = false;
+  private readonly lifecycle: AdapterInitialization.AdapterLifecycleCoordinator;
   /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'codex'). */
   protected readonly clientId?: string;
   /** Platform-provided defaults (cwd, env) injected by runtime. Lowest priority. */
@@ -100,7 +104,12 @@ export abstract class AIAdapter<
    * @param config - Adapter configuration
    */
   protected constructor(config: AIAdapterConstructorConfig<TBus, TConnector, TAgent>) {
+    if (config.ownerInstanceId === undefined) {
+      throw new Error(`AIAdapter ${config.name} requires an ownership-authority incarnation`);
+    }
     this.adapterId = config.adapterId ?? crypto.randomUUID();
+    this.ownerInstanceId = config.ownerInstanceId;
+    this.machineId = AdapterInitialization.requireAdapterMachineId(config.name, config.machineId);
     this.name = config.name;
     this.capabilities = config.capabilities;
     this.nativeTools = config.nativeTools ?? [];
@@ -117,24 +126,46 @@ export abstract class AIAdapter<
     this.registry = new ActiveAgentRegistry({
       globalBus: this.globalBus,
       adapterName: this.name,
+      ownerInstanceId: this.ownerInstanceId,
       arbiter: this.teardownArbiter,
     });
     this.rehydrationManager = new AgentRehydrationManager({
       globalBus: this.globalBus,
       registry: this.registry,
       createAgent: this.createAgent.bind(this),
+      machineId: this.machineId,
+      ownerInstanceId: this.ownerInstanceId,
+    });
+    this.lifecycle = new AdapterInitialization.AdapterLifecycleCoordinator({
+      bus: this.globalBus,
+      publication: {
+        adapterId: this.adapterId,
+        adapterName: this.name,
+        machineId: this.machineId,
+        ownerInstanceId: this.ownerInstanceId,
+        capabilities: this.capabilities,
+        nativeTools: this.nativeTools,
+      },
+      prepareInitialization: () => this.registry.reopen(),
+      initialize: this.initializeGeneration.bind(this),
+      shutdown: this.runClose.bind(this),
     });
   }
 
   /** Set up RPC handlers and event listeners. */
   private setupHandlers(): void {
     const filteredBus = this.globalBus.withFilter({ adapterId: this.adapterId });
-
+    const ownerFilteredBus = filteredBus.withFilter({ ownerInstanceId: this.ownerInstanceId });
+    const stopAgent = createStopAgentHandler({ disposeAgent: this.disposeAgent.bind(this) });
+    const getAgent = createGetAgentHandler(this.registry);
+    const acknowledgeCallerSettlement = createAcknowledgeCallerSettlementHandler(this.registry);
     this.cleanupFns.push(
       filteredBus.on(
         AdapterSubjects.startAgent,
         createStartAgentHandler({
           adapterId: this.adapterId,
+          machineId: this.machineId,
+          ownerInstanceId: this.ownerInstanceId,
           name: this.name,
           clientId: this.clientId,
           getPlatformDefaults: () => this.platformDefaults,
@@ -144,6 +175,7 @@ export abstract class AIAdapter<
         }),
       ),
       filteredBus.on(AdapterSubjects.rehydrateAgent, this.rehydrationManager.handleRehydrateAgent),
+      ownerFilteredBus.on(AdapterSubjects.acknowledgeCallerSettlement, acknowledgeCallerSettlement),
       filteredBus.on(AdapterSubjects.infer, (ctx) =>
         handleInfer(ctx, {
           adapterBus: this.adapterBus,
@@ -167,20 +199,10 @@ export abstract class AIAdapter<
       filteredBus.on(AdapterSubjects.listAgents, (ctx) => {
         ctx.setResult({ agents: Array.from(this.registry.values()).map(toAgentSummary) });
       }),
-      filteredBus.on(AdapterSubjects.getAgent, (ctx) => {
-        const entry = this.registry.get(ctx.payload.agentId);
-        ctx.setResult({ agent: entry ? toAgentSummary(entry) : null });
-      }),
-      filteredBus.on(AdapterSubjects.stopAgent, async (ctx) => {
-        // The deadline travels in: a teardown that waits for a connector
-        // replacement ends its wait inside the deadline of whoever awaits it.
-        const report = await this.disposeAgent(ctx.payload.agentId, { deadline: ctx.deadline });
-        ctx.setResult({
-          success: report.found,
-          evidence: report.evidence,
-          ...(report.detail !== undefined && { detail: report.detail }),
-        });
-      }),
+      // Liveness is attributable only to the exact runtime owner.
+      ownerFilteredBus.on(AdapterSubjects.getAgent, getAgent),
+      // Stops are addressed to exactly one authority incarnation.
+      ownerFilteredBus.on(AdapterSubjects.stopAgent, stopAgent),
       filteredBus.on(AdapterSubjects.getCapabilities, (ctx) => {
         ctx.setResult({ capabilities: this.capabilities, nativeTools: this.nativeTools });
       }),
@@ -200,11 +222,11 @@ export abstract class AIAdapter<
       return;
     }
 
-    // Prefer the event payload, fall back to the registry's stored value —
-    // by session-close time the ID should be confirmed, but the agent event
-    // schema allows it missing for unconfirmed fork sessions.
+    // Fall back to the registry value for unconfirmed fork-session events.
     const resolvedAdapterSessionId = adapterSessionId ?? entry.adapterSessionId ?? '';
 
+    // runTeardown installs its flight synchronously before AIAgent.close emits
+    // this event, so the reentrant eviction joins that exact flight (case 204c).
     void this.registry.evict(agentId).catch((error) => {
       console.error(`[AIAdapter:${this.name}] Failed to evict agent ${agentId} after session.closed:`, error);
     });
@@ -273,25 +295,19 @@ export abstract class AIAdapter<
     });
   };
 
-  /** Initialize adapter (idempotent). Creates scoped bus, sets up handlers, emits adapter.initialized. */
-  public async init(): Promise<void> {
-    if (this.initialized) return;
+  /**
+   * Initialize or join the current adapter generation's initialization.
+   * @returns Promise settled when the adapter is publicly initialized
+   */
+  public init(): Promise<void> {
+    return this.lifecycle.init();
+  }
 
+  private async initializeGeneration(): Promise<void> {
     this.globalBus.registerNamespaces([this.namespace.definition]);
     this.adapterBus ??= (await this.namespace.scopedBus(this.globalBus.getContext())) as TBus;
-
     this.setupHandlers();
-
     await this.onInit();
-
-    this.initialized = true;
-
-    await this.globalBus.emit(AdapterSubjects.initialized, {
-      adapterId: this.adapterId,
-      adapterName: this.name,
-      capabilities: this.capabilities,
-      nativeTools: this.nativeTools,
-    });
   }
 
   /** Hook for subclass initialization. Override to perform async setup (connections, auth, etc.). */
@@ -317,6 +333,8 @@ export abstract class AIAdapter<
         sessionId,
         adapterId: this.adapterId,
         adapterName: this.name,
+        machineId: this.machineId,
+        ownerInstanceId: this.ownerInstanceId,
         globalBus: this.globalBus,
         adapterBus: this.adapterBus,
         // One arbiter per instance: the agents replace connectors against the
@@ -335,29 +353,27 @@ export abstract class AIAdapter<
   }
 
   /**
-   * Asynchronous cleanup for awaitable shutdown.
-   * Runs cleanup functions, aborts agents, allows subclass cleanup via onClose hook.
+   * Run or join awaitable adapter shutdown.
    * @returns Promise that resolves when cleanup is complete
    */
-  public async closeAsync(): Promise<void> {
+  public closeAsync(): Promise<ConnectorTeardownResult> {
+    return this.lifecycle.close();
+  }
+
+  private async runClose(publishWithdrawal: boolean): Promise<ConnectorTeardownResult> {
+    let report: ConnectorTeardownResult = { evidence: 'released' };
     try {
-      // Close agents FIRST — this interrupts SDK queries and drains connections
-      // (e.g., MCP HTTP server connections held by the Claude Agent SDK).
-      // onClose() waits for connection drain; agents must be closed before that.
-      // Every close goes through the registry's teardown flight rather than
-      // straight at the agents: an instance shutdown overlapping a stop used to
-      // close one connector twice, and no failing agent may skip onClose() —
-      // which the flight preserves by reporting instead of rejecting.
+      // Registry flights close agents exactly once before onClose drains connections.
       const reports = await this.registry.closeAll();
-
-      await this.onClose();
-
+      const onCloseReport = await this.onClose();
+      report = aggregateTeardownReports([...reports, ...(onCloseReport === undefined ? [] : [onCloseReport])]);
       const closeErrors = reports
         .map((report) => report.closeError)
         .filter((error): error is unknown => error !== undefined);
       if (closeErrors.length > 0) {
         console.warn(`[AIAdapter] ${closeErrors.length} agent(s) failed to close:`, closeErrors);
       }
+      return report;
     } finally {
       for (const cleanup of this.cleanupFns) {
         try {
@@ -367,20 +383,19 @@ export abstract class AIAdapter<
         }
       }
       this.cleanupFns = [];
-      this.initialized = false;
+      if (publishWithdrawal) {
+        await AdapterInitialization.publishDeinitializedAdapterBestEffort(this.globalBus, this);
+      }
     }
   }
 
-  /**
-   * Cleanup resources and unsubscribe from bus.
-   * Runs cleanup functions, aborts agents, allows subclass cleanup via onClose hook.
-   */
+  /** Start cleanup without awaiting its completion. */
   public close(): void {
     void this.closeAsync();
   }
 
   /** Hook for subclass cleanup. Override to perform async teardown (close connections, etc.). */
-  protected async onClose(): Promise<void> {}
+  protected async onClose(): Promise<ConnectorTeardownResult | void> {}
 
   /**
    * Get a live agent and its registry-owned session metadata.
@@ -419,15 +434,12 @@ export abstract class AIAdapter<
    * @returns true if init() has been called successfully
    */
   public isInitialized(): boolean {
-    return this.initialized;
+    return this.lifecycle.isInitialized();
   }
 }
 
 /**
- * Project a registry entry onto the handle both public agent reads return.
- *
- * Shared so the single-agent and the list read cannot drift on which fields a
- * handle carries — the same reason the summary projection beside it is shared.
+ * Project a registry entry onto the shared public handle shape.
  * @param entry - Registry entry to project
  * @returns Handle exposing the agent and its registry-owned session metadata
  */

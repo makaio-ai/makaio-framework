@@ -44,6 +44,15 @@ export {
 export type { ConnectorTeardownResult, TeardownEvidence } from './teardown.js';
 export { RehydrateAgentSchema } from './rehydrate-agent.js';
 export type { RehydrateAgentRequest, RehydrateAgentResponse } from './rehydrate-agent.js';
+export {
+  AcknowledgeCallerSettlementSchema,
+  CallerSettlementAckRefusalSchema,
+} from './acknowledge-caller-settlement.js';
+export type {
+  AcknowledgeCallerSettlementRequest,
+  AcknowledgeCallerSettlementResponse,
+  CallerSettlementAckRefusal,
+} from './acknowledge-caller-settlement.js';
 export { GetConfigSchemaSchema } from './get-config-schema.js';
 export type { GetConfigSchemaRequest, GetConfigSchemaResponse } from './get-config-schema.js';
 
@@ -62,6 +71,8 @@ export { ErrorSchema } from './error.js';
 export type { AdapterError } from './error.js';
 export { InitializedSchema } from './initialized.js';
 export type { Initialized } from './initialized.js';
+export { DeinitializedSchema } from './deinitialized.js';
+export type { Deinitialized } from './deinitialized.js';
 export { QuotaSchema } from './quota.js';
 export type { Quota } from './quota.js';
 export { SessionDiscoveredSchema } from './session-discovered.js';

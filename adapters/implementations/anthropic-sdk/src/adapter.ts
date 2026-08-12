@@ -1,4 +1,4 @@
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import { AnthropicSdkAgent } from './agent.js';
 import { AnthropicSdkConnector } from './connector.js';
 import { AnthropicSdkConnectorNamespace, type AnthropicSdkConnectorBus } from './namespaces/index.js';
@@ -27,26 +27,27 @@ export { AnthropicSdkAdapterName };
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new AnthropicSdkAdapter();
+ * const adapter = new AnthropicSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createAnthropicSdkAdapter();
+ * const adapter = await createAnthropicSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * ```
  */
 export class AnthropicSdkAdapter extends AIAdapter<AnthropicSdkConnectorBus, AnthropicSdkConnector, AnthropicSdkAgent> {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: AnthropicSdkAdapterName,
       capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append', 'structuredOutput'],
-      ...config,
+      nativeTools: [],
       namespace: AnthropicSdkConnectorNamespace,
       agentFactory: (agentConfig) => {
         return new AnthropicSdkAgent(agentConfig);
       },
       configFactory: AnthropicSdkConfig.getConfig,
       connectorFactory: (fullConfig) => new AnthropicSdkConnector(fullConfig),
-      definitionProviders: config?.definitionProviders,
+      definitionProviders: config.definitionProviders,
     });
   }
 }
@@ -55,17 +56,17 @@ export class AnthropicSdkAdapter extends AIAdapter<AnthropicSdkConnectorBus, Ant
  * Factory function to create and initialize an Anthropic SDK adapter.
  *
  * Convenience wrapper that creates the adapter and calls init() for you.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized AnthropicSdkAdapter instance
  * @example
  * ```typescript
- * const adapter = await createAnthropicSdkAdapter();
+ * const adapter = await createAnthropicSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle requests via bus
  * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
-export async function createAnthropicSdkAdapter(config?: Partial<AIAdapterConfig>): Promise<AnthropicSdkAdapter> {
+export async function createAnthropicSdkAdapter(config: AIAdapterRuntimeConfig): Promise<AnthropicSdkAdapter> {
   const adapter = new AnthropicSdkAdapter(config);
   await adapter.init();
   return adapter;

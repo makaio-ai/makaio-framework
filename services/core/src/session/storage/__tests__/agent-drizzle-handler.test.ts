@@ -217,6 +217,28 @@ describe('registerDrizzleAgentStorage', () => {
       expect(retrieved.agent?.createdAt).toBe(1000);
       expect(retrieved.agent?.lastActivityAt).toBe(2000);
     });
+
+    it('preserves an existing recovery attempt fence, including a stored absence', async () => {
+      const agent = createTestAgent({ agentId: 'recovery-fence-test' });
+      await MakaioBus.request(AgentStorageSubjects.set, { agentId: agent.agentId, agent });
+      await MakaioBus.request(AgentStorageSubjects.set, {
+        agentId: agent.agentId,
+        agent: { ...agent, recoveryAttemptId: 'stale-attempt' },
+      });
+
+      expect(
+        (await MakaioBus.request(AgentStorageSubjects.get, { agentId: agent.agentId })).agent?.recoveryAttemptId,
+      ).toBeUndefined();
+
+      await MakaioBus.request(AgentStorageSubjects.set, {
+        agentId: 'recovery-fence-insert',
+        agent: { ...agent, agentId: 'recovery-fence-insert', recoveryAttemptId: 'new-attempt' },
+      });
+      expect(
+        (await MakaioBus.request(AgentStorageSubjects.get, { agentId: 'recovery-fence-insert' })).agent
+          ?.recoveryAttemptId,
+      ).toBe('new-attempt');
+    });
   });
 
   describe('delete', () => {

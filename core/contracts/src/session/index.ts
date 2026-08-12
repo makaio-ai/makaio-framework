@@ -15,15 +15,13 @@ export {
   validateSnapshot,
   safeValidateSnapshot,
 } from './schemas.js';
-export {
-  AdapterSessionCurrencyStateSchema,
-  type AdapterSessionCurrencyState,
-} from './schemas.js';
+export { AdapterSessionCurrencyStateSchema, type AdapterSessionCurrencyState } from './schemas.js';
 export { AgentRoleSchema, type AgentRole } from './schemas.js';
 export { AgentStatusSchema, type AgentStatus } from './schemas.js';
 // Session-ownership authority — the service surface of the ownership aggregate.
 export {
   OwnershipTopologySchema,
+  normalizeSessionOwnershipReserveStartServiceRequest,
   SessionOwnershipContinuationServiceRequestSchema,
   SessionOwnershipContinuationServiceResponseSchema,
   SessionOwnershipPrincipalSchema,
@@ -224,8 +222,19 @@ export {
   AdapterSessionClaimRecordSchema,
   AdapterSessionClaimStatusSchema,
   AgentSessionOwnershipRecordSchema,
+  OwnershipOwnerInstanceSchema,
+  RuntimeInstanceRecordSchema,
+  RuntimeBindingSchema,
   SessionOwnershipClaimRequestSchema,
+  normalizeSessionOwnershipClaimRequest,
   SessionOwnershipClaimResponseSchema,
+  SessionOwnershipRecoveryGuardSchema,
+  SessionOwnershipRecoveryOwnerGenerationSchema,
+  SessionOwnershipRecoveryPreimageSchema,
+  SessionOwnershipRecoveryReservationSchema,
+  SessionOwnershipRecoveryTerminalActionSchema,
+  SessionOwnershipFinalizeRecoveryRequestSchema,
+  SessionOwnershipFinalizeRecoveryResponseSchema,
   OwnershipMovementSchema,
   SessionOwnershipListClaimsRequestSchema,
   SessionOwnershipReleaseAgentClaimsRequestSchema,
@@ -239,15 +248,34 @@ export {
   SessionOwnershipStorageNamespace,
   SessionOwnershipStorageSubjects,
 } from './session-ownership-storage-namespace.js';
+export {
+  getLeadDesignationMutationViolation,
+  isInactiveSafeLeadDesignationMutation,
+  isPureLeadRelinquishment,
+  isPureLeadRestoration,
+  validateLeadDesignationMutation,
+  type SessionOwnershipDesignationMutationCandidate,
+  type SessionOwnershipLeadDesignationMutation,
+} from './session-ownership-designation-mutation.js';
 export type {
   AdapterSessionClaimDisposition,
   AdapterSessionClaimKey,
   AdapterSessionClaimRecord,
   AdapterSessionClaimStatus,
   AgentSessionOwnershipRecord,
+  OwnershipOwnerInstance,
+  RuntimeInstanceRecord,
+  RuntimeBinding,
   OwnershipMovement,
   SessionOwnershipClaimRequest,
   SessionOwnershipClaimResult,
+  SessionOwnershipRecoveryGuard,
+  SessionOwnershipRecoveryOwnerGeneration,
+  SessionOwnershipRecoveryPreimage,
+  SessionOwnershipRecoveryReservation,
+  SessionOwnershipRecoveryTerminalAction,
+  SessionOwnershipFinalizeRecoveryRequest,
+  SessionOwnershipFinalizeRecoveryResult,
   SessionOwnershipListClaimsRequest,
   SessionOwnershipReleaseAgentClaimsRequest,
   SessionOwnershipReleaseAgentClaimsResult,
@@ -271,10 +299,7 @@ export type {
 } from './schemas/adapter-session-currency.js';
 
 // Shared caller-facing shape of session-creation subjects (`session.create` and friends)
-export {
-  SessionCreateBaseSchema,
-  type SessionCreateBase,
-} from './schemas/crud.js';
+export { SessionCreateBaseSchema, type SessionCreateBase } from './schemas/crud.js';
 
 // Native session locality contracts
 export {

@@ -10,7 +10,7 @@ import type {
   TurnInitiator,
 } from '@makaio/contracts';
 import type { AttachLaunchTarget } from './attach-runtime-options.js';
-import type { OwnedAdapterInstance } from '../utils/resolution.js';
+import type { MachineScopedAdapterInstance } from '../utils/resolution.js';
 
 /** Identity metadata carried onto the agent row an attach owns. */
 export interface AttachIdentity {
@@ -40,6 +40,9 @@ export interface AttachLocalityResult {
   readonly attachSessionContext: SessionContext | undefined;
 }
 
+/** How this attach changes the session's materialized lead membership. */
+export type AttachLeadTransition = 'none' | 'fresh' | 'replace';
+
 /** Fully resolved inputs for starting and optionally dispatching an attach turn. */
 export interface ResolvedAttachExecution {
   launch: AttachLaunchTarget;
@@ -47,15 +50,16 @@ export interface ResolvedAttachExecution {
   locality: AttachLocalityResult;
   /** Lead the caller observed on the session row, or `null` when it names none. */
   expectedLeadAgentId: string | null;
+  /** Semantic lead transition decided from the requested role and materialized membership. */
+  leadTransition: AttachLeadTransition;
   /**
    * Instance the attach dispatches to, and the machine every one of its ownership
    * acts names — one value, because it is one key.
    *
-   * `machineId` is absent only when this runtime named no machine of its own and
-   * the caller named none either, in which case the authority acts under its
-   * composed identity and there are no two identities to mix.
+   * A keyless authority designation may use its internal sentinel, but that
+   * sentinel is never a dispatch target or durable runtime owner.
    */
-  instance: OwnedAdapterInstance;
+  instance: MachineScopedAdapterInstance;
   session: IMakaioSession;
   initialMessage: MessageInput | undefined;
   responseSchema: ResponseSchemaDescriptor | undefined;

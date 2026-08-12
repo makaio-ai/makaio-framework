@@ -15,15 +15,16 @@ import type {
   ResolvedAgentConfig,
 } from '@makaio/contracts';
 import { buildTurnInitiator, extractTextContent } from '../session-orchestrator-helpers.js';
-import type { OwnedAdapterInstance } from '../utils/resolution.js';
+import type { MachineScopedAdapterInstance } from '../utils/resolution.js';
 import { resolveAttachAdapterTarget } from './attach-adapter-target.js';
 import { resolveAttachProviderSelection } from './attach-provider-selection.js';
-import type { AttachAgentParams, AttachLocalityResult, ResolvedAttachExecution } from './attach-execution-types.js';
-import {
-  assertSessionActiveAfterStart,
-  dispatchInitialAttachMessage,
-  stopStartedAgentAfterFailure,
-} from './attach-turn-tracking.js';
+import type {
+  AttachAgentParams,
+  AttachLeadTransition,
+  AttachLocalityResult,
+  ResolvedAttachExecution,
+} from './attach-execution-types.js';
+import { assertSessionActiveAfterStart, dispatchInitialAttachMessage } from './attach-turn-tracking.js';
 import { retireStartedAttach, startReservedAttachAgent } from './attach-start.js';
 import { extractRuntimeOptions, mergeRuntimeOptions, resolveEffectiveAttachCwd } from './attach-runtime-options.js';
 import { evaluateNativeLocality } from '../native-locality.js';
@@ -32,7 +33,7 @@ import { resolveSessionResumeIdentity } from '../session-resume-identity.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import type { SessionTurnManager } from '../session-turn-manager.js';
 import type { TurnReservation } from '../session-turn-manager.js';
-import { SessionAgentAttachError } from './attach-error.js';
+import { AttachStartError, SessionAgentAttachError } from './attach-error.js';
 import { SessionAttachCloseGate } from './session-attach-close-gate.js';
 
 /**
@@ -175,7 +176,7 @@ async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promis
  */
 async function resolveAttachLocality(input: {
   bus: IMakaioBus;
-  instance: OwnedAdapterInstance;
+  instance: MachineScopedAdapterInstance;
   adapterName: string;
   session: IMakaioSession;
   effectiveCwd: string | undefined;
@@ -291,7 +292,7 @@ async function attachAgent(
     session.targetWorkingDirectory,
     runtimeOptions,
   );
-  const role = determineRole(session, requestedRole);
+  const { role, leadTransition } = determineRole(session, requestedRole);
   const locality = await resolveAttachLocality({
     bus,
     session,
@@ -321,6 +322,7 @@ async function attachAgent(
     },
     locality,
     expectedLeadAgentId: session.leadAgentId ?? null,
+    leadTransition,
     instance,
     session,
     initialMessage,
@@ -403,6 +405,7 @@ async function runAttachAttempt(
         identity: input.identity,
         locality: input.locality,
         expectedLeadAgentId: input.expectedLeadAgentId,
+        leadTransition: input.leadTransition,
         instance: input.instance,
       });
     } catch (error) {
@@ -420,10 +423,8 @@ async function runAttachAttempt(
     // session that is *gone* rather than closed is reported by the settlement
     // itself, which releases the key cleanly.
     try {
-      await assertSessionActiveAfterStart(bus, startResult, input.session.sessionId);
+      await assertSessionActiveAfterStart(bus, input.session.sessionId);
     } catch (error) {
-      // `assertSessionActiveAfterStart` has already stopped the connector; what
-      // is left is the durable half.
       await retireStartedAttach(bus, started);
       throw new SessionAgentAttachError('agent_attach', error);
     }
@@ -433,12 +434,6 @@ async function runAttachAttempt(
         input.assertAttachCommitAllowed();
       } catch (error) {
         await retireStartedAttach(bus, started);
-        await stopStartedAgentAfterFailure(
-          bus,
-          startResult,
-          input.session.sessionId,
-          'session close won attach commit',
-        );
         throw new SessionAgentAttachError('agent_attach', error);
       }
     } else {
@@ -519,17 +514,47 @@ async function resolveAttachSelection(
 async function validateSession(bus: IMakaioBus, sessionId: string): Promise<IMakaioSession> {
   const { session } = await bus.request(SessionSubjects.get, { sessionId });
   if (!session) throw new Error(`[attach-handler] Session not found: ${sessionId}`);
-  if (session.status !== 'active') throw new Error(`[attach-handler] Session is not active: ${sessionId}`);
+  if (session.status !== 'active') {
+    throw new AttachStartError(
+      'session-not-active',
+      `[attach-handler] Session is not active: ${sessionId} (${session.status})`,
+      'not-dispatched',
+      undefined,
+      session.status,
+    );
+  }
   return session;
 }
 
 /**
- * Determines agent role based on existing agents and requested role.
+ * Determine role and designation semantics from distinct snapshot facts.
+ *
+ * Agent count selects the implicit role. Replacement, however, requires the
+ * session's designated lead to be among the materialized agents: member-only
+ * sessions and stale unmaterialized designations both receive their first real
+ * lead and must retain it as the recovery target on a later failure.
  * @param session - Current session with agents array
  * @param requestedRole - Explicitly requested role (optional)
- * @returns Resolved agent role
+ * @returns Resolved role and the semantic designation transition it represents.
  */
-function determineRole(session: { agents: unknown[] }, requestedRole?: AgentRole): AgentRole {
+function determineRole(
+  session: Pick<IMakaioSession, 'agents' | 'leadAgentId'>,
+  requestedRole?: AgentRole,
+): AttachRoleDecision {
   const isFirstAgent = session.agents.length === 0;
-  return requestedRole ?? (isFirstAgent ? 'lead' : 'member');
+  const role = requestedRole ?? (isFirstAgent ? 'lead' : 'member');
+  const hasMaterializedLead =
+    session.leadAgentId !== undefined && session.agents.some((agent) => agent.agentId === session.leadAgentId);
+  return {
+    role,
+    leadTransition: role === 'member' ? 'none' : hasMaterializedLead ? 'replace' : 'fresh',
+  };
+}
+
+/** Semantic attach role together with its designation transition. */
+interface AttachRoleDecision {
+  /** Role written onto the new agent row. */
+  readonly role: AgentRole;
+  /** Whether this attempt leaves designation untouched, creates it, or replaces it. */
+  readonly leadTransition: AttachLeadTransition;
 }

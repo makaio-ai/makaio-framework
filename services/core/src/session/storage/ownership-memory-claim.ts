@@ -12,14 +12,26 @@
  * introduced into these bodies would silently drop that guarantee.
  * @packageDocumentation
  */
-import type {
-  AdapterSessionClaimRecord,
-  MakaioSessionAgent,
-  SessionOwnershipClaimRequest,
-  SessionOwnershipClaimResult,
-} from '@makaio/contracts';
+import {
+  isInactiveSafeLeadDesignationMutation,
+  normalizeSessionOwnershipClaimRequest,
+  type AdapterSessionClaimRecord,
+  type MakaioSessionAgent,
+  type SessionOwnershipClaimRequest,
+  type SessionOwnershipClaimResult,
+} from '@makaio/contracts/session';
 import type { SessionStorageMemoryState } from './memory-store.js';
-import { allocateFence, findClaimByKey, findClaimByToken, resolveLeadCurrencyMirror } from './ownership-memory-rows.js';
+import { classifyRecoveryGuard } from './ownership-recovery-guard.js';
+import {
+  agentCurrencySnapshot,
+  allocateFence,
+  ensureMemoryRuntimeInstance,
+  findClaimByKey,
+  findClaimByToken,
+  memoryMayTakeOver,
+  resolveLeadCurrencyMirror,
+  runtimeInstanceKey,
+} from './ownership-memory-rows.js';
 
 /**
  * Result of the lead designation sub-procedure.
@@ -33,6 +45,50 @@ type LeadOutcome =
   | { readonly kind: 'ok'; readonly leadDesignated: boolean; readonly previousLeadAgentId: string | null }
   | { readonly kind: 'conflict'; readonly currentLeadAgentId: string | null }
   | { readonly kind: 'refused'; readonly result: SessionOwnershipClaimResult };
+
+/**
+ * Commit the lifecycle half of a successful guarded reservation.
+ * @param agent - Locked in-memory agent row.
+ * @param payload - Claim request carrying the optional recovery guard.
+ * @param result - Claim decision whose success gates the status transition.
+ * @returns The unchanged claim result.
+ */
+function finishRecoveryClaim(
+  agent: MakaioSessionAgent | undefined,
+  payload: SessionOwnershipClaimRequest,
+  result: SessionOwnershipClaimResult,
+): SessionOwnershipClaimResult {
+  if (
+    payload.recoveryGuard !== undefined &&
+    agent !== undefined &&
+    (result.outcome === 'claimed' || result.outcome === 'idempotent')
+  ) {
+    const recoveryAttemptId = payload.recoveryAttemptId;
+    if (recoveryAttemptId === undefined) throw new Error('guarded recovery claim requires recoveryAttemptId');
+    const preimage = {
+      status: agent.status,
+      adapterId: agent.adapterId,
+      ...(agent.runtimeOwner === undefined
+        ? {}
+        : {
+            binding: {
+              adapterId: agent.adapterId,
+              ownerMachineId: agent.runtimeOwner.machineId,
+              ownerInstanceId: agent.runtimeOwner.instanceId,
+            },
+          }),
+      ...(agent.recoveryAttemptId === undefined ? {} : { recoveryAttemptId: agent.recoveryAttemptId }),
+    };
+    agent.status = 'starting';
+    agent.adapterId = payload.adapterId;
+    if (payload.ownerInstance === undefined) throw new Error('guarded recovery claim requires ownerInstance');
+    agent.runtimeOwner = { machineId: payload.machineId, instanceId: payload.ownerInstance.instanceId };
+    agent.recoveryAttemptId = recoveryAttemptId;
+    agent.lastActivityAt = Date.now();
+    return { ...result, recovery: { attemptId: recoveryAttemptId, preimage } };
+  }
+  return result;
+}
 
 /**
  * Run the sessions phase of a claim: read the designation, then move it.
@@ -80,6 +136,12 @@ function designateLead(
   const session = state.sessions.get(payload.sessionId);
   if (session === undefined) {
     return { kind: 'refused', result: { outcome: 'not-found', missing: 'session' } };
+  }
+  // Acquisition may only act on a live session. Cleanup-only clear and restore
+  // requests must still CAS after closure so a failed replacement cannot leave
+  // a stale lead standing or erase the prior one it replaced.
+  if (session.status !== 'active' && (session.status !== 'closed' || !isInactiveSafeLeadDesignationMutation(payload))) {
+    return { kind: 'refused', result: { outcome: 'session-not-active', status: session.status } };
   }
   const previousLeadAgentId = session.leadAgentId ?? null;
   const designation = payload.designateLead;
@@ -222,6 +284,7 @@ function acquireFreeKey(state: SessionStorageMemoryState, payload: KeyedClaimReq
     providerSessionId: payload.providerSessionId,
     sessionId: payload.sessionId,
     agentId: payload.agentId,
+    ownerInstanceId: payload.ownerInstance.instanceId,
     claimToken: payload.claimToken,
     fence: allocateFence(state, payload.agentId, 0),
     status: 'held',
@@ -250,10 +313,10 @@ function acquireFreeKey(state: SessionStorageMemoryState, payload: KeyedClaimReq
  * after the agent's provider session moves to another key. A failing lead
  * designation restores the superseded generation exactly as it stood.
  *
- * The SQL backend re-states the superseded token — and, for an unusable
- * incumbent, its owner's disposal — as conditions of its UPDATE and classifies
- * the zero-row case, because a competitor may commit between its classifying
- * read and its write. Here there is no such window and therefore no such branch:
+ * The SQL backend re-states its takeover authorization as a condition of the
+ * UPDATE and classifies the zero-row case, because a competitor may commit
+ * between its classifying read and its write. Here there is no such window and
+ * therefore no such branch:
  * `existing` is the very object the claims map holds, read in the same
  * synchronous block, so it cannot have been released, superseded or revived in
  * between. A compare-and-swap spelled out anyway could only ever pass, and its
@@ -279,6 +342,7 @@ function takeOverClaim(
     agentId: payload.agentId,
     sessionId: payload.sessionId,
     adapterName: payload.adapterName,
+    ownerInstanceId: payload.ownerInstance.instanceId,
     status: 'held',
     claimedAt: now,
     updatedAt: now,
@@ -379,7 +443,101 @@ function runKeylessReservation(
 }
 
 /** A claim request whose ownership key is present — everything but a keyless reservation. */
-type KeyedClaimRequest = SessionOwnershipClaimRequest & { readonly providerSessionId: string };
+type KeyedClaimRequest = SessionOwnershipClaimRequest & {
+  readonly providerSessionId: string;
+  readonly ownerInstance: { readonly instanceId: string };
+};
+
+/**
+ * Execute the keyed half after the optional recovery snapshot has been checked.
+ * @param state - Shared in-memory state.
+ * @param payload - Claim request whose provider key is present.
+ * @param providerSessionId - Provider key narrowed from the request.
+ * @param agent - Claiming agent row, when present.
+ * @param existing - Generation observed on the key before any write.
+ * @returns The modeled claim outcome.
+ */
+function runKeyedClaim(
+  state: SessionStorageMemoryState,
+  payload: SessionOwnershipClaimRequest,
+  providerSessionId: string,
+  agent: MakaioSessionAgent | undefined,
+  existing: AdapterSessionClaimRecord | undefined,
+): SessionOwnershipClaimResult {
+  const ownerInstance = payload.ownerInstance;
+  if (ownerInstance === undefined) throw new Error('keyed session ownership claim requires ownerInstance');
+  const ownerKey = runtimeInstanceKey(ownerInstance.instanceId, payload.machineId);
+  const ownerAlreadyExisted = state.runtimeInstances.has(ownerKey);
+  ensureMemoryRuntimeInstance(state, ownerInstance.instanceId, payload.machineId, Date.now());
+  const keyed: KeyedClaimRequest = { ...payload, providerSessionId, ownerInstance };
+
+  if (existing === undefined) {
+    const result = acquireFreeKey(state, keyed);
+    if (!ownerAlreadyExisted && result.outcome !== 'claimed') state.runtimeInstances.delete(ownerKey);
+    return finishRecoveryClaim(agent, payload, result);
+  }
+  if (existing.claimToken === keyed.claimToken) {
+    // A token match is only this caller's own retry while the row still names
+    // the same agent and session. A token presented by anyone else is a
+    // competitor holding the key — never an idempotent success that would also
+    // let it run the lead designation.
+    if (existing.agentId === keyed.agentId && existing.sessionId === keyed.sessionId) {
+      const result = repeatClaim(state, keyed, existing);
+      if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
+      return finishRecoveryClaim(agent, payload, result);
+    }
+    if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
+    return { outcome: 'already-claimed', holder: structuredClone(existing) };
+  }
+  if (
+    memoryMayTakeOver(
+      state,
+      {
+        machineId: keyed.machineId,
+        agentId: keyed.agentId,
+        ownerInstanceId: keyed.ownerInstance.instanceId,
+        topology: keyed.topology,
+        supersededClaimToken: keyed.supersedes?.claimToken,
+      },
+      existing,
+    )
+  ) {
+    const result = takeOverClaim(state, keyed, existing);
+    if (!ownerAlreadyExisted && result.outcome !== 'claimed') state.runtimeInstances.delete(ownerKey);
+    return finishRecoveryClaim(agent, payload, result);
+  }
+  if (!ownerAlreadyExisted) state.runtimeInstances.delete(ownerKey);
+  return { outcome: 'already-claimed', holder: structuredClone(existing) };
+}
+
+/**
+ * Run the keyless branch, registering a guarded recovery owner before the
+ * agent/session phase and undoing a newly allocated volatile row on refusal.
+ * @param state - Shared in-memory state.
+ * @param payload - Keyless claim request.
+ * @param agent - Claiming agent observed for the guard.
+ * @returns The reservation outcome.
+ */
+function runKeylessClaim(
+  state: SessionStorageMemoryState,
+  payload: SessionOwnershipClaimRequest,
+  agent: MakaioSessionAgent | undefined,
+): SessionOwnershipClaimResult {
+  const ownerInstance = payload.ownerInstance;
+  const ownerKey =
+    payload.recoveryGuard === undefined || ownerInstance === undefined
+      ? undefined
+      : runtimeInstanceKey(ownerInstance.instanceId, payload.machineId);
+  const ownerAlreadyExisted = ownerKey === undefined || state.runtimeInstances.has(ownerKey);
+  if (ownerKey !== undefined && ownerInstance !== undefined) {
+    ensureMemoryRuntimeInstance(state, ownerInstance.instanceId, payload.machineId, Date.now());
+  }
+  const result = runKeylessReservation(state, payload);
+  if (ownerKey !== undefined && !ownerAlreadyExisted && result.outcome !== 'claimed') {
+    state.runtimeInstances.delete(ownerKey);
+  }
+  return finishRecoveryClaim(agent, payload, result);
+}
 
 /**
  * Take or take over the ownership claim on a provider session — or reserve a
@@ -388,37 +546,41 @@ type KeyedClaimRequest = SessionOwnershipClaimRequest & { readonly providerSessi
  * A key held by another generation is `already-claimed` even when the lead
  * expectation is also wrong: ownership is decided before designation.
  *
- * A key whose incumbent's agent row is `disposed` is taken over
- * **unconditionally**, with no `supersedes` from the caller: a removed agent can
- * never legitimately hold a key, so admitting the takeover is always correct. A
- * *deleted* agent or session needs no takeover at all — the claim goes with its
- * parent (see the cascade in the session and agent delete handlers), and the key
- * is simply free.
+ * Disposing the incumbent agent does not prove its runtime connector stopped.
+ * Such a row therefore remains occupied until explicit supersession or durable
+ * runtime identity establishes T1, T3, or T4. A deleted parent needs no takeover:
+ * its cascade removes the claim and leaves the key free.
  * @param state - Shared in-memory state
- * @param payload - Claim request
+ * @param request - Claim request
  * @returns The modeled claim outcome
  */
-export function runClaim(
-  state: SessionStorageMemoryState,
-  payload: SessionOwnershipClaimRequest,
-): SessionOwnershipClaimResult {
+export function runClaim(state: SessionStorageMemoryState, request: unknown): SessionOwnershipClaimResult {
+  const payload = normalizeSessionOwnershipClaimRequest(request);
   const { providerSessionId } = payload;
-  if (providerSessionId === null) return runKeylessReservation(state, payload);
-  const keyed: KeyedClaimRequest = { ...payload, providerSessionId };
-
-  const existing = findClaimByKey(state.claims, keyed.machineId, keyed.adapterId, providerSessionId);
-  if (existing === undefined) return acquireFreeKey(state, keyed);
-  if (existing.claimToken === keyed.claimToken) {
-    // A token match is only this caller's own retry while the row still names
-    // the same agent and session. A token presented by anyone else is a
-    // competitor holding the key — never an idempotent success that would also
-    // let it run the lead designation.
-    if (existing.agentId === keyed.agentId && existing.sessionId === keyed.sessionId) {
-      return repeatClaim(state, keyed, existing);
-    }
-    return { outcome: 'already-claimed', holder: structuredClone(existing) };
+  const agent = state.agents.get(payload.agentId);
+  const existing =
+    providerSessionId === null
+      ? undefined
+      : findClaimByKey(state.claims, payload.machineId, payload.adapterId, providerSessionId);
+  if (payload.recoveryGuard !== undefined && agent !== undefined) {
+    const guardRefusal = classifyRecoveryGuard(
+      payload,
+      {
+        status: agent.status,
+        adapterId: agent.adapterId,
+        runtimeOwner: agent.runtimeOwner,
+        recoveryAttemptId: agent.recoveryAttemptId,
+        revision: agent.revision ?? 0,
+        currencyFence: agent.currencyFence ?? 0,
+        currency: agentCurrencySnapshot(agent),
+      },
+      existing ?? null,
+    );
+    if (guardRefusal !== undefined) return guardRefusal;
   }
-  if (keyed.supersedes?.claimToken === existing.claimToken) return takeOverClaim(state, keyed, existing);
-  if (state.agents.get(existing.agentId)?.status === 'disposed') return takeOverClaim(state, keyed, existing);
-  return { outcome: 'already-claimed', holder: structuredClone(existing) };
+
+  if (providerSessionId === null) {
+    return runKeylessClaim(state, payload, agent);
+  }
+  return runKeyedClaim(state, payload, providerSessionId, agent, existing);
 }

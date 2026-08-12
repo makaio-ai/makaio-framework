@@ -14,7 +14,7 @@ import {
   type MessageHandle,
   type NormalizedMessageInput,
   type AIAdapterDefinition,
-  type AIAdapterInitOptions,
+  type AIAdapterRuntimeInitOptions,
   type AIAdapterConfig,
   type AdapterProviderDefinition,
 } from '@makaio/ai-adapters-core';
@@ -174,10 +174,12 @@ class DevexSmokeAdapter extends AIAdapter<DevexSmokeBus, DevexSmokeConnector, De
  * @param options - Runtime adapter init options.
  * @returns Initialized local-only adapter instance.
  */
-export async function createDevexSmokeAdapter(options?: AIAdapterInitOptions): Promise<DevexSmokeAdapter> {
+export async function createDevexSmokeAdapter(options: AIAdapterRuntimeInitOptions): Promise<DevexSmokeAdapter> {
   const scopedBus = (await DevexSmokeNamespace.scopedBus()) as DevexSmokeBus;
   const adapter = new DevexSmokeAdapter({
-    adapterId: options?.adapterId,
+    adapterId: options.adapterId,
+    machineId: options.machineId,
+    ownerInstanceId: options.ownerInstanceId,
     name: DEVEX_SMOKE_ADAPTER_NAME,
     capabilities: [],
     nativeTools: [],

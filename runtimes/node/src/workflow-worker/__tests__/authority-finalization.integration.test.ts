@@ -239,11 +239,14 @@ describe('authority WorkerNode finalization integration', () => {
           toolsets: [readOnlyFilesystemToolset],
         });
         try {
-          if (adapterCapture.adapterId === undefined) throw new Error('Adapter contribution did not initialize');
+          if (adapterCapture.adapterId === undefined || adapterCapture.ownerInstanceId === undefined) {
+            throw new Error('Adapter contribution did not initialize with runtime ownership');
+          }
           const startsBeforeProbe = adapterCapture.starts.length;
           const authorityStartsBeforeProbe = authorityAgentStarts;
           await runtime.bus.request(AdapterSubjects.startAgent, {
             adapterId: adapterCapture.adapterId,
+            ownerInstanceId: adapterCapture.ownerInstanceId,
             initialMessage: 'Verify isolated adapter execution locality',
             role: 'lead',
             ephemeral: true,

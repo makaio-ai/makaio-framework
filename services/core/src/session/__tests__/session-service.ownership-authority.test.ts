@@ -66,8 +66,10 @@ describe('session ownership authority', () => {
       agentId,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
       role,
       resumeProviderSessionId: providerSessionId,
+      claimToken: crypto.randomUUID(),
       ...(role === 'lead' && { expectedLeadAgentId: null }),
     });
   }
@@ -96,11 +98,24 @@ describe('session ownership authority', () => {
       expect(result.reservation.leadDesignated).toBe(true);
       expect(result.reservation.previousLeadAgentId).toBeNull();
       expect(result.reservation.machineId).toBe(MACHINE_ID);
+      expect(result.reservation.ownerInstanceId).toBe(service.requireOwnershipInstanceId());
 
       const stored = await bus.request(SessionStorageSubjects.get, { sessionId });
       expect(stored.session?.leadAgentId).toBe(agentId);
       const { claims } = await bus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: MACHINE_ID });
       expect(claims).toEqual([]);
+    });
+
+    it('does not expose the storage-only designation sentinel as a machine identity', async () => {
+      await startService();
+      const { sessionId, agentId } = await seed('reserve-keyless-without-machine', 'agent-keyless-without-machine');
+
+      const result = await reserve(sessionId, agentId, null, 'lead');
+
+      expect(result.outcome).toBe('reserved');
+      if (result.outcome !== 'reserved') return;
+      expect(result.reservation).toMatchObject({ claim: null });
+      expect(result.reservation.machineId).toBeUndefined();
     });
 
     it('reports occupied when another agent holds the key, without touching the designation', async () => {
@@ -145,6 +160,21 @@ describe('session ownership authority', () => {
       expect((await reserve(sessionId, agentId, 'provider-disposed', 'member')).outcome).toBe('agent-disposed');
       const { claims } = await bus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: MACHINE_ID });
       expect(claims).toEqual([]);
+    });
+
+    it.each([
+      'closed',
+      'archived',
+      'discovered',
+    ] as const)('reports session-not-active with the stored %s status', async (status) => {
+      await startService({ machineId: MACHINE_ID });
+      const { sessionId, agentId } = await seed(`reserve-${status}`, `agent-${status}`);
+      await bus.request(SessionStorageSubjects.update, { sessionId, status });
+
+      await expect(reserve(sessionId, agentId, 'provider-closed', 'member')).resolves.toEqual({
+        outcome: 'session-not-active',
+        status,
+      });
     });
   });
 
@@ -557,6 +587,7 @@ describe('session ownership authority', () => {
         agentId,
         adapterId: ADAPTER_ID,
         adapterName: ADAPTER_NAME,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
         movement: { confirmed: true, providerSessionId: 'provider-none' },
       });
       expect(settled.outcome).toBe('machine-identity-unavailable');
@@ -588,15 +619,18 @@ describe('session ownership authority', () => {
         agentId,
         adapterId: ADAPTER_ID,
         adapterName: ADAPTER_NAME,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
         role: 'lead',
         resumeProviderSessionId: null,
         expectedLeadAgentId: null,
+        claimToken: crypto.randomUUID(),
       });
 
       expect(reserved.outcome).toBe('reserved');
       if (reserved.outcome !== 'reserved') return;
       // No key was taken, so nothing names a machine anywhere.
       expect(reserved.reservation.claim).toBeNull();
+      expect(reserved.reservation.ownerInstanceId).toBe(service.requireOwnershipInstanceId());
       expect(reserved.reservation.leadDesignated).toBe(true);
       const stored = await bus.request(SessionStorageSubjects.get, { sessionId });
       expect(stored.session?.leadAgentId).toBe(agentId);
@@ -613,9 +647,11 @@ describe('session ownership authority', () => {
         agentId,
         adapterId: ADAPTER_ID,
         adapterName: ADAPTER_NAME,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
         machineId: 'operator-named-machine',
         role: 'member',
         resumeProviderSessionId: 'provider-override',
+        claimToken: crypto.randomUUID(),
       });
 
       expect(result.outcome).toBe('reserved');

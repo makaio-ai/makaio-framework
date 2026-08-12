@@ -7,11 +7,11 @@ next: false
 
 # services
 
-32 namespaces, 227 subjects (35 events, 192 RPCs).
+32 namespaces, 230 subjects (36 events, 194 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
-| [`adapterRuntime`](./adapterruntime.md) | bus | 3 | 0E / 3R |
+| [`adapterRuntime`](./adapterruntime.md) | bus | 5 | 1E / 4R |
 | [`adapterSubsystem`](./adaptersubsystem.md) | bus | 35 | 9E / 26R |
 | [`agentRuntime`](./agentruntime.md) | bus | 6 | 2E / 4R |
 | [`cliDetection`](./clidetection.md) | bus | 1 | 0E / 1R |
@@ -23,7 +23,7 @@ next: false
 | [`docker`](./docker.md) | bus | 9 | 4E / 5R |
 | [`execution-target`](./execution-target.md) | bus | 8 | 3E / 5R |
 | [`fs`](./fs.md) | bus | 10 | 2E / 8R |
-| [`git`](./git.md) | bus | 44 | 6E / 38R |
+| [`git`](./git.md) | bus | 45 | 6E / 39R |
 | [`host:tray`](./host-tray.md) | bus | 7 | 2E / 5R |
 | [`local-notification`](./local-notification.md) | bus | 2 | 0E / 2R |
 | [`log-import`](./log-import.md) | bus | 13 | 0E / 13R |

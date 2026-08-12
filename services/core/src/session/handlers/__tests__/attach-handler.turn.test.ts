@@ -201,11 +201,21 @@ describe('registerAttachHandler - turn tracking', () => {
       );
     });
 
-    it('rolls back the started agent when local admission authority rejects before turn setup', async () => {
+    it('preserves an admission failure and stops once when the durable terminal write fails', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
       const { unsubscribe } = ctx.registerStartAgentHandler();
       ctx.trackUnsubscribe(unsubscribe);
       const stoppedAgents = recordStoppedAgents(ctx);
+      ctx.trackUnsubscribe(
+        MakaioBus.on(
+          AgentStorageSubjects.updateStatus,
+          (context) => {
+            if (context.payload.status === 'dead') throw new Error('durable terminal write failed');
+            return context.next();
+          },
+          { priority: 1000 },
+        ),
+      );
       ctx.trackUnsubscribe(ctx.registerHandler());
 
       await expect(
@@ -220,7 +230,7 @@ describe('registerAttachHandler - turn tracking', () => {
       ).rejects.toThrow('startup cancelled');
 
       expect(ctx.getActiveTurn(sessionId)).toBeUndefined();
-      expect(stoppedAgents).toContainEqual(expect.objectContaining({ agentId: ctx.startedAgentId() }));
+      expect(stoppedAgents).toEqual([expect.objectContaining({ agentId: ctx.startedAgentId() })]);
     });
 
     it('terminalizes the prepared turn when admission authority rejects at provider dispatch', async () => {
@@ -431,6 +441,8 @@ describe('registerAttachHandler - turn tracking', () => {
             adapterSessionId: `adapter-session-${receivedRequests.length}`,
             sessionId,
             messageId: 'msg-001',
+            ownerInstanceId: context.payload.ownerInstanceId ?? 'attach-turn-owner',
+            settlementAckToken: `attach-turn-ack-${receivedRequests.length}`,
           });
         }),
       );

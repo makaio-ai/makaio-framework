@@ -282,8 +282,6 @@ const ContainerLocalSpawnRequestBaseSchema = SpawnRequestBase.extend({
   repoPath: z.string(),
   /** Branch to fork from */
   baseBranch: z.string(),
-  /** Branch to create */
-  worktreeBranch: z.string().optional(),
 }).strict();
 
 /** Session-local container request with no workflow execution identity. */

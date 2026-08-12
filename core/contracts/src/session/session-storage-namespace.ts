@@ -113,6 +113,26 @@ const SessionAdapterIdentitySchema = z.object({
 });
 
 /**
+ * Provider-confirmed session identity announced by a session's designated lead.
+ *
+ * This is intentionally a named operation, rather than a reusable compare-and-
+ * swap shape: reconciliation may fill the provider key only when the stored
+ * identity is either wholly absent or already this exact adapter identity.
+ */
+const SessionAdapterSessionReconciliationSchema = z.object({
+  /** Agent whose start announcement is reconciling the session. */
+  agentId: z.string(),
+  /** Adapter type that announced the provider-native session. */
+  adapterName: z.string(),
+  /** Adapter instance that announced the provider-native session. */
+  adapterId: z.string(),
+  /** Provider-native session ID confirmed by the adapter. */
+  adapterSessionId: z.string(),
+  /** Time of the reconciliation announcement. */
+  lastActivityAt: z.number().finite(),
+});
+
+/**
  * Require the identity write and its authority to travel together.
  *
  * The adapter identity pair is admitted onto a partial-update surface only
@@ -130,6 +150,7 @@ function validateIdentityBackfillPairing(
   value: {
     identity?: unknown;
     expectIdentityOpenForLead?: unknown;
+    reconcileAdapterSession?: unknown;
   },
   ctx: z.RefinementCtx,
 ): void {
@@ -146,6 +167,17 @@ function validateIdentityBackfillPairing(
       code: z.ZodIssueCode.custom,
       path: ['identity'],
       message: 'identity is required when expectIdentityOpenForLead is provided',
+    });
+  }
+
+  if (
+    value.reconcileAdapterSession !== undefined &&
+    (value.identity !== undefined || value.expectIdentityOpenForLead !== undefined)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['reconcileAdapterSession'],
+      message: 'reconcileAdapterSession cannot be combined with the identity-open-for-lead authority mode',
     });
   }
 }
@@ -170,7 +202,8 @@ const SessionStorageUpdateRequestPayloadSchema = z
      * guess which of the two it was.
      */
     expectedStatus: z.array(SessionStorageStatusSchema).nonempty().optional(),
-    parentSessionId: z.string().optional(),
+    /** Parent linkage; null clears it without rewriting the session snapshot. */
+    parentSessionId: z.string().nullable().optional(),
     contextInheritance: SessionContextInheritanceSchema.optional(),
     rootSessionId: z.string().optional(),
     forkPointMessageId: z.string().optional(),
@@ -221,6 +254,15 @@ const SessionStorageUpdateRequestPayloadSchema = z
      * written anyway issues them as a second, unguarded update.
      */
     expectIdentityOpenForLead: z.string().nullable().optional(),
+    /**
+     * Atomically reconcile the provider session confirmed by the designated lead.
+     *
+     * Storage admits this only while the provider session ID is unset, the stored
+     * lead is `agentId`, and the adapter identity is either wholly open or exactly
+     * the announced adapter identity. A half-populated identity is malformed and
+     * is deliberately not completed by this operation.
+     */
+    reconcileAdapterSession: SessionAdapterSessionReconciliationSchema.optional(),
     // The adapter-session currency pair is deliberately absent. Resume currency
     // has exactly one writer — the `storage:sessionOwnership` seam — because it
     // is the only surface that states who is allowed to write it: a claim

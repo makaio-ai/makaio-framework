@@ -1,4 +1,4 @@
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import { QwenAcpAgent } from './agent.js';
 import { QwenAcpConnector } from './connector.js';
 import { QwenAcpNamespace } from './namespaces/index.js';
@@ -28,19 +28,19 @@ import { QwenAcpAdapterName } from './constants.js';
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new QwenAcpAdapter();
+ * const adapter = new QwenAcpAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createQwenAcpAdapter();
+ * const adapter = await createQwenAcpAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * ```
  */
 export class QwenAcpAdapter extends AIAdapter<QwenAcpBus, QwenAcpConnector, QwenAcpAgent> {
   /**
    * Creates a Qwen ACP adapter instance.
-   * @param config - Optional adapter configuration overrides
+   * @param config - Runtime configuration, including the owning authority.
    */
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
       ...config,
       name: QwenAcpAdapterName,
@@ -58,17 +58,17 @@ export class QwenAcpAdapter extends AIAdapter<QwenAcpBus, QwenAcpConnector, Qwen
  * Factory function to create and initialize a Qwen ACP adapter.
  *
  * Convenience wrapper that creates the adapter and calls init() for you.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized QwenAcpAdapter instance
  * @example
  * ```typescript
- * const adapter = await createQwenAcpAdapter();
+ * const adapter = await createQwenAcpAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle requests via bus
  * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
-export async function createQwenAcpAdapter(config?: Partial<AIAdapterConfig>): Promise<QwenAcpAdapter> {
+export async function createQwenAcpAdapter(config: AIAdapterRuntimeConfig): Promise<QwenAcpAdapter> {
   const adapter = new QwenAcpAdapter(config);
   await adapter.init();
   return adapter;

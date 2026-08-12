@@ -10,7 +10,7 @@ import { createClaudeCliAdapter } from '@makaio/adapter-claude-code-cli';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
 
-const adapter = await createClaudeCliAdapter();
+const adapter = await createClaudeCliAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 
 const result = await MakaioBus.request(AdapterSubjects.startAgent, {
   adapterId: adapter.adapterId,

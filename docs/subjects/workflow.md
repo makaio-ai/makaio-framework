@@ -100,7 +100,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `accepted` | `boolean` | yes |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing"` | yes |
+| `status` | `"failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing"` | yes |
 
 ### <a id="workflow.artifact.updated"></a>`workflow.artifact.updated` (event)
 
@@ -183,7 +183,7 @@ Type: Request (RPC)
 | `executionId` | `string` | yes |
 | `frame` | `{ frameId: string; nodeId: string; nodeType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; path: string[]; startedAt: number; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; durationMs?: number \| undefined; } \| undefined` | no |
 | `reason` | `string \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed"` | yes |
+| `status` | `"failed" \| "completed" \| "cancelled"` | yes |
 
 **Response:**
 
@@ -655,7 +655,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `execution` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing"; inputs: JsonValue; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; config?: Record<string, unknown> \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; } \| null` | yes |
+| `execution` | `{ id: string; workflowId: string; status: "failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing"; inputs: JsonValue; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; config?: Record<string, unknown> \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; } \| null` | yes |
 
 ### <a id="workflow.getRunContext"></a>`workflow.getRunContext` (rpc)
 
@@ -762,14 +762,14 @@ Type: Request (RPC)
 | `cursor` | `{ startedAt: number; id: string; } \| undefined` | no |
 | `limit` | `number \| undefined` | no |
 | `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing" \| undefined` | no |
+| `status` | `"failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing" \| undefined` | no |
 | `workflowId` | `string \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executions` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing"; inputs: JsonValue; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; config?: Record<string, unknown> \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; }[]` | yes |
+| `executions` | `{ id: string; workflowId: string; status: "failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing"; inputs: JsonValue; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; config?: Record<string, unknown> \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; }[]` | yes |
 
 ### <a id="workflow.listExecutionsByArtifactRefs"></a>`workflow.listExecutionsByArtifactRefs` (rpc)
 
@@ -794,7 +794,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executionsByRef` | `Record<string, { id: string; workflowId: string; status: "completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing"; inputs: JsonValue; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; config?: Record<string, unknown> \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; }[]>` | yes |
+| `executionsByRef` | `Record<string, { id: string; workflowId: string; status: "failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing"; inputs: JsonValue; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; config?: Record<string, unknown> \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; }[]>` | yes |
 
 ### <a id="workflow.listFrames"></a>`workflow.listFrames` (rpc)
 
@@ -817,7 +817,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `frames` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "completed" \| "cancelled" \| "skipped" \| "failed" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }[]` | yes |
+| `frames` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="workflow.listGateInstances"></a>`workflow.listGateInstances` (rpc)
 
@@ -866,7 +866,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `spans` | `{ executionId: string; frameId: string; stepId: string; stepType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; status: "completed" \| "skipped" \| "failed" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }[]` | yes |
+| `spans` | `{ executionId: string; frameId: string; stepId: string; stepType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; status: "failed" \| "completed" \| "skipped" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }[]` | yes |
 
 ### <a id="workflow.registerExternalExecution"></a>`workflow.registerExternalExecution` (rpc)
 
@@ -1259,7 +1259,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "completed" \| "cancelled" \| "skipped" \| "failed" \| "pending" \| "running" \| "waiting"; attempt: number; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| null` | yes |
+| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| null` | yes |
 
 ### <a id="workflow.worklog.get"></a>`workflow.worklog.get` (rpc)
 
@@ -1281,7 +1281,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `summary` | `{ executionId: string; workflowId: string; status: "completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing"; startedAt: number; workflowName?: string \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; totalInputTokens?: number \| undefined; totalOutputTokens?: number \| undefined; totalEstimatedCost?: number \| undefined; error?: string \| undefined; failedNodeId?: string \| undefined; } \| null` | yes |
+| `summary` | `{ executionId: string; workflowId: string; status: "failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing"; startedAt: number; workflowName?: string \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; totalInputTokens?: number \| undefined; totalOutputTokens?: number \| undefined; totalEstimatedCost?: number \| undefined; error?: string \| undefined; failedNodeId?: string \| undefined; } \| null` | yes |
 
 ### <a id="workflow.worklog.list"></a>`workflow.worklog.list` (rpc)
 
@@ -1299,14 +1299,14 @@ Type: Request (RPC)
 |-------|------|----------|
 | `limit` | `number \| undefined` | no |
 | `offset` | `number \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing" \| undefined` | no |
+| `status` | `"failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing" \| undefined` | no |
 | `workflowId` | `string \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `items` | `{ executionId: string; workflowId: string; status: "completed" \| "cancelled" \| "failed" \| "pending" \| "paused" \| "running" \| "finalizing"; startedAt: number; workflowName?: string \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; totalInputTokens?: number \| undefined; totalOutputTokens?: number \| undefined; totalEstimatedCost?: number \| undefined; error?: string \| undefined; failedNodeId?: string \| undefined; }[]` | yes |
+| `items` | `{ executionId: string; workflowId: string; status: "failed" \| "completed" \| "cancelled" \| "pending" \| "paused" \| "running" \| "finalizing"; startedAt: number; workflowName?: string \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; totalInputTokens?: number \| undefined; totalOutputTokens?: number \| undefined; totalEstimatedCost?: number \| undefined; error?: string \| undefined; failedNodeId?: string \| undefined; }[]` | yes |
 | `total` | `number` | yes |
 
 ### <a id="workflow.worklog.stats"></a>`workflow.worklog.stats` (rpc)

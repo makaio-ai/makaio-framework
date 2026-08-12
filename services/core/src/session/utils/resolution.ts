@@ -45,6 +45,8 @@ export interface OwnedAdapterInstance {
   readonly adapterId: string;
   /** Machine whose namespace those acts are filed under, or `undefined` when the caller named none. */
   readonly machineId?: string;
+  /** Exact runtime owner, absent only before a connector-dispatchable target is proved. */
+  readonly ownerInstanceId?: string;
 }
 
 /**
@@ -58,7 +60,38 @@ export interface OwnedAdapterInstance {
  * absence, and then settles on the provider session the connector confirms,
  * which does not.
  */
-export type MachineScopedAdapterInstance = OwnedAdapterInstance & { readonly machineId: string };
+export type MachineScopedAdapterInstance = OwnedAdapterInstance & {
+  readonly machineId: string;
+  readonly ownerInstanceId: string;
+};
+
+/**
+ * Keep only an adapter instance that can name the machine hosting its connector.
+ *
+ * A designation-only authority may use its internal sentinel while deciding
+ * ownership, but a connector-producing path must never dispatch or persist that
+ * sentinel as a runtime owner. Callers translate `undefined` into their own
+ * pre-dispatch refusal or deferral.
+ * @param instance - Resolved adapter instance, possibly unscoped.
+ * @returns The dispatchable instance, or `undefined` when no real machine is known.
+ */
+export function toMachineScopedAdapterInstance(
+  instance: OwnedAdapterInstance | undefined,
+): MachineScopedAdapterInstance | undefined {
+  if (
+    instance === undefined ||
+    instance.machineId === undefined ||
+    instance.machineId.length === 0 ||
+    instance.ownerInstanceId === undefined ||
+    instance.ownerInstanceId.length === 0
+  )
+    return undefined;
+  return {
+    adapterId: instance.adapterId,
+    machineId: instance.machineId,
+    ownerInstanceId: instance.ownerInstanceId,
+  };
+}
 
 /** What a caller knows about the instance it wants, before it is resolved. */
 export interface OwnedAdapterInstanceTarget {
@@ -90,6 +123,37 @@ export interface OwnedAdapterInstanceTarget {
 }
 
 /**
+ * Prove that an explicitly selected adapter instance is currently live on the
+ * exact machine the selection names.
+ *
+ * The proof is announcement-backed rather than hash-backed: hosts may provide
+ * opaque adapter IDs, and a deterministic-looking value is not evidence that a
+ * runtime has initialized it.
+ * @param bus - Bus the live-identity request is issued on.
+ * @param target - Complete identity the caller intends to dispatch to.
+ * @returns The dispatchable instance, or `undefined` when it has no matching live announcement.
+ */
+export async function resolveAnnouncedAdapterInstance(
+  bus: IMakaioBus,
+  target: Required<Pick<OwnedAdapterInstanceTarget, 'adapterId' | 'adapterName' | 'machineId'>>,
+): Promise<MachineScopedAdapterInstance | undefined> {
+  try {
+    const identity = await bus.request(AdapterRuntimeSubjects.resolveLiveIdentity, target);
+    return {
+      adapterId: identity.adapterId,
+      machineId: identity.machineId,
+      ownerInstanceId: identity.ownerInstanceId,
+    };
+  } catch (error: unknown) {
+    console.debug(
+      `[resolveAnnouncedAdapterInstance] adapter ${target.adapterId} is not live as ${target.adapterName} on ${target.machineId}:`,
+      error,
+    );
+    return undefined;
+  }
+}
+
+/**
  * Resolve the instance an attempt addresses **and** the machine it acts for, or
  * answer that this runtime may not act at all.
  *
@@ -104,9 +168,10 @@ export interface OwnedAdapterInstanceTarget {
  *
  * **The three answers, and why each is the honest one:**
  *
- * - **A named instance with its machine** is returned unresolved. The caller
- *   already holds both halves from one source — the selection schema refuses the
- *   pair any other way — so there is nothing to look up and nothing to second-guess.
+ * - **A named instance with its machine** is returned only after the live
+ *   identity registry confirms the exact triple it announced. The selection
+ *   schema proves the request is complete; the announcement proves the target
+ *   currently exists, including when its host supplied an opaque ID.
  * - **A named instance without a machine** is `undefined`. This is the handler-side
  *   half of the schema's refinement, and it is needed as well as the schema:
  *   the test bus does not validate, and defaulting to this runtime's own identity
@@ -131,7 +196,9 @@ export async function resolveOwnedAdapterInstance(
 ): Promise<OwnedAdapterInstance | undefined> {
   const { adapterName, adapterId, machineId, storedAdapterId } = target;
   if (adapterId !== undefined) {
-    return machineId === undefined ? undefined : { adapterId, machineId };
+    return machineId === undefined
+      ? undefined
+      : await resolveAnnouncedAdapterInstance(bus, { adapterId, adapterName, machineId });
   }
   const resolved = await resolveAdapterId(bus, adapterName, machineId).catch((error: unknown) => {
     // The refusal is modeled by the caller (deferral / non-native degrade), so
@@ -148,7 +215,8 @@ export async function resolveOwnedAdapterInstance(
   // lookup that could have proven the pair was unavailable.
   const effective = resolved ?? (machineId === undefined ? storedAdapterId : undefined);
   if (effective === undefined) return undefined;
-  return machineId === undefined ? { adapterId: effective } : { adapterId: effective, machineId };
+  if (machineId === undefined) return { adapterId: effective };
+  return await resolveAnnouncedAdapterInstance(bus, { adapterId: effective, adapterName, machineId });
 }
 
 /**

@@ -6,8 +6,14 @@ import { planAgentRecovery, recoveryPlanRequiresHistory, type RecoveryPlan } fro
 import { resolveAgentResumeIdentity } from '../session-resume-identity.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
-import { resolveOwnedAdapterInstance } from '../utils/resolution.js';
+import { resolveOwnedAdapterInstance, toMachineScopedAdapterInstance } from '../utils/resolution.js';
 import { runOrJoinReservedRehydrate, type ExclusiveRehydrateOutcome } from './in-flight-start-join.js';
+import {
+  buildRecoveryReservationGuard,
+  MAX_RECOVERY_REPLANS,
+  readRecoveryPlanningSnapshot,
+  recoverySnapshotIsClaimable,
+} from './recovery-reservation.js';
 
 /** One agent's outcome, as `session.restartAgents` reports it. */
 type RestartAgentsHandlerResult =
@@ -137,6 +143,13 @@ function reportRestartOutcome(
         success: false,
         error: 'Another runtime claimed this agent’s recovery',
       };
+    case 'stale-plan':
+      return {
+        agentId,
+        adapterId: storedAdapterId,
+        success: false,
+        error: 'Agent currency kept changing while its restart was planned',
+      };
     default:
       // Unreachable: a self-run attempt records its outcome before it settles.
       return { agentId, adapterId: storedAdapterId, success: false, error: 'Restart produced no result' };
@@ -175,56 +188,51 @@ async function restartAgent(
   // dispatched for it, so re-stamping the row with a freshly resolved instance
   // would advertise a binding that does not exist.
   const { agentId, adapterId: storedAdapterId } = agent;
-  if (agent.status === 'disposed') {
-    // Checked before anything is dispatched or reserved: rehydrating a removed
-    // agent throws, and every ownership operation refuses it by predicate
-    // anyway, so the round-trip would only turn a known answer into a slower
-    // one.
-    return {
-      agentId,
-      adapterId: storedAdapterId,
-      success: false,
-      error: 'Agent is disposed and can no longer be restarted',
-    };
+  for (let replan = 0; replan <= MAX_RECOVERY_REPLANS; replan += 1) {
+    const outcome = await runOrJoinReservedRehydrate(bus, agent, async () => {
+      const snapshot = await readRecoveryPlanningSnapshot(bus, agentId);
+      if (snapshot === null) return { kind: 'lost' };
+      if (!recoverySnapshotIsClaimable(snapshot)) {
+        return snapshot.agent.status === 'disposed' ? { kind: 'refused', outcome: 'agent-disposed' } : { kind: 'lost' };
+      }
+      Object.assign(agent, snapshot.agent);
+
+      // Planning belongs to the exclusive winner. A joiner can wait while an
+      // attempt rewrites the row, replaces the live incarnation or changes the
+      // holder generation; reading any of those facts before the seam would
+      // create a request for a lifecycle this caller never gets to run.
+      const instance = toMachineScopedAdapterInstance(
+        await resolveOwnedAdapterInstance(bus, {
+          adapterName: agent.adapterName,
+          storedAdapterId: agent.adapterId,
+          ...(machineId !== undefined && { machineId }),
+        }),
+      );
+      if (instance === undefined) return { kind: 'deferred', reason: 'machine-identity-unavailable' };
+
+      const plan = await planRestart(bus, session, agent, instance.adapterId, instance.machineId);
+      if (recoveryPlanRequiresHistory(plan)) return { kind: 'deferred', reason: 'machine-identity-unavailable' };
+      const recoveryGuard = await buildRecoveryReservationGuard(bus, snapshot, instance, plan.resumeAdapterSessionId);
+      return {
+        agent,
+        sessionId: agent.sessionId,
+        instance,
+        resumeProviderSessionId: plan.resumeAdapterSessionId,
+        recoveryGuard,
+        ...(agent.cwd !== undefined && { cwd: agent.cwd }),
+        ...(agent.model !== undefined && { model: agent.model }),
+      };
+    });
+    if (outcome?.kind === 'stale-plan' && replan < MAX_RECOVERY_REPLANS) continue;
+    return reportRestartOutcome({ agentId, storedAdapterId }, outcome);
   }
 
-  // Resolved before anything reads or reserves against it, so the probe, the
-  // reservation, the dispatch, the settlement and the runtime write all name one
-  // instance — and one *machine*, since the instance ID is derived from it. A
-  // caller that named a machine gets its whole restart in that machine's
-  // namespace rather than a key mixing its identity with this runtime's.
-  const instance = await resolveOwnedAdapterInstance(bus, {
-    adapterName: agent.adapterName,
-    storedAdapterId,
-    ...(machineId !== undefined && { machineId }),
-  });
-  if (instance === undefined) {
-    // No instance of this agent's adapter is derivable for the machine this
-    // restart acts under, so there is none this restart could both reserve
-    // under and dispatch to — the persisted ID cannot stand in, because the
-    // machine it belongs to cannot be recovered from it. Reported exactly like
-    // the deferral a non-native plan takes, and for the same reason: nothing
-    // failed and nothing was dispatched, the agent record is intact, and the
-    // send path recovers it with injected history.
-    return { agentId, adapterId: storedAdapterId, success: true };
-  }
-
-  // The plan is decided for the same machine the reservation files under, which
-  // is what the pair guarantees: deciding for one and reserving in another's
-  // namespace was how a plan could be native for a machine whose key nobody
-  // checked.
-  const plan = await planRestart(bus, session, agent, instance.adapterId, instance.machineId);
-  if (recoveryPlanRequiresHistory(plan)) return { agentId, adapterId: storedAdapterId, success: true };
-
-  const outcome = await runOrJoinReservedRehydrate(bus, {
-    agent,
-    sessionId: agent.sessionId,
-    instance,
-    resumeProviderSessionId: plan.resumeAdapterSessionId,
-    ...(agent.cwd !== undefined && { cwd: agent.cwd }),
-    ...(agent.model !== undefined && { model: agent.model }),
-  });
-  return reportRestartOutcome({ agentId, storedAdapterId }, outcome);
+  return {
+    agentId,
+    adapterId: storedAdapterId,
+    success: false,
+    error: 'Agent restart exhausted its recovery-plan retry',
+  };
 }
 
 /**

@@ -363,6 +363,26 @@ describe('MakaioSessionService - Lifecycle', () => {
       const { success } = await MakaioBus.request(SessionSubjects.close, { sessionId });
       expect(success).toBe(true);
     });
+
+    it('emits one event when concurrent close requests race the active transition', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      const closed: string[] = [];
+      const cleanup = MakaioBus.on(SessionSubjects.closed, (ctx) => {
+        closed.push(ctx.payload.sessionId);
+      });
+
+      try {
+        const results = await Promise.all([
+          MakaioBus.request(SessionSubjects.close, { sessionId }),
+          MakaioBus.request(SessionSubjects.close, { sessionId }),
+        ]);
+
+        expect(results).toEqual([{ success: true }, { success: true }]);
+        expect(closed).toEqual([sessionId]);
+      } finally {
+        cleanup();
+      }
+    });
   });
 
   // ===========================================================================
@@ -498,6 +518,27 @@ describe('MakaioSessionService - Lifecycle', () => {
       expect(session?.status).toBe('archived');
     });
 
+    it('emits one event when concurrent archive requests race the closed transition', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      await MakaioBus.request(SessionSubjects.close, { sessionId });
+      const archived: string[] = [];
+      const cleanup = MakaioBus.on(SessionSubjects.archived, (ctx) => {
+        archived.push(ctx.payload.sessionId);
+      });
+
+      try {
+        const results = await Promise.all([
+          MakaioBus.request(SessionSubjects.archive, { sessionId }),
+          MakaioBus.request(SessionSubjects.archive, { sessionId }),
+        ]);
+
+        expect(results).toEqual([{ success: true }, { success: true }]);
+        expect(archived).toEqual([sessionId]);
+      } finally {
+        cleanup();
+      }
+    });
+
     it('purges an archived session in framework-only mode', async () => {
       const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
       await MakaioBus.request(SessionSubjects.close, { sessionId });
@@ -587,7 +628,7 @@ describe('MakaioSessionService - Lifecycle', () => {
 describe('registerCoreSessionServiceHandlers - ephemeral mode', () => {
   it('returns unhandled-storage results without throwing for update, archive, and purge', async () => {
     const bus = createBusInstance();
-    const cleanups = registerCoreSessionServiceHandlers({ bus });
+    const { cleanups } = registerCoreSessionServiceHandlers({ bus });
 
     try {
       await expect(

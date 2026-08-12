@@ -14,6 +14,8 @@ import { SessionStorageSubjects } from '../storage/namespace.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionEventStorageSubjects } from '../session-events/namespace.js';
 import { DEFAULT_TEST_MACHINE_ID, registerMockAdapterIdentityHandlers } from './mock-adapter-identity-registry.js';
+import { registerCallerSettlementAckHandler } from './caller-owned-adapter-stub.js';
+export { callerOwnedSuccessFields, registerCallerSettlementAckHandler } from './caller-owned-adapter-stub.js';
 export {
   SESSION_STORAGE_TEST_SCHEMA_SQL,
   MESSAGES_FTS_TEST_SCHEMA_SQL,
@@ -222,6 +224,7 @@ function registerRoutingHandlers(unsubs: Array<() => void>): void {
  */
 function registerAdapterHandlers(unsubs: Array<() => void>): void {
   unsubs.push(registerMockAdapterIdentityHandlers(DEFAULT_TEST_MACHINE_ID).unsubscribe);
+  unsubs.push(registerCallerSettlementAckHandler(MakaioBus));
 }
 
 /**

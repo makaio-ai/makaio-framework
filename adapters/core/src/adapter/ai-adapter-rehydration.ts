@@ -39,6 +39,35 @@ import {
 
 type RehydrateAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubjects.rehydrateAgent>;
 type RehydrateAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.rehydrateAgent>;
+
+/**
+ * Whether a warm rehydrate has any runtime-row field to persist.
+ * @param input - Candidate runtime fields.
+ * @returns Whether at least one candidate is present.
+ */
+function hasRuntimeUpdate(input: {
+  readonly cwd: string | undefined;
+  readonly model: string | undefined;
+  readonly adapterSessionId: string | undefined;
+  readonly runtimeOwner: { readonly machineId: string; readonly instanceId: string } | undefined;
+}): boolean {
+  return Object.values(input).some((value) => value !== undefined);
+}
+
+/**
+ * Project the adapter host identity only when this adapter owns the row write.
+ * @param machineId - Host machine identity, when composed by a runtime.
+ * @param instanceId - Runtime incarnation hosting the adapter.
+ * @param callerOwnsAgentRow - Whether the reserving caller owns persistence.
+ * @returns Runtime owner for an adapter-owned write, otherwise `undefined`.
+ */
+function hostedRuntimeOwner(
+  machineId: string | undefined,
+  instanceId: string,
+  callerOwnsAgentRow: boolean | undefined,
+): { readonly machineId: string; readonly instanceId: string } | undefined {
+  return callerOwnsAgentRow === true || machineId === undefined ? undefined : { machineId, instanceId };
+}
 /**
  * Configuration for AgentRehydrationManager construction.
  * @typeParam TBus - Scoped bus type for adapter-specific events
@@ -50,6 +79,10 @@ export interface AgentRehydrationManagerConfig<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 > {
+  /** Runtime incarnation hosting this adapter. */
+  ownerInstanceId: string;
+  /** Stable machine identity hosting this adapter, when composed by a host. */
+  machineId: string | undefined;
   /** Global bus for storage and service resolution calls. */
   globalBus: IMakaioBus;
   /** Agent registry for entry lookup and registration. */
@@ -82,6 +115,8 @@ export class AgentRehydrationManager<
    */
   private readonly inFlight = new Map<string, Promise<RehydrateAgentResponsePayload>>();
   private readonly globalBus: IMakaioBus;
+  private readonly ownerInstanceId: string;
+  private readonly machineId: string | undefined;
   private readonly registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   private readonly createAgentFn: (
     agentId: string,
@@ -91,6 +126,8 @@ export class AgentRehydrationManager<
 
   public constructor(config: AgentRehydrationManagerConfig<TBus, TConnector, TAgent>) {
     this.globalBus = config.globalBus;
+    this.ownerInstanceId = config.ownerInstanceId;
+    this.machineId = config.machineId;
     this.registry = config.registry;
     this.createAgentFn = config.createAgent;
   }
@@ -111,12 +148,14 @@ export class AgentRehydrationManager<
   public handleRehydrateAgent = async (
     ctx: RequestContext<RehydrateAgentRequestPayload, RehydrateAgentResponsePayload>,
   ): Promise<void> => {
+    if (ctx.payload.ownerInstanceId !== undefined && ctx.payload.ownerInstanceId !== this.ownerInstanceId) return;
     const { agentId, cwd, model, resumeAdapterSessionId: rpcResumeId, callerOwnsAgentRow } = ctx.payload;
     const runtime: RehydrateRuntime = {
       rpcResumeId,
       cwd,
       model,
       callerOwnsAgentRow,
+      ...(callerOwnsAgentRow === true && { settlementAckToken: crypto.randomUUID() }),
       publication: providerKeyPublicationFor({ callerOwnsAgentRow: callerOwnsAgentRow === true }),
     };
     const existing = this.inFlight.get(agentId);
@@ -125,6 +164,12 @@ export class AgentRehydrationManager<
       // a success here would report that attempt's refusal as a rehydrate that
       // happened.
       ctx.setResult(await existing);
+      return;
+    }
+
+    const endStart = this.registry.beginStart();
+    if (endStart === undefined) {
+      ctx.setResult(notDispatched(`Adapter is closing and cannot rehydrate agent ${agentId}`));
       return;
     }
 
@@ -149,6 +194,7 @@ export class AgentRehydrationManager<
       result = await rehydratePromise;
     } finally {
       this.inFlight.delete(agentId);
+      endStart();
     }
 
     ctx.setResult(result);
@@ -227,6 +273,14 @@ export class AgentRehydrationManager<
         sessionId: persisted.sessionId,
         adapterSessionId: recoveredAdapterSessionId,
         usage: restoredUsage,
+        callerOwnsAgentRow: callerOwnsAgentRow === true,
+        ...(runtime.settlementAckToken !== undefined && {
+          pendingCallerSettlement: {
+            token: runtime.settlementAckToken,
+            publication: runtime.publication,
+            adapterSessionId: recoveredAdapterSessionId,
+          },
+        }),
       },
       rpcResumeId,
     );
@@ -239,7 +293,12 @@ export class AgentRehydrationManager<
     if (!callerOwnsAgentRow) {
       await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
     }
-    return { success: true, adapterSessionId: recoveredAdapterSessionId };
+    return {
+      success: true,
+      ownerInstanceId: this.ownerInstanceId,
+      adapterSessionId: recoveredAdapterSessionId,
+      ...(runtime.settlementAckToken !== undefined && { settlementAckToken: runtime.settlementAckToken }),
+    };
   }
 
   /**
@@ -276,11 +335,8 @@ export class AgentRehydrationManager<
    * name — so a settlement that then fails gives back the reservation and its
    * own candidate and leaves the observer's generation held on a row it has just
    * marked dead. One movement, one settle producer: the same gate that decides
-   * whether the start handler announces, applied at the seam where the caller
-   * settles instead. What is given up is a window — between the
-   * connector confirming the key and the caller's settlement claiming it, nobody
-   * holds it — which is the residual this aggregate already documents and which
-   * the next attempt heals; a leaked generation heals for nobody.
+   * whether the start handler announces stays closed until the caller returns
+   * the adapter-minted token after settlement.
    * @param agentId - Agent identifier being rehydrated
    * @param persisted - Persisted agent record supplying stable identity fields
    * @param agent - Rehydrated agent instance owning the movement tracker
@@ -299,8 +355,8 @@ export class AgentRehydrationManager<
   ): Promise<void> {
     const { cwd, model, recoveredAdapterSessionId } = runtime;
     const adapterSessionIdMoved = recoveredAdapterSessionId !== persisted.adapterSessionId;
-    // Same gate, in its "who settles this" form: a deferred key is the caller's,
-    // so the movement is recorded as settled by it rather than announced.
+    // Same gate, in its "who settles this" form: a deferred key is observed for
+    // occupancy but remains unpublished until the caller's acknowledgement.
     const callerSettlesCurrency = !providerKeyIsPublishable(runtime.publication);
     if (adapterSessionIdMoved) {
       await agent.recordConfirmedAdapterSession(recoveredAdapterSessionId, callerSettlesCurrency);
@@ -313,11 +369,19 @@ export class AgentRehydrationManager<
     const publishedAdapterSessionId = adapterSessionIdMoved
       ? publishedProviderKey(runtime.publication, recoveredAdapterSessionId)
       : undefined;
-    if (cwd === undefined && model === undefined && publishedAdapterSessionId === undefined) return;
+    const runtimeOwner = hostedRuntimeOwner(this.machineId, this.ownerInstanceId, callerSettlesCurrency);
+    if (
+      cwd === undefined &&
+      model === undefined &&
+      publishedAdapterSessionId === undefined &&
+      runtimeOwner === undefined
+    )
+      return;
     await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
       agentId,
       cwd,
       model,
+      ...(runtimeOwner !== undefined && { runtimeOwner }),
       ...(publishedAdapterSessionId !== undefined && { adapterSessionId: publishedAdapterSessionId }),
     });
   }
@@ -523,27 +587,40 @@ export class AgentRehydrationManager<
         this.registry.releaseAdapterSessionClaim(foreignResumeId);
       }
     }
-    // Persist the confirmed identity when it moved (fresh replacements mint
-    // a new provider session): the agent.started reconciliation is
-    // write-once and never replaces a stale stored ID, and a later
-    // restartAgents native verdict would resume the abandoned provider
-    // thread from storage.
+    // Persist a moved identity because start reconciliation is write-once; a
+    // later restart must not resume the abandoned provider thread.
     const movedAdapterSessionId =
       entry.adapterSessionId !== previousAdapterSessionId ? entry.adapterSessionId : undefined;
     // Through the same gate as the cold path's row write, and for the same
     // reason: the response carries the key to the caller, whose settlement
     // claims it first.
     const publishedAdapterSessionId = publishedProviderKey(runtime.publication, movedAdapterSessionId);
-    if (runtime.cwd !== undefined || runtime.model !== undefined || publishedAdapterSessionId !== undefined) {
+    const runtimeOwner = hostedRuntimeOwner(this.machineId, this.ownerInstanceId, runtime.callerOwnsAgentRow);
+    if (
+      hasRuntimeUpdate({
+        cwd: runtime.cwd,
+        model: runtime.model,
+        adapterSessionId: publishedAdapterSessionId,
+        runtimeOwner,
+      })
+    ) {
       await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
         agentId,
         cwd: runtime.cwd,
         model: runtime.model,
+        ...(runtimeOwner !== undefined && { runtimeOwner }),
         ...(publishedAdapterSessionId !== undefined && { adapterSessionId: publishedAdapterSessionId }),
       });
     }
     if (!runtime.callerOwnsAgentRow) {
       await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+    } else if (runtime.settlementAckToken !== undefined) {
+      entry.callerOwnsAgentRow = true;
+      entry.pendingCallerSettlement = {
+        token: runtime.settlementAckToken,
+        publication: runtime.publication,
+        adapterSessionId: entry.adapterSessionId,
+      };
     }
     // The entry's field is the post-swap identity: it was just refreshed from
     // the live connector, so it is what the registry advertises as this agent's
@@ -551,7 +628,9 @@ export class AgentRehydrationManager<
     // when the connector confirmed nothing.
     return {
       success: true,
+      ownerInstanceId: this.ownerInstanceId,
       ...(entry.adapterSessionId !== undefined && { adapterSessionId: entry.adapterSessionId }),
+      ...(runtime.settlementAckToken !== undefined && { settlementAckToken: runtime.settlementAckToken }),
     };
   }
 

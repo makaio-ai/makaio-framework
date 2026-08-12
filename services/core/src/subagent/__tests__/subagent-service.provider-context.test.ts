@@ -62,6 +62,7 @@ describe('SubagentService provider context', () => {
         success: true,
         agentId: 'agent-carried',
         adapterId: String(ctx.payload.adapterId),
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-carried',
         sessionId: 'child-provider-context',
       });
@@ -168,6 +169,7 @@ describe('SubagentService provider context', () => {
         success: true,
         agentId: 'agent-native',
         adapterId: String(ctx.payload.adapterId),
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-native',
         sessionId: 'child-provider-context',
       });

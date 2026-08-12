@@ -6,6 +6,7 @@ import {
   ProviderDefinitionSchema,
   defineAdapterProviderAuth,
   type AdapterContribution,
+  type ConnectorTeardownResult,
   type ProviderDefinition,
   type ProviderDefinitionInput,
   createClientDefinition,
@@ -24,8 +25,11 @@ import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@maka
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { AdapterRuntimeRegistry } from '../adapter-runtime-registry.js';
-import { AdapterSubsystemService } from '../adapter-subsystem-service.js';
-import { ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS, initializeEnabledAdapters } from '../adapter-runtime-lifecycle.js';
+import {
+  AdapterSubsystemService as RuntimeAdapterSubsystemService,
+  type AdapterSubsystemServiceOptions,
+} from '../adapter-subsystem-service.js';
+import { ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS } from '../adapter-runtime-lifecycle.js';
 import { cloneAdapterClientRefs, resolveDefaultClientId } from '../adapter-client-refs.js';
 import type { AdapterInitOptions, AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
 import { createStubCoordinator, TEST_MACHINE_ID, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
@@ -44,6 +48,13 @@ const TEST_EXTENSION_CONTEXT: KernelExtensionContext = {
   signal: new AbortController().signal,
   hasExtension: () => false,
 };
+
+/** Test composition with an explicit ownership-authority incarnation. */
+class AdapterSubsystemService extends RuntimeAdapterSubsystemService {
+  public constructor(options: Omit<AdapterSubsystemServiceOptions, 'resolveOwnerInstanceId'>) {
+    super({ ...options, resolveOwnerInstanceId: () => 'test-owner-instance' });
+  }
+}
 
 class MemoryRepository implements IAdapterConfigRepository {
   public constructor(
@@ -107,7 +118,10 @@ function readAdapterFactoryOptions(options: unknown): AdapterFactoryOptions {
 
 type RestartCloseHook = 'shutdown' | 'closeAsync' | 'close';
 
-function createRestartTrackingFactory(closeHook: () => void | Promise<void>, hookName: RestartCloseHook = 'shutdown') {
+function createRestartTrackingFactory(
+  closeHook: () => void | ConnectorTeardownResult | Promise<void | ConnectorTeardownResult>,
+  hookName: RestartCloseHook = 'shutdown',
+) {
   const factory = vi.fn(async (options?: unknown) => {
     const adapterOptions = options as AdapterInitOptions;
     const callCount = factory.mock.calls.length;
@@ -287,6 +301,7 @@ describe('AdapterRuntimeRegistry', () => {
     const registry = new AdapterRuntimeRegistry({
       bus: MakaioBus,
       machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
     });
 
     registry.registerAdapter(createLoadedAdapter('duplicate-adapter', '@owner/first'), '@owner/first');
@@ -294,6 +309,471 @@ describe('AdapterRuntimeRegistry', () => {
     expect(() =>
       registry.registerAdapter(createLoadedAdapter('duplicate-adapter', '@owner/second'), '@owner/second'),
     ).toThrow(/duplicate-adapter.*@owner\/first.*@owner\/second/);
+  });
+
+  it('resolves only a current live instance and reflects restart and deregistration', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const explicitAdapterId = 'host-configured-live-adapter-id';
+    const shutdown = vi.fn().mockResolvedValue({ evidence: 'released' });
+    const adapter: LoadedAdapter = {
+      ...createLoadedAdapter('live-adapter', '@owner/live'),
+      factory: async () => ({ adapterId: explicitAdapterId, shutdown }),
+      options: { adapterId: explicitAdapterId },
+    };
+    registry.registerAdapter(adapter, '@owner/live');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: 'live-adapter', enabled: true, bindings: [] } });
+    });
+
+    expect(registry.resolveLiveAdapterId('live-adapter')).toBeUndefined();
+    await registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS);
+    expect(registry.resolveLiveAdapterId('live-adapter')).toBe(explicitAdapterId);
+
+    await registry.restartAdapterInstance(adapter, TEST_PLATFORM_DEFAULTS);
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(registry.resolveLiveAdapterId('live-adapter')).toBe(explicitAdapterId);
+
+    await registry.deregisterAdapter('live-adapter');
+    expect(registry.resolveLiveAdapterId('live-adapter')).toBeUndefined();
+  });
+
+  it('keeps a weakly retired dynamic adapter non-routable until a later activation proves it stopped', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('retry-retiring-adapter', '@owner/retry-retiring');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const closeAsync = vi
+      .fn<() => Promise<{ evidence: 'detached' } | { evidence: 'released' }>>()
+      .mockResolvedValueOnce({ evidence: 'detached' })
+      .mockResolvedValueOnce({ evidence: 'released' });
+    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const retiringAdapter = { ...adapter, factory };
+    registry.registerAdapter(retiringAdapter, '@owner/retry-retiring');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: retiringAdapter.name, enabled: true, bindings: [] } });
+    });
+
+    await registry.initializeAdapter(retiringAdapter, TEST_PLATFORM_DEFAULTS);
+    await registry.deregisterAdapter(retiringAdapter.name);
+
+    expect(closeAsync).toHaveBeenCalledOnce();
+    expect(registry.resolveLiveAdapterId(retiringAdapter.name)).toBeUndefined();
+    expect(registry.getAdapterInstances()).toEqual(new Map());
+    expect(factory).toHaveBeenCalledOnce();
+
+    // A package that comes back while its former handle is still retiring must
+    // reuse the slot and retry close, never construct a competing instance.
+    registry.registerAdapter(retiringAdapter, '@owner/retry-retiring');
+    await registry.initializeAdapter(retiringAdapter, TEST_PLATFORM_DEFAULTS);
+
+    expect(closeAsync).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(registry.resolveLiveAdapterId(retiringAdapter.name)).toBe(adapterId);
+  });
+
+  it('replaces a dynamically restarted adapter immediately after observed teardown', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('released-restart-adapter', '@owner/released-restart');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const closeAsync = vi.fn().mockResolvedValue({ evidence: 'released' });
+    const factory = vi.fn(async () => ({ adapterId, ...(factory.mock.calls.length === 1 ? { closeAsync } : {}) }));
+    const restartableAdapter = { ...adapter, factory };
+    registry.registerAdapter(restartableAdapter, '@owner/released-restart');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: restartableAdapter.name, enabled: true, bindings: [] } });
+    });
+
+    await registry.initializeAdapter(restartableAdapter, TEST_PLATFORM_DEFAULTS);
+    await registry.restartAdapterInstance(restartableAdapter, TEST_PLATFORM_DEFAULTS);
+
+    expect(closeAsync).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(registry.resolveLiveAdapterId(restartableAdapter.name)).toBe(adapterId);
+  });
+
+  it('retries retiring handles during host shutdown before clearing the registry', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('shutdown-retry-adapter', '@owner/shutdown-retry');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const closeAsync = vi
+      .fn<() => Promise<ConnectorTeardownResult>>()
+      .mockResolvedValueOnce({ evidence: 'unknown', detail: 'first close did not prove exit' })
+      .mockResolvedValueOnce({ evidence: 'released' });
+    const shutdownRetryAdapter = {
+      ...adapter,
+      factory: async () => ({ adapterId, closeAsync }),
+    };
+    registry.registerAdapter(shutdownRetryAdapter, '@owner/shutdown-retry');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: shutdownRetryAdapter.name, enabled: true, bindings: [] } });
+    });
+
+    await registry.initializeAdapter(shutdownRetryAdapter, TEST_PLATFORM_DEFAULTS);
+    await registry.deregisterAdapter(shutdownRetryAdapter.name);
+    const report = await registry.shutdownAll();
+
+    expect(closeAsync).toHaveBeenCalledTimes(2);
+    expect(report).toMatchObject({ evidence: 'released', results: [{ adapterId, evidence: 'released' }] });
+    expect(registry.getAdapterInstances()).toEqual(new Map());
+    expect(registry.getLoadedAdapters()).toEqual([]);
+  });
+
+  it.each([
+    'deregister',
+    'restart',
+    'shutdown',
+  ] as const)('leaves the withdrawal attempt owned by a self-publishing instance during %s', async (operation) => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter(`self-publishing-${operation}`, '@owner/self-publishing');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const withdrawn = vi.fn();
+    const selfPublishingAdapter: LoadedAdapter = {
+      ...adapter,
+      factory: async () => ({
+        adapterId,
+        closeAsync: async () => {
+          await MakaioBus.emit(AdapterSubjects.deinitialized, {
+            adapterId,
+            adapterName: adapter.name,
+            machineId: TEST_MACHINE_ID,
+            ownerInstanceId: 'test-owner-instance',
+          });
+          return { evidence: 'released' };
+        },
+      }),
+    };
+    registry.registerAdapter(selfPublishingAdapter, '@owner/self-publishing');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    MakaioBus.on(AdapterSubjects.deinitialized, withdrawn);
+    await registry.initializeAdapter(selfPublishingAdapter, TEST_PLATFORM_DEFAULTS);
+
+    if (operation === 'deregister') await registry.deregisterAdapter(selfPublishingAdapter.name);
+    else if (operation === 'restart')
+      await registry.restartAdapterInstance(selfPublishingAdapter, TEST_PLATFORM_DEFAULTS);
+    else await registry.shutdownAll();
+
+    expect(withdrawn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'deregister',
+    'restart',
+  ] as const)('withdraws a self-publishing instance from live routing when %s cleanup throws afterward', async (operation) => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter(`withdraw-then-fail-${operation}`, '@owner/withdraw-then-fail');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const selfPublishingAdapter: LoadedAdapter = {
+      ...adapter,
+      factory: async () => ({
+        adapterId,
+        closeAsync: async () => {
+          await MakaioBus.emit(AdapterSubjects.deinitialized, {
+            adapterId,
+            adapterName: adapter.name,
+            machineId: TEST_MACHINE_ID,
+            ownerInstanceId: 'test-owner-instance',
+          });
+          throw new Error('cleanup failed after withdrawal');
+        },
+      }),
+    };
+    registry.registerAdapter(selfPublishingAdapter, '@owner/withdraw-then-fail');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    await registry.initializeAdapter(selfPublishingAdapter, TEST_PLATFORM_DEFAULTS);
+
+    const cleanup =
+      operation === 'deregister'
+        ? registry.deregisterAdapter(adapter.name)
+        : registry.restartAdapterInstance(selfPublishingAdapter, TEST_PLATFORM_DEFAULTS);
+    await expect(cleanup).resolves.toBeUndefined();
+
+    expect(registry.getAdapterInstances().has(adapterId)).toBe(false);
+    expect(registry.resolveLiveAdapterId(adapter.name)).toBeUndefined();
+    expect(registry.resolveLiveAdapterIdentity(adapterId)).toBeUndefined();
+  });
+
+  it.each([
+    'deregister',
+    'restart',
+    'shutdown',
+  ] as const)('publishes one ordered fallback withdrawal for a generic instance during %s', async (operation) => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter(`generic-${operation}`, '@owner/generic');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const order: string[] = [];
+    const genericAdapter: LoadedAdapter = {
+      ...adapter,
+      factory: async () => ({
+        adapterId,
+        closeAsync: async () => {
+          order.push('close');
+        },
+      }),
+    };
+    registry.registerAdapter(genericAdapter, '@owner/generic');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    MakaioBus.on(AdapterSubjects.deinitialized, () => {
+      order.push('deinitialized');
+    });
+    await registry.initializeAdapter(genericAdapter, TEST_PLATFORM_DEFAULTS);
+
+    if (operation === 'deregister') await registry.deregisterAdapter(genericAdapter.name);
+    else if (operation === 'restart') await registry.restartAdapterInstance(genericAdapter, TEST_PLATFORM_DEFAULTS);
+    else await registry.shutdownAll();
+
+    expect(order).toEqual(['close', 'deinitialized']);
+  });
+
+  it.each([
+    'deregister',
+    'restart',
+    'shutdown',
+  ] as const)('keeps generic-instance %s cleanup independent of withdrawal subscribers', async (operation) => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter(`rejecting-generic-${operation}`, '@owner/rejecting-generic');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const factory = vi.fn(async () => ({ adapterId, closeAsync: vi.fn().mockResolvedValue(undefined) }));
+    const genericAdapter = { ...adapter, factory };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    registry.registerAdapter(genericAdapter, '@owner/rejecting-generic');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    MakaioBus.on(AdapterSubjects.deinitialized, () => {
+      throw new Error('withdrawal subscriber failed');
+    });
+    await registry.initializeAdapter(genericAdapter, TEST_PLATFORM_DEFAULTS);
+
+    if (operation === 'deregister') await expect(registry.deregisterAdapter(adapter.name)).resolves.toBeUndefined();
+    else if (operation === 'restart')
+      await expect(registry.restartAdapterInstance(genericAdapter, TEST_PLATFORM_DEFAULTS)).resolves.toBeUndefined();
+    else await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'detached' });
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to publish deinitialization for "${adapter.name}"`),
+      expect.any(Error),
+    );
+    expect(registry.getAdapterInstances().size).toBe(0);
+    expect(registry.resolveLiveAdapterId(adapter.name)).toBeUndefined();
+    expect(factory).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it.each([
+    'deregister',
+    'restart',
+    'shutdown',
+  ] as const)('keeps managed %s cleanup independent of a rejecting withdrawal subscriber without duplicating the attempt', async (operation) => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter(`rejecting-managed-${operation}`, '@owner/rejecting-managed');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const withdrawn = vi.fn();
+    const managedAdapter: LoadedAdapter = {
+      ...adapter,
+      factory: async () => ({
+        adapterId,
+        closeAsync: async () => {
+          try {
+            await MakaioBus.emit(AdapterSubjects.deinitialized, {
+              adapterId,
+              adapterName: adapter.name,
+              machineId: TEST_MACHINE_ID,
+              ownerInstanceId: 'test-owner-instance',
+            });
+          } catch {
+            // Managed adapters own this best-effort attempt even when a subscriber rejects.
+          }
+          return { evidence: 'released' };
+        },
+      }),
+    };
+    registry.registerAdapter(managedAdapter, '@owner/rejecting-managed');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    MakaioBus.on(AdapterSubjects.deinitialized, withdrawn);
+    MakaioBus.on(AdapterSubjects.deinitialized, () => {
+      throw new Error('withdrawal subscriber failed');
+    });
+    await registry.initializeAdapter(managedAdapter, TEST_PLATFORM_DEFAULTS);
+
+    if (operation === 'deregister') await registry.deregisterAdapter(adapter.name);
+    else if (operation === 'restart') await registry.restartAdapterInstance(managedAdapter, TEST_PLATFORM_DEFAULTS);
+    else await registry.shutdownAll();
+
+    expect(withdrawn).toHaveBeenCalledOnce();
+    expect(registry.getAdapterInstances().size).toBe(operation === 'restart' ? 1 : 0);
+  });
+
+  it('isolates every shutdown withdrawal fallback from sibling subscriber failures', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const first = createLoadedAdapter('shutdown-first', '@owner/shutdown');
+    const second = createLoadedAdapter('shutdown-second', '@owner/shutdown');
+    const attempted: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    registry.registerAdapter(first, '@owner/shutdown');
+    registry.registerAdapter(second, '@owner/shutdown');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: ctx.payload.name, enabled: true, bindings: [] } });
+    });
+    MakaioBus.on(AdapterSubjects.deinitialized, (ctx) => {
+      attempted.push(ctx.payload.adapterName);
+      if (ctx.payload.adapterName === first.name) throw new Error('first withdrawal failed');
+    });
+    await registry.initializeAdapter(first, TEST_PLATFORM_DEFAULTS);
+    await registry.initializeAdapter(second, TEST_PLATFORM_DEFAULTS);
+
+    await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'released' });
+
+    expect(attempted).toEqual([first.name, second.name]);
+    expect(registry.getAdapterInstances().size).toBe(0);
+    warn.mockRestore();
+  });
+
+  it('withdraws each self-publishing shutdown instance while sibling cleanup is still running', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const first = createLoadedAdapter('early-withdrawal', '@owner/concurrent-shutdown');
+    const second = createLoadedAdapter('gated-cleanup', '@owner/concurrent-shutdown');
+    const firstAdapterId = registry.resolveLoadedAdapterId(first);
+    const secondAdapterId = registry.resolveLoadedAdapterId(second);
+    const firstWithdrawn = Promise.withResolvers<void>();
+    const secondCloseStarted = Promise.withResolvers<void>();
+    const releaseSecondClose = Promise.withResolvers<void>();
+    const selfPublishingFirst: LoadedAdapter = {
+      ...first,
+      factory: async () => ({
+        adapterId: firstAdapterId,
+        closeAsync: async () => {
+          await MakaioBus.emit(AdapterSubjects.deinitialized, {
+            adapterId: firstAdapterId,
+            adapterName: first.name,
+            machineId: TEST_MACHINE_ID,
+            ownerInstanceId: 'test-owner-instance',
+          });
+        },
+      }),
+    };
+    const gatedSecond: LoadedAdapter = {
+      ...second,
+      factory: async () => ({
+        adapterId: secondAdapterId,
+        closeAsync: async () => {
+          secondCloseStarted.resolve();
+          await releaseSecondClose.promise;
+        },
+      }),
+    };
+    registry.registerAdapter(selfPublishingFirst, '@owner/concurrent-shutdown');
+    registry.registerAdapter(gatedSecond, '@owner/concurrent-shutdown');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: ctx.payload.name, enabled: true, bindings: [] } });
+    });
+    MakaioBus.on(AdapterSubjects.deinitialized, (ctx) => {
+      if (ctx.payload.adapterId === firstAdapterId) firstWithdrawn.resolve();
+    });
+    await registry.initializeAdapter(selfPublishingFirst, TEST_PLATFORM_DEFAULTS);
+    await registry.initializeAdapter(gatedSecond, TEST_PLATFORM_DEFAULTS);
+
+    const shutdown = registry.shutdownAll();
+    await Promise.all([firstWithdrawn.promise, secondCloseStarted.promise]);
+
+    expect(registry.getAdapterInstances().has(firstAdapterId)).toBe(false);
+    expect(registry.resolveLiveAdapterId(first.name)).toBeUndefined();
+    expect(registry.resolveLiveAdapterIdentity(firstAdapterId)).toBeUndefined();
+    expect(registry.getAdapterInstances().has(secondAdapterId)).toBe(false);
+    expect(registry.resolveLiveAdapterId(second.name)).toBeUndefined();
+
+    releaseSecondClose.resolve();
+    await expect(shutdown).resolves.toMatchObject({ evidence: 'detached' });
+    expect(registry.getAdapterInstances().size).toBe(0);
+    expect(registry.getLoadedAdapters()).toEqual([]);
+  });
+
+  it('withdraws routing availability while preserving unknown shutdown evidence', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('unknown-shutdown', '@owner/unknown-shutdown');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const withdrawn = vi.fn();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const unknownAdapter: LoadedAdapter = {
+      ...adapter,
+      factory: async () => ({
+        adapterId,
+        closeAsync: async () => {
+          throw new Error('close outcome unknown');
+        },
+      }),
+    };
+    registry.registerAdapter(unknownAdapter, '@owner/unknown-shutdown');
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    MakaioBus.on(AdapterSubjects.deinitialized, withdrawn);
+    await registry.initializeAdapter(unknownAdapter, TEST_PLATFORM_DEFAULTS);
+
+    const report = await registry.shutdownAll();
+
+    expect(report).toMatchObject({
+      evidence: 'unknown',
+      results: [{ adapterId, evidence: 'unknown' }],
+    });
+    expect(withdrawn).toHaveBeenCalledOnce();
+    expect(registry.getAdapterInstances().size).toBe(0);
+    expect(registry.resolveLiveAdapterId(adapter.name)).toBeUndefined();
+    error.mockRestore();
   });
 });
 
@@ -321,7 +801,7 @@ describe('AdapterContributionProcessor rollback', () => {
   });
 
   it('deregisters the current adapter when initialization fails after registration', async () => {
-    const firstShutdown = vi.fn().mockResolvedValue(undefined);
+    const firstShutdown = vi.fn().mockResolvedValue({ evidence: 'released' });
     const repository = new MemoryRepository(
       new Map(),
       new Map<string, AdapterFile>([
@@ -371,10 +851,11 @@ describe('AdapterContributionProcessor rollback', () => {
 
   it('retains rollback state when adapter close rejects during activation rollback', async () => {
     let shouldFailClose = true;
-    const closeAsync = vi.fn(async () => {
+    const closeAsync = vi.fn(async (): Promise<ConnectorTeardownResult> => {
       if (shouldFailClose) {
         throw new Error('close failed');
       }
+      return { evidence: 'released' };
     });
     const repository = new MemoryRepository(
       new Map(),
@@ -412,7 +893,7 @@ describe('AdapterContributionProcessor rollback', () => {
 
       expect(closeAsync).toHaveBeenCalledOnce();
       expect(service.getLoadedAdapters().map((adapter) => adapter.name)).toEqual(['rollback-retained-adapter']);
-      expect(service.getAdapterInstances().size).toBe(1);
+      expect(service.getAdapterInstances().size).toBe(0);
 
       shouldFailClose = false;
       await service.stopAdapterContributions('@owner/rollback-package');
@@ -1009,7 +1490,7 @@ describe('AdapterContributionProcessor rollback', () => {
 
     const providers: ProviderDefinitionInput[] = [];
     const adapterProviderAuth = createTestProviderAuth('late-provider');
-    const firstCloseAsync = vi.fn().mockResolvedValue(undefined);
+    const firstCloseAsync = vi.fn().mockResolvedValue({ evidence: 'released' });
     const factory = createRestartTrackingFactory(firstCloseAsync, 'closeAsync');
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
@@ -1077,7 +1558,7 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     const providers: ProviderDefinitionInput[] = [];
-    const closeAsync = vi.fn(async () => {
+    const closeAsync = vi.fn(async (): Promise<ConnectorTeardownResult> => {
       throw new Error('close failed');
     });
     const factory = createRestartTrackingFactory(closeAsync, 'closeAsync');
@@ -1117,11 +1598,11 @@ describe('AdapterContributionProcessor rollback', () => {
 
       expect(closeAsync).toHaveBeenCalledOnce();
       expect(factory).toHaveBeenCalledOnce();
-      expect(service.getAdapterInstances().size).toBe(1);
+      expect(service.getAdapterInstances().size).toBe(0);
       expect(service.getLoadedAdapters()[0]?.providers[0]?.definition.id).toBe('late-provider');
       expect(registeredEvents.at(-1)).toEqual({
         adapterName: 'late-live-failing-adapter',
-        initialized: true,
+        initialized: false,
       });
     } finally {
       offRegistered();
@@ -1147,7 +1628,7 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     await service.init();
 
-    const close = vi.fn();
+    const close = vi.fn().mockResolvedValue({ evidence: 'released' });
     const factory = createRestartTrackingFactory(close, 'close');
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
@@ -1189,6 +1670,101 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('keeps the latest provider-stop epoch deferred across a timed-out close', async () => {
+    vi.useFakeTimers();
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([
+        ['deferred-provider-stop-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }],
+      ]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator({ loadedProviderDefinitionIds: new Set(['provider-one', 'provider-two']) }),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const releaseClose = Promise.withResolvers<void>();
+    const closeStarted = Promise.withResolvers<void>();
+    const replacementFactoryStarted = Promise.withResolvers<void>();
+    const releaseReplacementFactory = Promise.withResolvers<void>();
+    const closeAsync = vi.fn(async () => {
+      closeStarted.resolve();
+      await releaseClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const factory = vi.fn(async (options?: unknown) => {
+      const adapterId = readAdapterFactoryOptions(options).adapterId;
+      if (factory.mock.calls.length === 1) return { adapterId, closeAsync };
+      if (factory.mock.calls.length === 2) {
+        replacementFactoryStarted.resolve();
+        await releaseReplacementFactory.promise;
+      }
+      return { adapterId };
+    });
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [
+          {
+            packageName: '@owner/provider-one',
+            definition: ProviderDefinitionSchema.parse({
+              id: 'provider-one',
+              name: 'Provider One',
+              authMethods: [],
+              availableModels: [],
+            }),
+          },
+          {
+            packageName: '@owner/provider-two',
+            definition: ProviderDefinitionSchema.parse({
+              id: 'provider-two',
+              name: 'Provider Two',
+              authMethods: [],
+              availableModels: [],
+            }),
+          },
+        ],
+        clients: [],
+      });
+    });
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('deferred-provider-stop-adapter', factory, [
+            { definitionId: 'provider-one' },
+            { definitionId: 'provider-two' },
+          ]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      const firstProviderStop = service.stopAdapterContributions('@owner/provider-one');
+      await closeStarted.promise;
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await firstProviderStop;
+
+      releaseClose.resolve();
+      await replacementFactoryStarted.promise;
+      await service.stopAdapterContributions('@owner/provider-two');
+      expect(factory).toHaveBeenCalledTimes(2);
+
+      releaseReplacementFactory.resolve();
+      await vi.runAllTimersAsync();
+
+      expect(factory).toHaveBeenCalledTimes(3);
+      expect(getFactoryInitOptions(factory, 2).definitionProviders).toEqual([]);
+      expect(service.getAdapterInstances().size).toBe(1);
+    } finally {
+      offCatalog();
+      vi.useRealTimers();
+    }
+  });
+
   it('retains adapter package state when adapter close rejects during stop until retry succeeds', async () => {
     const repository = new MemoryRepository(
       new Map(),
@@ -1206,10 +1782,11 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     let shouldFailClose = true;
-    const closeAsync = vi.fn(async () => {
+    const closeAsync = vi.fn(async (): Promise<ConnectorTeardownResult> => {
       if (shouldFailClose) {
         throw new Error('close failed');
       }
+      return { evidence: 'released' };
     });
     const factory = createRestartTrackingFactory(closeAsync, 'closeAsync');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1228,7 +1805,7 @@ describe('AdapterContributionProcessor rollback', () => {
 
       expect(closeAsync).toHaveBeenCalledOnce();
       expect(service.getLoadedAdapters()).toHaveLength(1);
-      expect(service.getAdapterInstances().size).toBe(1);
+      expect(service.getAdapterInstances().size).toBe(0);
 
       shouldFailClose = false;
       await service.stopAdapterContributions('@owner/adapter-package');
@@ -1262,7 +1839,10 @@ describe('AdapterContributionProcessor rollback', () => {
       });
       await service.init();
 
-      const hangingCloseAsync = vi.fn(() => new Promise<void>(() => {}));
+      const releaseClose = Promise.withResolvers<void>();
+      const hangingCloseAsync = vi.fn(async () => {
+        await releaseClose.promise;
+      });
       const factory = createRestartTrackingFactory(hangingCloseAsync, 'closeAsync');
       const hangingCloseRegisteredEvents: Array<{ adapterName: string; initialized: boolean }> = [];
       errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1303,12 +1883,14 @@ describe('AdapterContributionProcessor rollback', () => {
       await stopPromise;
 
       expect(factory).toHaveBeenCalledOnce();
-      expect(service.getAdapterInstances().size).toBe(1);
+      expect(service.getAdapterInstances().size).toBe(0);
       expect(service.getLoadedAdapters()[0]?.providers).toEqual([]);
       expect(hangingCloseRegisteredEvents.at(-1)).toEqual({
         adapterName: 'hanging-close-adapter',
-        initialized: true,
+        initialized: false,
       });
+      releaseClose.resolve();
+      await vi.runAllTimersAsync();
     } finally {
       offCatalog?.();
       offRegistered?.();
@@ -1728,47 +2310,46 @@ describe('AdapterContributionProcessor rollback', () => {
 
   it('passes the runtime bus as globalBus to the adapter factory', async () => {
     const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'bus-check-adapter');
-    const adapterInstances = new Map<string, AdapterInstance>();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
     let capturedGlobalBus: unknown;
+    let capturedOwnerInstanceId: unknown;
     const offGetConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: 'bus-check-adapter', enabled: true, bindings: [] } });
     });
 
     try {
-      await initializeEnabledAdapters(
-        MakaioBus,
-        TEST_MACHINE_ID,
-        [
-          {
-            name: 'bus-check-adapter',
-            displayName: 'Bus Check Adapter',
-            packageName: '@owner/bus-check-package',
-            factory: async (options?: unknown) => {
-              const opts = options as Record<string, unknown>;
-              capturedGlobalBus = opts?.globalBus;
-              return { adapterId: readAdapterFactoryOptions(options).adapterId };
-            },
-            options: { adapterId },
-            providerDefinitionIds: [],
-            providerRefs: [],
-            providers: [],
-          },
-        ],
-        adapterInstances,
-        TEST_PLATFORM_DEFAULTS,
-      );
+      const adapter: LoadedAdapter = {
+        ...createLoadedAdapter('bus-check-adapter', '@owner/bus-check-package'),
+        factory: async (options?: unknown) => {
+          const opts = options as Record<string, unknown>;
+          capturedGlobalBus = opts.globalBus;
+          capturedOwnerInstanceId = opts.ownerInstanceId;
+          return { adapterId: readAdapterFactoryOptions(options).adapterId };
+        },
+        options: { adapterId },
+      };
+      registry.registerAdapter(adapter, '@owner/bus-check-package');
+      await registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS);
 
       expect(capturedGlobalBus).toBe(MakaioBus);
+      expect(capturedOwnerInstanceId).toBe('test-owner-instance');
     } finally {
       offGetConfig();
-      adapterInstances.clear();
     }
   });
 
-  it('rolls back a directly initialized instance when adapter.initialized emission fails', async () => {
+  it('rolls back a registry-owned instance when adapter.initialized emission fails', async () => {
     const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'event-failing-adapter');
-    const shutdown = vi.fn().mockResolvedValue(undefined);
-    const adapterInstances = new Map<string, AdapterInstance>();
+    const shutdown = vi.fn().mockResolvedValue({ evidence: 'released' });
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
     const offGetConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: 'event-failing-adapter', enabled: true, bindings: [] } });
     });
@@ -1777,31 +2358,17 @@ describe('AdapterContributionProcessor rollback', () => {
     });
 
     try {
-      await expect(
-        initializeEnabledAdapters(
-          MakaioBus,
-          TEST_MACHINE_ID,
-          [
-            {
-              name: 'event-failing-adapter',
-              displayName: 'Event Failing Adapter',
-              packageName: '@owner/event-failing-package',
-              factory: async (options?: unknown) => ({
-                adapterId: readAdapterFactoryOptions(options).adapterId,
-                shutdown,
-              }),
-              options: { adapterId },
-              providerDefinitionIds: [],
-              providerRefs: [],
-              providers: [],
-            },
-          ],
-          adapterInstances,
-          TEST_PLATFORM_DEFAULTS,
-        ),
-      ).rejects.toThrow(/event-failing-adapter: Injected initialized emit failure/);
+      const adapter: LoadedAdapter = {
+        ...createLoadedAdapter('event-failing-adapter', '@owner/event-failing-package'),
+        factory: async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId, shutdown }),
+        options: { adapterId },
+      };
+      registry.registerAdapter(adapter, '@owner/event-failing-package');
+      await expect(registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS)).rejects.toThrow(
+        /event-failing-adapter: Injected initialized emit failure/,
+      );
 
-      expect(adapterInstances.size).toBe(0);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
       expect(shutdown).toHaveBeenCalledOnce();
     } finally {
       offInitialized();
@@ -1809,42 +2376,929 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
-  it('closes a directly initialized instance when adapterId validation fails', async () => {
+  it('keeps a weak failed-initialization rollback retiring until a later retry observes teardown', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('weak-initialization-rollback', '@owner/weak-initialization-rollback');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const closeAsync = vi
+      .fn<() => Promise<ConnectorTeardownResult>>()
+      .mockResolvedValueOnce({ evidence: 'unknown', detail: 'first close is unproven' })
+      .mockResolvedValueOnce({ evidence: 'unknown', detail: 'retry is still unproven' })
+      .mockResolvedValueOnce({ evidence: 'released' });
+    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const rollbackAdapter = { ...adapter, factory };
+    let rejectInitialized = true;
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: rollbackAdapter.name, enabled: true, bindings: [] } });
+    });
+    const offInitialized = MakaioBus.on(AdapterSubjects.initialized, () => {
+      if (rejectInitialized) throw new Error('initialized publication failed');
+    });
+
+    try {
+      registry.registerAdapter(rollbackAdapter, '@owner/weak-initialization-rollback');
+      await expect(registry.initializeAdapter(rollbackAdapter, TEST_PLATFORM_DEFAULTS)).rejects.toThrow(
+        /initialized publication failed/,
+      );
+      expect(closeAsync).toHaveBeenCalledOnce();
+      expect(factory).toHaveBeenCalledOnce();
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+
+      rejectInitialized = false;
+      await registry.initializeAdapter(rollbackAdapter, TEST_PLATFORM_DEFAULTS);
+      expect(closeAsync).toHaveBeenCalledTimes(2);
+      expect(factory).toHaveBeenCalledOnce();
+
+      await registry.initializeAdapter(rollbackAdapter, TEST_PLATFORM_DEFAULTS);
+      expect(closeAsync).toHaveBeenCalledTimes(3);
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(registry.resolveLiveAdapterId(rollbackAdapter.name)).toBe(adapterId);
+    } finally {
+      offInitialized();
+      offConfig();
+    }
+  });
+
+  it('waits for a timed-out close hook to self-publish before choosing a deinitialization fallback', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('late-self-publishing-close', '@owner/late-self-publishing-close');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseClose = Promise.withResolvers<void>();
+    const closeStarted = Promise.withResolvers<void>();
+    const withdrawn = vi.fn();
+    const closeAsync = vi.fn(async () => {
+      if (closeAsync.mock.calls.length > 1) return { evidence: 'released' as const };
+      closeStarted.resolve();
+      await releaseClose.promise;
+      await MakaioBus.emit(AdapterSubjects.deinitialized, {
+        adapterId,
+        adapterName: adapter.name,
+        machineId: TEST_MACHINE_ID,
+        ownerInstanceId: 'test-owner-instance',
+      });
+      return { evidence: 'released' as const };
+    });
+    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const lateSelfPublishingAdapter: LoadedAdapter = {
+      ...adapter,
+      factory,
+    };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    const offDeinitialized = MakaioBus.on(AdapterSubjects.deinitialized, withdrawn);
+
+    try {
+      registry.registerAdapter(lateSelfPublishingAdapter, '@owner/late-self-publishing-close');
+      await registry.initializeAdapter(lateSelfPublishingAdapter, TEST_PLATFORM_DEFAULTS);
+
+      const restart = registry.restartAdapterInstance(lateSelfPublishingAdapter, TEST_PLATFORM_DEFAULTS);
+      await closeStarted.promise;
+      expect(closeAsync).toHaveBeenCalledOnce();
+      expect(factory).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await restart;
+
+      expect(withdrawn).not.toHaveBeenCalled();
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+
+      releaseClose.resolve();
+      await vi.runAllTimersAsync();
+
+      expect(withdrawn).toHaveBeenCalledOnce();
+      expect(withdrawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({ adapterId, adapterName: adapter.name }),
+        }),
+      );
+      expect(closeAsync).toHaveBeenCalledOnce();
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(registry.resolveLiveAdapterId(adapter.name)).toBe(adapterId);
+    } finally {
+      offDeinitialized();
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes a late-released deregistration before admitting a replacement without a second close', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('late-released-deregistration', '@owner/late-released-deregistration');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseClose = Promise.withResolvers<void>();
+    const closeAsync = vi.fn(async () => {
+      await releaseClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const factory = vi.fn(async () => ({ adapterId, ...(factory.mock.calls.length === 1 ? { closeAsync } : {}) }));
+    const deregisteredAdapter = { ...adapter, factory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(deregisteredAdapter, '@owner/late-released-deregistration');
+      await registry.initializeAdapter(deregisteredAdapter, TEST_PLATFORM_DEFAULTS);
+      const deregister = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await deregister;
+      expect(closeAsync).toHaveBeenCalledOnce();
+      expect(registry.getLoadedAdapters()).toEqual([deregisteredAdapter]);
+
+      releaseClose.resolve();
+      await vi.runAllTimersAsync();
+      expect(registry.getLoadedAdapters()).toEqual([]);
+
+      registry.registerAdapter(deregisteredAdapter, '@owner/late-released-deregistration');
+      await registry.initializeAdapter(deregisteredAdapter, TEST_PLATFORM_DEFAULTS);
+      expect(closeAsync).toHaveBeenCalledOnce();
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(registry.resolveLiveAdapterId(adapter.name)).toBe(adapterId);
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('activates an exact replacement registered during a pending retirement flight', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('pending-flight-replacement', '@owner/pending-flight-replacement');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseClose = Promise.withResolvers<void>();
+    const oldClose = vi.fn(async () => {
+      await releaseClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const oldFactory = vi.fn(async () => ({ adapterId, closeAsync: oldClose }));
+    const replacementFactory = vi.fn(async () => ({ adapterId }));
+    const oldAdapter = { ...adapter, factory: oldFactory };
+    const replacementAdapter = { ...adapter, factory: replacementFactory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, '@owner/pending-flight-replacement');
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      const deregister = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await deregister;
+
+      registry.registerAdapter(replacementAdapter, '@owner/pending-flight-replacement');
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      expect(oldClose).toHaveBeenCalledOnce();
+      expect(replacementFactory).not.toHaveBeenCalled();
+
+      releaseClose.resolve();
+      await vi.runAllTimersAsync();
+
+      expect(oldClose).toHaveBeenCalledOnce();
+      expect(replacementFactory).toHaveBeenCalledOnce();
+      expect(registry.resolveLiveAdapterIdentity(adapterId)).toEqual({
+        adapterId,
+        adapterName: adapter.name,
+        machineId: TEST_MACHINE_ID,
+        ownerInstanceId: 'test-owner-instance',
+      });
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a current replacement deferred when the older restart later times out', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('stale-restart-replacement', '@owner/stale-restart-replacement');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseOldClose = Promise.withResolvers<void>();
+    const oldCloseStarted = Promise.withResolvers<void>();
+    const oldClose = vi.fn(async () => {
+      oldCloseStarted.resolve();
+      await releaseOldClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const oldFactory = vi.fn(async () => ({ adapterId, closeAsync: oldClose }));
+    const replacementFactory = vi.fn(async () => ({
+      adapterId,
+      closeAsync: async () => ({ evidence: 'released' as const }),
+    }));
+    const oldAdapter = { ...adapter, factory: oldFactory };
+    const replacementAdapter = { ...adapter, factory: replacementFactory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+
+      const restartOldAdapter = registry.restartAdapterInstance(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      await oldCloseStarted.promise;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      expect(replacementFactory).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await restartOldAdapter;
+      releaseOldClose.resolve();
+      await vi.runAllTimersAsync();
+
+      expect(oldFactory).toHaveBeenCalledOnce();
+      expect(replacementFactory).toHaveBeenCalledOnce();
+      expect(registry.resolveLiveAdapterIdentity(adapterId)).toEqual({
+        adapterId,
+        adapterName: adapter.name,
+        machineId: TEST_MACHINE_ID,
+        ownerInstanceId: 'test-owner-instance',
+      });
+
+      await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'released' });
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces a public restart while the exact deferred replacement factory is active', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('coalesced-deferred-replacement', '@owner/coalesced-deferred-replacement');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseOldClose = Promise.withResolvers<void>();
+    const replacementFactoryStarted = Promise.withResolvers<void>();
+    const releaseReplacementFactory = Promise.withResolvers<void>();
+    const oldClose = vi.fn(async () => {
+      await releaseOldClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const replacementClose = vi.fn(async () => ({ evidence: 'released' as const }));
+    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const replacementFactory = vi.fn(async () => {
+      replacementFactoryStarted.resolve();
+      await releaseReplacementFactory.promise;
+      return { adapterId, closeAsync: replacementClose };
+    });
+    const replacementAdapter = { ...adapter, factory: replacementFactory };
+    const initialized = vi.fn();
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    const offInitialized = MakaioBus.on(AdapterSubjects.initialized, initialized);
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      initialized.mockClear();
+
+      const deregister = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await deregister;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      releaseOldClose.resolve();
+      await replacementFactoryStarted.promise;
+
+      const concurrentRestart = registry.restartAdapterInstance(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      await Promise.resolve();
+      expect(oldClose).toHaveBeenCalledOnce();
+      expect(replacementFactory).toHaveBeenCalledOnce();
+
+      releaseReplacementFactory.resolve();
+      await concurrentRestart;
+
+      expect(replacementFactory).toHaveBeenCalledOnce();
+      expect(initialized).toHaveBeenCalledOnce();
+      expect(registry.resolveLiveAdapterIdentity(adapterId)).toEqual({
+        adapterId,
+        adapterName: adapter.name,
+        machineId: TEST_MACHINE_ID,
+        ownerInstanceId: 'test-owner-instance',
+      });
+
+      await registry.deregisterAdapter(adapter.name);
+      expect(replacementClose).toHaveBeenCalledOnce();
+      await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'released' });
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+    } finally {
+      offInitialized();
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('joins public admissions for a successor waiting behind a gated deferred factory', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('waiting-successor-coalescing', '@owner/waiting-successor-coalescing');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const provider: LoadedAdapter['providers'][number] = {
+      definition: ProviderDefinitionSchema.parse({
+        id: 'waiting-successor-provider',
+        name: 'Waiting Successor Provider',
+        authMethods: [],
+        availableModels: [],
+      }),
+      providerPackageName: '@owner/waiting-successor-provider',
+    };
+    const releaseOldClose = Promise.withResolvers<void>();
+    const releaseReplacementFactory = Promise.withResolvers<void>();
+    const replacementFactoryStarted = Promise.withResolvers<void>();
+    const releaseRollbackClose = Promise.withResolvers<void>();
+    const rollbackCloseStarted = Promise.withResolvers<void>();
+    const releaseFinalFactory = Promise.withResolvers<void>();
+    const finalFactoryStarted = Promise.withResolvers<void>();
+    const oldAdapter = {
+      ...adapter,
+      providers: [provider],
+      factory: async () => ({
+        adapterId,
+        closeAsync: async () => {
+          await releaseOldClose.promise;
+          return { evidence: 'released' as const };
+        },
+      }),
+    };
+    const replacementFactory = vi.fn(async (options?: unknown) => {
+      if (replacementFactory.mock.calls.length === 1) {
+        replacementFactoryStarted.resolve();
+        await releaseReplacementFactory.promise;
+        return {
+          adapterId: readAdapterFactoryOptions(options).adapterId,
+          closeAsync: async () => {
+            rollbackCloseStarted.resolve();
+            await releaseRollbackClose.promise;
+            return { evidence: 'released' as const };
+          },
+        };
+      }
+      finalFactoryStarted.resolve();
+      await releaseFinalFactory.promise;
+      return { adapterId: readAdapterFactoryOptions(options).adapterId };
+    });
+    const replacementAdapter = { ...adapter, providers: [provider], factory: replacementFactory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      const deregister = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await deregister;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      releaseOldClose.resolve();
+      await replacementFactoryStarted.promise;
+
+      const [successor] = await registry.removeProviderPackage(
+        '@owner/waiting-successor-provider',
+        TEST_PLATFORM_DEFAULTS,
+      );
+      if (successor === undefined) throw new Error('Provider stop did not produce a successor adapter epoch');
+      const publicInitialize = registry.initializeAdapter(successor, TEST_PLATFORM_DEFAULTS);
+      const publicRestart = registry.restartAdapterInstance(successor, TEST_PLATFORM_DEFAULTS);
+      await Promise.resolve();
+      expect(replacementFactory).toHaveBeenCalledOnce();
+
+      releaseReplacementFactory.resolve();
+      await rollbackCloseStarted.promise;
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      expect(replacementFactory).toHaveBeenCalledOnce();
+      releaseRollbackClose.resolve();
+      await finalFactoryStarted.promise;
+      let deregistrationSettled = false;
+      const deregistration = registry.deregisterAdapter(successor.name).then(() => {
+        deregistrationSettled = true;
+      });
+      await Promise.resolve();
+      expect(deregistrationSettled).toBe(false);
+      releaseFinalFactory.resolve();
+      await vi.runAllTimersAsync();
+      await deregistration;
+      await Promise.all([publicInitialize, publicRestart]);
+
+      expect(replacementFactory).toHaveBeenCalledTimes(2);
+      expect(getFactoryInitOptions(replacementFactory, 1).definitionProviders).toEqual([]);
+      expect(registry.resolveLiveAdapterId(adapter.name)).toBeUndefined();
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a stopped waiting successor tracked until its predecessor rollback can be retried', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('stopped-waiting-successor', '@owner/stopped-waiting-successor');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const provider: LoadedAdapter['providers'][number] = {
+      definition: ProviderDefinitionSchema.parse({
+        id: 'stopped-waiting-successor-provider',
+        name: 'Stopped Waiting Successor Provider',
+        authMethods: [],
+        availableModels: [],
+      }),
+      providerPackageName: '@owner/stopped-waiting-successor-provider',
+    };
+    const releaseOldClose = Promise.withResolvers<void>();
+    const releaseReplacementFactory = Promise.withResolvers<void>();
+    const replacementFactoryStarted = Promise.withResolvers<void>();
+    const replacementClose = vi
+      .fn<() => Promise<ConnectorTeardownResult>>()
+      .mockResolvedValueOnce({ evidence: 'unknown', detail: 'stale rollback remains unobserved' })
+      .mockResolvedValueOnce({ evidence: 'released' });
+    const oldAdapter = {
+      ...adapter,
+      providers: [provider],
+      factory: async () => ({
+        adapterId,
+        closeAsync: async () => {
+          await releaseOldClose.promise;
+          return { evidence: 'released' as const };
+        },
+      }),
+    };
+    const replacementAdapter = {
+      ...adapter,
+      providers: [provider],
+      factory: async () => {
+        replacementFactoryStarted.resolve();
+        await releaseReplacementFactory.promise;
+        return { adapterId, closeAsync: replacementClose };
+      },
+    };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      const deregister = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await deregister;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      releaseOldClose.resolve();
+      await replacementFactoryStarted.promise;
+
+      const [successor] = await registry.removeProviderPackage(
+        '@owner/stopped-waiting-successor-provider',
+        TEST_PLATFORM_DEFAULTS,
+      );
+      if (successor === undefined) throw new Error('Provider stop did not produce a successor adapter epoch');
+      let successorStopSettled = false;
+      const successorStop = registry.deregisterAdapter(successor.name).then(() => {
+        successorStopSettled = true;
+      });
+      await Promise.resolve();
+      expect(successorStopSettled).toBe(false);
+
+      releaseReplacementFactory.resolve();
+      await successorStop;
+
+      expect(replacementClose).toHaveBeenCalledOnce();
+      expect(registry.getLoadedAdapters()).toEqual([successor]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+      await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'released' });
+      expect(replacementClose).toHaveBeenCalledTimes(2);
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a replacement stopped before its blocking retirement flight settles', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('cancelled-pending-replacement', '@owner/cancelled-pending-replacement');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseClose = Promise.withResolvers<void>();
+    const oldClose = vi.fn(async () => {
+      await releaseClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const replacementFactory = vi.fn(async () => ({ adapterId }));
+    const replacementAdapter = { ...adapter, factory: replacementFactory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      const firstStop = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await firstStop;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      let replacementStopSettled = false;
+      const replacementStop = registry.deregisterAdapter(adapter.name).then(() => {
+        replacementStopSettled = true;
+      });
+      await Promise.resolve();
+      expect(replacementStopSettled).toBe(false);
+
+      releaseClose.resolve();
+      await vi.runAllTimersAsync();
+      await replacementStop;
+
+      expect(replacementFactory).not.toHaveBeenCalled();
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+      await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'released' });
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps cancellation and shutdown bounded when an ordinary deferred close never settles', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('never-settling-deferred-close', '@owner/never-settling-deferred-close');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const closeAsync = vi.fn(() => new Promise<void>(() => {}));
+    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const deferredAdapter = { ...adapter, factory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(deferredAdapter, adapter.packageName);
+      await registry.initializeAdapter(deferredAdapter, TEST_PLATFORM_DEFAULTS);
+      const restart = registry.restartAdapterInstance(deferredAdapter, TEST_PLATFORM_DEFAULTS);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await restart;
+
+      await registry.deregisterAdapter(adapter.name);
+      expect(factory).toHaveBeenCalledOnce();
+      await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'unknown' });
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a stopped in-flight replacement rollback retryable after weak teardown', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('stopped-in-flight-replacement', '@owner/stopped-in-flight-replacement');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseOldClose = Promise.withResolvers<void>();
+    const releaseReplacementFactory = Promise.withResolvers<void>();
+    const oldClose = vi.fn(async () => {
+      await releaseOldClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const replacementClose = vi
+      .fn<() => Promise<ConnectorTeardownResult>>()
+      .mockResolvedValueOnce({ evidence: 'unknown', detail: 'rollback remains unobserved' })
+      .mockResolvedValueOnce({ evidence: 'released' });
+    const replacementFactory = vi.fn(async () => {
+      await releaseReplacementFactory.promise;
+      return { adapterId, closeAsync: replacementClose };
+    });
+    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const replacementAdapter = { ...adapter, factory: replacementFactory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      const firstStop = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await firstStop;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      releaseOldClose.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(replacementFactory).toHaveBeenCalledOnce();
+
+      const secondStop = registry.deregisterAdapter(adapter.name);
+      releaseReplacementFactory.resolve();
+      await secondStop;
+
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+      expect(registry.getLoadedAdapters()).toEqual([replacementAdapter]);
+      expect(replacementClose).toHaveBeenCalledOnce();
+      await expect(registry.shutdownAll()).resolves.toMatchObject({ evidence: 'released' });
+      expect(replacementClose).toHaveBeenCalledTimes(2);
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('cleans a stopped replacement after its timed-out rollback later proves release', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('late-released-replacement-rollback', '@owner/late-released-rollback');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseOldClose = Promise.withResolvers<void>();
+    const releaseReplacementFactory = Promise.withResolvers<void>();
+    const releaseRollbackClose = Promise.withResolvers<void>();
+    const oldClose = vi.fn(async () => {
+      await releaseOldClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const rollbackClose = vi.fn(async () => {
+      await releaseRollbackClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const replacementFactory = vi.fn(async () => {
+      await releaseReplacementFactory.promise;
+      return { adapterId, closeAsync: rollbackClose };
+    });
+    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const replacementAdapter = { ...adapter, factory: replacementFactory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      const firstStop = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await firstStop;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      releaseOldClose.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(replacementFactory).toHaveBeenCalledOnce();
+
+      const secondStop = registry.deregisterAdapter(adapter.name);
+      releaseReplacementFactory.resolve();
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await secondStop;
+      expect(registry.getLoadedAdapters()).toEqual([replacementAdapter]);
+
+      releaseRollbackClose.resolve();
+      await vi.runAllTimersAsync();
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(rollbackClose).toHaveBeenCalledOnce();
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      expect(replacementFactory).toHaveBeenCalledTimes(2);
+      expect(registry.resolveLiveAdapterId(adapter.name)).toBe(adapterId);
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('joins a started deferred factory before host shutdown retires its rollback slot', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('shutdown-deferred-factory', '@owner/shutdown-deferred-factory');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseOldClose = Promise.withResolvers<void>();
+    const releaseReplacementFactory = Promise.withResolvers<void>();
+    const oldClose = vi.fn(async () => {
+      await releaseOldClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const replacementClose = vi
+      .fn<() => Promise<ConnectorTeardownResult>>()
+      .mockResolvedValueOnce({ evidence: 'unknown', detail: 'shutdown must retry the rollback handle' })
+      .mockResolvedValueOnce({ evidence: 'released' });
+    const replacementFactory = vi.fn(async () => {
+      await releaseReplacementFactory.promise;
+      return { adapterId, closeAsync: replacementClose };
+    });
+    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const replacementAdapter = { ...adapter, factory: replacementFactory };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+
+    try {
+      registry.registerAdapter(oldAdapter, adapter.packageName);
+      await registry.initializeAdapter(oldAdapter, TEST_PLATFORM_DEFAULTS);
+      const firstStop = registry.deregisterAdapter(adapter.name);
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await firstStop;
+
+      registry.registerAdapter(replacementAdapter, adapter.packageName);
+      await registry.initializeAdapter(replacementAdapter, TEST_PLATFORM_DEFAULTS);
+      releaseOldClose.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(replacementFactory).toHaveBeenCalledOnce();
+
+      let shutdownSettled = false;
+      const shutdown = registry.shutdownAll().then((report) => {
+        shutdownSettled = true;
+        return report;
+      });
+      await Promise.resolve();
+      expect(shutdownSettled).toBe(false);
+
+      releaseReplacementFactory.resolve();
+      await expect(shutdown).resolves.toMatchObject({ evidence: 'released' });
+      expect(replacementClose).toHaveBeenCalledTimes(2);
+      expect(registry.getLoadedAdapters()).toEqual([]);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+    } finally {
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('withdraws an early observed initialized identity exactly once when a later initialized subscriber rejects', async () => {
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('partially-published-initialization', '@owner/partially-published');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const identitySnapshots: unknown[] = [];
+    const deinitialized = vi.fn();
+    const rejectingAdapter = {
+      ...adapter,
+      factory: async () => ({ adapterId, closeAsync: async () => ({ evidence: 'released' as const }) }),
+    };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    const offEarlyInitialized = MakaioBus.on(AdapterSubjects.initialized, () => {
+      identitySnapshots.push(registry.resolveLiveAdapterIdentity(adapterId));
+    });
+    const offRejectingInitialized = MakaioBus.on(AdapterSubjects.initialized, () => {
+      throw new Error('late initialized subscriber rejected');
+    });
+    const offDeinitialized = MakaioBus.on(AdapterSubjects.deinitialized, deinitialized);
+
+    try {
+      registry.registerAdapter(rejectingAdapter, '@owner/partially-published');
+      await expect(registry.initializeAdapter(rejectingAdapter, TEST_PLATFORM_DEFAULTS)).rejects.toThrow(
+        /late initialized subscriber rejected/,
+      );
+
+      expect(identitySnapshots).toEqual([
+        { adapterId, adapterName: adapter.name, machineId: TEST_MACHINE_ID, ownerInstanceId: 'test-owner-instance' },
+      ]);
+      expect(deinitialized).toHaveBeenCalledOnce();
+      expect(registry.resolveLiveAdapterIdentity(adapterId)).toBeUndefined();
+      expect(registry.getAdapterInstances()).toEqual(new Map());
+    } finally {
+      offDeinitialized();
+      offRejectingInitialized();
+      offEarlyInitialized();
+      offConfig();
+    }
+  });
+
+  it('does not overlap a timed-out shutdown close and publishes one eventual fallback', async () => {
+    vi.useFakeTimers();
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const adapter = createLoadedAdapter('timed-out-shutdown', '@owner/timed-out-shutdown');
+    const adapterId = registry.resolveLoadedAdapterId(adapter);
+    const releaseClose = Promise.withResolvers<void>();
+    const closeAsync = vi.fn(async () => {
+      await releaseClose.promise;
+      return { evidence: 'released' as const };
+    });
+    const withdrawn = vi.fn();
+    const shutdownAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync }) };
+    const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
+    });
+    const offDeinitialized = MakaioBus.on(AdapterSubjects.deinitialized, withdrawn);
+
+    try {
+      registry.registerAdapter(shutdownAdapter, '@owner/timed-out-shutdown');
+      await registry.initializeAdapter(shutdownAdapter, TEST_PLATFORM_DEFAULTS);
+      const shutdown = registry.shutdownAll();
+      await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+      await expect(shutdown).resolves.toMatchObject({ evidence: 'unknown' });
+      expect(closeAsync).toHaveBeenCalledOnce();
+      expect(withdrawn).not.toHaveBeenCalled();
+
+      releaseClose.resolve();
+      await vi.runAllTimersAsync();
+      expect(closeAsync).toHaveBeenCalledOnce();
+      expect(withdrawn).toHaveBeenCalledOnce();
+    } finally {
+      offDeinitialized();
+      offConfig();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retires a registry-owned instance without withdrawal when adapterId validation fails', async () => {
     const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'mismatch-adapter');
-    const shutdown = vi.fn().mockResolvedValue(undefined);
-    const adapterInstances = new Map<string, AdapterInstance>();
+    const shutdown = vi.fn().mockResolvedValue({ evidence: 'released' });
+    const registry = new AdapterRuntimeRegistry({
+      bus: MakaioBus,
+      machineId: TEST_MACHINE_ID,
+      resolveOwnerInstanceId: () => 'test-owner-instance',
+    });
+    const deinitialized = vi.fn();
     const offGetConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: 'mismatch-adapter', enabled: true, bindings: [] } });
     });
 
+    const offDeinitialized = MakaioBus.on(AdapterSubjects.deinitialized, deinitialized);
     try {
-      await expect(
-        initializeEnabledAdapters(
-          MakaioBus,
-          TEST_MACHINE_ID,
-          [
-            {
-              name: 'mismatch-adapter',
-              displayName: 'Mismatch Adapter',
-              packageName: '@owner/mismatch-package',
-              factory: async () => ({
-                adapterId: 'wrong-adapter-id',
-                shutdown,
-              }),
-              options: { adapterId },
-              providerDefinitionIds: [],
-              providerRefs: [],
-              providers: [],
-            },
-          ],
-          adapterInstances,
-          TEST_PLATFORM_DEFAULTS,
-        ),
-      ).rejects.toThrow(/mismatch-adapter: Adapter 'mismatch-adapter' initialized with mismatched adapterId/);
+      const adapter: LoadedAdapter = {
+        ...createLoadedAdapter('mismatch-adapter', '@owner/mismatch-package'),
+        factory: async () => ({ adapterId: 'wrong-adapter-id', shutdown }),
+        options: { adapterId },
+      };
+      registry.registerAdapter(adapter, '@owner/mismatch-package');
+      await expect(registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS)).rejects.toThrow(
+        /mismatch-adapter: Adapter 'mismatch-adapter' initialized with mismatched adapterId/,
+      );
 
-      expect(adapterInstances.size).toBe(0);
+      expect(registry.getAdapterInstances()).toEqual(new Map());
       expect(shutdown).toHaveBeenCalledOnce();
+      expect(deinitialized).not.toHaveBeenCalled();
     } finally {
+      offDeinitialized();
       offGetConfig();
     }
   });

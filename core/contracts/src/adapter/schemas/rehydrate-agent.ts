@@ -35,6 +35,9 @@ export const RehydrateAgentSchema = {
     /** Target adapter instance ID */
     adapterId: z.string(),
 
+    /** Exact runtime incarnation to target when owner routing is required. */
+    ownerInstanceId: z.string().optional(),
+
     /** Agent to rehydrate */
     agentId: z.string(),
 
@@ -84,6 +87,9 @@ export const RehydrateAgentSchema = {
     z.object({
       success: z.literal(true),
 
+      /** Runtime incarnation that owns the rehydrated agent. */
+      ownerInstanceId: z.string().optional(),
+
       /**
        * Provider session the connector is **actually** current on after the
        * rehydrate.
@@ -99,6 +105,9 @@ export const RehydrateAgentSchema = {
        * announces it later in that case.
        */
       adapterSessionId: z.string().optional(),
+
+      /** Opaque token required to acknowledge a caller-owned settlement. */
+      settlementAckToken: z.string().optional(),
     }),
     z.object({
       success: z.literal(false),

@@ -17,6 +17,8 @@
  * - agent upsert: writing the same agentId twice keeps exactly one row.
  * - identity backfill: the guarded update matches only while both identity
  *   columns are null and the row still names the expected designation.
+ * - adapter-session reconciliation: a designated lead may fill one missing
+ *   provider key only for an open or exactly matching adapter identity.
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
@@ -336,6 +338,103 @@ describeStorageConformance('handlers-sessions', (config) => {
       const designated = await attemptBackfill({ leadAgentId: 'lead-1' }, null);
       expect(designated.success).toBe(false);
       expect(designated.stored?.adapterName).toBeUndefined();
+    });
+  });
+
+  describe('adapter-session reconciliation — lead, identity, and provider key settle together', () => {
+    /**
+     * Seed one session row and attempt the dedicated reconciliation operation.
+     * @param seed - Session fields that decide whether reconciliation matches.
+     * @param announcement - Lead announcement to reconcile.
+     * @returns Whether the reconciliation landed, and its stored row.
+     */
+    async function attemptReconciliation(
+      seed: Partial<IMakaioSession>,
+      announcement: { agentId: string; adapterName: string; adapterId: string; adapterSessionId: string },
+    ): Promise<{ success: boolean; stored: IMakaioSession | null }> {
+      const sessionId = `sess-reconciliation-${crypto.randomUUID()}`;
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session: makeSession({ sessionId, ...seed }) });
+      const { success } = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId,
+        reconcileAdapterSession: { ...announcement, lastActivityAt: 1234 },
+      });
+      const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      return { success, stored: session };
+    }
+
+    it('writes the complete triplet for the designated lead when identity is fully open', async () => {
+      const announcement = {
+        agentId: 'lead-1',
+        adapterName: 'reconciled-adapter',
+        adapterId: 'reconciled-instance',
+        adapterSessionId: 'provider-session-1',
+      };
+      const { success, stored } = await attemptReconciliation({ leadAgentId: announcement.agentId }, announcement);
+
+      expect(success).toBe(true);
+      expect(stored).toMatchObject({
+        adapterName: announcement.adapterName,
+        adapterId: announcement.adapterId,
+        adapterSessionId: announcement.adapterSessionId,
+        lastActivityAt: 1234,
+      });
+    });
+
+    it('cannot be combined with the identity-open-for-lead authority mode', async () => {
+      await expect(
+        MakaioBus.request(SessionStorageSubjects.update, {
+          sessionId: `sess-reconciliation-schema-${crypto.randomUUID()}`,
+          identity: { adapterName: 'identity-adapter', adapterId: 'identity-instance' },
+          expectIdentityOpenForLead: 'lead-1',
+          reconcileAdapterSession: {
+            agentId: 'lead-1',
+            adapterName: 'reconciled-adapter',
+            adapterId: 'reconciled-instance',
+            adapterSessionId: 'provider-session-1',
+            lastActivityAt: 1234,
+          },
+        }),
+      ).rejects.toThrow('reconcileAdapterSession cannot be combined with the identity-open-for-lead authority mode');
+    });
+
+    it('fills the provider key only when the existing identity exactly matches', async () => {
+      const announcement = {
+        agentId: 'lead-1',
+        adapterName: 'reconciled-adapter',
+        adapterId: 'reconciled-instance',
+        adapterSessionId: 'provider-session-1',
+      };
+      const { success, stored } = await attemptReconciliation(
+        { leadAgentId: announcement.agentId, adapterName: announcement.adapterName, adapterId: announcement.adapterId },
+        announcement,
+      );
+
+      expect(success).toBe(true);
+      expect(stored?.adapterSessionId).toBe(announcement.adapterSessionId);
+    });
+
+    it('refuses a used provider key, a moved lead, mismatched identity, and either malformed half-open identity', async () => {
+      const announcement = {
+        agentId: 'lead-1',
+        adapterName: 'reconciled-adapter',
+        adapterId: 'reconciled-instance',
+        adapterSessionId: 'provider-session-1',
+      };
+      const refusedSeeds: Partial<IMakaioSession>[] = [
+        { leadAgentId: announcement.agentId, adapterSessionId: 'already-set' },
+        { leadAgentId: 'new-lead' },
+        { leadAgentId: announcement.agentId, adapterName: 'other-adapter', adapterId: announcement.adapterId },
+        { leadAgentId: announcement.agentId, adapterName: announcement.adapterName },
+        { leadAgentId: announcement.agentId, adapterId: announcement.adapterId },
+      ];
+
+      for (const seed of refusedSeeds) {
+        const { success, stored } = await attemptReconciliation(seed, announcement);
+        expect(success).toBe(false);
+        expect(stored?.adapterSessionId).toBe(seed.adapterSessionId);
+        expect(stored?.adapterName).toBe(seed.adapterName);
+        expect(stored?.adapterId).toBe(seed.adapterId);
+      }
     });
   });
 });

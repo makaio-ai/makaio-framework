@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 106 |
-| Subjects | 990 (403 events, 587 RPCs) |
+| Subjects | 998 (405 events, 593 RPCs) |
 | framework | 102 |
 | extension | 4 |
 | kind: bus | 75 |
@@ -29,14 +29,14 @@ next: false
 | [adapters/](./adapters/index.md) | 1 | 3 |
 | [clients/](./clients/index.md) | 2 | 25 |
 | [extensions/](./extensions/index.md) | 4 | 18 |
-| [services/](./services/index.md) | 32 | 227 |
+| [services/](./services/index.md) | 32 | 230 |
 | [ui/](./ui/index.md) | 3 | 9 |
 
 ## Core Namespaces
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
-| [`adapter`](./adapter.md) | bus | 17 | 9E / 8R |
+| [`adapter`](./adapter.md) | bus | 19 | 10E / 9R |
 | [`adapter:anthropic-sdk`](./adapter-anthropic-sdk.md) | adapter | 19 | 18E / 1R |
 | [`adapter:claude-code-tmux`](./adapter-claude-code-tmux.md) | adapter | 9 | 8E / 1R |
 | [`adapter:codex-app-server`](./adapter-codex-app-server.md) | adapter | 23 | 20E / 3R |
@@ -82,7 +82,7 @@ next: false
 | [`storage:message`](./storage-message.md) | storage | 9 | 1E / 8R |
 | [`storage:session`](./storage-session.md) | storage | 15 | 0E / 15R |
 | [`storage:sessionEvent`](./storage-sessionevent.md) | storage | 5 | 0E / 5R |
-| [`storage:sessionOwnership`](./storage-sessionownership.md) | storage | 7 | 0E / 7R |
+| [`storage:sessionOwnership`](./storage-sessionownership.md) | storage | 10 | 0E / 10R |
 | [`storage:skill`](./storage-skill.md) | storage | 5 | 0E / 5R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
 | [`storage:workflow`](./storage-workflow.md) | storage | 38 | 0E / 38R |

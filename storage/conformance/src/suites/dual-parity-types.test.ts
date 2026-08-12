@@ -451,6 +451,8 @@ const STRUCTURAL_ONLY_DUAL_TABLES: ReadonlySet<string> = new Set([
   'client_profiles',
   'client_binary_versions',
   'client_binary_state',
+  'runtime_instance_incarnation_counters',
+  'runtime_instances',
   // Narrowing consumed only inside the owning package; not on a public surface.
   'supervisor_runtimes',
   'log_import_settings',

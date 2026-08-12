@@ -19,7 +19,7 @@ npm install @makaio/ai-adapters-core
 import {
   AIAdapter,
   createAdapterNamespace,
-  type AIAdapterConfig,
+  type AIAdapterRuntimeConfig,
 } from '@makaio/ai-adapters-core';
 import { z } from 'zod';
 
@@ -40,15 +40,15 @@ type MyLLMBus = Awaited<ReturnType<typeof MyNamespace.scopedBus>>;
 
 // 2. Extend AIAdapter — bus wiring, agent tracking, and session lifecycle included
 class MyLLMAdapter extends AIAdapter<MyLLMBus, MyLLMConnector, MyLLMAgent> {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: 'my-llm',
       capabilities: ['tools', 'streaming', 'systemPrompt:override'],
       namespace: MyNamespace,
       agentFactory: (agentConfig) => new MyLLMAgent(agentConfig),
       configFactory: MyLLMConfig.getConfig,
       connectorFactory: (fullConfig) => new MyLLMConnector(fullConfig),
-      ...config,
     });
   }
 }
@@ -88,6 +88,6 @@ await processDiscriminatedItems(sdkStreamChunks, handlers, emit);
 | `normalizeMessageInput()` | Normalize diverse message input shapes to canonical form |
 | `cleanEnvForAdapter()` | Strip unsafe env vars before spawning adapter subprocesses |
 | `normalizeMimeType()` / `isTextLikeMimeType()` | MIME type helpers for attachment handling |
-| `type AIAdapterConfig` | Adapter configuration shape |
+| `type AIAdapterRuntimeConfig` | Runtime adapter configuration shape with required ownership and machine identities |
 | `type AdapterNamespace` | Typed namespace returned by `createAdapterNamespace()` |
 | `type AIAdapterContext` | Adapter factory context for descriptor-driven creation surfaces |

@@ -6,8 +6,68 @@ import type {
   ResolvedProviderContext,
   SessionContext,
   StartAgentRequest,
+  StartAgentResponse,
 } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '../../adapter-runtime/identity.js';
+import type { MachineScopedAdapterInstance } from '../utils/resolution.js';
+
+/** Fully-owned payload supplied to a host-specific lead-start dispatcher. */
+export type LeadStartDispatchRequest = StartAgentRequest & {
+  /** Framework-minted identity of this exact attempt. */
+  readonly agentId: string;
+  /** Runtime incarnation selected by the ownership reservation. */
+  readonly ownerInstanceId: string;
+};
+
+/**
+ * Host-specific transport policy for one already-reserved lead start.
+ *
+ * The callback may choose how the request reaches the selected adapter, but it
+ * does not own identity, persistence, reservation, settlement, or cleanup.
+ */
+export type LeadStartDispatch = (request: LeadStartDispatchRequest) => Promise<StartAgentResponse>;
+
+/** Whether this start creates the first lead or replaces an existing one. */
+export type LeadTransition = { readonly kind: 'fresh' } | { readonly kind: 'replace' };
+
+/** Everything a lead transition needs beyond the payload it dispatches. */
+export interface LeadStartRequest {
+  /** Session the agent is started into. */
+  readonly sessionId: string;
+  /** Machine-scoped adapter runtime selected for dispatch and ownership. */
+  readonly instance: MachineScopedAdapterInstance;
+  /** Adapter type name, carried onto the agent row and any claim. */
+  readonly adapterName: string;
+  /** Provider config to stamp on the agent's runtime row once the start lands. */
+  readonly providerConfigId?: string;
+  /** Persona identity persisted before the adapter can create a connector. */
+  readonly personaId?: string;
+  /** Profile identity persisted before the adapter can create a connector. */
+  readonly profileId?: string;
+  /** Explicit lifecycle transition; never inferred from designation identity. */
+  readonly leadTransition: LeadTransition;
+  /** Lead designation the caller observed before entering the reservation. */
+  readonly expectedLeadAgentId: string | null;
+  /** Adapter payload, complete except for the attempt identity minted by this service. */
+  readonly startRequest: StartAgentRequest;
+  /** Optional host transport policy; the bus request remains the default. */
+  readonly dispatch?: LeadStartDispatch;
+}
+
+/** How a lead transition ended, for the caller that has a send to continue. */
+export type LeadStartResult =
+  | {
+      /** The agent is live, owns its provider session and is `idle` in storage. */
+      outcome: 'started';
+      /** The agent row as it now stands, for the caller's in-memory session. */
+      agent: MakaioSessionAgent;
+    }
+  | {
+      /** Another start won the designation race and this attempt left nothing behind. */
+      outcome: 'lead-conflict';
+      /** Lead the session actually names, or `null` when it has none. */
+      currentLeadAgentId: string | null;
+    };
 
 /** Identity and context a lead start carries independently of the selection. */
 export interface LeadStartDispatchContext {
@@ -60,8 +120,8 @@ export function buildLeadStartRequest(
 export interface CallerOwnedAgentRow {
   /** Caller-minted agent identity; the row's primary key. */
   readonly agentId: string;
-  /** Live adapter instance the start is dispatched to. */
-  readonly adapterId: string;
+  /** Exact runtime instance the row is reserved and dispatched against. */
+  readonly instance: MachineScopedAdapterInstance;
   /** Adapter type name carried onto the row. */
   readonly adapterName: string;
   /** Session the agent is started into. */
@@ -107,8 +167,12 @@ export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSess
   const { model, cwd, allowedDirectories, clientId, harnessId } = input.runtime;
   return {
     agentId: input.agentId,
-    adapterId: input.adapterId,
+    adapterId: input.instance.adapterId,
     adapterName: input.adapterName,
+    runtimeOwner: {
+      machineId: input.instance.machineId,
+      instanceId: input.instance.ownerInstanceId,
+    },
     sessionId: input.sessionId,
     role: input.role,
     // Not `idle`: no connector is confirmed yet, and a consumer that read `idle`

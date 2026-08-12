@@ -11,6 +11,8 @@ export const GetAgentSchema = {
   request: z.object({
     /** Target adapter instance ID */
     adapterId: z.string(),
+    /** Runtime incarnation that owns the agent and must answer this probe. */
+    ownerInstanceId: z.string(),
     /** Agent to retrieve */
     agentId: z.string(),
   }),

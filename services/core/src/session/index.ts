@@ -43,6 +43,7 @@ export {
   resolveTargetAgents,
   resolveAdapterId,
   resolveOwnedAdapterInstance,
+  resolveAnnouncedAdapterInstance,
   reserveStartFor,
   type MachineScopedAdapterInstance,
   type OwnedAdapterInstance,
@@ -66,15 +67,20 @@ export {
 // The modeled start failures, so a host or product path can raise and branch on
 // the same outcomes the framework's own start paths do.
 export { SessionStartError, type SessionStartFailureCode } from './handlers/session-start-error.js';
+export {
+  type LeadStartDispatch,
+  type LeadStartDispatchRequest,
+  type LeadStartRequest,
+  type LeadStartResult,
+  type LeadTransition,
+} from './handlers/lead-start-request.js';
+export { startLeadAgent } from './handlers/lead-start.js';
 
 // The fresh-start ownership seam. A host start path that resolves its own
 // selection still has to answer the same question this one does — which instance
 // does the dispatch address, and which machine do its ownership acts name — and
 // answering it a second time is how the two halves come from two identities.
-export {
-  resolveSelectionOwnedInstance,
-  type SelectionInstanceContext,
-} from './session-orchestrator-selection.js';
+export { resolveSelectionOwnedInstance, type SelectionInstanceContext } from './session-orchestrator-selection.js';
 
 // Optional session handlers used by hosts that opt into richer session operations.
 export {
@@ -137,6 +143,7 @@ export {
   mapAgentsBySession,
   mapRowToSession,
   mapToSession,
+  ownershipClaimTransactionLock,
   parseForkTransforms,
   registerDrizzleAgentStorage,
   registerDrizzleSessionOwnershipStorage,
@@ -148,6 +155,7 @@ export {
   sessions,
   sessionsDual,
   SessionStorageNamespace,
+  SESSION_OWNERSHIP_CLAIM_LOCK_NAMESPACE,
   SessionStorageSubjects,
 } from './storage/index.js';
 export type {
@@ -155,6 +163,7 @@ export type {
   SearchSessionRow,
   SessionPreviewMaps,
   SessionStorageMemoryState,
+  OwnershipClaimKey,
 } from './storage/index.js';
 
 // Session event storage (event log)

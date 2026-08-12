@@ -152,6 +152,10 @@ export interface AgentRuntimeCreationResult {
  * @typeParam TBus - Scoped bus type for adapter-specific events
  */
 export interface AIAdapterConfig<TBus extends ScopedBus<string> = ScopedBus<string>> {
+  /** Session-ownership authority incarnation hosting this adapter. */
+  ownerInstanceId: string;
+  /** Stable machine identity hosting this adapter runtime. */
+  machineId: string;
   /** Unique adapter name (e.g., 'openai-node', 'claude-code'). */
   name: string;
   /** Adapter capabilities (e.g., ['streaming', 'tools', 'vision']). */
@@ -179,6 +183,29 @@ export interface AIAdapterConfig<TBus extends ScopedBus<string> = ScopedBus<stri
 }
 
 /**
+ * Runtime overrides accepted by concrete adapter constructors.
+ *
+ * Adapter implementations supply their own immutable name, capabilities, and
+ * factories. The host must supply the ownership authority for every live
+ * adapter, while all other runtime injections remain optional overrides.
+ */
+export type AIAdapterRuntimeConfig<TBus extends ScopedBus<string> = ScopedBus<string>> = Pick<
+  AIAdapterConfig<TBus>,
+  | 'ownerInstanceId'
+  | 'machineId'
+  | 'adapterId'
+  | 'globalBus'
+  | 'scopedBus'
+  | 'logImport'
+  | 'definitionProviders'
+  | 'clientId'
+  | 'prepareAuthRuntime'
+> & {
+  /** Platform-provided defaults (cwd, env). Injected by the runtime. */
+  platformDefaults?: PlatformDefaults;
+};
+
+/**
  * Full constructor config including factory injections.
  *
  * Replaces the inline intersection type previously used in `AIAdapter`'s
@@ -193,7 +220,7 @@ export interface AIAdapterConstructorConfig<
   TAgent extends AIAgent<TBus, TConnector>,
   // Extends the default AIAdapterConfig (TBus = ScopedBus<string>) intentionally.
   // Using AIAdapterConfig<TBus> here would narrow scopedBus to the specific TBus,
-  // but all 8 adapter subclass constructors accept Partial<AIAdapterConfig> (wide type).
+  // but concrete adapter constructors accept AIAdapterRuntimeConfig (wide type).
   // The adapter constructor narrows with `config.scopedBus as TBus` — that is the
   // intentional cast point, matching the pre-extraction behavior.
 > extends AIAdapterConfig {

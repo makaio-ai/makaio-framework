@@ -216,6 +216,8 @@ function buildAdapter<T extends TestAdapter>(
 
   return new Ctor({
     name,
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     capabilities: [],
     nativeTools: [],
     namespace,

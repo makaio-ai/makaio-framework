@@ -15,8 +15,16 @@
  * @packageDocumentation
  */
 import type { IMakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, type AgentRole, type SessionOwnershipReserveStartServiceResult } from '@makaio/contracts';
+import {
+  SessionSubjects,
+  type AgentRole,
+  type SessionOwnershipRecoveryGuard,
+  type SessionOwnershipReserveStartServiceResult,
+} from '@makaio/contracts';
 import type { OwnedAdapterInstance } from './resolution.js';
+
+/** Adapter identity sufficient to route every reservation to one authority. */
+type ReservationAdapterInstance = OwnedAdapterInstance & { readonly ownerInstanceId: string };
 
 /** What every start reservation names, whatever role it takes. */
 interface StartReservationIdentity {
@@ -27,9 +35,11 @@ interface StartReservationIdentity {
   /** Adapter type name carried onto any claim for diagnostics. */
   readonly adapterName: string;
   /** Instance the dispatch addresses, and the machine its ownership acts are filed under. */
-  readonly instance: OwnedAdapterInstance;
+  readonly instance: ReservationAdapterInstance;
   /** Provider session to reserve, or `null` for a start with no key yet. */
   readonly resumeProviderSessionId: string | null;
+  /** Caller-minted identity for the reservation generation. */
+  readonly claimToken: string;
 }
 
 /**
@@ -55,7 +65,13 @@ type StartReservationDesignation =
     };
 
 /** Everything a start reservation names beyond the instance it runs against. */
-export type StartReservationRequest = StartReservationIdentity & StartReservationDesignation;
+export type StartReservationRequest = StartReservationIdentity &
+  StartReservationDesignation & {
+    /** Atomic snapshot for a member recovery; absent for ordinary starts. */
+    readonly recoveryGuard?: SessionOwnershipRecoveryGuard;
+    /** Opaque fence for this guarded recovery attempt. */
+    readonly recoveryAttemptId?: string;
+  };
 
 /**
  * Take one start reservation.
@@ -80,8 +96,12 @@ export async function reserveStartFor(
     agentId: request.agentId,
     adapterId: instance.adapterId,
     adapterName: request.adapterName,
+    ownerInstanceId: instance.ownerInstanceId,
     role: request.role,
     resumeProviderSessionId: request.resumeProviderSessionId,
+    claimToken: request.claimToken,
+    ...(request.recoveryGuard !== undefined && { recoveryGuard: request.recoveryGuard }),
+    ...(request.recoveryAttemptId !== undefined && { recoveryAttemptId: request.recoveryAttemptId }),
     ...(request.role === 'lead' && { expectedLeadAgentId: request.expectedLeadAgentId }),
     ...(instance.machineId !== undefined && { machineId: instance.machineId }),
   });

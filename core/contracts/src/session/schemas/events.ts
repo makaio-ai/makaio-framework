@@ -82,18 +82,11 @@ export const EventSchemas = {
    * Type: Event (fire-and-forget)
    * Emitted when: An agent is detached/removed from a session
    *
-   * **A producer must have stopped the agent's connector first.** The removal
-   * handler disposes the agent row *and* releases the agent's ownership claims,
-   * which is precisely the act that strips a live connector of its anchor: the
-   * provider session it speaks to becomes acquirable while it is still running,
-   * and a second runtime may then legitimately take it.
-   *
-   * The handler cannot verify the connector is gone and must not try — it would
-   * put an adapter round trip, and adapter availability, inside a storage-facing
-   * event handler, so removing an agent would start failing when an adapter is
-   * slow. The emitter can, because it is the party that decided to remove the
-   * agent. Note that `adapter.stopAgent`'s response is not evidence of a closed
-   * connector today; it reports only that an entry existed.
+   * The consumer first terminalizes the durable agent and clears its lead
+   * designation, then addresses every exact runtime owner for teardown. Claims
+   * are released only after terminalization is proved and teardown evidence is
+   * observed. Producers must therefore emit this event rather than stopping a
+   * connector and separately mutating durable lifecycle state.
    * @example
    * ```typescript
    * bus.on(SessionSubjects.agent.removed, (ctx) => {

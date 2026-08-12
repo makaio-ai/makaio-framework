@@ -34,3 +34,25 @@ export function isIdentityBackfillRefused(stored: IMakaioSession, payload: Sessi
   if (stored.adapterName !== undefined || stored.adapterId !== undefined) return true;
   return (stored.leadAgentId ?? null) !== expectedLeadAgentId;
 }
+
+/**
+ * Whether a lead's provider-session reconciliation must be refused.
+ *
+ * A reconciliation fills a missing provider session ID. It may establish a fully
+ * open identity or confirm the exact identity already stored, but it must never
+ * repair a half-open identity: that malformed row does not identify a trustworthy
+ * conversation for this announcement to complete.
+ * @param stored - The row as storage holds it right now.
+ * @param payload - The update carrying an optional reconciliation operation.
+ * @returns `true` when the reconciliation may not land.
+ */
+export function isAdapterSessionReconciliationRefused(stored: IMakaioSession, payload: SessionUpdatePayload): boolean {
+  const reconciliation = payload.reconcileAdapterSession;
+  if (reconciliation === undefined) return false;
+  if (stored.adapterSessionId !== undefined || stored.leadAgentId !== reconciliation.agentId) return true;
+
+  const identityIsOpen = stored.adapterName === undefined && stored.adapterId === undefined;
+  const identityMatches =
+    stored.adapterName === reconciliation.adapterName && stored.adapterId === reconciliation.adapterId;
+  return !identityIsOpen && !identityMatches;
+}

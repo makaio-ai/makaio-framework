@@ -51,12 +51,24 @@ export interface AdapterStartReservation {
   readonly agentId: string;
   /** The generation this start allocated, and the only one it may release. */
   readonly claimToken: string;
+  /** Runtime incarnation that owns the generation. */
+  readonly ownerInstanceId: string;
 }
 
 /** What the authority answered, as the start handler branches on it. */
 export type AdapterStartReservationResult =
   | { readonly kind: 'reserved'; readonly reservation: AdapterStartReservation }
-  | { readonly kind: 'refused'; readonly message: string };
+  | {
+      readonly kind: 'refused';
+      readonly message: string;
+      readonly outcome?: Exclude<SessionOwnershipReserveStartServiceResult['outcome'], 'session-not-active'>;
+    }
+  | {
+      readonly kind: 'refused';
+      readonly message: string;
+      readonly outcome: 'session-not-active';
+      readonly sessionStatus: 'closed' | 'archived' | 'discovered';
+    };
 
 /**
  * Registry operations a failed start gives its process-local claims back through.
@@ -218,25 +230,51 @@ export async function reserveAdapterOwnedStart(
     readonly sessionId: string;
     readonly adapterId: string;
     readonly adapterName: string;
+    readonly ownerInstanceId: string;
     readonly resumeProviderSessionId: string;
   },
 ): Promise<AdapterStartReservationResult> {
-  const reserved = await reserveStartFor(bus, {
-    sessionId: request.sessionId,
-    agentId: request.agentId,
-    adapterName: request.adapterName,
-    // **No machine, deliberately.** The adapter is not acting *for* a machine
-    // some caller named; it is the runtime that owns the instance, so the
-    // authority decides under the identity it was composed with and there are no
-    // two identities to mix (Wave 3 §5.1, Path C).
-    instance: { adapterId: request.adapterId },
-    role: 'member',
-    resumeProviderSessionId: request.resumeProviderSessionId,
-  });
-  if (reserved.outcome !== 'reserved') {
-    return { kind: 'refused', message: describeReservationRefusal(request.resumeProviderSessionId, reserved.outcome) };
+  const claimToken = crypto.randomUUID();
+  let reserved;
+  try {
+    reserved = await reserveStartFor(bus, {
+      sessionId: request.sessionId,
+      agentId: request.agentId,
+      adapterName: request.adapterName,
+      // **No machine, deliberately.** This adapter-owned resume is not keyed by
+      // a caller-named machine, but it still routes to the exact runtime
+      // incarnation that owns the connector.
+      instance: { adapterId: request.adapterId, ownerInstanceId: request.ownerInstanceId },
+      role: 'member',
+      resumeProviderSessionId: request.resumeProviderSessionId,
+      claimToken,
+    });
+  } catch (error) {
+    await bus
+      .requestOptional(SessionSubjects.ownership.release, {
+        agentId: request.agentId,
+        claimToken,
+        disposition: 'released',
+      })
+      .catch(() => undefined);
+    throw error;
   }
-  const { claim } = reserved.reservation;
+  if (reserved.outcome !== 'reserved') {
+    if (reserved.outcome === 'session-not-active') {
+      return {
+        kind: 'refused',
+        outcome: reserved.outcome,
+        sessionStatus: reserved.status,
+        message: describeReservationRefusal(request.resumeProviderSessionId, reserved.outcome),
+      };
+    }
+    return {
+      kind: 'refused',
+      outcome: reserved.outcome,
+      message: describeReservationRefusal(request.resumeProviderSessionId, reserved.outcome),
+    };
+  }
+  const { claim, ownerInstanceId } = reserved.reservation;
   if (claim === null) {
     // A keyed reservation always allocates a generation, so this is the shape a
     // claim-less answer has to be given: refusing costs nothing, because a
@@ -247,7 +285,27 @@ export async function reserveAdapterOwnedStart(
       message: `Provider session ${request.resumeProviderSessionId} was reserved without a claim, so this start has no ownership anchor`,
     };
   }
-  return { kind: 'reserved', reservation: { agentId: request.agentId, claimToken: claim.claimToken } };
+  if (ownerInstanceId !== request.ownerInstanceId || claim.ownerInstanceId !== ownerInstanceId) {
+    await bus.requestOptional(SessionSubjects.ownership.release, {
+      agentId: request.agentId,
+      claimToken: claim.claimToken,
+      disposition: 'released',
+    });
+    return {
+      kind: 'refused',
+      message:
+        `Provider session ${request.resumeProviderSessionId} reservation named runtime ${ownerInstanceId}, ` +
+        `claim named ${claim.ownerInstanceId ?? 'none'}, and adapter owner is ${request.ownerInstanceId}`,
+    };
+  }
+  return {
+    kind: 'reserved',
+    reservation: {
+      agentId: request.agentId,
+      claimToken: claim.claimToken,
+      ownerInstanceId,
+    },
+  };
 }
 
 /**
@@ -346,7 +404,11 @@ export async function releaseStartAcquisitions(deps: {
 }
 
 /** Bus and registry a start gives its acquisitions back through. */
-type StartAcquisitionDeps = PersistEmitDeps & { registry: StartAcquisitionRegistry };
+type StartAcquisitionDeps = PersistEmitDeps & {
+  /** Runtime incarnation hosting the adapter. */
+  ownerInstanceId: string;
+  registry: StartAcquisitionRegistry;
+};
 
 /**
  * Answer a refusal taken before anything reached the provider.
@@ -493,6 +555,7 @@ export async function acquireStartOwnership(
     sessionId,
     adapterId: deps.adapterId,
     adapterName: deps.name,
+    ownerInstanceId: deps.ownerInstanceId,
     resumeProviderSessionId: adapterSessionId,
   });
   if (outcome.kind === 'refused') {

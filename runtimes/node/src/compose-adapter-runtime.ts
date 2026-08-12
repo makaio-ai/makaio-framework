@@ -25,15 +25,14 @@ import { registerAdapterNameResolver } from './register-adapter-name-resolver.js
  *    are awaited during activation.
  * 2. {@link activateAdapterRuntimeIdentity} — call **after** `coordinator.startAll()`:
  *    registers the adapter-runtime identity handlers and the adapter-name
- *    resolver, which resolve `adapterName` to the deterministic adapter id that
- *    live `AIAdapter` instances filter `AdapterSubjects.startAgent` on.
+ *    resolver, which resolve local `adapterName` values to the registered live
+ *    adapter id that `AIAdapter` instances filter `AdapterSubjects.startAgent` on.
  *
  * The locality invariant this seam upholds: the `currentMachineId` passed to
  * {@link activateAdapterRuntimeIdentity} MUST be the same machine id the
- * coordinator injects as `extensionContextBase.machineId` (and therefore the
- * id `AdapterSubsystemService` and `SubagentService` derive adapter ids from).
- * If they diverge, `AdapterRuntimeSubjects.resolveId` yields an id no local
- * adapter listens on and `startAgent` silently falls through to the transport.
+ * coordinator injects as `extensionContextBase.machineId`. A local resolver
+ * then reads the adapter subsystem's live registry at request time; explicitly
+ * foreign requests remain deterministic until a targeted remote RPC exists.
  */
 
 /** Input for {@link prepareAdapterRuntime} (the pre-`startAll` phase). */
@@ -71,6 +70,24 @@ export interface ActivateAdapterRuntimeIdentityInput {
    * `extensionContextBase.machineId` (see the locality invariant above).
    */
   readonly currentMachineId: string;
+  /**
+   * Read the adapter subsystem's current live instance by driver name.
+   * Production composition roots must provide this authoritative resolver.
+   * Omit it only for lightweight compatibility hosts, which retain deterministic
+   * local derivation and cannot model liveness.
+   */
+  readonly resolveLiveAdapterId?: (adapterName: string) => string | undefined;
+  /** Resolve a current live identity by instance ID. */
+  readonly resolveLiveAdapterIdentity?: (
+    adapterId: string,
+  ) => { adapterId: string; adapterName: string; machineId: string; ownerInstanceId: string } | undefined;
+  /** Snapshot identities already live before handlers are installed. */
+  readonly listLiveAdapterIdentities?: () => Iterable<{
+    adapterId: string;
+    adapterName: string;
+    machineId: string;
+    ownerInstanceId: string;
+  }>;
   /**
    * Optional override for enumerating known adapter names. Defaults to querying
    * `AdapterSubsystemSubjects.listAdapterConfigs` on the bus, matching the host.
@@ -126,7 +143,7 @@ export function prepareAdapterRuntime(input: PrepareAdapterRuntimeInput): Prepar
  *
  * Call after `coordinator.startAll()` so that `CapabilityService` and the
  * adapter subsystem have registered their handlers.
- * @param input - Bus, the runtime machine id, and an optional name enumerator.
+ * @param input - Bus, runtime identity, local-live resolver, and optional name enumerator.
  * @returns A cleanup that tears both registrations down.
  */
 export function activateAdapterRuntimeIdentity(
@@ -141,7 +158,17 @@ export function activateAdapterRuntimeIdentity(
       return configs.map((config) => config.name);
     });
 
-  const identity = registerAdapterRuntimeIdentityHandlers(bus, { currentMachineId, listKnownAdapterNames });
+  const identity = registerAdapterRuntimeIdentityHandlers(bus, {
+    currentMachineId,
+    listKnownAdapterNames,
+    ...(input.resolveLiveAdapterId !== undefined && { resolveLiveAdapterId: input.resolveLiveAdapterId }),
+    ...(input.resolveLiveAdapterIdentity !== undefined && {
+      resolveLiveAdapterIdentity: input.resolveLiveAdapterIdentity,
+    }),
+    ...(input.listLiveAdapterIdentities !== undefined && {
+      listLiveAdapterIdentities: input.listLiveAdapterIdentities,
+    }),
+  });
   const unregisterNameResolver = registerAdapterNameResolver(bus);
 
   return {

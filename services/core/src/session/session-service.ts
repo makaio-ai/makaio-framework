@@ -4,6 +4,7 @@ import { KernelSubjects } from '@makaio/kernel';
 import { BaseService } from '@makaio/service-base';
 import { appendSessionLifecycleEvent, registerSessionLifecycleEventWriters } from './session-lifecycle-events.js';
 import { registerCoreSessionServiceHandlers } from './session-service-handlers-core.js';
+import type { OwnershipAuthorityHandle } from './ownership/index.js';
 import { TurnStorageSubjects } from './turns/index.js';
 
 /**
@@ -84,6 +85,23 @@ export interface MakaioSessionServiceOptions {
  * ```
  */
 export class MakaioSessionService extends BaseService {
+  private ownership: OwnershipAuthorityHandle | undefined;
+
+  /**
+   * Return the currently active ownership-authority incarnation.
+   *
+   * Read at adapter construction time rather than cached by the adapter
+   * subsystem, so reinitializing this service gives every subsequently created
+   * adapter the newly minted incarnation.
+   * @returns Active runtime-incarnation identity.
+   * @throws When the service has not initialized its authority.
+   */
+  public requireOwnershipInstanceId(): string {
+    const instanceId = this.ownership?.instanceId;
+    if (instanceId === undefined) throw new Error('Session ownership authority is not initialized');
+    return instanceId;
+  }
+
   /**
    * Creates a new MakaioSessionService instance.
    * @param bus - The event bus for inter-service communication
@@ -112,11 +130,24 @@ export class MakaioSessionService extends BaseService {
    * that do not register turn storage).
    */
   protected async onInit(): Promise<void> {
-    for (const cleanup of registerCoreSessionServiceHandlers({
+    const registered = registerCoreSessionServiceHandlers({
       bus: this.bus,
       ...(this.options.machineId !== undefined && { machineId: this.options.machineId }),
       ...(this.options.topology !== undefined && { topology: this.options.topology }),
-    })) {
+      // A clean BaseService may be initialized again after destroy. That is a
+      // new runtime incarnation: reusing the just-retired identity would make
+      // every generation it allocates immediately takeable by T3.
+      instanceId: crypto.randomUUID(),
+    });
+    this.ownership = registered.ownership;
+    // Initialization failure bypasses `onDestroy`; make the ordinary cleanup
+    // unwind close the authority as well. Normal destroy reaches the same
+    // idempotent close through `onDestroy` before handler cleanup begins.
+    this.addCleanup(async () => {
+      if (this.ownership === registered.ownership) this.ownership = undefined;
+      await registered.ownership.close();
+    });
+    for (const cleanup of registered.cleanups) {
       this.addCleanup(cleanup);
     }
     // Persist agent.added / branch.created lifecycle rows in every host that
@@ -124,6 +155,21 @@ export class MakaioSessionService extends BaseService {
     this.addCleanup(registerSessionLifecycleEventWriters(this.bus));
     this.addCleanup(this.scheduleOwnershipReconcile());
     await this.reconcileOrphanedTurns();
+  }
+
+  /**
+   * Retire this process only after the adapter subsystem's earlier teardown has
+   * published its aggregate evidence.
+   *
+   * Reverse dependency ordering destroys the adapter subsystem first. The
+   * authority then closes admission, drains operations already admitted, and
+   * stamps retirement only when that published aggregate proves teardown was
+   * observed.
+   */
+  protected override async onDestroy(): Promise<void> {
+    const ownership = this.ownership;
+    this.ownership = undefined;
+    await ownership?.close();
   }
 
   /**

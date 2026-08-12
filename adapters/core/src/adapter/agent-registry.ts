@@ -14,9 +14,26 @@ import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
 import type { AgentTeardownArbiter } from '../agent/agent-teardown-arbiter.js';
 import { closeConnectorRuntime } from '../agent/connector-runtime.js';
-import type { TeardownReport } from '../connector/teardown-report.js';
+import { aggregateTeardownReports, type TeardownReport } from '../connector/teardown-report.js';
 import type { AgentUsageTotals } from './types.js';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import type { CallerSettlementAckRefusal } from '@makaio/contracts';
+import { releaseProviderKeyPublication, type ProviderKeyPublication } from './adapter-provider-key-publication.js';
+
+/** Caller-owned generation waiting for its durable-settlement acknowledgement. */
+export interface PendingCallerSettlement {
+  /** Opaque generation token returned to the caller. */
+  readonly token: string;
+  /** Provider-key publication gate held closed until acknowledgement. */
+  readonly publication: ProviderKeyPublication;
+  /** Provider session the caller settled, when the provider confirmed one. */
+  readonly adapterSessionId: string | undefined;
+}
+
+/** Result of acknowledging a caller-owned generation in this registry. */
+export type CallerSettlementAckResult =
+  | { readonly acknowledged: true }
+  | { readonly acknowledged: false; readonly reason: CallerSettlementAckRefusal };
 
 /**
  * Registry entry consolidating agent instance with session info and usage totals.
@@ -29,6 +46,8 @@ export interface ActiveAgentEntry<
   TConnector extends AIAgentConnector<TBus> = AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector> = AIAgent<TBus, TConnector>,
 > {
+  /** Runtime incarnation that owns this live entry. */
+  readonly ownerInstanceId: string;
   /** The agent instance. */
   agent: TAgent;
   /** Makaio session ID. */
@@ -48,6 +67,10 @@ export interface ActiveAgentEntry<
   adapterSessionId: string | undefined;
   /** Cumulative usage totals for this agent. */
   usage: AgentUsageTotals;
+  /** Whether the caller, rather than this adapter, owns the agent row. */
+  callerOwnsAgentRow: boolean;
+  /** Exact caller-owned generation still awaiting durable-settlement acknowledgement. */
+  pendingCallerSettlement?: PendingCallerSettlement | undefined;
 }
 
 /**
@@ -117,6 +140,8 @@ export interface ActiveAgentRegistryConfig {
   globalBus: IMakaioBus;
   /** Adapter name for error-log context. */
   adapterName: string;
+  /** Runtime incarnation that owns every entry in this registry. */
+  ownerInstanceId: string;
   /**
    * Adapter-instance arbiter between teardowns and connector replacements.
    *
@@ -141,6 +166,8 @@ export interface AgentDisposalReport extends TeardownReport {
 
 /** Options a teardown entry point accepts from the request that drove it. */
 export interface AgentTeardownOptions {
+  /** Whether this teardown must leave the durable agent row untouched. */
+  readonly responsibility?: 'connector-only' | undefined;
   /**
    * Absolute deadline of the request driving this teardown, when it has one.
    *
@@ -194,14 +221,28 @@ export class ActiveAgentRegistry<
    * on every failure path.
    */
   private readonly pendingAgentIdentityClaims = new Set<string>();
+  /** Started-but-not-yet-settled operations that instance shutdown must drain. */
+  private readonly startFlights = new Set<Promise<void>>();
+  /** Acknowledgements that won arbitration and therefore precede teardown. */
+  private readonly settlementAckFlights = new Map<
+    string,
+    { readonly token: string; readonly promise: Promise<CallerSettlementAckResult> }
+  >();
+  /** Cumulative teardown fact for identities this runtime has already stopped. */
+  private readonly terminalTeardownReports = new Map<string, TeardownReport>();
+  /** Admission phase for this reusable adapter instance. */
+  private lifecycleState: 'open' | 'closing' | 'closed' = 'open';
   private readonly globalBus: IMakaioBus;
   private readonly adapterName: string;
+  /** Runtime incarnation stamped onto every registered entry. */
+  private readonly ownerInstanceId: string;
   /** Arbiter owning the teardown and connector-replacement maps for this instance. */
   private readonly arbiter: AgentTeardownArbiter;
 
   public constructor(config: ActiveAgentRegistryConfig) {
     this.globalBus = config.globalBus;
     this.adapterName = config.adapterName;
+    this.ownerInstanceId = config.ownerInstanceId;
     this.arbiter = config.arbiter;
   }
 
@@ -269,6 +310,133 @@ export class ActiveAgentRegistry<
   }
 
   /**
+   * Admit one start and return its exact completion release.
+   *
+   * The registry owns this admission because it is also the only place that can
+   * make instance close wait for an unregistered runtime. The release is
+   * idempotent so every start path can use one `finally` without coupling its
+   * success and failure cleanup to shutdown bookkeeping.
+   * @returns A completion release, or `undefined` after instance close begins
+   */
+  public beginStart(): (() => void) | undefined {
+    if (this.lifecycleState !== 'open') return undefined;
+    let release: (() => void) | undefined;
+    const flight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.startFlights.add(flight);
+    return () => {
+      if (release === undefined) return;
+      release();
+      release = undefined;
+      this.startFlights.delete(flight);
+    };
+  }
+
+  /**
+   * Reopen start admission after a fully settled shutdown.
+   * @throws When shutdown has not settled or lifecycle work still owns runtimes
+   */
+  public reopen(): void {
+    if (this.lifecycleState === 'open') return;
+    if (this.lifecycleState !== 'closed' || this.arbiter.hasLifecycleWorkInFlight()) {
+      throw new Error(`ActiveAgentRegistry ${this.adapterName} cannot reopen before shutdown fully settles`);
+    }
+    this.lifecycleState = 'open';
+  }
+
+  /**
+   * Acknowledge one exact caller-owned generation.
+   *
+   * The admission prologue is synchronous. An already installed teardown wins
+   * and refuses; an admitted acknowledgement is installed before its first
+   * storage await, so a later teardown sees and waits for it.
+   * @param agentId - Hosted agent whose settlement completed
+   * @param token - Opaque generation token returned by its dispatch
+   * @param recoveryOwnsDurableRow - Whether ownership finalizes the recovery row after acknowledgement
+   * @returns Whether this exact hosted generation accepted the acknowledgement
+   */
+  public acknowledgeCallerSettlement(
+    agentId: string,
+    token: string,
+    recoveryOwnsDurableRow = false,
+  ): Promise<CallerSettlementAckResult> {
+    const entry = this.entries.get(agentId);
+    if (entry === undefined) return Promise.resolve({ acknowledged: false, reason: 'not-hosted' });
+    const pending = entry.pendingCallerSettlement;
+    if (pending === undefined || pending.token !== token) {
+      return Promise.resolve({ acknowledged: false, reason: 'stale-token' });
+    }
+    const joined = this.settlementAckFlights.get(agentId);
+    if (joined !== undefined) {
+      return joined.token === token ? joined.promise : Promise.resolve({ acknowledged: false, reason: 'stale-token' });
+    }
+    if (this.arbiter.hasTeardownInFlight(agentId)) {
+      return Promise.resolve({ acknowledged: false, reason: 'teardown-in-flight' });
+    }
+
+    let resolveFlight!: (result: CallerSettlementAckResult) => void;
+    let rejectFlight!: (error: unknown) => void;
+    const promise = new Promise<CallerSettlementAckResult>((resolve, reject) => {
+      resolveFlight = resolve;
+      rejectFlight = reject;
+    });
+    this.settlementAckFlights.set(agentId, { token, promise });
+    const retireFlight = (): void => {
+      const current = this.settlementAckFlights.get(agentId);
+      if (current?.promise === promise) this.settlementAckFlights.delete(agentId);
+    };
+    void promise.then(retireFlight, retireFlight);
+    void this.finishCallerSettlementAck(agentId, entry, pending, recoveryOwnsDurableRow).then(
+      resolveFlight,
+      rejectFlight,
+    );
+    return promise;
+  }
+
+  /**
+   * Commit an admitted acknowledgement while teardown is ordered behind it.
+   * @param agentId - Hosted agent being acknowledged
+   * @param entry - Exact registry entry admitted by the synchronous prologue
+   * @param pending - Exact pending generation admitted by the prologue
+   * @param recoveryOwnsDurableRow - Whether this acknowledgement must skip its ordinary status transition
+   * @returns Acknowledgement result
+   */
+  private async finishCallerSettlementAck(
+    agentId: string,
+    entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
+    pending: PendingCallerSettlement,
+    recoveryOwnsDurableRow: boolean,
+  ): Promise<CallerSettlementAckResult> {
+    if (!recoveryOwnsDurableRow) {
+      let transitioned;
+      try {
+        transitioned = await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, {
+          agentId,
+          status: 'idle',
+          expectedStatus: ['starting', 'dead'],
+        });
+      } catch (error) {
+        if (entry.pendingCallerSettlement === pending) entry.pendingCallerSettlement = undefined;
+        throw error;
+      }
+      if (!transitioned.handled || !transitioned.data.transitioned) {
+        if (entry.pendingCallerSettlement === pending) entry.pendingCallerSettlement = undefined;
+        return { acknowledged: false, reason: 'status-refused' };
+      }
+    }
+    if (this.entries.get(agentId) !== entry || entry.pendingCallerSettlement !== pending) {
+      return { acknowledged: false, reason: 'not-hosted' };
+    }
+
+    releaseProviderKeyPublication(pending.publication);
+    entry.agent.acknowledgeCallerSettledAdapterSession(pending.adapterSessionId);
+    entry.pendingCallerSettlement = undefined;
+    entry.callerOwnsAgentRow = false;
+    return { acknowledged: true };
+  }
+
+  /**
    * Check whether a provider-native session ID is held by a registered
    * entry or a pending claim.
    *
@@ -317,10 +485,15 @@ export class ActiveAgentRegistry<
    */
   public set(
     agentId: string,
-    entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
+    entry: Omit<ActiveAgentEntry<TBus, TConnector, TAgent>, 'callerOwnsAgentRow' | 'ownerInstanceId'> &
+      Partial<Pick<ActiveAgentEntry<TBus, TConnector, TAgent>, 'callerOwnsAgentRow'>>,
     claimedAdapterSessionId?: string,
   ): void {
-    this.entries.set(agentId, entry);
+    this.entries.set(agentId, {
+      ...entry,
+      ownerInstanceId: this.ownerInstanceId,
+      callerOwnsAgentRow: entry.callerOwnsAgentRow === true,
+    });
     // The identity claim is settled unconditionally: the entry that now holds
     // the identity supersedes any claim on it, and a start that claimed none
     // deletes nothing.
@@ -355,6 +528,7 @@ export class ActiveAgentRegistry<
     this.entries.clear();
     this.pendingAdapterSessionClaims.clear();
     this.pendingAgentIdentityClaims.clear();
+    this.terminalTeardownReports.clear();
   }
 
   /**
@@ -413,6 +587,8 @@ export class ActiveAgentRegistry<
         detail: `Agent ${agentId} has an unsettled connector replacement in flight that owns its runtimes; nothing was closed.`,
       };
     }
+    const terminal = this.terminalTeardownReports.get(agentId);
+    if (terminal !== undefined) return { found: false, ...terminal };
     return { found: false, evidence: 'released' };
   }
 
@@ -433,8 +609,16 @@ export class ActiveAgentRegistry<
     agentId: string,
     options: AgentTeardownOptions & { emitSessionClosed?: boolean | undefined },
   ): Promise<TeardownReport> {
+    const acknowledgement = this.settlementAckFlights.get(agentId);
+    // The acknowledgement caller receives its own failure. Teardown waits for
+    // the arbitration region to end but must still close when that region failed.
+    if (acknowledgement !== undefined) await acknowledgement.promise.catch(() => undefined);
     try {
-      return await this.arbiter.runTeardown(agentId, {
+      // `runTeardown()` installs synchronously, so this read identifies the one
+      // wrapper that owns terminal accounting for this arbiter flight. Joiners
+      // receive its report but must not add the same observation to the ledger.
+      const startedFlight = !this.arbiter.hasTeardownInFlight(agentId);
+      const report = await this.arbiter.runTeardown(agentId, {
         deadline: options.deadline,
         closeCurrent: async () => {
           const entry = this.entries.get(agentId);
@@ -449,6 +633,14 @@ export class ActiveAgentRegistry<
         // nothing is registered for has no wiring to give up.
         releaseIdentity: () => this.entries.get(agentId)?.agent.releaseIdentityWiring(),
       });
+      // Expiry hands both runtimes to the still-live replacement. Its `unknown`
+      // is an in-flight state, not terminal close evidence; the replacement's
+      // eventual settlement remains the authority for what actually ended.
+      if (!startedFlight || this.arbiter.hasReplacementInFlight(agentId)) return report;
+      const previous = this.terminalTeardownReports.get(agentId);
+      const cumulative = previous === undefined ? report : aggregateTeardownReports([previous, report]);
+      this.terminalTeardownReports.set(agentId, cumulative);
+      return cumulative;
     } finally {
       // **Behind the whole flight, not behind the close alone.** Keeping the entry
       // for the duration of the close is what lets a reentrant eviction join
@@ -475,14 +667,19 @@ export class ActiveAgentRegistry<
     agentId: string,
     options: AgentTeardownOptions & { emitSessionClosed?: boolean } = {},
   ): Promise<TeardownReport> {
+    const acknowledgement = this.settlementAckFlights.get(agentId);
+    if (acknowledgement !== undefined) await acknowledgement.promise.catch(() => undefined);
+    const callerOwnsAgentRow = this.getEntryCallerOwnsAgentRow(agentId);
     const report = await this.teardownFlight(agentId, options);
-    try {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
-    } catch (error) {
-      if (report.closeError === undefined) {
-        throw error;
+    if (!callerOwnsAgentRow) {
+      try {
+        await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
+      } catch (error) {
+        if (report.closeError === undefined) {
+          throw error;
+        }
+        console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as dead:`, error);
       }
-      console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as dead:`, error);
     }
     if (report.closeError !== undefined) {
       throw report.closeError;
@@ -537,10 +734,12 @@ export class ActiveAgentRegistry<
     // that flight instead of being reported.
     if (!this.hasTeardownSubject(agentId)) return this.reportWithNothingToTearDown(agentId);
     const report = await this.teardownFlight(agentId, options);
-    try {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
-    } catch (error) {
-      console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as disposed:`, error);
+    if (options.responsibility !== 'connector-only') {
+      try {
+        await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+      } catch (error) {
+        console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as disposed:`, error);
+      }
     }
     return { found: true, ...report };
   }
@@ -552,13 +751,55 @@ export class ActiveAgentRegistry<
    * flight: closing the agents directly is what let an instance shutdown race a
    * concurrent stop into two closes of one connector. No status is written — a
    * normal process shutdown must not mark every agent it owned terminally gone.
-   * @returns One report per agent that was live, in iteration order
+   * @returns The weakest report for every teardown this shutdown awaited, plus
+   *   retained terminal reports for agents stopped before shutdown
    */
   public async closeAll(): Promise<readonly TeardownReport[]> {
-    const agentIds = [...this.entries.keys()];
-    const reports = await Promise.all(agentIds.map((agentId) => this.teardownFlight(agentId, {})));
+    this.lifecycleState = 'closing';
+    await Promise.all([...this.startFlights]);
+    // A bounded teardown can expire and remove its entry while a replacement
+    // still owns both runtimes. Those identities have no closeable subject, but
+    // shutdown still needs to report their transient unknown observation.
+    const agentIds = new Set([...this.entries.keys(), ...this.arbiter.replacementAgentIdsInFlight()]);
+    // Start with terminal observations from earlier teardown entry points. A
+    // replacement-wait expiry deliberately does not enter that ledger: it is a
+    // transient state until the replacement settles. It is nevertheless evidence
+    // this shutdown awaited, so retain each flight result below even when it did
+    // not become terminal.
+    const reportsByAgent = new Map(this.terminalTeardownReports);
+    await Promise.all(
+      [...agentIds].map(async (agentId) => {
+        const retained = reportsByAgent.get(agentId);
+        const report = this.hasTeardownSubject(agentId)
+          ? await this.teardownFlight(agentId, {})
+          : this.reportWithNothingToTearDown(agentId);
+        const terminal = this.terminalTeardownReports.get(agentId);
+        // A completed terminal flight already merged its predecessor into the
+        // ledger. Only an unrecorded transient result needs merging here; doing
+        // both would duplicate weak-detail diagnostics in the shutdown report.
+        reportsByAgent.set(
+          agentId,
+          terminal !== undefined && terminal !== retained
+            ? terminal
+            : retained === undefined
+              ? report
+              : aggregateTeardownReports([retained, report]),
+        );
+      }),
+    );
+    const reports = [...reportsByAgent.values()];
     this.clear();
+    this.lifecycleState = 'closed';
     return reports;
+  }
+
+  /**
+   * Read ownership before the teardown flight removes the entry.
+   * @param agentId - Agent whose row ownership is needed
+   * @returns Whether its row belongs to the caller
+   */
+  private getEntryCallerOwnsAgentRow(agentId: string): boolean {
+    return this.entries.get(agentId)?.callerOwnsAgentRow ?? false;
   }
 
   /**

@@ -11,6 +11,8 @@ const IDENTITY = {
   agentId: 'agent-1',
   adapterId: 'adapter-1',
   adapterName: 'claude-code',
+  machineId: 'test-machine',
+  ownerInstanceId: 'test-owner',
   sessionId: 'session-1',
 };
 
@@ -54,6 +56,8 @@ describe('AdapterSessionMovedSchema', () => {
       agentId: IDENTITY.agentId,
       adapterId: IDENTITY.adapterId,
       adapterName: IDENTITY.adapterName,
+      machineId: IDENTITY.machineId,
+      ownerInstanceId: IDENTITY.ownerInstanceId,
       adapterSessionId: 'provider-1',
       confirmed: true,
     });

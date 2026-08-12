@@ -152,4 +152,15 @@ describe('registerDrizzleAgentStorage.updateRuntime', () => {
     expect(agent?.allowedDirectories).toEqual(['/tmp/old']);
     expect(agent?.status).toBe('idle');
   });
+
+  it('updates and round-trips the exact runtime owner pair', async () => {
+    const result = await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      agentId: 'runtime-test',
+      runtimeOwner: { machineId: 'machine-1', instanceId: 'instance-1' },
+    });
+
+    expect(result.success).toBe(true);
+    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, { agentId: 'runtime-test' });
+    expect(agent?.runtimeOwner).toEqual({ machineId: 'machine-1', instanceId: 'instance-1' });
+  });
 });

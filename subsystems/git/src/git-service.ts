@@ -34,6 +34,7 @@ import { computeFingerprint } from './git-fingerprint.js';
 import { resolveLogRepoPath } from './log-repo-path.js';
 import { normalizeLogRequest } from './log-request-normalizer.js';
 import { resolveInvalidationRoot } from './invalidation-root.js';
+import { deleteBranch } from './commands/branch.js';
 
 /**
  * GitService provides git repository functionality via bus requests.
@@ -128,6 +129,14 @@ export class GitService extends BaseService {
       const git = getGit(ctx.payload.repoPath);
       const result = await getBranch(git);
       ctx.setResult(result);
+    });
+
+    // localBranchExists handler — uncached and host-owned
+    this.registerHandler(GitSubjects.localBranchExists, async (ctx) => {
+      this.requireHostOwnedOrigin(ctx, 'localBranchExists');
+      const git = getGit(ctx.payload.repoPath);
+      const branches = await git.branchLocal();
+      ctx.setResult({ exists: branches.all.includes(ctx.payload.name) });
     });
 
     // getStatus handler
@@ -292,6 +301,9 @@ export class GitService extends BaseService {
         baseBranch: ctx.payload.baseBranch,
         createBranch: ctx.payload.createBranch,
       });
+      if (ctx.payload.createBranch) {
+        await this.invalidateLogCache(ctx.payload.repoPath);
+      }
       ctx.setResult(result);
     });
 
@@ -303,7 +315,23 @@ export class GitService extends BaseService {
         force: ctx.payload.force,
         deleteBranch: ctx.payload.deleteBranch,
       });
+      if (ctx.payload.deleteBranch) {
+        await this.invalidateLogCache(ctx.payload.repoPath);
+      }
       ctx.setResult(result);
+    });
+
+    // deleteBranch handler — mutates a local ref, host-owned
+    this.registerHandler(GitSubjects.deleteBranch, async (ctx) => {
+      this.requireHostOwnedOrigin(ctx, 'deleteBranch');
+      const repoPath = this.resolveRepoPath(ctx.payload);
+      const git = getGit(repoPath);
+      try {
+        const result = await deleteBranch(git, ctx.payload.name, ctx.payload.force);
+        ctx.setResult({ success: result.success, error: result.error });
+      } finally {
+        await this.invalidateLogCache(repoPath);
+      }
     });
 
     // stage handler — mutates git index, host-owned
@@ -369,8 +397,15 @@ export class GitService extends BaseService {
    * @param repoPath - Repository path to invalidate
    */
   private async invalidateLogCache(repoPath: string): Promise<void> {
-    const invalidationRoot = await resolveInvalidationRoot(repoPath);
-    this.logCache.invalidate(invalidationRoot);
+    try {
+      const invalidationRoot = await resolveInvalidationRoot(repoPath);
+      this.logCache.invalidate(invalidationRoot);
+    } catch (error) {
+      // An attempted ref mutation must never leave a cache entry whose repository
+      // root could not be resolved; evicting all bounded entries preserves correctness.
+      this.logCache.clear();
+      console.warn('[GitService] Cleared log cache after failing to resolve invalidation root', { repoPath, error });
+    }
   }
 
   /**

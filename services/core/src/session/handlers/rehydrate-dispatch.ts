@@ -11,6 +11,8 @@ export interface RehydrateDispatchRequest {
   readonly agentId: string;
   /** Live adapter instance the rehydrate is addressed to. */
   readonly adapterId: string;
+  /** Exact runtime authority incarnation the reservation selected. */
+  readonly ownerInstanceId: string;
   /** Working directory the replacement connector runs in. */
   readonly cwd?: string;
   /** Model the replacement connector runs. */
@@ -52,6 +54,7 @@ export async function dispatchAgentRehydrate(
 ): Promise<RehydrateAgentResult> {
   return bus.request(AdapterSubjects.rehydrateAgent, {
     adapterId: request.adapterId,
+    ownerInstanceId: request.ownerInstanceId,
     agentId: request.agentId,
     ...(request.cwd !== undefined && { cwd: request.cwd }),
     ...(request.model !== undefined && { model: request.model }),

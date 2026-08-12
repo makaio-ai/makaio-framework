@@ -4,21 +4,16 @@ import { AgentRoleSchema } from './primitives.js';
 import {
   AdapterSessionClaimDispositionSchema,
   AdapterSessionClaimRecordSchema,
+  OwnershipTopologySchema,
+  SessionOwnershipRecoveryConflictSchema,
+  SessionOwnershipRecoveryCurrencyChangedSchema,
+  SessionOwnershipRecoveryGuardSchema,
+  SessionOwnershipRecoveryReservationSchema,
   SessionOwnershipReleaseAgentClaimsResponseSchema,
   SessionOwnershipSettleMovementResponseSchema,
 } from '../session-ownership-storage-namespace.js';
 
-/**
- * How many runtime processes may own claims on one machine.
- *
- * Only `machine-exclusive` licenses "no adapter answers for this instance" as
- * evidence that an owner is gone: with peers on the same machine, an
- * unanswered probe means "not mine", never "nobody's". The default is
- * `shared-machine` everywhere, because neither the desktop runtime nor the
- * isolated workflow runtime can prove exclusivity while workflow workers and
- * relay peers may host adapters of their own.
- */
-export const OwnershipTopologySchema = z.enum(['machine-exclusive', 'shared-machine']);
+export { OwnershipTopologySchema };
 
 /** {@inheritDoc OwnershipTopologySchema} */
 export type OwnershipTopology = z.infer<typeof OwnershipTopologySchema>;
@@ -48,6 +43,8 @@ export const SessionOwnershipPrincipalSchema = z.object({
   adapterId: z.string(),
   /** Adapter type name, carried onto any claim taken for diagnostics. */
   adapterName: z.string(),
+  /** Exact authority incarnation that owns the connector this act addresses. */
+  ownerInstanceId: z.string(),
   /**
    * Machine identity override.
    *
@@ -85,6 +82,12 @@ export const SessionOwnershipReserveStartServiceRequestSchema = SessionOwnership
    * the provider will mint its own identity.
    */
   resumeProviderSessionId: z.string().nullable(),
+  /** Caller-minted identity for the reservation generation. */
+  claimToken: z.string(),
+  /** Atomic recovery snapshot; omitted for ordinary starts. */
+  recoveryGuard: SessionOwnershipRecoveryGuardSchema.optional(),
+  /** Opaque recovery-attempt fence minted before the reservation. */
+  recoveryAttemptId: z.string().optional(),
   /**
    * Lead the caller observed, compare-and-swap style; `null` means "no lead
    * yet".
@@ -103,6 +106,20 @@ export const SessionOwnershipReserveStartServiceRequestSchema = SessionOwnership
       message: "expectedLeadAgentId is required when role is 'lead'",
     });
   }
+  if (value.recoveryGuard !== undefined && value.role !== 'member') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['recoveryGuard'],
+      message: "recoveryGuard is only valid when role is 'member'",
+    });
+  }
+  if ((value.recoveryGuard === undefined) !== (value.recoveryAttemptId === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['recoveryAttemptId'],
+      message: 'recoveryAttemptId is required exactly for a guarded recovery reservation',
+    });
+  }
 });
 
 /** {@inheritDoc SessionOwnershipReserveStartServiceRequestSchema} */
@@ -111,25 +128,26 @@ export type SessionOwnershipReserveStartServiceRequest = z.infer<
 >;
 
 /**
- * What a committed reservation gives the caller to act — and to roll back — on.
+ * Validate and normalize a start reservation at the service trust boundary.
+ * @param value - Untrusted reservation request received by the authority.
+ * @returns The fully validated reservation request.
  */
-export const SessionOwnershipReservationSchema = z.object({
+export function normalizeSessionOwnershipReserveStartServiceRequest(
+  value: unknown,
+): SessionOwnershipReserveStartServiceRequest {
+  return SessionOwnershipReserveStartServiceRequestSchema.parse(value);
+}
+
+/** Shared fields of both keyed and designation-only reservations. */
+const SessionOwnershipReservationBaseSchema = z.object({
   /** Agent the reservation was taken for. */
   agentId: z.string(),
   /** Session the reservation was taken in. */
   sessionId: z.string(),
-  /** Machine identity the authority decided under. */
-  machineId: z.string(),
   /** Adapter instance the reservation was taken against. */
   adapterId: z.string(),
-  /**
-   * Claim taken, or `null` for a keyless reservation.
-   *
-   * A rollback releases exactly this generation's token — never a fan-out,
-   * because the agent may hold a second generation from an unrelated in-flight
-   * movement.
-   */
-  claim: AdapterSessionClaimRecordSchema.nullable(),
+  /** Runtime authority incarnation the reserved dispatch must address. */
+  ownerInstanceId: z.string(),
   /** Whether this reservation moved the session's lead designation. */
   leadDesignated: z.boolean(),
   /**
@@ -139,7 +157,32 @@ export const SessionOwnershipReservationSchema = z.object({
    * never observed.
    */
   previousLeadAgentId: z.string().nullable(),
+  /** Attempt fence and exact preimage for a guarded recovery. */
+  recovery: SessionOwnershipRecoveryReservationSchema.optional(),
 });
+
+/**
+ * What a committed reservation gives the caller to act — and to roll back — on.
+ *
+ * A provider-session claim always carries the resolved machine identity that
+ * names its key. A designation-only reservation may not: its storage request
+ * uses an inert schema filler, which is not a runtime identity and must never
+ * be forwarded to a settlement or persisted as a runtime owner.
+ */
+export const SessionOwnershipReservationSchema = z.union([
+  SessionOwnershipReservationBaseSchema.extend({
+    /** Resolved machine identity of the claimed provider-session key. */
+    machineId: z.string(),
+    /** Claim taken for the provider-session key. */
+    claim: AdapterSessionClaimRecordSchema,
+  }),
+  SessionOwnershipReservationBaseSchema.extend({
+    /** Real authority machine when one was resolved for this keyless reservation. */
+    machineId: z.string().optional(),
+    /** Keyless reservations only designate; they never create a claim row. */
+    claim: z.null(),
+  }),
+]);
 
 /** {@inheritDoc SessionOwnershipReservationSchema} */
 export type SessionOwnershipReservation = z.infer<typeof SessionOwnershipReservationSchema>;
@@ -176,6 +219,12 @@ export const SessionOwnershipReserveStartServiceResponseSchema = z.discriminated
     outcome: z.literal('agent-disposed'),
   }),
   z.object({
+    /** The session was closed, archived, or remains only discovered. */
+    outcome: z.literal('session-not-active'),
+    /** Actual stored session status observed by the reserving transaction. */
+    status: z.enum(['closed', 'archived', 'discovered']),
+  }),
+  z.object({
     /** A row the reservation must reference does not exist. */
     outcome: z.literal('not-found'),
     /** Which referenced row is missing. */
@@ -189,6 +238,8 @@ export const SessionOwnershipReserveStartServiceResponseSchema = z.discriminated
      */
     outcome: z.literal('machine-identity-unavailable'),
   }),
+  SessionOwnershipRecoveryCurrencyChangedSchema,
+  SessionOwnershipRecoveryConflictSchema,
 ]);
 
 /** {@inheritDoc SessionOwnershipReserveStartServiceResponseSchema} */
@@ -303,7 +354,12 @@ export type SessionOwnershipReleaseServiceRequest = z.infer<typeof SessionOwners
  * storage predicate over the incumbent's own rows, and it never looks at a
  * claim's reconcile verdict or at an adapter probe.
  */
-export const SessionOwnershipReclaimReasonSchema = z.enum(['agent-gone', 'agent-disposed', 'adapter-instance-gone']);
+export const SessionOwnershipReclaimReasonSchema = z.enum([
+  'agent-gone',
+  'agent-disposed',
+  'adapter-instance-gone',
+  'owner-instance-retired',
+]);
 
 /** {@inheritDoc SessionOwnershipReclaimReasonSchema} */
 export type SessionOwnershipReclaimReason = z.infer<typeof SessionOwnershipReclaimReasonSchema>;

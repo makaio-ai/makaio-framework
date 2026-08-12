@@ -486,6 +486,8 @@ describe('AIAgent credential.change handler', () => {
       agentId: TEST_AGENT_ID,
       adapterId: 'test-adapter',
       adapterName: 'test',
+      machineId: 'test-machine',
+      ownerInstanceId: 'test-owner-instance',
       capabilities: [],
       nativeTools: [],
       adapterBus: mockBus,

@@ -258,7 +258,7 @@ describe('TmuxBackend exit evidence — a tmux that fails in a chosen way', () =
   // caller wired down through the options can. Parameterised over two budgets
   // so an implementation that hard-codes a value next to `execFileSync` fails
   // the second one on timing while satisfying the first.
-  it.each([250, 900])(
+  it.each([500, 1_200])(
     'bounds an unconfirmable kill by the wired command budget of %ims',
     async (commandTimeoutMs) => {
       const { proc, exits } = await spawnStubbed(commandTimeoutMs);

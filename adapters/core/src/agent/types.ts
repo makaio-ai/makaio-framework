@@ -247,6 +247,10 @@ export interface AIAgentConfig<
   TConnector extends AIAgentConnector<TBus> = AIAgentConnector<TBus>,
 > extends Omit<AgentIdentity, 'adapterSessionId'>,
     AgentRuntimeInput {
+  /** Stable machine identity of the adapter runtime hosting this agent. */
+  machineId: string;
+  /** Exact authority incarnation hosting this agent's adapter runtime. */
+  ownerInstanceId: string;
   /** Adapter-specific session identifier for multi-turn conversations */
   adapterSessionId?: string;
   /** Makaio session identifier */

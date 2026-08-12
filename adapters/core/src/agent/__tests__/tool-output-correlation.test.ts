@@ -14,6 +14,8 @@ class TestAgent extends AIAgent {
       agentId: 'test-agent',
       adapterId: 'test-adapter',
       adapterName: 'test',
+      machineId: 'test-machine',
+      ownerInstanceId: 'test-owner-instance',
       capabilities: [],
       nativeTools: [],
       adapterBus: mockBus,

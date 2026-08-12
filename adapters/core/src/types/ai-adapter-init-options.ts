@@ -32,8 +32,6 @@ export interface AIAdapterInitOptions {
   /** Provider-specific non-secret config (base URLs, defaults, etc.). Type explicitly in adapter implementations. */
   providerOptions?: unknown;
 
-  adapterId?: string;
-
   /**
    * Platform-provided defaults (cwd, env, etc.).
    * Lowest priority - overridden by request values.
@@ -57,4 +55,20 @@ export interface AIAdapterInitOptions {
   clientId?: string;
   /** Trusted non-serializable normalized auth preparer injected by the host. */
   prepareAuthRuntime?: AdapterAuthRuntimePreparer;
+}
+
+/**
+ * Host-injected options required to construct a live adapter runtime.
+ *
+ * `AIAdapterInitOptions` deliberately excludes runtime identity: callers may
+ * prepare user-facing defaults, but only the host may choose the authority
+ * incarnation that owns a live adapter.
+ */
+export interface AIAdapterRuntimeInitOptions extends AIAdapterInitOptions {
+  /** Per-adapter unique identifier assigned by the runtime. */
+  adapterId: string;
+  /** Stable machine identity hosting this adapter runtime. */
+  machineId: string;
+  /** Session-ownership authority incarnation hosting this adapter. */
+  ownerInstanceId: string;
 }

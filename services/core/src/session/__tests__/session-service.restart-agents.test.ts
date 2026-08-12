@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
+  AdapterNamespace,
   AdapterSubjects,
   SessionOwnershipStorageSubjects,
   SessionSubjects,
@@ -8,6 +9,7 @@ import {
 } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { callerOwnedSuccessFields, registerCallerSettlementAckHandler } from '../testing/caller-owned-adapter-stub.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { MakaioSessionService } from '../session-service.js';
 import { createTestAgent, registerMemorySessionBackends } from './shared.js';
@@ -52,9 +54,16 @@ describe('MakaioSessionService - restartAgents', () => {
 
   beforeEach(async () => {
     bus = createBusInstance();
+    bus.registerNamespace(AdapterNamespace);
     storageCleanups = registerMemorySessionBackends(bus);
     service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
     await service.init();
+    storageCleanups.push(
+      bus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (ctx) => {
+        ctx.setResult({ ...ctx.payload, ownerInstanceId: service.requireOwnershipInstanceId() });
+      }),
+      registerCallerSettlementAckHandler(bus),
+    );
   });
 
   afterEach(() => {
@@ -90,7 +99,7 @@ describe('MakaioSessionService - restartAgents', () => {
     }> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
@@ -131,12 +140,8 @@ describe('MakaioSessionService - restartAgents', () => {
       status: 'dead',
     });
 
-    bus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
-      await bus.request(AgentStorageSubjects.updateStatus, {
-        agentId: ctx.payload.agentId,
-        status: 'idle',
-      });
-      ctx.setResult({ success: true });
+    bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     let setCallsDuringRestart = 0;
     bus.on(AgentStorageSubjects.set, (ctx) => {
@@ -173,7 +178,7 @@ describe('MakaioSessionService - restartAgents', () => {
       if (ctx.payload.agentId === 'agent-fails') {
         throw new Error('adapter refused rehydrate');
       }
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
@@ -201,9 +206,16 @@ describe('MakaioSessionService - restartAgents with locality', () => {
 
   beforeEach(async () => {
     bus = createBusInstance();
+    bus.registerNamespace(AdapterNamespace);
     storageCleanups = registerMemorySessionBackends(bus);
     service = new MakaioSessionService(bus, { machineId: 'ownership-machine' });
     await service.init();
+    storageCleanups.push(
+      bus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (ctx) => {
+        ctx.setResult({ ...ctx.payload, ownerInstanceId: service.requireOwnershipInstanceId() });
+      }),
+      registerCallerSettlementAckHandler(bus),
+    );
   });
 
   afterEach(() => {
@@ -234,14 +246,13 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
       sessionId,
       machineId,
     });
-
     expect(result.results).toEqual([{ agentId: 'agent-native', adapterId: 'current-test-adapter', success: true }]);
     expect(rehydrateRequests).toHaveLength(1);
     expect(rehydrateRequests[0]).toEqual(
@@ -267,7 +278,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -298,7 +309,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -330,7 +341,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -381,7 +392,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -428,7 +439,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -470,7 +481,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -510,7 +521,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     // No machineId in payload — handler resolves it from runtime identity
@@ -546,7 +557,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     // No machineId in payload, no getMachineId handler → degrades to
@@ -594,7 +605,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
         agentId: ctx.payload.agentId,
         resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
       });
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -641,7 +652,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -673,7 +684,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId, machineId });
@@ -712,7 +723,7 @@ describe('MakaioSessionService - restartAgents with locality', () => {
     const rehydrateRequests: Array<Record<string, unknown>> = [];
     bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateRequests.push(ctx.payload);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -791,6 +802,7 @@ async function markSessionCurrencyMoved(
     sessionId,
     agentId,
     claimToken,
+    ownerInstance: { instanceId: `currency-fixture-owner-${agentId}` },
     designateLead: { expectedLeadAgentId: null },
   });
   if (claim.outcome !== 'claimed' || claim.claim === null) {

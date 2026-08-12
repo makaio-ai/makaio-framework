@@ -20,6 +20,7 @@ describe('SubagentService lifecycle projection', () => {
         success: true,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-1',
         sessionId: 'child-sess-1',
         messageId: 'msg-1',

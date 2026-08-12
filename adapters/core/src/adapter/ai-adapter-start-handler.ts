@@ -32,7 +32,6 @@ import { createUnresolvedProviderContext, normalizeMessageInput } from '../utils
 import {
   providerKeyIsPublishable,
   providerKeyPublicationFor,
-  releaseProviderKeyPublication,
   type ProviderKeyPublication,
 } from './adapter-provider-key-publication.js';
 import {
@@ -55,6 +54,25 @@ import {
 export const EPHEMERAL_CLEANUP_COMPLETION_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * Build the registry fields owned by the caller-settlement handshake.
+ * @param token - Opaque generation token, when this is a caller-owned start
+ * @param publication - Provider-key gate carried by the generation
+ * @param adapterSessionId - Provider session confirmed by the start
+ * @returns Registry fields for this ownership mode
+ */
+function callerSettlementRegistration(
+  token: string | undefined,
+  publication: ProviderKeyPublication,
+  adapterSessionId: string | undefined,
+) {
+  if (token === undefined) return { callerOwnsAgentRow: false };
+  return {
+    callerOwnsAgentRow: true,
+    pendingCallerSettlement: { token, publication, adapterSessionId },
+  };
+}
+
+/**
  * Dependencies required by the start-agent handler factory.
  * @typeParam TBus - Scoped bus type for adapter-specific events
  * @typeParam TConnector - Connector type bridging to the AI SDK
@@ -65,6 +83,10 @@ export interface StartAgentHandlerDeps<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 > {
+  /** Runtime incarnation hosting this adapter. */
+  ownerInstanceId: string;
+  /** Stable machine identity hosting this adapter, when composed by a host. */
+  machineId: string | undefined;
   /** Adapter instance identifier. */
   adapterId: string;
   /** Adapter type name. */
@@ -373,6 +395,7 @@ async function runStartAttempt<
   acquisitions: StartAcquisitions,
 ): Promise<{ result: StartAgentResponsePayload; messageHandle: MessageHandle | undefined }> {
   const { name, registry, globalBus, createAgent } = deps;
+  const settlementAckToken = callerOwnsAgentRow(payload) ? crypto.randomUUID() : undefined;
   // Absence is a closed configless state, never implicit native or ambient auth.
   const providerContext: ProviderContext =
     payload.providerContext === undefined
@@ -410,7 +433,17 @@ async function runStartAttempt<
   // target so the claim is settled even when the start did not end up on it: a
   // start that suppresses native resume abandons the armed target and the
   // connector mints its own provider session.
-  registry.set(agentId, { agent, sessionId, adapterSessionId, usage: createUsageBaseline() }, resumeAdapterSessionId);
+  registry.set(
+    agentId,
+    {
+      agent,
+      sessionId,
+      adapterSessionId,
+      usage: createUsageBaseline(),
+      ...callerSettlementRegistration(settlementAckToken, acquisitions.publication, adapterSessionId),
+    },
+    resumeAdapterSessionId,
+  );
   // Both process-local claims are settled by that registration, so a later
   // failure has nothing of theirs left to give back.
   acquisitions.claimedIdentity = false;
@@ -426,21 +459,16 @@ async function runStartAttempt<
     if (failure !== undefined) return { result: failure, messageHandle: undefined };
     await announceStartedAdapterSession(agent, adapterSessionId, acquisitions.publication);
   }
-  // **The hand-over is complete**: everything this start publishes has been
-  // published, and the key now travels to the caller in the response below. From
-  // here the agent's own routes may report it — see
-  // {@link releaseProviderKeyPublication} for what the remaining gap to the
-  // caller's settlement is and why the adapter cannot see it.
-  releaseProviderKeyPublication(acquisitions.publication);
-
   return {
     result: {
       success: true,
       agentId,
       adapterId: deps.adapterId,
+      ownerInstanceId: deps.ownerInstanceId,
       sessionId,
       adapterSessionId,
       ...(messageId !== undefined && { messageId }),
+      ...(settlementAckToken !== undefined && { settlementAckToken }),
     },
     messageHandle,
   };
@@ -569,50 +597,64 @@ export function createStartAgentHandler<
   return async function handleStartAgent(
     ctx: RequestContext<StartAgentRequestPayload, StartAgentResponsePayload>,
   ): Promise<void> {
-    const payload = ctx.payload;
-    const agentId = payload.agentId ?? crypto.randomUUID();
-
-    const collision = refuseAgentIdentityCollision(payload, agentId, registry);
-    if (collision !== undefined) {
-      ctx.setResult(collision);
+    if (ctx.payload.ownerInstanceId !== undefined && ctx.payload.ownerInstanceId !== deps.ownerInstanceId) return;
+    const endStart = registry.beginStart();
+    if (endStart === undefined) {
+      ctx.setResult({
+        success: false,
+        dispatch: 'not-dispatched',
+        message: `Adapter ${name} is closing and cannot start another agent`,
+      });
       return;
     }
-
-    // The one predicate the collision refusal claims under, read again rather
-    // than returned from it, so the two readings cannot drift apart — and read
-    // once here, because the claim this attempt holds and the gate it publishes
-    // under are two consequences of the same fact.
-    const callerOwnsRow = callerOwnsAgentRow(payload);
-    const acquisitions: StartAcquisitions = {
-      // Held exactly when the caller supplied the identity.
-      claimedIdentity: callerOwnsRow,
-      resumeAdapterSessionId: undefined,
-      reservation: undefined,
-      agentRowCreatedAt: undefined,
-      dispatched: false,
-      publication: providerKeyPublicationFor({
-        callerOwnsAgentRow: callerOwnsRow,
-        ...(payload.ephemeral !== undefined && { ephemeral: payload.ephemeral }),
-      }),
-    };
-
-    let attempt: { result: StartAgentResponsePayload; messageHandle: MessageHandle | undefined };
     try {
-      attempt = await runStartAttempt(deps, payload, agentId, acquisitions);
-    } catch (error) {
-      // The scope of this catch is exactly "failures with no modeled response":
-      // every outcome the attempt can describe answers for itself and has
-      // already given its acquisitions back.
-      await releaseStartAcquisitions({ globalBus, registry, agentId, ...acquisitions });
-      throw error;
-    }
+      const payload = ctx.payload;
+      const agentId = payload.agentId ?? crypto.randomUUID();
 
-    ctx.setResult(attempt.result);
+      const collision = refuseAgentIdentityCollision(payload, agentId, registry);
+      if (collision !== undefined) {
+        ctx.setResult(collision);
+        return;
+      }
 
-    if (payload.ephemeral && attempt.result.success) {
-      void cleanupEphemeralAgentAfterTurn(registry, agentId, name, attempt.messageHandle).catch((err) => {
-        console.warn(`[AIAdapter:${name}] Ephemeral agent cleanup failed:`, err);
-      });
+      // The one predicate the collision refusal claims under, read again rather
+      // than returned from it, so the two readings cannot drift apart — and read
+      // once here, because the claim this attempt holds and the gate it publishes
+      // under are two consequences of the same fact.
+      const callerOwnsRow = callerOwnsAgentRow(payload);
+      const acquisitions: StartAcquisitions = {
+        // Held exactly when the caller supplied the identity.
+        claimedIdentity: callerOwnsRow,
+        resumeAdapterSessionId: undefined,
+        reservation: undefined,
+        agentRowCreatedAt: undefined,
+        dispatched: false,
+        publication: providerKeyPublicationFor({
+          callerOwnsAgentRow: callerOwnsRow,
+          ...(payload.ephemeral !== undefined && { ephemeral: payload.ephemeral }),
+        }),
+      };
+
+      let attempt: { result: StartAgentResponsePayload; messageHandle: MessageHandle | undefined };
+      try {
+        attempt = await runStartAttempt(deps, payload, agentId, acquisitions);
+      } catch (error) {
+        // The scope of this catch is exactly "failures with no modeled response":
+        // every outcome the attempt can describe answers for itself and has
+        // already given its acquisitions back.
+        await releaseStartAcquisitions({ globalBus, registry, agentId, ...acquisitions });
+        throw error;
+      }
+
+      ctx.setResult(attempt.result);
+
+      if (payload.ephemeral && attempt.result.success) {
+        void cleanupEphemeralAgentAfterTurn(registry, agentId, name, attempt.messageHandle).catch((err) => {
+          console.warn(`[AIAdapter:${name}] Ephemeral agent cleanup failed:`, err);
+        });
+      }
+    } finally {
+      endStart();
     }
   };
 }

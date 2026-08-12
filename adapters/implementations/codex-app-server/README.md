@@ -15,7 +15,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
 
 // Using the factory function (recommended)
-const adapter = await createCodexAppServerAdapter();
+const adapter = await createCodexAppServerAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 
 const result = await MakaioBus.request(AdapterSubjects.startAgent, {
   adapterId: adapter.adapterId,
@@ -26,7 +26,7 @@ const result = await MakaioBus.request(AdapterSubjects.startAgent, {
 });
 
 // Or using the class directly
-const directAdapter = new CodexAppServerAdapter();
+const directAdapter = new CodexAppServerAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 await directAdapter.init();
 ```
 

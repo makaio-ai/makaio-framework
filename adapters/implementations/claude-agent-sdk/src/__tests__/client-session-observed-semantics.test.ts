@@ -181,6 +181,8 @@ async function makeAgent(opts: { sessionId?: string; clientId?: string } = {}): 
     globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'claude-agent-sdk',
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     agentId: 'agent-test',
     cwd: os.tmpdir(),
     model: 'claude-sonnet-4-20250514',

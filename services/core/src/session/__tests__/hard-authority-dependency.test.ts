@@ -30,6 +30,7 @@ import { KEYLESS_DESIGNATION_KEY } from '../ownership/lead-designation.js';
 import { MakaioSessionService } from '../session-service.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
+import { registerCallerSettlementAckHandler } from '../testing/caller-owned-adapter-stub.js';
 import { createTestAgent, createTestSession, registerMemorySessionBackends } from './shared.js';
 
 const MACHINE_ID = 'hard-dependency-machine';
@@ -57,6 +58,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
     startedProviderSessionId = 'provider-1';
     cleanups = [
       ...registerMemorySessionBackends(bus),
+      registerCallerSettlementAckHandler(bus),
       bus.on(AdapterSubjects.startAgent, (ctx) => {
         const agentId = ctx.payload.agentId ?? 'adapter-minted-agent';
         dispatchedStarts.push(agentId);
@@ -66,11 +68,17 @@ describe('the ownership authority is a hard dependency of every reserving start 
           adapterId: ctx.payload.adapterId,
           sessionId: ctx.payload.sessionId ?? 'unexpected-session',
           ...(startedProviderSessionId !== null && { adapterSessionId: startedProviderSessionId }),
+          ownerInstanceId: ctx.payload.ownerInstanceId ?? 'hard-dependency-owner',
+          settlementAckToken: `hard-dependency-start-${agentId}`,
         });
       }),
       bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         dispatchedRehydrates.push(ctx.payload.agentId);
-        ctx.setResult({ success: true });
+        ctx.setResult({
+          success: true,
+          ownerInstanceId: ctx.payload.ownerInstanceId,
+          settlementAckToken: `hard-dependency-rehydrate-${ctx.payload.agentId}`,
+        });
       }),
     ];
   });
@@ -88,9 +96,10 @@ describe('the ownership authority is a hard dependency of every reserving start 
    *   for the host that has none — the condition case 86 separates from an
    *   absent authority.
    */
-  async function composeAuthority(machineId?: string): Promise<void> {
+  async function composeAuthority(machineId?: string): Promise<MakaioSessionService> {
     service = new MakaioSessionService(bus, { ...(machineId !== undefined && { machineId }) });
     await service.init();
+    return service;
   }
 
   /**
@@ -145,6 +154,14 @@ describe('the ownership authority is a hard dependency of every reserving start 
       bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
         ctx.setResult({ adapterId: ADAPTER_ID });
       }),
+      bus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (ctx) => {
+        ctx.setResult({
+          adapterId: ADAPTER_ID,
+          adapterName: ctx.payload.adapterName,
+          machineId: ctx.payload.machineId,
+          ownerInstanceId: service?.requireOwnershipInstanceId() ?? 'hard-dependency-owner',
+        });
+      }),
     );
   }
 
@@ -171,13 +188,19 @@ describe('the ownership authority is a hard dependency of every reserving start 
   /**
    * Run one fresh lead start against whatever this host composed.
    * @param sessionId - Session to start the lead into.
+   * @param machineId - Machine to target; an empty value probes the runtime boundary.
    * @returns Whatever the start decided.
    */
-  function startLead(sessionId: string): ReturnType<typeof startLeadAgent> {
+  function startLead(sessionId: string, machineId = MACHINE_ID): ReturnType<typeof startLeadAgent> {
     return startLeadAgent(bus, {
       sessionId,
-      instance: { adapterId: ADAPTER_ID, machineId: MACHINE_ID },
+      instance: {
+        adapterId: ADAPTER_ID,
+        machineId,
+        ownerInstanceId: service?.requireOwnershipInstanceId() ?? 'hard-dependency-owner',
+      },
       adapterName: ADAPTER_NAME,
+      leadTransition: { kind: 'fresh' },
       expectedLeadAgentId: null,
       startRequest: { adapterId: ADAPTER_ID, sessionId, role: 'lead' },
     });
@@ -229,9 +252,9 @@ describe('the ownership authority is a hard dependency of every reserving start 
     expect(agent?.adapterId).toBe(ADAPTER_ID);
   });
 
-  it('reserves a fresh lead start under the sentinel when the authority has no machine identity (case 86, Path A)', async () => {
+  it('uses the selected machine as the runtime owner when the authority designates under its sentinel (case 86, Path A)', async () => {
     const sessionId = 'no-machine-identity-fresh-start';
-    await composeAuthority();
+    const authority = await composeAuthority();
     // An idle start, so the case is about the reservation and nothing else: a
     // start that *does* report a provider session goes on to settle currency,
     // and a settlement is keyed and therefore genuinely needs an identity.
@@ -252,6 +275,23 @@ describe('the ownership authority is a hard dependency of every reserving start 
     const agents = await loadAgents(sessionId);
     expect(agents).toHaveLength(1);
     expect(agents[0]?.status).toBe('idle');
+    expect(agents[0]?.runtimeOwner).toEqual({
+      machineId: MACHINE_ID,
+      instanceId: authority.requireOwnershipInstanceId(),
+    });
+  });
+
+  it('refuses an unscoped fresh lead start before it reserves, persists, or dispatches', async () => {
+    const sessionId = 'no-machine-identity-keyed-settlement';
+    await composeAuthority();
+    await bus.request(SessionSubjects.create, { sessionId });
+
+    await expect(startLead(sessionId, '')).rejects.toMatchObject({ code: 'start-failed' });
+
+    expect(dispatchedStarts).toEqual([]);
+    expect(await loadClaims(KEYLESS_DESIGNATION_KEY.machineId)).toEqual([]);
+    const agents = await loadAgents(sessionId);
+    expect(agents).toEqual([]);
   });
 
   it('reserves and dispatches a restart normally once the authority is composed (case 85, control)', async () => {

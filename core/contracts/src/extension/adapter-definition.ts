@@ -113,7 +113,7 @@ export interface AdapterProviderDefinitionContract {
  * @typeParam TOptions - Options type accepted by {@link createAdapter}.
  *   Defaults to `never` so the type-erased base contract (`AdapterContribution.definition`)
  *   is structurally compatible with any specialised definition via contravariance:
- *   `(options?: ConcreteOptions) => Promise<T>` is assignable to `(options?: never) => Promise<T>`.
+ *   `(options: ConcreteOptions) => Promise<T>` is assignable to `(options: never) => Promise<T>`.
  *   Specialised adapter interfaces (e.g. `AIAdapterDefinition`) pass a narrower
  *   options type here to gain compile-time safety in their factory signatures.
  */
@@ -206,5 +206,5 @@ export interface AdapterDefinitionContract<TAdapter = unknown, TOptions = never>
    * @param options - Resolved adapter configuration (shape defined by the adapter).
    * @returns Promise resolving to the adapter instance.
    */
-  readonly createAdapter: (options?: TOptions) => Promise<TAdapter>;
+  readonly createAdapter: (options: TOptions) => Promise<TAdapter>;
 }

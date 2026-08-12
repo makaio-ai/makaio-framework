@@ -12,6 +12,7 @@ import { AgentSubjects, SessionSubjects, type AgentRole } from '@makaio/contract
 import { MakaioSessionService } from '../session-service.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { SessionStorageSubjects } from '../storage/namespace.js';
 import { designateSessionLead } from '../ownership/index.js';
 import { registerMemorySessionBackends, resetBusHandlers, waitForAsync } from './shared.js';
 
@@ -209,6 +210,46 @@ describe('adapter-session-ID reconciliation', () => {
     // Session storage also retains the first confirmed ID
     const session = await MakaioBus.request(SessionSubjects.get, { sessionId });
     expect(session.session?.adapterSessionId).toBe(confirmedId);
+  });
+
+  it('does not overwrite a peer reconciliation that lands while agent.started is being handled', async () => {
+    const sessionId = 'session-recon-race';
+    const agentId = 'agent-recon-race';
+    const adapterId = 'adapter-recon-race';
+
+    await seedIdleForkState(sessionId, agentId, adapterId);
+
+    // The service handler awaits the agent-row read before it reaches session
+    // storage. A peer can therefore settle the session in that interval. The
+    // service must not carry a session snapshot from before that settlement back
+    // through `set`; its own operation must be refused by storage instead.
+    const unsubscribePeer = MakaioBus.on(
+      AgentSubjects.started,
+      async () => {
+        await MakaioBus.request(SessionStorageSubjects.update, {
+          sessionId,
+          reconcileAdapterSession: {
+            agentId,
+            adapterName: 'test-adapter',
+            adapterId,
+            adapterSessionId: 'peer-provider-session',
+            lastActivityAt: Date.now(),
+          },
+        });
+      },
+      { filter: { agentId } },
+    );
+
+    try {
+      await emitAgentStarted(agentId, adapterId, 'test-adapter', 'announcement-provider-session', sessionId);
+    } finally {
+      unsubscribePeer();
+    }
+
+    const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    expect(session?.adapterSessionId).toBe('peer-provider-session');
+    expect(session?.adapterName).toBe('test-adapter');
+    expect(session?.adapterId).toBe(adapterId);
   });
 
   it('does not overwrite session adapterSessionId once it is already set', async () => {

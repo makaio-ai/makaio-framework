@@ -95,8 +95,10 @@ turn-scoped event cannot observe it.
 | `agentId` | `string` | yes |
 | `clientId` | `string \| undefined` | no |
 | `confirmed` | `boolean` | yes |
+| `machineId` | `string` | yes |
 | `messageId` | `string \| undefined` | no |
 | `occurredAt` | `number \| undefined` | no |
+| `ownerInstanceId` | `string` | yes |
 | `providerConfigId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `turnId` | `string \| undefined` | no |

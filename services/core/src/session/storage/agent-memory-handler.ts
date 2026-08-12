@@ -37,6 +37,8 @@ interface RuntimeUpdateOptions {
   adapterId?: string;
   /** Provider-confirmed session ID. */
   adapterSessionId?: string;
+  /** Runtime process currently hosting the connector. */
+  runtimeOwner?: MakaioSessionAgent['runtimeOwner'];
   /** New working directory. */
   cwd?: string;
   /** New model identifier. */
@@ -56,9 +58,10 @@ interface RuntimeUpdateOptions {
  * @returns `true` if at least one field was updated, `false` otherwise
  */
 function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOptions): boolean {
-  const { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = options;
+  const { adapterId, runtimeOwner, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = options;
   if (
     adapterId === undefined &&
+    runtimeOwner === undefined &&
     adapterSessionId === undefined &&
     cwd === undefined &&
     model === undefined &&
@@ -68,6 +71,7 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
     return false;
   }
   if (adapterId !== undefined) agent.adapterId = adapterId;
+  if (runtimeOwner !== undefined) agent.runtimeOwner = structuredClone(runtimeOwner);
   if (adapterSessionId !== undefined) agent.adapterSessionId = adapterSessionId;
   if (cwd !== undefined) agent.cwd = cwd;
   if (model !== undefined) agent.model = model;
@@ -83,12 +87,10 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
 /**
  * The stored columns a whole-record `set` carries across, detached from the row.
  *
- * A projection rather than a record, because these six are all
- * {@link storeAgentPreservingOwnership} reads and every one of them is a
- * primitive — so copying the fields *is* detaching them, with no route left by
- * which the incoming write could alias a stored value. The alternative it
- * replaces was a `structuredClone` of the whole agent, which detached the same
- * six by deep-copying every column beside them, on every write.
+ * A projection rather than a record, because these eight are all
+ * {@link storeAgentPreservingOwnership} reads. Copying their primitive values
+ * and cloning the runtime owner detaches the preserved state without a second
+ * whole-agent clone on every write.
  *
  * Adding a preserved column means adding it here too: a field read from `previous`
  * that this does not carry is a compile error rather than a silent alias.
@@ -96,8 +98,12 @@ function applyRuntimeUpdate(agent: MakaioSessionAgent, options: RuntimeUpdateOpt
 interface PreservedOwnership {
   /** Stored lifecycle status, whose terminal `disposed` wins over the snapshot. */
   readonly status: MakaioSessionAgent['status'];
+  /** Recovery attempt fence, writable only by the ownership aggregate. */
+  readonly recoveryAttemptId: string | undefined;
   /** Stored origin provider session, which wins whenever a previous row exists. */
   readonly adapterSessionId: MakaioSessionAgent['adapterSessionId'];
+  /** Stored runtime owner, writable only through the runtime-update seam. */
+  readonly runtimeOwner: MakaioSessionAgent['runtimeOwner'];
   /** Stored currency ID, owned exclusively by the `storage:sessionOwnership` seam. */
   readonly currentAdapterSessionId: MakaioSessionAgent['currentAdapterSessionId'];
   /** Stored currency state, owned by the same seam. */
@@ -116,7 +122,9 @@ interface PreservedOwnership {
 function detachPreservedOwnership(stored: MakaioSessionAgent): PreservedOwnership {
   return {
     status: stored.status,
+    recoveryAttemptId: stored.recoveryAttemptId,
     adapterSessionId: stored.adapterSessionId,
+    runtimeOwner: structuredClone(stored.runtimeOwner),
     currentAdapterSessionId: stored.currentAdapterSessionId,
     currentAdapterSessionIdState: stored.currentAdapterSessionIdState,
     revision: stored.revision,
@@ -172,7 +180,9 @@ function storeAgentPreservingOwnership(
   store.set(agentId, {
     ...structuredClone(next),
     status: previous?.status === 'disposed' ? 'disposed' : next.status,
+    recoveryAttemptId: previous === undefined ? next.recoveryAttemptId : previous.recoveryAttemptId,
     adapterSessionId: previous === undefined ? next.adapterSessionId : previous.adapterSessionId,
+    runtimeOwner: previous === undefined ? structuredClone(next.runtimeOwner) : previous.runtimeOwner,
     currentAdapterSessionId: previous?.currentAdapterSessionId,
     currentAdapterSessionIdState: previous?.currentAdapterSessionIdState ?? 'inherited',
     revision: previous?.revision ?? 0,
@@ -358,9 +368,13 @@ export function registerMemoryAgentStorage(
   // storage:agent.updateRuntime
   unsubs.push(
     bus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
-      const { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
-      const success = mutateAgent(store, ctx.payload.agentId, (agent) => {
-        const options = { adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId };
+      // A runtime update is a storage write boundary just as a whole-record set
+      // is. Detach the request before applying it so mutable fields such as
+      // allowedDirectories cannot become references the store still owns.
+      const { agentId, adapterId, runtimeOwner, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } =
+        structuredClone(ctx.payload);
+      const success = mutateAgent(store, agentId, (agent) => {
+        const options = { adapterId, runtimeOwner, adapterSessionId, cwd, model, allowedDirectories, providerConfigId };
         if (!applyRuntimeUpdate(agent, options)) return false;
         agent.lastActivityAt = Date.now();
         return true;

@@ -7,9 +7,12 @@ import { SessionOrchestrator } from '../session-orchestrator.js';
 import { MakaioSessionService } from '../session-service.js';
 import { runExclusiveStart } from '../ownership/in-flight-starts.js';
 import { resolveInFlightStarts } from '../handlers/in-flight-start-join.js';
+import { runReservedRehydrate, type ReservedRehydrateOutcome } from '../handlers/reserved-rehydrate.js';
+import { buildRecoveryReservationGuard, readRecoveryPlanningSnapshot } from '../handlers/recovery-reservation.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
+import { callerOwnedSuccessFields } from '../testing/caller-owned-adapter-stub.js';
 import { createTestAgent, registerMemorySessionBackends, settleEventLoop } from './shared.js';
 import { createMockSession } from '../testing/orchestrator-shared.js';
 import {
@@ -69,6 +72,19 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     unsubscribers.push(registerCwdChangeHandler());
     service = new MakaioSessionService(MakaioBus, { machineId: MACHINE_ID });
     await service.init();
+    orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
+    await publishLiveTestAdapter();
+    const liveAdapter = await MakaioBus.request(AdapterRuntimeSubjects.resolveId, {
+      adapterName: 'test-adapter',
+      machineId: MACHINE_ID,
+    });
+    await expect(
+      MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, {
+        adapterId: liveAdapter.adapterId,
+        adapterName: 'test-adapter',
+        machineId: MACHINE_ID,
+      }),
+    ).resolves.toMatchObject({ ownerInstanceId: service.requireOwnershipInstanceId() });
   });
 
   afterEach(() => {
@@ -91,9 +107,62 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       const agent: MakaioSessionAgent = createTestAgent(agentId, {
         sessionId,
         role: agentId === agentIds[0] ? 'lead' : 'member',
+        runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
       });
       await MakaioBus.request(AgentStorageSubjects.set, { agentId, agent });
     }
+  }
+
+  /**
+   * Announce the exact adapter incarnation recovery resolves and the local
+   * authority owns. Recovery must only dispatch through this live-identity
+   * seam; a deterministic ID alone proves neither a process nor its owner.
+   */
+  async function publishLiveTestAdapter(): Promise<void> {
+    const { adapterId } = await MakaioBus.request(AdapterRuntimeSubjects.resolveId, {
+      adapterName: 'test-adapter',
+      machineId: MACHINE_ID,
+    });
+    await MakaioBus.emit(AdapterSubjects.initialized, {
+      adapterId,
+      adapterName: 'test-adapter',
+      machineId: MACHINE_ID,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
+      capabilities: [],
+    });
+  }
+
+  /**
+   * Start the real guarded reservation that a remote recovery leaves in storage.
+   *
+   * This deliberately bypasses the local exclusive-start registry: the test is
+   * exercising what a different process observes after the reservation has
+   * persisted, not what a second send in this process joins.
+   * @param agentId - Agent whose persisted recovery snapshot is reserved.
+   * @param ownerInstanceId - Authority incarnation that owns this recovery.
+   * @param resumeProviderSessionId - Provider key to reserve, or `null` for a fresh recovery.
+   * @returns The real reserved-rehydrate lifecycle.
+   */
+  async function startForeignReservedRehydrate(
+    agentId: string,
+    ownerInstanceId: string,
+    resumeProviderSessionId: string | null,
+  ): Promise<ReservedRehydrateOutcome> {
+    const snapshot = await readRecoveryPlanningSnapshot(MakaioBus, agentId);
+    if (snapshot === null) throw new Error(`expected recovery snapshot for ${agentId}`);
+    const { adapterId } = await MakaioBus.request(AdapterRuntimeSubjects.resolveId, {
+      adapterName: snapshot.agent.adapterName,
+      machineId: MACHINE_ID,
+    });
+    const instance = { adapterId, machineId: MACHINE_ID, ownerInstanceId };
+    const recoveryGuard = await buildRecoveryReservationGuard(MakaioBus, snapshot, instance, resumeProviderSessionId);
+    return runReservedRehydrate(MakaioBus, {
+      agent: snapshot.agent,
+      sessionId: snapshot.agent.sessionId,
+      instance,
+      resumeProviderSessionId,
+      recoveryGuard,
+    });
   }
 
   it('routes concurrent messages for one dead agent on a single turn', async () => {
@@ -112,7 +181,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
         firstRehydrateStarted.resolve();
         await releaseFirstRehydrate.promise;
       }
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
 
     const sent = registerSendCapture();
@@ -162,7 +231,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub?.();
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
@@ -216,10 +285,23 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
       rehydratedAgentIds.add(ctx.payload.agentId);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+    const recoveryClaims: Array<{ guard: unknown; result: unknown }> = [];
+    unsubscribers.push(
+      MakaioBus.on(
+        SessionOwnershipStorageSubjects.claim,
+        async (ctx) => {
+          await ctx.next();
+          if (ctx.payload.recoveryGuard !== undefined) {
+            recoveryClaims.push({ guard: ctx.payload.recoveryGuard, result: ctx.result });
+          }
+        },
+        { priority: 100 },
+      ),
+    );
 
     const attempt = createDeferred<void>();
     const inFlight = runExclusiveStart('agent-1', async () => {
@@ -239,11 +321,21 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       attempt.resolve();
     }
     await inFlight.settled;
+    await settleEventLoop();
     await send;
 
     // One bounded re-entry: this send asked the question for itself and got an
     // authoritative answer, rather than reporting somebody else's non-answer.
     expect(rehydrateCallCount).toBe(1);
+    expect(recoveryClaims).toEqual([
+      {
+        guard: expect.objectContaining({
+          expectedStatus: 'dead',
+          expectedPreimage: expect.objectContaining({ status: 'dead', adapterId: 'adapter-agent-1' }),
+        }),
+        result: expect.objectContaining({ outcome: 'claimed' }),
+      },
+    ]);
     expect(sent).toEqual([{ agentId: 'agent-1', message: 'joins-then-recovers' }]);
   });
 
@@ -269,7 +361,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub?.();
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
@@ -320,7 +412,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub?.();
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
@@ -344,7 +436,11 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // actually holds. Driven on a bare bus, which is exactly that composition.
     const bare = createBusInstance();
     const agentId = `agent-no-storage-${crypto.randomUUID()}`;
-    const agent = createTestAgent(agentId, { sessionId: 'session-no-storage', status: 'starting' });
+    const agent = createTestAgent(agentId, {
+      sessionId: 'session-no-storage',
+      status: 'starting',
+      runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
+    });
     const session = createMockSession({ sessionId: 'session-no-storage', agents: [agent], leadAgentId: agentId });
 
     const resolution = await resolveInFlightStarts(bare, session);
@@ -399,6 +495,608 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     expect(session.agents[0]?.status).toBe('idle');
   });
 
+  it('refreshes a dead sibling after joining another agent start before deciding to recover it', async () => {
+    // `sendMessage` materialises every agent row before resolving any start.
+    // While it waits for agent-1, another lifecycle can make agent-2 live on a
+    // new adapter instance. Keeping agent-2's old `dead` row would probe the
+    // old instance, get no connector, and open a replacement lifecycle beside
+    // the one that just landed.
+    const sessionId = 'session-joined-start-refreshes-sibling';
+    await seedSession(sessionId, ['agent-1', 'agent-2']);
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'dead' });
+
+    probeUnsub?.();
+    probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
+      if (ctx.payload.agentId === 'agent-2' && ctx.payload.adapterId !== 'agent-2-live') {
+        ctx.setResult({ agent: null });
+        return;
+      }
+      ctx.setResult({
+        agent: { agentId: ctx.payload.agentId, sessionId, adapterSessionId: `provider-${ctx.payload.agentId}` },
+      });
+    });
+
+    let rehydrateCallCount = 0;
+    rehydrateUnsub?.();
+    rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      rehydrateCallCount += 1;
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
+    });
+    const sent = registerSendCapture();
+
+    const releaseStart = createDeferred<void>();
+    const inFlight = runExclusiveStart('agent-1', async () => {
+      await releaseStart.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+        agentId: 'agent-2',
+        adapterId: 'agent-2-live',
+      });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
+      return 'connected';
+    });
+
+    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'uses-the-sibling-that-landed',
+      agentIds: ['agent-2'],
+    });
+    try {
+      await settleEventLoop();
+    } finally {
+      releaseStart.resolve();
+    }
+    await inFlight.settled;
+    await send;
+
+    expect(rehydrateCallCount).toBe(0);
+    expect(sent).toEqual([{ agentId: 'agent-2', message: 'uses-the-sibling-that-landed' }]);
+  });
+
+  it('arbitrates a sibling that becomes starting while a local join waits', async () => {
+    // The send materialized agent-2 as dead, so the first pass deliberately
+    // skips it. While agent-1's local start holds the send, a peer claims
+    // agent-2 and leaves it `starting` without a local in-flight entry. The
+    // refresh must not hand that raw row to probe/recovery: it needs the same
+    // compare-and-swap arbitration and provenance as an originally starting row.
+    const sessionId = 'session-joined-start-refreshes-starting-sibling';
+    await seedSession(sessionId, ['agent-1', 'agent-2']);
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'dead' });
+    const read = (await MakaioBus.request(SessionSubjects.get, { sessionId })).session;
+    if (!read) throw new Error('seeded session is missing');
+    const session: IMakaioSession = { ...read, agents: read.agents.map((agent) => ({ ...agent })) };
+
+    const releaseStart = createDeferred<void>();
+    const inFlight = runExclusiveStart('agent-1', async () => {
+      await releaseStart.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      return 'connected';
+    });
+
+    const resolving = resolveInFlightStarts(MakaioBus, session);
+    try {
+      await settleEventLoop();
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'starting' });
+    } finally {
+      releaseStart.resolve();
+    }
+    await inFlight.settled;
+    const resolution = await resolving;
+
+    // Agent-2 was not left as the raw refreshed `starting` row: the no-local-
+    // entry branch arbitrated it to dead, and recovery therefore receives both
+    // its durable preimage and its cross-process provenance.
+    expect([...resolution.droppedAgentIds]).toEqual([]);
+    expect([...resolution.recoveringAgentIds]).toEqual(['agent-2']);
+    expect([...resolution.arbitratedAgentIds]).toEqual(['agent-2']);
+    expect(session.agents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agentId: 'agent-1', status: 'idle' }),
+        expect.objectContaining({ agentId: 'agent-2', status: 'dead' }),
+      ]),
+    );
+    expect(await readStatus('agent-2')).toBe('dead');
+  });
+
+  it('defers a foreign guarded recovery without probing or finalizing it', async () => {
+    const sessionId = 'session-foreign-guarded-recovery';
+    const agentId = 'agent-1';
+    await seedSession(sessionId, [agentId]);
+    const resumeProviderSessionId = `provider-${agentId}`;
+    await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
+    await MakaioBus.request(AgentStorageSubjects.set, {
+      agentId,
+      agent: createTestAgent(agentId, {
+        sessionId,
+        adapterSessionId: resumeProviderSessionId,
+        status: 'dead',
+        runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
+      }),
+    });
+    let finalized = 0;
+    let probed = 0;
+    let rehydrated = 0;
+    let stopped = 0;
+    const firstRehydrateEntered = createDeferred<void>();
+    const releaseFirstRehydrate = createDeferred<void>();
+    unsubscribers.push(
+      MakaioBus.on(
+        SessionOwnershipStorageSubjects.finalizeRecovery,
+        async (ctx) => {
+          finalized += 1;
+          await ctx.next();
+        },
+        { priority: 100 },
+      ),
+    );
+    unsubscribers.push(
+      MakaioBus.on(
+        AdapterSubjects.stopAgent,
+        async (ctx) => {
+          stopped += 1;
+          await ctx.next();
+        },
+        { priority: 100 },
+      ),
+    );
+    probeUnsub?.();
+    probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
+      probed += 1;
+      ctx.setResult({ agent: null });
+    });
+    rehydrateUnsub?.();
+    rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
+      rehydrated += 1;
+      firstRehydrateEntered.resolve();
+      await releaseFirstRehydrate.promise;
+      ctx.setResult({ success: false, dispatch: 'not-dispatched', message: 'foreign recovery remains in flight' });
+    });
+    const sent = registerSendCapture();
+    orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
+
+    const foreignRecovery = startForeignReservedRehydrate(
+      agentId,
+      service.requireOwnershipInstanceId(),
+      resumeProviderSessionId,
+    );
+    await firstRehydrateEntered.promise;
+
+    const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'must-not-touch-foreign-recovery',
+      agentIds: [agentId],
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      cause: { code: 'agent-unavailable', deferredAgentIds: [agentId] },
+    });
+
+    expect(finalized).toBe(0);
+    expect(probed).toBe(0);
+    // The only rehydrate is the remote reservation used to create the real
+    // guarded row; the send opened none of its own.
+    expect(rehydrated).toBe(1);
+    expect(stopped).toBe(0);
+    expect(sent).toEqual([]);
+    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    expect(agent).toMatchObject({
+      status: 'starting',
+      runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
+    });
+    releaseFirstRehydrate.resolve();
+    await foreignRecovery;
+  });
+
+  it('finalizes only a retired guarded recovery before one ordinary recovery proceeds', async () => {
+    const sessionId = 'session-retired-guarded-recovery';
+    const agentId = 'agent-retired-guarded-recovery';
+    await seedSession(sessionId, [agentId]);
+    const resumeProviderSessionId = `provider-${agentId}`;
+    await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
+    await MakaioBus.request(AgentStorageSubjects.set, {
+      agentId,
+      agent: createTestAgent(agentId, {
+        sessionId,
+        adapterSessionId: resumeProviderSessionId,
+        status: 'dead',
+        runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
+      }),
+    });
+    const firstRehydrateEntered = createDeferred<void>();
+    const releaseFirstRehydrate = createDeferred<void>();
+    rehydrateUnsub?.();
+    rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
+      firstRehydrateEntered.resolve();
+      await releaseFirstRehydrate.promise;
+      ctx.setResult({ success: false, dispatch: 'not-dispatched', message: 'the retired runtime never dispatched' });
+    });
+
+    const retiredOwnerInstanceId = service.requireOwnershipInstanceId();
+    const firstRecovery = startForeignReservedRehydrate(agentId, retiredOwnerInstanceId, null);
+    await firstRehydrateEntered.promise;
+    const guarded = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const guardedAgent = guarded.agent;
+    if (guardedAgent === null || guardedAgent.recoveryAttemptId === undefined) {
+      throw new Error('expected the real reservation attempt fence');
+    }
+    const retiredAttemptId = guardedAgent.recoveryAttemptId;
+    expect(guardedAgent.runtimeOwner).toEqual({ machineId: MACHINE_ID, instanceId: retiredOwnerInstanceId });
+    // The authority records retirement only after real teardown evidence; a
+    // made-up runtime row would not exercise the ownership lifecycle this
+    // consumer relies on.
+    await MakaioBus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+      ownerInstanceId: retiredOwnerInstanceId,
+      evidence: 'released',
+    });
+    await MakaioBus.emit(AdapterSubjects.deinitialized, {
+      adapterId: guardedAgent.adapterId,
+      adapterName: guardedAgent.adapterName,
+      machineId: MACHINE_ID,
+      ownerInstanceId: retiredOwnerInstanceId,
+    });
+    await service.destroy();
+    const optionalRetired = await MakaioBus.requestOptional(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+      instanceId: retiredOwnerInstanceId,
+      machineId: MACHINE_ID,
+    });
+    expect(optionalRetired).toMatchObject({ handled: true, data: { instance: { retiredAt: expect.any(Number) } } });
+    expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId })).agent).toMatchObject({
+      status: 'starting',
+      recoveryAttemptId: retiredAttemptId,
+      runtimeOwner: { machineId: MACHINE_ID, instanceId: retiredOwnerInstanceId },
+    });
+
+    const finalizations: Array<{ attemptId: string; action: string }> = [];
+    unsubscribers.push(
+      MakaioBus.on(
+        SessionOwnershipStorageSubjects.finalizeRecovery,
+        async (ctx) => {
+          finalizations.push({ attemptId: ctx.payload.attemptId, action: ctx.payload.action.kind });
+          await ctx.next();
+        },
+        { priority: 100 },
+      ),
+    );
+    let recoveryDispatches = 0;
+    rehydrateUnsub?.();
+    rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
+      recoveryDispatches += 1;
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
+    });
+    probeUnsub?.();
+    probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
+      ctx.setResult({ agent: null });
+    });
+    orchestrator.destroy();
+    service = new MakaioSessionService(MakaioBus, { machineId: MACHINE_ID });
+    await service.init();
+    orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
+    await publishLiveTestAdapter();
+    const sent = registerSendCapture();
+    await MakaioBus.request(SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'recover exactly once',
+      agentIds: [agentId],
+    });
+    expect(finalizations[0]).toEqual({ attemptId: retiredAttemptId, action: 'failed' });
+    expect(recoveryDispatches).toBe(1);
+    expect(sent).toEqual([{ agentId, message: 'recover exactly once' }]);
+    expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId })).agent).toMatchObject({ status: 'idle' });
+    releaseFirstRehydrate.resolve();
+    await firstRecovery;
+  });
+
+  it('does not let a retired attempt finalizer overwrite a superseding guarded recovery', async () => {
+    const sessionId = 'session-stale-retired-finalizer';
+    const agentId = 'agent-stale-retired-finalizer';
+    await seedSession(sessionId, [agentId]);
+    const resumeProviderSessionId = `provider-${agentId}`;
+    await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
+    await MakaioBus.request(AgentStorageSubjects.set, {
+      agentId,
+      agent: createTestAgent(agentId, {
+        sessionId,
+        adapterSessionId: resumeProviderSessionId,
+        status: 'dead',
+        runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
+      }),
+    });
+    const firstRehydrateEntered = createDeferred<void>();
+    const releaseFirstRehydrate = createDeferred<void>();
+    let rehydrateCalls = 0;
+    rehydrateUnsub?.();
+    rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
+      rehydrateCalls += 1;
+      if (rehydrateCalls === 1) {
+        firstRehydrateEntered.resolve();
+        await releaseFirstRehydrate.promise;
+        ctx.setResult({ success: false, dispatch: 'not-dispatched', message: 'stale owner did not dispatch' });
+        return;
+      }
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
+    });
+    const stopped: string[] = [];
+    unsubscribers.push(
+      MakaioBus.on(
+        AdapterSubjects.stopAgent,
+        async (ctx) => {
+          stopped.push(ctx.payload.agentId);
+          await ctx.next();
+        },
+        { priority: 100 },
+      ),
+    );
+
+    const retiredOwnerInstanceId = service.requireOwnershipInstanceId();
+    const firstRecovery = startForeignReservedRehydrate(agentId, retiredOwnerInstanceId, resumeProviderSessionId);
+    await firstRehydrateEntered.promise;
+    const guarded = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const guardedAgent = guarded.agent;
+    if (guardedAgent === null || guardedAgent.recoveryAttemptId === undefined) {
+      throw new Error('expected the first real reservation attempt fence');
+    }
+    const retiredAttemptId = guardedAgent.recoveryAttemptId;
+    expect(guardedAgent.runtimeOwner).toEqual({ machineId: MACHINE_ID, instanceId: retiredOwnerInstanceId });
+    await MakaioBus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+      ownerInstanceId: retiredOwnerInstanceId,
+      evidence: 'released',
+    });
+    await MakaioBus.emit(AdapterSubjects.deinitialized, {
+      adapterId: guardedAgent.adapterId,
+      adapterName: guardedAgent.adapterName,
+      machineId: MACHINE_ID,
+      ownerInstanceId: retiredOwnerInstanceId,
+    });
+    await service.destroy();
+    orchestrator.destroy();
+    service = new MakaioSessionService(MakaioBus, { machineId: MACHINE_ID });
+    await service.init();
+    orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
+    await publishLiveTestAdapter();
+
+    let supersedingOutcome: ReservedRehydrateOutcome | undefined;
+    unsubscribers.push(
+      MakaioBus.on(
+        SessionOwnershipStorageSubjects.finalizeRecovery,
+        async (ctx) => {
+          if (ctx.payload.attemptId === retiredAttemptId) {
+            // This reservation transaction claims the current guarded row, so
+            // the stale finalizer reaches storage only after a newer attempt
+            // owns the row. No synthetic guarded row or direct state mutation
+            // can establish that ordering.
+            supersedingOutcome = await startForeignReservedRehydrate(
+              agentId,
+              service.requireOwnershipInstanceId(),
+              resumeProviderSessionId,
+            );
+          }
+          await ctx.next();
+        },
+        { priority: 100 },
+      ),
+    );
+
+    probeUnsub?.();
+    probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
+      ctx.setResult({ agent: { agentId: ctx.payload.agentId, sessionId, adapterSessionId: resumeProviderSessionId } });
+    });
+    const sent = registerSendCapture();
+    await MakaioBus.request(SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'uses the superseding recovery',
+      agentIds: [agentId],
+    });
+    expect(supersedingOutcome).toMatchObject({ kind: 'rehydrated' });
+    expect(rehydrateCalls).toBe(2);
+    expect(sent).toEqual([{ agentId, message: 'uses the superseding recovery' }]);
+    expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId })).agent).toMatchObject({ status: 'idle' });
+    expect(stopped).toEqual([]);
+
+    releaseFirstRehydrate.resolve();
+    await firstRecovery;
+    expect(stopped).toEqual([]);
+  });
+
+  it('restarts the sibling refresh after a later local join', async () => {
+    // Agent-2 is read before agent-3. Joining agent-3 must therefore restart
+    // the entire refresh pass: its start rebinds agent-2 while the join waits,
+    // and the send must probe the final identity rather than the earlier row.
+    const sessionId = 'session-joined-start-stable-sibling-refresh';
+    await seedSession(sessionId, ['agent-1', 'agent-2', 'agent-3']);
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'dead' });
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'dead' });
+
+    const probedAgent2AdapterIds: string[] = [];
+    probeUnsub?.();
+    probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
+      if (ctx.payload.agentId === 'agent-2') {
+        probedAgent2AdapterIds.push(ctx.payload.adapterId);
+      }
+      ctx.setResult({
+        agent: {
+          agentId: ctx.payload.agentId,
+          sessionId,
+          adapterSessionId: `provider-${ctx.payload.agentId}`,
+        },
+      });
+    });
+    let rehydrateCallCount = 0;
+    rehydrateUnsub?.();
+    rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+      rehydrateCallCount += 1;
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
+    });
+    const sent = registerSendCapture();
+    orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
+
+    const agent2FirstRefresh = createDeferred<void>();
+    let observedAgent2Refresh = false;
+    unsubscribers.push(
+      MakaioBus.on(
+        AgentStorageSubjects.get,
+        async (ctx) => {
+          await ctx.next();
+          if (!observedAgent2Refresh && ctx.payload.agentId === 'agent-2') {
+            observedAgent2Refresh = true;
+            agent2FirstRefresh.resolve();
+          }
+        },
+        { priority: 100 },
+      ),
+    );
+
+    const releaseFirstStart = createDeferred<void>();
+    const firstStart = runExclusiveStart('agent-1', async () => {
+      await releaseFirstStart.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      return 'connected';
+    });
+    const releaseLaterStart = createDeferred<void>();
+    const laterStart = runExclusiveStart('agent-3', async () => {
+      await releaseLaterStart.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'idle' });
+      await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+        agentId: 'agent-2',
+        adapterId: 'agent-2-final',
+      });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
+      return 'connected';
+    });
+
+    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'uses-the-final-sibling-identity',
+      agentIds: ['agent-2'],
+    });
+    try {
+      await settleEventLoop();
+      await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+        agentId: 'agent-2',
+        adapterId: 'agent-2-first-refresh',
+      });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'starting' });
+      releaseFirstStart.resolve();
+      await firstStart.settled;
+      await agent2FirstRefresh.promise;
+      await settleEventLoop();
+    } finally {
+      releaseFirstStart.resolve();
+      releaseLaterStart.resolve();
+    }
+    await laterStart.settled;
+    await send;
+
+    expect(rehydrateCallCount).toBe(0);
+    expect(probedAgent2AdapterIds).toEqual(['agent-2-final']);
+    expect(sent).toEqual([{ agentId: 'agent-2', message: 'uses-the-final-sibling-identity' }]);
+    const { agent: storedAgent2 } = await MakaioBus.request(AgentStorageSubjects.get, { agentId: 'agent-2' });
+    expect(storedAgent2).toMatchObject({ adapterId: 'agent-2-final', status: 'idle' });
+  });
+
+  it('bounds refresh passes invalidated by fresh local starts', async () => {
+    // Each start lands after its row's position in the preceding pass: agent-2
+    // invalidates pass one, agent-3 invalidates pass two, and agent-4
+    // invalidates pass three. The latter exceeds the shared contention bound,
+    // so the send fails deterministically instead of waiting for a stable pass
+    // that a local producer can keep invalidating forever.
+    const sessionId = 'session-joined-start-refresh-pass-bound';
+    await seedSession(sessionId, ['agent-1', 'agent-2', 'agent-3', 'agent-4']);
+    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    for (const agentId of ['agent-2', 'agent-3', 'agent-4']) {
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
+    }
+    const read = (await MakaioBus.request(SessionSubjects.get, { sessionId })).session;
+    if (!read) throw new Error('seeded session is missing');
+    const agent = (agentId: string): MakaioSessionAgent => {
+      const found = read.agents.find((candidate) => candidate.agentId === agentId);
+      if (!found) throw new Error(`seeded agent ${agentId} is missing`);
+      return { ...found };
+    };
+    // Reverse the chained starters so each successor is passed before the
+    // predecessor's join can publish it as `starting`.
+    const session: IMakaioSession = {
+      ...read,
+      agents: [agent('agent-1'), agent('agent-4'), agent('agent-3'), agent('agent-2')],
+    };
+
+    const agent2Observed = createDeferred<void>();
+    const agent3Observed = createDeferred<void>();
+    const agent4Observed = createDeferred<void>();
+    const reads = new Map<string, number>();
+    unsubscribers.push(
+      MakaioBus.on(
+        AgentStorageSubjects.get,
+        async (ctx) => {
+          await ctx.next();
+          const count = (reads.get(ctx.payload.agentId) ?? 0) + 1;
+          reads.set(ctx.payload.agentId, count);
+          if (ctx.payload.agentId === 'agent-2' && count === 1) agent2Observed.resolve();
+          if (ctx.payload.agentId === 'agent-3' && count === 2) agent3Observed.resolve();
+          if (ctx.payload.agentId === 'agent-4' && count === 3) agent4Observed.resolve();
+        },
+        { priority: 100 },
+      ),
+    );
+
+    const releaseAgent1 = createDeferred<void>();
+    const firstStart = runExclusiveStart('agent-1', async () => {
+      await releaseAgent1.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      return 'connected';
+    });
+    const releaseAgent2 = createDeferred<void>();
+    const secondStart = runExclusiveStart('agent-2', async () => {
+      await releaseAgent2.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'starting' });
+      return 'connected';
+    });
+    const releaseAgent3 = createDeferred<void>();
+    const thirdStart = runExclusiveStart('agent-3', async () => {
+      await releaseAgent3.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'idle' });
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-4', status: 'starting' });
+      return 'connected';
+    });
+    const releaseAgent4 = createDeferred<void>();
+    const fourthStart = runExclusiveStart('agent-4', async () => {
+      await releaseAgent4.promise;
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-4', status: 'idle' });
+      return 'connected';
+    });
+
+    const resolving = resolveInFlightStarts(MakaioBus, session);
+    try {
+      await settleEventLoop();
+      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'starting' });
+      releaseAgent1.resolve();
+      await firstStart.settled;
+      await agent2Observed.promise;
+      await settleEventLoop();
+      releaseAgent2.resolve();
+      await secondStart.settled;
+      await agent3Observed.promise;
+      await settleEventLoop();
+      releaseAgent3.resolve();
+      await thirdStart.settled;
+      await agent4Observed.promise;
+      await settleEventLoop();
+    } finally {
+      releaseAgent1.resolve();
+      releaseAgent2.resolve();
+      releaseAgent3.resolve();
+      releaseAgent4.resolve();
+    }
+    await fourthStart.settled;
+    await expect(resolving).rejects.toMatchObject({
+      code: 'start-unresolved',
+      message: expect.stringContaining('did not stabilize after 2 joined refresh passes'),
+    });
+  });
+
   it('recovers for itself when the attempt it joined rolled the row back to idle', async () => {
     // The interaction between the two rules. A recovery that ends in a modeled
     // non-success — deferred, or refused before dispatch — puts the row back
@@ -414,7 +1112,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
       rehydratedAgentIds.add(ctx.payload.agentId);
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
@@ -469,7 +1167,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub?.();
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
@@ -532,7 +1230,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub?.();
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
@@ -565,7 +1263,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub?.();
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
@@ -659,7 +1357,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     rehydrateUnsub?.();
     rehydrateUnsub = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
       rehydrateCallCount += 1;
-      ctx.setResult({ success: true });
+      ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
     });
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
