@@ -65,6 +65,40 @@ export interface ExtensionDiscovery {
   discover(): Promise<DiscoveredExtension[]>;
 }
 
+const DESCRIPTOR_FILENAME = 'descriptor.json';
+const DESCRIPTOR_GLOB_IGNORES = ['**/node_modules/**', '**/dist/**', '**/.git/**'] as const;
+
+/**
+ * Enumerate descriptor files from one configured filesystem path without
+ * parsing them. A package-root descriptor wins over nested descriptors, and a
+ * node_modules root is limited to direct and scoped packages.
+ * @param discoveryPath - Descriptor file, package directory, node_modules root, or recursive search root.
+ * @returns Matching descriptor paths using the runtime's filesystem discovery semantics.
+ */
+export async function enumerateDescriptorPaths(discoveryPath: string): Promise<string[]> {
+  const entry = await fs.stat(discoveryPath).catch(() => undefined);
+  if (entry === undefined) return [];
+  if (entry.isFile()) return path.basename(discoveryPath) === DESCRIPTOR_FILENAME ? [discoveryPath] : [];
+  if (!entry.isDirectory()) return [];
+
+  const packageDescriptorPath = path.join(discoveryPath, DESCRIPTOR_FILENAME);
+  if (await isFile(packageDescriptorPath)) return [packageDescriptorPath];
+
+  const isNodeModulesRoot = path.basename(discoveryPath) === 'node_modules';
+  const patterns = isNodeModulesRoot ? ['*/descriptor.json', '@*/*/descriptor.json'] : [`**/${DESCRIPTOR_FILENAME}`];
+  const matches = await Promise.all(
+    patterns.map((pattern) =>
+      glob(pattern, {
+        absolute: true,
+        cwd: discoveryPath,
+        ...(isNodeModulesRoot ? {} : { ignore: [...DESCRIPTOR_GLOB_IGNORES] }),
+        windowsPathsNoEscape: true,
+      }),
+    ),
+  );
+  return matches.flat();
+}
+
 /**
  * Discovers extensions by scanning up to three locations in priority order:
  *
@@ -275,4 +309,16 @@ function deduplicateByDescriptorName(tiers: ReadonlyArray<ReadonlyArray<Discover
     }
   }
   return [...byName.values()];
+}
+
+/**
+ * Check whether a path exists and is a regular file.
+ * @param filePath - Candidate file path.
+ * @returns `true` when the path exists and is a regular file.
+ */
+async function isFile(filePath: string): Promise<boolean> {
+  return fs
+    .stat(filePath)
+    .then((entry) => entry.isFile())
+    .catch(() => false);
 }
