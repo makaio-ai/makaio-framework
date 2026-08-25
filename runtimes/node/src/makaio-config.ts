@@ -2,11 +2,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { glob } from 'glob';
 import { minimatch } from 'minimatch';
 import { z } from 'zod';
 import { parseExtensionDescriptor } from '@makaio/contracts';
-import { type DiscoveredExtension, type ExtensionDiscovery } from './extension-discovery.js';
+import { enumerateDescriptorPaths, type DiscoveredExtension, type ExtensionDiscovery } from './extension-discovery.js';
 
 /** Environment override for the runtime config file path. */
 export const MAKAIO_CONFIG_FILE_ENV = 'MAKAIO_CONFIG_FILE';
@@ -14,8 +13,6 @@ export const MAKAIO_CONFIG_FILE_ENV = 'MAKAIO_CONFIG_FILE';
 export const MAKAIO_HOME_ENV = 'MAKAIO_HOME';
 
 const CONFIG_FILE_BASENAMES = ['makaio.config.ts', 'makaio.config.js', 'makaio.config.json'] as const;
-const DESCRIPTOR_GLOB_IGNORES = ['**/node_modules/**', '**/dist/**', '**/.git/**'] as const;
-
 /** Filesystem discovery source tiers assignable from runtime config roots. */
 export type ConfiguredDiscoverySource = DiscoveredExtension['source'];
 
@@ -336,58 +333,7 @@ class ConfiguredDescriptorDiscovery implements ExtensionDiscovery {
  * @returns Discovered extensions under the path.
  */
 async function discoverFromPath(discoveryRoot: ConfiguredDiscoveryRoot): Promise<DiscoveredExtension[]> {
-  const discoveryPath = discoveryRoot.path;
-  const stat = await fs.stat(discoveryPath).catch(() => undefined);
-  if (stat === undefined) return [];
-  if (stat.isFile()) {
-    if (path.basename(discoveryPath) !== 'descriptor.json') return [];
-    const extension = await readDiscoveredExtension(discoveryPath, discoveryRoot.source);
-    return extension === undefined ? [] : [extension];
-  }
-
-  const descriptorPath = path.join(discoveryPath, 'descriptor.json');
-  if (await fileExists(descriptorPath)) {
-    const extension = await readDiscoveredExtension(descriptorPath, discoveryRoot.source);
-    return extension === undefined ? [] : [extension];
-  }
-
-  if (path.basename(discoveryPath) === 'node_modules') {
-    return discoverNodeModulesPath(discoveryRoot);
-  }
-
-  return discoverDescriptorGlob(toGlobPath(discoveryPath, '**', 'descriptor.json'), discoveryRoot.source);
-}
-
-/**
- * Discover descriptors one package level below a node_modules root.
- * @param discoveryRoot - Absolute node_modules directory plus source.
- * @returns Discovered extension descriptors.
- */
-async function discoverNodeModulesPath(discoveryRoot: ConfiguredDiscoveryRoot): Promise<DiscoveredExtension[]> {
-  const nodeModulesPath = discoveryRoot.path;
-  const patterns = [
-    toGlobPath(nodeModulesPath, '*/descriptor.json'),
-    toGlobPath(nodeModulesPath, '@*/*/descriptor.json'),
-  ];
-  const matches = (await Promise.all(patterns.map((pattern) => glob(pattern, { windowsPathsNoEscape: true })))).flat();
-  return readDiscoveredExtensions(matches, discoveryRoot.source);
-}
-
-/**
- * Discover descriptor files matching a recursive glob.
- * @param pattern - Glob pattern for descriptor files.
- * @param source - Source tier applied to descriptors matched by the pattern.
- * @returns Parsed extension descriptors.
- */
-async function discoverDescriptorGlob(
-  pattern: string,
-  source: ConfiguredDiscoverySource,
-): Promise<DiscoveredExtension[]> {
-  const matches = await glob(pattern, {
-    ignore: [...DESCRIPTOR_GLOB_IGNORES],
-    windowsPathsNoEscape: true,
-  });
-  return readDiscoveredExtensions(matches, source);
+  return readDiscoveredExtensions(await enumerateDescriptorPaths(discoveryRoot.path), discoveryRoot.source);
 }
 
 /**
@@ -497,16 +443,4 @@ async function assertFileExists(filePath: string, label: string): Promise<void> 
   if (!(await fileExists(filePath))) {
     throw new Error(`Missing ${label}: ${filePath}`);
   }
-}
-
-/**
- * Build a POSIX-style glob path from native path segments.
- * @param segments - Native path segments.
- * @returns Glob path with forward slashes.
- */
-function toGlobPath(...segments: readonly string[]): string {
-  return path
-    .join(...segments)
-    .split(path.sep)
-    .join('/');
 }

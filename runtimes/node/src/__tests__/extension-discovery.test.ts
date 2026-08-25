@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ExplicitDescriptorDiscovery,
+  enumerateDescriptorPaths,
   FilesystemDescriptorDiscovery,
   MergedDescriptorDiscovery,
   type DiscoveredExtension,
@@ -101,6 +102,69 @@ describe('FilesystemDescriptorDiscovery', () => {
     expect(result[0]?.descriptor.name).toBe('test-extension');
     expect(result[0]?.source).toBe('local');
     expect(result[0]?.extensionPath).toBe(path.join(nodeModules, '@scope', 'my-scoped-ext'));
+  });
+
+  it('enumerates only the package-root descriptor when a discovery root has one', async () => {
+    await writeDescriptor(extensionsDir, JSON.stringify(baseDescriptor));
+    await writeDescriptor(
+      path.join(extensionsDir, 'nested-extension'),
+      JSON.stringify({ ...baseDescriptor, name: 'nested-extension', displayName: 'Nested Extension' }),
+    );
+
+    await expect(enumerateDescriptorPaths(extensionsDir)).resolves.toEqual([
+      path.join(extensionsDir, 'descriptor.json'),
+    ]);
+  });
+
+  it('enumerates only direct and scoped packages from a node_modules root', async () => {
+    const directDescriptor = path.join(nodeModules, 'direct-extension', 'descriptor.json');
+    const scopedDescriptor = path.join(nodeModules, '@scope', 'scoped-extension', 'descriptor.json');
+    await writeDescriptor(path.dirname(directDescriptor), JSON.stringify(baseDescriptor));
+    await writeDescriptor(
+      path.dirname(scopedDescriptor),
+      JSON.stringify({ ...baseDescriptor, name: 'scoped-extension', displayName: 'Scoped Extension' }),
+    );
+    await writeDescriptor(
+      path.join(nodeModules, 'direct-extension', 'nested-package'),
+      JSON.stringify({ ...baseDescriptor, name: 'nested-extension', displayName: 'Nested Extension' }),
+    );
+
+    await expect(enumerateDescriptorPaths(nodeModules)).resolves.toEqual([directDescriptor, scopedDescriptor]);
+  });
+
+  const symlinkTest = process.platform === 'win32' ? it.skip : it;
+  symlinkTest('enumerates descriptors from symlinked extension packages', async () => {
+    const packageTarget = path.join(tmpDir, 'linked-package-target');
+    const linkedPackage = path.join(nodeModules, 'linked-extension');
+    await writeDescriptor(packageTarget, JSON.stringify(baseDescriptor));
+    await fs.mkdir(nodeModules, { recursive: true });
+    await fs.symlink(packageTarget, linkedPackage, 'dir');
+
+    await expect(enumerateDescriptorPaths(nodeModules)).resolves.toEqual([path.join(linkedPackage, 'descriptor.json')]);
+  });
+
+  it('treats literal glob metacharacters in the discovery root as literal path segments', async () => {
+    const bracketedRoot = path.join(tmpDir, '[prod]');
+    const descriptorPath = path.join(bracketedRoot, 'extension', 'descriptor.json');
+    await writeDescriptor(path.dirname(descriptorPath), JSON.stringify(baseDescriptor));
+
+    await expect(enumerateDescriptorPaths(bracketedRoot)).resolves.toEqual([descriptorPath]);
+  });
+
+  it('does not apply recursive ignore rules to a configured root beneath dist', async () => {
+    const distRoot = path.join(tmpDir, 'dist', 'extensions');
+    const descriptorPath = path.join(distRoot, 'extension', 'descriptor.json');
+    await writeDescriptor(path.dirname(descriptorPath), JSON.stringify(baseDescriptor));
+
+    await expect(enumerateDescriptorPaths(distRoot)).resolves.toEqual([descriptorPath]);
+  });
+
+  it('does not apply recursive ignore rules to a configured root beneath node_modules', async () => {
+    const scopedRoot = path.join(nodeModules, '@scope');
+    const descriptorPath = path.join(scopedRoot, 'extension', 'descriptor.json');
+    await writeDescriptor(path.dirname(descriptorPath), JSON.stringify(baseDescriptor));
+
+    await expect(enumerateDescriptorPaths(scopedRoot)).resolves.toEqual([descriptorPath]);
   });
 
   it('can skip the project-local node_modules tier', async () => {
