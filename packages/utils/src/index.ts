@@ -14,6 +14,7 @@ export { extractJson } from './extract-json.js';
 export { getErrorString } from './getErrorString.js';
 export { normalizeBusSecret } from './normalize-bus-secret.js';
 export { isBunRuntime } from './runtime.js';
+export { isNpmPackageName, NPM_PACKAGE_NAME_MAX_LENGTH } from './npm-package-name.js';
 export { safeStringify } from './safe-stringify.js';
 export { SerialLane } from './serial-lane.js';
 export {

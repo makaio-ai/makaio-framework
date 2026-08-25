@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { MAKAIO_PROJECT_DIR } from './scope-paths.js';
+import { isNpmPackageName, NPM_PACKAGE_NAME_MAX_LENGTH } from './npm-package-name.js';
 
 /** Basename of the project manifest file within the Makaio project directory. */
 export const PROJECT_MANIFEST_BASENAME = 'manifest.json';
@@ -19,9 +20,6 @@ export const PROJECT_MANIFEST_SCHEMA_ID = 'makaio/project-manifest/v1';
 /** Pattern for a strict semantic version string including optional pre-release and build metadata. */
 const EXACT_SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
-
-/** Pattern for registry package names, without local path, git URL, or subpath syntax. */
-const NPM_PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
 /**
  * A parsed extension spec that has been validated to contain an exact semantic version.
@@ -100,7 +98,7 @@ export function parseExactExtensionSpec(spec: string): ExactExtensionSpec {
   if (packageName.length === 0 || version.length === 0) {
     throw new Error(`Project manifest extension specs must include an exact version: ${spec}`);
   }
-  if (!NPM_PACKAGE_NAME_PATTERN.test(packageName) || packageName.length > 214) {
+  if (!isNpmPackageName(packageName) || packageName.length > NPM_PACKAGE_NAME_MAX_LENGTH) {
     throw new Error(`Project manifest extension specs must use npm package names: ${spec}`);
   }
   if (!EXACT_SEMVER_PATTERN.test(version)) {

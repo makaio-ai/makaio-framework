@@ -58,4 +58,4 @@ export type { WildcardSubject, WildcardSubjectDefinition } from './wildcards.js'
 export { WildcardSubjectKey } from './wildcards.js';
 
 export type { OptionalResult } from './result.js';
-export type { MakaioBusLike } from './bus-like.js';
+export type { BusLikeEmitOptions, MakaioBusLike } from './bus-like.js';

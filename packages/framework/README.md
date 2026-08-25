@@ -21,6 +21,8 @@ Makaio Framework is runtime infrastructure for AI agent systems. It provides a t
 
 ## Install
 
+Requires Node.js 22.15 or newer.
+
 ```bash
 npm install @makaio/framework
 ```

@@ -10,6 +10,7 @@ export default defineConfig({
     './src/adapter-runtime/namespace.ts',
     './src/automation-trigger/index.ts',
     './src/capability/index.ts',
+    './src/code-execution/index.ts',
     './src/cli-detection/namespace.ts',
     './src/context-rules/index.ts',
     './src/credential-change/index.ts',

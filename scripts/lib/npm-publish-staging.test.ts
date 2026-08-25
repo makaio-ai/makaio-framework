@@ -82,11 +82,13 @@ describe('createStagedPackageJson', () => {
     const sourceExports = frameworkManifest.exports as Record<string, unknown>;
 
     expect(staged.version).toBe('1.0.0-dev-1780000000000');
+    expect(staged.engines).toEqual({ node: '>=22.15.0' });
     expect(exports['./bus']).toEqual(sourceExports['./bus']);
     expect(exports['./workflow-engine']).toEqual(sourceExports['./workflow-engine']);
     expect(exports['./contracts/native-session-supervisor']).toEqual(
       sourceExports['./contracts/native-session-supervisor'],
     );
+    expect(exports['./runtime-node/code-execution/worker-entry']).toBeUndefined();
     expect(staged.peerDependencies?.['@makaio/framework']).toBeUndefined();
     expect(staged.peerDependencies?.['@makaio/ordinary-peer']).toBe('^1.0.0');
   });

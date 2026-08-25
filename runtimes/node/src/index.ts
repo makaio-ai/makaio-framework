@@ -149,3 +149,18 @@ export type {
   HeadlessWorkflowWorkerDeps,
   HeadlessWorkflowWorkerResult,
 } from './workflow-worker/index.js';
+// Opt-in CodeExecution provider. It is never registered implicitly: the
+// composing host decides whether a runtime may execute submitted code, and it
+// executes trusted code only — a worker thread is not an isolation boundary.
+export {
+  CODE_EXECUTION_DEFAULT_IDLE_TIMEOUT_MS,
+  CODE_EXECUTION_DEFAULT_MAX_ARGUMENT_BYTES,
+  CODE_EXECUTION_DEFAULT_MAX_CONCURRENCY,
+  CODE_EXECUTION_DEFAULT_MAX_INVOCATIONS_PER_WORKER,
+  CODE_EXECUTION_DEFAULT_MAX_PROGRAM_FILES,
+  CODE_EXECUTION_DEFAULT_MAX_QUEUED_INVOCATIONS,
+  CODE_EXECUTION_DEFAULT_MAX_RESULT_BYTES,
+  CODE_EXECUTION_DEFAULT_MAX_SOURCE_BYTES,
+  PiscinaCodeExecutionProvider,
+} from './code-execution/index.js';
+export type { PiscinaCodeExecutionProviderOptions } from './code-execution/index.js';

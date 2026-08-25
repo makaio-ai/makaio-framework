@@ -173,6 +173,20 @@ const standardPackages = FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.filter(
   (p) => !BUS_PACKAGES.has(p.packageName) && !REACT_PACKAGES.has(p.packageName),
 );
 
+/**
+ * Runtime worker entry points that are loaded by framework code from the
+ * assembled distribution without being part of the umbrella's public API.
+ */
+const PRIVATE_CORE_ENTRIES: Record<string, string> = {
+  'code-execution/worker-entry': './runtimes/node/src/code-execution/worker-entry.ts',
+};
+
+/**
+ * These runtime packages locate adjacent assets through CommonJS globals,
+ * which are unavailable after inlining them into an ESM bundle.
+ */
+const CORE_RUNTIME_EXTERNALS: ReadonlyArray<string | RegExp> = ['piscina', /^tsx(?:\/.*)?$/];
+
 // ---------------------------------------------------------------------------
 // Build configs
 // ---------------------------------------------------------------------------
@@ -187,7 +201,11 @@ const configs: Array<UserConfig & { name: string }> = [
   {
     name: 'core',
     ...frameworkPreset,
-    entry: buildEntryMap(standardPackages),
+    entry: { ...buildEntryMap(standardPackages), ...PRIVATE_CORE_ENTRIES },
+    deps: {
+      ...frameworkPreset.deps,
+      neverBundle: [...frameworkPreset.deps.neverBundle, ...CORE_RUNTIME_EXTERNALS],
+    },
     outDir: DIST,
   },
   {

@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace, defaultTransports } from '@makaio/core';
-import { createBusInstance, type BusMessage, type BusTransportRegistry } from '../index.js';
+import { createBusInstance, type BusMessage, type BusTransportRegistry, type EmitOptions } from '../index.js';
 import { MockTransport } from './helpers/transport-fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -87,6 +87,7 @@ declare module '../index.js' {
     'dtv-transport-d': MockTransport;
     'dtv-transport-e': MockTransport;
     'dtv-transport-relay': MockTransport;
+    'dtv-transport-wrapper': MockTransport;
   }
 }
 
@@ -266,6 +267,73 @@ describe('defaultTransports — relay path unaffected', () => {
       namespace: 'dtv-local-only',
       payload: { value: 'relayed' },
     });
+  });
+});
+
+/**
+ * The dispatching surface every namespace-scoped bus wrapper has to expose.
+ *
+ * Spelled structurally so one call site can drive a scoped bus and a filtered
+ * bus alike: their generic `emit` signatures do not form a callable union, and
+ * what is under test here is the option's fate, not subject inference.
+ */
+type WrapperBus = {
+  /**
+   * Emit the wrapper-test subject.
+   * @param subject - Subject to emit on.
+   * @param payload - Event payload.
+   * @param options - Emit options whose routing must reach the bus intact.
+   * @returns Promise resolving once the emission has been dispatched.
+   */
+  emit(subject: typeof DefaultNs.subjects.updated, payload: { value: string }, options?: EmitOptions): Promise<void>;
+};
+
+describe('emit options survive the namespace-scoped bus wrappers', () => {
+  let bus: ReturnType<typeof createBusInstance>;
+  let transport: MockTransport;
+
+  /**
+   * Count the events this transport was asked to relay.
+   * @returns Number of recorded event messages.
+   */
+  const relayedEvents = (): number => transport.messages.filter((m) => m.type === 'event').length;
+
+  beforeEach(() => {
+    // A namespace that relays by default: the control emission below then
+    // proves the wrapper can reach the transport at all, so a silence under
+    // `transports: []` is the option's doing and not the wrapper's.
+    ({ bus, transport } = createTestSetup(DefaultNs, 'dtv-transport-wrapper'));
+  });
+
+  afterEach(() => {
+    transport.clear();
+  });
+
+  it.each<readonly [string, (root: ReturnType<typeof createBusInstance>) => WrapperBus]>([
+    ['scoped bus', (root) => root.scoped(root.registerNamespace(DefaultNs))],
+    ['filtered bus', (root) => root.withFilter({ value: 'irrelevant' })],
+    [
+      'filtered bus derived from a scoped bus',
+      (root) => root.scoped(root.registerNamespace(DefaultNs)).withFilter({ value: 'irrelevant' }),
+    ],
+  ])('honours an explicit local-only routing option through a %s', async (_label, createWrapper) => {
+    const wrapper = createWrapper(bus);
+    const received: string[] = [];
+    bus.on(DefaultNs.subjects.updated, ({ payload }) => {
+      received.push(payload.value);
+    });
+
+    await wrapper.emit(DefaultNs.subjects.updated, { value: 'relayed' });
+    expect(relayedEvents()).toBe(1);
+
+    await wrapper.emit(DefaultNs.subjects.updated, { value: 'local-only' }, { transports: [] });
+
+    // The option is the only difference between the two emissions, so the
+    // second one leaving no trace on the transport is what proves the wrapper
+    // forwarded it rather than dropping it.
+    expect(relayedEvents()).toBe(1);
+    // And the message itself was still emitted — locally, which is the point.
+    expect(received).toEqual(['relayed', 'local-only']);
   });
 });
 

@@ -15,7 +15,7 @@ import {
   SurfaceBindingRegistryToken,
   surfaceBindingRegistryPackage,
 } from './materialization/packages.js';
-import { CapabilityService } from './capability/capability-service.js';
+import { capabilityPackage, CapabilityToken } from './capability/package.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import { reactionRegistryPackage } from './reaction/packages.js';
 import {
@@ -74,8 +74,8 @@ export const ToolRegistryToken = extensionToken<ToolRegistry>('tool-registry');
 export const ToolApprovalToken = extensionToken<ToolApprovalService>('tool-approval');
 /** Token for the framework tray menu service. */
 export const TrayMenuToken = extensionToken<TrayMenuService>('tray-menu');
-/** Token for the capability registry service. */
-export const CapabilityToken = extensionToken<CapabilityService>('capability');
+/** Capability-domain token and package (defined in the capability domain module). */
+export { CapabilityToken, capabilityPackage };
 /** Token for the model registry service. */
 export const ModelRegistryToken = extensionToken<ModelRegistryService>('model-registry');
 /** Token for the workflow block registry service. */
@@ -260,15 +260,6 @@ export const trayMenuPackage: MakaioNodeExtension<IMakaioBus> = {
   version: '0.1.0',
   critical: true,
   create: (ctx) => new TrayMenuService(ctx.bus),
-};
-
-/** Package that starts the framework capability registry. */
-export const capabilityPackage: MakaioNodeExtension<IMakaioBus> = {
-  name: CapabilityToken.name,
-  displayName: 'Capability',
-  version: '0.1.0',
-  critical: true,
-  create: (ctx) => new CapabilityService(ctx.bus),
 };
 
 /** Package that starts the framework workflow block registry. */

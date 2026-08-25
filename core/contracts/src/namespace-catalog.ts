@@ -8,6 +8,7 @@ import { AutomationTriggerNamespace } from './automation-trigger/namespace.js';
 import { CanonicalModelNamespace } from './canonical-model/namespace.js';
 import { CapabilityNamespace } from './capability/namespace.js';
 import { ClientNamespace } from './client/namespace.js';
+import { CodeExecutionNamespace } from './code-execution/namespace.js';
 import { ConfigNamespace } from './config/config-namespace.js';
 import { CredentialNamespace } from './credential/namespace.js';
 import { FacetNamespace } from './facet/namespace.js';
@@ -67,6 +68,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   CanonicalModelNamespace,
   CapabilityNamespace,
   ClientNamespace,
+  CodeExecutionNamespace,
   ConfigNamespace,
   CredentialNamespace,
   FacetNamespace,

@@ -4,3 +4,4 @@
  * Capability provider registration and discovery service.
  */
 export { CapabilityService } from './capability-service.js';
+export { CapabilityToken, capabilityPackage } from './package.js';

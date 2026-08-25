@@ -152,19 +152,24 @@ export function createFilteredBus<Namespace extends string, Subjects = unknown, 
       );
     }) as IFilteredBus<Namespace>['once'],
 
-    async emit(subject, payload) {
+    // The base filter is a subscription concern, so it is deliberately absent
+    // from the three dispatching methods below — but their option bags are not
+    // this wrapper's to reinterpret either. Dropping `options` here would
+    // silently rewrite routing: a caller that emitted local-only through this
+    // bus would have the message relayed to every ready transport instead.
+    async emit(subject, payload, options) {
       validateMessage('emit', subject, namespace);
-      return emit(context, subject, payload);
+      return emit(context, subject, payload, options);
     },
 
-    async request(subject, payload) {
+    async request(subject, payload, options) {
       validateMessage('request', subject, namespace);
-      return request(context, subject, payload);
+      return request(context, subject, payload, options);
     },
 
-    async requestOptional(subject, payload) {
+    async requestOptional(subject, payload, options) {
       validateMessage('request', subject, namespace);
-      return requestOptional(context, subject, payload);
+      return requestOptional(context, subject, payload, options);
     },
   };
 
