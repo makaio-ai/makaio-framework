@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ExplicitDescriptorDiscovery,
   enumerateDescriptorPaths,
@@ -42,6 +42,7 @@ describe('FilesystemDescriptorDiscovery', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -75,6 +76,17 @@ describe('FilesystemDescriptorDiscovery', () => {
     expect(result[0]?.descriptor.name).toBe('test-extension');
     expect(result[0]?.source).toBe('local');
     expect(result[0]?.extensionPath).toBe(path.join(nodeModules, 'my-extension'));
+  });
+
+  it('ignores descriptor.json directories', async () => {
+    await fs.mkdir(path.join(nodeModules, 'directory-ext', 'descriptor.json'), { recursive: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const discovery = new FilesystemDescriptorDiscovery(tmpDir, { extensionsDir, nodeModulesDir: globalNodeModules });
+    const result = await discovery.discover();
+
+    expect(result).toStrictEqual([]);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('discovers the shipped SDK-native Cursor adapter descriptor', async () => {
