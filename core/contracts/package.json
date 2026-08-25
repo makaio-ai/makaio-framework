@@ -21,6 +21,7 @@
     "./auth": "./src/auth/index.ts",
     "./adapter/schemas/session-lineage": "./src/adapter/schemas/session-lineage.ts",
     "./client": "./src/client/index.ts",
+    "./code-execution": "./src/code-execution/index.ts",
     "./common": "./src/common/index.ts",
     "./config": "./src/config/index.ts",
     "./canonical-model": "./src/canonical-model/index.ts",
@@ -97,6 +98,10 @@
       "./client": {
         "types": "./dist/client/index.d.ts",
         "default": "./dist/client/index.mjs"
+      },
+      "./code-execution": {
+        "types": "./dist/code-execution/index.d.ts",
+        "default": "./dist/code-execution/index.mjs"
       },
       "./common": {
         "types": "./dist/common/index.d.ts",

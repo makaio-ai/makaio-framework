@@ -87,7 +87,11 @@ export {
   ValidationError,
 } from './errors/index.js';
 
-export type { OnOptions } from './types/options.js';
+// The dispatching option bags are named on the public scoped/filtered bus
+// surface, so a consumer holding one of those buses must be able to name them
+// too — declaring a variable of the type it is about to pass to `emit()` or
+// `request()` is not a bus-internal concern.
+export type { EmitOptions, OnOptions, RequestOptions } from './types/options.js';
 export type { InterceptorContext } from './types/interceptor.js';
 export type { BusNamespace, ScopedBusFor } from './types/namespace.js';
 

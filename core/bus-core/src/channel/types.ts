@@ -38,6 +38,13 @@ export interface IDirectChannel {
 
   /**
    * Fire-and-forget encrypted event to the peer.
+   *
+   * Takes no emit options, unlike the namespace-scoped bus wrappers. A channel
+   * is not a view onto a subject a caller could otherwise emit itself: it
+   * re-subjects the payload onto its own channel subject and routes it to the
+   * transports the channel was opened over. Routing therefore belongs to the
+   * channel, and an option bag that could override it would let a caller send a
+   * peer-encrypted payload somewhere the peer is not.
    * @param subject - Subject definition
    * @param payload - Event payload (will be encrypted before dispatch)
    */

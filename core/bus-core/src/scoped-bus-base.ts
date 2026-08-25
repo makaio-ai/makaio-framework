@@ -9,7 +9,7 @@
  * own unique members on top.
  */
 
-import type { InterceptOptions, OnOptions } from './types/index.js';
+import type { EmitOptions, InterceptOptions, OnOptions, RequestOptions } from './types/index.js';
 import type { InterceptorHandler } from './types/interceptor.js';
 import type { OnceOptions } from './methods/once.js';
 import type {
@@ -21,6 +21,14 @@ import type {
 
 /**
  * Minimal shared surface common to {@link ScopedBus} and {@link IFilteredBus}.
+ *
+ * The dispatching methods carry the same option bags as the unscoped bus.
+ * Scoping and filtering are properties of a *subscription*, not of a message:
+ * an option that decides where a message goes — `transports` above all — must
+ * mean the same thing however the caller reached the bus. Declaring the options
+ * here is what makes that a checked contract rather than a convention each
+ * wrapper is free to forget, and a caller holding one of these buses can state
+ * routing that a caller holding the root bus could always state.
  * @typeParam Namespace - The namespace domain string (e.g. `'adapter:codex-mcp'`)
  */
 export interface IScopedBusBase<Namespace extends string> {
@@ -78,22 +86,26 @@ export interface IScopedBusBase<Namespace extends string> {
    * Emit an event.
    * @param subject - Subject definition to emit on
    * @param payload - Event payload matching the subject schema
+   * @param options - Optional emit options (message ids, transports)
    * @returns Promise resolving when all handlers have been notified
    */
   emit<Subject extends ScopedSubjectDefinition<Namespace>>(
     subject: Subject,
     payload: Subject['$meta']['payload'],
+    options?: EmitOptions,
   ): Promise<void>;
 
   /**
    * Make a request (throws if no handler is registered).
    * @param subject - Subject definition for the request
    * @param payload - Request payload matching the subject schema
+   * @param options - Optional request options (timeout, signal, transports)
    * @returns Promise resolving to the response payload
    */
   request<Subject extends ScopedSubjectDefinition<Namespace>>(
     subject: Subject,
     payload: Subject['$meta']['payload']['request'],
+    options?: RequestOptions,
   ): Promise<Subject['$meta']['payload']['response']>;
 
   /**
@@ -101,10 +113,12 @@ export interface IScopedBusBase<Namespace extends string> {
    * when no handler is registered).
    * @param subject - Subject definition for the request
    * @param payload - Request payload matching the subject schema
+   * @param options - Optional request options (timeout, signal, transports)
    * @returns Promise resolving to an `OptionalResult` wrapper
    */
   requestOptional<Subject extends ScopedSubjectDefinition<Namespace>>(
     subject: Subject,
     payload: Subject['$meta']['payload']['request'],
+    options?: RequestOptions,
   ): Promise<OptionalResult<Subject['$meta']['payload']['response']>>;
 }

@@ -167,6 +167,25 @@ export type {
   ToolsWithToolsetsResult,
 } from './tools/index.js';
 export { CapabilityService } from './capability/index.js';
+/**
+ * Code-execution routing service and its opt-in package.
+ *
+ * The package is intentionally absent from `frameworkCorePackages`: a host
+ * composes it explicitly when it accepts running submitted code.
+ */
+export {
+  CodeExecutionService,
+  CodeExecutionServiceToken,
+  codeExecutionPackage,
+  createEffectiveExecutionSignal,
+  selectCodeExecutionProvider,
+  type CodeExecutionProviderRejected,
+  type CodeExecutionProviderSelected,
+  type CodeExecutionProviderSelection,
+  type CodeExecutionSelectionFailureCode,
+  type EffectiveExecutionSignal,
+  type EffectiveExecutionSignalOptions,
+} from './code-execution/index.js';
 export { ToolApprovalService } from './tool-approval/index.js';
 export {
   TrayMenuEntrySchema,

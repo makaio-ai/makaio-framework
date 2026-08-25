@@ -1,11 +1,18 @@
 import { z } from 'zod';
 export {
+  snapshotJsonBoundary,
+  JSON_BOUNDARY_MAX_CONTAINER_NESTING,
   JsonValueSchema,
   JsonObjectSchema,
   JsonObjectContractSchema,
   JsonRecordSchema,
   JsonSchemaRecordSchema,
+  rejectingLossyJsonValues,
+  type JsonFidelityViolation,
+  type JsonFidelityViolationKind,
+  type JsonBoundarySnapshot,
   type JsonValue,
+  type LossyJsonValueMessages,
 } from './json-value.js';
 export { zodSchemaToJsonRecord } from './zod-json-schema.js';
 

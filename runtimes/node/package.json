@@ -24,6 +24,7 @@
     "./workflow-execution-bus-access": "./src/workflow-execution-bus-access.ts",
     "./workflow-worker": "./src/workflow-worker/index.ts",
     "./workflow-worker/worker-entry": "./src/workflow-worker/worker-entry.ts",
+    "./code-execution": "./src/code-execution/index.ts",
     "./package.json": "./package.json"
   },
   "files": [
@@ -65,6 +66,7 @@
     "hono": "^4.12.23",
     "minimatch": "^10.0.3",
     "piscina": "^5.1.4",
+    "tsx": "^4.22.3",
     "ws": "^8.21.0",
     "yaml": "^2.9.0",
     "zod": "4.4.3"
@@ -128,6 +130,10 @@
       "./workflow-worker/worker-entry": {
         "types": "./dist/workflow-worker/worker-entry.d.ts",
         "default": "./dist/workflow-worker/worker-entry.mjs"
+      },
+      "./code-execution": {
+        "types": "./dist/code-execution/index.d.ts",
+        "default": "./dist/code-execution/index.mjs"
       },
       "./package.json": "./package.json"
     }

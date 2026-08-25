@@ -190,7 +190,7 @@ Type: Request (RPC)
 | `confidence` | `{ maxLevel?: "assumed" \| "inferred" \| "stated" \| "confirmed" \| "verified" \| undefined; minLevel?: "assumed" \| "inferred" \| "stated" \| "confirmed" \| "verified" \| undefined; } \| undefined` | no |
 | `currentOnly` | `boolean \| undefined` | no |
 | `ids` | `string[] \| undefined` | no |
-| `indexed` | `Record<string, unknown> \| undefined` | no |
+| `indexed` | `Record<string, JsonValue> \| undefined` | no |
 | `kind` | `string \| undefined` | no |
 | `limit` | `number \| undefined` | no |
 | `relation` | `{ type?: string \| undefined; target?: unknown; } \| undefined` | no |

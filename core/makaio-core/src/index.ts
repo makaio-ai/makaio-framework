@@ -112,5 +112,6 @@ export type {
   WildcardContext,
   WildcardSubjectDefinition,
   WildcardUnifiedHandler,
+  BusLikeEmitOptions,
   MakaioBusLike,
 } from './types/index.js';

@@ -81,7 +81,9 @@ describe('verifyFrameworkDist', () => {
   function makeTempDir(): string {
     const dir = mkdtempSync(join(tmpdir(), 'framework-dist-'));
     tempDirs.push(dir);
-    writeBuiltFile(join(dir, BUNDLED_RUNTIME_ASSETS[0]));
+    for (const asset of BUNDLED_RUNTIME_ASSETS) {
+      writeBuiltFile(join(dir, asset));
+    }
     return dir;
   }
 
@@ -109,7 +111,7 @@ describe('verifyFrameworkDist', () => {
 
     expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
     expect(result.checkedTargets).toBe(3);
-    expect(result.scannedModules).toBe(1);
+    expect(result.scannedModules).toBe(2);
   });
 
   it('reports missing built export targets', () => {
@@ -140,7 +142,7 @@ describe('verifyFrameworkDist', () => {
     // Only the runtime target counts as checked; the exempted declaration
     // target does not.
     expect(result.checkedTargets).toBe(1);
-    expect(result.scannedModules).toBe(1);
+    expect(result.scannedModules).toBe(2);
   });
 
   it('still reports missing runtime targets and escaping declaration targets without expected declarations', () => {
@@ -265,7 +267,7 @@ describe('verifyFrameworkDist', () => {
     const result = verifyFrameworkDist(root, { migrationChains: [] });
 
     expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
-    expect(result.scannedModules).toBe(2);
+    expect(result.scannedModules).toBe(3);
   });
 
   it('reports bare external imports the manifest does not declare', () => {
@@ -483,15 +485,16 @@ describe('verifyFrameworkDist', () => {
   it('reports a missing required runtime asset', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), { exports: {} });
-    rmSync(join(root, BUNDLED_RUNTIME_ASSETS[0]));
+    const missingAsset = 'dist/code-execution/worker-entry.mjs';
+    rmSync(join(root, missingAsset));
 
     const result = verifyFrameworkDist(root, { migrationChains: [] });
 
     expect(result.issues).toEqual([
       expect.objectContaining({
-        exportKey: BUNDLED_RUNTIME_ASSETS[0],
+        exportKey: missingAsset,
         kind: 'missing-runtime-asset',
-        target: BUNDLED_RUNTIME_ASSETS[0],
+        target: missingAsset,
       }),
     ]);
   });

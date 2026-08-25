@@ -9,6 +9,9 @@
   "description": "Typed, bus-centric framework for building and orchestrating AI agents with tools, sessions, and events",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "files": [
     "dist",
     "LICENSE",
@@ -26,6 +29,8 @@
     "execa": "^9.5.2",
     "glob": "13.0.6",
     "hono": "^4.12.23",
+    "piscina": "^5.1.4",
+    "tsx": "^4.22.3",
     "type-fest": "^5.2.0",
     "ws": "^8.21.0",
     "zod": "4.4.3"
@@ -119,6 +124,10 @@
     "./contracts/client": {
       "types": "./dist/contracts/client/index.d.mts",
       "default": "./dist/contracts/client/index.mjs"
+    },
+    "./contracts/code-execution": {
+      "types": "./dist/contracts/code-execution/index.d.mts",
+      "default": "./dist/contracts/code-execution/index.mjs"
     },
     "./contracts/common": {
       "types": "./dist/contracts/common/index.d.mts",
@@ -243,6 +252,10 @@
     "./services/capability": {
       "types": "./dist/services/capability/index.d.mts",
       "default": "./dist/services/capability/index.mjs"
+    },
+    "./services/code-execution": {
+      "types": "./dist/services/code-execution/index.d.mts",
+      "default": "./dist/services/code-execution/index.mjs"
     },
     "./services/materialization": {
       "types": "./dist/services/materialization/index.d.mts",
@@ -527,6 +540,10 @@
     "./runtime-node/workflow-worker/worker-entry": {
       "types": "./dist/runtime-node/workflow-worker/worker-entry.d.mts",
       "default": "./dist/runtime-node/workflow-worker/worker-entry.mjs"
+    },
+    "./runtime-node/code-execution": {
+      "types": "./dist/runtime-node/code-execution/index.d.mts",
+      "default": "./dist/runtime-node/code-execution/index.mjs"
     },
     "./runtime-bun": {
       "types": "./dist/runtime-bun/index.d.mts",

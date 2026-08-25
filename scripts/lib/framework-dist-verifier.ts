@@ -68,7 +68,10 @@ export const BUNDLED_MIGRATION_CHAINS: readonly string[] = ['dist/drizzle'];
  * package root. These paths are consumed directly by built runtime modules,
  * so exports-map verification cannot prove their presence.
  */
-export const BUNDLED_RUNTIME_ASSETS = ['dist/runtime-node/static/model-registry.yaml'] as const;
+export const BUNDLED_RUNTIME_ASSETS = [
+  'dist/runtime-node/static/model-registry.yaml',
+  'dist/code-execution/worker-entry.mjs',
+] as const;
 
 /**
  * Import specifiers that must never appear in built framework dist modules.

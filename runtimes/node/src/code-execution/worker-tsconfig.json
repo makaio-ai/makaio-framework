@@ -1,0 +1,11 @@
+{
+  "//": "Isolated tsconfig for the CodeExecution worker's process-wide TypeScript loader. Deliberately declares no 'paths' and no 'extends': see worker-entry-resolver.ts.",
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowJs": true
+  }
+}
