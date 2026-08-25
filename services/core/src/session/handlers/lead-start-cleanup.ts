@@ -22,6 +22,8 @@ import { SessionStartError, type SessionStartFailureCode } from './session-start
  * than a second copy of it.
  */
 export interface StartCleanupPolicy {
+  /** Whether cleanup may close the connector but must not let the adapter write the row. */
+  readonly connectorOnlyTeardown?: boolean;
   /**
    * Whether this caller owns `agents.status` for the start being cleaned up.
    *
@@ -33,16 +35,42 @@ export interface StartCleanupPolicy {
   /**
    * The committed reservation, when this cleanup may undo its designation.
    *
-   * Present only for a caller that *made* the designation and is unwinding its
-   * own start. `undefined` keeps the pre-Wave-3 behaviour exactly — a rehydrate
-   * never designates, so it never supplies one, and "a dispatched start keeps
-   * the designation" still holds wherever it is absent.
+   * Present only when the caller is authorized to reverse the concrete lead
+   * transition it made. A replacement supplies its reservation so cleanup can
+   * CAS-restore the transaction-read prior lead; a member supplies none because
+   * it changed no designation. A fresh first lead also supplies none: its dead
+   * row remains the canonical recovery target, whereas clearing it would make a
+   * later default send create a second lead instead of recovering this one.
    *
-   * A caller that supplies one is saying the opposite: the agent it designated
-   * is not going to be a usable lead, so leaving the session pointed at it would
-   * name a lead that is `dead` and has no connector.
+   * Thus presence describes rollback authority, not merely whether the attempt
+   * happened to write a designation.
    */
   readonly reservation?: SessionOwnershipReservation;
+}
+
+/**
+ * The designation a keyless reservation may have committed before its response was lost.
+ *
+ * Unlike a returned reservation, this is reconstructed from the request: the
+ * transaction could only install `agentId` after validating
+ * `expectedLeadAgentId`, and the cleanup compare-and-swap proves that this
+ * attempt still owns the designation before it restores that value.
+ */
+export interface UncertainKeylessDesignation {
+  /** Session whose designation the uncertain reservation may have changed. */
+  readonly sessionId: string;
+  /** Minted agent the reservation may have designated. */
+  readonly agentId: string;
+  /** Transaction guard the reservation validated before it could designate. */
+  readonly expectedLeadAgentId: string | null;
+  /** Semantic transition the caller classified before it reserved. */
+  readonly transition: 'fresh' | 'replace';
+}
+
+/** Evidence that pre-dispatch rollback removed the caller-minted agent row. */
+export interface ReservedStartRollback {
+  /** Whether deletion either answered or was verified by an exact row re-read. */
+  readonly rowDeleted: boolean;
 }
 
 /**
@@ -158,23 +186,26 @@ async function releaseNamedClaims(
  * restore — a lead read before the call is one another start may already have
  * replaced.
  * @param bus - Bus the designation is written on.
- * @param reservation - The reservation being rolled back.
+ * @param designation - The reservation-derived designation being rolled back.
  */
-async function restoreLeadDesignation(bus: IMakaioBus, reservation: SessionOwnershipReservation): Promise<void> {
-  if (!reservation.leadDesignated) return;
-  const previous = reservation.previousLeadAgentId;
+async function restoreLeadDesignation(
+  bus: IMakaioBus,
+  designation: Pick<SessionOwnershipReservation, 'sessionId' | 'agentId' | 'previousLeadAgentId'>,
+): Promise<void> {
+  const previous = designation.previousLeadAgentId;
   const result = await designateSessionLead(bus, {
-    sessionId: reservation.sessionId,
+    sessionId: designation.sessionId,
     // With no previous lead there is nothing to point the designation at, so the
     // restore is the sanctioned clear — which names the departing agent as its
     // expectation exactly as the promotion form does.
-    agentId: previous ?? reservation.agentId,
-    expectedLeadAgentId: reservation.agentId,
+    agentId: previous ?? designation.agentId,
+    expectedLeadAgentId: designation.agentId,
     ...(previous === null && { clear: true as const }),
+    ...(previous !== null && { restore: true as const }),
   });
   if (result !== undefined && result.outcome === 'lead-conflict') {
     console.debug(
-      `[session.start] lead restore for session ${reservation.sessionId} abandoned: a newer designation stands`,
+      `[session.start] lead restore for session ${designation.sessionId} abandoned: a newer designation stands`,
     );
   }
 }
@@ -206,9 +237,36 @@ async function clearReservedDesignation(
 ): Promise<void> {
   if (reservation === undefined) return;
   try {
+    if (!reservation.leadDesignated) return;
     await restoreLeadDesignation(bus, reservation);
   } catch (error) {
     console.debug(`[session.start] clearing the designation of agent ${reservation.agentId} failed:`, error);
+  }
+}
+
+/**
+ * Undo the designation an unacknowledged keyless reservation may have committed.
+ *
+ * The request guard is safe to restore only through the minted-agent CAS: if
+ * the reservation rolled back, or another writer has already moved the lead,
+ * this is a no-op. It deliberately uses the same clear/restore mutation as a
+ * returned reservation so every designation reversal has one marker contract.
+ * @param bus - Bus the designation is written on.
+ * @param designation - Request evidence reconstructed after a lost response.
+ */
+async function clearUncertainKeylessDesignation(
+  bus: IMakaioBus,
+  designation: UncertainKeylessDesignation | undefined,
+): Promise<void> {
+  if (designation === undefined) return;
+  try {
+    await restoreLeadDesignation(bus, {
+      sessionId: designation.sessionId,
+      agentId: designation.agentId,
+      previousLeadAgentId: designation.transition === 'replace' ? designation.expectedLeadAgentId : null,
+    });
+  } catch (error) {
+    console.debug(`[session.start] clearing uncertain designation of agent ${designation.agentId} failed:`, error);
   }
 }
 
@@ -223,12 +281,15 @@ async function clearReservedDesignation(
  * @param bus - Bus the cleanup is issued on.
  * @param agentId - Agent whose row is removed.
  * @param reservation - The committed reservation, when one was taken.
+ * @param uncertainDesignation - Keyless reservation request whose response may have been lost after commit.
+ * @returns Whether the caller-owned row was deleted or verified absent.
  */
 export async function rollbackReservedStart(
   bus: IMakaioBus,
   agentId: string,
   reservation: SessionOwnershipReservation | undefined,
-): Promise<void> {
+  uncertainDesignation?: UncertainKeylessDesignation,
+): Promise<ReservedStartRollback> {
   if (reservation !== undefined) {
     // A keyless reservation holds no claim, so the token-scoped release is a
     // no-op — issued anyway rather than branched on, because "the reservation's
@@ -238,7 +299,30 @@ export async function rollbackReservedStart(
     }
     await clearReservedDesignation(bus, reservation);
   }
-  await bus.requestOptional(AgentStorageSubjects.delete, { agentId });
+  await clearUncertainKeylessDesignation(bus, uncertainDesignation);
+  try {
+    const deletion = await bus.requestOptional(AgentStorageSubjects.delete, { agentId });
+    return { rowDeleted: deletion.handled && deletion.data.success ? true : await isRollbackRowAbsent(bus, agentId) };
+  } catch (error) {
+    console.debug(`[session.start] deleting agent ${agentId} during rollback failed:`, error);
+    return { rowDeleted: await isRollbackRowAbsent(bus, agentId) };
+  }
+}
+
+/**
+ * Verify whether a deletion that threw nevertheless committed.
+ * @param bus - Bus the exact agent row is read on.
+ * @param agentId - Caller-minted agent identity expected to be gone.
+ * @returns Whether storage confirmed that the row is absent.
+ */
+async function isRollbackRowAbsent(bus: IMakaioBus, agentId: string): Promise<boolean> {
+  try {
+    const result = await bus.requestOptional(AgentStorageSubjects.get, { agentId });
+    return result.handled && result.data.agent === null;
+  } catch (error) {
+    console.debug(`[session.start] verifying rollback deletion of agent ${agentId} failed:`, error);
+    return false;
+  }
 }
 
 /**
@@ -408,10 +492,23 @@ function classifyRefusedSettlement(
  * @param bus - Bus the stop is issued on.
  * @param adapterId - Adapter instance the connector lives on.
  * @param agentId - Agent whose connector is stopped.
+ * @param ownerInstanceId - Exact runtime incarnation to address.
+ * @param connectorOnly - Whether teardown must leave the caller-owned row untouched.
  */
-export async function stopStartedConnector(bus: IMakaioBus, adapterId: string, agentId: string): Promise<void> {
+export async function stopStartedConnector(
+  bus: IMakaioBus,
+  adapterId: string,
+  agentId: string,
+  ownerInstanceId: string,
+  connectorOnly = false,
+): Promise<void> {
   try {
-    await bus.requestOptional(AdapterSubjects.stopAgent, { adapterId, agentId });
+    await bus.requestOptional(AdapterSubjects.stopAgent, {
+      adapterId,
+      agentId,
+      ownerInstanceId,
+      ...(connectorOnly && { teardown: 'connector-only' as const }),
+    });
   } catch (error) {
     console.debug(`[session.start] stopping agent ${agentId} failed:`, error);
   }
@@ -431,6 +528,7 @@ export async function stopStartedConnector(bus: IMakaioBus, adapterId: string, a
  * @param bus - Bus the cleanup is issued on.
  * @param adapterId - Adapter instance the connector lives on.
  * @param agentId - Agent the start was for.
+ * @param ownerInstanceId - Exact runtime incarnation that hosted the start.
  * @param result - What the authority answered.
  * @param policy - What this cleanup may write on the start's behalf.
  * @param claimTokens - The generations this attempt is answerable for.
@@ -439,6 +537,7 @@ export async function applySettlementOutcome(
   bus: IMakaioBus,
   adapterId: string,
   agentId: string,
+  ownerInstanceId: string,
   result: SessionOwnershipSettleMovementServiceResult,
   policy: StartCleanupPolicy,
   claimTokens: StartClaimTokens,
@@ -452,7 +551,8 @@ export async function applySettlementOutcome(
   // the one place that knows a *dispatched* start has failed for good, so it is
   // the only place a designation made for that start can honestly be undone.
   await clearReservedDesignation(bus, policy.reservation);
-  if (cleanup.stopConnector) await stopStartedConnector(bus, adapterId, agentId);
+  if (cleanup.stopConnector)
+    await stopStartedConnector(bus, adapterId, agentId, ownerInstanceId, policy.connectorOnlyTeardown);
   if (cleanup.markDead && policy.writesAgentStatus) await markFailedStartDead(bus, agentId);
 
   // The classification is what this helper exists to produce, and the teardown

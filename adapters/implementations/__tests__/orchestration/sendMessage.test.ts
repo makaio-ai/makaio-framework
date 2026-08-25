@@ -37,7 +37,9 @@ describe('Orchestration: sendMessage', () => {
   });
 
   it('sends one-shot message via AdapterSubjects.sendMessage', { timeout: defaultTimeout }, async ({ task }) => {
-    cleanup = async () => await ctx.adapter.closeAsync?.();
+    cleanup = async () => {
+      await ctx.adapter.closeAsync?.();
+    };
 
     // Collect all events emitted for this adapter
     const events: Array<{ subject: string; payload: unknown }> = [];

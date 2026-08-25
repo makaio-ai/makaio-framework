@@ -10,11 +10,11 @@
  * import { OpenAIAdapter, createOpenAINodeAdapter } from '@makaio/adapter-openai-node';
  *
  * // Using the class-based adapter
- * const adapter = new OpenAIAdapter();
+ * const adapter = new OpenAIAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Or using the convenience factory
- * const adapter = await createOpenAINodeAdapter();
+ * const adapter = await createOpenAINodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle adapter.startAgent RPC via bus
  * // Start agents via MakaioBus.request(AdapterSubjects.startAgent, { adapterId, ... })

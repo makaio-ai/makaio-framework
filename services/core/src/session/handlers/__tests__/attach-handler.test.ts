@@ -220,11 +220,13 @@ describe('registerAttachHandler', () => {
       const session = ctx.createMockSession();
       const stoppedAgents: unknown[] = [];
       let startedAgentId: string | undefined;
+      let startedOwnerInstanceId: string | undefined;
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
       ctx.trackUnsubscribe(
         MakaioBus.on(AdapterSubjects.startAgent, (context) => {
           session.status = 'closed';
           startedAgentId = context.payload.agentId;
+          startedOwnerInstanceId = context.payload.ownerInstanceId;
           context.setResult({
             success: true,
             agentId: startedAgentId ?? agentId,
@@ -232,6 +234,8 @@ describe('registerAttachHandler', () => {
             adapterSessionId,
             sessionId,
             messageId: 'message-1',
+            ownerInstanceId: startedOwnerInstanceId ?? 'attach-close-owner',
+            settlementAckToken: 'attach-close-ack',
           });
         }),
       );
@@ -252,7 +256,9 @@ describe('registerAttachHandler', () => {
       expect(stoppedAgents).toEqual([
         {
           adapterId: buildDeterministicAdapterId('test-machine', adapterName),
+          ownerInstanceId: startedOwnerInstanceId,
           agentId: startedAgentId,
+          teardown: 'connector-only',
         },
       ]);
       // Post-dispatch: the row is retired, never deleted — deleting it would
@@ -286,6 +292,8 @@ describe('registerAttachHandler', () => {
               adapterSessionId,
               sessionId,
               messageId: 'initial-message-id',
+              ownerInstanceId: context.payload.ownerInstanceId ?? 'attach-race-owner',
+              settlementAckToken: 'attach-race-ack',
             });
           },
           { priority: 1 },
@@ -410,13 +418,18 @@ describe('registerAttachHandler', () => {
       // The same reset cleared the agent, ownership and authority registrations
       // a reserved attach cannot run without.
       ctx.restoreOwnershipComposition();
+      await ctx.registerKnownAdapter(adapterName, 'node-scoped-adapter-id', 'node-local');
 
       let resolvePayload: { adapterName?: string; machineId?: string } | undefined;
       ctx.trackUnsubscribe(
-        MakaioBus.on(AdapterRuntimeSubjects.resolveId, (context) => {
-          resolvePayload = context.payload;
-          context.setResult({ adapterId: 'node-scoped-adapter-id' });
-        }),
+        MakaioBus.on(
+          AdapterRuntimeSubjects.resolveId,
+          (context) => {
+            resolvePayload = context.payload;
+            context.setResult({ adapterId: 'node-scoped-adapter-id' });
+          },
+          { priority: 100 },
+        ),
       );
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
       const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler({
@@ -490,6 +503,7 @@ describe('registerAttachHandler', () => {
           });
         }),
       );
+      await ctx.registerKnownAdapter('resolved-adapter');
       const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
       ctx.trackUnsubscribe(unsubscribe);
       ctx.trackUnsubscribe(ctx.registerHandler());
@@ -583,7 +597,7 @@ describe('registerAttachHandler', () => {
 
     it('backfills adapterName from adapterId when the direct selection omits adapterName', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
-      await ctx.registerKnownAdapter('resolved-adapter-name', 'machine-1:resolved-adapter-name');
+      await ctx.registerKnownAdapter('resolved-adapter-name', 'machine-1:resolved-adapter-name', 'machine-1');
       const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler({
         adapterId: 'machine-1:resolved-adapter-name',
       });
@@ -608,9 +622,26 @@ describe('registerAttachHandler', () => {
       expect(result.adapterSessionId).toBe(adapterSessionId);
     });
 
+    it('refuses an announced adapter ID when the selection names a different machine before starting or creating an agent row', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      await ctx.registerKnownAdapter('resolved-adapter-name', 'opaque-host-adapter-id', 'foreign-machine');
+      const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      const error = await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterId: 'opaque-host-adapter-id', machineId: 'test-machine' },
+      }).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(RequestError);
+      expect(receivedRequests).toEqual([]);
+      expect(() => ctx.startedAgentId()).toThrow('no attach has dispatched a startAgent request yet');
+    });
+
     it('throws when adapterName and adapterId are provided but storage name differs', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
-      await ctx.registerKnownAdapter('actual-adapter-name', 'machine-1:actual-adapter-name');
+      await ctx.registerKnownAdapter('actual-adapter-name', 'machine-1:actual-adapter-name', 'machine-1');
       ctx.trackUnsubscribe(ctx.registerHandler());
 
       const error = await MakaioBus.request(SessionSubjects.agent.attach, {

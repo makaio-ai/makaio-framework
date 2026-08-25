@@ -48,6 +48,7 @@ describe('SubagentService - execution target inheritance', () => {
         success: true,
         agentId: 'mock-agent',
         adapterId: String(ctx.payload.adapterId),
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-1',
         sessionId,
         messageId: 'msg-1',

@@ -25,6 +25,10 @@ export type ResolvedStartPayload = StartAgentRequestPayload & { providerContext:
 export interface PersistEmitDeps {
   /** Adapter instance identifier. */
   adapterId: string;
+  /** Stable machine identity hosting the adapter. */
+  machineId: string | undefined;
+  /** Runtime incarnation hosting the adapter. */
+  ownerInstanceId: string;
   /** Adapter type name. */
   name: string;
   /** Client identifier for the application this adapter belongs to. */
@@ -136,6 +140,9 @@ function buildAgentRecord(params: {
     adapterId: deps.adapterId,
     adapterName: deps.name,
     sessionId,
+    ...(deps.machineId !== undefined && {
+      runtimeOwner: { machineId: deps.machineId, instanceId: deps.ownerInstanceId },
+    }),
     adapterSessionId,
     model: payload.model,
     cwd: resolvedCwd,

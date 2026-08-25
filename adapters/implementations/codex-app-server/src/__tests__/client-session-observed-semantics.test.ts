@@ -43,6 +43,8 @@ async function createAgentForContext(ctx: ConnectorTestContext, clientId = 'code
     agentId: 'test-agent',
     adapterId: 'test-adapter',
     adapterName: 'codex-app-server',
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     capabilities: ['tools', 'streaming'],
     nativeTools: ['bash', 'patch'],
     adapterBus: ctx.mockBus,

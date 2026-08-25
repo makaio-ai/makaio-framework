@@ -33,12 +33,12 @@ import {
   registerCwdChangeHandler,
   registerModelChangeHandler,
   emitAgentAdded,
-  emitAdapterInitialized,
   collectTurnStartedEvents,
   collectUserMessageSentEvents,
   collectUserMessageAcknowledgedEvents,
   type UnsubscribeFunction,
 } from '../testing/orchestrator-shared.js';
+import { registerMockAdapterIdentityHandlers } from '../testing/mock-adapter-identity-registry.js';
 import { registerMemorySessionBackends, resetBusHandlers, waitForAsync } from './shared.js';
 
 /** Machine identity the orchestrator, the adapter ids and the authority share. */
@@ -145,6 +145,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
   let unsubscribers: UnsubscribeFunction[];
   let defaultCwdChangeUnsub: UnsubscribeFunction | undefined;
   let defaultModelChangeUnsub: UnsubscribeFunction | undefined;
+  let announceLiveAdapter: (adapterName: string, adapterId?: string) => Promise<void>;
 
   beforeEach(async () => {
     resetBusHandlers();
@@ -167,6 +168,23 @@ describe('SessionOrchestrator - Auto-attach', () => {
     unsubscribers.push(defaultModelChangeUnsub);
     service = new MakaioSessionService(MakaioBus, { machineId: MACHINE_ID });
     await service.init();
+    const { unsubscribe } = registerMockAdapterIdentityHandlers(MACHINE_ID);
+    unsubscribers.push(unsubscribe);
+    /**
+     * Publish a complete live identity that the same authority instance owns.
+     * @param adapterName - Stable adapter driver name.
+     * @param adapterId - Runtime adapter identity to announce.
+     */
+    announceLiveAdapter = async (adapterName, adapterId = buildDeterministicAdapterId(MACHINE_ID, adapterName)) => {
+      await MakaioBus.emit(AdapterSubjects.initialized, {
+        adapterName,
+        adapterId,
+        machineId: MACHINE_ID,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+        capabilities: [],
+      });
+    };
+    await announceLiveAdapter('test-adapter');
     bridge = new SessionBridge(MakaioBus);
   });
 
@@ -255,7 +273,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       );
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('my-adapter');
+      await announceLiveAdapter('my-adapter');
 
       const result = await MakaioBus.requestOptional(SessionSubjects.agent.attachResolved, {
         sessionId,
@@ -292,7 +310,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       );
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('my-adapter');
+      await announceLiveAdapter('my-adapter');
 
       // Execute
       await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -378,13 +396,15 @@ describe('SessionOrchestrator - Auto-attach', () => {
             adapterId,
             adapterSessionId,
             sessionId,
+            ownerInstanceId: ctx.payload.ownerInstanceId ?? 'auto-attach-owner',
+            settlementAckToken: `auto-attach-ack-${agentId}`,
           });
           emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
         }),
       );
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
         sessionId,
@@ -453,13 +473,15 @@ describe('SessionOrchestrator - Auto-attach', () => {
             adapterId,
             adapterSessionId,
             sessionId,
+            ownerInstanceId: ctx.payload.ownerInstanceId ?? 'auto-attach-owner',
+            settlementAckToken: `auto-attach-ack-${agentId}`,
           });
           emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
         }),
       );
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
         sessionId,
@@ -483,6 +505,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
     it('backfills adapterName from adapterId when the direct selection omits adapterName', async () => {
       const sessionId = 'session-id-only';
+      const adapterId = buildDeterministicAdapterId(MACHINE_ID, 'resolved-adapter-name');
       await seedEmptySession(sessionId);
 
       let startAgentCalled = false;
@@ -495,20 +518,20 @@ describe('SessionOrchestrator - Auto-attach', () => {
       );
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('resolved-adapter-name', 'machine-1:resolved-adapter-name');
+      await announceLiveAdapter('resolved-adapter-name', adapterId);
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
         sessionId,
         // The machine travels with the instance: an instance ID is a one-way hash
         // of `(machineId, adapterName)`, so naming one without the other leaves
         // every ownership act of the start without a namespace.
-        agent: { kind: 'adapter', adapterId: 'machine-1:resolved-adapter-name', machineId: MACHINE_ID },
+        agent: { kind: 'adapter', adapterId, machineId: MACHINE_ID },
         message: 'Hello!',
       });
 
       expect(startAgentCalled).toBe(true);
       expect(receivedPayload).toEqual({
-        adapterId: 'machine-1:resolved-adapter-name',
+        adapterId,
         sessionId,
       });
     });
@@ -518,7 +541,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       await seedEmptySession(sessionId);
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('bar', 'machine-1:bar');
+      await announceLiveAdapter('bar', 'machine-1:bar');
 
       await expect(
         MakaioBus.request(SessionSubjects.sendMessage, {
@@ -571,7 +594,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
       const turnStarted = collectTurnStartedEvents(unsubscribers);
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       // Execute
       const result = await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -602,7 +625,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
       const messageSent = collectUserMessageSentEvents(unsubscribers);
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       const testMessage = 'Test message content';
 
@@ -637,7 +660,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
       const messageAck = collectUserMessageAcknowledgedEvents(unsubscribers);
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       // Execute
       const result = await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -666,7 +689,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
 
       unsubscribers.push(registerStartAgentHandler());
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       // Execute
       const result = await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -686,7 +709,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
     it('returns provided sessionId for new session', async () => {
       unsubscribers.push(registerStartAgentHandler());
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       // Execute
       const sessionId = `session-${crypto.randomUUID().slice(0, 8)}`;
@@ -712,7 +735,11 @@ describe('SessionOrchestrator - Auto-attach', () => {
       unsubscribers.push(
         MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
           receivedPayload = ctx.payload as Record<string, unknown>;
-          const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
+          const agentId = ctx.payload.agentId;
+          const ownerInstanceId = ctx.payload.ownerInstanceId;
+          if (agentId === undefined || ownerInstanceId === undefined) {
+            throw new Error('Expected a caller-owned start identity.');
+          }
           const messageId = `msg-${crypto.randomUUID().slice(0, 8)}`;
           const adapterSessionId = `adapter-session-${sessionId}`;
           ctx.setResult({
@@ -722,6 +749,8 @@ describe('SessionOrchestrator - Auto-attach', () => {
             adapterSessionId,
             sessionId,
             messageId,
+            ownerInstanceId,
+            settlementAckToken: `auto-attach-ack-${agentId}`,
           });
 
           // Emit agent.added event (mimics AIAdapter behavior)
@@ -730,7 +759,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       );
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       // Execute
       await MakaioBus.request(SessionSubjects.sendMessage, {
@@ -777,7 +806,7 @@ describe('SessionOrchestrator - Auto-attach', () => {
       unsubscribers.push(registerSendMessageHandler());
 
       orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
-      await emitAdapterInitialized('test-adapter');
+      await announceLiveAdapter('test-adapter');
 
       await MakaioBus.request(SessionSubjects.sendMessage, {
         sessionId,

@@ -1,4 +1,4 @@
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import { GeminiAgent } from './agent.js';
 import { GeminiConnector } from './connector.js';
 import { GeminiConnectorNamespace, type GeminiConnectorBus } from './namespaces/index.js';
@@ -27,26 +27,27 @@ export { GeminiSdkAdapterName };
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new GeminiAdapter();
+ * const adapter = new GeminiAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createGeminiSDKAdapter();
+ * const adapter = await createGeminiSDKAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * ```
  */
 export class GeminiAdapter extends AIAdapter<GeminiConnectorBus, GeminiConnector, GeminiAgent> {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: GeminiSdkAdapterName,
       capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append'],
-      ...config,
+      nativeTools: [],
       namespace: GeminiConnectorNamespace,
       agentFactory: (agentConfig) => {
         return new GeminiAgent(agentConfig);
       },
       configFactory: GeminiSdkConfig.getConfig,
       connectorFactory: (fullConfig) => new GeminiConnector(fullConfig),
-      definitionProviders: config?.definitionProviders,
+      definitionProviders: config.definitionProviders,
     });
   }
 }
@@ -55,17 +56,17 @@ export class GeminiAdapter extends AIAdapter<GeminiConnectorBus, GeminiConnector
  * Factory function to create and initialize a Gemini SDK adapter.
  *
  * Convenience wrapper that creates the adapter and calls init() for you.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized GeminiAdapter instance
  * @example
  * ```typescript
- * const adapter = await createGeminiSDKAdapter();
+ * const adapter = await createGeminiSDKAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle requests via bus
  * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
-export async function createGeminiSDKAdapter(config?: Partial<AIAdapterConfig>): Promise<GeminiAdapter> {
+export async function createGeminiSDKAdapter(config: AIAdapterRuntimeConfig): Promise<GeminiAdapter> {
   const adapter = new GeminiAdapter(config);
   await adapter.init();
   return adapter;

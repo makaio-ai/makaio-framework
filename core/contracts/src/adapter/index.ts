@@ -29,6 +29,13 @@ export {
   type RehydrateAgentResponse,
 } from './schemas/rehydrate-agent.js';
 export {
+  AcknowledgeCallerSettlementSchema,
+  CallerSettlementAckRefusalSchema,
+  type AcknowledgeCallerSettlementRequest,
+  type AcknowledgeCallerSettlementResponse,
+  type CallerSettlementAckRefusal,
+} from './schemas/acknowledge-caller-settlement.js';
+export {
   aggregateTeardownEvidence,
   aggregateTeardownResults,
   ConnectorTeardownResultSchema,

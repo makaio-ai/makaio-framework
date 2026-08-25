@@ -1,6 +1,12 @@
 import { sql } from 'drizzle-orm';
-import { index, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
-import { index as pgIndex, uniqueIndex as pgUniqueIndex, check as pgCheck } from 'drizzle-orm/pg-core';
+import { index, uniqueIndex, check, foreignKey, primaryKey } from 'drizzle-orm/sqlite-core';
+import {
+  index as pgIndex,
+  uniqueIndex as pgUniqueIndex,
+  check as pgCheck,
+  foreignKey as pgForeignKey,
+  primaryKey as pgPrimaryKey,
+} from 'drizzle-orm/pg-core';
 import type { JsonValue } from '@makaio/contracts';
 import { defineDualTable } from '@makaio/storage-drizzle';
 
@@ -365,6 +371,15 @@ export const agentsDual = defineDualTable(
       .notNull()
       .references(() => sessionsDual.columnPair('sessionId'), { onDelete: 'cascade' }),
 
+    /** Machine hosting the current live connector, when one has been committed. */
+    ownerMachineId: c.text('owner_machine_id'),
+
+    /** Runtime incarnation hosting the current live connector. */
+    ownerInstanceId: c.text('owner_instance_id'),
+
+    /** Opaque fence for the recovery attempt currently driving this agent. */
+    recoveryAttemptId: c.text('recovery_attempt_id'),
+
     /**
      * Provider's session ID — this agent's **immutable origin identity**.
      *
@@ -480,6 +495,7 @@ export const agentsDual = defineDualTable(
         sql`${t.currentAdapterSessionIdState} IN ('inherited', 'moved', 'confirmed') AND (${t.currentAdapterSessionIdState} <> 'confirmed' OR ${t.currentAdapterSessionId} IS NOT NULL) AND (${t.currentAdapterSessionIdState} = 'confirmed' OR ${t.currentAdapterSessionId} IS NULL)`,
       ),
       check('agents_ownership_counters_check', sql`${t.revision} >= 0 AND ${t.currencyFence} >= 0`),
+      check('agents_runtime_owner_pair_check', sql`(${t.ownerMachineId} IS NULL) = (${t.ownerInstanceId} IS NULL)`),
     ],
     postgres: (t) => [
       pgIndex('agents_session_id_idx').on(t.sessionId),
@@ -495,12 +511,65 @@ export const agentsDual = defineDualTable(
         sql`${t.currentAdapterSessionIdState} IN ('inherited', 'moved', 'confirmed') AND (${t.currentAdapterSessionIdState} <> 'confirmed' OR ${t.currentAdapterSessionId} IS NOT NULL) AND (${t.currentAdapterSessionIdState} = 'confirmed' OR ${t.currentAdapterSessionId} IS NULL)`,
       ),
       pgCheck('agents_ownership_counters_check', sql`${t.revision} >= 0 AND ${t.currencyFence} >= 0`),
+      pgCheck('agents_runtime_owner_pair_check', sql`(${t.ownerMachineId} IS NULL) = (${t.ownerInstanceId} IS NULL)`),
     ],
   },
 );
 
 /** SQLite face of the `agents` table (canonical schema). */
 export const agents = agentsDual.sqlite;
+
+/**
+ * Per-machine runtime incarnation allocation state.
+ *
+ * This private coordination table serializes incarnation allocation before a
+ * runtime instance row is inserted. Its value is never exposed as a public
+ * storage record; `runtime_instances` remains the durable audit surface.
+ */
+export const runtimeInstanceIncarnationCountersDual = defineDualTable('runtime_instance_incarnation_counters', (c) => ({
+  /** Machine whose runtime incarnations this row allocates. */
+  machineId: c.text('machine_id').primaryKey(),
+  /** Last incarnation allocated for this machine. */
+  lastAllocatedIncarnation: c.int4('last_allocated_incarnation').notNull(),
+}));
+
+/** SQLite face of the private runtime-incarnation counter table. */
+export const runtimeInstanceIncarnationCounters = runtimeInstanceIncarnationCountersDual.sqlite;
+
+/**
+ * Runtime processes that have taken ownership claims.
+ *
+ * Rows are retained permanently: `retired_at` is the durable liveness fact;
+ * deleting a row would erase the evidence needed to assess its claims.
+ */
+export const runtimeInstancesDual = defineDualTable(
+  'runtime_instances',
+  (c) => ({
+    /** Identity minted once per runtime process. */
+    instanceId: c.text('instance_id').notNull(),
+    /** Machine this process acted for. */
+    machineId: c.text('machine_id').notNull(),
+    /** Storage-allocated, strictly increasing sequence per machine. */
+    incarnation: c.int4('incarnation').notNull(),
+    /** When this process first took a claim for this machine. */
+    startedAt: c.epochMs('started_at').notNull(),
+    /** When the process retired itself; null while it may still be running. */
+    retiredAt: c.epochMs('retired_at'),
+  }),
+  {
+    sqlite: (t) => [
+      primaryKey({ columns: [t.instanceId, t.machineId] }),
+      uniqueIndex('uniq_runtime_instances_incarnation').on(t.machineId, t.incarnation),
+    ],
+    postgres: (t) => [
+      pgPrimaryKey({ columns: [t.instanceId, t.machineId] }),
+      pgUniqueIndex('uniq_runtime_instances_incarnation').on(t.machineId, t.incarnation),
+    ],
+  },
+);
+
+/** SQLite face of the `runtime_instances` table (canonical schema). */
+export const runtimeInstances = runtimeInstancesDual.sqlite;
 
 /**
  * Adapter session claims table schema.
@@ -566,6 +635,9 @@ export const adapterSessionClaimsDual = defineDualTable(
       .notNull()
       .references(() => agentsDual.columnPair('agentId'), { onDelete: 'cascade' }),
 
+    /** Runtime process that took this generation, or `null` for a legacy claim. */
+    ownerInstanceId: c.text('owner_instance_id'),
+
     /**
      * Opaque identity of the current claim generation, minted by the claimant.
      *
@@ -630,6 +702,10 @@ export const adapterSessionClaimsDual = defineDualTable(
       uniqueIndex('uniq_adapter_session_claims_agent_fence').on(t.agentId, t.fence),
       index('adapter_session_claims_agent_id_idx').on(t.agentId),
       index('adapter_session_claims_session_id_idx').on(t.sessionId),
+      foreignKey({
+        columns: [t.ownerInstanceId, t.machineId],
+        foreignColumns: [runtimeInstancesDual.sqlite.instanceId, runtimeInstancesDual.sqlite.machineId],
+      }).onDelete('restrict'),
       check('adapter_session_claims_status_check', sql`${t.status} IN ('held', 'releasing', 'abandoned')`),
       check('adapter_session_claims_fence_check', sql`${t.fence} >= 1`),
     ],
@@ -639,6 +715,10 @@ export const adapterSessionClaimsDual = defineDualTable(
       pgUniqueIndex('uniq_adapter_session_claims_agent_fence').on(t.agentId, t.fence),
       pgIndex('adapter_session_claims_agent_id_idx').on(t.agentId),
       pgIndex('adapter_session_claims_session_id_idx').on(t.sessionId),
+      pgForeignKey({
+        columns: [t.ownerInstanceId, t.machineId],
+        foreignColumns: [runtimeInstancesDual.postgres.instanceId, runtimeInstancesDual.postgres.machineId],
+      }).onDelete('restrict'),
       pgCheck('adapter_session_claims_status_check', sql`${t.status} IN ('held', 'releasing', 'abandoned')`),
       pgCheck('adapter_session_claims_fence_check', sql`${t.fence} >= 1`),
     ],
@@ -667,6 +747,9 @@ export type InsertAgent = typeof agents.$inferInsert;
  * Type for a selected agent row.
  */
 export type SelectAgent = typeof agents.$inferSelect;
+
+/** Type for selecting a runtime instance. */
+export type SelectRuntimeInstance = typeof runtimeInstances.$inferSelect;
 
 /**
  * Type for inserting a new adapter session claim.

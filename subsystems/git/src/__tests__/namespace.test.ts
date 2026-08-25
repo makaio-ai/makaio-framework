@@ -16,6 +16,14 @@ describe('Git Namespace', () => {
       });
     });
 
+    it('should export git.localBranchExists request subject', () => {
+      expect(GitSubjects.localBranchExists).toBeDefined();
+      expect(GitSubjects.localBranchExists).toMatchObject({
+        subject: 'localBranchExists',
+        $meta: { namespace: 'git', isRequest: true },
+      });
+    });
+
     it('should export git.getCommit request subject', () => {
       expect(GitSubjects.getCommit).toBeDefined();
       expect(GitSubjects.getCommit).toMatchObject({

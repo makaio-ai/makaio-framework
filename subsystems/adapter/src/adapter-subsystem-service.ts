@@ -1,6 +1,7 @@
 import { type IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
+import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
 import { ProviderDefinitionSchema, teardownWasObserved } from '@makaio/contracts';
 import { ExtensionSubjects, type ExtensionCoordinator } from '@makaio/kernel';
@@ -43,6 +44,8 @@ export interface AdapterSubsystemServiceOptions {
    * Stable machine identifier used for deterministic adapter ID derivation.
    */
   readonly machineId: string;
+  /** Resolve the currently active session-ownership authority incarnation. */
+  readonly resolveOwnerInstanceId?: () => string;
   /**
    * Platform-provided defaults forwarded to adapter factories.
    */
@@ -83,6 +86,7 @@ export class AdapterSubsystemService extends BaseService {
   private readonly contributionProcessor: AdapterContributionProcessor;
   private readonly runtimeSnapshotHandlerPriority: number;
   private readonly runtimeDefinitionHandlerPriority: number;
+  private readonly resolveOwnerInstanceId: (() => string) | undefined;
 
   /**
    * Create a new adapter subsystem service.
@@ -99,6 +103,9 @@ export class AdapterSubsystemService extends BaseService {
     this.registry = new AdapterRuntimeRegistry({
       bus: options.bus,
       machineId: options.machineId,
+      ...(options.resolveOwnerInstanceId !== undefined && {
+        resolveOwnerInstanceId: options.resolveOwnerInstanceId,
+      }),
     });
 
     this.providerConfigService = new AdapterProviderConfigService({
@@ -121,6 +128,7 @@ export class AdapterSubsystemService extends BaseService {
     });
     this.runtimeSnapshotHandlerPriority = options.runtimeSnapshotHandlerPriority ?? 0;
     this.runtimeDefinitionHandlerPriority = options.runtimeDefinitionHandlerPriority ?? -100;
+    this.resolveOwnerInstanceId = options.resolveOwnerInstanceId;
   }
 
   /**
@@ -323,6 +331,11 @@ export class AdapterSubsystemService extends BaseService {
    */
   protected override async onDestroy(): Promise<void> {
     const shutdown = await this.registry.shutdownAll();
+    await this.bus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+      ownerInstanceId: this.resolveOwnerInstanceId?.() ?? null,
+      evidence: shutdown.evidence,
+      ...(shutdown.detail !== undefined && { detail: shutdown.detail }),
+    });
     if (!teardownWasObserved(shutdown.evidence)) {
       console.warn(
         `[AdapterSubsystemService] Adapter instance shutdown reported "${shutdown.evidence}": ${shutdown.detail ?? 'no detail reported.'}`,
@@ -355,6 +368,39 @@ export class AdapterSubsystemService extends BaseService {
    */
   public getAdapterInstances(): ReadonlyMap<string, AdapterInstance> {
     return this.registry.getAdapterInstances();
+  }
+
+  /**
+   * Resolve a named adapter to its currently registered local instance ID.
+   * @param adapterName - Adapter driver name.
+   * @returns Live instance ID, or undefined when the adapter is not dispatchable.
+   */
+  public resolveLiveAdapterId(adapterName: string): string | undefined {
+    return this.registry.resolveLiveAdapterId(adapterName);
+  }
+
+  /**
+   * Resolve an exact currently live adapter identity.
+   * @param adapterId - Instance ID to resolve from the live runtime registry.
+   * @returns Exact identity, or `undefined` when no matching instance is live.
+   */
+  public resolveLiveAdapterIdentity(
+    adapterId: string,
+  ): { adapterId: string; adapterName: string; machineId: string; ownerInstanceId: string } | undefined {
+    return this.registry.resolveLiveAdapterIdentity(adapterId);
+  }
+
+  /**
+   * Snapshot every currently live adapter identity.
+   * @returns Exact identities for all dispatchable local instances.
+   */
+  public getLiveAdapterIdentities(): Array<{
+    adapterId: string;
+    adapterName: string;
+    machineId: string;
+    ownerInstanceId: string;
+  }> {
+    return this.registry.getLiveAdapterIdentities();
   }
 
   /**

@@ -9,7 +9,7 @@ import { createAnthropicSdkAdapter } from '@makaio/adapter-anthropic-sdk';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
 
-const adapter = await createAnthropicSdkAdapter();
+const adapter = await createAnthropicSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 
 const result = await MakaioBus.request(AdapterSubjects.startAgent, {
   adapterId: adapter.adapterId,

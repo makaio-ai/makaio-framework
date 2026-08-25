@@ -56,8 +56,15 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 500, intervalMs =
 function setupLocalityTest(
   ctx: AttachHandlerTestContext,
   session: IMakaioSession,
-  machineId: string,
+  machineId: string | undefined,
 ): StartAgentRequestPayload[] {
+  if (machineId !== undefined) {
+    void ctx.registerKnownAdapter(
+      ATTACH_TEST_IDS.adapterName,
+      buildDeterministicAdapterId(machineId, ATTACH_TEST_IDS.adapterName),
+      machineId,
+    );
+  }
   ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
   const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
   ctx.trackUnsubscribe(unsubscribe);
@@ -221,6 +228,7 @@ describe('registerAttachHandler - native locality', () => {
         }),
         localMachine,
       );
+      await ctx.registerKnownAdapter('codex-mcp', buildDeterministicAdapterId(localMachine, 'codex-mcp'), localMachine);
 
       // Attach using a different adapter name than the session's stored adapter.
       await MakaioBus.request(SessionSubjects.agent.attach, {
@@ -304,6 +312,18 @@ describe('registerAttachHandler - native locality', () => {
     });
   });
 
+  it('uses the canonical runtime machine when the handler receives no explicit target machine', async () => {
+    const receivedRequests = setupLocalityTest(ctx, ctx.createMockSession(), undefined);
+
+    await MakaioBus.request(SessionSubjects.agent.attach, {
+      sessionId,
+      agent: { kind: 'adapter', adapterName },
+    });
+
+    expect(receivedRequests).toHaveLength(1);
+    expect(receivedRequests[0]?.adapterId).toBe(buildDeterministicAdapterId('test-machine', adapterName));
+  });
+
   /**
    * The attach face of the one-identity rule (#1140 Wave 4 Step 5, case 213/214).
    *
@@ -326,7 +346,7 @@ describe('registerAttachHandler - native locality', () => {
      */
     async function announceInstance(machineId: string): Promise<string> {
       const adapterId = buildDeterministicAdapterId(machineId, adapterName);
-      await ctx.registerKnownAdapter(adapterName, adapterId);
+      await ctx.registerKnownAdapter(adapterName, adapterId, machineId);
       return adapterId;
     }
 
@@ -605,6 +625,7 @@ describe('registerAttachHandler - native locality', () => {
         machineId: localMachine,
         adapterSessionId: nativeAdapterSessionId,
       });
+      await ctx.registerKnownAdapter(adapterName, buildDeterministicAdapterId(localMachine, adapterName), localMachine);
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
       ctx.trackUnsubscribe(ctx.registerHandler(localMachine));
 
@@ -623,6 +644,8 @@ describe('registerAttachHandler - native locality', () => {
             adapterSessionId: `${ATTACH_TEST_IDS.adapterSessionId}-${agentCounter}`,
             sessionId: ATTACH_TEST_IDS.sessionId,
             messageId: ATTACH_TEST_IDS.messageId,
+            ownerInstanceId: context.payload.ownerInstanceId ?? 'native-locality-owner',
+            settlementAckToken: `native-locality-ack-${agentCounter}`,
           });
         }),
       );

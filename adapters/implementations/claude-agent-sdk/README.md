@@ -10,10 +10,10 @@ import { AdapterSubjects } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
 
 // Using the factory (recommended)
-const adapter = await createClaudeAdapter();
+const adapter = await createClaudeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 
 // Or instantiate directly
-const directAdapter = new ClaudeCodeAdapter();
+const directAdapter = new ClaudeCodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 await directAdapter.init();
 
 const result = await MakaioBus.request(AdapterSubjects.startAgent, {

@@ -68,7 +68,7 @@ Type: Request (RPC)
 | `kind` | `string` | yes |
 | `progress` | `string[] \| undefined` | no |
 | `result` | `string \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "running" \| "waiting_input"` | yes |
+| `status` | `"failed" \| "completed" \| "cancelled" \| "running" \| "waiting_input"` | yes |
 | `subagentId` | `string` | yes |
 
 ### <a id="agentRuntime.kill"></a>`agentRuntime.kill` (rpc)

@@ -2,7 +2,7 @@ import type { ScopedBus } from '@makaio/bus-core';
 import type { AIAdapter } from '../adapter/ai-adapter.js';
 import type { AIAgentConnector } from '../connector/agent-connector.js';
 import type { AIAgent } from '../agent/ai-agent.js';
-import type { AIAdapterInitOptions } from './ai-adapter-init-options.js';
+import type { AIAdapterRuntimeInitOptions } from './ai-adapter-init-options.js';
 import type { AdapterClientRef, AdapterDefinitionContract } from '@makaio/contracts';
 
 /**
@@ -22,7 +22,7 @@ import type { AdapterClientRef, AdapterDefinitionContract } from '@makaio/contra
  *   name: 'openai-node',
  *   displayName: 'OpenAI',
  *   description: 'OpenAI chat completions with streaming and tool calling',
- *   createAdapter: (options) => createOpenAINodeAdapter({ adapterId: options?.adapterId }),
+ *   createAdapter: (options) => createOpenAINodeAdapter(options),
  * };
  * ```
  */
@@ -30,13 +30,13 @@ export interface AIAdapterDefinition<
   TBus extends ScopedBus<string> = ScopedBus<string>,
   TConnector extends AIAgentConnector<TBus> = AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector> = AIAgent<TBus, TConnector>,
-> extends AdapterDefinitionContract<AIAdapter<TBus, TConnector, TAgent>, AIAdapterInitOptions> {
+> extends AdapterDefinitionContract<AIAdapter<TBus, TConnector, TAgent>, AIAdapterRuntimeInitOptions> {
   /**
    * Client packages this adapter can delegate to.
    *
    * Each reference names a client extension by stable ID and declares the
    * compatible client package version range. Runtime initialization still
-   * receives a selected `clientId` through {@link AIAdapterInitOptions}; this
+   * receives a selected `clientId` through {@link AIAdapterRuntimeInitOptions}; this
    * definition field is the adapter-to-client capability declaration.
    */
   readonly clients?: readonly AdapterClientRef[];
@@ -44,7 +44,7 @@ export interface AIAdapterDefinition<
   /**
    * Adapter definitions declare client compatibility through {@link clients}.
    *
-   * `AIAdapterInitOptions.clientId` remains the runtime-selected client
+   * `AIAdapterRuntimeInitOptions.clientId` remains the runtime-selected client
    * override passed to adapter factories for existing client-backed adapters.
    */
   readonly clientId?: never;
@@ -52,11 +52,11 @@ export interface AIAdapterDefinition<
   /**
    * Factory that creates and initializes the adapter instance.
    *
-   * Inherits the typed {@link AIAdapterInitOptions} parameter from the base
+   * Inherits the typed {@link AIAdapterRuntimeInitOptions} parameter from the base
    * contract's `TOptions` generic, carrying platform defaults, log import
    * config, and provider definitions injected at runtime.
-   * @param options - Optional initialization options injected by the runtime.
+   * @param options - Runtime identity and initialization options injected by the host.
    * @returns The initialized adapter instance.
    */
-  readonly createAdapter: (options?: AIAdapterInitOptions) => Promise<AIAdapter<TBus, TConnector, TAgent>>;
+  readonly createAdapter: (options: AIAdapterRuntimeInitOptions) => Promise<AIAdapter<TBus, TConnector, TAgent>>;
 }

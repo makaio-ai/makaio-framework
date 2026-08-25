@@ -1,9 +1,42 @@
 import { z } from 'zod';
+import { validateLeadDesignationMutation } from './session-ownership-designation-mutation.js';
 import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import {
   AdapterSessionCurrencySnapshotSchema,
   AdapterSessionCurrencyTargetSchema,
 } from './schemas/adapter-session-currency.js';
+import { AgentStatusSchema } from './schemas/agent.js';
+import { AdapterSessionClaimStatusSchema, type AdapterSessionClaimStatus } from './session-ownership-claim-status.js';
+import {
+  RuntimeBindingSchema,
+  SessionOwnershipFinalizeRecoveryRequestSchema,
+  SessionOwnershipFinalizeRecoveryResponseSchema,
+  SessionOwnershipRecoveryGuardSchema,
+  SessionOwnershipRecoveryOwnerGenerationSchema,
+  SessionOwnershipRecoveryPreimageSchema,
+  SessionOwnershipRecoveryReservationSchema,
+  SessionOwnershipRecoveryTerminalActionSchema,
+} from './session-ownership-recovery.js';
+export {
+  RuntimeBindingSchema,
+  SessionOwnershipFinalizeRecoveryRequestSchema,
+  SessionOwnershipFinalizeRecoveryResponseSchema,
+  SessionOwnershipRecoveryGuardSchema,
+  SessionOwnershipRecoveryOwnerGenerationSchema,
+  SessionOwnershipRecoveryPreimageSchema,
+  SessionOwnershipRecoveryReservationSchema,
+  SessionOwnershipRecoveryTerminalActionSchema,
+};
+export type {
+  RuntimeBinding,
+  SessionOwnershipFinalizeRecoveryRequest,
+  SessionOwnershipFinalizeRecoveryResult,
+  SessionOwnershipRecoveryGuard,
+  SessionOwnershipRecoveryOwnerGeneration,
+  SessionOwnershipRecoveryPreimage,
+  SessionOwnershipRecoveryReservation,
+  SessionOwnershipRecoveryTerminalAction,
+} from './session-ownership-recovery.js';
 
 /**
  * Lifecycle state of a durable ownership claim.
@@ -35,10 +68,7 @@ import {
  * A clean release removes the row instead of marking it, so the unblocked case
  * is the absence of a row rather than a status a reader has to interpret.
  */
-export const AdapterSessionClaimStatusSchema = z.enum(['held', 'releasing', 'abandoned']);
-
-/** {@inheritDoc AdapterSessionClaimStatusSchema} */
-export type AdapterSessionClaimStatus = z.infer<typeof AdapterSessionClaimStatusSchema>;
+export { AdapterSessionClaimStatusSchema, type AdapterSessionClaimStatus };
 
 /**
  * Identity of the namespace a provider session is owned within.
@@ -86,6 +116,8 @@ export const AdapterSessionClaimRecordSchema = AdapterSessionClaimKeySchema.exte
   sessionId: z.string(),
   /** Agent that owns the provider session under this claim. */
   agentId: z.string(),
+  /** Runtime process that took this generation, or `null` for a legacy claim. */
+  ownerInstanceId: z.string().nullable(),
   /** Opaque identity of the current claim generation. */
   claimToken: z.string(),
   /**
@@ -114,6 +146,41 @@ export const AdapterSessionClaimRecordSchema = AdapterSessionClaimKeySchema.exte
 
 /** {@inheritDoc AdapterSessionClaimRecordSchema} */
 export type AdapterSessionClaimRecord = z.infer<typeof AdapterSessionClaimRecordSchema>;
+
+/**
+ * One runtime process acting for one machine that has taken an ownership
+ * generation. Instance rows are durable diagnostics and are never deleted.
+ */
+export const RuntimeInstanceRecordSchema = z.object({
+  /** Identity minted once per runtime process. */
+  instanceId: z.string(),
+  /** Machine this process acted for. */
+  machineId: z.string(),
+  /** Storage-allocated, strictly increasing sequence for this machine. */
+  incarnation: z.number().int().positive(),
+  /** When this process first took a claim for this machine. */
+  startedAt: z.number().int().nonnegative(),
+  /** When this process retired itself, or `null` while it may still be running. */
+  retiredAt: z.number().int().nonnegative().nullable(),
+});
+
+/** {@inheritDoc RuntimeInstanceRecordSchema} */
+export type RuntimeInstanceRecord = z.infer<typeof RuntimeInstanceRecordSchema>;
+
+/** Runtime process on whose behalf an ownership generation is taken. */
+export const OwnershipOwnerInstanceSchema = z.object({
+  /** Identity minted once per runtime process. */
+  instanceId: z.string(),
+});
+
+/** {@inheritDoc OwnershipOwnerInstanceSchema} */
+export type OwnershipOwnerInstance = z.infer<typeof OwnershipOwnerInstanceSchema>;
+
+/** How many runtime processes may own claims on one machine. */
+export const OwnershipTopologySchema = z.enum(['machine-exclusive', 'shared-machine']);
+
+/** {@inheritDoc OwnershipTopologySchema} */
+export type OwnershipTopology = z.infer<typeof OwnershipTopologySchema>;
 
 /**
  * Durable ownership state of one agent.
@@ -179,6 +246,20 @@ export const SessionOwnershipClaimRequestSchema = AdapterSessionClaimKeySchema.e
   providerSessionId: z.string().nullable(),
   /** Adapter type name of the claiming runtime. */
   adapterName: z.string(),
+  /** Owner process for any generation this call allocates. */
+  ownerInstance: OwnershipOwnerInstanceSchema.optional(),
+  /** Topology the caller may decide under. */
+  topology: OwnershipTopologySchema.default('shared-machine'),
+  /**
+   * Guard for an atomic recovery reservation.
+   *
+   * Omitted by ordinary starts. When present, storage verifies the snapshot
+   * under the same agent-row lock as the claim and moves the agent to
+   * `starting` only when the claim also succeeds.
+   */
+  recoveryGuard: SessionOwnershipRecoveryGuardSchema.optional(),
+  /** Opaque attempt fence minted before this recovery's reservation. */
+  recoveryAttemptId: z.string().optional(),
   /**
    * Session the claiming agent belongs to.
    *
@@ -226,16 +307,15 @@ export const SessionOwnershipClaimRequestSchema = AdapterSessionClaimKeySchema.e
    * the previous owner is gone — the storage seam does not decide abandonment,
    * it records the conclusion and fences the previous generation out.
    *
-   * **This is not the only takeover, and no production caller sends it.** A key
-   * whose incumbent's agent row carries `status: 'disposed'` is taken over
-   * *unconditionally*, with no request flag at all, because a disposed agent can
-   * never legitimately hold a key — see
-   * {@link SessionOwnershipClaimResponseSchema}'s `agent-disposed`. That
-   * takeover is a predicate evaluated inside the taking transaction, so the
-   * evidence behind it can be neither stale nor replayed nor contradicted by a
-   * concurrent writer. A *deleted* agent or session needs no takeover at all:
-   * both foreign keys cascade, so the claim row goes with its parent and the
-   * next claimant performs an ordinary free acquisition.
+   * **This is not the only takeover.** Storage also permits a replacement only
+   * when its runtime-owner facts establish one of these public predicates:
+   * T1, the same held generation's agent and owner instance; T3, a retired
+   * incumbent owner; or T4, a newer owner incarnation under explicitly
+   * `machine-exclusive` topology. An incumbent agent's `disposed` status does
+   * not prove that its connector stopped, so it does not authorize takeover.
+   * A *deleted* agent or session needs no takeover at all: both foreign keys
+   * cascade, so the claim row goes with its parent and the next claimant
+   * performs an ordinary free acquisition.
    *
    * A takeover repoints the claim row at the taking agent, so it is held to the
    * same `(agent, session)` membership as a fresh acquisition and reports the
@@ -303,12 +383,56 @@ export const SessionOwnershipClaimRequestSchema = AdapterSessionClaimKeySchema.e
        * caller holding a pre-designation snapshot cannot unset it by accident.
        */
       clear: z.literal(true).optional(),
+      /** Restore a prior non-null lead during failed-start cleanup. */
+      restore: z.literal(true).optional(),
     })
     .optional(),
+}).superRefine((value, ctx) => {
+  validateLeadDesignationMutation(value, ctx);
+  if (value.providerSessionId !== null && value.ownerInstance === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ownerInstance'],
+      message: 'ownerInstance is required when providerSessionId is not null',
+    });
+  }
+  if (value.recoveryGuard !== undefined && value.ownerInstance === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ownerInstance'],
+      message: 'ownerInstance is required when recoveryGuard is present',
+    });
+  }
+  if (value.recoveryGuard !== undefined && value.recoveryAttemptId === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['recoveryAttemptId'],
+      message: 'recoveryAttemptId is required when recoveryGuard is present',
+    });
+  }
+  if (value.recoveryGuard === undefined && value.recoveryAttemptId !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['recoveryGuard'],
+      message: 'recoveryGuard is required when recoveryAttemptId is present',
+    });
+  }
 });
 
 /** {@inheritDoc SessionOwnershipClaimRequestSchema} */
 export type SessionOwnershipClaimRequest = z.infer<typeof SessionOwnershipClaimRequestSchema>;
+
+/**
+ * Validate and normalize an ownership claim at the storage trust boundary.
+ *
+ * Storage handlers call this even when bus validation is disabled so schema
+ * defaults and cross-field refinements remain part of the durable invariant.
+ * @param value - Untrusted claim request received by a storage handler.
+ * @returns The fully validated claim request with schema defaults applied.
+ */
+export function normalizeSessionOwnershipClaimRequest(value: unknown): SessionOwnershipClaimRequest {
+  return SessionOwnershipClaimRequestSchema.parse(value);
+}
 
 /**
  * Result of `storage:sessionOwnership.claim`.
@@ -318,6 +442,28 @@ export type SessionOwnershipClaimRequest = z.infer<typeof SessionOwnershipClaimR
  * depends on *who* holds it and in which state, and re-reading afterwards would
  * observe a different instant than the one that rejected the claim.
  */
+/** Recovery plan currency changed before its guarded reservation committed. */
+export const SessionOwnershipRecoveryCurrencyChangedSchema = z.object({
+  /** No write occurred because the agent currency changed. */
+  outcome: z.literal('currency-changed'),
+  /** Current currency revision. */
+  revision: z.number().int().nonnegative(),
+  /** Current currency fence. */
+  currencyFence: z.number().int().nonnegative(),
+  /** Current currency snapshot. */
+  currency: AdapterSessionCurrencySnapshotSchema,
+});
+
+/** Recovery lifecycle or owner generation changed before reservation. */
+export const SessionOwnershipRecoveryConflictSchema = z.object({
+  /** No write occurred because lifecycle arbitration changed. */
+  outcome: z.literal('recovery-conflict'),
+  /** Current lifecycle status. */
+  status: AgentStatusSchema,
+  /** Generation currently holding the requested key, or `null` when free. */
+  ownerGeneration: SessionOwnershipRecoveryOwnerGenerationSchema.nullable(),
+});
+
 export const SessionOwnershipClaimResponseSchema = z.discriminatedUnion('outcome', [
   z.object({
     /** The claim was taken by this call. */
@@ -327,6 +473,7 @@ export const SessionOwnershipClaimResponseSchema = z.discriminatedUnion('outcome
      * writes no claim row and therefore names no generation.
      */
     claim: AdapterSessionClaimRecordSchema.nullable(),
+    recovery: SessionOwnershipRecoveryReservationSchema.optional(),
     /** Whether this call wrote the session's lead designation. */
     leadDesignated: z.boolean(),
     /**
@@ -373,6 +520,7 @@ export const SessionOwnershipClaimResponseSchema = z.discriminatedUnion('outcome
      * carries the row it re-validated against.
      */
     claim: AdapterSessionClaimRecordSchema.nullable(),
+    recovery: SessionOwnershipRecoveryReservationSchema.optional(),
     /** Whether this call wrote the session's lead designation. */
     leadDesignated: z.boolean(),
     /** Lead the session named inside this transaction, as on `claimed`. */
@@ -402,6 +550,16 @@ export const SessionOwnershipClaimResponseSchema = z.discriminatedUnion('outcome
     outcome: z.literal('agent-disposed'),
   }),
   z.object({
+    /**
+     * The session is no longer admitted for starts; no claim or designation was
+     * committed. The status keeps a lifecycle refusal distinct from a missing
+     * row or a contended provider session.
+     */
+    outcome: z.literal('session-not-active'),
+    /** Stored non-active status observed by the reserving transaction. */
+    status: z.enum(['closed', 'archived', 'discovered']),
+  }),
+  z.object({
     /** The session's lead is not the one the caller expected; nothing was written. */
     outcome: z.literal('lead-conflict'),
     /** Lead agent the session actually names, or `null` when it has none. */
@@ -421,6 +579,8 @@ export const SessionOwnershipClaimResponseSchema = z.discriminatedUnion('outcome
      */
     missing: z.enum(['session', 'agent']),
   }),
+  SessionOwnershipRecoveryCurrencyChangedSchema,
+  SessionOwnershipRecoveryConflictSchema,
 ]);
 
 /** {@inheritDoc SessionOwnershipClaimResponseSchema} */
@@ -616,28 +776,42 @@ export type OwnershipMovement = z.infer<typeof OwnershipMovementSchema>;
  * transactions with two windows in which a crash strands a key or publishes a
  * currency no generation owns.
  */
-export const SessionOwnershipSettleMovementRequestSchema = z.object({
-  /** {@inheritDoc AdapterSessionClaimKeySchema.shape.machineId} */
-  machineId: z.string(),
-  /** {@inheritDoc AdapterSessionClaimKeySchema.shape.adapterId} */
-  adapterId: z.string(),
-  /** Adapter type name of the owning runtime, carried onto any claim taken. */
-  adapterName: z.string(),
-  /**
-   * Session the agent belongs to.
-   *
-   * Verified against the agent's own row rather than trusted, exactly as
-   * `claim` verifies it: a movement filed under a session the agent has left
-   * would publish its currency into a session it was never part of.
-   */
-  sessionId: z.string(),
-  /** Agent whose provider conversation moved. */
-  agentId: z.string(),
-  /** Revision the caller read before computing the movement. */
-  expectedRevision: z.number().int().nonnegative(),
-  /** {@inheritDoc OwnershipMovementSchema} */
-  movement: OwnershipMovementSchema,
-});
+export const SessionOwnershipSettleMovementRequestSchema = z
+  .object({
+    /** {@inheritDoc AdapterSessionClaimKeySchema.shape.machineId} */
+    machineId: z.string(),
+    /** {@inheritDoc AdapterSessionClaimKeySchema.shape.adapterId} */
+    adapterId: z.string(),
+    /** Adapter type name of the owning runtime, carried onto any claim taken. */
+    adapterName: z.string(),
+    /** Owner process for the generation this movement may allocate. */
+    ownerInstance: OwnershipOwnerInstanceSchema.optional(),
+    /** Topology the caller may decide under. */
+    topology: OwnershipTopologySchema.default('shared-machine'),
+    /**
+     * Session the agent belongs to.
+     *
+     * Verified against the agent's own row rather than trusted, exactly as
+     * `claim` verifies it: a movement filed under a session the agent has left
+     * would publish its currency into a session it was never part of.
+     */
+    sessionId: z.string(),
+    /** Agent whose provider conversation moved. */
+    agentId: z.string(),
+    /** Revision the caller read before computing the movement. */
+    expectedRevision: z.number().int().nonnegative(),
+    /** {@inheritDoc OwnershipMovementSchema} */
+    movement: OwnershipMovementSchema,
+  })
+  .superRefine((value, ctx) => {
+    if (value.ownerInstance === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ownerInstance'],
+        message: 'ownerInstance is required for settleMovement',
+      });
+    }
+  });
 
 /** {@inheritDoc SessionOwnershipSettleMovementRequestSchema} */
 export type SessionOwnershipSettleMovementRequest = z.infer<typeof SessionOwnershipSettleMovementRequestSchema>;
@@ -997,6 +1171,12 @@ export const SessionOwnershipStorageNamespace = createContractStorageNamespace('
       response: SessionOwnershipClaimResponseSchema,
     },
 
+    /** Terminalize a recovery attempt under its opaque attempt fence. */
+    finalizeRecovery: {
+      request: SessionOwnershipFinalizeRecoveryRequestSchema,
+      response: SessionOwnershipFinalizeRecoveryResponseSchema,
+    },
+
     /**
      * Write an agent's adapter-session currency under a claim generation, and
      * mirror it onto the session row when the agent is the designated lead.
@@ -1067,6 +1247,29 @@ export const SessionOwnershipStorageNamespace = createContractStorageNamespace('
       response: z.object({
         claims: z.array(AdapterSessionClaimRecordSchema),
       }),
+    },
+
+    /**
+     * Stamp every row for a runtime process as retired without releasing its
+     * claims. Repeating the operation is idempotent.
+     *
+     * Subject: `storage:sessionOwnership.retireInstance`
+     * Type: Request (RPC)
+     */
+    retireInstance: {
+      request: z.object({ instanceId: z.string() }),
+      response: z.object({ retiredMachines: z.number().int().nonnegative() }),
+    },
+
+    /**
+     * Read one runtime-instance row for diagnostics only.
+     *
+     * Subject: `storage:sessionOwnership.getRuntimeInstance`
+     * Type: Request (RPC)
+     */
+    getRuntimeInstance: {
+      request: z.object({ instanceId: z.string(), machineId: z.string() }),
+      response: z.object({ instance: RuntimeInstanceRecordSchema.nullable() }),
     },
   },
 });

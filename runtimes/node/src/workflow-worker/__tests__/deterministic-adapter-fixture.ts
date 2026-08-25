@@ -8,7 +8,7 @@ import {
   type AIAgentConfig,
   type AgentStartResult,
   type AIAdapterDefinition,
-  type AIAdapterInitOptions,
+  type AIAdapterRuntimeInitOptions,
   type BaseAgentConnectorConfig,
   type ConfigFactoryInput,
   type ConnectorSendMessageOptions,
@@ -37,6 +37,7 @@ export interface DeterministicAdapterCapture {
   readResult?: unknown;
   initialized?: boolean;
   adapterId?: string;
+  ownerInstanceId?: string;
   adapterInitCount?: number;
   extensionDestroyed?: boolean;
   connectorClosed?: boolean;
@@ -187,7 +188,7 @@ export function createDeterministicAdapterContribution(capture: DeterministicAda
       toolApproval: 1_000,
       eventWait: 1_000,
     },
-    createAdapter: async (options?: AIAdapterInitOptions) => {
+    createAdapter: async (options: AIAdapterRuntimeInitOptions) => {
       if (runtimeBus === undefined) throw new Error('Deterministic adapter extension has not received its runtime bus');
       const initializedRuntimeBus = runtimeBus;
       capture.adapterInitCount = (capture.adapterInitCount ?? 0) + 1;
@@ -196,8 +197,10 @@ export function createDeterministicAdapterContribution(capture: DeterministicAda
         name: 'workflow-test-adapter',
         capabilities: ['tools'],
         nativeTools: [],
-        adapterId: options?.adapterId,
-        clientId: options?.clientId,
+        adapterId: options.adapterId,
+        machineId: options.machineId,
+        ownerInstanceId: options.ownerInstanceId,
+        clientId: options.clientId,
         namespace: createAdapterNamespace('workflow-test-adapter', {}),
         scopedBus,
         globalBus: runtimeBus,
@@ -221,6 +224,7 @@ export function createDeterministicAdapterContribution(capture: DeterministicAda
       });
       await adapter.init();
       capture.adapterId = adapter.adapterId;
+      capture.ownerInstanceId = adapter.ownerInstanceId;
       return adapter;
     },
   } satisfies AdapterContribution['definition'];

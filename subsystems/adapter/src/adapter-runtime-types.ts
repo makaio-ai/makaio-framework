@@ -4,10 +4,12 @@ import type {
   AdapterClientRef,
   AdapterProviderDefinitionContract,
   AdapterProviderRef,
+  ConnectorTeardownResult,
 } from '@makaio/contracts';
 import type { HelpLink } from '@makaio/services-core/settings';
 import type { ClientDefinition } from '@makaio/contracts/client';
 import type { z } from 'zod';
+import type { AdapterInstanceTeardownResult } from './adapter-instance-teardown.js';
 
 /**
  * Minimal log import configuration surface needed by adapter lifecycle utilities.
@@ -75,6 +77,22 @@ export interface AdapterInitOptions {
 }
 
 /**
+ * Runtime identity injected immediately before the adapter factory is called.
+ *
+ * Stored adapter options intentionally exclude these values: the active
+ * authority incarnation changes across runtime lifetimes and must never be
+ * captured in contribution-time configuration.
+ */
+export interface AdapterRuntimeInitOptions extends AdapterInitOptions {
+  /** Per-adapter unique identifier assigned by the runtime. */
+  adapterId: string;
+  /** Session-ownership authority incarnation hosting this adapter. */
+  ownerInstanceId: string;
+  /** Stable machine identity hosting this adapter runtime. */
+  machineId: string;
+}
+
+/**
  * Minimal adapter instance surface returned by the adapter factory.
  *
  * Captures the `adapterId` field needed by the runtime to validate instance
@@ -83,7 +101,44 @@ export interface AdapterInitOptions {
 export interface AdapterInstance {
   /** Unique identifier assigned when the adapter instance is created. */
   adapterId?: string;
+  /** Preferred awaitable shutdown hook, which may report actual teardown evidence. */
+  closeAsync?: () => void | ConnectorTeardownResult | Promise<void | ConnectorTeardownResult>;
+  /** Legacy shutdown hook, which may report actual teardown evidence. */
+  shutdown?: () => void | ConnectorTeardownResult | Promise<void | ConnectorTeardownResult>;
+  /** Fire-and-forget compatible shutdown hook, which may report actual teardown evidence. */
+  close?: () => void | ConnectorTeardownResult | Promise<void | ConnectorTeardownResult>;
 }
+
+/** One in-flight retirement that still owns close and lifecycle-publication observation. */
+export interface AdapterRuntimeRetirementFlight {
+  /** Settles only after the close hook and deinitialization observation have finished. */
+  readonly completion: Promise<AdapterInstanceTeardownResult>;
+  /** Settles when the bounded retirement attempt has reported its evidence. */
+  readonly cancellationCompletion: Promise<void>;
+}
+
+/** One adapter-runtime slot, either dispatchable or awaiting proven retirement. */
+export type AdapterRuntimeEntry =
+  | {
+      /** The instance is currently eligible for local routing. */
+      readonly state: 'live';
+      /** Adapter handle exposed to local dispatch. */
+      readonly instance: AdapterInstance;
+      /** Ownership-authority incarnation captured during construction. */
+      readonly ownerInstanceId: string;
+    }
+  | {
+      /** Routing was withdrawn, but the previous handle has not proved it stopped. */
+      readonly state: 'retiring';
+      /** Handle retained so a later lifecycle attempt can retry close. */
+      readonly instance: AdapterInstance;
+      /** Ownership-authority incarnation captured during construction. */
+      readonly ownerInstanceId: string;
+      /** Weak evidence reported by the most recent retirement attempt. */
+      readonly report: ConnectorTeardownResult;
+      /** Active close/publication flight that must finish before another retry. */
+      readonly flight?: AdapterRuntimeRetirementFlight;
+    };
 
 /**
  * Provider definition resolved for one loaded adapter.
@@ -113,14 +168,13 @@ export interface LoadedAdapter {
   /**
    * Factory function that creates a live adapter instance.
    *
-   * The parameter is typed as `unknown` because the full option shape
-   * (`AIAdapterInitOptions`) lives in the host layer. The core layer
-   * forwards the options object without inspecting it, so the loose type
-   * avoids a contravariant incompatibility at the core/host boundary.
+   * This core-layer runtime shape carries the authority and machine identities
+   * required by every live adapter. Host-specific fields stay opaque where the
+   * core layer does not need to inspect them.
    * @param options - Initialization options forwarded by the runtime
    * @returns Promise resolving to a live adapter instance
    */
-  factory: (options?: unknown) => Promise<AdapterInstance>;
+  factory: (options: AdapterRuntimeInitOptions) => Promise<AdapterInstance>;
   /** Runtime initialization options merged from config and defaults. */
   options: AdapterInitOptions;
   /** Adapter-wide config schema (runtime-only, for adapter-level settings). */

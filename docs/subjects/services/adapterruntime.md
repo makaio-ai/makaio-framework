@@ -24,7 +24,9 @@ next: false
 |-----|------|------|--------|
 | `getMachineId` | [`adapterRuntime.getMachineId`](#adapterRuntime.getMachineId) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
 | `resolveId` | [`adapterRuntime.resolveId`](#adapterRuntime.resolveId) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
+| `resolveLiveIdentity` | [`adapterRuntime.resolveLiveIdentity`](#adapterRuntime.resolveLiveIdentity) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
 | `resolveName` | [`adapterRuntime.resolveName`](#adapterRuntime.resolveName) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
+| `teardownCompleted` | [`adapterRuntime.teardownCompleted`](#adapterRuntime.teardownCompleted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
 
 ## Subject Details
 
@@ -61,6 +63,31 @@ Type: Request (RPC)
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 
+### <a id="adapterRuntime.resolveLiveIdentity"></a>`adapterRuntime.resolveLiveIdentity` (rpc)
+
+Prove an exact adapter ID/name/machine triple from a live announcement.
+
+Subject: `adapterRuntime.resolveLiveIdentity`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string` | yes |
+| `adapterName` | `string` | yes |
+| `machineId` | `string` | yes |
+| `ownerInstanceId` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string` | yes |
+| `adapterName` | `string` | yes |
+| `machineId` | `string` | yes |
+| `ownerInstanceId` | `string` | yes |
+
 ### <a id="adapterRuntime.resolveName"></a>`adapterRuntime.resolveName` (rpc)
 
 Subject: `adapterRuntime.resolveName`
@@ -77,6 +104,23 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterName` | `string` | yes |
+
+### <a id="adapterRuntime.teardownCompleted"></a>`adapterRuntime.teardownCompleted` (event)
+
+Aggregate result observed while the local adapter runtime shut down.
+
+This is a fact emitted by the lifecycle owner, not a request another
+component can use to initiate teardown. Ownership retirement consumes it
+only after package ordering has destroyed the adapter subsystem.
+
+Subject: `adapterRuntime.teardownCompleted`
+Type: Event
+
+| Field | Type | Required |
+|-------|------|----------|
+| `detail` | `string \| undefined` | no |
+| `evidence` | `"unknown" \| "closed" \| "released" \| "exited" \| "detached"` | yes |
+| `ownerInstanceId` | `string \| null` | yes |
 
 ---
 

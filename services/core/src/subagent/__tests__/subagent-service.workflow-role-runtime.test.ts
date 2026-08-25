@@ -61,6 +61,7 @@ describe('SubagentService workflow role runtime config', () => {
         success: true,
         agentId: 'agent-role-runtime',
         adapterId: String(ctx.payload.adapterId),
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-role-runtime',
         sessionId: 'child-role-runtime',
       });

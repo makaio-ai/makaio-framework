@@ -8,7 +8,7 @@ import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { sessionStorageSchema } from '../schema.variants.js';
 import { messagesSchema } from '../../messages/schema.variants.js';
-import { sessions, agents } from '../schema.js';
+import { sessions, agents, runtimeInstanceIncarnationCounters, runtimeInstances } from '../schema.js';
 import { messages } from '../../messages/schema.js';
 import { SessionStorageSubjects } from '../namespace.js';
 import { AgentStorageSubjects } from '../agent-namespace.js';
@@ -24,6 +24,8 @@ describe('session storage dialect adoption', () => {
       expect(resolved).toBe(sessionStorageSchema.postgres);
       expect(is(resolved.sessions, PgTable)).toBe(true);
       expect(is(resolved.agents, PgTable)).toBe(true);
+      expect(is(resolved.runtimeInstanceIncarnationCounters, PgTable)).toBe(true);
+      expect(is(resolved.runtimeInstances, PgTable)).toBe(true);
     });
 
     it('resolves canonical sqlite tables for an unbranded handle', () => {
@@ -31,6 +33,8 @@ describe('session storage dialect adoption', () => {
       expect(resolved).toBe(sessionStorageSchema.sqlite);
       expect(resolved.sessions).toBe(sessions);
       expect(resolved.agents).toBe(agents);
+      expect(resolved.runtimeInstanceIncarnationCounters).toBe(runtimeInstanceIncarnationCounters);
+      expect(resolved.runtimeInstances).toBe(runtimeInstances);
     });
   });
 

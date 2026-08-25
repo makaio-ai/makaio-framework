@@ -91,6 +91,7 @@ describe('session adapter-session movement observer', () => {
         adapterName,
         sessionId,
         adapterSessionId: options?.adapterSessionId,
+        runtimeOwner: { machineId: MACHINE_ID, instanceId: sessionService.requireOwnershipInstanceId() },
         role,
         status: 'idle',
         createdAt: now,
@@ -112,8 +113,10 @@ describe('session adapter-session movement observer', () => {
       agentId,
       adapterId: `${ADAPTER_NAME}-instance`,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: sessionService.requireOwnershipInstanceId(),
       role: 'lead',
       resumeProviderSessionId: null,
+      claimToken: crypto.randomUUID(),
       expectedLeadAgentId: null,
     });
     expect(result.outcome).toBe('reserved');
@@ -141,6 +144,8 @@ describe('session adapter-session movement observer', () => {
       agentId,
       adapterId: `${adapterName}-instance`,
       adapterName,
+      machineId: MACHINE_ID,
+      ownerInstanceId: sessionService.requireOwnershipInstanceId(),
       sessionId,
       confirmed: movement.confirmed,
       ...(movement.adapterSessionId !== undefined && { adapterSessionId: movement.adapterSessionId }),
@@ -358,6 +363,8 @@ describe('session adapter-session movement observer', () => {
           agentId,
           adapterId: `${ADAPTER_NAME}-instance`,
           adapterName: ADAPTER_NAME,
+          machineId: MACHINE_ID,
+          ownerInstanceId: sessionService.requireOwnershipInstanceId(),
           sessionId,
           confirmed: true,
           adapterSessionId: 'first-id',
@@ -366,6 +373,8 @@ describe('session adapter-session movement observer', () => {
           agentId,
           adapterId: `${ADAPTER_NAME}-instance`,
           adapterName: ADAPTER_NAME,
+          machineId: MACHINE_ID,
+          ownerInstanceId: sessionService.requireOwnershipInstanceId(),
           sessionId,
           confirmed: true,
           adapterSessionId: 'second-id',
@@ -393,6 +402,8 @@ describe('session adapter-session movement observer', () => {
       agentId,
       adapterId: `${ADAPTER_NAME}-instance`,
       adapterName: ADAPTER_NAME,
+      machineId: MACHINE_ID,
+      ownerInstanceId: sessionService.requireOwnershipInstanceId(),
       adapterSessionId: 'orphan-id',
       confirmed: true,
     });
@@ -415,6 +426,8 @@ describe('session adapter-session movement observer', () => {
       agentId,
       adapterId: `${ADAPTER_NAME}-instance`,
       adapterName: ADAPTER_NAME,
+      machineId: MACHINE_ID,
+      ownerInstanceId: sessionService.requireOwnershipInstanceId(),
       sessionId,
       confirmed: true,
       adapterSessionId: 'settled-before-resolve',
@@ -449,6 +462,8 @@ describe('session adapter-session movement observer', () => {
       sessionId: holderSessionId,
       agentId: holderAgentId,
       claimToken: crypto.randomUUID(),
+      ownerInstance: { instanceId: 'currency-refused-holder-instance' },
+      topology: 'shared-machine',
     });
     expect(claimed.outcome).toBe('claimed');
 
@@ -471,7 +486,7 @@ describe('session adapter-session movement observer', () => {
     expect(resolveResumableAdapterSessionId(await loadAgentCurrency(agentId))).toBe('started-id');
   });
 
-  it('drops a movement from an adapter instance the agent has left', async () => {
+  it('drops a stale movement from a prior runtime owner', async () => {
     // A rehydrate moves the agent onto a new instance and persists it. The old
     // connector can still be alive long enough to announce, and that
     // announcement describes a provider session the agent stopped being current
@@ -482,17 +497,18 @@ describe('session adapter-session movement observer', () => {
     await seedSessionWithAgent(sessionId, agentId, { adapterSessionId: 'origin-id' });
     expect(await emitMovement(sessionId, agentId, { confirmed: true, adapterSessionId: 'resumed-id' })).toBe(true);
 
-    // The agent is rebound to a new instance of the same adapter type.
+    // The agent is rebound to a newer incarnation of the same adapter runtime.
     await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
       agentId,
-      adapterId: `${ADAPTER_NAME}-instance-2`,
+      runtimeOwner: { machineId: MACHINE_ID, instanceId: 'new-owner-instance' },
     });
 
     const delivered = await MakaioBus.emit(AgentSubjects.adapterSession.moved, {
       agentId,
-      // The instance the agent has just left.
       adapterId: `${ADAPTER_NAME}-instance`,
       adapterName: ADAPTER_NAME,
+      machineId: MACHINE_ID,
+      ownerInstanceId: 'old-owner-instance',
       sessionId,
       confirmed: true,
       adapterSessionId: 'abandoned-id',

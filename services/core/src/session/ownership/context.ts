@@ -16,6 +16,8 @@ export interface OwnershipAuthorityContext {
   readonly bus: IMakaioBus;
   /** Machine identity the authority owns claims under, or `undefined` when it has none. */
   readonly machineId: string | undefined;
+  /** Runtime-incarnation identity stamped onto every generation this authority allocates. */
+  readonly instanceId: string;
   /** {@inheritDoc OwnershipTopologySchema} */
   readonly topology: OwnershipTopology;
 }

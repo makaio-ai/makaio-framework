@@ -21,6 +21,8 @@ import {
   GitDefaultBranchResponseSchema,
   GitLogRequestSchema,
   GitLogResponseSchema,
+  GitLocalBranchExistsRequestSchema,
+  GitLocalBranchExistsResponseSchema,
   GitFileAtRevisionRequestSchema,
   GitFileAtRevisionResponseSchema,
   GitDiffRequestSchema,
@@ -94,7 +96,7 @@ import {
  *
  * This namespace contains:
  * - Query subjects: getRepoRoot, getBranch, getCommit, getCommitDetails, getWorkingTreeDetails,
- *   getStatus, getWorktrees, getRemotes, getDefaultBranch, getLog, getFileAtRevision, getDiff,
+ *   getStatus, getWorktrees, getRemotes, getDefaultBranch, getLog, localBranchExists, getFileAtRevision, getDiff,
  *   getBranchCommits, switchWorktree, getBlame, fingerprint, getFileAtCommit, getBlobHashAtCommit
  * - Event subjects (fire-and-forget): commit, checkout, staging, merge, rebase, worktree
  * - Control subjects: addRepo, removeRepo, initRepo, createWorktree, removeWorktree, stage, unstage
@@ -116,6 +118,11 @@ const GitSchemas = {
   getBranch: {
     request: GitBranchRequestSchema,
     response: GitBranchResponseSchema,
+  },
+  /** Check whether a local branch ref exists (host-owned only) */
+  localBranchExists: {
+    request: GitLocalBranchExistsRequestSchema,
+    response: GitLocalBranchExistsResponseSchema,
   },
   /** Get commit info for a ref */
   getCommit: {

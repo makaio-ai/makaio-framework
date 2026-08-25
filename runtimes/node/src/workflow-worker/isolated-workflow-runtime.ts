@@ -12,7 +12,7 @@ import {
   ToolRegistryToken,
   toolRegistryPackage,
 } from '@makaio/services-core';
-import { orderAfterAdapterSubsystem } from '@makaio/subsystem-adapter';
+import { AdapterSubsystemToken, orderAfterAdapterSubsystem } from '@makaio/subsystem-adapter';
 import { createClientsCorePackage } from '@makaio/subsystem-client';
 import type { Toolset } from '@makaio/tools-core';
 import {
@@ -105,6 +105,30 @@ function createShutdownRunner(steps: readonly ShutdownStep[]): () => Promise<voi
 }
 
 /**
+ * Activate the adapter identity routes after the isolated coordinator starts.
+ * @param bus - Isolated runtime bus that carries adapter identity requests.
+ * @param coordinator - Started coordinator owning the live adapter subsystem.
+ * @param machineId - Machine identity assigned to this isolated runtime.
+ * @returns Active identity routes and their lifecycle cleanup.
+ */
+function activateIsolatedAdapterRuntimeIdentity(
+  bus: IMakaioBus,
+  coordinator: ExtensionCoordinator,
+  machineId: string,
+): ReturnType<typeof activateAdapterRuntimeIdentity> {
+  return activateAdapterRuntimeIdentity({
+    bus,
+    currentMachineId: machineId,
+    resolveLiveAdapterId: (adapterName) =>
+      coordinator.getExtensionService(AdapterSubsystemToken)?.resolveLiveAdapterId(adapterName),
+    resolveLiveAdapterIdentity: (adapterId) =>
+      coordinator.getExtensionService(AdapterSubsystemToken)?.resolveLiveAdapterIdentity(adapterId),
+    listLiveAdapterIdentities: () =>
+      coordinator.getExtensionService(AdapterSubsystemToken)?.getLiveAdapterIdentities() ?? [],
+  });
+}
+
+/**
  * Compose an isolated, authority-backed runtime for workflow agent steps.
  *
  * The runtime deliberately owns no database and installs no local storage
@@ -183,7 +207,7 @@ export async function createIsolatedWorkflowRuntime(
     shutdownSteps.push(() => coordinator.shutdown());
     await coordinator.startAll();
 
-    identity = activateAdapterRuntimeIdentity({ bus, currentMachineId: context.machineId });
+    identity = activateIsolatedAdapterRuntimeIdentity(bus, coordinator, context.machineId);
     shutdownSteps.push(() => {
       identity?.cleanup();
       identity = undefined;

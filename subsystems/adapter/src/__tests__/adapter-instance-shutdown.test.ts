@@ -100,6 +100,20 @@ describe('case 207b: per-instance shutdown results', () => {
     expect(report.results).toEqual([{ adapterId: 'hookless', evidence: 'released' }]);
   });
 
+  it('uses teardown evidence returned by a close hook instead of classifying it as detached', async () => {
+    const instances = new Map<string, AdapterInstance>([
+      [
+        'reported',
+        { adapterId: 'reported', closeAsync: async () => ({ evidence: 'exited', detail: 'provider exited' }) },
+      ],
+    ]);
+
+    const report = await shutdownAdapterInstances(instances);
+
+    expect(report).toMatchObject({ evidence: 'exited' });
+    expect(report.results).toEqual([{ adapterId: 'reported', evidence: 'exited', detail: 'provider exited' }]);
+  });
+
   it('reports `released` for an empty instance map', async () => {
     const report = await shutdownAdapterInstances(new Map());
 

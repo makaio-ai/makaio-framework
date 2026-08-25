@@ -123,7 +123,11 @@ describe('case 204f arm 1: a teardown installed before the prologue makes the do
     // in flight when the door's prologue reads the map.
     const closeGate = new DeferredPromise<void>();
     incumbent.closeGate = closeGate.getPromise();
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     await drain();
 
     const response = await rehydrate(agentId);
@@ -149,7 +153,11 @@ describe('case 204f arms 2-5: a teardown admitted after the door waits for the s
     const replacement = connectors[1];
     if (replacement === undefined) throw new Error('the swap built no replacement');
 
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     await drain();
     initGate.resolve();
 
@@ -184,7 +192,11 @@ describe('case 204f arms 2-5: a teardown admitted after the door waits for the s
     const replacement = connectors[1];
     if (replacement === undefined) throw new Error('the swap built no replacement');
 
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     await drain();
     initGate.resolve();
 
@@ -212,7 +224,11 @@ describe('case 204f arms 2-5: a teardown admitted after the door waits for the s
     const replacement = connectors[1];
     if (replacement === undefined) throw new Error('the swap built no replacement');
 
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     await drain();
     initGate.resolve();
 
@@ -240,7 +256,11 @@ describe('case 204f arms 2-5: a teardown admitted after the door waits for the s
     const replacement = connectors[1];
     if (replacement === undefined) throw new Error('the swap built no replacement');
 
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     await drain();
     initGate.resolve();
 
@@ -274,7 +294,11 @@ describe('case 204f arms 2-5: a teardown admitted after the door waits for the s
     const replacement = connectors[1];
     if (replacement === undefined) throw new Error('the swap built no replacement');
 
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     await drain();
     initGate.resolve();
 
@@ -311,7 +335,11 @@ describe('case 204f arm 7: a settlement nobody waited for still binds the agent'
     if (replacement === undefined) throw new Error('the swap built no replacement');
     expect(replacement.closeCount).toBe(1);
 
-    const stopped = await MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stopped = await MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
 
     // The stop's own close was clean — the incumbent reports `released` — so
     // `released` is exactly the comfortable answer that ignoring the discarded
@@ -337,7 +365,11 @@ describe('case 204i: a producer that throws after admission still settles the en
 
     // The teardown is **already waiting** when the replacement fails, so a missing
     // settlement in the door's `finally` hangs this test rather than passing it.
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
     await drain();
     initGate.resolve();
 
@@ -354,7 +386,11 @@ describe('case 204i: a producer that throws after admission still settles the en
     const { agentId, incumbent } = await startAgent();
     configFactoryFailure = new Error('config factory refused');
     const pending = rehydrate(agentId);
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId,
+    });
 
     const [, stopped] = await Promise.all([pending.catch(() => undefined), stop]);
 
@@ -407,7 +443,12 @@ describe('the door reads the teardown map first, and its two refusals are distin
     // and would then keep answering it for an agent a *waiting* teardown has not
     // detached anything from yet.
     const arbiter = new AgentTeardownArbiter();
-    const registry = new ActiveAgentRegistry({ globalBus: MakaioBus, adapterName: 'arbitration-adapter', arbiter });
+    const registry = new ActiveAgentRegistry({
+      globalBus: MakaioBus,
+      adapterName: 'arbitration-adapter',
+      ownerInstanceId: 'test-owner-instance',
+      arbiter,
+    });
     const built: AgentMockConnector[] = [];
     const closeGate = new DeferredPromise<void>();
     const agent = createTestableAgent({

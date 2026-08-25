@@ -29,8 +29,8 @@ function createMissingAdapterError(adapterName: string, machineId?: string): Err
  * namespace.
  *
  * `undefined` is its own scope rather than an alias for the runtime's own
- * machine, because the registry does not know what that is — see the
- * `adapter.initialized` listener.
+ * machine, because callers that omit a machine are not entitled to one chosen
+ * from a different identity.
  * @param adapterName - Adapter type name.
  * @param machineId - Machine the instance was resolved for, when one was named.
  * @returns The key for this scope.
@@ -61,18 +61,27 @@ export class AdapterRegistry {
    * adapters that restart emit a fresh initialized event and the registry should
    * reflect the latest instance.
    *
-   * **The event names no machine**, and the bus can span hosts, so an instance
-   * learned this way is *unattributed*: it says an adapter of this name exists
-   * somewhere reachable, not that it belongs to any particular machine. It is
-   * therefore cached in the unscoped scope only, and a lookup that named a
-   * machine is never served from it — answering one would be a guess about the
-   * very identity the caller was careful enough to name.
+   * Every initialization announcement carries the machine that hosts the exact
+   * adapter ID, so event fallback may serve only that same scope. The unscoped
+   * entry remains for legacy observers that intentionally make no ownership
+   * assertion.
    * @param bus - The event bus to listen on
    */
   public constructor(private readonly bus: IMakaioBus) {
-    this.cleanup = this.bus.on(AdapterSubjects.initialized, (ctx) => {
+    const initializedCleanup = this.bus.on(AdapterSubjects.initialized, (ctx) => {
       this.registry.set(cacheKey(ctx.payload.adapterName), ctx.payload.adapterId);
+      this.registry.set(cacheKey(ctx.payload.adapterName, ctx.payload.machineId), ctx.payload.adapterId);
     });
+    const deinitializedCleanup = this.bus.on(AdapterSubjects.deinitialized, (ctx) => {
+      const keys = [cacheKey(ctx.payload.adapterName), cacheKey(ctx.payload.adapterName, ctx.payload.machineId)];
+      for (const key of keys) {
+        if (this.registry.get(key) === ctx.payload.adapterId) this.registry.delete(key);
+      }
+    });
+    this.cleanup = () => {
+      initializedCleanup();
+      deinitializedCleanup();
+    };
   }
 
   /**
@@ -118,8 +127,7 @@ export class AdapterRegistry {
       return adapterId;
     } catch {
       // Only an instance remembered for *this* scope. A cached answer from
-      // another machine — or an unattributed one from the initialized event —
-      // would resolve to an instance the caller's ownership acts do not name,
+      // another machine would resolve to an instance the caller's ownership acts do not name,
       // and a fallback that guesses the machine is worse than one that fails:
       // the failure is loud and local, the guess surfaces as a second writer on
       // someone else's provider session.

@@ -130,11 +130,18 @@ export function createTestSession(sessionId: string, overrides?: Partial<IMakaio
  * runtime identity handlers unless they specifically need the event cache.
  * @param adapterName - Adapter type name (e.g., `'test-adapter'`)
  * @param adapterId - Adapter instance ID. Defaults to `adapterName` for test simplicity.
+ * @param machineId - Machine that announced the adapter instance.
  */
-export async function emitAdapterInitialized(adapterName: string, adapterId = adapterName): Promise<void> {
+export async function emitAdapterInitialized(
+  adapterName: string,
+  adapterId = adapterName,
+  machineId = 'test-machine',
+): Promise<void> {
   await MakaioBus.emit(AdapterSubjects.initialized, {
     adapterName,
     adapterId,
+    machineId,
+    ownerInstanceId: `owner-${adapterId}`,
     capabilities: [],
   });
 }

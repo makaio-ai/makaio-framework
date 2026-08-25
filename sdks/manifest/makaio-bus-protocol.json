@@ -54,6 +54,9 @@
           "confirmed": {
             "type": "boolean"
           },
+          "machineId": {
+            "type": "string"
+          },
           "messageId": {
             "makaio.observability": {
               "attributeName": "makaio.message.id",
@@ -69,6 +72,9 @@
               "visibility": "attribute"
             },
             "type": "number"
+          },
+          "ownerInstanceId": {
+            "type": "string"
           },
           "providerConfigId": {
             "makaio.observability": {
@@ -95,7 +101,7 @@
             "type": "string"
           }
         },
-        "required": ["agentId", "adapterId", "adapterName", "confirmed"],
+        "required": ["agentId", "adapterId", "adapterName", "machineId", "ownerInstanceId", "confirmed"],
         "type": "object"
       }
     },

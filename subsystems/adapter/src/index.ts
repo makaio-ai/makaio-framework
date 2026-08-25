@@ -105,12 +105,17 @@ export function createAdapterSubsystemPackage(
     provides: ['adapters'] satisfies readonly CapabilityToken[],
     dependencies: [dep(SessionToken.name)],
     critical: true,
-    create: (ctx) =>
-      new AdapterSubsystemService({
+    create: (ctx) => {
+      const sessionService = ctx.getService(SessionToken);
+      if (sessionService === undefined) {
+        throw new Error('Adapter subsystem requires the active session ownership authority');
+      }
+      return new AdapterSubsystemService({
         bus: ctx.bus,
         configRepository: options.configRepository,
         coordinator: options.coordinator,
         machineId: ctx.machineId,
+        resolveOwnerInstanceId: () => sessionService.requireOwnershipInstanceId(),
         platformDefaults: options.platformDefaults,
         ...(options.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
         ...(options.runtimeSnapshotHandlerPriority !== undefined && {
@@ -119,7 +124,8 @@ export function createAdapterSubsystemPackage(
         ...(options.runtimeDefinitionHandlerPriority !== undefined && {
           runtimeDefinitionHandlerPriority: options.runtimeDefinitionHandlerPriority,
         }),
-      }),
+      });
+    },
   };
 }
 
@@ -141,7 +147,6 @@ export type {
 export {
   extractAdapterIdFromPackageName,
   ensureAdapterConfigs,
-  initializeEnabledAdapters,
   shutdownAdapterInstances,
   toAvailableAdapter,
 } from './adapter-runtime-lifecycle.js';

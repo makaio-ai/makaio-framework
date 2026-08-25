@@ -77,6 +77,8 @@ function createHookTestAgent(): HookTestAgent {
     agentId: 'hook-test-agent',
     adapterId: 'hook-test-adapter',
     adapterName: 'hook-test',
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     capabilities: [],
     nativeTools: [],
     adapterBus: mockBus,

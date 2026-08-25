@@ -24,6 +24,13 @@ export { registerMemorySessionOwnershipStorage } from './ownership-memory-handle
 // `deleteClaimsWhere` stays internal — it is the handlers' cascade, not an API.
 export { createSessionStorageMemoryState, type SessionStorageMemoryState } from './memory-store.js';
 export { registerDrizzleSessionOwnershipStorage } from './ownership-drizzle-handler.js';
+// Stable claim-key identities are public so storage conformance can verify the
+// engine lock protocol without coupling to mutable claim-row implementation.
+export {
+  ownershipClaimTransactionLock,
+  SESSION_OWNERSHIP_CLAIM_LOCK_NAMESPACE,
+  type OwnershipClaimKey,
+} from './ownership-drizzle-claim-keys.js';
 export { registerFtsSearchHandler } from './fts-search-handler.js';
 export {
   fetchAgentsBySession,

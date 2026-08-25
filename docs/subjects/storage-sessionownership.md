@@ -23,10 +23,13 @@ next: false
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
 | `claim` | [`storage:sessionOwnership.claim`](#storage:sessionOwnership.claim) | rpc | — |
+| `finalizeRecovery` | [`storage:sessionOwnership.finalizeRecovery`](#storage:sessionOwnership.finalizeRecovery) | rpc | — |
+| `getRuntimeInstance` | [`storage:sessionOwnership.getRuntimeInstance`](#storage:sessionOwnership.getRuntimeInstance) | rpc | — |
 | `listClaims` | [`storage:sessionOwnership.listClaims`](#storage:sessionOwnership.listClaims) | rpc | — |
 | `read` | [`storage:sessionOwnership.read`](#storage:sessionOwnership.read) | rpc | — |
 | `release` | [`storage:sessionOwnership.release`](#storage:sessionOwnership.release) | rpc | — |
 | `releaseAgentClaims` | [`storage:sessionOwnership.releaseAgentClaims`](#storage:sessionOwnership.releaseAgentClaims) | rpc | — |
+| `retireInstance` | [`storage:sessionOwnership.retireInstance`](#storage:sessionOwnership.retireInstance) | rpc | — |
 | `settleCurrency` | [`storage:sessionOwnership.settleCurrency`](#storage:sessionOwnership.settleCurrency) | rpc | — |
 | `settleMovement` | [`storage:sessionOwnership.settleMovement`](#storage:sessionOwnership.settleMovement) | rpc | — |
 
@@ -54,23 +57,75 @@ Type: Request (RPC)
 | `adapterName` | `string` | yes |
 | `agentId` | `string` | yes |
 | `claimToken` | `string` | yes |
-| `designateLead` | `{ expectedLeadAgentId: string \| null; clear?: true \| undefined; } \| undefined` | no |
+| `designateLead` | `{ expectedLeadAgentId: string \| null; clear?: true \| undefined; restore?: true \| undefined; } \| undefined` | no |
 | `machineId` | `string` | yes |
+| `ownerInstance` | `{ instanceId: string; } \| undefined` | no |
 | `providerSessionId` | `string \| null` | yes |
+| `recoveryAttemptId` | `string \| undefined` | no |
+| `recoveryGuard` | `{ expectedStatus: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; expectedPreimage: { status: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; expectedRevision: number; expectedCurrencyFence: number; expectedCurrency: { adapterSessionId: string \| null; currentAdapterSessionId: string \| null; currentAdapterSessionIdState: "confirmed" \| "inherited" \| "moved"; }; ownerGeneration: { claimId: string; claimToken: string; fence: number; ownerInstanceId: string \| null; status: "held" \| "releasing" \| "abandoned"; } \| null; } \| undefined` | no |
 | `sessionId` | `string` | yes |
 | `supersedes` | `{ claimToken: string; } \| undefined` | no |
+| `topology` | `"machine-exclusive" \| "shared-machine" \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `claim` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| null \| undefined` | no |
+| `claim` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| null \| undefined` | no |
+| `currency` | `{ adapterSessionId: string \| null; currentAdapterSessionId: string \| null; currentAdapterSessionIdState: "confirmed" \| "inherited" \| "moved"; } \| undefined` | no |
+| `currencyFence` | `number \| undefined` | no |
 | `currentLeadAgentId` | `string \| null \| undefined` | no |
-| `holder` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
+| `holder` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
 | `leadDesignated` | `boolean \| undefined` | no |
 | `missing` | `"session" \| "agent" \| undefined` | no |
-| `outcome` | `"claimed" \| "idempotent" \| "already-claimed" \| "agent-disposed" \| "lead-conflict" \| "not-found"` | yes |
+| `outcome` | `"claimed" \| "idempotent" \| "already-claimed" \| "agent-disposed" \| "session-not-active" \| "lead-conflict" \| "not-found" \| "currency-changed" \| "recovery-conflict"` | yes |
+| `ownerGeneration` | `{ claimId: string; claimToken: string; fence: number; ownerInstanceId: string \| null; status: "held" \| "releasing" \| "abandoned"; } \| null \| undefined` | no |
 | `previousLeadAgentId` | `string \| null \| undefined` | no |
+| `recovery` | `{ attemptId: string; preimage: { status: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; } \| undefined` | no |
+| `revision` | `number \| undefined` | no |
+| `status` | `"archived" \| "closed" \| "discovered" \| "active" \| "starting" \| "idle" \| "dead" \| "disposed" \| undefined` | no |
+
+### <a id="storage:sessionOwnership.finalizeRecovery"></a>`storage:sessionOwnership.finalizeRecovery` (rpc)
+
+Terminalize a recovery attempt under its opaque attempt fence.
+
+Subject: `storage:sessionOwnership.finalizeRecovery`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `action` | `{ kind: "rollback"; preimage: { status: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; } \| { kind: "succeeded"; } \| { kind: "failed"; }` | yes |
+| `agentId` | `string` | yes |
+| `attemptId` | `string` | yes |
+| `binding` | `{ adapterId: string; ownerMachineId: string; ownerInstanceId: string; }` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `applied` | `boolean` | yes |
+
+### <a id="storage:sessionOwnership.getRuntimeInstance"></a>`storage:sessionOwnership.getRuntimeInstance` (rpc)
+
+Read one runtime-instance row for diagnostics only.
+
+Subject: `storage:sessionOwnership.getRuntimeInstance`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `instanceId` | `string` | yes |
+| `machineId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `instance` | `{ instanceId: string; machineId: string; incarnation: number; startedAt: number; retiredAt: number \| null; } \| null` | yes |
 
 ### <a id="storage:sessionOwnership.listClaims"></a>`storage:sessionOwnership.listClaims` (rpc)
 
@@ -93,7 +148,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `claims` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; }[]` | yes |
+| `claims` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; }[]` | yes |
 
 ### <a id="storage:sessionOwnership.read"></a>`storage:sessionOwnership.read` (rpc)
 
@@ -120,7 +175,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `ownership` | `{ agentId: string; sessionId: string; currency: { adapterSessionId: string \| null; currentAdapterSessionId: string \| null; currentAdapterSessionIdState: "confirmed" \| "inherited" \| "moved"; }; revision: number; currencyFence: number; claims: { machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; }[]; } \| null` | yes |
+| `ownership` | `{ agentId: string; sessionId: string; currency: { adapterSessionId: string \| null; currentAdapterSessionId: string \| null; currentAdapterSessionIdState: "confirmed" \| "inherited" \| "moved"; }; revision: number; currencyFence: number; claims: { machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; }[]; } \| null` | yes |
 
 ### <a id="storage:sessionOwnership.release"></a>`storage:sessionOwnership.release` (rpc)
 
@@ -141,8 +196,8 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `claim` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
-| `holder` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
+| `claim` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
+| `holder` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
 | `outcome` | `"released" \| "marked" \| "not-owner" \| "not-found"` | yes |
 
 ### <a id="storage:sessionOwnership.releaseAgentClaims"></a>`storage:sessionOwnership.releaseAgentClaims` (rpc)
@@ -166,8 +221,28 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `claimTokenNotFound` | `boolean` | yes |
-| `markedClaims` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; }[]` | yes |
+| `markedClaims` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; }[]` | yes |
 | `releasedProviderSessionIds` | `string[]` | yes |
+
+### <a id="storage:sessionOwnership.retireInstance"></a>`storage:sessionOwnership.retireInstance` (rpc)
+
+Stamp every row for a runtime process as retired without releasing its
+claims. Repeating the operation is idempotent.
+
+Subject: `storage:sessionOwnership.retireInstance`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `instanceId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `retiredMachines` | `number` | yes |
 
 ### <a id="storage:sessionOwnership.settleCurrency"></a>`storage:sessionOwnership.settleCurrency` (rpc)
 
@@ -226,16 +301,18 @@ Type: Request (RPC)
 | `expectedRevision` | `number` | yes |
 | `machineId` | `string` | yes |
 | `movement` | `{ kind: "confirmed"; providerSessionId: string; claimToken: string; } \| { kind: "demote"; claimToken: string; }` | yes |
+| `ownerInstance` | `{ instanceId: string; } \| undefined` | no |
 | `sessionId` | `string` | yes |
+| `topology` | `"machine-exclusive" \| "shared-machine" \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `claim` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| null \| undefined` | no |
+| `claim` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| null \| undefined` | no |
 | `currency` | `{ adapterSessionId: string \| null; currentAdapterSessionId: string \| null; currentAdapterSessionIdState: "confirmed" \| "inherited" \| "moved"; } \| undefined` | no |
 | `currentFence` | `number \| undefined` | no |
-| `holder` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
+| `holder` | `{ machineId: string; adapterId: string; providerSessionId: string; claimId: string; adapterName: string; sessionId: string; agentId: string; ownerInstanceId: string \| null; claimToken: string; fence: number; status: "held" \| "releasing" \| "abandoned"; claimedAt: number; updatedAt: number; } \| undefined` | no |
 | `outcome` | `"settled" \| "idempotent" \| "already-claimed" \| "superseded" \| "currency-changed" \| "not-owner" \| "agent-disposed" \| "not-found"` | yes |
 | `releasedProviderSessionIds` | `string[] \| undefined` | no |
 | `revision` | `number \| undefined` | no |

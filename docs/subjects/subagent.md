@@ -63,7 +63,7 @@ Type: Request (RPC)
 | `error` | `string \| undefined` | no |
 | `pendingRequest` | `{ messageId: string; question: string; context?: string \| undefined; } \| undefined` | no |
 | `result` | `string \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "timeout" \| "waiting_input"` | yes |
+| `status` | `"failed" \| "completed" \| "cancelled" \| "timeout" \| "waiting_input"` | yes |
 | `toolObservations` | `{ toolName: string; outcome: "success" \| "failure"; artifact?: { kind: string; id: string; revision: string; } \| undefined; }[] \| undefined` | no |
 | `usage` | `{ toolCallCount: number; inputTokens?: number \| undefined; cachedInputTokens?: number \| undefined; outputTokens?: number \| undefined; } \| undefined` | no |
 
@@ -177,7 +177,7 @@ Type: Request (RPC)
 | `pendingRequest` | `{ messageId: string; question: string; context?: string \| undefined; } \| undefined` | no |
 | `progress` | `string[]` | yes |
 | `result` | `string \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "completing" \| "waiting_input" \| "hung"` | yes |
+| `status` | `"failed" \| "completed" \| "cancelled" \| "running" \| "spawning" \| "completing" \| "waiting_input" \| "hung"` | yes |
 | `summary` | `string \| undefined` | no |
 | `usage` | `{ toolCallCount: number; inputTokens?: number \| undefined; cachedInputTokens?: number \| undefined; outputTokens?: number \| undefined; } \| undefined` | no |
 
@@ -220,7 +220,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `subagents` | `{ subagentId: string; task: string; status: "completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "completing" \| "waiting_input" \| "hung"; }[]` | yes |
+| `subagents` | `{ subagentId: string; task: string; status: "failed" \| "completed" \| "cancelled" \| "running" \| "spawning" \| "completing" \| "waiting_input" \| "hung"; }[]` | yes |
 
 ### <a id="subagent.reportProgress"></a>`subagent.reportProgress` (rpc)
 

@@ -7,8 +7,10 @@ import {
   type MakaioSessionAgent,
 } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
+import { registerAdapterRuntimeIdentityHandlers } from '../../adapter-runtime/identity.js';
 import { MakaioSessionService } from '../session-service.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { registerCallerSettlementAckHandler } from '../testing/caller-owned-adapter-stub.js';
 import { peekInFlightStart, runExclusiveStart } from '../ownership/in-flight-starts.js';
 import { createTestAgent, registerMemorySessionBackends, settleEventLoop } from './shared.js';
 
@@ -62,6 +64,7 @@ function foreignHolder(agentId: string) {
     agentId: `foreign-${agentId}`,
     claimToken: `token-${agentId}`,
     fence: 1,
+    ownerInstanceId: `foreign-owner-${agentId}`,
     status: 'held' as const,
     claimedAt: now,
     updatedAt: now,
@@ -74,6 +77,7 @@ describe('MakaioSessionService - restartAgents ownership', () => {
   let bus: IMakaioBus;
   let service: MakaioSessionService;
   let storageCleanups: Array<() => void> = [];
+  let publishLiveIdentity: (machineId?: string) => Promise<void>;
   /** Every adapter-instance resolution the handler issued, in order. */
   let resolveIdRequests: Array<{ adapterName: string; machineId?: string }> = [];
 
@@ -92,9 +96,22 @@ describe('MakaioSessionService - restartAgents ownership', () => {
       bus.on(AdapterSubjects.getCapabilities, (ctx) => {
         ctx.setResult({ capabilities: ['session:resume'], nativeTools: [] });
       }),
+      registerCallerSettlementAckHandler(bus),
     ];
     service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
     await service.init();
+    const runtimeIdentity = registerAdapterRuntimeIdentityHandlers(bus, { currentMachineId: MACHINE_ID });
+    storageCleanups.push(runtimeIdentity.cleanup);
+    publishLiveIdentity = async (machineId = MACHINE_ID) => {
+      await bus.emit(AdapterSubjects.initialized, {
+        adapterId: LIVE_ADAPTER_ID,
+        adapterName: 'test-adapter',
+        machineId,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+        capabilities: ['session:resume'],
+      });
+    };
+    await publishLiveIdentity();
   });
 
   afterEach(() => {
@@ -143,7 +160,11 @@ describe('MakaioSessionService - restartAgents ownership', () => {
       bus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
         dispatched.push(ctx.payload);
         await onDispatch?.(ctx.payload.agentId);
-        ctx.setResult({ success: true });
+        ctx.setResult({
+          success: true,
+          ownerInstanceId: service.requireOwnershipInstanceId(),
+          settlementAckToken: `ack-${ctx.payload.agentId}`,
+        });
       }),
     );
     return dispatched;
@@ -176,6 +197,7 @@ describe('MakaioSessionService - restartAgents ownership', () => {
       sessionId: 'session-incumbent',
       agentId: 'agent-incumbent',
       claimToken: crypto.randomUUID(),
+      ownerInstance: { instanceId: 'restart-ownership-incumbent' },
     });
     expect(held.outcome).toBe('claimed');
 
@@ -227,16 +249,11 @@ describe('MakaioSessionService - restartAgents ownership', () => {
 
   it('settles the resumed provider session onto the agent row', async () => {
     // Case 43. The rehydrate re-attaches the connector to a conversation this
-    // runtime just reserved, so the currency has to name it — and the adapter's
-    // own unconditional `idle` write is unordered with respect to the
-    // settlement, which is harmless because status is neither liveness nor
-    // ownership evidence.
+    // runtime just reserved, so the currency has to name it. The caller-owned
+    // path keeps the row `starting` until the adapter acknowledges that durable
+    // settlement, then the acknowledgement commits it to `idle`.
     const adapterSessionId = await seedResumableAgent('session-settled', 'agent-settled');
-    captureRehydrates(async (agentId) => {
-      // Exactly what `ai-adapter-rehydration` does, and deliberately *before*
-      // the service settles.
-      await bus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
-    });
+    captureRehydrates();
 
     const result = await bus.request(SessionSubjects.restartAgents, { sessionId: 'session-settled' });
     expect(result.results).toEqual([{ agentId: 'agent-settled', adapterId: LIVE_ADAPTER_ID, success: true }]);
@@ -368,6 +385,8 @@ describe('MakaioSessionService - restartAgents ownership', () => {
       adapterName: 'test-adapter',
       role: 'member',
       resumeProviderSessionId: adapterSessionId,
+      claimToken: crypto.randomUUID(),
+      ownerInstanceId: service.requireOwnershipInstanceId(),
     });
     expect(reserved.outcome).toBe('agent-disposed');
   });
@@ -578,6 +597,7 @@ describe('MakaioSessionService - restartAgents ownership', () => {
       undefined,
       namedMachine,
     );
+    await publishLiveIdentity(namedMachine);
     const dispatched = captureRehydrates();
 
     const result = await bus.request(SessionSubjects.restartAgents, {
@@ -610,6 +630,118 @@ describe('MakaioSessionService - restartAgents ownership', () => {
     const { ownership } = await bus.request(SessionOwnershipStorageSubjects.read, { agentId: 'agent-named-machine' });
     expect(ownership?.currency.currentAdapterSessionId).toBe(adapterSessionId);
     expect(ownership?.currencyFence).toBeGreaterThan(0);
+  });
+
+  it('replans once from canonical currency when movement wins between planning and reservation', async () => {
+    const sessionId = 'session-g9-currency-race';
+    const agentId = 'agent-g9-currency-race';
+    const originalKey = await seedResumableAgent(sessionId, agentId);
+    const movedKey = 'provider-g9-moved';
+    const attemptedKeys: Array<string | null> = [];
+    let injectMovement = true;
+    storageCleanups.push(
+      bus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (ctx) => {
+          attemptedKeys.push(ctx.payload.resumeProviderSessionId);
+          if (injectMovement && ctx.payload.recoveryGuard !== undefined) {
+            injectMovement = false;
+            const movement = await bus.request(SessionOwnershipStorageSubjects.settleMovement, {
+              machineId: MACHINE_ID,
+              adapterId: LIVE_ADAPTER_ID,
+              adapterName: 'test-adapter',
+              ownerInstance: { instanceId: 'g9-currency-mover' },
+              sessionId,
+              agentId,
+              expectedRevision: 0,
+              movement: { kind: 'confirmed', providerSessionId: movedKey, claimToken: crypto.randomUUID() },
+            });
+            if (movement.outcome !== 'settled' || movement.claim === null) {
+              throw new Error(`G9 fixture movement failed: ${movement.outcome}`);
+            }
+            await bus.request(SessionOwnershipStorageSubjects.release, {
+              agentId,
+              claimToken: movement.claim.claimToken,
+              disposition: 'released',
+            });
+          }
+          await ctx.next();
+        },
+        { priority: 1000 },
+      ),
+    );
+    const dispatched = captureRehydrates();
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
+
+    expect(result.results).toEqual([{ agentId, adapterId: LIVE_ADAPTER_ID, success: true }]);
+    expect(attemptedKeys).toEqual([originalKey, movedKey]);
+    expect(dispatched).toEqual([expect.objectContaining({ agentId, resumeAdapterSessionId: movedKey })]);
+    expect((await listClaims()).map((claim) => claim.providerSessionId)).toEqual([movedKey]);
+  });
+
+  it('does not retry or dispatch when the observed owner generation changes', async () => {
+    const sessionId = 'session-g9-owner-race';
+    const agentId = 'agent-g9-owner-race';
+    const providerSessionId = await seedResumableAgent(sessionId, agentId);
+    await bus.request(SessionSubjects.create, { sessionId: 'session-g9-holder', machineId: MACHINE_ID });
+    await bus.request(AgentStorageSubjects.set, {
+      agentId: 'agent-g9-holder',
+      agent: createTestAgent('agent-g9-holder', {
+        sessionId: 'session-g9-holder',
+        adapterId: LIVE_ADAPTER_ID,
+      }),
+    });
+    const firstToken = crypto.randomUUID();
+    const first = await bus.request(SessionOwnershipStorageSubjects.claim, {
+      machineId: MACHINE_ID,
+      adapterId: LIVE_ADAPTER_ID,
+      adapterName: 'test-adapter',
+      providerSessionId,
+      sessionId: 'session-g9-holder',
+      agentId: 'agent-g9-holder',
+      claimToken: firstToken,
+      ownerInstance: { instanceId: 'g9-owner-first' },
+    });
+    expect(first.outcome).toBe('claimed');
+    let reservationAttempts = 0;
+    storageCleanups.push(
+      bus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (ctx) => {
+          reservationAttempts += 1;
+          if (reservationAttempts === 1) {
+            await bus.request(SessionOwnershipStorageSubjects.release, {
+              agentId: 'agent-g9-holder',
+              claimToken: firstToken,
+              disposition: 'released',
+            });
+            await bus.request(SessionOwnershipStorageSubjects.claim, {
+              machineId: MACHINE_ID,
+              adapterId: LIVE_ADAPTER_ID,
+              adapterName: 'test-adapter',
+              providerSessionId,
+              sessionId: 'session-g9-holder',
+              agentId: 'agent-g9-holder',
+              claimToken: crypto.randomUUID(),
+              ownerInstance: { instanceId: 'g9-owner-second' },
+            });
+          }
+          await ctx.next();
+        },
+        { priority: 1000 },
+      ),
+    );
+    const dispatched = captureRehydrates();
+
+    const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
+
+    expect(result.results).toEqual([
+      { agentId, adapterId: STALE_ADAPTER_ID, success: false, error: expect.stringContaining('claimed') },
+    ]);
+    expect(reservationAttempts).toBe(1);
+    expect(dispatched).toEqual([]);
+    expect((await bus.request(AgentStorageSubjects.get, { agentId })).agent?.status).toBe('idle');
   });
 
   it('restarts nothing when the named machine has no instance of the agent’s adapter', async () => {

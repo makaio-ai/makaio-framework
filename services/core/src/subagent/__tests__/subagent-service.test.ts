@@ -56,6 +56,7 @@ describe('SubagentService', () => {
         success: true,
         agentId: 'mock-agent',
         adapterId: 'default',
+        ownerInstanceId: 'test-owner-instance',
         adapterSessionId: 'adapter-session-1',
         sessionId: 'child-1',
         messageId: 'msg-1',

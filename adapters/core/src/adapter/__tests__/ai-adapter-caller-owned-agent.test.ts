@@ -49,6 +49,14 @@ class EmittingDuringStartConnector extends MockConnector {
     await this.updateProcessingState('turn_started');
     await this.updateProcessingState('idle');
   }
+
+  /**
+   * Move the test connector onto a later provider session.
+   * @param adapterSessionId - Provider session to expose from the connector
+   */
+  public moveTo(adapterSessionId: string): void {
+    this.adapterSessionId = adapterSessionId;
+  }
 }
 
 describe('AIAdapter - caller-owned agent row', () => {
@@ -126,6 +134,239 @@ describe('AIAdapter - caller-owned agent row', () => {
     // Lifecycle emission is unchanged — it is what says a live agent exists.
     expect(addedAgentIds).toEqual(['caller-minted-agent']);
     expect(adapter.getAgent('caller-minted-agent')).toBeDefined();
+  });
+
+  it('closes a caller-owned session agent without writing its row dead', async () => {
+    const statusUpdates: string[] = [];
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+        statusUpdates.push(ctx.payload.agentId);
+        ctx.setResult({ success: true, transitioned: true });
+      }),
+    );
+    const result = await startAgent('caller-owned-session-close', 'caller-owned-close-agent');
+    expect(result.success).toBe(true);
+
+    await MakaioBus.emit(SessionSubjects.closed, { sessionId: 'caller-owned-session-close' });
+
+    expect(statusUpdates).toEqual([]);
+    expect(adapter.getAgent('caller-owned-close-agent')).toBeUndefined();
+  });
+
+  it('closes only the connector when the caller has already terminalized its row', async () => {
+    let durableStatus = 'dead';
+    const statusWrites: string[] = [];
+    let connector: MockConnector | undefined;
+    const { adapter: connectorOnlyAdapter } = createTestAdapter('test-caller-owned-connector-only', {
+      connectorFactory: (config) => {
+        connector = new MockConnector(config);
+        return connector;
+      },
+    });
+    await connectorOnlyAdapter.init();
+    cleanupFns.push(() => void connectorOnlyAdapter.closeAsync());
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+        statusWrites.push(ctx.payload.status);
+        durableStatus = ctx.payload.status;
+        ctx.setResult({ success: true, transitioned: true });
+      }),
+    );
+    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: connectorOnlyAdapter.adapterId,
+      sessionId: 'caller-owned-connector-only',
+      role: 'lead',
+      model: 'test-model',
+      cwd: os.tmpdir(),
+      providerContext: TEST_PROVIDER_CONTEXT,
+      agentId: 'caller-owned-dead-agent',
+    });
+    expect(result.success).toBe(true);
+
+    await expect(
+      MakaioBus.request(AdapterSubjects.stopAgent, {
+        adapterId: connectorOnlyAdapter.adapterId,
+        ownerInstanceId: connectorOnlyAdapter.ownerInstanceId,
+        agentId: 'caller-owned-dead-agent',
+        teardown: 'connector-only',
+      }),
+    ).resolves.toMatchObject({ success: true });
+
+    expect(durableStatus).toBe('dead');
+    expect(statusWrites).toEqual([]);
+    expect(connector?.closeCount).toBe(1);
+    expect(connectorOnlyAdapter.getAgent('caller-owned-dead-agent')).toBeUndefined();
+  });
+
+  it('acknowledges the exact start generation before taking row responsibility', async () => {
+    const statusUpdates: Array<{ status: string; expectedStatus?: string | string[] }> = [];
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+        statusUpdates.push({ status: ctx.payload.status, expectedStatus: ctx.payload.expectedStatus });
+        ctx.setResult({ success: true, transitioned: true });
+      }),
+    );
+    const result = await startAgent('caller-owned-ack', 'caller-owned-ack-agent');
+    expect(result.success).toBe(true);
+    if (!result.success || result.settlementAckToken === undefined) throw new Error('caller-owned start omitted ack');
+
+    const stale = await MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId: result.agentId,
+      settlementAckToken: 'stale-generation',
+    });
+    expect(stale).toEqual({ acknowledged: false, reason: 'stale-token' });
+
+    await expect(
+      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+        adapterId: adapter.adapterId,
+        ownerInstanceId: adapter.ownerInstanceId,
+        agentId: result.agentId,
+        settlementAckToken: result.settlementAckToken,
+      }),
+    ).resolves.toEqual({ acknowledged: true });
+    await MakaioBus.emit(SessionSubjects.closed, { sessionId: 'caller-owned-ack' });
+
+    expect(statusUpdates).toEqual([
+      { status: 'idle', expectedStatus: ['starting', 'dead'] },
+      { status: 'dead', expectedStatus: undefined },
+    ]);
+  });
+
+  it('refuses an acknowledgement after teardown wins arbitration', async () => {
+    let connector: MockConnector | undefined;
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const { adapter: gated } = createTestAdapter('test-caller-owned-teardown-wins', {
+      connectorFactory: (config) => {
+        connector = new MockConnector(config);
+        return connector;
+      },
+    });
+    await gated.init();
+    cleanupFns.push(() => void gated.closeAsync());
+
+    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: gated.adapterId,
+      sessionId: 'caller-owned-teardown-wins',
+      role: 'lead',
+      model: 'test-model',
+      cwd: os.tmpdir(),
+      providerContext: TEST_PROVIDER_CONTEXT,
+      agentId: 'caller-owned-teardown-agent',
+    });
+    expect(result.success).toBe(true);
+    if (!result.success || result.settlementAckToken === undefined) throw new Error('caller-owned start omitted ack');
+    if (connector === undefined) throw new Error('connector was not created');
+    connector.closeGate = closeGate;
+
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: gated.adapterId,
+      ownerInstanceId: gated.ownerInstanceId,
+      agentId: result.agentId,
+    });
+    await Promise.resolve();
+    await expect(
+      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+        adapterId: gated.adapterId,
+        ownerInstanceId: gated.ownerInstanceId,
+        agentId: result.agentId,
+        settlementAckToken: result.settlementAckToken,
+      }),
+    ).resolves.toEqual({ acknowledged: false, reason: 'teardown-in-flight' });
+
+    releaseClose();
+    await expect(stop).resolves.toMatchObject({ success: true });
+    await expect(
+      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+        adapterId: gated.adapterId,
+        ownerInstanceId: gated.ownerInstanceId,
+        agentId: result.agentId,
+        settlementAckToken: result.settlementAckToken,
+      }),
+    ).resolves.toEqual({ acknowledged: false, reason: 'not-hosted' });
+  });
+
+  it('consumes a generation whose guarded idle transition was refused', async () => {
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+        ctx.setResult({ success: true, transitioned: false });
+      }),
+    );
+    const result = await startAgent('caller-owned-status-refused', 'caller-owned-status-refused-agent');
+    if (!result.success || result.settlementAckToken === undefined) throw new Error('caller-owned start omitted ack');
+    const request = {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId: result.agentId,
+      settlementAckToken: result.settlementAckToken,
+    };
+
+    await expect(MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, request)).resolves.toEqual({
+      acknowledged: false,
+      reason: 'status-refused',
+    });
+    await expect(MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, request)).resolves.toEqual({
+      acknowledged: false,
+      reason: 'stale-token',
+    });
+  });
+
+  it('makes teardown wait when acknowledgement wins arbitration', async () => {
+    let connector: MockConnector | undefined;
+    const statuses: string[] = [];
+    let releaseStatus!: () => void;
+    const statusGate = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, async (ctx) => {
+        statuses.push(ctx.payload.status);
+        if (ctx.payload.status === 'idle') await statusGate;
+        ctx.setResult({ success: true, transitioned: true });
+      }),
+    );
+    const { adapter: gated } = createTestAdapter('test-caller-owned-ack-wins', {
+      connectorFactory: (config) => {
+        connector = new MockConnector(config);
+        return connector;
+      },
+    });
+    await gated.init();
+    cleanupFns.push(() => void gated.closeAsync());
+    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: gated.adapterId,
+      sessionId: 'caller-owned-ack-wins',
+      role: 'lead',
+      model: 'test-model',
+      cwd: os.tmpdir(),
+      providerContext: TEST_PROVIDER_CONTEXT,
+      agentId: 'caller-owned-ack-wins-agent',
+    });
+    if (!result.success || result.settlementAckToken === undefined) throw new Error('caller-owned start omitted ack');
+
+    const acknowledgement = MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      adapterId: gated.adapterId,
+      ownerInstanceId: gated.ownerInstanceId,
+      agentId: result.agentId,
+      settlementAckToken: result.settlementAckToken,
+    });
+    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: gated.adapterId,
+      ownerInstanceId: gated.ownerInstanceId,
+      agentId: result.agentId,
+    });
+    await Promise.resolve();
+    expect(connector?.closeCount).toBe(0);
+
+    releaseStatus();
+    await expect(acknowledgement).resolves.toEqual({ acknowledged: true });
+    await expect(stop).resolves.toMatchObject({ success: true });
+    expect(connector?.closeCount).toBe(1);
+    expect(statuses).toEqual(['idle', 'disposed', 'dead']);
   });
 
   /**
@@ -225,6 +466,83 @@ describe('AIAdapter - caller-owned agent row', () => {
     // belongs to.
     await connector?.reportProcessing();
     expect(announced).toEqual([]);
+
+    if (owned.settlementAckToken === undefined) throw new Error('caller-owned start omitted ack');
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+        ctx.setResult({ success: true, transitioned: true });
+      }),
+    );
+    await expect(
+      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+        adapterId: emitting.adapterId,
+        ownerInstanceId: emitting.ownerInstanceId,
+        agentId: owned.agentId,
+        settlementAckToken: owned.settlementAckToken,
+      }),
+    ).resolves.toEqual({ acknowledged: true });
+    connector?.moveTo('provider-after-ack');
+    await connector?.reportProcessing();
+    expect(announced).toEqual(['caller-enriched-agent']);
+  });
+
+  it('returns an acknowledgement token for a caller-owned warm rehydrate', async () => {
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+        ctx.setResult({ success: true, transitioned: true });
+      }),
+    );
+    const started = await startAgent('caller-owned-rehydrate-base');
+    expect(started.success).toBe(true);
+    if (!started.success) throw new Error('adapter-owned start failed');
+
+    const rehydrated = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      adapterId: adapter.adapterId,
+      agentId: started.agentId,
+      callerOwnsAgentRow: true,
+    });
+    expect(rehydrated.success).toBe(true);
+    if (!rehydrated.success || rehydrated.settlementAckToken === undefined) {
+      throw new Error('caller-owned rehydrate omitted ack');
+    }
+    await expect(
+      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+        adapterId: adapter.adapterId,
+        ownerInstanceId: adapter.ownerInstanceId,
+        agentId: started.agentId,
+        settlementAckToken: rehydrated.settlementAckToken,
+      }),
+    ).resolves.toEqual({ acknowledged: true });
+  });
+
+  it('leaves a recovery row for ownership finalization after acknowledging its rehydrate', async () => {
+    const statusUpdates: string[] = [];
+    cleanupFns.push(
+      MakaioBus.on(AgentStorageSubjects.updateStatus, (ctx) => {
+        statusUpdates.push(ctx.payload.status);
+        ctx.setResult({ success: true, transitioned: true });
+      }),
+    );
+    const started = await startAgent('caller-owned-recovery-finalize');
+    expect(started.success).toBe(true);
+    if (!started.success) throw new Error('adapter-owned start failed');
+    const rehydrated = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      adapterId: adapter.adapterId,
+      agentId: started.agentId,
+      callerOwnsAgentRow: true,
+    });
+    expect(rehydrated.success).toBe(true);
+    if (!rehydrated.success || rehydrated.settlementAckToken === undefined) throw new Error('rehydrate omitted ack');
+    await expect(
+      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+        adapterId: adapter.adapterId,
+        ownerInstanceId: adapter.ownerInstanceId,
+        agentId: started.agentId,
+        settlementAckToken: rehydrated.settlementAckToken,
+        recovery: true,
+      }),
+    ).resolves.toEqual({ acknowledged: true });
+    expect(statusUpdates).toEqual([]);
   });
 
   it('withholds the provider session from a caller-owned start, and only that field', async () => {

@@ -1,4 +1,4 @@
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import { GitHubCopilotAgent } from './agent.js';
 import { GitHubCopilotConnectorNamespace, type GitHubCopilotConnectorBus } from './namespaces/index.js';
 import { GitHubCopilotConnector } from './connector.js';
@@ -27,11 +27,11 @@ export { GitHubCopilotSdkAdapterName };
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new GitHubCopilotAdapter();
+ * const adapter = new GitHubCopilotAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createGitHubCopilotSDKAdapter();
+ * const adapter = await createGitHubCopilotSDKAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  * ```
  */
 export class GitHubCopilotAdapter extends AIAdapter<
@@ -39,18 +39,19 @@ export class GitHubCopilotAdapter extends AIAdapter<
   GitHubCopilotConnector,
   GitHubCopilotAgent
 > {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: GitHubCopilotSdkAdapterName,
       capabilities: ['tools', 'systemPrompt:override', 'systemPrompt:append'],
-      ...config,
+      nativeTools: [],
       namespace: GitHubCopilotConnectorNamespace,
       agentFactory: (agentConfig) => {
         return new GitHubCopilotAgent(agentConfig);
       },
       configFactory: GitHubCopilotConfig.getConfig,
       connectorFactory: (fullConfig) => new GitHubCopilotConnector(fullConfig),
-      definitionProviders: config?.definitionProviders,
+      definitionProviders: config.definitionProviders,
     });
   }
 }
@@ -59,17 +60,17 @@ export class GitHubCopilotAdapter extends AIAdapter<
  * Factory function to create and initialize a GitHub Copilot SDK adapter.
  *
  * Convenience wrapper that creates the adapter and calls init() for you.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized GitHubCopilotAdapter instance
  * @example
  * ```typescript
- * const adapter = await createGitHubCopilotSDKAdapter();
+ * const adapter = await createGitHubCopilotSDKAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle requests via bus
  * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
-export async function createGitHubCopilotSDKAdapter(config?: Partial<AIAdapterConfig>): Promise<GitHubCopilotAdapter> {
+export async function createGitHubCopilotSDKAdapter(config: AIAdapterRuntimeConfig): Promise<GitHubCopilotAdapter> {
   const adapter = new GitHubCopilotAdapter(config);
   await adapter.init();
   return adapter;

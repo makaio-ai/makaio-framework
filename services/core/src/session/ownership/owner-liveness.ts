@@ -5,6 +5,7 @@ import {
   type MakaioSessionAgent,
   type OwnershipTopology,
   type SessionOwnershipReclaimReason,
+  SessionOwnershipStorageSubjects,
 } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 
@@ -26,6 +27,8 @@ import { AgentStorageSubjects } from '../storage/agent-namespace.js';
  *   diagnostic must report what it observes, and a probe can straddle a delete.
  * - `agent-disposed` — the agent was removed. A disposed agent can never
  *   legitimately hold a key.
+ * - `owner-instance-retired` — storage proves the exact process that took this
+ *   generation retired itself.
  * - `adapter-instance-gone` — no adapter answers for the claim's instance.
  *   Admitted **only** under `machine-exclusive`: where peers may host adapters
  *   on the same machine, an unanswered probe means "not this runtime's", never
@@ -49,8 +52,34 @@ export async function assessClaimOwner(
   if (agent === null) return 'agent-gone';
   if (agent.status === 'disposed') return 'agent-disposed';
 
+  if (await ownerInstanceIsRetired(bus, claim)) return 'owner-instance-retired';
+
   if (topology !== 'machine-exclusive') return null;
   return (await adapterInstanceAnswers(bus, claim.adapterId)) ? null : 'adapter-instance-gone';
+}
+
+/**
+ * Read the durable liveness fact for the process that took a generation.
+ *
+ * Absence, legacy ownerlessness and read failure are all inconclusive. Only a
+ * stored non-null retirement stamp is evidence, and this diagnostic read never
+ * authorizes a takeover — the taking transaction evaluates that predicate
+ * again against its own locked state.
+ * @param bus - Bus used for the optional runtime-instance read.
+ * @param claim - Claim whose owner process may have retired.
+ * @returns Whether storage proves that exact owner process retired.
+ */
+async function ownerInstanceIsRetired(bus: IMakaioBus, claim: AdapterSessionClaimRecord): Promise<boolean> {
+  if (claim.ownerInstanceId === null) return false;
+  try {
+    const result = await bus.requestOptional(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+      instanceId: claim.ownerInstanceId,
+      machineId: claim.machineId,
+    });
+    return result.handled && result.data.instance !== null && result.data.instance.retiredAt !== null;
+  } catch {
+    return false;
+  }
 }
 
 /** The agent read could not be made — distinct from "the agent is not there". */

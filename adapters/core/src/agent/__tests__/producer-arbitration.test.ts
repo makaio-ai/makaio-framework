@@ -89,7 +89,12 @@ const cleanups: Array<() => void> = [];
 beforeEach(async () => {
   otherCwd = fs.mkdtempSync(`${os.tmpdir()}/producer-arbitration-`);
   arbiter = new AgentTeardownArbiter();
-  registry = new ActiveAgentRegistry({ globalBus: MakaioBus, adapterName: 'producer-adapter', arbiter });
+  registry = new ActiveAgentRegistry({
+    globalBus: MakaioBus,
+    adapterName: 'producer-adapter',
+    ownerInstanceId: 'test-owner-instance',
+    arbiter,
+  });
   built = [];
   activationEvents = [];
   nextGeneration = undefined;

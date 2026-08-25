@@ -29,7 +29,9 @@ export type SessionStartFailureCode =
   /** A joined start left the row `starting` more often than the bounded re-read allows. */
   | 'start-unresolved'
   /** Another start won the lead designation and the session still has no agents. */
-  | 'lead-conflict';
+  | 'lead-conflict'
+  /** The session lifecycle gate rejected the reservation before adapter dispatch. */
+  | 'session-not-active';
 
 /** A reserved start that did not end with a usable agent. */
 export class SessionStartError extends Error {
@@ -51,20 +53,26 @@ export class SessionStartError extends Error {
    */
   public readonly deferredAgentIds?: readonly string[];
 
+  /** Stored lifecycle status when the admission gate rejected a reservation. */
+  public readonly sessionStatus?: 'closed' | 'archived' | 'discovered';
+
   /**
    * @param code - Which modeled outcome this is; the value callers branch on.
    * @param message - Human-readable detail, including the identifiers involved.
    * @param cause - Underlying failure, when one exists.
    * @param deferredAgentIds - The named targets this call could not act for, when the send named any.
+   * @param sessionStatus - Non-active session status observed by a refused reservation.
    */
   public constructor(
     public readonly code: SessionStartFailureCode,
     message: string,
     cause?: unknown,
     deferredAgentIds?: readonly string[],
+    sessionStatus?: 'closed' | 'archived' | 'discovered',
   ) {
     super(message, { cause });
     this.name = 'SessionStartError';
     if (deferredAgentIds !== undefined) this.deferredAgentIds = deferredAgentIds;
+    if (sessionStatus !== undefined) this.sessionStatus = sessionStatus;
   }
 }

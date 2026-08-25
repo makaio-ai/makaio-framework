@@ -1,0 +1,1 @@
+ALTER TABLE `agents` ADD `recovery_attempt_id` text;

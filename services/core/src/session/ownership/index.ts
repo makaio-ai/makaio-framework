@@ -5,7 +5,13 @@
  * which is exactly one durable ownership act, plus the two process-local seams
  * a start needs — exclusive-start joining and per-agent settle ordering.
  */
-export { registerSessionOwnershipAuthority, type SessionOwnershipAuthorityDeps } from './authority.js';
+export {
+  OwnershipAuthorityClosedError,
+  registerSessionOwnershipAuthority,
+  type OwnershipAuthorityHandle,
+  type RegisteredSessionOwnershipAuthority,
+  type SessionOwnershipAuthorityDeps,
+} from './authority.js';
 export { registerAdapterSessionMovementObserver } from './movement-observer.js';
 export {
   peekInFlightStart,

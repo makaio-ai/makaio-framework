@@ -1,12 +1,7 @@
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 520 }] */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  SessionOwnershipStorageSubjects,
-  SessionSubjects,
-  type AdapterSessionClaimRecord,
-  type MakaioSessionAgent,
-} from '@makaio/contracts';
+import { SessionOwnershipStorageSubjects, SessionSubjects, type MakaioSessionAgent } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStartError } from '../handlers/session-start-error.js';
 import {
@@ -14,7 +9,6 @@ import {
   createReservedRehydrateContext,
   MACHINE_ID,
   FIRST,
-  MOVED_KEY,
   type ReservedRehydrateContext,
 } from './reserved-rehydrate-fixture.js';
 
@@ -48,6 +42,31 @@ describe('reserved rehydrate', () => {
   function recoverNatively(agent: MakaioSessionAgent) {
     return ctx.recover(agent, { kind: 'native-resume', resumeAdapterSessionId: agent.adapterSessionId as string });
   }
+
+  it('does not dispatch when close wins before the recovery reservation', async () => {
+    const agent = await ctx.seedAgent(
+      'session-close-before-rehydrate-reservation',
+      'agent-close-before-rehydrate-reservation',
+    );
+    ctx.track(
+      bus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (context) => {
+          await bus.request(SessionSubjects.close, { sessionId: agent.sessionId });
+          await context.next();
+        },
+        FIRST,
+      ),
+    );
+    ctx.registerAdapter();
+
+    await expect(recoverNatively(agent)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
+
+    expect(dispatched).toEqual([]);
+    expect(stopped).toEqual([]);
+    expect(await ctx.readStatus(agent.agentId)).toBe('dead');
+    expect(await ctx.listClaims()).toEqual([]);
+  });
 
   it('defers without dispatching anything when the key is occupied (case 70)', async () => {
     const agent = await ctx.seedAgent('session-occupied', 'agent-occupied');
@@ -168,6 +187,7 @@ describe('reserved rehydrate', () => {
       sessionId: 'session-refused',
       agentId: agent.agentId,
       claimToken: crypto.randomUUID(),
+      ownerInstance: { instanceId: 'reserved-rehydrate-unrelated-owner' },
     });
     expect(unrelated.outcome).toBe('claimed');
     ctx.registerAdapter(() => ({ success: false, message: 'already claimed in flight', dispatch: 'not-dispatched' }));
@@ -203,27 +223,48 @@ describe('reserved rehydrate', () => {
     expect(ownership?.currency.currentAdapterSessionId).toBe('provider-moved-to');
   });
 
+  it('does not let a stale whole-record write resurrect the attempt fence after finalization', async () => {
+    const agent = await ctx.seedAgent('session-finalized-fence', 'agent-finalized-fence');
+    ctx.registerAdapter();
+
+    await recoverNatively(agent);
+    const finalized = await bus.request(AgentStorageSubjects.get, { agentId: agent.agentId });
+    expect(finalized.agent?.recoveryAttemptId).toBeUndefined();
+    if (finalized.agent === null) throw new Error('expected finalized agent');
+
+    await bus.request(AgentStorageSubjects.set, {
+      agentId: agent.agentId,
+      agent: { ...finalized.agent, recoveryAttemptId: 'stale-recovery-attempt' },
+    });
+
+    expect(
+      (await bus.request(AgentStorageSubjects.get, { agentId: agent.agentId })).agent?.recoveryAttemptId,
+    ).toBeUndefined();
+  });
+
   it.each([
     {
       // `updateRuntime` is a hard request whose response is checked, so a
       // refusal is a post-dispatch failure rather than a warning.
-      label: 'the runtime write is refused',
+      label: 'the recovery acknowledgement is refused',
       inject: () =>
         bus.on(
-          AgentStorageSubjects.updateRuntime,
+          SessionOwnershipStorageSubjects.finalizeRecovery,
           (ctx) => {
-            ctx.setResult({ success: false });
+            if (ctx.payload.action.kind === 'succeeded') ctx.setResult({ applied: false });
+            else return ctx.next();
           },
           FIRST,
         ),
     },
     {
-      label: 'the runtime write throws',
+      label: 'the recovery acknowledgement throws',
       inject: () =>
         bus.on(
-          AgentStorageSubjects.updateRuntime,
-          () => {
-            throw new Error('runtime write transport failed');
+          SessionOwnershipStorageSubjects.finalizeRecovery,
+          (ctx) => {
+            if (ctx.payload.action.kind === 'succeeded') throw new Error('recovery acknowledgement transport failed');
+            return ctx.next();
           },
           FIRST,
         ),
@@ -240,12 +281,12 @@ describe('reserved rehydrate', () => {
         ),
     },
     {
-      label: 'the commit throws',
+      label: 'the recovery commit throws',
       inject: () =>
         bus.on(
-          AgentStorageSubjects.updateStatus,
+          SessionOwnershipStorageSubjects.finalizeRecovery,
           (ctx) => {
-            if (ctx.payload.status === 'idle') throw new Error('commit transport failed');
+            if (ctx.payload.action.kind === 'succeeded') throw new Error('commit transport failed');
             return ctx.next();
           },
           FIRST,
@@ -267,7 +308,7 @@ describe('reserved rehydrate', () => {
     expect(claims.every((claim) => claim.status === 'abandoned')).toBe(true);
   });
 
-  it('keeps a healthy connector when a peer stomped the row to dead (case 98a)', async () => {
+  it('does not let a status-only peer overwrite a guarded recovery attempt (case 98a)', async () => {
     const agent = await ctx.seedAgent('session-peer-dead', 'agent-peer-dead');
     ctx.registerAdapter(async (agentId) => {
       // A peer applying the in-flight consumer rule claims this recovery while
@@ -276,16 +317,13 @@ describe('reserved rehydrate', () => {
       return { success: true };
     });
 
-    const outcome = await recoverNatively(agent);
+    await expect(recoverNatively(agent)).rejects.toMatchObject({ code: 'settlement-unresolved' });
 
-    expect(outcome.kind).toBe('recovered');
-    // `dead` is in the commit's expectation precisely so the owner restores it.
-    expect(await ctx.readStatus(agent.agentId)).toBe('idle');
-    expect(stopped).toEqual([]);
-    expect((await ctx.listClaims()).some((claim) => claim.status === 'held')).toBe(true);
+    expect(await ctx.readStatus(agent.agentId)).toBe('dead');
+    expect(stopped).toEqual([agent.agentId]);
   });
 
-  it('accepts a peer that wrote idle first as a silent no-op (case 98b)', async () => {
+  it('refuses Ack when a peer wrote idle before this generation could commit (case 98b)', async () => {
     const agent = await ctx.seedAgent('session-peer-idle', 'agent-peer-idle');
     ctx.registerAdapter(async (agentId) => {
       // What an *unreserved* attempt joining the same agent writes.
@@ -293,22 +331,21 @@ describe('reserved rehydrate', () => {
       return { success: true };
     });
 
-    const outcome = await recoverNatively(agent);
+    await expect(recoverNatively(agent)).rejects.toMatchObject({ code: 'settlement-unresolved' });
 
-    expect(outcome.kind).toBe('recovered');
+    // The adapter cannot attribute an existing `idle` write to this token, so it
+    // refuses instead of converting an ambiguous row into settlement evidence.
+    // The only idle write was the peer's. This attempt does not overwrite a
+    // status slot it cannot attribute to itself.
     expect(await ctx.readStatus(agent.agentId)).toBe('idle');
-    expect(stopped).toEqual([]);
-    expect((await ctx.listClaims()).some((claim) => claim.status === 'held')).toBe(true);
+    expect(stopped).toEqual([agent.agentId]);
+    expect((await ctx.listClaims()).every((claim) => claim.status === 'abandoned')).toBe(true);
   });
 
   it('detects a removal that landed after the settlement and answers lost (cases 72, 98c)', async () => {
     const agent = await ctx.seedAgent('session-removed', 'agent-removed');
-    // The real removal, on the real production path, in the one interval this
-    // case is about: the keyed settlement has committed, so every earlier
-    // checkpoint is behind it and the commit's own re-read is the only one left.
-    // `registerAgentRemovedHandler` disposes the row and releases the agent's
-    // claims — which is precisely the act that strips a live connector of its
-    // ownership anchor (I23b).
+    // Real removal after keyed settlement: it disposes the row and releases the
+    // claims, stripping the live connector of its ownership anchor (I23b).
     ctx.track(
       bus.on(
         SessionOwnershipStorageSubjects.settleMovement,
@@ -320,10 +357,9 @@ describe('reserved rehydrate', () => {
       ),
     );
     ctx.registerAdapter();
-
     await expect(recoverNatively(agent)).rejects.toMatchObject({ code: 'agent-unavailable' });
-
-    expect(stopped).toEqual([agent.agentId]);
+    // One connector teardown, then one idempotent exact-owner confirmation.
+    expect(stopped).toEqual([agent.agentId, agent.agentId]);
     expect(await ctx.readStatus(agent.agentId)).toBe('disposed');
     expect((await ctx.listClaims()).some((claim) => claim.status === 'held')).toBe(false);
   });
@@ -358,12 +394,12 @@ describe('reserved rehydrate', () => {
     // The connector lands on a key a foreign generation already holds, so the
     // settlement is refused on ownership grounds rather than failing.
     await ctx.occupyKey('provider-taken');
-    const statusWrites: string[] = [];
+    const finalizations: string[] = [];
     ctx.track(
       bus.on(
-        AgentStorageSubjects.updateStatus,
+        SessionOwnershipStorageSubjects.finalizeRecovery,
         (ctx) => {
-          statusWrites.push(`${ctx.payload.agentId}:${ctx.payload.status}`);
+          finalizations.push(`${ctx.payload.agentId}:${ctx.payload.action.kind}`);
           return ctx.next();
         },
         FIRST,
@@ -376,7 +412,7 @@ describe('reserved rehydrate', () => {
     // One teardown, not two: the outcome table cleans and throws for itself, so
     // it runs outside every guard.
     expect(stopped).toEqual([agent.agentId]);
-    expect(statusWrites.filter((write) => write === `${agent.agentId}:dead`)).toHaveLength(1);
+    expect(finalizations.filter((action) => action === `${agent.agentId}:failed`)).toHaveLength(1);
     expect((await ctx.listClaims()).some((claim) => claim.agentId === agent.agentId && claim.status === 'held')).toBe(
       false,
     );
@@ -417,104 +453,36 @@ describe('reserved rehydrate', () => {
       agentId: agent.agentId,
       adapterId: ADAPTER_ID,
       adapterName: agent.adapterName,
+      machineId: MACHINE_ID,
+      ownerInstanceId: ctx.ownerInstanceId,
       role: 'member',
       resumeProviderSessionId: agent.adapterSessionId as string,
+      claimToken: crypto.randomUUID(),
     });
     expect(reserved.outcome).toBe('occupied');
   });
 
-  it('releases the generation an observer-first settlement reported (case 113a)', async () => {
-    const agent = await ctx.seedAgent('session-observer-first', 'agent-observer-first');
-    // The connector lands on a key the reservation did not name, and the
-    // movement observer settles *that* key before the caller does. The
-    // generation this creates is therefore one the attempt never reserved and
-    // cannot name from anything it holds: only the settle response reports it,
-    // which is why the attempt records it before it does anything else with the
-    // result. Settling the reserved key instead would reuse the attempt's own
-    // generation and the case would pass without ever exercising the rule.
-    ctx.registerAdapter(async (agentId) => {
-      await bus.request(SessionSubjects.ownership.settleMovement, {
-        sessionId: agent.sessionId,
-        agentId,
-        adapterId: ADAPTER_ID,
-        adapterName: agent.adapterName,
-        movement: { confirmed: true, providerSessionId: MOVED_KEY },
-      });
-      return { success: true, adapterSessionId: MOVED_KEY };
-    });
-    // The commit then fails, which is the failure that has to give the
-    // observer's generation back.
-    const statusWrites: string[] = [];
-    ctx.track(
-      bus.on(
-        AgentStorageSubjects.updateStatus,
-        (ctx) => {
-          if (ctx.payload.status === 'idle') throw new Error('commit transport failed');
-          statusWrites.push(ctx.payload.status);
-          return ctx.next();
-        },
-        FIRST,
-      ),
-    );
-
-    await expect(recoverNatively(agent)).rejects.toMatchObject({ code: 'settlement-unresolved' });
-
-    const claims = await ctx.listClaims();
-    expect(claims).not.toHaveLength(0);
-    expect(claims.every((claim) => claim.status === 'abandoned')).toBe(true);
-    // One teardown, not two: the connector is stopped once and the row reaches
-    // its terminal state through exactly one write.
-    expect(stopped).toEqual([agent.agentId]);
-    expect(await ctx.readStatus(agent.agentId)).toBe('dead');
-    expect(statusWrites.filter((status) => status === 'dead')).toHaveLength(1);
-  });
-
-  it('leaves an observer-first generation held when the settle response is lost (case 113b)', async () => {
-    const agent = await ctx.seedAgent('session-observer-lost', 'agent-observer-lost');
-    let observed: AdapterSessionClaimRecord | undefined;
-    ctx.registerAdapter(async (agentId) => {
-      await bus.request(SessionSubjects.ownership.settleMovement, {
-        sessionId: agent.sessionId,
-        agentId,
-        adapterId: ADAPTER_ID,
-        adapterName: agent.adapterName,
-        movement: { confirmed: true, providerSessionId: MOVED_KEY },
-      });
-      observed = (await ctx.listClaims())[0];
-      return { success: true, adapterSessionId: MOVED_KEY };
-    });
-    // The caller's own settle — the second one storage sees — commits and its
-    // answer never arrives. The effective generation is only knowable *from*
-    // that answer, so the attempt never learns the observer's token and its
-    // releasable set stays exactly what it seeded: its reservation and its own
-    // settlement candidate.
-    let settles = 0;
+  it('retires the exact recovery and stops its connector when close wins after dispatch', async () => {
+    const agent = await ctx.seedAgent('session-close-during-rehydrate', 'agent-close-during-rehydrate');
     ctx.track(
       bus.on(
         SessionOwnershipStorageSubjects.settleMovement,
-        async (ctx) => {
-          settles += 1;
-          await ctx.next();
-          if (settles === 2) throw new Error('settlement response was lost after it committed');
+        async (context) => {
+          await context.next();
+          await bus.request(SessionSubjects.close, { sessionId: agent.sessionId });
         },
         FIRST,
       ),
     );
+    ctx.registerAdapter();
 
-    await expect(recoverNatively(agent)).rejects.toMatchObject({ code: 'settlement-unresolved' });
+    await expect(recoverNatively(agent)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
 
-    // OQ-I's residual, pinned rather than glossed: the observer's generation
-    // survives as `held`, and this case exists so a later change that closes the
-    // window has a test to flip instead of a surprise to discover. What it also
-    // pins is that nothing *falsely* touched it — the token is the one the
-    // observer allocated, so no cleanup released it and no retry re-minted it.
-    const claims = await ctx.listClaims();
-    expect(claims).toHaveLength(1);
-    expect(claims[0]?.claimToken).toBe(observed?.claimToken);
-    expect(claims[0]?.status).toBe('held');
-    // The row and the connector are still unwound, because the attempt itself
-    // did fail: only the generation it could not name is left standing.
+    expect(dispatched).toHaveLength(1);
     expect(stopped).toEqual([agent.agentId]);
     expect(await ctx.readStatus(agent.agentId)).toBe('dead');
+    const claims = await ctx.listClaims();
+    expect(claims).not.toHaveLength(0);
+    expect(claims.every((claim) => claim.agentId !== agent.agentId || claim.status === 'abandoned')).toBe(true);
   });
 });

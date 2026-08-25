@@ -21,6 +21,12 @@ import { SessionStorageSubjects } from '../namespace.js';
 import { AgentStorageSubjects } from '../agent-namespace.js';
 import { createSession, createAgent } from './shared.js';
 
+/** Backend-specific setup used to place a real persisted claim in legacy form. */
+export interface SessionOwnershipBehaviorFixture {
+  /** Clear the persisted runtime owner identity for the named claim. */
+  readonly clearClaimOwnerInstanceId: (claimId: string) => Promise<void> | void;
+}
+
 // ---------------------------------------------------------------------------
 // Internal test helpers
 // ---------------------------------------------------------------------------
@@ -47,7 +53,10 @@ async function seedSession(): Promise<string> {
  */
 async function seedAgent(sessionId: string): Promise<string> {
   const agentId = `agent-${crypto.randomUUID()}`;
-  await MakaioBus.request(AgentStorageSubjects.set, { agentId, agent: createAgent({ agentId, sessionId }) });
+  await MakaioBus.request(AgentStorageSubjects.set, {
+    agentId,
+    agent: createAgent({ agentId, sessionId, adapterId: 'adapter-1' }),
+  });
   return agentId;
 }
 
@@ -97,6 +106,7 @@ function requireClaim(claim: AdapterSessionClaimRecord | null): AdapterSessionCl
  * @param machineId - Machine identity (default `machine-1`).
  * @param adapterId - Adapter identity (default `adapter-1`).
  * @param providerSessionId - Provider session identity (default `provider-session-1`).
+ * @param ownerInstanceId - Runtime process taking the generation.
  */
 function buildClaimRequest(
   agentId: string,
@@ -104,7 +114,8 @@ function buildClaimRequest(
   claimToken: string,
   machineId = 'machine-1',
   adapterId = 'adapter-1',
-  providerSessionId = 'provider-session-1',
+  providerSessionId: string | null = 'provider-session-1',
+  ownerInstanceId = `instance-${claimToken}`,
 ) {
   return {
     machineId,
@@ -113,6 +124,7 @@ function buildClaimRequest(
     providerSessionId,
     sessionId,
     agentId,
+    ownerInstance: { instanceId: ownerInstanceId },
     claimToken,
   } as const;
 }
@@ -126,8 +138,86 @@ function buildClaimRequest(
  *
  * Call inside a `describe()` block after the backend's `beforeEach`/`afterEach`
  * lifecycle is configured.
+ * @param fixture - Backend hook that prepares a persisted legacy claim.
  */
-export function describeSessionOwnershipBehavior(): void {
+export function describeSessionOwnershipBehavior(fixture: SessionOwnershipBehaviorFixture): void {
+  describe('finalizeRecovery — attempt-fenced lifecycle', () => {
+    it('applies only the exact attempt and binding, clears the attempt on success, and restores an absent prior binding', async () => {
+      const sessionId = await seedSession();
+      const agentId = `agent-${crypto.randomUUID()}`;
+      const currentBinding = {
+        adapterId: 'recovery-adapter',
+        ownerMachineId: 'recovery-machine',
+        ownerInstanceId: 'recovery-owner',
+      };
+      await MakaioBus.request(AgentStorageSubjects.set, {
+        agentId,
+        agent: createAgent({
+          agentId,
+          sessionId,
+          adapterId: currentBinding.adapterId,
+          status: 'starting',
+          runtimeOwner: { machineId: currentBinding.ownerMachineId, instanceId: currentBinding.ownerInstanceId },
+          recoveryAttemptId: 'attempt-1',
+        }),
+      });
+
+      const stale = await MakaioBus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+        agentId,
+        attemptId: 'attempt-0',
+        binding: currentBinding,
+        action: { kind: 'failed' },
+      });
+      expect(stale.applied).toBe(false);
+
+      const rolledBack = await MakaioBus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+        agentId,
+        attemptId: 'attempt-1',
+        binding: currentBinding,
+        action: {
+          kind: 'rollback',
+          preimage: { status: 'active', adapterId: 'prior-adapter', recoveryAttemptId: 'prior-attempt' },
+        },
+      });
+      expect(rolledBack.applied).toBe(true);
+      const afterRollback = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+      expect(afterRollback.agent?.status).toBe('active');
+      expect(afterRollback.agent?.adapterId).toBe('prior-adapter');
+      expect(afterRollback.agent?.runtimeOwner).toBeUndefined();
+      expect(afterRollback.agent?.recoveryAttemptId).toBe('prior-attempt');
+
+      const succeedingAgentId = `agent-${crypto.randomUUID()}`;
+      await MakaioBus.request(AgentStorageSubjects.set, {
+        agentId: succeedingAgentId,
+        agent: createAgent({
+          agentId: succeedingAgentId,
+          sessionId,
+          adapterId: currentBinding.adapterId,
+          status: 'starting',
+          runtimeOwner: { machineId: currentBinding.ownerMachineId, instanceId: currentBinding.ownerInstanceId },
+          recoveryAttemptId: 'attempt-2',
+        }),
+      });
+      const staleFirstAttempt = await MakaioBus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+        agentId: succeedingAgentId,
+        attemptId: 'attempt-1',
+        binding: currentBinding,
+        action: { kind: 'failed' },
+      });
+      expect(staleFirstAttempt.applied).toBe(false);
+      const succeeded = await MakaioBus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+        agentId: succeedingAgentId,
+        attemptId: 'attempt-2',
+        binding: currentBinding,
+        action: { kind: 'succeeded' },
+      });
+      expect(succeeded.applied).toBe(true);
+      const afterSuccess = await MakaioBus.request(AgentStorageSubjects.get, { agentId: succeedingAgentId });
+      expect(afterSuccess.agent).toMatchObject({ status: 'idle', runtimeOwner: { machineId: 'recovery-machine' } });
+      expect(afterSuccess.agent?.recoveryAttemptId).toBeUndefined();
+    });
+  });
+
   // ─── claim: acquisition, retry, contention ─────────────────────────────────────────────────────────────────────
 
   describe('claim — free key', () => {
@@ -169,6 +259,71 @@ export function describeSessionOwnershipBehavior(): void {
         machineId: 'machine-1',
       });
       expect(listed.claims).toHaveLength(1);
+    });
+
+    it('reuses an existing owner without consuming the next runtime incarnation', async () => {
+      const sessionId = await seedSession();
+      const firstAgentId = await seedAgent(sessionId);
+      const secondAgentId = await seedAgent(sessionId);
+      const thirdAgentId = await seedAgent(sessionId);
+      const machineId = `machine-incarnation-${crypto.randomUUID()}`;
+      const adapterId = `adapter-incarnation-${crypto.randomUUID()}`;
+      const firstOwnerInstanceId = `instance-incarnation-first-${crypto.randomUUID()}`;
+      const firstRequest = buildClaimRequest(
+        firstAgentId,
+        sessionId,
+        crypto.randomUUID(),
+        machineId,
+        adapterId,
+        `provider-incarnation-first-${crypto.randomUUID()}`,
+        firstOwnerInstanceId,
+      );
+
+      const first = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, firstRequest);
+      expect(first.outcome).toBe('claimed');
+      const beforeRetry = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId: firstAgentId });
+
+      const repeated = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, firstRequest);
+      expect(repeated.outcome).toBe('idempotent');
+      const refused = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...firstRequest,
+        agentId: secondAgentId,
+        claimToken: crypto.randomUUID(),
+      });
+      expect(refused.outcome).toBe('already-claimed');
+
+      const afterRefusal = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId: firstAgentId });
+      expect(afterRefusal).toEqual(beforeRetry);
+      const held = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId, adapterId });
+      expect(held.claims).toHaveLength(1);
+
+      const secondOwnerInstanceId = `instance-incarnation-second-${crypto.randomUUID()}`;
+      const second = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          thirdAgentId,
+          sessionId,
+          crypto.randomUUID(),
+          machineId,
+          adapterId,
+          `provider-incarnation-second-${crypto.randomUUID()}`,
+          secondOwnerInstanceId,
+        ),
+      );
+      expect(second.outcome).toBe('claimed');
+
+      const [firstRuntime, secondRuntime] = await Promise.all([
+        MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: firstOwnerInstanceId,
+          machineId,
+        }),
+        MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: secondOwnerInstanceId,
+          machineId,
+        }),
+      ]);
+      expect(firstRuntime.instance?.incarnation).toBe(1);
+      expect(secondRuntime.instance?.incarnation).toBe(2);
     });
 
     it('returns outcome=already-claimed carrying the holder when a different token races', async () => {
@@ -990,6 +1145,347 @@ export function describeSessionOwnershipBehavior(): void {
   // ─── claim: takeover ───────────────────────────────────────────────────────────────────────────────────────────
 
   describe('claim — takeover', () => {
+    it('atomically retokenizes a guarded recovery, moves status to starting, and fences the old owner', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const ownerInstanceId = `instance-${crypto.randomUUID()}`;
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'recover-key',
+          ownerInstanceId,
+        ),
+      );
+      expect(first.outcome).toBe('claimed');
+      if (first.outcome !== 'claimed') return;
+      const firstClaim = requireClaim(first.claim);
+      const before = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(before.ownership).not.toBeNull();
+      if (before.ownership === null) return;
+
+      const recovered = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'recover-key',
+          ownerInstanceId,
+        ),
+        recoveryAttemptId: crypto.randomUUID(),
+        recoveryGuard: {
+          expectedStatus: 'idle' as const,
+          expectedPreimage: { status: 'idle', adapterId: 'adapter-1' },
+          expectedRevision: before.ownership.revision,
+          expectedCurrencyFence: before.ownership.currencyFence,
+          expectedCurrency: before.ownership.currency,
+          ownerGeneration: {
+            claimId: firstClaim.claimId,
+            claimToken: firstClaim.claimToken,
+            fence: firstClaim.fence,
+            ownerInstanceId: firstClaim.ownerInstanceId,
+            status: firstClaim.status,
+          },
+        },
+      });
+
+      expect(recovered.outcome).toBe('claimed');
+      if (recovered.outcome !== 'claimed') return;
+      const recoveredClaim = requireClaim(recovered.claim);
+      expect(recoveredClaim.claimToken).not.toBe(firstClaim.claimToken);
+      expect(recoveredClaim.fence).toBeGreaterThan(firstClaim.fence);
+      const agent = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+      expect(agent.agent?.status).toBe('starting');
+
+      const lateSettle = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
+        agentId,
+        claimToken: firstClaim.claimToken,
+        fence: firstClaim.fence,
+        expectedRevision: before.ownership.revision,
+        target: INHERITED_TARGET,
+      });
+      expect(lateSettle.outcome).toBe('not-owner');
+    });
+
+    it('refuses stale recovery currency without changing status, claims, or runtime identities', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, crypto.randomUUID()),
+      );
+      expect(first.outcome).toBe('claimed');
+      if (first.outcome !== 'claimed') return;
+      const firstClaim = requireClaim(first.claim);
+      const before = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(before.ownership).not.toBeNull();
+      if (before.ownership === null) return;
+      const unallocatedOwner = `instance-${crypto.randomUUID()}`;
+
+      for (const stale of [
+        { expectedRevision: before.ownership.revision + 1, expectedCurrencyFence: before.ownership.currencyFence },
+        { expectedRevision: before.ownership.revision, expectedCurrencyFence: before.ownership.currencyFence + 1 },
+      ]) {
+        const result = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+          ...buildClaimRequest(
+            agentId,
+            sessionId,
+            crypto.randomUUID(),
+            'machine-1',
+            'adapter-1',
+            'provider-session-1',
+            unallocatedOwner,
+          ),
+          recoveryAttemptId: crypto.randomUUID(),
+          recoveryGuard: {
+            expectedStatus: 'idle' as const,
+            expectedPreimage: { status: 'idle', adapterId: 'adapter-1' },
+            ...stale,
+            expectedCurrency: before.ownership.currency,
+            ownerGeneration: {
+              claimId: firstClaim.claimId,
+              claimToken: firstClaim.claimToken,
+              fence: firstClaim.fence,
+              ownerInstanceId: firstClaim.ownerInstanceId,
+              status: firstClaim.status,
+            },
+          },
+        });
+        expect(result.outcome).toBe('currency-changed');
+      }
+
+      const after = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(after.ownership).toEqual(before.ownership);
+      const agent = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+      expect(agent.agent?.status).toBe('idle');
+      const runtime = await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+        instanceId: unallocatedOwner,
+        machineId: 'machine-1',
+      });
+      expect(runtime.instance).toBeNull();
+    });
+
+    it('refuses every mismatched expected preimage field without mutating either ownership or the agent row', async () => {
+      const sessionId = await seedSession();
+      const agentId = `agent-${crypto.randomUUID()}`;
+      const priorBinding = { machineId: 'prior-machine', instanceId: 'prior-owner' };
+      await MakaioBus.request(AgentStorageSubjects.set, {
+        agentId,
+        agent: createAgent({
+          agentId,
+          sessionId,
+          adapterId: 'adapter-1',
+          runtimeOwner: priorBinding,
+          recoveryAttemptId: 'prior-attempt',
+        }),
+      });
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'preimage-key'),
+      );
+      expect(first.outcome).toBe('claimed');
+      if (first.outcome !== 'claimed') return;
+      const firstClaim = requireClaim(first.claim);
+      const beforeOwnership = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      const beforeAgent = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+      expect(beforeOwnership.ownership).not.toBeNull();
+      expect(beforeAgent.agent).not.toBeNull();
+      if (beforeOwnership.ownership === null || beforeAgent.agent === null) return;
+
+      const basePreimage = {
+        status: 'idle' as const,
+        adapterId: 'adapter-1',
+        binding: {
+          adapterId: 'adapter-1',
+          ownerMachineId: priorBinding.machineId,
+          ownerInstanceId: priorBinding.instanceId,
+        },
+        recoveryAttemptId: 'prior-attempt',
+      };
+      const mismatches = [
+        {
+          ...basePreimage,
+          adapterId: 'other-adapter',
+          binding: { ...basePreimage.binding, adapterId: 'other-adapter' },
+        },
+        { ...basePreimage, binding: { ...basePreimage.binding, ownerInstanceId: 'other-owner' } },
+        { ...basePreimage, recoveryAttemptId: 'other-attempt' },
+      ];
+
+      for (const expectedPreimage of mismatches) {
+        const result = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+          ...buildClaimRequest(
+            agentId,
+            sessionId,
+            crypto.randomUUID(),
+            'machine-1',
+            'adapter-1',
+            'preimage-key',
+            `new-owner-${crypto.randomUUID()}`,
+          ),
+          recoveryAttemptId: crypto.randomUUID(),
+          recoveryGuard: {
+            expectedStatus: 'idle',
+            expectedPreimage,
+            expectedRevision: beforeOwnership.ownership.revision,
+            expectedCurrencyFence: beforeOwnership.ownership.currencyFence,
+            expectedCurrency: beforeOwnership.ownership.currency,
+            ownerGeneration: {
+              claimId: firstClaim.claimId,
+              claimToken: firstClaim.claimToken,
+              fence: firstClaim.fence,
+              ownerInstanceId: firstClaim.ownerInstanceId,
+              status: firstClaim.status,
+            },
+          },
+        });
+        expect(result.outcome).toBe('recovery-conflict');
+        expect(await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId })).toEqual(beforeOwnership);
+        expect(await MakaioBus.request(AgentStorageSubjects.get, { agentId })).toEqual(beforeAgent);
+      }
+    });
+
+    it('refuses an ABA-stale owner generation and preserves the replacement generation', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const ownerInstanceId = `instance-${crypto.randomUUID()}`;
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'aba-key',
+          ownerInstanceId,
+        ),
+      );
+      expect(first.outcome).toBe('claimed');
+      if (first.outcome !== 'claimed') return;
+      const firstClaim = requireClaim(first.claim);
+      const observed = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(observed.ownership).not.toBeNull();
+      if (observed.ownership === null) return;
+
+      const replacement = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'aba-key',
+          ownerInstanceId,
+        ),
+      );
+      expect(replacement.outcome).toBe('claimed');
+      if (replacement.outcome !== 'claimed') return;
+
+      const result = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'aba-key',
+          ownerInstanceId,
+        ),
+        recoveryAttemptId: crypto.randomUUID(),
+        recoveryGuard: {
+          expectedStatus: 'idle' as const,
+          expectedPreimage: { status: 'idle', adapterId: 'adapter-1' },
+          expectedRevision: observed.ownership.revision,
+          expectedCurrencyFence: observed.ownership.currencyFence,
+          expectedCurrency: observed.ownership.currency,
+          ownerGeneration: {
+            claimId: firstClaim.claimId,
+            claimToken: firstClaim.claimToken,
+            fence: firstClaim.fence,
+            ownerInstanceId: firstClaim.ownerInstanceId,
+            status: firstClaim.status,
+          },
+        },
+      });
+      expect(result.outcome).toBe('recovery-conflict');
+
+      const after = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(after.ownership?.claims).toEqual([replacement.claim]);
+      const agent = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+      expect(agent.agent?.status).toBe('idle');
+    });
+
+    it('rejects a guarded takeover that also tries to designate a lead', async () => {
+      const sessionId = await seedSession();
+      const agentId = await seedAgent(sessionId);
+      const leadAgentId = await seedAgent(sessionId);
+      const lead = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(leadAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'lead-key'),
+        designateLead: { expectedLeadAgentId: null },
+      });
+      expect(lead.outcome).toBe('claimed');
+
+      const ownerInstanceId = `instance-${crypto.randomUUID()}`;
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'rollback-key',
+          ownerInstanceId,
+        ),
+      );
+      expect(first.outcome).toBe('claimed');
+      if (first.outcome !== 'claimed') return;
+      const firstClaim = requireClaim(first.claim);
+      const observed = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(observed.ownership).not.toBeNull();
+      if (observed.ownership === null) return;
+
+      await expect(
+        MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+          ...buildClaimRequest(
+            agentId,
+            sessionId,
+            crypto.randomUUID(),
+            'machine-1',
+            'adapter-1',
+            'rollback-key',
+            ownerInstanceId,
+          ),
+          designateLead: { expectedLeadAgentId: null },
+          recoveryAttemptId: crypto.randomUUID(),
+          recoveryGuard: {
+            expectedStatus: 'idle' as const,
+            expectedPreimage: { status: 'idle', adapterId: 'adapter-1' },
+            expectedRevision: observed.ownership.revision,
+            expectedCurrencyFence: observed.ownership.currencyFence,
+            expectedCurrency: observed.ownership.currency,
+            ownerGeneration: {
+              claimId: firstClaim.claimId,
+              claimToken: firstClaim.claimToken,
+              fence: firstClaim.fence,
+              ownerInstanceId: firstClaim.ownerInstanceId,
+              status: firstClaim.status,
+            },
+          },
+        }),
+      ).rejects.toThrow('guarded recovery claim cannot designate');
+
+      const after = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      expect(after.ownership).toEqual(observed.ownership);
+      const agent = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+      expect(agent.agent?.status).toBe('idle');
+    });
+
     it('accepts supersedes and returns claimed with a strictly higher fence and new token', async () => {
       const { sessionId, agentId } = await seedSessionAndAgent();
       const firstToken = crypto.randomUUID();
@@ -2700,6 +3196,210 @@ export function describeSessionOwnershipBehavior(): void {
   // ─── Wave 2: keyless reservation ───────────────────────────────────────────────────────────────────────────────
 
   describe('claim — keyless reservation', () => {
+    it.each([
+      'keyed',
+      'owner-bearing',
+      'guarded',
+      'superseding',
+    ] as const)('rejects an active mixed clear (%s) before allocating runtime authority', async (kind) => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const ownerInstanceId = `mixed-clear-${crypto.randomUUID()}`;
+      const before = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      if (before.ownership === null) throw new Error('expected seeded ownership state');
+      const base = buildClaimRequest(
+        agentId,
+        sessionId,
+        crypto.randomUUID(),
+        'machine-1',
+        'adapter-1',
+        null,
+        ownerInstanceId,
+      );
+      const mixed =
+        kind === 'keyed'
+          ? { ...base, providerSessionId: 'mixed-clear-key' }
+          : kind === 'owner-bearing'
+            ? base
+            : kind === 'guarded'
+              ? {
+                  ...base,
+                  recoveryAttemptId: crypto.randomUUID(),
+                  recoveryGuard: {
+                    expectedStatus: 'idle' as const,
+                    expectedPreimage: { status: 'idle' as const, adapterId: 'adapter-1' },
+                    expectedRevision: before.ownership.revision,
+                    expectedCurrencyFence: before.ownership.currencyFence,
+                    expectedCurrency: before.ownership.currency,
+                    ownerGeneration: null,
+                  },
+                }
+              : { ...base, ownerInstance: undefined, supersedes: { claimToken: crypto.randomUUID() } };
+      await expect(
+        MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+          ...mixed,
+          designateLead: { expectedLeadAgentId: null, clear: true },
+        }),
+      ).rejects.toThrow('keyless, unguarded relinquishment');
+      expect(
+        (await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' })).claims,
+      ).toEqual([]);
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: ownerInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toEqual({ instance: null });
+      const nextInstanceId = `next-${crypto.randomUUID()}`;
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'next-key',
+          nextInstanceId,
+        ),
+      );
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: nextInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toMatchObject({ instance: { incarnation: 1 } });
+    });
+
+    it('registers an exact runtime identity for a guarded recovery and rolls it back when the guard refuses', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const before = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      if (before.ownership === null) throw new Error('expected seeded ownership state');
+      const ownerInstanceId = `instance-${crypto.randomUUID()}`;
+      const recoveryAttemptId = crypto.randomUUID();
+      const request = {
+        ...buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'unused-provider-session',
+          ownerInstanceId,
+        ),
+        providerSessionId: null,
+        recoveryAttemptId,
+        recoveryGuard: {
+          expectedStatus: 'idle' as const,
+          expectedPreimage: { status: 'idle' as const, adapterId: 'adapter-1' },
+          expectedRevision: before.ownership.revision,
+          expectedCurrencyFence: before.ownership.currencyFence,
+          expectedCurrency: before.ownership.currency,
+          ownerGeneration: null,
+        },
+      };
+
+      const reserved = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, request);
+      expect(reserved.outcome).toBe('claimed');
+      expect(reserved).toMatchObject({ claim: null, recovery: { attemptId: recoveryAttemptId } });
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: ownerInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toMatchObject({
+        instance: { instanceId: ownerInstanceId, machineId: 'machine-1', incarnation: 1, retiredAt: null },
+      });
+      expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId })).agent).toMatchObject({
+        status: 'starting',
+        runtimeOwner: { machineId: 'machine-1', instanceId: ownerInstanceId },
+        recoveryAttemptId,
+      });
+
+      const refusedInstanceId = `instance-${crypto.randomUUID()}`;
+      const refused = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...request,
+        ownerInstance: { instanceId: refusedInstanceId },
+        recoveryAttemptId: crypto.randomUUID(),
+        recoveryGuard: { ...request.recoveryGuard, expectedRevision: before.ownership.revision + 1 },
+      });
+      expect(refused.outcome).toBe('currency-changed');
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: refusedInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toEqual({ instance: null });
+
+      const nextInstanceId = `instance-${crypto.randomUUID()}`;
+      const next = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'after-refusal',
+          nextInstanceId,
+        ),
+      );
+      expect(next.outcome).toBe('claimed');
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: nextInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toMatchObject({ instance: { instanceId: nextInstanceId, incarnation: 2 } });
+    });
+
+    it('reuses an existing runtime identity without consuming another incarnation', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const ownerInstanceId = `instance-${crypto.randomUUID()}`;
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'existing-key',
+          ownerInstanceId,
+        ),
+      );
+      const before = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      if (before.ownership === null) throw new Error('expected seeded ownership state');
+
+      const reserved = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'unused-provider-session',
+          ownerInstanceId,
+        ),
+        providerSessionId: null,
+        recoveryAttemptId: crypto.randomUUID(),
+        recoveryGuard: {
+          expectedStatus: 'idle',
+          expectedPreimage: { status: 'idle', adapterId: 'adapter-1' },
+          expectedRevision: before.ownership.revision,
+          expectedCurrencyFence: before.ownership.currencyFence,
+          expectedCurrency: before.ownership.currency,
+          ownerGeneration: null,
+        },
+      });
+      expect(reserved.outcome).toBe('claimed');
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: ownerInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toMatchObject({ instance: { instanceId: ownerInstanceId, incarnation: 1, retiredAt: null } });
+    });
+
     it('designates the lead, writes no claim row, and reports previousLeadAgentId=null', async () => {
       const { sessionId, agentId } = await seedSessionAndAgent();
 
@@ -2794,6 +3494,7 @@ export function describeSessionOwnershipBehavior(): void {
       const memberClear = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
         ...buildClaimRequest(memberAgentId, sessionId, crypto.randomUUID()),
         providerSessionId: null,
+        ownerInstance: undefined,
         designateLead: { expectedLeadAgentId: memberAgentId, clear: true },
       });
       expect(memberClear.outcome).toBe('lead-conflict');
@@ -2808,6 +3509,7 @@ export function describeSessionOwnershipBehavior(): void {
       const leadClear = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
         ...buildClaimRequest(leadAgentId, sessionId, crypto.randomUUID()),
         providerSessionId: null,
+        ownerInstance: undefined,
         designateLead: { expectedLeadAgentId: leadAgentId, clear: true },
       });
       expect(leadClear.outcome).toBe('claimed');
@@ -2883,7 +3585,7 @@ export function describeSessionOwnershipBehavior(): void {
       expect(stored.session?.leadAgentId ?? null).toBeNull();
     });
 
-    it('refuses a disposed taker even against a disposed incumbent', async () => {
+    it('keeps a disposed incumbent authoritative even against a disposed contender', async () => {
       const sessionId = await seedSession();
       const takerAgentId = await seedAgent(sessionId);
       const incumbentAgentId = await seedAgent(sessionId);
@@ -2895,13 +3597,13 @@ export function describeSessionOwnershipBehavior(): void {
       await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: incumbentAgentId, status: 'disposed' });
       await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: takerAgentId, status: 'disposed' });
 
-      // The incumbent is takeable; the taker may not have it. Both halves of the
-      // rule are needed, and the taker's is the one that must win.
+      // Neither agent status proves connector liveness. With no T1/T3/T4 or
+      // named-token evidence, occupancy wins before taker classification.
       const result = await MakaioBus.request(
         SessionOwnershipStorageSubjects.claim,
         buildClaimRequest(takerAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-both'),
       );
-      expect(result.outcome).toBe('agent-disposed');
+      expect(result.outcome).toBe('already-claimed');
 
       const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
       expect(listed.claims).toHaveLength(1);
@@ -2926,10 +3628,61 @@ export function describeSessionOwnershipBehavior(): void {
     });
   });
 
-  // ─── Wave 2: takeover of an unusable incumbent ────────────────────────────────────────────────────────────────
+  describe('claim — session lifecycle admission', () => {
+    it.each([
+      'closed',
+      'archived',
+      'discovered',
+    ] as const)('refuses every reservation path for a %s session without changing ownership', async (status) => {
+      const sessionId = await seedSession();
+      const agentId = await seedAgent(sessionId);
+      const incumbentAgentId = await seedAgent(sessionId);
+      const ownToken = crypto.randomUUID();
+      const incumbentToken = crypto.randomUUID();
 
-  describe('claim — the unusable-incumbent takeover', () => {
-    it('takes a key whose owner was removed, with a strictly higher fence and a repointed row', async () => {
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, ownToken, 'machine-1', 'adapter-1', 'prov-own'),
+      );
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(incumbentAgentId, sessionId, incumbentToken, 'machine-1', 'adapter-1', 'prov-foreign'),
+      );
+      await MakaioBus.request(SessionStorageSubjects.update, { sessionId, status });
+
+      const free = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-free'),
+      );
+      const retry = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, ownToken, 'machine-1', 'adapter-1', 'prov-own'),
+      );
+      const takeover = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-foreign'),
+        supersedes: { claimToken: incumbentToken },
+      });
+      const keyless = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(agentId, sessionId, crypto.randomUUID()),
+        providerSessionId: null,
+        designateLead: { expectedLeadAgentId: null },
+      });
+
+      for (const result of [free, retry, takeover, keyless]) {
+        expect(result).toEqual({ outcome: 'session-not-active', status });
+      }
+      const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(listed.claims.map((claim) => claim.claimToken).sort()).toEqual([ownToken, incumbentToken].sort());
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+      expect(stored.session?.status).toBe(status);
+      expect(stored.session?.leadAgentId).toBeUndefined();
+    });
+  });
+
+  // ─── Conservative takeover of a disposed incumbent ───────────────────────────────────────────────────────────
+
+  describe('claim — disposed incumbent', () => {
+    it('keeps the key occupied until runtime liveness provides takeover evidence', async () => {
       const sessionId = await seedSession();
       const incumbentAgentId = await seedAgent(sessionId);
       const takerAgentId = await seedAgent(sessionId);
@@ -2945,18 +3698,15 @@ export function describeSessionOwnershipBehavior(): void {
 
       await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: incumbentAgentId, status: 'disposed' });
 
-      // No `supersedes`, no flag: a disposed agent can never legitimately hold a
-      // key, so the takeover needs no caller evidence at all.
+      // Agent disposal does not prove that its runtime connector has stopped.
+      // Shared-machine ownership therefore remains conservative without T3.
       const takeover = await MakaioBus.request(
         SessionOwnershipStorageSubjects.claim,
         buildClaimRequest(takerAgentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-unusable'),
       );
-      expect(takeover.outcome).toBe('claimed');
-      if (takeover.outcome !== 'claimed') return;
-      const takenClaim = requireClaim(takeover.claim);
-      expect(takenClaim.claimId).toBe(heldClaim.claimId);
-      expect(takenClaim.agentId).toBe(takerAgentId);
-      expect(takenClaim.fence).toBeGreaterThan(heldClaim.fence);
+      expect(takeover.outcome).toBe('already-claimed');
+      if (takeover.outcome !== 'already-claimed') return;
+      expect(takeover.holder).toEqual(heldClaim);
 
       // The row was repointed rather than duplicated …
       const listed = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
@@ -2965,8 +3715,7 @@ export function describeSessionOwnershipBehavior(): void {
       });
       expect(listed.claims).toHaveLength(1);
 
-      // … so the previous owner's generation is gone, and a late settle under it
-      // is refused by absence rather than by a fence comparison.
+      // The disposed agent still cannot exercise the retained generation.
       const late = await MakaioBus.request(SessionOwnershipStorageSubjects.settleCurrency, {
         agentId: incumbentAgentId,
         claimToken: incumbentToken,
@@ -3035,6 +3784,211 @@ export function describeSessionOwnershipBehavior(): void {
     });
   });
 
+  // ─── Wave 5: runtime owner identity and liveness takeover ─────────────────────────────────────────────────────
+
+  describe('runtime owner identity', () => {
+    it('allocates no runtime row for a refused claim or a movement with no generation', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const incumbentInstanceId = `instance-${crypto.randomUUID()}`;
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-runtime-refusal',
+          incumbentInstanceId,
+        ),
+      );
+
+      const refusedInstanceId = `instance-${crypto.randomUUID()}`;
+      const refused = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-runtime-refusal',
+          refusedInstanceId,
+        ),
+      );
+      expect(refused.outcome).toBe('already-claimed');
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: refusedInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toEqual({ instance: null });
+
+      const targetlessInstanceId = `instance-${crypto.randomUUID()}`;
+      const targetless = await MakaioBus.request(SessionOwnershipStorageSubjects.settleMovement, {
+        machineId: 'machine-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        ownerInstance: { instanceId: targetlessInstanceId },
+        sessionId,
+        agentId,
+        expectedRevision: 0,
+        movement: { kind: 'demote', claimToken: crypto.randomUUID() },
+      });
+      expect(targetless.outcome).toBe('idempotent');
+      if (targetless.outcome !== 'idempotent') return;
+      expect(targetless.claim).toBeNull();
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+          instanceId: targetlessInstanceId,
+          machineId: 'machine-1',
+        }),
+      ).toEqual({ instance: null });
+    });
+
+    it('re-generates a held claim only for the same agent and runtime instance', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const ownerInstanceId = `instance-${crypto.randomUUID()}`;
+      const firstToken = crypto.randomUUID();
+      const first = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, firstToken, 'machine-1', 'adapter-1', 'prov-t1', ownerInstanceId),
+      );
+      expect(first.outcome).toBe('claimed');
+      if (first.outcome !== 'claimed') return;
+
+      const replacementToken = crypto.randomUUID();
+      const replaced = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, replacementToken, 'machine-1', 'adapter-1', 'prov-t1', ownerInstanceId),
+      );
+      expect(replaced.outcome).toBe('claimed');
+      if (replaced.outcome !== 'claimed') return;
+      const replacement = requireClaim(replaced.claim);
+      expect(replacement.claimId).toBe(requireClaim(first.claim).claimId);
+      expect(replacement.claimToken).toBe(replacementToken);
+      expect(replacement.fence).toBeGreaterThan(requireClaim(first.claim).fence);
+      expect(replacement.ownerInstanceId).toBe(ownerInstanceId);
+
+      const restarted = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-t1',
+          `instance-${crypto.randomUUID()}`,
+        ),
+      );
+      expect(restarted.outcome).toBe('already-claimed');
+    });
+
+    it('retains claims on retirement and lets a new instance take them through T3', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const retiredInstanceId = `instance-${crypto.randomUUID()}`;
+      const held = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-retired',
+          retiredInstanceId,
+        ),
+      );
+      expect(held.outcome).toBe('claimed');
+
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.retireInstance, { instanceId: retiredInstanceId }),
+      ).toEqual({ retiredMachines: 1 });
+      expect(
+        await MakaioBus.request(SessionOwnershipStorageSubjects.retireInstance, { instanceId: retiredInstanceId }),
+      ).toEqual({ retiredMachines: 0 });
+      const retired = await MakaioBus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+        instanceId: retiredInstanceId,
+        machineId: 'machine-1',
+      });
+      expect(retired.instance?.retiredAt).not.toBeNull();
+
+      const stillHeld = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
+      expect(stillHeld.claims).toHaveLength(1);
+
+      const takerInstanceId = `instance-${crypto.randomUUID()}`;
+      const taken = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-retired',
+          takerInstanceId,
+        ),
+      );
+      expect(taken.outcome).toBe('claimed');
+      if (taken.outcome !== 'claimed') return;
+      expect(requireClaim(taken.claim).ownerInstanceId).toBe(takerInstanceId);
+    });
+
+    it('admits supersession only for a newer instance under machine-exclusive topology', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const oldInstanceId = `instance-${crypto.randomUUID()}`;
+      const newInstanceId = `instance-${crypto.randomUUID()}`;
+      await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(agentId, sessionId, crypto.randomUUID(), 'machine-1', 'adapter-1', 'prov-old', oldInstanceId),
+      );
+      const auxiliary = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.claim,
+        buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-new-instance',
+          newInstanceId,
+        ),
+      );
+      expect(auxiliary.outcome).toBe('claimed');
+
+      const shared = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-old',
+          newInstanceId,
+        ),
+        topology: 'shared-machine',
+      });
+      expect(shared.outcome).toBe('already-claimed');
+
+      const exclusive = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+        ...buildClaimRequest(
+          agentId,
+          sessionId,
+          crypto.randomUUID(),
+          'machine-1',
+          'adapter-1',
+          'prov-old',
+          newInstanceId,
+        ),
+        topology: 'machine-exclusive',
+      });
+      expect(exclusive.outcome).toBe('claimed');
+      if (exclusive.outcome !== 'claimed') return;
+      expect(requireClaim(exclusive.claim).ownerInstanceId).toBe(newInstanceId);
+    });
+  });
+
   // ─── Wave 2: settleMovement ───────────────────────────────────────────────────────────────────────────────────
 
   describe('settleMovement', () => {
@@ -3046,6 +4000,7 @@ export function describeSessionOwnershipBehavior(): void {
      * @param expectedRevision - Revision the caller read.
      * @param machineId - Machine identity (default `machine-1`).
      * @param adapterId - Adapter identity (default `adapter-1`).
+     * @param ownerInstanceId - Runtime instance reporting the movement.
      */
     function buildMovementRequest(
       agentId: string,
@@ -3056,9 +4011,72 @@ export function describeSessionOwnershipBehavior(): void {
       expectedRevision = 0,
       machineId = 'machine-1',
       adapterId = 'adapter-1',
+      ownerInstanceId = `movement-instance-${agentId}`,
     ) {
-      return { machineId, adapterId, adapterName: 'test-adapter', sessionId, agentId, expectedRevision, movement };
+      return {
+        machineId,
+        adapterId,
+        adapterName: 'test-adapter',
+        ownerInstance: { instanceId: ownerInstanceId },
+        sessionId,
+        agentId,
+        expectedRevision,
+        movement,
+      };
     }
+
+    it('reports an idempotent legacy repeat from its unadopted persisted preimage', async () => {
+      const { sessionId, agentId } = await seedSessionAndAgent();
+      const providerSessionId = 'prov-legacy-repeat';
+      const settled = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(
+          agentId,
+          sessionId,
+          { kind: 'confirmed', providerSessionId, claimToken: crypto.randomUUID() },
+          0,
+          'machine-1',
+          'adapter-1',
+          'initial-owner',
+        ),
+      );
+      expect(settled.outcome).toBe('settled');
+      if (settled.outcome !== 'settled') return;
+
+      await fixture.clearClaimOwnerInstanceId(settled.claim.claimId);
+      const ownershipBefore = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      const claimsBefore = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
+        machineId: 'machine-1',
+      });
+
+      const repeated = await MakaioBus.request(
+        SessionOwnershipStorageSubjects.settleMovement,
+        buildMovementRequest(
+          agentId,
+          sessionId,
+          { kind: 'confirmed', providerSessionId, claimToken: crypto.randomUUID() },
+          settled.revision,
+          'machine-1',
+          'adapter-1',
+          'different-owner',
+        ),
+      );
+      expect(repeated.outcome).toBe('idempotent');
+      if (repeated.outcome !== 'idempotent') return;
+      expect(requireClaim(repeated.claim).ownerInstanceId).toBeNull();
+      expect(repeated.revision).toBe(settled.revision);
+      expect(repeated.currency).toEqual(settled.currency);
+      expect(repeated.sessionSnapshotUpdated).toBe(false);
+
+      const ownershipAfter = await MakaioBus.request(SessionOwnershipStorageSubjects.read, { agentId });
+      const claimsAfter = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
+        machineId: 'machine-1',
+      });
+      expect(ownershipAfter).toEqual(ownershipBefore);
+      expect(claimsAfter).toEqual(claimsBefore);
+      expect(ownershipAfter.ownership?.claims[0]?.ownerInstanceId).toBeNull();
+      expect(claimsAfter.claims[0]?.ownerInstanceId).toBeNull();
+    });
 
     it('refuses a movement token another live generation already holds', async () => {
       // Tokens are unique per generation — the SQL backends enforce it with

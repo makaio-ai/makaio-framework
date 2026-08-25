@@ -15,8 +15,18 @@ import {
 } from '../__tests__/shared.js';
 
 export { resetBusHandlers, waitForAsync, emitAdapterInitialized, getStoredEvents };
-/** Alias for {@link createTestAgent} - kept for orchestrator test naming consistency. */
-export const createMockAgent = createTestAgent;
+/**
+ * Create an agent row owned by the mock runtime unless a test explicitly models a legacy row.
+ * @param agentId - The agent identifier.
+ * @param overrides - Optional persisted-agent fields to override.
+ * @returns A test agent with the mock runtime owner.
+ */
+export function createMockAgent(agentId: string, overrides?: Partial<MakaioSessionAgent>): MakaioSessionAgent {
+  return createTestAgent(agentId, {
+    runtimeOwner: { machineId: 'test-machine', instanceId: 'test-runtime-owner' },
+    ...overrides,
+  });
+}
 
 // Re-export event collector utilities (defined in a separate module to keep this file within line limits)
 export {
@@ -29,6 +39,7 @@ export {
   collectUserMessageCompletedEvents,
 } from './orchestrator-event-collectors.js';
 import type { UnsubscribeFunction } from './orchestrator-event-collectors.js';
+import { callerOwnedSuccessFields } from './caller-owned-adapter-stub.js';
 
 /** Configuration for creating mock sessions. */
 export interface MockSessionConfig {
@@ -148,12 +159,13 @@ export function registerGetAgentHandler(sessions: Map<string, IMakaioSession>): 
  * @returns Unsubscribe function
  */
 export function registerRehydrateAgentHandler(): UnsubscribeFunction {
-  return MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+  const rehydrate = MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
     // The connector came back. `success: true` without an `adapterSessionId`
     // means the connector kept the key it was asked to resume — the response is
     // a disposition union, not the `{}` this stub used to answer.
-    ctx.setResult({ success: true });
+    ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
   });
+  return rehydrate;
 }
 
 /**
@@ -187,7 +199,7 @@ export function registerModelChangeHandler(): UnsubscribeFunction {
 export function registerStartAgentHandler(
   onStart?: (p: { adapterId: string; sessionId: string; initialMessage: MessageInput | undefined }) => void,
 ): UnsubscribeFunction {
-  return MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
+  const start = MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
     const { adapterId, initialMessage } = ctx.payload;
     const sessionId = ctx.payload.sessionId ?? `session-${crypto.randomUUID().slice(0, 8)}`;
     // A caller-supplied identity is the agent's, exactly as production: its row
@@ -202,12 +214,14 @@ export function registerStartAgentHandler(
       adapterId,
       adapterSessionId,
       sessionId,
+      ...callerOwnedSuccessFields(ctx.payload),
       ...(messageId && { messageId }),
     });
 
     // Emit agent.added event (mimics AIAdapter behavior)
     emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
   });
+  return start;
 }
 
 /**
@@ -359,6 +373,7 @@ export function registerCapturingStartAgentHandler(
       adapterId: ctx.payload.adapterId,
       adapterSessionId,
       sessionId,
+      ...callerOwnedSuccessFields(ctx.payload),
       ...(messageId && { messageId }),
     });
     emitAgentAdded({ sessionId, agentId, adapterId: ctx.payload.adapterId, adapterSessionId });

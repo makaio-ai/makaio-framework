@@ -6,7 +6,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
+import { SessionSubjects } from '@makaio/contracts';
 import type {
   IMakaioSession,
   MessageInput,
@@ -22,6 +22,7 @@ import { extractTextContent, normalizeToBlocks } from '../session-orchestrator-h
 import type { SessionTurnManager } from '../session-turn-manager.js';
 import type { TurnReservation } from '../session-turn-manager.js';
 import { routeToAgentsCore } from './route-to-agents-core.js';
+import { SessionStartError } from './session-start-error.js';
 
 /** Prepared initial attach turn and its canonical user-message identity. */
 interface PreparedInitialAttachTurn {
@@ -36,29 +37,28 @@ interface PreparedInitialAttachTurn {
  * adapter is still starting. In that case the close event cannot evict an
  * agent that has not entered the adapter registry yet, so the completed start
  * must be rolled back here.
- * @param bus - Bus used for session lookup and adapter rollback.
- * @param startResult - Successfully started adapter agent.
+ * @param bus - Bus used for session lookup.
  * @param sessionId - Session that must still accept the attachment.
  */
-export async function assertSessionActiveAfterStart(
-  bus: IMakaioBus,
-  startResult: Pick<Extract<StartAgentResponse, { success: true }>, 'adapterId' | 'agentId'>,
-  sessionId: string,
-): Promise<void> {
-  try {
-    const { session } = await bus.request(SessionSubjects.get, { sessionId });
-    if (!session || session.status !== 'active') {
-      throw new Error(`[attach-handler] Session is no longer active after agent startup: ${sessionId}`);
-    }
-  } catch (error) {
-    await stopStartedAgentAfterFailure(bus, startResult, sessionId, 'session closed during agent startup');
-    throw error;
-  }
+export async function assertSessionActiveAfterStart(bus: IMakaioBus, sessionId: string): Promise<void> {
+  const { session } = await bus.request(SessionSubjects.get, { sessionId });
+  if (session?.status === 'active') return;
+  const sessionStatus =
+    session?.status === 'closed' || session?.status === 'archived' || session?.status === 'discovered'
+      ? session.status
+      : undefined;
+  throw new SessionStartError(
+    'session-not-active',
+    `[attach-handler] Session is no longer active after agent startup: ${sessionId}`,
+    undefined,
+    undefined,
+    sessionStatus,
+  );
 }
 
 /**
- * Set up initial-message turn tracking and stop the started agent if setup fails.
- * @param bus - Bus instance for storage and adapter rollback
+ * Set up initial-message turn tracking.
+ * @param bus - Bus instance for storage
  * @param turnManager - Shared owner of attach turn lifecycle state
  * @param reservation - Exclusive session turn slot reserved before agent startup
  * @param startResult - Successful adapter startup result
@@ -69,7 +69,7 @@ export async function assertSessionActiveAfterStart(
  * @param initiator - Provenance for the reserved initial turn
  * @returns Turn tracking info
  */
-async function setupInitialAttachTurnOrRollbackAgent(
+async function setupInitialAttachTurnForStartedAttach(
   bus: IMakaioBus,
   turnManager: SessionTurnManager,
   reservation: TurnReservation,
@@ -92,13 +92,12 @@ async function setupInitialAttachTurnOrRollbackAgent(
       initiator,
     );
   } catch (error) {
-    console.error('[attach-handler] Failed to set up initial-message turn, rolling back started agent', {
+    console.error('[attach-handler] Failed to set up initial-message turn', {
       sessionId,
       agentId,
       adapterId: startResult.adapterId,
       error,
     });
-    await stopStartedAgentAfterFailure(bus, startResult, sessionId, 'initial-message turn setup failure');
     throw error;
   }
 }
@@ -132,13 +131,8 @@ export async function dispatchInitialAttachMessage(
   sessionContext: SessionContext | undefined,
   assertAdmission: (() => void) | undefined,
 ): Promise<{ messageId: string; turnId: string }> {
-  try {
-    assertAdmission?.();
-  } catch (error) {
-    await stopStartedAgentAfterFailure(bus, startResult, session.sessionId, 'initial-message admission rejection');
-    throw error;
-  }
-  const prepared = await setupInitialAttachTurnOrRollbackAgent(
+  assertAdmission?.();
+  const prepared = await setupInitialAttachTurnForStartedAttach(
     bus,
     turnManager,
     reservation,
@@ -175,7 +169,6 @@ export async function dispatchInitialAttachMessage(
         error: retryError,
       });
     }
-    await stopStartedAgentAfterFailure(bus, startResult, session.sessionId, 'initial-message routing failure');
     throw error;
   }
   const outcome = outcomes[0];
@@ -183,36 +176,7 @@ export async function dispatchInitialAttachMessage(
     return { messageId: prepared.messageId, turnId: prepared.turn.turnId };
   }
 
-  await stopStartedAgentAfterFailure(bus, startResult, session.sessionId, 'initial-message routing failure');
   throw outcome.error;
-}
-
-/**
- * Stop a successfully started adapter agent after a later attach step fails.
- * @param bus - Bus instance for adapter RPC
- * @param startResult - Successful adapter startup result
- * @param sessionId - Session being attached
- * @param reason - Human-readable rollback reason for diagnostics
- */
-export async function stopStartedAgentAfterFailure(
-  bus: IMakaioBus,
-  startResult: Pick<Extract<StartAgentResponse, { success: true }>, 'adapterId' | 'agentId'>,
-  sessionId: string,
-  reason: string,
-): Promise<void> {
-  try {
-    await bus.request(AdapterSubjects.stopAgent, {
-      adapterId: startResult.adapterId,
-      agentId: startResult.agentId,
-    });
-  } catch (stopError) {
-    console.error(`[attach-handler] Failed to rollback started agent after ${reason}`, {
-      sessionId,
-      agentId: startResult.agentId,
-      adapterId: startResult.adapterId,
-      error: stopError,
-    });
-  }
 }
 
 /**

@@ -19,6 +19,11 @@ import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import { postgresStorageEngine } from '../engine.js';
 import { isPostgresDuplicateObjectError, isPostgresUniqueViolationError } from '../errors.js';
 import { buildPostgresLedgerDdl, migrationAdvisoryLockKey, POSTGRES_MIGRATION_BEGIN } from '../migrations.js';
+import {
+  postgresTransactionLockExpressions,
+  postgresTransactionLockKey,
+  postgresTransactionLocks,
+} from '../transaction-locks.js';
 import { storageEngine } from '../index.js';
 
 /** The registry's documented `globalThis` storage key (used for test cleanup). */
@@ -80,6 +85,36 @@ describe('capabilities', () => {
   it('declares bytea binary columns and the MAX-counter race', () => {
     expect(postgresStorageEngine.capabilities.binaryColumnType).toBe('bytea');
     expect(postgresStorageEngine.capabilities.maxCounterAssignmentRaces).toBe(true);
+  });
+});
+
+describe('transaction lock strategy', () => {
+  it('pins length-framed FNV-1a keys as signed 64-bit values', () => {
+    expect(
+      postgresTransactionLockKey({
+        namespace: 'makaio:session-ownership:claim:v1',
+        identity: '["machine","adapter","provider"]',
+      }),
+    ).toBe(4708309522623643060n);
+    // Length framing makes these otherwise ambiguous concatenations distinct.
+    expect(postgresTransactionLockKey({ namespace: 'a', identity: 'bc' })).toBe(-5503210646444362960n);
+    expect(postgresTransactionLockKey({ namespace: 'ab', identity: 'c' })).toBe(5952912767215893880n);
+  });
+
+  it('deduplicates and orders the actual advisory bigint keys', () => {
+    const first = { namespace: 'first', identity: 'one' };
+    const second = { namespace: 'second', identity: 'two' };
+    const expected = [postgresTransactionLockKey(first), postgresTransactionLockKey(second)].sort((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+
+    const expressions = postgresTransactionLockExpressions([second, first, second]);
+    expect(expressions).toHaveLength(2);
+    expect(postgresTransactionLocks.lockExpressions).toBe(postgresTransactionLockExpressions);
+    expect(postgresStorageEngine.transactionLocks).toBe(postgresTransactionLocks);
+    for (const [index, key] of expected.entries()) {
+      expect(expressions[index]?.queryChunks.map(String).join('')).toContain(key.toString());
+    }
   });
 });
 

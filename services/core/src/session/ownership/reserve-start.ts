@@ -1,12 +1,52 @@
 import {
+  normalizeSessionOwnershipReserveStartServiceRequest,
   SessionOwnershipStorageSubjects,
   type SessionOwnershipClaimRequest,
   type SessionOwnershipReserveStartServiceRequest,
   type SessionOwnershipReserveStartServiceResult,
 } from '@makaio/contracts';
-import { mintClaimToken } from './claim-token.js';
 import { KEYLESS_DESIGNATION_KEY } from './lead-designation.js';
 import { resolveOwnershipMachineId, type OwnershipAuthorityContext } from './context.js';
+
+/**
+ * Map an authority reservation onto the single storage claim it authorizes.
+ * @param context - Composed authority context.
+ * @param request - Validated reservation request.
+ * @param machineId - Resolved machine identity or the keyless sentinel.
+ * @param keyless - Whether the reservation carries no provider-session key.
+ * @returns The storage claim request.
+ */
+function toClaimRequest(
+  context: OwnershipAuthorityContext,
+  request: SessionOwnershipReserveStartServiceRequest,
+  machineId: string,
+  keyless: boolean,
+): SessionOwnershipClaimRequest {
+  return {
+    machineId,
+    adapterId: request.adapterId,
+    adapterName: request.adapterName,
+    providerSessionId: request.resumeProviderSessionId,
+    sessionId: request.sessionId,
+    agentId: request.agentId,
+    claimToken: request.claimToken,
+    topology: context.topology,
+    ...(request.recoveryGuard !== undefined && { recoveryGuard: request.recoveryGuard }),
+    ...(request.recoveryAttemptId !== undefined && { recoveryAttemptId: request.recoveryAttemptId }),
+    ...(!keyless || request.recoveryGuard !== undefined
+      ? { ownerInstance: { instanceId: request.ownerInstanceId } }
+      : {}),
+    ...(request.role === 'lead' && {
+      // The request refinement makes `expectedLeadAgentId` present for a lead,
+      // so the `?? null` is unreachable for a validated payload — but bus
+      // payload validation is off in production builds and the exported
+      // manifest cannot carry the refinement, so the total mapping is written
+      // out rather than asserted. `null` is the honest reading of an absent
+      // expectation: "the caller believes there is no lead yet".
+      designateLead: { expectedLeadAgentId: request.expectedLeadAgentId ?? null },
+    }),
+  };
+}
 
 /**
  * Reserve a start: one `storage:sessionOwnership.claim` call, and nothing else.
@@ -35,63 +75,75 @@ import { resolveOwnershipMachineId, type OwnershipAuthorityContext } from './con
  * all, which is not an ownership decision — it is a start being refused for
  * lacking something it never uses.
  * @param context - Composed authority context.
- * @param request - The reservation the caller wants.
+ * @param untrustedRequest - The reservation the caller wants.
  * @returns The reservation, or the reason it was refused.
  */
 export async function runReserveStart(
   context: OwnershipAuthorityContext,
-  request: SessionOwnershipReserveStartServiceRequest,
+  untrustedRequest: SessionOwnershipReserveStartServiceRequest,
 ): Promise<SessionOwnershipReserveStartServiceResult> {
+  const request = normalizeSessionOwnershipReserveStartServiceRequest(untrustedRequest);
+  if (request.ownerInstanceId !== context.instanceId) {
+    throw new Error(`reserveStart routed to owner ${context.instanceId} for target ${request.ownerInstanceId}`);
+  }
   const resolvedMachineId = resolveOwnershipMachineId(context, request.machineId);
   const keyless = request.resumeProviderSessionId === null;
   if (resolvedMachineId === undefined && !keyless) return { outcome: 'machine-identity-unavailable' };
-  // The sentinel is never stored on a keyless reservation — no claim row is
-  // written — and naming it explicitly keeps anything from coming to depend on
-  // a machine identity that was never resolved.
-  const machineId = resolvedMachineId ?? KEYLESS_DESIGNATION_KEY.machineId;
+  // The sentinel only satisfies the storage claim schema for a designation-only
+  // request. It is not an authority identity, so the returned reservation carries
+  // only `resolvedMachineId`; later keyed settlement then refuses honestly when
+  // this host cannot name a machine.
+  const claimMachineId = resolvedMachineId ?? KEYLESS_DESIGNATION_KEY.machineId;
 
-  const claimRequest: SessionOwnershipClaimRequest = {
-    machineId,
-    adapterId: request.adapterId,
-    adapterName: request.adapterName,
-    providerSessionId: request.resumeProviderSessionId,
-    sessionId: request.sessionId,
-    agentId: request.agentId,
-    claimToken: mintClaimToken(),
-    ...(request.role === 'lead' && {
-      // The request refinement makes `expectedLeadAgentId` present for a lead,
-      // so the `?? null` is unreachable for a validated payload — but bus
-      // payload validation is off in production builds and the exported
-      // manifest cannot carry the refinement, so the total mapping is written
-      // out rather than asserted. `null` is the honest reading of an absent
-      // expectation: "the caller believes there is no lead yet".
-      designateLead: { expectedLeadAgentId: request.expectedLeadAgentId ?? null },
-    }),
-  };
+  const claimRequest = toClaimRequest(context, request, claimMachineId, keyless);
 
   const result = await context.bus.request(SessionOwnershipStorageSubjects.claim, claimRequest);
   switch (result.outcome) {
     case 'claimed':
-    case 'idempotent':
+    case 'idempotent': {
+      const reservation = {
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        adapterId: request.adapterId,
+        ownerInstanceId: request.ownerInstanceId,
+        leadDesignated: result.leadDesignated,
+        previousLeadAgentId: result.previousLeadAgentId,
+        ...(result.recovery !== undefined && { recovery: result.recovery }),
+      };
+      if (result.claim === null) {
+        return {
+          outcome: 'reserved',
+          reservation: {
+            ...reservation,
+            ...(resolvedMachineId !== undefined && { machineId: resolvedMachineId }),
+            claim: null,
+          },
+        };
+      }
+      if (resolvedMachineId === undefined) {
+        throw new Error('A keyed ownership claim was returned without a resolved machine identity');
+      }
       return {
         outcome: 'reserved',
         reservation: {
-          agentId: request.agentId,
-          sessionId: request.sessionId,
-          machineId,
-          adapterId: request.adapterId,
+          ...reservation,
+          machineId: resolvedMachineId,
           claim: result.claim,
-          leadDesignated: result.leadDesignated,
-          previousLeadAgentId: result.previousLeadAgentId,
         },
       };
+    }
     case 'already-claimed':
       return { outcome: 'occupied', holder: result.holder };
     case 'lead-conflict':
       return { outcome: 'lead-conflict', currentLeadAgentId: result.currentLeadAgentId };
     case 'agent-disposed':
       return { outcome: 'agent-disposed' };
+    case 'session-not-active':
+      return { outcome: 'session-not-active', status: result.status };
     case 'not-found':
       return { outcome: 'not-found', missing: result.missing };
+    case 'currency-changed':
+    case 'recovery-conflict':
+      return result;
   }
 }

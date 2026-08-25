@@ -10,6 +10,7 @@ export { AIAdapter } from './ai-adapter.js';
 export {
   type ActiveAgentHandle,
   type AIAdapterConfig,
+  type AIAdapterRuntimeConfig,
   type AIAdapterConstructorConfig,
   type AgentRuntimeCreationResult,
   type AgentUsageTotals,

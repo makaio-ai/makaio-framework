@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import {
+  AdapterSubjects,
   AgentSubjects,
   SessionOwnershipStorageSubjects,
   SessionSubjects,
@@ -550,6 +551,10 @@ describe('MakaioSessionService - Agent Management', () => {
 
       const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
       expect(session?.status).toBe('closed');
+      expect(session?.leadAgentId).toBeUndefined();
+      expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId: 'lead-then-removed' })).agent?.status).toBe(
+        'disposed',
+      );
     });
 
     it('should set subsequent agents as member role', async () => {
@@ -854,8 +859,18 @@ describe('MakaioSessionService - Agent Management', () => {
       expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId: leadId })).agent?.status).toBe('disposed');
     });
 
-    it('gives up the removed agent’s claims cleanly, freeing the ownership key', async () => {
+    it('gives up the removed agent’s claims after exact-owner teardown is observed', async () => {
       const { sessionId, leadId } = await seedLeadAndMember();
+      storageCleanups.push(
+        MakaioBus.on(AdapterSubjects.stopAgent, (ctx) => {
+          expect(ctx.payload).toMatchObject({
+            adapterId: 'adapter-1',
+            agentId: leadId,
+            ownerInstanceId: sessionService.requireOwnershipInstanceId(),
+          });
+          ctx.setResult({ success: true, evidence: 'released' });
+        }),
+      );
 
       const claimed = await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
         machineId: 'machine-1',
@@ -865,14 +880,14 @@ describe('MakaioSessionService - Agent Management', () => {
         sessionId,
         agentId: leadId,
         claimToken: crypto.randomUUID(),
+        ownerInstance: { instanceId: sessionService.requireOwnershipInstanceId() },
       });
       expect(claimed.outcome).toBe('claimed');
 
       await MakaioBus.emit(SessionSubjects.agent.removed, { sessionId, agentId: leadId });
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      // A removal is a deliberate stop, so the claim is released rather than
-      // marked: the key is free for whoever attaches to that conversation next.
+      // A removal frees the key only after the exact owner proves teardown.
       const claims = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: 'machine-1' });
       expect(claims.claims).toEqual([]);
     });

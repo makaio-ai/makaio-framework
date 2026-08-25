@@ -8,8 +8,7 @@
  * the key held by nobody.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { MakaioSessionAgent } from '@makaio/contracts';
-import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { SessionOwnershipStorageSubjects, type MakaioSessionAgent } from '@makaio/contracts';
 import {
   createReservedRehydrateContext,
   FIRST,
@@ -39,20 +38,21 @@ describe('reserved rehydrate ordering', () => {
     return ctx.recover(agent, { kind: 'native-resume', resumeAdapterSessionId: agent.adapterSessionId as string });
   }
 
-  it('claims the confirmed key before the runtime write that can fail on it', async () => {
-    // The third seam under the same rule. The connector is live on the key it
-    // confirmed, and the runtime write is a hard request whose refusal is a
-    // failure — run in front of the settlement it was a window in which nothing
-    // held that key, and its failure retired a reservation that never named it.
+  it('claims the confirmed key before the recovery acknowledgement that can fail on it', async () => {
+    // The final recovery acknowledgement is fallible. It runs only after the
+    // connector's confirmed key has durable ownership, so a failure can retire
+    // a generation that names the live provider session.
     const agent = await ctx.seedAgent('session-runtime-after-settle', 'agent-runtime-after-settle');
     let claimedAtRuntimeWrite: string[] = [];
     ctx.track(
       bus.on(
-        AgentStorageSubjects.updateRuntime,
+        SessionOwnershipStorageSubjects.finalizeRecovery,
         async (context) => {
-          claimedAtRuntimeWrite = (await ctx.listClaims())
-            .filter((claim) => claim.status === 'held')
-            .map((claim) => claim.providerSessionId);
+          if (context.payload.action.kind === 'succeeded') {
+            claimedAtRuntimeWrite = (await ctx.listClaims())
+              .filter((claim) => claim.status === 'held')
+              .map((claim) => claim.providerSessionId);
+          }
           return context.next();
         },
         FIRST,
@@ -63,7 +63,7 @@ describe('reserved rehydrate ordering', () => {
     const outcome = await recoverNatively(agent);
 
     expect(outcome.kind).toBe('recovered');
-    // The key the connector landed on was already held when the runtime write
+    // The key the connector landed on was already held when the acknowledgement
     // ran, so a failure there would have had a real generation to give back.
     expect(claimedAtRuntimeWrite).toEqual([MOVED_KEY]);
   });

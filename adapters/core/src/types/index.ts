@@ -1,5 +1,5 @@
 export type { AIModel, AIReasoningLevel, ReasoningLevelMap } from './ai-model.js';
-export type { PlatformDefaults, AIAdapterInitOptions } from './ai-adapter-init-options.js';
+export type { PlatformDefaults, AIAdapterInitOptions, AIAdapterRuntimeInitOptions } from './ai-adapter-init-options.js';
 export type { AIAdapterDefinition } from './ai-adapter-definition.js';
 export type { AdapterProviderDefinition } from './provider-definition.js';
 export type {

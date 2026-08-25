@@ -28,6 +28,10 @@ export function mapAgent(row: AgentRow): MakaioSessionAgent {
     adapterId: row.adapterId,
     adapterName: row.adapterName,
     sessionId: row.sessionId,
+    ...(row.ownerMachineId !== null && row.ownerInstanceId !== null
+      ? { runtimeOwner: { machineId: row.ownerMachineId, instanceId: row.ownerInstanceId } }
+      : {}),
+    ...(row.recoveryAttemptId !== null ? { recoveryAttemptId: row.recoveryAttemptId } : {}),
     role: row.role,
     status: row.status,
     createdAt: row.createdAt,
@@ -74,6 +78,9 @@ function toDbValues(agent: MakaioSessionAgent): AgentsTable['$inferInsert'] {
     adapterId: agent.adapterId,
     adapterName: agent.adapterName,
     sessionId: agent.sessionId,
+    ownerMachineId: agent.runtimeOwner?.machineId ?? null,
+    ownerInstanceId: agent.runtimeOwner?.instanceId ?? null,
+    recoveryAttemptId: agent.recoveryAttemptId ?? null,
     role: agent.role,
     status: agent.status,
     createdAt: agent.createdAt,
@@ -118,8 +125,20 @@ function toDbValues(agent: MakaioSessionAgent): AgentsTable['$inferInsert'] {
 function toConflictValues(
   values: AgentsTable['$inferInsert'],
   agents: AgentsTable,
-): Omit<AgentsTable['$inferInsert'], 'adapterSessionId' | 'status'> & { status: SQL } {
-  const { adapterSessionId: _storedOriginWins, status: _terminalDisposedWins, ...conflictValues } = values;
+): Omit<
+  AgentsTable['$inferInsert'],
+  'adapterSessionId' | 'ownerMachineId' | 'ownerInstanceId' | 'recoveryAttemptId' | 'status'
+> & {
+  status: SQL;
+} {
+  const {
+    adapterSessionId: _storedOriginWins,
+    ownerMachineId: _storedOwnerMachineWins,
+    ownerInstanceId: _storedOwnerInstanceWins,
+    recoveryAttemptId: _storedRecoveryAttemptWins,
+    status: _terminalDisposedWins,
+    ...conflictValues
+  } = values;
   return {
     ...conflictValues,
     status: sql`CASE WHEN ${agents.status} = 'disposed' THEN ${agents.status} ELSE excluded.status END`,
@@ -342,13 +361,18 @@ function registerUpdateRuntimeHandler(deps: AgentHandlerDeps): () => void {
   const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.updateRuntime, async (ctx) => {
-    const { agentId, adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
+    const { agentId, adapterId, runtimeOwner, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } =
+      ctx.payload;
     const now = Date.now();
     const updateFields: Partial<AgentsTable['$inferInsert']> = {
       lastActivityAt: now,
     };
 
     if (adapterId !== undefined) updateFields.adapterId = adapterId;
+    if (runtimeOwner !== undefined) {
+      updateFields.ownerMachineId = runtimeOwner.machineId;
+      updateFields.ownerInstanceId = runtimeOwner.instanceId;
+    }
     if (adapterSessionId !== undefined) updateFields.adapterSessionId = adapterSessionId;
     if (cwd !== undefined) updateFields.cwd = cwd;
     if (model !== undefined) updateFields.model = model;

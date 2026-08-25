@@ -21,6 +21,7 @@ import {
   type MakaioSessionAgent,
 } from '@makaio/contracts';
 import type { ExtractSubjectResponse } from '@makaio/core';
+import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { MakaioSessionService } from '../session-service.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { recoverAgent } from '../utils/agent-recovery.js';
@@ -34,6 +35,8 @@ export type RehydrateAnswer = ExtractSubjectResponse<typeof AdapterSubjects.rehy
 export const MACHINE_ID = 'reserved-rehydrate-machine';
 /** Adapter instance every recovery in this suite is addressed to. */
 export const ADAPTER_ID = 'live-adapter';
+/** Explicit runtime owner used by direct storage claims in this fixture. */
+const TEST_OWNER_INSTANCE_ID = 'reserved-rehydrate-fixture-owner';
 /** A foreign agent that holds a key on the *same* adapter instance. */
 export const FOREIGN_AGENT_ID = 'agent-foreign';
 /** Key a connector landed on that its reservation never named. */
@@ -50,6 +53,8 @@ export const FIRST = { priority: 100 } as const;
 export interface ReservedRehydrateContext {
   /** Bus the whole composition lives on. */
   readonly bus: IMakaioBus;
+  /** Exact authority incarnation hosting this fixture's adapter stand-in. */
+  readonly ownerInstanceId: string;
   /** Every agent `adapter.stopAgent` was asked to stop, in order. */
   readonly stopped: string[];
   /** Every rehydrate the adapter stand-in observed, in order. */
@@ -111,14 +116,29 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
   const service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
   await service.init();
   cleanups.push(
+    bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
+      ctx.setResult({ adapterId: ADAPTER_ID });
+    }),
+    bus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (ctx) => {
+      ctx.setResult({
+        adapterId: ctx.payload.adapterId,
+        adapterName: ctx.payload.adapterName,
+        machineId: ctx.payload.machineId,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+      });
+    }),
     bus.on(AdapterSubjects.stopAgent, (ctx) => {
       stopped.push(ctx.payload.agentId);
       ctx.setResult({ success: true, evidence: 'released' });
+    }),
+    bus.on(AdapterSubjects.acknowledgeCallerSettlement, async (ctx) => {
+      ctx.setResult({ acknowledged: true });
     }),
   );
 
   return {
     bus,
+    ownerInstanceId: service.requireOwnershipInstanceId(),
     stopped,
     dispatched,
     track: (cleanup) => cleanups.push(cleanup),
@@ -127,7 +147,16 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
         bus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
           dispatched.push(ctx.payload);
           const answer = await respond?.(ctx.payload.agentId);
-          ctx.setResult(answer ?? { success: true });
+          const resolved = answer ?? { success: true };
+          ctx.setResult(
+            resolved.success
+              ? {
+                  ...resolved,
+                  ownerInstanceId: resolved.ownerInstanceId ?? service.requireOwnershipInstanceId(),
+                  settlementAckToken: resolved.settlementAckToken ?? `ack-${ctx.payload.agentId}`,
+                }
+              : resolved,
+          );
         }),
       );
     },
@@ -160,6 +189,7 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
         sessionId: 'session-foreign',
         agentId: FOREIGN_AGENT_ID,
         claimToken: crypto.randomUUID(),
+        ownerInstance: { instanceId: TEST_OWNER_INSTANCE_ID },
       });
       if (held.outcome !== 'claimed' || held.claim === null) {
         throw new Error(`expected the foreign claim to land: ${held.outcome}`);
@@ -174,7 +204,7 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
       const { agent } = await bus.request(AgentStorageSubjects.get, { agentId });
       return agent?.status;
     },
-    recover: (agent, plan) => recoverAgent(bus, agent, { plan }, { adapterId: ADAPTER_ID }),
+    recover: (agent, plan) => recoverAgent(bus, agent, { plan, machineId: MACHINE_ID }),
     destroy: () => {
       service.destroy();
       for (let index = cleanups.length - 1; index >= 0; index -= 1) cleanups[index]?.();

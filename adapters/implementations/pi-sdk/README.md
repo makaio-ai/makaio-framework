@@ -12,7 +12,7 @@ import { createPiSdkAdapter } from '@makaio/ai-adapters-pi-sdk';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
 
-const adapter = await createPiSdkAdapter();
+const adapter = await createPiSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 
 const result = await MakaioBus.request(AdapterSubjects.startAgent, {
   adapterId: adapter.adapterId,

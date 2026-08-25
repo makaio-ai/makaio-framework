@@ -502,7 +502,12 @@ export const getOrchestrationTestContext = async (
   // Generate unique adapter ID for test isolation
   const finalAdapterId = adapterId ?? `test-${adapterName}-${crypto.randomUUID()}`;
 
-  const createAdapterFn = () => testConfig.createAdapter!({ adapterId: finalAdapterId });
+  const createAdapterFn = () =>
+    testConfig.createAdapter!({
+      adapterId: finalAdapterId,
+      machineId: 'test-machine',
+      ownerInstanceId: 'test-owner-instance',
+    });
   const adapter = queue ? await queue.add(createAdapterFn) : await createAdapterFn();
 
   return {

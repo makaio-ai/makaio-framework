@@ -94,6 +94,7 @@ class HookedConnector extends MockConnector {
 
 describe('adapter-owned resume starts reserve before they dispatch', () => {
   let adapter: TestAdapter | undefined;
+  let ownerInstanceId: string | undefined;
   let cleanups: Array<() => void>;
   let state: SessionStorageMemoryState;
   let connectorsCreated: number;
@@ -105,6 +106,7 @@ describe('adapter-owned resume starts reserve before they dispatch', () => {
     MakaioBus.__resetHandlers?.();
     state = createSessionStorageMemoryState();
     cleanups = [];
+    ownerInstanceId = undefined;
     connectorsCreated = 0;
     onInitialize = undefined;
     confirmedAdapterSessionId = undefined;
@@ -140,7 +142,9 @@ describe('adapter-owned resume starts reserve before they dispatch', () => {
    *   written as an omission and silently get the identity back.
    */
   function composeAuthority(machineId: string | undefined): void {
-    cleanups.push(registerSessionOwnershipAuthority({ bus: MakaioBus, machineId, topology: 'shared-machine' }));
+    const registered = registerSessionOwnershipAuthority({ bus: MakaioBus, machineId, topology: 'shared-machine' });
+    ownerInstanceId = registered.ownership.instanceId;
+    cleanups.push(...registered.cleanups);
   }
 
   /** Persist the session row every reservation checks its agent against. */
@@ -166,6 +170,7 @@ describe('adapter-owned resume starts reserve before they dispatch', () => {
    */
   async function createAdapter(): Promise<void> {
     ({ adapter } = createTestAdapter(ADAPTER_NAME, {
+      ownerInstanceId: ownerInstanceId ?? 'test-owner-instance',
       connectorFactory: async (config) => {
         connectorsCreated += 1;
         return new HookedConnector(config, onInitialize, confirmedAdapterSessionId);
@@ -222,6 +227,8 @@ describe('adapter-owned resume starts reserve before they dispatch', () => {
       sessionId: SESSION_ID,
       agentId,
       claimToken: `foreign-token-${agentId}`,
+      ownerInstance: { instanceId: `foreign-instance-${agentId}` },
+      topology: 'shared-machine',
     });
   }
 
@@ -546,7 +553,11 @@ describe('adapter-owned resume starts reserve before they dispatch', () => {
     // `registry.set` settles the identity claim rather than leaving it pending:
     // once the entry is gone the identity is free again, which it would not be
     // if the claim had outlived the start that took it.
-    await MakaioBus.request(AdapterSubjects.stopAgent, { adapterId: adapter.adapterId, agentId: supplied.agentId });
+    await MakaioBus.request(AdapterSubjects.stopAgent, {
+      adapterId: adapter.adapterId,
+      ownerInstanceId: adapter.ownerInstanceId,
+      agentId: supplied.agentId,
+    });
     onInitialize = undefined;
     const third = await MakaioBus.request(AdapterSubjects.startAgent, {
       ...supplied,
@@ -596,6 +607,8 @@ describe('adapter-owned resume starts reserve before they dispatch', () => {
     // Authority present without a machine identity — a working authority
     // declining to decide a *keyed* reservation, which is a modeled refusal.
     composeAuthority(undefined);
+    await adapter?.closeAsync();
+    await createAdapter();
     const refused = await startResume();
     expect(refused).toMatchObject({ success: false, dispatch: 'not-dispatched' });
     if (refused.success) throw new Error('expected a refusal');

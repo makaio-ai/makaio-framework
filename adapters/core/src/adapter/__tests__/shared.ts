@@ -5,7 +5,7 @@
  * function reused across ai-adapter-*.test.ts files.
  */
 import os from 'node:os';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { createMockScopedBus } from '@makaio/test-utils';
@@ -108,7 +108,7 @@ export type AdapterConfigExtensions = {
 /** Test adapter with typed config extensions. */
 export class TestAdapter extends AIAdapter<TestBus, MockConnector, TestAgent> {
   public constructor(config: AIAdapterConfig<TestBus> & AdapterConfigExtensions) {
-    super(config);
+    super({ ...config, ownerInstanceId: config.ownerInstanceId ?? 'test-owner-instance' });
   }
 }
 
@@ -125,6 +125,10 @@ export function createTestAdapter(
     configFactory?: AdapterConfigExtensions['configFactory'];
     connectorFactory?: AdapterConfigExtensions['connectorFactory'];
     prepareAuthRuntime?: AIAdapterConfig<TestBus>['prepareAuthRuntime'];
+    ownerInstanceId?: string;
+    machineId?: string;
+    adapterId?: string;
+    globalBus?: IMakaioBus;
   },
 ): { adapter: TestAdapter; scopedBus: TestBus } {
   const { bus: scopedBus } = createMockScopedBus();
@@ -136,7 +140,10 @@ export function createTestAdapter(
     nativeTools: [],
     namespace,
     scopedBus,
-    globalBus: MakaioBus,
+    globalBus: options?.globalBus ?? MakaioBus,
+    ownerInstanceId: options?.ownerInstanceId ?? 'test-owner-instance',
+    machineId: options?.machineId ?? 'test-machine',
+    ...(options?.adapterId !== undefined && { adapterId: options.adapterId }),
     agentFactory: options?.agentFactory ?? ((config: AIAgentConfig<TestBus, MockConnector>) => new TestAgent(config)),
     configFactory:
       options?.configFactory ??
@@ -185,6 +192,7 @@ export function registerStartReservationAuthority(): () => void {
         sessionId: ctx.payload.sessionId,
         machineId: 'test-machine',
         adapterId: ctx.payload.adapterId,
+        ownerInstanceId: 'test-owner-instance',
         claim:
           ctx.payload.resumeProviderSessionId === null
             ? null
@@ -196,6 +204,7 @@ export function registerStartReservationAuthority(): () => void {
                 providerSessionId: ctx.payload.resumeProviderSessionId,
                 sessionId: ctx.payload.sessionId,
                 agentId: ctx.payload.agentId,
+                ownerInstanceId: 'test-owner-instance',
                 claimToken: `token-${ctx.payload.agentId}`,
                 fence: 1,
                 status: 'held',

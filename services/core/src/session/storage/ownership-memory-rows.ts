@@ -13,6 +13,8 @@ import type {
   AdapterSessionCurrencySnapshot,
   AdapterSessionCurrencyState,
   MakaioSessionAgent,
+  OwnershipTopology,
+  RuntimeInstanceRecord,
 } from '@makaio/contracts';
 import type { SessionStorageMemoryState } from './memory-store.js';
 
@@ -93,6 +95,106 @@ export function maxLiveClaimFence(claims: Map<string, AdapterSessionClaimRecord>
 export function allocateFence(state: SessionStorageMemoryState, agentId: string, floor: number): number {
   const currencyFence = state.agents.get(agentId)?.currencyFence ?? 0;
   return 1 + Math.max(floor, currencyFence, maxLiveClaimFence(state.claims, agentId));
+}
+
+/**
+ * Produce the collision-free key for one process acting for one machine.
+ * @param instanceId - Runtime process identity.
+ * @param machineId - Machine the process acted for.
+ * @returns Composite map key.
+ */
+export function runtimeInstanceKey(instanceId: string, machineId: string): string {
+  return `${instanceId.length}:${instanceId}${machineId}`;
+}
+
+/**
+ * Lazily allocate the durable identity of a runtime acting for a machine.
+ *
+ * The in-memory handler is synchronous, so two allocations cannot observe the
+ * same maximum. It nevertheless performs the same storage-owned max-plus-one
+ * allocation as the SQL backend and never revives a retired row.
+ * @param state - Shared in-memory state.
+ * @param instanceId - Runtime process identity.
+ * @param machineId - Machine the process acts for.
+ * @param now - First-use timestamp for a newly allocated row.
+ * @returns The existing or newly allocated runtime instance.
+ */
+export function ensureMemoryRuntimeInstance(
+  state: SessionStorageMemoryState,
+  instanceId: string,
+  machineId: string,
+  now: number,
+): RuntimeInstanceRecord {
+  const key = runtimeInstanceKey(instanceId, machineId);
+  const existing = state.runtimeInstances.get(key);
+  if (existing !== undefined) return existing;
+
+  let incarnation = 1;
+  for (const candidate of state.runtimeInstances.values()) {
+    if (candidate.machineId === machineId && candidate.incarnation >= incarnation) {
+      incarnation = candidate.incarnation + 1;
+    }
+  }
+  const allocated: RuntimeInstanceRecord = {
+    instanceId,
+    machineId,
+    incarnation,
+    startedAt: now,
+    retiredAt: null,
+  };
+  state.runtimeInstances.set(key, structuredClone(allocated));
+  return allocated;
+}
+
+/** Inputs common to both in-memory generation allocators. */
+export interface MemoryTakeoverRequest {
+  /** Machine component of the ownership key. */
+  readonly machineId: string;
+  /** Agent taking the generation. */
+  readonly agentId: string;
+  /** Runtime process taking the generation. */
+  readonly ownerInstanceId: string;
+  /** Topology under which supersession may be inferred. */
+  readonly topology: OwnershipTopology;
+  /** Explicitly superseded token, when the caller supplied one. */
+  readonly supersededClaimToken?: string;
+}
+
+/**
+ * Decide whether a durable fact permits replacing an incumbent generation.
+ *
+ * Shared by `claim` and `settleMovement`, so T1/T3/T4 cannot drift between the
+ * two allocation doors. Legacy rows deliberately satisfy none of the owner
+ * predicates; movement handles its same-agent legacy adoption before asking to
+ * allocate a replacement.
+ * @param state - Shared in-memory state.
+ * @param request - Runtime identity and topology of the requester.
+ * @param incumbent - Generation currently holding the key.
+ * @returns Whether explicit supersession, T1, T3, or T4 authorizes takeover.
+ */
+export function memoryMayTakeOver(
+  state: SessionStorageMemoryState,
+  request: MemoryTakeoverRequest,
+  incumbent: AdapterSessionClaimRecord,
+): boolean {
+  if (incumbent.ownerInstanceId === null) return false;
+  if (request.supersededClaimToken === incumbent.claimToken) return true;
+  if (
+    incumbent.status === 'held' &&
+    incumbent.agentId === request.agentId &&
+    incumbent.ownerInstanceId === request.ownerInstanceId
+  ) {
+    return true;
+  }
+  const incumbentOwner = state.runtimeInstances.get(runtimeInstanceKey(incumbent.ownerInstanceId, incumbent.machineId));
+  if (incumbentOwner?.retiredAt !== null && incumbentOwner?.retiredAt !== undefined) return true;
+  if (request.topology === 'machine-exclusive') {
+    const requester = state.runtimeInstances.get(runtimeInstanceKey(request.ownerInstanceId, request.machineId));
+    if (requester !== undefined && incumbentOwner !== undefined && requester.incarnation > incumbentOwner.incarnation) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** The currency pair a promoted lead publishes onto its session row. */

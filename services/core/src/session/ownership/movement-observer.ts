@@ -43,7 +43,8 @@ import { enqueueAgentSettle } from './settle-queue.js';
  */
 export function registerAdapterSessionMovementObserver(bus: IMakaioBus): () => void {
   return bus.on(AgentSubjects.adapterSession.moved, async (ctx) => {
-    const { agentId, adapterId, adapterName, sessionId, adapterSessionId, confirmed } = ctx.payload;
+    const { agentId, adapterId, adapterName, machineId, ownerInstanceId, sessionId, adapterSessionId, confirmed } =
+      ctx.payload;
     if (sessionId === undefined) return;
 
     // The seam schema refines the flag/ID pairing, but that refinement is not a
@@ -64,7 +65,11 @@ export function registerAdapterSessionMovementObserver(bus: IMakaioBus): () => v
     // order the announcements were received in — and awaited, so the emit that
     // carried this announcement stays pending until the settlement is durable.
     await enqueueAgentSettle(agentId, async () => {
-      await settleObservedMovement(bus, { agentId, adapterId, adapterName, sessionId }, movement);
+      await settleObservedMovement(
+        bus,
+        { agentId, adapterId, adapterName, machineId, ownerInstanceId, sessionId },
+        movement,
+      );
     });
   });
 }
@@ -102,6 +107,10 @@ interface ObservedMovementPrincipal {
   readonly adapterId: string;
   /** Adapter type name the announcement came from. */
   readonly adapterName: string;
+  /** Stable machine identity of the emitting adapter runtime. */
+  readonly machineId: string;
+  /** Exact authority incarnation that emitted the movement. */
+  readonly ownerInstanceId: string;
   /** Session the agent belongs to. */
   readonly sessionId: string;
 }
@@ -148,12 +157,21 @@ async function settleObservedMovement(
     if (agent.adapterName !== principal.adapterName || agent.adapterId !== principal.adapterId) {
       throw new MovementNotSettledError(principal.agentId, 'adapter-mismatch');
     }
+    if (
+      agent.runtimeOwner === undefined ||
+      agent.runtimeOwner.machineId !== principal.machineId ||
+      agent.runtimeOwner.instanceId !== principal.ownerInstanceId
+    ) {
+      throw new MovementNotSettledError(principal.agentId, 'runtime-owner-mismatch');
+    }
 
     const result = await bus.requestOptional(SessionSubjects.ownership.settleMovement, {
       sessionId: principal.sessionId,
       agentId: principal.agentId,
       adapterId: principal.adapterId,
       adapterName: principal.adapterName,
+      ownerInstanceId: principal.ownerInstanceId,
+      machineId: principal.machineId,
       movement,
     });
     if (!result.handled) throw new MovementNotSettledError(principal.agentId, 'authority-unavailable');

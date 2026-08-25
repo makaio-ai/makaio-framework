@@ -79,7 +79,12 @@ interface HeldSwap {
  */
 async function withHeldSwap(): Promise<HeldSwap> {
   const arbiter = new AgentTeardownArbiter();
-  const registry = new ActiveAgentRegistry({ globalBus: MakaioBus, adapterName: 'bound-adapter', arbiter });
+  const registry = new ActiveAgentRegistry({
+    globalBus: MakaioBus,
+    adapterName: 'bound-adapter',
+    ownerInstanceId: 'test-owner-instance',
+    arbiter,
+  });
   const built: MockConnector[] = [];
   const initGate = new DeferredPromise<void>();
   const agent = createTestableAgent({
@@ -276,7 +281,7 @@ describe('case 228 arm 5: end-to-end through the real stopAgent request', () => 
     let rejection: unknown;
     const stop = MakaioBus.request(
       AdapterSubjects.stopAgent,
-      { adapterId: adapter.adapterId, agentId: started.agentId },
+      { adapterId: adapter.adapterId, ownerInstanceId: adapter.ownerInstanceId, agentId: started.agentId },
       { timeout: callerTimeoutMs },
     ).then(
       (result) => {

@@ -11,6 +11,8 @@ class AgentAdapterSessionMovedPayload:
     adapter_name: str
     agent_id: str
     confirmed: bool
+    machine_id: str
+    owner_instance_id: str
     adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None

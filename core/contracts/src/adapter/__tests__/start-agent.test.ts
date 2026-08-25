@@ -122,4 +122,16 @@ describe('StartAgentSchema', () => {
     expect(parsed.mode).toBe('fork');
     expect((parsed as { sourceAdapterSessionId: string }).sourceAdapterSessionId).toBe('adapter-source');
   });
+
+  it('requires an exact owner on successful start responses', () => {
+    const response = {
+      success: true,
+      agentId: 'agent-1',
+      adapterId: 'adapter-1',
+      sessionId: 'session-1',
+    };
+
+    expect(StartAgentSchema.response.safeParse(response).success).toBe(false);
+    expect(StartAgentSchema.response.safeParse({ ...response, ownerInstanceId: 'runtime-1' }).success).toBe(true);
+  });
 });

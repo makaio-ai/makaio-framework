@@ -30,6 +30,7 @@ const DEFINITION_ID = 'anthropic';
 const PROVIDER_CONFIG_ID = 'cfg-test-123';
 const ADAPTER_NAME = 'claude-code-cli';
 const ADAPTER_ID = 'adapter-runtime-uuid-123';
+const OWNER_INSTANCE_ID = 'owner-runtime-uuid-123';
 const FAST_MODEL = 'claude-haiku-4-5';
 const EXPIRED_AT = 1_000_000;
 
@@ -232,6 +233,7 @@ function registerSuccessHandlers(
           success: true,
           agentId: 'agent-ping-1',
           adapterId: ADAPTER_ID,
+          ownerInstanceId: OWNER_INSTANCE_ID,
           adapterSessionId: 'session-ping-1',
           sessionId: 'makaio-session-ping-1',
         });
@@ -334,6 +336,7 @@ describe('WindowActivator', () => {
           success: true,
           agentId: 'agent-dedup-1',
           adapterId: ADAPTER_ID,
+          ownerInstanceId: OWNER_INSTANCE_ID,
           adapterSessionId: 'session-dedup-1',
           sessionId: 'makaio-session-dedup-1',
         });
@@ -414,6 +417,7 @@ describe('WindowActivator', () => {
           success: true,
           agentId: `agent-dedup-${startAgentCallCount}`,
           adapterId: ADAPTER_ID,
+          ownerInstanceId: OWNER_INSTANCE_ID,
           adapterSessionId: `session-dedup-${startAgentCallCount}`,
           sessionId: `makaio-session-dedup-${startAgentCallCount}`,
         });
@@ -818,6 +822,7 @@ describe('WindowActivator', () => {
           success: true,
           agentId: 'agent-fallback-model',
           adapterId: ADAPTER_ID,
+          ownerInstanceId: OWNER_INSTANCE_ID,
           adapterSessionId: 'session-fallback',
           sessionId: 'makaio-session-fallback',
         });

@@ -83,5 +83,9 @@ export const sqliteStorageEngine: StorageEngine = {
     extensionLedgerName: (sourceHash) => `__drizzle_migrations_${sourceHash}`,
   },
 
+  transactionLocks: {
+    lockExpressions: () => [],
+  },
+
   fts: sqliteFtsSearchStrategy,
 };

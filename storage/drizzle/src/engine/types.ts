@@ -13,6 +13,29 @@ import type { DatabaseClient, DatabaseClientConfig } from '../client';
 import type { FtsSearchStrategy } from '../fts/strategy';
 import type { RawSqlExecutor, RawSqlSession } from '../raw-sql';
 import type { StorageDialect } from '../types';
+import type { SQL } from 'drizzle-orm';
+
+/** Stable identity for a transaction-scoped cross-process lock. */
+export interface TransactionLock {
+  /** Versioned domain that owns the identity format. */
+  readonly namespace: string;
+  /** Domain-owned stable identity within the lock namespace. */
+  readonly identity: string;
+}
+
+/** Engine-specific expressions that acquire transaction-scoped stable keys. */
+export interface StorageEngineTransactionLocks {
+  /**
+   * Build transaction-lock expressions for the supplied stable keys.
+   *
+   * The generic Drizzle seam executes every returned expression sequentially.
+   * Engines that serialize these operations without a cross-process primitive
+   * return an empty list.
+   * @param locks - Stable keys the caller needs for this transaction.
+   * @returns Expressions whose evaluation acquires the requested locks.
+   */
+  lockExpressions(locks: readonly TransactionLock[]): readonly SQL[];
+}
 
 /**
  * Dialect-specific classification of database errors.
@@ -233,6 +256,9 @@ export interface StorageEngine {
 
   /** Migration ledger, journal, and transaction behavior. */
   readonly migrations: StorageEngineMigrationBehavior;
+
+  /** Transaction-scoped stable-key locking behavior. */
+  readonly transactionLocks: StorageEngineTransactionLocks;
 
   /**
    * Full-text-search provisioning and query operations.

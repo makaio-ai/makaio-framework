@@ -9,8 +9,9 @@ Current adapters declare capabilities in the `AIAdapter` constructor config:
 
 ```typescript
 export class MyAdapter extends AIAdapter<MyBus, MyConnector, MyAgent> {
-  public constructor(config?: Partial<AIAdapterConfig>) {
+  public constructor(config: AIAdapterRuntimeConfig) {
     super({
+      ...config,
       name: 'my-provider',
       capabilities: [
         'tools',
@@ -23,7 +24,6 @@ export class MyAdapter extends AIAdapter<MyBus, MyConnector, MyAgent> {
       agentFactory: (agentConfig) => new MyAgent(agentConfig),
       configFactory: MyConfig.getConfig,
       connectorFactory: (fullConfig) => new MyConnector(fullConfig),
-      ...config,
     });
   }
 }

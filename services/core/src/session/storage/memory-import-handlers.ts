@@ -429,7 +429,10 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
   const { bus, store, cloneSession, populateAgents } = deps;
   return [
     bus.on(SessionStorageSubjects.importUpsert, (ctx) => {
-      const payload = ctx.payload;
+      // Import metadata is stored on newly created rows and can contain nested
+      // JSON values. Detach the request at the storage boundary so this backend
+      // has the same value semantics as a serialized Drizzle write.
+      const payload = structuredClone(ctx.payload);
       const existing = findByImportIdentity(store, payload.source, payload.externalSessionId);
       const discoveredAt = nextDiscoveredAt();
       const created = existing === undefined;

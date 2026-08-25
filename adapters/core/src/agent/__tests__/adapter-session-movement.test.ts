@@ -30,6 +30,8 @@ const HOST_BASE = {
   agentId: 'agent-1',
   adapterId: 'adapter-1',
   adapterName: 'claude-code',
+  machineId: 'test-machine',
+  ownerInstanceId: 'test-owner',
   sessionId: 'session-1',
 };
 
@@ -350,9 +352,11 @@ describe('ConfirmedAdapterSessionTracker', () => {
       failNext = false;
       capture.movements.length = 0;
 
-      // The caller settles the successor itself, so nothing is announced for it.
+      // The caller owns the successor, so it stays unpublished until the exact
+      // generation acknowledgement records the durable settlement.
       await tracker.record('provider-2', true);
       expect(capture.movements).toEqual([]);
+      tracker.recordCallerSettled('provider-2');
 
       // And the parked movement is gone rather than waiting for the next event:
       // enrichment re-records the identity, then reports none, and neither

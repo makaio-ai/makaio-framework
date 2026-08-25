@@ -17,7 +17,7 @@
  * @packageDocumentation
  */
 
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 import { ClaudeCodeTmuxAgent } from './agent.js';
 import { ClaudeCodeTmuxConnector } from './connector.js';
 import { ClaudeCodeTmuxConnectorNamespace, type ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
@@ -29,7 +29,7 @@ import type { ClaudeCodeTmuxProviderConfig } from './schemas.js';
 /**
  * Configuration for the Claude Code tmux adapter.
  */
-export type ClaudeCodeTmuxAdapterConfig = Partial<AIAdapterConfig> & {
+export type ClaudeCodeTmuxAdapterConfig = AIAdapterRuntimeConfig & {
   /**
    * Adapter-scoped provider defaults merged into each agent config.
    *
@@ -53,15 +53,16 @@ export class ClaudeCodeTmuxAdapter extends AIAdapter<
   ClaudeCodeTmuxAgent
 > {
   /**
-   * Create a Claude Code tmux adapter with optional runtime overrides.
-   * @param config - Optional adapter configuration overrides merged with tmux defaults.
+   * Create a Claude Code tmux adapter with host-injected runtime identity.
+   * @param config - Runtime configuration, including the owning authority and tmux defaults.
    */
-  public constructor(config?: ClaudeCodeTmuxAdapterConfig) {
-    const { providerConfigDefaults, ...adapterConfig } = config ?? {};
+  public constructor(config: ClaudeCodeTmuxAdapterConfig) {
+    const { providerConfigDefaults, ...adapterConfig } = config;
     super({
+      ...adapterConfig,
       name: ADAPTER_NAME,
       capabilities: ['tools', 'systemPrompt:override', 'systemPrompt:append', 'session:resume'],
-      ...adapterConfig,
+      nativeTools: [],
       namespace: ClaudeCodeTmuxConnectorNamespace,
       agentFactory: (agentConfig) => new ClaudeCodeTmuxAgent(agentConfig),
       configFactory: async (input) => {
@@ -91,12 +92,10 @@ export class ClaudeCodeTmuxAdapter extends AIAdapter<
 
 /**
  * Factory function to create and initialize a Claude Code tmux adapter.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized ClaudeCodeTmuxAdapter instance
  */
-export async function createClaudeCodeTmuxAdapter(
-  config?: ClaudeCodeTmuxAdapterConfig,
-): Promise<ClaudeCodeTmuxAdapter> {
+export async function createClaudeCodeTmuxAdapter(config: ClaudeCodeTmuxAdapterConfig): Promise<ClaudeCodeTmuxAdapter> {
   const adapter = new ClaudeCodeTmuxAdapter(config);
   await adapter.init();
   return adapter;

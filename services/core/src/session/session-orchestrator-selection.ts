@@ -206,15 +206,15 @@ export interface SelectionInstanceContext {
  * @param selection - Direct adapter selection this start runs from.
  * @param context - Adapter name, session identity, this runtime's machine and its instance registry.
  * @returns The instance and the machine, as one key.
- * @throws A {@link SessionStartError} when a named instance carries no machine, or
- *   a named machine carries no instance.
+ * @throws A {@link SessionStartError} when an identity is incomplete or its
+ *   complete explicit triple has no matching live announcement.
  */
 export async function resolveSelectionOwnedInstance(
   bus: IMakaioBus,
   selection: AdapterSelection,
   context: SelectionInstanceContext,
 ): Promise<MachineScopedAdapterInstance> {
-  const { adapterName, sessionId, machineId, registry } = context;
+  const { adapterName, sessionId, machineId } = context;
   const named: NamedSelectionInstance = {
     adapterId: normalizeSelectionString(selection.adapterId),
     machineId: normalizeSelectionString(selection.machineId),
@@ -225,7 +225,17 @@ export async function resolveSelectionOwnedInstance(
   });
   if (refusal !== undefined) throw new SessionStartError('start-failed', refusal);
   if (named.adapterId === undefined) {
-    return { adapterId: await registry.resolveAvailable(adapterName, machineId), machineId };
+    const owned = await resolveOwnedAdapterInstance(bus, {
+      adapterName,
+      machineId,
+    });
+    if (owned === undefined || owned.machineId === undefined || owned.ownerInstanceId === undefined) {
+      throw new SessionStartError(
+        'start-failed',
+        `[SessionOrchestrator.sendMessage] adapter runtime did not prove a live owner for ${adapterName} (sessionId=${sessionId})`,
+      );
+    }
+    return { adapterId: owned.adapterId, machineId: owned.machineId, ownerInstanceId: owned.ownerInstanceId };
   }
   const owned = await resolveOwnedAdapterInstance(bus, {
     adapterName,
@@ -233,17 +243,21 @@ export async function resolveSelectionOwnedInstance(
     ...(named.machineId !== undefined && { machineId: named.machineId }),
   });
   if (owned?.machineId === undefined) {
-    // Unreachable, and kept as the narrowing rather than as a guard: the resolver
-    // returns a named instance with its machine unresolved, and the refusal above
-    // already excluded the one input that makes it answer otherwise. What it
-    // narrows is the resolver's optional machine, which is optional because its
-    // *unscoped* callers have none.
+    // A complete selection is still refused when the live announcement does not
+    // prove its exact adapter ID/name/machine triple. The optional return also
+    // serves deriving callers, which is why this explicit path narrows it here.
     throw new SessionStartError(
       'start-failed',
       `[SessionOrchestrator.sendMessage] agent instance resolution for ${named.adapterId} produced no machine (sessionId=${sessionId})`,
     );
   }
-  return { adapterId: owned.adapterId, machineId: owned.machineId };
+  if (owned.ownerInstanceId === undefined) {
+    throw new SessionStartError(
+      'start-failed',
+      `[SessionOrchestrator.sendMessage] agent instance resolution for ${named.adapterId} produced no owner (sessionId=${sessionId})`,
+    );
+  }
+  return { adapterId: owned.adapterId, machineId: owned.machineId, ownerInstanceId: owned.ownerInstanceId };
 }
 
 /** The target a fresh lead start dispatches to, resolved from its selection. */

@@ -19,18 +19,25 @@ import {
   type IMakaioSession,
   type MakaioSessionAgent,
 } from '@makaio/contracts';
+import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { MakaioSessionService } from '../session-service.js';
 import { SessionStartError } from '../handlers/session-start-error.js';
 import { startLeadAgent } from '../handlers/lead-start.js';
+import type { LeadTransition } from '../handlers/lead-start-request.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { resolveInFlightStarts } from '../handlers/in-flight-start-join.js';
 import { resolveTargetAgents } from '../utils/session-utils.js';
-import { runExclusiveStart } from '../ownership/index.js';
+import { designateSessionLead, runExclusiveStart } from '../ownership/index.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
 import { registerMemorySessionBackends, resetBusHandlers, waitForAsync } from './shared.js';
+import {
+  MockConnector,
+  createTestAdapter,
+  type TestAdapter,
+} from '../../../../../adapters/core/src/adapter/__tests__/shared.js';
 
 /** Runtime facts a caller can put on the start request under test. */
 interface LeadStartRuntimeFields {
@@ -59,19 +66,37 @@ interface StartAgentStub {
   /** Throw instead of answering. */
   throwWith?: string;
   /** Runs while the dispatch is in flight, before the adapter answers. */
-  duringDispatch?: (agentId: string) => Promise<void>;
+  duringDispatch?: (agentId: string, ownerInstanceId: string | undefined) => Promise<void>;
+  /** Owner echoed by the response; defaults to the exactly targeted owner. */
+  responseOwnerInstanceId?: string;
+  /** Agent identity echoed by the response; defaults to the minted request ID. */
+  responseAgentId?: string;
+  /** Adapter identity echoed by the response; defaults to the selected adapter. */
+  responseAdapterId?: string;
+  /** Session identity echoed by the response; defaults to the requested session. */
+  responseSessionId?: string;
 }
 
 describe('reserved fresh lead start', () => {
   let service: MakaioSessionService;
   let cleanups: Array<() => void> = [];
   let stoppedAgentIds: string[];
+  let stoppedAgentTargets: Array<{
+    agentId: string;
+    ownerInstanceId: string | undefined;
+    teardown: 'connector-only' | undefined;
+  }>;
   let rehydratedAgentIds: string[];
+  let acknowledgedAgentIds: string[];
+  let forwardStopRequests: boolean;
 
   beforeEach(async () => {
     resetBusHandlers();
     stoppedAgentIds = [];
+    stoppedAgentTargets = [];
     rehydratedAgentIds = [];
+    acknowledgedAgentIds = [];
+    forwardStopRequests = false;
     cleanups = [
       ...registerMemorySessionBackends(MakaioBus),
       registerMemorySessionEventStorage(MakaioBus),
@@ -80,15 +105,42 @@ describe('reserved fresh lead start', () => {
       registerMockStorageHandlers({ omit: ['agent', 'session'] }),
       MakaioBus.on(AdapterSubjects.stopAgent, (ctx) => {
         stoppedAgentIds.push(ctx.payload.agentId);
+        stoppedAgentTargets.push({
+          agentId: ctx.payload.agentId,
+          ownerInstanceId: ctx.payload.ownerInstanceId,
+          teardown: ctx.payload.teardown,
+        });
+        if (forwardStopRequests) return ctx.next();
         ctx.setResult({ success: true, evidence: 'released' });
       }),
       MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydratedAgentIds.push(ctx.payload.agentId);
-        ctx.setResult({ success: true });
+        ctx.setResult({
+          success: true,
+          ownerInstanceId: ctx.payload.ownerInstanceId,
+          settlementAckToken: `ack-rehydrate-${ctx.payload.agentId}`,
+        });
+      }),
+      MakaioBus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
+        ctx.setResult({ adapterId: ADAPTER_ID });
       }),
     ];
     service = new MakaioSessionService(MakaioBus, { machineId: MACHINE_ID });
     await service.init();
+    cleanups.push(
+      MakaioBus.on(
+        AdapterRuntimeSubjects.resolveLiveIdentity,
+        (ctx) => {
+          ctx.setResult({
+            adapterId: ctx.payload.adapterId,
+            adapterName: ctx.payload.adapterName,
+            machineId: ctx.payload.machineId,
+            ownerInstanceId: service.requireOwnershipInstanceId(),
+          });
+        },
+        { priority: 100 },
+      ),
+    );
   });
 
   afterEach(() => {
@@ -105,7 +157,7 @@ describe('reserved fresh lead start', () => {
     cleanups.push(
       MakaioBus.on(AdapterSubjects.startAgent, async (ctx) => {
         const agentId = ctx.payload.agentId ?? 'adapter-minted-agent';
-        await stub.duringDispatch?.(agentId);
+        await stub.duringDispatch?.(agentId, ctx.payload.ownerInstanceId);
         if (stub.throwWith !== undefined) throw new Error(stub.throwWith);
         if (stub.refuseWith !== undefined) {
           ctx.setResult({ success: false as const, dispatch: stub.refuseWith, message: 'refused by stub' });
@@ -114,11 +166,26 @@ describe('reserved fresh lead start', () => {
         const adapterSessionId = stub.adapterSessionId === undefined ? 'provider-1' : stub.adapterSessionId;
         ctx.setResult({
           success: true as const,
-          agentId,
-          adapterId: ctx.payload.adapterId,
-          sessionId: ctx.payload.sessionId ?? 'unexpected-session',
+          agentId: stub.responseAgentId ?? agentId,
+          adapterId: stub.responseAdapterId ?? ctx.payload.adapterId,
+          sessionId: stub.responseSessionId ?? ctx.payload.sessionId ?? 'unexpected-session',
           ...(adapterSessionId !== null && { adapterSessionId }),
+          ownerInstanceId: stub.responseOwnerInstanceId ?? ctx.payload.ownerInstanceId ?? 'lead-start-owner',
+          settlementAckToken: `ack-${agentId}`,
         });
+      }),
+      MakaioBus.on(AdapterSubjects.acknowledgeCallerSettlement, async (ctx) => {
+        acknowledgedAgentIds.push(ctx.payload.agentId);
+        const transitioned = await MakaioBus.requestOptional(AgentStorageSubjects.updateStatus, {
+          agentId: ctx.payload.agentId,
+          status: 'idle',
+          expectedStatus: ['starting', 'dead'],
+        });
+        ctx.setResult(
+          transitioned.handled && transitioned.data.transitioned
+            ? { acknowledged: true }
+            : { acknowledged: false, reason: 'status-refused' },
+        );
       }),
     );
   }
@@ -138,16 +205,56 @@ describe('reserved fresh lead start', () => {
    * @param sessionId - Session to start into.
    * @param runtime - Runtime facts to put on the composed start request.
    * @param expectedLeadAgentId - Designation the caller observed; defaults to none.
+   * @param leadTransition - Whether the attempt starts or replaces the lead.
    * @returns Whatever the start decided.
    */
-  function start(sessionId: string, runtime?: LeadStartRuntimeFields, expectedLeadAgentId: string | null = null) {
+  function start(
+    sessionId: string,
+    runtime?: LeadStartRuntimeFields,
+    expectedLeadAgentId: string | null = null,
+    leadTransition: LeadTransition = { kind: 'fresh' },
+  ) {
     return startLeadAgent(MakaioBus, {
       sessionId,
-      instance: { adapterId: ADAPTER_ID, machineId: MACHINE_ID },
+      instance: {
+        adapterId: ADAPTER_ID,
+        machineId: MACHINE_ID,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+      },
       adapterName: ADAPTER_NAME,
+      leadTransition,
       expectedLeadAgentId,
       startRequest: { adapterId: ADAPTER_ID, sessionId, role: 'lead', ...runtime },
     });
+  }
+
+  /**
+   * Seed an idle lead that a replacement attempt must restore on failure.
+   * @param sessionId - Session whose existing lead is created.
+   * @returns Existing lead identity.
+   */
+  async function seedExistingLead(sessionId: string): Promise<string> {
+    const agentId = `old-${sessionId}`;
+    await MakaioBus.request(AgentStorageSubjects.set, {
+      agentId,
+      agent: {
+        agentId,
+        adapterId: 'old-adapter-instance',
+        adapterName: 'old-adapter',
+        sessionId,
+        role: 'lead',
+        status: 'idle',
+        createdAt: 1,
+        lastActivityAt: 1,
+      },
+    });
+    const designated = await designateSessionLead(MakaioBus, {
+      sessionId,
+      agentId,
+      expectedLeadAgentId: null,
+    });
+    expect(designated?.outcome).toBe('claimed');
+    return agentId;
   }
 
   /**
@@ -183,9 +290,11 @@ describe('reserved fresh lead start', () => {
     const sessionId = await seedSession('lead-start-order');
     let leadAtDispatch: string | null | undefined;
     let dispatchedAgentId: string | undefined;
+    let targetedOwnerInstanceId: string | undefined;
     registerStartAgent({
-      duringDispatch: async (agentId) => {
+      duringDispatch: async (agentId, ownerInstanceId) => {
         dispatchedAgentId = agentId;
+        targetedOwnerInstanceId = ownerInstanceId;
         leadAtDispatch = (await loadSession(sessionId))?.leadAgentId ?? null;
       },
     });
@@ -197,7 +306,259 @@ describe('reserved fresh lead start', () => {
     // The identity is the caller's, and it was already the session's lead when
     // the adapter first saw it.
     expect(dispatchedAgentId).toBe(result.agent.agentId);
+    expect(targetedOwnerInstanceId).toBe(service.requireOwnershipInstanceId());
     expect(leadAtDispatch).toBe(result.agent.agentId);
+  });
+
+  it.each([
+    { label: 'fresh lead', existingLead: false },
+    { label: 'replacement lead', existingLead: true },
+  ])('reverses a committed keyless $label reservation when its response is lost', async ({ existingLead }) => {
+    const sessionId = await seedSession(`lead-start-lost-keyless-${existingLead ? 'replace' : 'fresh'}`);
+    const previousLeadAgentId = existingLead ? await seedExistingLead(sessionId) : null;
+    cleanups.push(
+      MakaioBus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (context) => {
+          await context.next();
+          throw new Error('keyless reservation response was lost');
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    await expect(
+      start(sessionId, undefined, previousLeadAgentId, existingLead ? { kind: 'replace' } : { kind: 'fresh' }),
+    ).rejects.toThrow('keyless reservation response was lost');
+
+    expect((await loadSession(sessionId))?.leadAgentId).toBe(previousLeadAgentId ?? undefined);
+    expect((await loadSession(sessionId))?.agents.map((agent) => agent.agentId)).toEqual(
+      previousLeadAgentId === null ? [] : [previousLeadAgentId],
+    );
+  });
+
+  it('does not overwrite a newer lead while reversing a response-lost keyless reservation', async () => {
+    const sessionId = await seedSession('lead-start-lost-keyless-cas-loser');
+    cleanups.push(
+      MakaioBus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (context) => {
+          await context.next();
+          await MakaioBus.request(AgentStorageSubjects.set, {
+            agentId: 'newer-lead',
+            agent: {
+              agentId: 'newer-lead',
+              adapterId: ADAPTER_ID,
+              adapterName: ADAPTER_NAME,
+              sessionId,
+              role: 'lead',
+              status: 'idle',
+              createdAt: 1,
+              lastActivityAt: 1,
+            },
+          });
+          await designateSessionLead(MakaioBus, {
+            sessionId,
+            agentId: 'newer-lead',
+            expectedLeadAgentId: context.payload.agentId,
+          });
+          throw new Error('keyless reservation response was lost');
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    await expect(start(sessionId)).rejects.toThrow('keyless reservation response was lost');
+
+    expect((await loadSession(sessionId))?.leadAgentId).toBe('newer-lead');
+  });
+
+  it('clears a response-lost fresh start instead of restoring a stale unmaterialized designation', async () => {
+    const sessionId = await seedSession('lead-start-lost-keyless-stale-designation');
+    const session = await loadSession(sessionId);
+    if (session === null) throw new Error('expected session');
+    await MakaioBus.request(SessionStorageSubjects.delete, { sessionId });
+    await MakaioBus.request(SessionStorageSubjects.set, {
+      sessionId,
+      session: { ...session, leadAgentId: 'stale-unmaterialized-lead' },
+    });
+    cleanups.push(
+      MakaioBus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (context) => {
+          await context.next();
+          throw new Error('keyless reservation response was lost');
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    await expect(start(sessionId, undefined, 'stale-unmaterialized-lead')).rejects.toThrow(
+      'keyless reservation response was lost',
+    );
+
+    expect((await loadSession(sessionId))?.leadAgentId).toBeUndefined();
+  });
+
+  it('does not clear a stale designation when a fresh keyless reservation fails before commit', async () => {
+    const sessionId = await seedSession('lead-start-keyless-precommit-stale-designation');
+    const session = await loadSession(sessionId);
+    if (session === null) throw new Error('expected session');
+    await MakaioBus.request(SessionStorageSubjects.delete, { sessionId });
+    await MakaioBus.request(SessionStorageSubjects.set, {
+      sessionId,
+      session: { ...session, leadAgentId: 'stale-unmaterialized-lead' },
+    });
+    cleanups.push(
+      MakaioBus.on(
+        SessionSubjects.ownership.reserveStart,
+        () => {
+          throw new Error('keyless reservation failed before commit');
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    await expect(start(sessionId, undefined, 'stale-unmaterialized-lead')).rejects.toThrow(
+      'keyless reservation failed before commit',
+    );
+
+    expect((await loadSession(sessionId))?.leadAgentId).toBe('stale-unmaterialized-lead');
+  });
+
+  it('retires and stops a start answered by a different runtime incarnation', async () => {
+    const sessionId = await seedSession('lead-start-owner-mismatch');
+    registerStartAgent({ responseOwnerInstanceId: 'foreign-owner-instance' });
+
+    await expect(start(sessionId)).rejects.toThrow('adapter owner mismatch');
+
+    const session = await loadSession(sessionId);
+    expect(session?.agents).toHaveLength(1);
+    expect(session?.agents[0]?.status).toBe('dead');
+    expect(stoppedAgentTargets).toEqual([
+      {
+        agentId: session?.agents[0]?.agentId ?? '',
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+        teardown: 'connector-only',
+      },
+    ]);
+  });
+
+  it('never lets a malicious response redirect cleanup or adoption to another agent', async () => {
+    const sessionId = await seedSession('lead-start-response-victim');
+    const victim = {
+      agentId: 'unrelated-live-agent',
+      adapterId: ADAPTER_ID,
+      adapterName: ADAPTER_NAME,
+      sessionId,
+      role: 'member' as const,
+      status: 'idle' as const,
+      createdAt: 1,
+      lastActivityAt: 1,
+    };
+    await MakaioBus.request(AgentStorageSubjects.set, { agentId: victim.agentId, agent: victim });
+    registerStartAgent({ responseAgentId: victim.agentId });
+
+    await expect(start(sessionId)).rejects.toThrow('adapter response identity mismatch');
+
+    const storedVictim = await loadAgent(victim.agentId);
+    expect(storedVictim).toMatchObject(victim);
+    expect(stoppedAgentIds).toHaveLength(1);
+    expect(stoppedAgentIds[0]).not.toBe(victim.agentId);
+    expect(acknowledgedAgentIds).toEqual([]);
+    expect(await loadClaims()).toEqual([]);
+  });
+
+  it.each([
+    { label: 'adapter', stub: { responseAdapterId: 'foreign-adapter' } },
+    { label: 'session', stub: { responseSessionId: 'foreign-session' } },
+  ])('rejects a successful response with a mismatched $label before settlement', async ({ stub }) => {
+    const sessionId = await seedSession(`lead-start-response-${stub.responseAdapterId ?? stub.responseSessionId}`);
+    registerStartAgent(stub);
+
+    await expect(start(sessionId)).rejects.toThrow('adapter response identity mismatch');
+
+    const session = await loadSession(sessionId);
+    expect(session?.agents[0]?.status).toBe('dead');
+    expect(stoppedAgentIds).toEqual([session?.agents[0]?.agentId]);
+    expect(acknowledgedAgentIds).toEqual([]);
+    expect(await loadClaims()).toEqual([]);
+  });
+
+  it.each([
+    'throw',
+    'uncertain',
+    'malformed',
+    'settlement-throw',
+  ] as const)('restores the old lead when a replacement ends with %s after dispatch', async (failure) => {
+    const sessionId = await seedSession(`lead-replacement-${failure}`);
+    const oldLeadAgentId = await seedExistingLead(sessionId);
+    if (failure === 'throw') registerStartAgent({ throwWith: 'replacement response lost' });
+    if (failure === 'uncertain') registerStartAgent({ refuseWith: 'dispatch-uncertain' });
+    if (failure === 'malformed') registerStartAgent({ responseAgentId: oldLeadAgentId });
+    if (failure === 'settlement-throw') {
+      registerStartAgent();
+      cleanups.push(
+        MakaioBus.on(
+          SessionSubjects.ownership.settleMovement,
+          () => {
+            throw new Error('replacement settlement transport failed');
+          },
+          { priority: 2_000 },
+        ),
+      );
+    }
+
+    await expect(start(sessionId, undefined, oldLeadAgentId, { kind: 'replace' })).rejects.toThrow();
+
+    const storedSession = await loadSession(sessionId);
+    expect(storedSession?.leadAgentId).toBe(oldLeadAgentId);
+    expect((await loadAgent(oldLeadAgentId))?.status).toBe('idle');
+    expect(stoppedAgentTargets).toHaveLength(1);
+    const failedAgentId = stoppedAgentTargets[0]?.agentId;
+    expect(failedAgentId).toBeDefined();
+    expect(failedAgentId).not.toBe(oldLeadAgentId);
+    expect(stoppedAgentTargets[0]).toMatchObject({
+      ownerInstanceId: service.requireOwnershipInstanceId(),
+      teardown: 'connector-only',
+    });
+    expect((await loadAgent(failedAgentId ?? ''))?.status).toBe('dead');
+  });
+
+  it('retires and stops a dispatch whose response was lost at the selected runtime', async () => {
+    const sessionId = await seedSession('lead-start-response-lost');
+    registerStartAgent({ throwWith: 'response lost after start' });
+
+    await expect(start(sessionId)).rejects.toThrow('response lost after start');
+
+    const session = await loadSession(sessionId);
+    expect(stoppedAgentTargets).toEqual([
+      {
+        agentId: session?.agents[0]?.agentId ?? '',
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+        teardown: 'connector-only',
+      },
+    ]);
+  });
+
+  it('retires and stops an uncertain dispatch result at the selected runtime', async () => {
+    const sessionId = await seedSession('lead-start-dispatch-uncertain');
+    registerStartAgent({ refuseWith: 'dispatch-uncertain' });
+
+    await expect(start(sessionId)).rejects.toThrow('refused by stub');
+
+    const session = await loadSession(sessionId);
+    expect(stoppedAgentTargets).toEqual([
+      {
+        agentId: session?.agents[0]?.agentId ?? '',
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+        teardown: 'connector-only',
+      },
+    ]);
   });
 
   it('keeps the row `starting` through the adapter return and settles it to `idle` (case 30)', async () => {
@@ -229,6 +590,8 @@ describe('reserved fresh lead start', () => {
           agentId,
           adapterId: ADAPTER_ID,
           adapterName: ADAPTER_NAME,
+          machineId: MACHINE_ID,
+          ownerInstanceId: service.requireOwnershipInstanceId(),
           sessionId,
           confirmed: true,
           adapterSessionId: 'provider-1',
@@ -298,6 +661,51 @@ describe('reserved fresh lead start', () => {
     // designation standing.
     expect(session?.agents).toHaveLength(1);
     expect(session?.leadAgentId).toBe(winner.agent.agentId);
+  });
+
+  it('does not report a clean lead-conflict when the loser row cannot be deleted', async () => {
+    const sessionId = await seedSession('lead-start-conflict-rollback-unresolved');
+    cleanups.push(
+      MakaioBus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (context) => {
+          await MakaioBus.request(AgentStorageSubjects.set, {
+            agentId: 'conflict-winner',
+            agent: {
+              agentId: 'conflict-winner',
+              adapterId: ADAPTER_ID,
+              adapterName: ADAPTER_NAME,
+              sessionId,
+              role: 'lead',
+              status: 'idle',
+              createdAt: 1,
+              lastActivityAt: 1,
+            },
+          });
+          await designateSessionLead(MakaioBus, {
+            sessionId,
+            agentId: 'conflict-winner',
+            expectedLeadAgentId: null,
+          });
+          return context.next();
+        },
+        { priority: 1000 },
+      ),
+      MakaioBus.on(
+        AgentStorageSubjects.delete,
+        () => {
+          throw new Error('rollback delete failed before commit');
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent();
+
+    const failure = await start(sessionId).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: 'start-unresolved' });
+    const session = await loadSession(sessionId);
+    expect(session?.agents.map((agent) => agent.status).sort()).toEqual(['idle', 'starting']);
   });
 
   it('claims a crashed start for recovery through the status CAS (case 33)', async () => {
@@ -401,8 +809,9 @@ describe('reserved fresh lead start', () => {
 
     const result = await startLeadAgent(MakaioBus, {
       sessionId,
-      instance: { adapterId: ADAPTER_ID, machineId },
+      instance: { adapterId: ADAPTER_ID, machineId, ownerInstanceId: service.requireOwnershipInstanceId() },
       adapterName: ADAPTER_NAME,
+      leadTransition: { kind: 'fresh' },
       expectedLeadAgentId: null,
       startRequest: { adapterId: ADAPTER_ID, sessionId, role: 'lead' },
     });
@@ -548,7 +957,7 @@ describe('reserved fresh lead start', () => {
     expect(stoppedAgentIds).toEqual([]);
   });
 
-  it('accepts a peer that wrote idle first as a silent no-op (case 98b)', async () => {
+  it('refuses Ack when a peer wrote idle before this start could commit (case 98b)', async () => {
     const sessionId = await seedSession('lead-start-peer-idle');
     registerStartAgent({
       duringDispatch: async (agentId) => {
@@ -557,10 +966,9 @@ describe('reserved fresh lead start', () => {
       },
     });
 
-    const result = await start(sessionId);
+    await expect(start(sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
 
-    expect(result.outcome).toBe('started');
-    expect(stoppedAgentIds).toEqual([]);
+    expect(stoppedAgentIds).toHaveLength(1);
   });
 
   it.each([
@@ -739,8 +1147,10 @@ describe('reserved fresh lead start', () => {
       agentId: incumbentId,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
       role: 'member',
       resumeProviderSessionId: 'provider-1',
+      claimToken: crypto.randomUUID(),
     });
     expect(reserved.outcome).toBe('reserved');
 
@@ -798,6 +1208,26 @@ describe('reserved fresh lead start', () => {
     expect(session?.agents ?? []).toEqual([]);
   });
 
+  it('keeps the not-dispatched start failure when rollback deletion throws', async () => {
+    const sessionId = await seedSession('lead-start-rollback-delete-throws');
+    cleanups.push(
+      MakaioBus.on(
+        AgentStorageSubjects.delete,
+        async (context) => {
+          await context.next();
+          throw new Error('rollback delete response was lost');
+        },
+        { priority: 1000 },
+      ),
+    );
+    registerStartAgent({ refuseWith: 'not-dispatched' });
+
+    const failure = await start(sessionId).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SessionStartError);
+    expect((failure as SessionStartError).code).toBe('start-failed');
+  });
+
   it('keeps the refusal it classified when the terminal status write throws', async () => {
     // The teardown a refused settlement performs is best-effort down to its last
     // step: the generations are already back, and the status it writes is not
@@ -825,8 +1255,10 @@ describe('reserved fresh lead start', () => {
       agentId: incumbentId,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
       role: 'member',
       resumeProviderSessionId: 'provider-throwing',
+      claimToken: crypto.randomUUID(),
     });
     expect(reserved.outcome).toBe('reserved');
 
@@ -881,8 +1313,10 @@ describe('reserved fresh lead start', () => {
       agentId: removedAgentId,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
       role: 'member',
       resumeProviderSessionId: 'provider-1',
+      claimToken: crypto.randomUUID(),
     });
     expect(retry.outcome).toBe('agent-disposed');
   });
@@ -989,6 +1423,95 @@ describe('reserved fresh lead start', () => {
     expect(session?.agents).toEqual([]);
     expect(session?.leadAgentId).toBeUndefined();
   });
+
+  it('does not dispatch when close wins after the caller-owned row is written (admission race)', async () => {
+    const sessionId = await seedSession('lead-start-close-before-reservation');
+    let dispatched = 0;
+    registerStartAgent({
+      duringDispatch: async () => {
+        dispatched += 1;
+      },
+    });
+    cleanups.push(
+      MakaioBus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (ctx) => {
+          await MakaioBus.request(SessionSubjects.close, { sessionId });
+          await ctx.next();
+        },
+        { priority: 1_000 },
+      ),
+    );
+
+    await expect(start(sessionId)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
+
+    expect(dispatched).toBe(0);
+    expect((await loadSession(sessionId))?.agents).toEqual([]);
+    expect(await loadClaims()).toEqual([]);
+  });
+
+  it('preserves admission failure when cleanup cannot re-read the agent row', async () => {
+    const sessionId = await seedSession('lead-start-close-cleanup-read-fails');
+    registerStartAgent();
+    cleanups.push(
+      MakaioBus.on(
+        AdapterSubjects.startAgent,
+        async (context) => {
+          await MakaioBus.request(SessionSubjects.close, { sessionId });
+          return context.next();
+        },
+        { priority: 1000 },
+      ),
+      MakaioBus.on(
+        AgentStorageSubjects.get,
+        () => {
+          throw new Error('cleanup agent read failed');
+        },
+        { priority: 1000 },
+      ),
+    );
+
+    await expect(start(sessionId)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
+  });
+
+  it('retires an adapter-owned connector when close wins after reservation but before start dispatch', async () => {
+    const sessionId = await seedSession('lead-start-close-after-reservation');
+    let connector: MockConnector | undefined;
+    let adapter: TestAdapter | undefined;
+    const created = createTestAdapter(ADAPTER_NAME, {
+      adapterId: ADAPTER_ID,
+      machineId: MACHINE_ID,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
+      connectorFactory: (config) => {
+        connector = new MockConnector(config);
+        return connector;
+      },
+    });
+    adapter = created.adapter;
+    await adapter.init();
+    forwardStopRequests = true;
+    cleanups.push(() => void adapter?.closeAsync());
+    cleanups.push(
+      MakaioBus.on(
+        AdapterSubjects.startAgent,
+        async (ctx) => {
+          await MakaioBus.request(SessionSubjects.close, { sessionId });
+          await ctx.next();
+        },
+        { priority: 1_000 },
+      ),
+    );
+
+    await expect(start(sessionId)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
+
+    const stored = await loadSession(sessionId);
+    const agentId = stored?.agents[0]?.agentId;
+    expect(agentId).toBeDefined();
+    expect(stored?.agents[0]?.status).toBe('dead');
+    expect(await loadClaims()).toEqual([]);
+    expect(connector?.closeCount).toBe(1);
+    expect(adapter.getAgent(agentId ?? '')).toBeUndefined();
+  });
   it('arbitrates the winner’s still-starting agent when a send loses the designation race', async () => {
     // §15 Step-7's known gap, and the hazard hiding in it. The winner designates
     // *before* it dispatches, so the agent a losing send adopts on its re-read is
@@ -1021,6 +1544,7 @@ describe('reserved fresh lead start', () => {
                 role: 'lead',
                 // Reserved and published; its dispatch is still in flight.
                 status: 'starting',
+                runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
                 createdAt: Date.now(),
                 lastActivityAt: Date.now(),
               },

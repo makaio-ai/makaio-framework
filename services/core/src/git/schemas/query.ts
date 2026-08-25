@@ -41,6 +41,22 @@ export const GitBranchResponseSchema = z.object({
 export type GitBranchResponse = z.infer<typeof GitBranchResponseSchema>;
 
 // =============================================================================
+// localBranchExists - Check a local branch ref without using cached log data
+// =============================================================================
+
+export const GitLocalBranchExistsRequestSchema = BaseRequestSchema.extend({
+  /** Local branch name to check. */
+  name: z.string(),
+});
+export type GitLocalBranchExistsRequest = z.infer<typeof GitLocalBranchExistsRequestSchema>;
+
+export const GitLocalBranchExistsResponseSchema = z.object({
+  /** Whether the local branch ref exists. */
+  exists: z.boolean(),
+});
+export type GitLocalBranchExistsResponse = z.infer<typeof GitLocalBranchExistsResponseSchema>;
+
+// =============================================================================
 // getCommit - Get commit info
 // =============================================================================
 

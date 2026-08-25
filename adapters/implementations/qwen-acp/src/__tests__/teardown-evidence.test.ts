@@ -331,14 +331,14 @@ describe('QwenAcpConnector generation retirement (I33, case 226)', () => {
     expect(report.detail).toContain('qwen ACP process generation 1');
   });
 
-  it('arm 5 — a failed init that killed a process reports no class stronger than `detached`', async () => {
+  it('arm 5 — a failed init immediately caps teardown while its killed process exit is unsettled', async () => {
     // The generation that never reaches the connector's handle field: the process is
     // spawned, the handshake then fails, and the local variable is the only thing
-    // holding it. Killing it outside the retirement choke point books nothing, and a
-    // later close over an empty ledger claims `released` for a `qwen` process this
-    // connector signalled and never watched (C4).
-    const neverExits = new Promise<number | null>(() => {});
-    const handle = makeHandle('session-never-agreed', neverExits);
+    // holding it. The failed-init path must still book that local generation before
+    // returning its error, so a later close cannot claim `released` while the
+    // process end remains unobserved (C4).
+    const exit = deferredExit();
+    const handle = makeHandle('session-never-agreed', exit.promise);
     handle.connection.newSession = vi.fn().mockRejectedValue(new Error('qwen refused the session'));
     mockCreateAcpConnection.mockResolvedValueOnce(handle);
 
@@ -351,6 +351,30 @@ describe('QwenAcpConnector generation retirement (I33, case 226)', () => {
     const report = await connector.close();
     expect(report.evidence).toBe('detached');
     expect(report.detail).toContain('qwen ACP process generation 1');
+  });
+
+  it('reactively retires a failed-init generation after its exit settles, so a healthy retry is not capped', async () => {
+    const failedExit = deferredExit();
+    const failedHandle = makeHandle('session-never-agreed', failedExit.promise);
+    failedHandle.connection.newSession = vi.fn().mockRejectedValue(new Error('qwen refused the session'));
+    const healthyHandle = makeHandle('session-healthy', Promise.resolve(0));
+    mockCreateAcpConnection.mockResolvedValueOnce(failedHandle).mockResolvedValueOnce(healthyHandle);
+
+    const connector = await makeConnector();
+    await expect(connector.initialize()).rejects.toThrow('qwen refused the session');
+
+    // The first generation is still unproven until its existing exit observation
+    // settles; abandoning it must not wait for that observation.
+    expect(failedHandle.kill).toHaveBeenCalledTimes(1);
+    failedExit.settle();
+    await Promise.resolve();
+
+    await connector.initialize();
+
+    // The retry owns a separate, observed generation. The abandoned predecessor
+    // no longer caps this report once its own retained exit promise has settled.
+    await expect(connector.close()).resolves.toEqual({ evidence: 'exited' });
+    expect(healthyHandle.kill).toHaveBeenCalledTimes(1);
   });
 });
 

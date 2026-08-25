@@ -11,7 +11,7 @@ export const DEFAULT_TEST_MACHINE_ID = 'test-machine';
  */
 export interface MockAdapterIdentityRegistry {
   registerHandlers: () => () => void;
-  registerKnownAdapter: (adapterName: string, adapterId?: string) => Promise<void>;
+  registerKnownAdapter: (adapterName: string, adapterId?: string, machineId?: string) => Promise<void>;
 }
 
 /**
@@ -26,7 +26,20 @@ export function createMockAdapterIdentityRegistry(currentMachineId?: string): Mo
     registerHandlers(): () => void {
       const unsubs = [
         MakaioBus.on(AdapterSubjects.initialized, (context) => {
-          registry.rememberAdapterId(context.payload.adapterId, context.payload.adapterName);
+          registry.rememberLiveIdentity({
+            adapterId: context.payload.adapterId,
+            adapterName: context.payload.adapterName,
+            machineId: context.payload.machineId,
+            ownerInstanceId: context.payload.ownerInstanceId,
+          });
+        }),
+        MakaioBus.on(AdapterSubjects.deinitialized, (context) => {
+          registry.forgetLiveIdentity({
+            adapterId: context.payload.adapterId,
+            adapterName: context.payload.adapterName,
+            machineId: context.payload.machineId,
+            ownerInstanceId: context.payload.ownerInstanceId,
+          });
         }),
         MakaioBus.on(AdapterRuntimeSubjects.resolveId, (context) => {
           const adapterId = registry.resolveId(context.payload);
@@ -42,6 +55,13 @@ export function createMockAdapterIdentityRegistry(currentMachineId?: string): Mo
           }
           context.setResult({ adapterName });
         }),
+        MakaioBus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (context) => {
+          const identity = registry.resolveLiveIdentity(context.payload);
+          if (identity === undefined) {
+            throw new Error(`No matching live adapter for adapterId="${context.payload.adapterId}"`);
+          }
+          context.setResult(identity);
+        }),
       ];
 
       return () => {
@@ -51,11 +71,13 @@ export function createMockAdapterIdentityRegistry(currentMachineId?: string): Mo
       };
     },
 
-    async registerKnownAdapter(adapterName: string, adapterId?: string): Promise<void> {
+    async registerKnownAdapter(adapterName: string, adapterId?: string, machineId?: string): Promise<void> {
       const resolvedAdapterId = adapterId ?? registry.resolveId({ adapterName });
       await MakaioBus.emit(AdapterSubjects.initialized, {
         adapterName,
         adapterId: resolvedAdapterId,
+        machineId: machineId ?? currentMachineId ?? DEFAULT_TEST_MACHINE_ID,
+        ownerInstanceId: 'test-owner-instance',
         capabilities: [],
       });
     },

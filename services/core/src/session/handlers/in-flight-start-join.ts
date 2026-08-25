@@ -1,14 +1,21 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IMakaioSession, MakaioSessionAgent } from '@makaio/contracts';
+import { SessionOwnershipStorageSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
 import { peekInFlightStart, runExclusiveStart, type StartAttemptOutcome } from '../ownership/index.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
-import { resolveOwnedAdapterInstance } from '../utils/resolution.js';
+import { resolveOwnedAdapterInstance, toMachineScopedAdapterInstance } from '../utils/resolution.js';
 import {
   failedRehydrateError,
   runReservedRehydrate,
   type ReservedRehydrateOutcome,
   type ReservedRehydrateRequest,
 } from './reserved-rehydrate.js';
+import {
+  buildRecoveryReservationGuard,
+  MAX_RECOVERY_REPLANS,
+  recoveryProviderSessionId,
+  recoverySnapshotIsClaimable,
+  readRecoveryPlanningSnapshot,
+} from './recovery-reservation.js';
 import { SessionStartError } from './session-start-error.js';
 
 /**
@@ -22,12 +29,24 @@ import { SessionStartError } from './session-start-error.js';
  */
 const MAX_STARTING_OBSERVATIONS = 2;
 
+/**
+ * How many whole-session refresh passes may be invalidated by local joins.
+ *
+ * A local join is another observed start contention, only widened from one row
+ * to every row that was materialized beside it. Keep its bound aligned with the
+ * per-row rule rather than letting an unbounded sequence of fresh local starts
+ * hold a send forever.
+ */
+export const MAX_JOINED_REFRESH_PASSES = MAX_STARTING_OBSERVATIONS;
+
 /** What a consumer does with an agent whose start it joined or arbitrated. */
 export type StartResolution =
   /** The agent is usable as it stands. */
   | 'use'
   /** The agent is not part of this send: the row is gone, or terminal. */
   | 'drop'
+  /** The agent belongs to a guarded recovery this runtime cannot prove retired. */
+  | 'defer'
   /** The agent needs the ordinary fresh-with-history recovery. */
   | 'recover';
 
@@ -37,6 +56,8 @@ export interface InFlightStartResolution {
   readonly droppedAgentIds: ReadonlySet<string>;
   /** Agents this send must recover before using. */
   readonly recoveringAgentIds: ReadonlySet<string>;
+  /** Agents whose guarded recovery is owned by an unretired or unknown runtime. */
+  readonly deferredAgentIds: ReadonlySet<string>;
   /**
    * The subset whose recovery this send claimed by **compare-and-swap**, not by
    * consuming a local attempt.
@@ -150,6 +171,38 @@ async function readAgentRow(
 }
 
 /**
+ * Whether durable storage proves the exact runtime that owns a guarded recovery retired.
+ *
+ * Absence, an unhandled subject and read errors are deliberately inconclusive:
+ * an exact fence identifies the write it may make, but does not grant another
+ * runtime authority to make that write.
+ * @param bus - Bus the runtime-instance read is issued on.
+ * @param agent - Guarded recovery row whose owner may have retired.
+ * @returns `true` only when durable retirement evidence exists for that owner.
+ */
+async function guardedRecoveryOwnerIsRetired(bus: IMakaioBus, agent: MakaioSessionAgent): Promise<boolean> {
+  const owner = agent.runtimeOwner;
+  if (owner === undefined) return false;
+  try {
+    const result = await bus.requestOptional(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+      instanceId: owner.instanceId,
+      machineId: owner.machineId,
+    });
+    return result.handled && result.data.instance !== null && result.data.instance.retiredAt !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** The authoritative result of resolving a row observed as `starting`. */
+interface StartingAgentResolution {
+  readonly resolution: StartResolution;
+  readonly row: MakaioSessionAgent | null;
+  readonly arbitrated: boolean;
+  readonly joined: boolean;
+}
+
+/**
  * Resolve one agent whose stored status is `starting`.
  *
  * Two arbiters, in this order. The process-local registry makes the
@@ -169,13 +222,12 @@ async function readAgentRow(
  * @param bus - Bus the reads and the compare-and-swap are issued on.
  * @param agent - The agent as the session row carries it.
  * @returns What this send does with the agent, the row that decided it, and
- *   whether the decision came from the cross-process compare-and-swap.
+ *   whether it joined a local attempt or decided through the cross-process
+ *   compare-and-swap.
  */
-async function resolveStartingAgent(
-  bus: IMakaioBus,
-  agent: MakaioSessionAgent,
-): Promise<{ resolution: StartResolution; row: MakaioSessionAgent | null; arbitrated: boolean }> {
+async function resolveStartingAgent(bus: IMakaioBus, agent: MakaioSessionAgent): Promise<StartingAgentResolution> {
   let current: MakaioSessionAgent | null = agent;
+  let joined = false;
   for (let observation = 0; observation < MAX_STARTING_OBSERVATIONS; observation += 1) {
     const inFlight = peekInFlightStart(agent.agentId);
     if (inFlight !== undefined) {
@@ -197,38 +249,62 @@ async function resolveStartingAgent(
       // the agents this rule did not claim — which is where a question about
       // connectors belongs.
       await inFlight.settled.catch(() => undefined);
+      joined = true;
     } else {
-      const claimed = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
-        agentId: agent.agentId,
-        status: 'dead',
-        expectedStatus: ['starting'],
-      });
-      if (!claimed.handled || claimed.data.transitioned) {
-        // Two different facts reach the same resolution, and they must not reach
-        // the same *row*. A transitioned swap means this call won the
-        // arbitration and the stored row now says `dead`. An unhandled subject
-        // means there is no agent storage to arbitrate over at all — the session
-        // package does not depend on it — which the reserved recovery already
-        // treats as "claimed" for the same reason: refusing would make the whole
-        // path unavailable to a composition that never had the column.
-        //
-        // **The row is read, never constructed.** Synthesising a `dead` row for
-        // the unhandled case would hand the send a state no storage holds and no
-        // write produced, and the caller now carries that row into its liveness
-        // probe and its routing. Even for the transitioned case a constructed
-        // row silently drops whatever else the write touched. One read answers
-        // both honestly: the stored row where there is one, the caller's own
-        // view where there is not.
-        return {
-          resolution: 'recover',
-          row: await readAgentRow(bus, agent.agentId, current ?? agent),
-          arbitrated: true,
-        };
+      // A guarded recovery owns `starting` through its attempt fence, not its
+      // status alone. Refresh before arbitrating so an observer that read the
+      // row before the reservation still addresses the persisted attempt; a
+      // stale observer can then terminalize only that exact attempt and binding.
+      current = await readAgentRow(bus, agent.agentId, current ?? agent);
+      if (current?.status === 'starting' && current.recoveryAttemptId !== undefined) {
+        const owner = current.runtimeOwner;
+        if (owner === undefined || !(await guardedRecoveryOwnerIsRetired(bus, current))) {
+          return { resolution: 'defer', row: current, arbitrated: false, joined };
+        }
+        await bus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+          agentId: current.agentId,
+          attemptId: current.recoveryAttemptId,
+          binding: {
+            adapterId: current.adapterId,
+            ownerMachineId: owner.machineId,
+            ownerInstanceId: owner.instanceId,
+          },
+          action: { kind: 'failed' },
+        });
+      } else {
+        const claimed = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+          agentId: agent.agentId,
+          status: 'dead',
+          expectedStatus: ['starting'],
+        });
+        if (!claimed.handled || claimed.data.transitioned) {
+          // Two different facts reach the same resolution, and they must not reach
+          // the same *row*. A transitioned swap means this call won the
+          // arbitration and the stored row now says `dead`. An unhandled subject
+          // means there is no agent storage to arbitrate over at all — the session
+          // package does not depend on it — which the reserved recovery already
+          // treats as "claimed" for the same reason: refusing would make the whole
+          // path unavailable to a composition that never had the column.
+          //
+          // **The row is read, never constructed.** Synthesising a `dead` row for
+          // the unhandled case would hand the send a state no storage holds and no
+          // write produced, and the caller now carries that row into its liveness
+          // probe and its routing. Even for the transitioned case a constructed
+          // row silently drops whatever else the write touched. One read answers
+          // both honestly: the stored row where there is one, the caller's own
+          // view where there is not.
+          return {
+            resolution: 'recover',
+            row: await readAgentRow(bus, agent.agentId, current ?? agent),
+            arbitrated: true,
+            joined,
+          };
+        }
       }
     }
     current = await readAgentRow(bus, agent.agentId, current ?? agent);
     const resolution = classifyJoinedRow(current);
-    if (resolution !== undefined) return { resolution, row: current, arbitrated: false };
+    if (resolution !== undefined) return { resolution, row: current, arbitrated: false, joined };
   }
 
   throw new SessionStartError(
@@ -237,11 +313,127 @@ async function resolveStartingAgent(
   );
 }
 
+/** Mutable result collections built while resolving the session's starting rows. */
+interface StartingResolutionBookkeeping {
+  readonly droppedAgentIds: Set<string>;
+  readonly recoveringAgentIds: Set<string>;
+  readonly deferredAgentIds: Set<string>;
+  readonly arbitratedAgentIds: Set<string>;
+  readonly refreshed: Map<string, MakaioSessionAgent>;
+}
+
+/**
+ * Record one starting row's resolution for the send that observed it.
+ * @param agentId - Identity whose starting row was resolved.
+ * @param result - Resolution and authoritative row returned by the arbiter.
+ * @param bookkeeping - Collections accumulated for the send.
+ */
+function recordStartingResolution(
+  agentId: string,
+  result: StartingAgentResolution,
+  bookkeeping: StartingResolutionBookkeeping,
+): void {
+  const { resolution, row, arbitrated } = result;
+  bookkeeping.droppedAgentIds.delete(agentId);
+  bookkeeping.recoveringAgentIds.delete(agentId);
+  bookkeeping.deferredAgentIds.delete(agentId);
+  bookkeeping.arbitratedAgentIds.delete(agentId);
+  if (resolution === 'drop') bookkeeping.droppedAgentIds.add(agentId);
+  if (resolution === 'recover') {
+    bookkeeping.recoveringAgentIds.add(agentId);
+    if (arbitrated) bookkeeping.arbitratedAgentIds.add(agentId);
+  }
+  if (resolution === 'defer') bookkeeping.deferredAgentIds.add(agentId);
+  if (row !== null) bookkeeping.refreshed.set(agentId, row);
+}
+
+/**
+ * Record a session row's current authoritative non-starting state after a local join.
+ * @param agentId - Identity whose non-starting row was refreshed.
+ * @param row - Current stored row, or `null` when it has gone away.
+ * @param bookkeeping - Collections accumulated for the send.
+ */
+function recordRefreshedSessionRow(
+  agentId: string,
+  row: MakaioSessionAgent | null,
+  bookkeeping: StartingResolutionBookkeeping,
+): void {
+  switch (classifyJoinedRow(row)) {
+    case 'drop':
+      bookkeeping.recoveringAgentIds.delete(agentId);
+      bookkeeping.deferredAgentIds.delete(agentId);
+      bookkeeping.arbitratedAgentIds.delete(agentId);
+      bookkeeping.droppedAgentIds.add(agentId);
+      return;
+    case 'use':
+      // A row that became usable while another sibling was joined supersedes a
+      // prior start resolution; probing it is now both safe and required.
+      bookkeeping.droppedAgentIds.delete(agentId);
+      bookkeeping.recoveringAgentIds.delete(agentId);
+      bookkeeping.deferredAgentIds.delete(agentId);
+      bookkeeping.arbitratedAgentIds.delete(agentId);
+      if (row !== null) bookkeeping.refreshed.set(agentId, row);
+      return;
+    case 'recover':
+      // Keep an existing starting-resolution provenance while its `dead` row
+      // remains current; a dead sibling first seen outside that path still goes
+      // through the ordinary liveness probe.
+      bookkeeping.droppedAgentIds.delete(agentId);
+      bookkeeping.deferredAgentIds.delete(agentId);
+      if (row !== null) bookkeeping.refreshed.set(agentId, row);
+      return;
+    case undefined:
+      throw new Error('[session.start] a starting sibling must be resolved before it is recorded');
+  }
+}
+
+/**
+ * Refresh every materialized session row until an entire pass waits for none.
+ *
+ * A join during the pass makes all rows read before it stale, so the next pass
+ * begins again from storage. Each repeat follows a real local start that has
+ * settled; {@link resolveStartingAgent} bounds that start's own observations.
+ * The same contention limit bounds passes invalidated by fresh local starts.
+ * @param bus - Bus the refresh reads and starting resolutions use.
+ * @param session - Session whose materialized rows are refreshed.
+ * @param bookkeeping - Collections accumulated for the send.
+ */
+async function refreshJoinedSessionRows(
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  bookkeeping: StartingResolutionBookkeeping,
+): Promise<void> {
+  let joinedRefreshPasses = 0;
+  for (;;) {
+    let joinedDuringPass = false;
+    for (const agent of session.agents) {
+      const row = await readAgentRow(bus, agent.agentId, agent);
+      if (row?.status === 'starting') {
+        const result = await resolveStartingAgent(bus, row);
+        joinedDuringPass ||= result.joined;
+        recordStartingResolution(agent.agentId, result, bookkeeping);
+      } else {
+        recordRefreshedSessionRow(agent.agentId, row, bookkeeping);
+      }
+    }
+    if (!joinedDuringPass) return;
+    joinedRefreshPasses += 1;
+    if (joinedRefreshPasses > MAX_JOINED_REFRESH_PASSES) {
+      throw new SessionStartError(
+        'start-unresolved',
+        `[session.start] session ${session.sessionId} did not stabilize after ${MAX_JOINED_REFRESH_PASSES} joined refresh passes`,
+      );
+    }
+  }
+}
+
 /**
  * Apply the in-flight-start consumer rule to a session's agents.
  *
  * Runs *before* the liveness probe and before the fresh-start branch, and only
- * for agents whose stored status is `starting` — every other row costs nothing.
+ * for agents whose stored status is `starting`. When this process waits for one
+ * of those starts, every materialized row is re-read to a stable pass;
+ * otherwise they cost nothing.
  * The ordering matters at both ends: probing a `starting` agent would find no
  * registered connector and walk into a second lifecycle for an identity that
  * already has one in flight, and an agent dropped here may be the session's last,
@@ -250,10 +442,12 @@ async function resolveStartingAgent(
  * Dropped agents are removed from `session.agents` in place, and every agent that
  * survives is **replaced by the row this resolution read**, so every later step
  * of the send sees both the target set and the identities this resolution
- * produced. The second half matters as much as the first: a joined attempt can
- * bind its agent to a different adapter instance, and a send that kept the
- * pre-join snapshot would probe liveness and route at the instance that attempt
- * moved off.
+ * produced. A local join also refreshes every materialized row: every one was
+ * read before the wait, and the send probes and routes at all of their
+ * identities afterwards. The second half matters as much as the first: a joined
+ * attempt can bind an agent to a different adapter instance, and a send that
+ * kept the pre-join snapshot would probe liveness and route at the instance the
+ * lifecycle moved off.
  * @param bus - Bus the joins, reads and compare-and-swaps are issued on.
  * @param session - Session whose agents are resolved; its `agents` are filtered and refreshed in place.
  * @returns Which agents left the set, and which the send must recover.
@@ -264,17 +458,31 @@ export async function resolveInFlightStarts(
 ): Promise<InFlightStartResolution> {
   const droppedAgentIds = new Set<string>();
   const recoveringAgentIds = new Set<string>();
+  const deferredAgentIds = new Set<string>();
   const arbitratedAgentIds = new Set<string>();
   const refreshed = new Map<string, MakaioSessionAgent>();
+  const bookkeeping: StartingResolutionBookkeeping = {
+    droppedAgentIds,
+    recoveringAgentIds,
+    deferredAgentIds,
+    arbitratedAgentIds,
+    refreshed,
+  };
+  let joinedStart = false;
   for (const agent of session.agents) {
     if (agent.status !== 'starting') continue;
-    const { resolution, row, arbitrated } = await resolveStartingAgent(bus, agent);
-    if (resolution === 'drop') droppedAgentIds.add(agent.agentId);
-    if (resolution === 'recover') {
-      recoveringAgentIds.add(agent.agentId);
-      if (arbitrated) arbitratedAgentIds.add(agent.agentId);
-    }
-    if (row !== null) refreshed.set(agent.agentId, row);
+    const result = await resolveStartingAgent(bus, agent);
+    joinedStart ||= result.joined;
+    recordStartingResolution(agent.agentId, result, bookkeeping);
+  }
+
+  // Waiting for a local start makes the whole materialized session snapshot
+  // stale, including starting rows resolved before a later join. Refresh every
+  // row before the send probes and recovers it; a row that is again `starting`
+  // passes through the same resolver before it can reach either later step. A
+  // row removed or disposed while waiting is no longer a target at all.
+  if (joinedStart) {
+    await refreshJoinedSessionRows(bus, session, bookkeeping);
   }
 
   // The designation is deliberately left alone. A session left with no agents
@@ -286,7 +494,7 @@ export async function resolveInFlightStarts(
       .filter((agent) => !droppedAgentIds.has(agent.agentId))
       .map((agent) => refreshed.get(agent.agentId) ?? agent);
   }
-  return { droppedAgentIds, recoveringAgentIds, arbitratedAgentIds };
+  return { droppedAgentIds, recoveringAgentIds, deferredAgentIds, arbitratedAgentIds };
 }
 
 /**
@@ -318,6 +526,33 @@ export type ExclusiveRehydrateOutcome =
       readonly agent: MakaioSessionAgent;
     };
 
+/** An outcome decided before an exclusive recovery attempt can reserve or dispatch. */
+export type EarlyRehydrateOutcome = Extract<
+  ReservedRehydrateOutcome,
+  { kind: 'deferred' | 'lost' | 'refused' | 'stale-plan' }
+>;
+
+/**
+ * Build the exact request an exclusive recovery attempt may execute.
+ *
+ * The factory is invoked only by the callback that won the in-flight-start
+ * seam. A joiner must not read a recovery snapshot, resolve an adapter
+ * incarnation or inspect a holder generation: all of those facts can change
+ * while it waits for another attempt.
+ */
+export type ReservedRehydrateAttemptFactory = () => Promise<ReservedRehydrateRequest | EarlyRehydrateOutcome>;
+
+/**
+ * Whether an attempt factory produced a dispatchable reserved-rehydrate request.
+ * @param value - Factory result to classify.
+ * @returns `true` when the result carries a reserved-rehydrate request.
+ */
+function isReservedRehydrateRequest(
+  value: ReservedRehydrateRequest | EarlyRehydrateOutcome,
+): value is ReservedRehydrateRequest {
+  return 'resumeProviderSessionId' in value;
+}
+
 /**
  * Recover one agent under the exclusive-start seam — run it, or consume the
  * attempt that is already running.
@@ -336,19 +571,21 @@ export type ExclusiveRehydrateOutcome =
  * including the `deferred` it must be told about. `starting` is unresolved by
  * definition, and a gone or `disposed` row is unavailable.
  * @param bus - Bus every step is issued on.
- * @param request - Agent, session, live adapter identity and resume target.
+ * @param agent - Agent identity the exclusive-start seam coordinates.
+ * @param createAttempt - Builds a fresh recovery request only after this call wins the seam.
  * @returns How the recovery ended, or `undefined` when a self-run attempt recorded nothing.
  * @throws A {@link SessionStartError} when a joined attempt failed or nothing resolved.
  */
 export async function runOrJoinReservedRehydrate(
   bus: IMakaioBus,
-  request: ReservedRehydrateRequest,
+  agent: MakaioSessionAgent,
+  createAttempt: ReservedRehydrateAttemptFactory,
 ): Promise<ExclusiveRehydrateOutcome | undefined> {
-  const { agent } = request;
   for (let reentry = 0; reentry <= MAX_JOIN_REENTRIES; reentry += 1) {
     let outcome: ReservedRehydrateOutcome | undefined;
     const start = runExclusiveStart(agent.agentId, async () => {
-      outcome = await runReservedRehydrate(bus, request);
+      const attempt = await createAttempt();
+      outcome = isReservedRehydrateRequest(attempt) ? await runReservedRehydrate(bus, attempt) : attempt;
       return outcome.kind === 'rehydrated' ? 'connected' : 'no-connector';
     });
     if (!start.joined) {
@@ -434,6 +671,12 @@ async function consumeJoinedAttempt(
       return { kind: 'refused', outcome: row === null ? 'not-found' : 'agent-disposed' };
     case 'recover':
       return 'retry';
+    case 'defer':
+      // `classifyJoinedRow` reads only durable lifecycle statuses, none of
+      // which carries ownership deferral. If that contract grows, joining a
+      // start must gain an explicit ownership decision rather than silently
+      // retrying it.
+      throw new Error('[session.start] joined-row classification returned an unsupported ownership deferral');
     case undefined:
       // Still `starting`: neither the join nor the row resolved it, and the
       // bounded re-entry decides whether that is final.
@@ -494,19 +737,54 @@ export async function recoverDeadAgentExclusively(
   agent: MakaioSessionAgent,
   request: { readonly resumeProviderSessionId: string | null; readonly machineId?: string },
 ): Promise<LazyRecoveryResult> {
-  const instance = await resolveOwnedAdapterInstance(bus, {
-    adapterName: agent.adapterName,
-    storedAdapterId: agent.adapterId,
-    ...(request.machineId !== undefined && { machineId: request.machineId }),
-  });
-  if (instance === undefined) return { deferred: true };
-  const outcome = await runOrJoinReservedRehydrate(bus, {
-    agent,
-    sessionId: agent.sessionId,
-    instance,
-    resumeProviderSessionId: request.resumeProviderSessionId,
-  });
-  return classifyRecoveryOutcome(agent.agentId, outcome);
+  const { agentId } = agent;
+  if (request.resumeProviderSessionId === null) {
+    const outcome = await runOrJoinReservedRehydrate(bus, agent, async () => {
+      const snapshot = await readRecoveryPlanningSnapshot(bus, agentId);
+      if (snapshot === null || !recoverySnapshotIsClaimable(snapshot)) return { kind: 'lost' };
+      Object.assign(agent, snapshot.agent);
+      const instance = toMachineScopedAdapterInstance(
+        await resolveOwnedAdapterInstance(bus, {
+          adapterName: agent.adapterName,
+          storedAdapterId: agent.adapterId,
+          ...(request.machineId !== undefined && { machineId: request.machineId }),
+        }),
+      );
+      if (instance === undefined) return { kind: 'deferred', reason: 'machine-identity-unavailable' };
+      return {
+        agent,
+        sessionId: agent.sessionId,
+        instance,
+        resumeProviderSessionId: null,
+        recoveryGuard: { ...snapshot.guard, ownerGeneration: null },
+      };
+    });
+    return classifyRecoveryOutcome(agentId, outcome);
+  }
+
+  for (let replan = 0; replan <= MAX_RECOVERY_REPLANS; replan += 1) {
+    const outcome = await runOrJoinReservedRehydrate(bus, agent, async () => {
+      const snapshot = await readRecoveryPlanningSnapshot(bus, agentId);
+      if (snapshot === null || !recoverySnapshotIsClaimable(snapshot)) return { kind: 'lost' };
+      const resumeProviderSessionId = recoveryProviderSessionId(snapshot);
+      if (resumeProviderSessionId === null) return { kind: 'stale-plan' };
+      Object.assign(agent, snapshot.agent);
+      const instance = toMachineScopedAdapterInstance(
+        await resolveOwnedAdapterInstance(bus, {
+          adapterName: agent.adapterName,
+          storedAdapterId: agent.adapterId,
+          ...(request.machineId !== undefined && { machineId: request.machineId }),
+        }),
+      );
+      if (instance === undefined) return { kind: 'deferred', reason: 'machine-identity-unavailable' };
+      const recoveryGuard = await buildRecoveryReservationGuard(bus, snapshot, instance, resumeProviderSessionId);
+      return { agent, sessionId: agent.sessionId, instance, resumeProviderSessionId, recoveryGuard };
+    });
+    if (outcome?.kind === 'stale-plan' && replan < MAX_RECOVERY_REPLANS) continue;
+    return classifyRecoveryOutcome(agentId, outcome);
+  }
+
+  return classifyRecoveryOutcome(agentId, { kind: 'stale-plan' });
 }
 
 /**

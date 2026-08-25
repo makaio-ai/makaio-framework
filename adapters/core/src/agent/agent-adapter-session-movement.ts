@@ -96,6 +96,10 @@ export interface AdapterSessionMovementIdentity {
   readonly adapterId: string;
   /** Adapter type name (e.g. `'claude-code'`). */
   readonly adapterName: string;
+  /** Stable machine identity of the adapter runtime that emits the movement. */
+  readonly machineId: string;
+  /** Exact authority incarnation hosting the emitting adapter runtime. */
+  readonly ownerInstanceId: string;
   /** Owning Makaio session, when the agent runs inside one. */
   readonly sessionId: string | undefined;
 }
@@ -188,6 +192,8 @@ export async function emitAdapterSessionMoved(
       agentId: identity.agentId,
       adapterId: identity.adapterId,
       adapterName: identity.adapterName,
+      machineId: identity.machineId,
+      ownerInstanceId: identity.ownerInstanceId,
       confirmed: movement.confirmed,
       ...(identity.sessionId !== undefined && { sessionId: identity.sessionId }),
       ...(movement.confirmed && { adapterSessionId: movement.adapterSessionId }),
@@ -270,6 +276,10 @@ export interface ConfirmedAdapterSessionTrackerHost {
   readonly adapterId: string;
   /** Adapter type name. */
   readonly adapterName: string;
+  /** Stable machine identity of the adapter runtime. */
+  readonly machineId: string;
+  /** Exact authority incarnation hosting the adapter runtime. */
+  readonly ownerInstanceId: string;
   /** Owning Makaio session, when the agent runs inside one. */
   readonly sessionId?: string;
   /**
@@ -353,6 +363,9 @@ export class ConfirmedAdapterSessionTracker {
    */
   private inheritsResumeTarget: boolean;
 
+  /** Whether an adapter-minted acknowledgement still gates this generation. */
+  private callerSettlementPending = false;
+
   private readonly bus: IMakaioBus;
 
   private readonly host: ConfirmedAdapterSessionTrackerHost;
@@ -396,21 +409,16 @@ export class ConfirmedAdapterSessionTracker {
    * still re-drive an undelivered movement — enrichment is the seam's only retry
    * clock, and an agent whose connector reports nothing is exactly the one whose
    * unconfirmed movement is still outstanding.
-   * **`settledByCaller` routes the movement to {@link recordCallerSettled}**, and
-   * the branch lives here rather than at each producer because this is the one
-   * place every producer already passes through — the swap's publication sink,
-   * payload enrichment, and the rehydrate's own explicit record. A producer that
-   * knows the caller settles this operation's currency says so; one that does
-   * not, announces, exactly as before.
+   * A caller-owned movement is observed but not marked settled until the caller
+   * returns its acknowledgement token. This keeps occupancy evidence current
+   * while leaving publication and retry markers closed through the settlement
+   * window.
    * @param adapterSessionId - Resolved provider session ID, or `undefined`
-   * @param settledByCaller - Whether the caller writes this movement's durable
-   *   currency itself, in which case it is recorded and not announced
+   * @param settledByCaller - Whether publication is deferred to a caller-owned
+   *   settlement acknowledgement
    */
   public async record(adapterSessionId: string | undefined, settledByCaller = false): Promise<void> {
-    if (settledByCaller && adapterSessionId !== undefined) {
-      this.recordCallerSettled(adapterSessionId);
-      return;
-    }
+    if (settledByCaller) this.callerSettlementPending = true;
     if (adapterSessionId !== undefined) {
       this.lastKnown = adapterSessionId;
       if (this.inheritsResumeTarget) {
@@ -429,7 +437,7 @@ export class ConfirmedAdapterSessionTracker {
         // movement is deliberately the *abandoned* identity.
         this.host.resumeAdapterSessionId = adapterSessionId;
       }
-      if (this.host.isProviderKeyPublishable?.() === false) {
+      if (this.callerSettlementPending || this.host.isProviderKeyPublishable?.() === false) {
         // Cached and inherited, but not published — see the host field. The
         // cache is occupancy evidence (duty 5) and the inherited target is what
         // a later swap resumes; neither publishes anything. The movement is left
@@ -555,9 +563,12 @@ export class ConfirmedAdapterSessionTracker {
    *
    * Synchronous, and that is the point: there is nothing to deliver, so there is
    * nothing to order against (duty 2) and no anchor to hold (duty 4).
-   * @param adapterSessionId - Provider session the caller settles the currency on
+   * @param adapterSessionId - Provider session the caller settled, or undefined
+   *   when the generation had no confirmed key to settle
    */
-  public recordCallerSettled(adapterSessionId: string): void {
+  public recordCallerSettled(adapterSessionId: string | undefined): void {
+    this.callerSettlementPending = false;
+    if (adapterSessionId === undefined) return;
     this.lastKnown = adapterSessionId;
     if (this.inheritsResumeTarget) this.host.resumeAdapterSessionId = adapterSessionId;
     this.lastAnnounced = adapterSessionId;
@@ -599,6 +610,8 @@ export class ConfirmedAdapterSessionTracker {
       agentId: this.host.agentId,
       adapterId: this.host.adapterId,
       adapterName: this.host.adapterName,
+      machineId: this.host.machineId,
+      ownerInstanceId: this.host.ownerInstanceId,
       sessionId: this.host.sessionId,
     };
   }

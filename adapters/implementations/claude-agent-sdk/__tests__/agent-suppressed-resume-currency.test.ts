@@ -55,6 +55,8 @@ async function makeResumeArmedAgent(): Promise<ClaudeCodeAgent> {
     globalBus: MakaioBus,
     adapterId: ADAPTER_ID,
     adapterName: 'claude-agent-sdk',
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     agentId: AGENT_ID,
     sessionId: SESSION_ID,
     cwd: os.tmpdir(),

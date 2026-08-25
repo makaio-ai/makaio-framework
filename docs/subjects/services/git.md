@@ -50,6 +50,7 @@ next: false
 | `getWorkingTreeDetails` | [`git.getWorkingTreeDetails`](#git.getWorkingTreeDetails) | rpc | — |
 | `getWorktrees` | [`git.getWorktrees`](#git.getWorktrees) | rpc | — |
 | `initRepo` | [`git.initRepo`](#git.initRepo) | rpc | — |
+| `localBranchExists` | [`git.localBranchExists`](#git.localBranchExists) | rpc | — |
 | `merge` | [`git.merge`](#git.merge) | event | [`event.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/git/schemas/event.ts) |
 | `mergeAbort` | [`git.mergeAbort`](#git.mergeAbort) | rpc | — |
 | `mergeBranch` | [`git.mergeBranch`](#git.mergeBranch) | rpc | — |
@@ -672,6 +673,26 @@ Type: Request (RPC)
 | `defaultBranch` | `string` | yes |
 | `path` | `string` | yes |
 | `success` | `boolean` | yes |
+
+### <a id="git.localBranchExists"></a>`git.localBranchExists` (rpc)
+
+Check whether a local branch ref exists (host-owned only)
+
+Subject: `git.localBranchExists`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `name` | `string` | yes |
+| `repoPath` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `exists` | `boolean` | yes |
 
 ### <a id="git.merge"></a>`git.merge` (event)
 

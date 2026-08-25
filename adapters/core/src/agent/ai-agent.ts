@@ -965,6 +965,14 @@ export abstract class AIAgent<
   }
 
   /**
+   * Record the durable settlement acknowledged for a caller-owned generation.
+   * @param adapterSessionId - Provider session settled, or undefined when none was confirmed
+   */
+  public acknowledgeCallerSettledAdapterSession(adapterSessionId: string | undefined): void {
+    this.adapterSessionTracker.recordCallerSettled(adapterSessionId);
+  }
+
+  /**
    * Provider session this agent is currently the live writer of.
    *
    * The occupancy authority for the adapter's registry. Synchronous on purpose:

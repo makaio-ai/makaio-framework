@@ -54,8 +54,13 @@ const OPAQUE_INSTANCE = 'explicitly-configured-instance';
 describe('one-identity completion', () => {
   let service: MakaioSessionService;
   let cleanups: Array<() => void> = [];
-  /** Every `(adapterId, machineId)` pair an ownership act named, in order. */
-  let ownershipActs: Array<{ readonly act: string; readonly adapterId: string; readonly machineId?: string }>;
+  /** Every strict `(adapterId, machineId, ownerInstanceId)` identity an ownership act named, in order. */
+  let ownershipActs: Array<{
+    readonly act: string;
+    readonly adapterId: string;
+    readonly machineId?: string;
+    readonly ownerInstanceId: string;
+  }>;
   /** Instances each `adapter.rehydrateAgent` was dispatched to, in order. */
   let rehydrateTargets: string[];
   /** Instances each `adapter.startAgent` was dispatched to, in order. */
@@ -75,7 +80,17 @@ describe('one-identity completion', () => {
       registerMockStorageHandlers({ omit: ['adapter', 'agent', 'session'] }),
       MakaioBus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydrateTargets.push(ctx.payload.adapterId);
-        ctx.setResult({ success: true });
+        ctx.setResult({
+          success: true,
+          ownerInstanceId: service.requireOwnershipInstanceId(),
+          settlementAckToken: `ack-${ctx.payload.agentId}`,
+        });
+      }),
+      MakaioBus.on(AdapterSubjects.acknowledgeCallerSettlement, (ctx) => {
+        // Adapter acknowledgement proves only that its exact live generation
+        // accepted the settlement. The authority finalizes the fenced durable
+        // recovery row afterwards; writing it here would race that transition.
+        ctx.setResult({ acknowledged: true });
       }),
       MakaioBus.on(AdapterSubjects.stopAgent, (ctx) => {
         ctx.setResult({ success: true, evidence: 'released' });
@@ -87,6 +102,7 @@ describe('one-identity completion', () => {
           ownershipActs.push({
             act: 'reserve',
             adapterId: ctx.payload.adapterId,
+            ownerInstanceId: ctx.payload.ownerInstanceId,
             ...(ctx.payload.machineId !== undefined && { machineId: ctx.payload.machineId }),
           });
           return ctx.next();
@@ -99,6 +115,7 @@ describe('one-identity completion', () => {
           ownershipActs.push({
             act: 'settle',
             adapterId: ctx.payload.adapterId,
+            ownerInstanceId: ctx.payload.ownerInstanceId,
             ...(ctx.payload.machineId !== undefined && { machineId: ctx.payload.machineId }),
           });
           return ctx.next();
@@ -130,7 +147,20 @@ describe('one-identity completion', () => {
       currentMachineId: MACHINE,
       knownAdapterNames: [ADAPTER],
     });
-    if (options.announceForeign === true) registry.rememberAdapterId(FOREIGN_INSTANCE, ADAPTER);
+    registry.rememberLiveIdentity({
+      adapterId: LOCAL_INSTANCE,
+      adapterName: ADAPTER,
+      machineId: MACHINE,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
+    });
+    if (options.announceForeign === true) {
+      registry.rememberLiveIdentity({
+        adapterId: FOREIGN_INSTANCE,
+        adapterName: ADAPTER,
+        machineId: FOREIGN_MACHINE,
+        ownerInstanceId: service.requireOwnershipInstanceId(),
+      });
+    }
     cleanups.push(cleanup);
   }
 
@@ -164,19 +194,46 @@ describe('one-identity completion', () => {
   }
 
   /**
-   * Register the adapter stub a start dispatches into.
+   * Register the adapter stub a start dispatches into and later probes for liveness.
    * @param adapterSessionId - Provider session the adapter reports, or `null` for an idle start.
    */
   function registerStartAgent(adapterSessionId: string | null = 'provider-session-1'): void {
+    const startedAgents = new Map<
+      string,
+      { readonly adapterId: string; readonly ownerInstanceId: string; readonly sessionId: string }
+    >();
     cleanups.push(
       MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
         startTargets.push(ctx.payload.adapterId);
+        const agentId = ctx.payload.agentId ?? crypto.randomUUID();
+        const ownerInstanceId = service.requireOwnershipInstanceId();
+        const sessionId = ctx.payload.sessionId ?? 'unexpected-session';
+        startedAgents.set(agentId, { adapterId: ctx.payload.adapterId, ownerInstanceId, sessionId });
         ctx.setResult({
           success: true as const,
-          agentId: ctx.payload.agentId ?? crypto.randomUUID(),
+          agentId,
           adapterId: ctx.payload.adapterId,
-          sessionId: ctx.payload.sessionId ?? 'unexpected-session',
+          sessionId,
+          ownerInstanceId,
+          settlementAckToken: `ack-${agentId}`,
           ...(adapterSessionId !== null && { adapterSessionId }),
+        });
+      }),
+      MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
+        const agent = startedAgents.get(ctx.payload.agentId);
+        if (
+          agent === undefined ||
+          agent.adapterId !== ctx.payload.adapterId ||
+          agent.ownerInstanceId !== ctx.payload.ownerInstanceId
+        ) {
+          return ctx.next();
+        }
+        ctx.setResult({
+          agent: {
+            agentId: ctx.payload.agentId,
+            sessionId: agent.sessionId,
+            ...(adapterSessionId !== null && { adapterSessionId }),
+          },
         });
       }),
     );
@@ -259,6 +316,27 @@ describe('one-identity completion', () => {
   }
 
   /**
+   * Build the fully routed live identity this test composition announces.
+   * @param adapterId - Adapter instance the act targets.
+   * @param machineId - Machine namespace the act targets.
+   * @returns Adapter identity including its authority incarnation.
+   */
+  function ownedIdentity(adapterId: string, machineId: string) {
+    return { adapterId, machineId, ownerInstanceId: service.requireOwnershipInstanceId() };
+  }
+
+  /**
+   * Build one observed ownership act with its exact authority routing identity.
+   * @param act - Ownership operation that ran.
+   * @param adapterId - Adapter instance the operation targeted.
+   * @param machineId - Machine namespace the operation targeted.
+   * @returns Observed ownership act.
+   */
+  function ownershipAct(act: string, adapterId: string, machineId: string) {
+    return { act, ...ownedIdentity(adapterId, machineId) };
+  }
+
+  /**
    * Case 214 — the resolver answers with both halves of the key or with neither.
    *
    * `undefined` keeps its Wave-3 meaning: *this runtime may not act for that
@@ -278,7 +356,7 @@ describe('one-identity completion', () => {
       // Returned as named rather than re-derived: the caller already holds both
       // halves from one source, and this runtime has nothing to add to a pair it
       // did not compute.
-      expect(owned).toEqual({ adapterId: FOREIGN_INSTANCE, machineId: FOREIGN_MACHINE });
+      expect(owned).toEqual(ownedIdentity(FOREIGN_INSTANCE, FOREIGN_MACHINE));
     });
 
     it('refuses a named instance whose machine was not named', async () => {
@@ -307,7 +385,7 @@ describe('one-identity completion', () => {
       // One call, one identity: the machine that went in is the machine that
       // comes out, alongside the instance derived for it — and the stored
       // instance is *not* the answer even though one was offered.
-      expect(owned).toEqual({ adapterId: LOCAL_INSTANCE, machineId: MACHINE });
+      expect(owned).toEqual(ownedIdentity(LOCAL_INSTANCE, MACHINE));
     });
 
     it('refuses rather than fall back on the stored instance when a machine was named', async () => {
@@ -406,7 +484,7 @@ describe('one-identity completion', () => {
       expect(recovered.deferred).toBe(false);
       // The reservation names the machine the instance was derived for, and the
       // dispatch names that same instance — the stale stored one appears nowhere.
-      expect(ownershipActs).toEqual([{ act: 'reserve', adapterId: LOCAL_INSTANCE, machineId: MACHINE }]);
+      expect(ownershipActs).toEqual([ownershipAct('reserve', LOCAL_INSTANCE, MACHINE)]);
       expect(rehydrateTargets).toEqual([LOCAL_INSTANCE]);
     });
   });
@@ -438,8 +516,8 @@ describe('one-identity completion', () => {
       // the keyed settlement — and it is the identity the caller named, not this
       // runtime's own.
       expect(ownershipActs).toEqual([
-        { act: 'reserve', adapterId: FOREIGN_INSTANCE, machineId: FOREIGN_MACHINE },
-        { act: 'settle', adapterId: FOREIGN_INSTANCE, machineId: FOREIGN_MACHINE },
+        ownershipAct('reserve', FOREIGN_INSTANCE, FOREIGN_MACHINE),
+        ownershipAct('settle', FOREIGN_INSTANCE, FOREIGN_MACHINE),
       ]);
       expect(startTargets).toEqual([FOREIGN_INSTANCE]);
       // Read out of storage rather than inferred from the payload: the claim the
@@ -448,6 +526,25 @@ describe('one-identity completion', () => {
       const foreignClaims = await loadClaims(FOREIGN_MACHINE);
       expect(foreignClaims.map((claim) => claim.providerSessionId)).toEqual(['provider-named-instance']);
       expect(await loadClaims(MACHINE)).toEqual([]);
+    });
+
+    it('refuses a caller-named instance paired with a different machine before dispatch or ownership acts', async () => {
+      composeAdapterIdentity({ announceForeign: true });
+      composeOrchestrator();
+      registerStartAgent('provider-never-reached');
+      const sessionId = await seedSession('one-identity-mixed-announcement');
+
+      const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        message: 'start on a mismatched host',
+        agent: { kind: 'adapter', adapterId: FOREIGN_INSTANCE, machineId: MACHINE },
+      }).catch((error: unknown) => error);
+
+      expect(carriedStartError(failure)?.code).toBe('start-failed');
+      expect(startTargets).toEqual([]);
+      expect(ownershipActs).toEqual([]);
+      expect(await loadClaims(MACHINE)).toEqual([]);
+      expect(await loadClaims(FOREIGN_MACHINE)).toEqual([]);
     });
 
     it('settles an unnamed instance under this runtime own machine', async () => {
@@ -466,8 +563,8 @@ describe('one-identity completion', () => {
       // both acts. There is no shape of this path left in which the settlement is
       // keyed and the machine is absent, which is what makes the matrix total.
       expect(ownershipActs).toEqual([
-        { act: 'reserve', adapterId: LOCAL_INSTANCE, machineId: MACHINE },
-        { act: 'settle', adapterId: LOCAL_INSTANCE, machineId: MACHINE },
+        ownershipAct('reserve', LOCAL_INSTANCE, MACHINE),
+        ownershipAct('settle', LOCAL_INSTANCE, MACHINE),
       ]);
       const claims = await loadClaims(MACHINE);
       expect(claims.map((claim) => claim.providerSessionId)).toEqual(['provider-own-instance']);
@@ -539,10 +636,9 @@ describe('one-identity completion', () => {
     /**
      * Seed a session whose lead is dead and drive the send that replaces it.
      * @param leadAdapterId - Instance the dead lead's row names.
-     * @param resolutionFailures - How many leading instance resolutions cannot answer.
      * @returns The session the send ran against.
      */
-    async function sendAgainstDeferredLead(leadAdapterId: string, resolutionFailures: number): Promise<string> {
+    async function sendAgainstDeferredLead(leadAdapterId: string): Promise<string> {
       const sessionId = await seedSession(`one-identity-replacement-${leadAdapterId}`);
       await seedAgent('deferred-lead', { sessionId, adapterId: leadAdapterId, model: 'inherited-model' });
       // Designated through the ownership seam that owns the column, not by a
@@ -559,7 +655,6 @@ describe('one-identity completion', () => {
         }),
       );
       composeAdapterIdentity({ announceForeign: true });
-      failFirstInstanceResolutions(resolutionFailures);
       composeOrchestrator();
       registerStartAgent('provider-replacement');
       await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue the conversation' });
@@ -567,15 +662,14 @@ describe('one-identity completion', () => {
     }
 
     it('reserves the replacement on the inherited instance, in the machine that provably owns it', async () => {
-      // Two resolutions fail: the recovery's, which is what defers the lead, and
-      // one more that the replacement would need **if** it had to resolve a name.
-      // It does not, because it inherited a proven pair — which is what this arm
-      // asserts and what a name-only inheritance could not satisfy.
-      const sessionId = await sendAgainstDeferredLead(LOCAL_INSTANCE, 2);
+      // Legacy/imported rows defer before recovery. The replacement may continue
+      // on the local instance because that is the only runtime this send can
+      // prove and address.
+      const sessionId = await sendAgainstDeferredLead(LOCAL_INSTANCE);
 
       expect(ownershipActs).toEqual([
-        { act: 'reserve', adapterId: LOCAL_INSTANCE, machineId: MACHINE },
-        { act: 'settle', adapterId: LOCAL_INSTANCE, machineId: MACHINE },
+        ownershipAct('reserve', LOCAL_INSTANCE, MACHINE),
+        ownershipAct('settle', LOCAL_INSTANCE, MACHINE),
       ]);
       expect(startTargets).toEqual([LOCAL_INSTANCE]);
       // A replacement *agent*, continuing the same conversation on the same
@@ -594,11 +688,11 @@ describe('one-identity completion', () => {
       // runtime's machine, so inheriting it would be the mixed key Wave 3
       // rejected; the replacement resolves the adapter *type* on the machine it
       // can act for instead.
-      await sendAgainstDeferredLead(FOREIGN_INSTANCE, 1);
+      await sendAgainstDeferredLead(FOREIGN_INSTANCE);
 
       expect(ownershipActs).toEqual([
-        { act: 'reserve', adapterId: LOCAL_INSTANCE, machineId: MACHINE },
-        { act: 'settle', adapterId: LOCAL_INSTANCE, machineId: MACHINE },
+        ownershipAct('reserve', LOCAL_INSTANCE, MACHINE),
+        ownershipAct('settle', LOCAL_INSTANCE, MACHINE),
       ]);
       expect(startTargets).toEqual([LOCAL_INSTANCE]);
       expect(await loadClaims(FOREIGN_MACHINE)).toEqual([]);

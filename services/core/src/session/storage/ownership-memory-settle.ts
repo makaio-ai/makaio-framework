@@ -25,8 +25,14 @@ import {
   assertCurrencyPairing,
   findClaimByKey,
   findClaimByToken,
+  memoryMayTakeOver,
   resolveLeadCurrencyMirror,
 } from './ownership-memory-rows.js';
+
+/** Movement request whose runtime owner passed contract validation. */
+export type IdentifiedMovementRequest = SessionOwnershipSettleMovementRequest & {
+  readonly ownerInstance: { readonly instanceId: string };
+};
 
 /**
  * Refuse a settle the caller may not perform, or one that changes nothing.
@@ -201,14 +207,64 @@ function assertMovementTokenIsFree(state: SessionStorageMemoryState, claimToken:
   );
 }
 
+/** A resolved fast-path generation and its claims-phase rollback. */
+interface OwnGeneration {
+  /** Generation the movement may settle through. */
+  readonly generation: AdapterSessionClaimRecord;
+  /** Undo the fast path's writes, which are none before a movement settles. */
+  readonly rollback: () => void;
+}
+
+/**
+ * Resolve the movement fast path without crossing process ownership.
+ * @param payload - Identified movement request.
+ * @param incumbent - Generation currently on the target key.
+ * @returns The usable generation, or `undefined` when allocation must arbitrate.
+ */
+function resolveOwnGeneration(
+  payload: IdentifiedMovementRequest,
+  incumbent: AdapterSessionClaimRecord | undefined,
+): OwnGeneration | undefined {
+  if (
+    incumbent === undefined ||
+    incumbent.agentId !== payload.agentId ||
+    incumbent.status !== 'held' ||
+    (incumbent.ownerInstanceId !== null && incumbent.ownerInstanceId !== payload.ownerInstance.instanceId)
+  ) {
+    return undefined;
+  }
+  return { generation: incumbent, rollback: (): void => {} };
+}
+
+/**
+ * Adopt a legacy generation after it has successfully settled a movement.
+ *
+ * A refusal leaves the pre-existing claim untouched, so its response can report
+ * exactly the same owner identity that reads and lists expose.
+ * @param state - Shared in-memory state.
+ * @param generation - Generation that settled the movement.
+ * @param ownerInstanceId - Runtime instance that settled the movement.
+ * @returns The persisted generation, adopted when it was legacy.
+ */
+export function adoptSettledLegacyGeneration(
+  state: SessionStorageMemoryState,
+  generation: AdapterSessionClaimRecord,
+  ownerInstanceId: string,
+): AdapterSessionClaimRecord {
+  if (generation.ownerInstanceId !== null) return generation;
+  const adopted = { ...generation, ownerInstanceId };
+  state.claims.set(adopted.claimId, structuredClone(adopted));
+  return adopted;
+}
+
 /**
  * Resolve the successor generation, and retire the ones it replaces.
  *
  * The agent's *own* live claim on the target key comes first, and when it exists
  * the request's token is discarded unused — which is what keeps a repeat
  * idempotent instead of minting a second generation for a key the agent already
- * owns. Otherwise the key is acquired, taking over an incumbent whose owning
- * agent is `disposed` exactly as `claim` does.
+ * owns. Otherwise the key is acquired under the same explicit or durable
+ * owner-identity takeover rules as `claim`.
  *
  * Predecessors are retired by **row identity**, never by the request's token: in
  * the already-held case that token names no row at all, so a token-keyed delete
@@ -220,7 +276,7 @@ function assertMovementTokenIsFree(state: SessionStorageMemoryState, claimToken:
  */
 export function runMovementClaimsPhase(
   state: SessionStorageMemoryState,
-  payload: SessionOwnershipSettleMovementRequest,
+  payload: IdentifiedMovementRequest,
   providerSessionId: string,
 ): MovementClaimsPhase | SessionOwnershipSettleMovementResult {
   const { machineId, adapterId, agentId } = payload;
@@ -228,11 +284,24 @@ export function runMovementClaimsPhase(
 
   let generation: AdapterSessionClaimRecord;
   let rollbackClaim: () => void;
+  const ownGeneration = resolveOwnGeneration(payload, incumbent);
 
-  if (incumbent !== undefined && incumbent.agentId === agentId && incumbent.status === 'held') {
-    generation = incumbent;
-    rollbackClaim = (): void => {};
-  } else if (incumbent !== undefined && state.agents.get(incumbent.agentId)?.status !== 'disposed') {
+  if (ownGeneration !== undefined) {
+    generation = ownGeneration.generation;
+    rollbackClaim = ownGeneration.rollback;
+  } else if (
+    incumbent !== undefined &&
+    !memoryMayTakeOver(
+      state,
+      {
+        machineId,
+        agentId,
+        ownerInstanceId: payload.ownerInstance.instanceId,
+        topology: payload.topology,
+      },
+      incumbent,
+    )
+  ) {
     return { outcome: 'already-claimed', holder: structuredClone(incumbent) };
   } else {
     const now = Date.now();
@@ -246,6 +315,7 @@ export function runMovementClaimsPhase(
       providerSessionId,
       sessionId: payload.sessionId,
       agentId,
+      ownerInstanceId: payload.ownerInstance.instanceId,
       claimToken: payload.movement.claimToken,
       fence: allocateFence(state, agentId, incumbent?.fence ?? 0),
       status: 'held',

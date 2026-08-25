@@ -252,6 +252,28 @@ export class AgentTeardownArbiter {
   }
 
   /**
+   * Whether any teardown or replacement still owns lifecycle work.
+   * @returns Whether this adapter instance still has an active lifecycle flight
+   */
+  public hasLifecycleWorkInFlight(): boolean {
+    return this.teardowns.size > 0 || this.swapRetirementCounts.size > 0;
+  }
+
+  /**
+   * Enumerate identities with a replacement that still owns post-settlement work.
+   *
+   * The registry normally discovers teardown subjects through its live entries.
+   * An expired replacement wait deliberately removes that entry before the
+   * replacement retires, though, so instance shutdown must include these
+   * replacement-only identities in its accounting without trying to close their
+   * runtimes out from under the replacement.
+   * @returns Agent identities whose replacements have not retired
+   */
+  public replacementAgentIdsInFlight(): IterableIterator<string> {
+    return this.swapRetirementCounts.keys();
+  }
+
+  /**
    * Admit a connector replacement, or refuse it.
    *
    * **The door, and the entire boundary between the two acts.** It is a

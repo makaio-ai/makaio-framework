@@ -59,6 +59,8 @@ async function makeAgent(): Promise<{ agent: PiAgent; connector: TestPiConnector
     agentId: TEST_AGENT_ID,
     adapterId: TEST_ADAPTER_ID,
     adapterName: 'pi-sdk',
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     adapterBus,
     teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,

@@ -98,6 +98,10 @@ describe('AIAdapter - fork idle start', () => {
     // Persisted agent record must have undefined adapterSessionId
     expect(persistedAgent).toBeDefined();
     expect(persistedAgent!.adapterSessionId).toBeUndefined();
+    expect(persistedAgent!.runtimeOwner).toEqual({
+      machineId: 'test-machine',
+      instanceId: adapter.ownerInstanceId,
+    });
 
     const activeAgent = adapter.getAgent(startResult.agentId);
     expect(activeAgent).toBeDefined();

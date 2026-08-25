@@ -32,20 +32,17 @@ describe('reserved rehydrate claim', () => {
     return ctx.recover(agent, { kind: 'native-resume', resumeAdapterSessionId: agent.adapterSessionId as string });
   }
 
-  it('loses the claim when the row moved out from under the caller\u2019s observation', async () => {
-    // The other half of the same rule. Reading the prior status before the swap
-    // only helps if the swap *required* it: a peer that moved the row between the
-    // caller's read and this claim — the liveness veto putting a live agent back
-    // to `idle`/`active` is the standing example — would otherwise have the claim
-    // succeed from a status the caller never saw, and a refused reservation then
-    // put the stale one back, advertising a live connector as recoverable.
+  it('plans from the canonical row rather than a stale caller snapshot', async () => {
+    // G9 rebuilds recovery input from storage before reserving, so a stale
+    // caller object cannot supply the claim expectation or rollback status. A
+    // later movement is fenced atomically by the recovery guard.
     const stored = await ctx.seedAgent('session-overtaken', 'agent-overtaken', { status: 'active' });
     // What the caller holds: an observation the peer has already overtaken.
     const stale: MakaioSessionAgent = { ...stored, status: 'dead' };
     await ctx.occupyKey(stored.adapterSessionId as string);
     ctx.registerAdapter();
 
-    await expect(recoverNatively(stale)).rejects.toMatchObject({ code: 'agent-unavailable' });
+    await expect(recoverNatively(stale)).resolves.toEqual({ kind: 'deferred', reason: 'occupied' });
 
     // Nothing was claimed and nothing was written: the row is exactly what the
     // peer left, not the `dead` the caller's snapshot would have restored.

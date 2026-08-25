@@ -28,6 +28,10 @@ import { BaseAgentEventSchema } from './base-event.js';
  * turn-scoped event cannot observe it.
  */
 export const AdapterSessionMovedSchema = BaseAgentEventSchema.extend({
+  /** Stable machine identity of the emitting adapter runtime. */
+  machineId: z.string(),
+  /** Exact ownership-authority incarnation that emitted the movement. */
+  ownerInstanceId: z.string(),
   /**
    * Whether `adapterSessionId` is provider-confirmed.
    *

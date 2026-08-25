@@ -3,6 +3,8 @@ import {
   type MessageHandle,
   type ProcessingState,
   type ProceduralConnectorSession,
+  SESSION_CLOSED_QUEUE_ERROR,
+  type UserMessageQueue,
   type WireSessionConfig,
   type WireSessionSubjects,
 } from '@makaio/ai-adapters-core';
@@ -30,7 +32,7 @@ class TestSession implements StreamConnectorSession {
   public getCurrentTurn(): undefined {
     return undefined;
   }
-  public processQueue = vi.fn(async (): Promise<void> => {});
+  public processQueue = vi.fn(async (_queue: UserMessageQueue): Promise<void> => {});
   public updateCwd(): void {}
   public updateModel(): void {}
 }
@@ -328,6 +330,66 @@ describe('BaseStreamConnector terminal initialization', () => {
 
     expect(session?.processQueue).not.toHaveBeenCalled();
     expect(session?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains an accepted queued handle before awaiting session close', async () => {
+    const hostBus = createTestBusInstance();
+    const sentHandles: MessageHandle[] = [];
+    const connector = new TestStreamConnector({
+      bus: await TestNamespace.scopedBus(hostBus.getContext()),
+      globalBus: hostBus,
+      adapterId: 'adapter-1',
+      adapterName: 'stream-lifecycle-test',
+      agentId: 'agent-1',
+      model: 'test-model',
+      cwd: process.cwd(),
+      onMessageSent: (handle) => {
+        sentHandles.push(handle);
+      },
+    });
+    await connector.initialize();
+    const session = connector.createdSession;
+    if (!session) {
+      throw new Error('stream session was not created');
+    }
+
+    session.processQueue.mockImplementationOnce(async (queue) => {
+      queue.dequeue();
+    });
+    await connector.sendMessage({
+      role: 'user',
+      message: 'active turn',
+      blocks: [{ type: 'text', content: 'active turn' }],
+    });
+    await connector.sendMessage({
+      role: 'user',
+      message: 'queued turn',
+      blocks: [{ type: 'text', content: 'queued turn' }],
+    });
+
+    const queuedHandle = sentHandles[1];
+    if (!queuedHandle) {
+      throw new Error('queued message handle was not created');
+    }
+    let releaseSessionClose: (() => void) | undefined;
+    session.close.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSessionClose = resolve;
+        }),
+    );
+
+    const closing = connector.close();
+    const completion = await queuedHandle.waitForCompletion();
+
+    expect(completion).toMatchObject({ outcome: 'error' });
+    if (completion.outcome !== 'error' || !(completion.error instanceof Error)) {
+      throw new Error('queued handle did not complete with a close error');
+    }
+    expect(completion.error.message).toBe(SESSION_CLOSED_QUEUE_ERROR);
+    expect(releaseSessionClose).toBeTypeOf('function');
+    releaseSessionClose?.();
+    await closing;
   });
 
   it('keeps the session usable after an interrupt', async () => {

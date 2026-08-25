@@ -1,5 +1,5 @@
 /**
- * Conformance suite: session ownership claims — two-connection race.
+ * Conformance suite: session ownership claims — multi-connection race.
  *
  * Verifies that concurrent ownership operations from two genuinely independent
  * database handles (simulating separate processes) produce exactly the modeled
@@ -19,19 +19,25 @@
  *
  * Suites are discovered by filename; no index registration is required.
  */
-import { afterAll, beforeAll, it, expect } from 'vitest';
+import { afterAll, beforeAll, it, expect, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createBusInstance } from '@makaio/bus-core';
-import { SessionOwnershipStorageSubjects, type AdapterSessionClaimRecord } from '@makaio/contracts';
+import {
+  SessionOwnershipStorageSubjects,
+  type AdapterSessionClaimRecord,
+  type SessionOwnershipSettleMovementResult,
+} from '@makaio/contracts';
 import {
   registerDrizzleSessionStorage,
   registerDrizzleAgentStorage,
   registerDrizzleSessionOwnershipStorage,
+  ownershipClaimTransactionLock,
   SessionStorageSubjects,
   AgentStorageSubjects,
 } from '@makaio/services-core/session';
-import { getRawSqlExecutor } from '@makaio/storage-drizzle';
+import { acquireTransactionLocks, executeTransaction, getRawSqlExecutor } from '@makaio/storage-drizzle';
+import { postgresTransactionLockKey } from '@makaio/storage-pg';
 import { describeStorageConformance } from '../harness/env.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
 import type { SiblingClient } from '../harness/config.js';
@@ -80,6 +86,9 @@ describeStorageConformance('session-ownership-claims', (config) => {
    */
   let busB: IMakaioBus;
 
+  /** Third ownership client for counter-allocation contention conformance. */
+  let busC: IMakaioBus;
+
   /**
    * Independent database client over the same isolated database/schema.
    *
@@ -87,6 +96,9 @@ describeStorageConformance('session-ownership-claims', (config) => {
    * in-process connections.
    */
   let sibling: SiblingClient | undefined;
+
+  /** A second independent sibling used only by the three-client Postgres cases. */
+  let thirdSibling: SiblingClient | undefined;
 
   let cleanupA: Array<() => void> = [];
   let cleanupB: Array<() => void> = [];
@@ -103,9 +115,14 @@ describeStorageConformance('session-ownership-claims', (config) => {
           // inherited from the server's default_transaction_isolation.
           await ctx.createSiblingClient({ postgresSettings: { default_transaction_isolation: 'read committed' } })
         : undefined;
+    thirdSibling =
+      config.dialect === 'postgres'
+        ? await ctx.createSiblingClient({ postgresSettings: { default_transaction_isolation: 'read committed' } })
+        : undefined;
 
     busA = createBusInstance();
     busB = createBusInstance();
+    busC = createBusInstance();
 
     // busA gets session, agent and ownership handlers so it can also set up fixtures.
     cleanupA = [
@@ -122,6 +139,7 @@ describeStorageConformance('session-ownership-claims', (config) => {
       registerDrizzleSessionOwnershipStorage(busB, sibling?.db ?? ctx.db),
       registerDrizzleSessionStorage(busB, sibling?.db ?? ctx.db),
     ];
+    cleanupB.push(registerDrizzleSessionOwnershipStorage(busC, thirdSibling?.db ?? ctx.db));
   });
 
   afterAll(async () => {
@@ -132,6 +150,7 @@ describeStorageConformance('session-ownership-claims', (config) => {
       cleanupA[i]?.();
     }
     await sibling?.close();
+    await thirdSibling?.close();
   });
 
   // ── Fixture helper ───────────────────────────────────────────────────────
@@ -188,6 +207,7 @@ describeStorageConformance('session-ownership-claims', (config) => {
    * @param machineId - Machine identity string.
    * @param adapterId - Adapter identity string.
    * @param providerSessionId - Provider session identity string.
+   * @param ownerInstanceId - Runtime process taking the generation.
    */
   function baseClaimRequest(
     agentId: string,
@@ -195,6 +215,7 @@ describeStorageConformance('session-ownership-claims', (config) => {
     machineId: string,
     adapterId: string,
     providerSessionId: string,
+    ownerInstanceId: string,
   ) {
     return {
       machineId,
@@ -203,7 +224,60 @@ describeStorageConformance('session-ownership-claims', (config) => {
       providerSessionId,
       sessionId,
       agentId,
+      ownerInstance: { instanceId: ownerInstanceId },
     } as const;
+  }
+
+  /**
+   * Wait until the requested number of Postgres transactions are queued on one
+   * advisory lock.
+   *
+   * This is a database-observed barrier, not a timing assumption: the claim
+   * statement cannot proceed past the test trigger until its ungranted lock is
+   * visible in `pg_locks`.
+   * @param lockKey - Single-key advisory lock identity.
+   * @param expected - Exact number of blocked claim transactions.
+   */
+  async function waitForAdvisoryWaiters(lockKey: number, expected: number): Promise<void> {
+    const executor = getRawSqlExecutor(getCtx().db);
+    await vi.waitFor(
+      async () => {
+        const rows = await executor.all<{ waiters: number }>(sql`
+          SELECT count(*)::integer AS waiters
+          FROM pg_locks
+          WHERE locktype = 'advisory'
+            AND classid = 0
+            AND objid = ${lockKey}
+            AND NOT granted
+        `);
+        expect(rows[0]?.waiters).toBe(expected);
+      },
+      { timeout: 5_000, interval: 10 },
+    );
+  }
+
+  /**
+   * Wait until one database backend is blocked by the named transaction.
+   * @param blockerPid - Backend PID currently holding the stable-key lock.
+   * @returns Backend PID waiting on that transaction.
+   */
+  async function waitForBackendBlockedBy(blockerPid: number): Promise<number> {
+    const executor = getRawSqlExecutor(getCtx().db);
+    let blockedPid: number | undefined;
+    await vi.waitFor(
+      async () => {
+        const rows = await executor.all<{ pid: number }>(sql`
+          SELECT pid
+          FROM pg_stat_activity
+          WHERE ${blockerPid} = ANY(pg_blocking_pids(pid))
+        `);
+        expect(rows).toHaveLength(1);
+        blockedPid = rows[0]?.pid;
+      },
+      { timeout: 5_000, interval: 10 },
+    );
+    if (blockedPid === undefined) throw new Error('blocked backend disappeared before its PID was read');
+    return blockedPid;
   }
 
   // ── Case 1: concurrent initial claims ────────────────────────────────────
@@ -216,12 +290,27 @@ describeStorageConformance('session-ownership-claims', (config) => {
 
     const tokenA = crypto.randomUUID();
     const tokenB = crypto.randomUUID();
-    const base = baseClaimRequest(agentId, sessionId, machineId, adapterId, providerSessionId);
+    const baseA = baseClaimRequest(
+      agentId,
+      sessionId,
+      machineId,
+      adapterId,
+      providerSessionId,
+      `instance-race-a-${crypto.randomUUID()}`,
+    );
+    const baseB = baseClaimRequest(
+      agentId,
+      sessionId,
+      machineId,
+      adapterId,
+      providerSessionId,
+      `instance-race-b-${crypto.randomUUID()}`,
+    );
 
     // Fire both claims in the same tick — no awaited yield between them.
     const [resultA, resultB] = await Promise.all([
-      busA.request(SessionOwnershipStorageSubjects.claim, { ...base, claimToken: tokenA }),
-      busB.request(SessionOwnershipStorageSubjects.claim, { ...base, claimToken: tokenB }),
+      busA.request(SessionOwnershipStorageSubjects.claim, { ...baseA, claimToken: tokenA }),
+      busB.request(SessionOwnershipStorageSubjects.claim, { ...baseB, claimToken: tokenB }),
     ]);
 
     const outcomes = [resultA.outcome, resultB.outcome].sort();
@@ -253,7 +342,8 @@ describeStorageConformance('session-ownership-claims', (config) => {
     const providerSessionId = `prov-takeover-${crypto.randomUUID()}`;
 
     const initialToken = crypto.randomUUID();
-    const base = baseClaimRequest(agentId, sessionId, machineId, adapterId, providerSessionId);
+    const initialOwnerInstanceId = `instance-takeover-initial-${crypto.randomUUID()}`;
+    const base = baseClaimRequest(agentId, sessionId, machineId, adapterId, providerSessionId, initialOwnerInstanceId);
 
     // Establish an initial claim to take over.
     const initialResult = await busA.request(SessionOwnershipStorageSubjects.claim, {
@@ -271,11 +361,13 @@ describeStorageConformance('session-ownership-claims', (config) => {
     const [takeoverA, takeoverB] = await Promise.all([
       busA.request(SessionOwnershipStorageSubjects.claim, {
         ...base,
+        ownerInstance: { instanceId: `instance-takeover-a-${crypto.randomUUID()}` },
         claimToken: takeoverTokenA,
         supersedes: { claimToken: initialToken },
       }),
       busB.request(SessionOwnershipStorageSubjects.claim, {
         ...base,
+        ownerInstance: { instanceId: `instance-takeover-b-${crypto.randomUUID()}` },
         claimToken: takeoverTokenB,
         supersedes: { claimToken: initialToken },
       }),
@@ -319,11 +411,11 @@ describeStorageConformance('session-ownership-claims', (config) => {
 
     const [claimA, claimB] = await Promise.all([
       busA.request(SessionOwnershipStorageSubjects.claim, {
-        ...baseClaimRequest(agentId, sessionId, machineId, adapterId, keyA),
+        ...baseClaimRequest(agentId, sessionId, machineId, adapterId, keyA, `instance-fence-${crypto.randomUUID()}`),
         claimToken: crypto.randomUUID(),
       }),
       busB.request(SessionOwnershipStorageSubjects.claim, {
-        ...baseClaimRequest(agentId, sessionId, machineId, adapterId, keyB),
+        ...baseClaimRequest(agentId, sessionId, machineId, adapterId, keyB, `instance-fence-${crypto.randomUUID()}`),
         claimToken: crypto.randomUUID(),
       }),
     ]);
@@ -359,7 +451,14 @@ describeStorageConformance('session-ownership-claims', (config) => {
     const providerSessionId = `prov-settle-${crypto.randomUUID()}`;
 
     const claimToken = crypto.randomUUID();
-    const base = baseClaimRequest(agentId, sessionId, machineId, adapterId, providerSessionId);
+    const base = baseClaimRequest(
+      agentId,
+      sessionId,
+      machineId,
+      adapterId,
+      providerSessionId,
+      `instance-settle-${crypto.randomUUID()}`,
+    );
 
     // Establish a claim through busA (any handle will do for setup).
     const claimResult = await busA.request(SessionOwnershipStorageSubjects.claim, {
@@ -439,6 +538,7 @@ describeStorageConformance('session-ownership-claims', (config) => {
       adapterName: 'race-adapter',
       sessionId: fixture.sessionId,
       agentId: fixture.agentId,
+      ownerInstance: { instanceId: `instance-movement-${fixture.agentId}` },
       expectedRevision: 0,
       movement: { kind: 'confirmed' as const, providerSessionId, claimToken: crypto.randomUUID() },
     });
@@ -480,6 +580,469 @@ describeStorageConformance('session-ownership-claims', (config) => {
     const winnerOwnership = await busA.request(SessionOwnershipStorageSubjects.read, { agentId: winnerAgentId });
     expect(winnerOwnership.ownership?.currency.currentAdapterSessionId).toBe(providerSessionId);
   });
+
+  // ── R56: durable owner identity ─────────────────────────────────────────
+
+  it('owner identity uses a RESTRICT composite FK while legacy null ownership remains representable', async () => {
+    const { sessionId, agentId } = await seedFixtures();
+    const machineId = `machine-owner-fk-${crypto.randomUUID()}`;
+    const adapterId = `adapter-owner-fk-${crypto.randomUUID()}`;
+    const providerSessionId = `prov-owner-fk-${crypto.randomUUID()}`;
+    const ownerInstanceId = `instance-owner-fk-${crypto.randomUUID()}`;
+    const claimToken = crypto.randomUUID();
+
+    const claimed = await busA.request(SessionOwnershipStorageSubjects.claim, {
+      ...baseClaimRequest(agentId, sessionId, machineId, adapterId, providerSessionId, ownerInstanceId),
+      claimToken,
+    });
+    expect(claimed.outcome).toBe('claimed');
+    if (claimed.outcome !== 'claimed') return;
+    expect(requireClaim(claimed.claim).ownerInstanceId).toBe(ownerInstanceId);
+
+    const executor = getRawSqlExecutor(getCtx().db);
+
+    // The referenced runtime row cannot disappear while a generation names it.
+    // This rejects both a cascading deletion and the impossible SET NULL shape
+    // that would have to null only half of the composite identity.
+    await expect(
+      executor.run(sql`
+        DELETE FROM runtime_instances
+        WHERE instance_id = ${ownerInstanceId} AND machine_id = ${machineId}
+      `),
+    ).rejects.toThrow();
+
+    const stillOwned = await busA.request(SessionOwnershipStorageSubjects.listClaims, {
+      machineId,
+      adapterId,
+      providerSessionId,
+    });
+    expect(stillOwned.claims).toHaveLength(1);
+    expect(stillOwned.claims[0]?.ownerInstanceId).toBe(ownerInstanceId);
+
+    // Existing databases may carry ownerless rows. A null owner-instance half
+    // deliberately opts out of the composite reference while preserving the
+    // non-null machine identity and the blocking claim itself.
+    await executor.run(sql`
+      UPDATE adapter_session_claims
+      SET owner_instance_id = NULL
+      WHERE claim_token = ${claimToken}
+    `);
+    await expect(
+      executor.run(sql`
+        DELETE FROM runtime_instances
+        WHERE instance_id = ${ownerInstanceId} AND machine_id = ${machineId}
+      `),
+    ).resolves.toBeDefined();
+
+    const legacy = await busA.request(SessionOwnershipStorageSubjects.listClaims, {
+      machineId,
+      adapterId,
+      providerSessionId,
+    });
+    expect(legacy.claims).toHaveLength(1);
+    expect(legacy.claims[0]?.ownerInstanceId).toBeNull();
+    expect(legacy.claims[0]?.machineId).toBe(machineId);
+  });
+
+  // ── Runtime incarnation counter allocation ───────────────────────────────
+
+  it('allocates three claim-owner incarnations through one Postgres counter row', async () => {
+    if (config.dialect !== 'postgres' || sibling === undefined || thirdSibling === undefined) return;
+
+    const first = await seedFixtures();
+    const second = await seedFixtures();
+    const third = await seedFixtures();
+    const machineId = `machine-incarnation-${crypto.randomUUID()}`;
+    const adapterId = `adapter-incarnation-${crypto.randomUUID()}`;
+    const firstOwnerInstanceId = `instance-incarnation-a-${crypto.randomUUID()}`;
+    const secondOwnerInstanceId = `instance-incarnation-b-${crypto.randomUUID()}`;
+    const thirdOwnerInstanceId = `instance-incarnation-c-${crypto.randomUUID()}`;
+    const lockKey = crypto.getRandomValues(new Uint32Array(1))[0]! & 0x7fffffff;
+    const functionName = `r57_incarnation_gate_${crypto.randomUUID().replaceAll('-', '_')}`;
+    const triggerName = `r57_incarnation_gate_${crypto.randomUUID().replaceAll('-', '_')}`;
+    const executor = getRawSqlExecutor(getCtx().db);
+
+    // The trigger blocks the counter allocation itself. `pg_locks` observes all
+    // three independent clients there before the gate opens, so this is neither
+    // a timing assumption nor an in-process serialization test.
+    await executor.run(
+      sql.raw(`
+        CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
+        BEGIN
+          PERFORM pg_advisory_xact_lock_shared(${lockKey});
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `),
+    );
+    await executor.run(
+      sql.raw(`
+        CREATE TRIGGER "${triggerName}"
+        BEFORE INSERT ON runtime_instance_incarnation_counters
+        FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+      `),
+    );
+
+    const firstClaim = () =>
+      busA.request(SessionOwnershipStorageSubjects.claim, {
+        ...baseClaimRequest(
+          first.agentId,
+          first.sessionId,
+          machineId,
+          adapterId,
+          `provider-incarnation-a-${crypto.randomUUID()}`,
+          firstOwnerInstanceId,
+        ),
+        claimToken: crypto.randomUUID(),
+      });
+    const secondClaim = () =>
+      busB.request(SessionOwnershipStorageSubjects.claim, {
+        ...baseClaimRequest(
+          second.agentId,
+          second.sessionId,
+          machineId,
+          adapterId,
+          `provider-incarnation-b-${crypto.randomUUID()}`,
+          secondOwnerInstanceId,
+        ),
+        claimToken: crypto.randomUUID(),
+      });
+    const thirdClaim = () =>
+      busC.request(SessionOwnershipStorageSubjects.claim, {
+        ...baseClaimRequest(
+          third.agentId,
+          third.sessionId,
+          machineId,
+          adapterId,
+          `provider-incarnation-c-${crypto.randomUUID()}`,
+          thirdOwnerInstanceId,
+        ),
+        claimToken: crypto.randomUUID(),
+      });
+
+    try {
+      const [resultA, resultB, resultC] = await executor.withSession(async (gate) => {
+        await gate.run(sql`SELECT pg_advisory_lock(CAST(${String(lockKey)} AS bigint))`);
+        let operationA: ReturnType<typeof firstClaim> | undefined;
+        let operationB: ReturnType<typeof secondClaim> | undefined;
+        let operationC: ReturnType<typeof thirdClaim> | undefined;
+        let gateReleased = false;
+        try {
+          operationA = firstClaim();
+          await waitForAdvisoryWaiters(lockKey, 1);
+          operationB = secondClaim();
+          await waitForAdvisoryWaiters(lockKey, 2);
+          operationC = thirdClaim();
+          await waitForAdvisoryWaiters(lockKey, 3);
+        } catch (error) {
+          await gate.run(sql`SELECT pg_advisory_unlock(CAST(${String(lockKey)} AS bigint))`);
+          gateReleased = true;
+          await Promise.allSettled([operationA, operationB, operationC].filter((item) => item !== undefined));
+          throw error;
+        } finally {
+          // Release even if a barrier assertion fails, otherwise the pending
+          // claim owns a checked-out connection and suite teardown cannot drop
+          // the isolated schema.
+          if (!gateReleased) await gate.run(sql`SELECT pg_advisory_unlock(CAST(${String(lockKey)} AS bigint))`);
+        }
+
+        if (operationA === undefined || operationB === undefined || operationC === undefined) {
+          await Promise.allSettled([operationA, operationB, operationC].filter((item) => item !== undefined));
+          throw new Error('counter allocation barrier failed before all claim operations entered');
+        }
+        return Promise.all([operationA, operationB, operationC]);
+      });
+
+      expect(resultA.outcome).toBe('claimed');
+      expect(resultB.outcome).toBe('claimed');
+      expect(resultC.outcome).toBe('claimed');
+      if (resultA.outcome !== 'claimed' || resultB.outcome !== 'claimed' || resultC.outcome !== 'claimed') return;
+
+      const instanceA = await busA.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+        instanceId: firstOwnerInstanceId,
+        machineId,
+      });
+      const instanceB = await busB.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+        instanceId: secondOwnerInstanceId,
+        machineId,
+      });
+      const instanceC = await busC.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+        instanceId: thirdOwnerInstanceId,
+        machineId,
+      });
+      expect(instanceA.instance).not.toBeNull();
+      expect(instanceB.instance).not.toBeNull();
+      expect(instanceC.instance).not.toBeNull();
+      expect(
+        [instanceA.instance?.incarnation, instanceB.instance?.incarnation, instanceC.instance?.incarnation].sort(),
+      ).toEqual([1, 2, 3]);
+      expect(instanceA.instance?.retiredAt).toBeNull();
+      expect(instanceB.instance?.retiredAt).toBeNull();
+
+      const claims = await busA.request(SessionOwnershipStorageSubjects.listClaims, { machineId, adapterId });
+      expect(claims.claims).toHaveLength(3);
+      expect(new Set(claims.claims.map((claim) => claim.ownerInstanceId))).toEqual(
+        new Set([firstOwnerInstanceId, secondOwnerInstanceId, thirdOwnerInstanceId]),
+      );
+      expect(claims.claims.every((claim) => claim.status === 'held')).toBe(true);
+    } finally {
+      await executor.run(sql.raw(`DROP TRIGGER IF EXISTS "${triggerName}" ON runtime_instance_incarnation_counters`));
+      await executor.run(sql.raw(`DROP FUNCTION IF EXISTS "${functionName}"()`));
+    }
+  });
+
+  it('allocates three movement-owner incarnations through one Postgres counter row', async () => {
+    if (config.dialect !== 'postgres' || sibling === undefined || thirdSibling === undefined) return;
+
+    const fixtures = await Promise.all([seedFixtures(), seedFixtures(), seedFixtures()]);
+    const machineId = `machine-movement-incarnation-${crypto.randomUUID()}`;
+    const adapterId = `adapter-movement-incarnation-${crypto.randomUUID()}`;
+    const ownerIds = fixtures.map((_, index) => `instance-movement-incarnation-${index}-${crypto.randomUUID()}`);
+    const lockKey = crypto.getRandomValues(new Uint32Array(1))[0]! & 0x7fffffff;
+    const functionName = `movement_incarnation_gate_${crypto.randomUUID().replaceAll('-', '_')}`;
+    const triggerName = `movement_incarnation_gate_${crypto.randomUUID().replaceAll('-', '_')}`;
+    const executor = getRawSqlExecutor(getCtx().db);
+
+    await executor.run(
+      sql.raw(`
+        CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
+        BEGIN
+          PERFORM pg_advisory_xact_lock_shared(${lockKey});
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `),
+    );
+    await executor.run(
+      sql.raw(`
+        CREATE TRIGGER "${triggerName}"
+        BEFORE INSERT ON runtime_instance_incarnation_counters
+        FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+      `),
+    );
+
+    const movementFor = (index: number) => {
+      const fixture = fixtures[index]!;
+      return {
+        machineId,
+        adapterId,
+        adapterName: 'race-adapter',
+        sessionId: fixture.sessionId,
+        agentId: fixture.agentId,
+        ownerInstance: { instanceId: ownerIds[index]! },
+        expectedRevision: 0,
+        movement: {
+          kind: 'confirmed' as const,
+          providerSessionId: `provider-movement-incarnation-${index}-${crypto.randomUUID()}`,
+          claimToken: crypto.randomUUID(),
+        },
+      };
+    };
+
+    try {
+      const [resultA, resultB, resultC] = await executor.withSession(async (gate) => {
+        await gate.run(sql`SELECT pg_advisory_lock(CAST(${String(lockKey)} AS bigint))`);
+        let operationA: Promise<SessionOwnershipSettleMovementResult> | undefined;
+        let operationB: Promise<SessionOwnershipSettleMovementResult> | undefined;
+        let operationC: Promise<SessionOwnershipSettleMovementResult> | undefined;
+        let gateReleased = false;
+        try {
+          operationA = busA.request(SessionOwnershipStorageSubjects.settleMovement, movementFor(0));
+          await waitForAdvisoryWaiters(lockKey, 1);
+          operationB = busB.request(SessionOwnershipStorageSubjects.settleMovement, movementFor(1));
+          await waitForAdvisoryWaiters(lockKey, 2);
+          operationC = busC.request(SessionOwnershipStorageSubjects.settleMovement, movementFor(2));
+          await waitForAdvisoryWaiters(lockKey, 3);
+        } catch (error) {
+          await gate.run(sql`SELECT pg_advisory_unlock(CAST(${String(lockKey)} AS bigint))`);
+          gateReleased = true;
+          await Promise.allSettled([operationA, operationB, operationC].filter((item) => item !== undefined));
+          throw error;
+        } finally {
+          if (!gateReleased) await gate.run(sql`SELECT pg_advisory_unlock(CAST(${String(lockKey)} AS bigint))`);
+        }
+        if (operationA === undefined || operationB === undefined || operationC === undefined) {
+          await Promise.allSettled([operationA, operationB, operationC].filter((item) => item !== undefined));
+          throw new Error('counter allocation barrier failed before all movement operations entered');
+        }
+        return Promise.all([operationA, operationB, operationC]);
+      });
+
+      expect([resultA.outcome, resultB.outcome, resultC.outcome]).toEqual(['settled', 'settled', 'settled']);
+      const instances = await Promise.all(
+        ownerIds.map((instanceId, index) =>
+          [busA, busB, busC][index]!.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+            instanceId,
+            machineId,
+          }),
+        ),
+      );
+      expect(instances.map(({ instance }) => instance?.incarnation).sort()).toEqual([1, 2, 3]);
+    } finally {
+      await executor.run(sql.raw(`DROP TRIGGER IF EXISTS "${triggerName}" ON runtime_instance_incarnation_counters`));
+      await executor.run(sql.raw(`DROP FUNCTION IF EXISTS "${functionName}"()`));
+    }
+  });
+
+  it('keeps a second Postgres stable-key transaction blocked until the first commits', async () => {
+    const siblingClient = sibling;
+    if (config.dialect !== 'postgres' || siblingClient === undefined) return;
+
+    const lock = ownershipClaimTransactionLock({
+      machineId: `machine-stable-lock-${crypto.randomUUID()}`,
+      adapterId: `adapter-stable-lock-${crypto.randomUUID()}`,
+      providerSessionId: `provider-stable-lock-${crypto.randomUUID()}`,
+    });
+    const releaseFirst = Promise.withResolvers<void>();
+    const firstEntered = Promise.withResolvers<number>();
+    let secondEntered = false;
+    const first = executeTransaction(getCtx().db, async (tx) => {
+      await acquireTransactionLocks(getCtx().db, tx, [lock]);
+      const [backend] = await tx
+        .select({ pid: sql<number>`pg_backend_pid()` })
+        .from(sql.raw('(SELECT 1) AS transaction_lock_anchor'));
+      if (backend === undefined) throw new Error('first stable-key transaction did not expose a backend PID');
+      firstEntered.resolve(backend.pid);
+      await releaseFirst.promise;
+    });
+    const firstPid = await firstEntered.promise;
+    const second = executeTransaction(siblingClient.db, async (tx) => {
+      await acquireTransactionLocks(siblingClient.db, tx, [lock]);
+      secondEntered = true;
+    });
+
+    try {
+      await waitForBackendBlockedBy(firstPid);
+      expect(secondEntered).toBe(false);
+    } finally {
+      releaseFirst.resolve();
+      await Promise.all([first, second]);
+    }
+    expect(secondEntered).toBe(true);
+  });
+
+  it('orders crossed movement claim keys before takeover and retirement', async () => {
+    if (config.dialect !== 'postgres' || sibling === undefined) return;
+
+    const first = await seedFixtures();
+    const second = await seedFixtures();
+    const machineIdA = `machine-crossed-movement-a-${crypto.randomUUID()}`;
+    const machineIdB = `machine-crossed-movement-b-${crypto.randomUUID()}`;
+    const adapterIdA = `adapter-crossed-movement-a-${crypto.randomUUID()}`;
+    const adapterIdB = `adapter-crossed-movement-b-${crypto.randomUUID()}`;
+    const providerSessionIdA = `provider-crossed-movement-a-${crypto.randomUUID()}`;
+    const providerSessionIdB = `provider-crossed-movement-b-${crypto.randomUUID()}`;
+    const ownerA = `instance-crossed-movement-a-${crypto.randomUUID()}`;
+    const ownerB = `instance-crossed-movement-b-${crypto.randomUUID()}`;
+
+    const initialA = await busA.request(SessionOwnershipStorageSubjects.claim, {
+      ...baseClaimRequest(first.agentId, first.sessionId, machineIdA, adapterIdA, providerSessionIdA, ownerA),
+      claimToken: crypto.randomUUID(),
+    });
+    const initialB = await busA.request(SessionOwnershipStorageSubjects.claim, {
+      ...baseClaimRequest(second.agentId, second.sessionId, machineIdB, adapterIdB, providerSessionIdB, ownerB),
+      claimToken: crypto.randomUUID(),
+    });
+    expect(initialA.outcome).toBe('claimed');
+    expect(initialB.outcome).toBe('claimed');
+    if (initialA.outcome !== 'claimed' || initialB.outcome !== 'claimed') return;
+
+    await busA.request(SessionOwnershipStorageSubjects.retireInstance, { instanceId: ownerA });
+    await busA.request(SessionOwnershipStorageSubjects.retireInstance, { instanceId: ownerB });
+
+    const executor = getRawSqlExecutor(getCtx().db);
+    const stableKeys = [
+      postgresTransactionLockKey(
+        ownershipClaimTransactionLock({
+          machineId: machineIdA,
+          adapterId: adapterIdA,
+          providerSessionId: providerSessionIdA,
+        }),
+      ),
+      postgresTransactionLockKey(
+        ownershipClaimTransactionLock({
+          machineId: machineIdB,
+          adapterId: adapterIdB,
+          providerSessionId: providerSessionIdB,
+        }),
+      ),
+    ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    const [lowerKey, higherKey] = stableKeys;
+    if (lowerKey === undefined || higherKey === undefined || lowerKey === higherKey) {
+      throw new Error('crossed movement fixture did not derive two distinct stable claim keys');
+    }
+
+    const movementA = () =>
+      busA.request(SessionOwnershipStorageSubjects.settleMovement, {
+        machineId: machineIdB,
+        adapterId: adapterIdB,
+        adapterName: 'race-adapter',
+        sessionId: first.sessionId,
+        agentId: first.agentId,
+        ownerInstance: { instanceId: `successor-crossed-movement-a-${crypto.randomUUID()}` },
+        expectedRevision: 0,
+        movement: {
+          kind: 'confirmed' as const,
+          providerSessionId: providerSessionIdB,
+          claimToken: crypto.randomUUID(),
+        },
+      });
+    const movementB = () =>
+      busB.request(SessionOwnershipStorageSubjects.settleMovement, {
+        machineId: machineIdA,
+        adapterId: adapterIdA,
+        adapterName: 'race-adapter',
+        sessionId: second.sessionId,
+        agentId: second.agentId,
+        ownerInstance: { instanceId: `successor-crossed-movement-b-${crypto.randomUUID()}` },
+        expectedRevision: 0,
+        movement: {
+          kind: 'confirmed' as const,
+          providerSessionId: providerSessionIdA,
+          claimToken: crypto.randomUUID(),
+        },
+      });
+
+    const [resultA, resultB] = await executor.withSession(async (control) => {
+      const [controlBackend] = await control.all<{ pid: number }>(sql`SELECT pg_backend_pid() AS pid`);
+      if (controlBackend === undefined) throw new Error('could not identify crossed-movement control backend');
+      await control.run(sql`SELECT pg_advisory_lock(CAST(${higherKey.toString()} AS bigint))`);
+      let operationA: ReturnType<typeof movementA> | undefined;
+      let operationB: ReturnType<typeof movementB> | undefined;
+      let controlReleased = false;
+      try {
+        operationA = movementA();
+        const firstMovementPid = await waitForBackendBlockedBy(controlBackend.pid);
+        operationB = movementB();
+        await waitForBackendBlockedBy(firstMovementPid);
+      } catch (error) {
+        await control.run(sql`SELECT pg_advisory_unlock(CAST(${higherKey.toString()} AS bigint))`);
+        controlReleased = true;
+        await Promise.allSettled([operationA, operationB].filter((item) => item !== undefined));
+        throw error;
+      } finally {
+        if (!controlReleased)
+          await control.run(sql`SELECT pg_advisory_unlock(CAST(${higherKey.toString()} AS bigint))`);
+      }
+      if (operationA === undefined || operationB === undefined) {
+        await Promise.allSettled([operationA, operationB].filter((item) => item !== undefined));
+        throw new Error('crossed movement lock staging failed before both operations entered');
+      }
+      return Promise.all([operationA, operationB]);
+    });
+
+    expect(resultA.outcome).toBe('settled');
+    expect(resultB.outcome).toBe('settled');
+    const [finalA, finalB] = await Promise.all([
+      busA.request(SessionOwnershipStorageSubjects.listClaims, { machineId: machineIdA, adapterId: adapterIdA }),
+      busA.request(SessionOwnershipStorageSubjects.listClaims, { machineId: machineIdB, adapterId: adapterIdB }),
+    ]);
+    expect(finalA.claims).toHaveLength(1);
+    expect(finalB.claims).toHaveLength(1);
+    expect(finalA.claims[0]).toMatchObject({ agentId: second.agentId, status: 'held' });
+    expect(finalB.claims[0]).toMatchObject({ agentId: first.agentId, status: 'held' });
+  });
+
   // ── Case: the session delete's lock order ────────────────────────────────
 
   it('a session delete takes `agents` before `sessions`, so a concurrent ownership act cannot deadlock', async () => {

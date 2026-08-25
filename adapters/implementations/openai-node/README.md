@@ -10,7 +10,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
 
 // Using the convenience factory
-const adapter = await createOpenAINodeAdapter();
+const adapter = await createOpenAINodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 
 const result = await MakaioBus.request(AdapterSubjects.startAgent, {
   adapterId: adapter.adapterId,
@@ -20,7 +20,7 @@ const result = await MakaioBus.request(AdapterSubjects.startAgent, {
 });
 
 // Or using the class directly
-const directAdapter = new OpenAIAdapter();
+const directAdapter = new OpenAIAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 await directAdapter.init();
 
 const directResult = await MakaioBus.request(AdapterSubjects.startAgent, {

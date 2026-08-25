@@ -18,34 +18,18 @@
  * it publishes from {@link publishedProviderKey} rather than from the connector,
  * the registry or the start result.
  *
- * ## What the window is
- *
- * It opens with the attempt and closes when the adapter has **handed the key
- * over**: for a start, the last act of the start itself, after which the key
- * travels in the response and the caller settles it; for a rehydrate, the whole
- * call, since its answer *is* the hand-over. A caller-owned attempt that
- * confirms no key hands over nothing and still closes its window, because
- * nothing is waiting to be settled and the movement observer is that agent's
- * only publisher from then on.
- *
- * ## What it does not cover
- *
- * The window ends where the adapter's knowledge does. Between the hand-over and
- * the caller's settlement the adapter has no way to observe that the generation
- * exists — `startAgent`'s contract carries no settlement signal back — so a key
- * published in that gap is published before it is claimed. The gap is a few
- * statements of the caller's own (nothing fallible runs between a live connector
- * and its settlement), and closing it needs an adapter-contract change, which
- * this wave does not make.
+ * The gate stays closed after the successful dispatch response. It opens only
+ * when the caller returns the adapter-minted acknowledgement token after its
+ * durable ownership settlement. That makes the previously unobservable region
+ * between response and settlement part of this adapter's lifecycle contract.
  */
 
 /**
  * Whether this attempt may publish the provider session it confirmed.
  *
- * Mutable, with exactly one writer — {@link releaseProviderKeyPublication}, at
- * the point the attempt hands its key over. A start carries one of these for its
- * whole duration; a rehydrate builds one that never opens, because its response
- * is the hand-over and there is nothing after it.
+ * Mutable, with exactly one writer — {@link releaseProviderKeyPublication}, in
+ * the successful acknowledgement path. A caller-owned start or rehydrate carries
+ * the same gate from dispatch through durable settlement.
  */
 export interface ProviderKeyPublication {
   /** Whether the key is still the caller's to publish first. */
@@ -104,12 +88,11 @@ export function providerKeyIsPublishable(publication: ProviderKeyPublication | u
 }
 
 /**
- * Hand the key over: from here on this attempt's key may be published.
+ * Acknowledge the hand-over: from here on this generation's key may be published.
  *
- * Called once, where the attempt has done everything it publishes and the key is
- * on its way to the caller. For a start that is after its own lifecycle events
- * and its hand-over to the tracker; there is nothing to release for an attempt
- * that was never deferred, and calling it then is a no-op by construction.
+ * Called only after the caller's durable settlement is acknowledged. There is
+ * nothing to release for an attempt that was never deferred, and calling it then
+ * is a no-op by construction.
  * @param publication - The attempt's publication state.
  */
 export function releaseProviderKeyPublication(publication: ProviderKeyPublication): void {

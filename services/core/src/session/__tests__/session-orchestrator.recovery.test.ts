@@ -2,25 +2,17 @@
 /* eslint max-lines: ["error", { "max": 425 }] */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import {
-  AdapterSubjects,
-  SessionSubjects,
-  type IMakaioSession,
-  type MakaioSessionAgent,
-  type SessionMessage,
-} from '@makaio/contracts';
-import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
+import { AdapterSubjects, type IMakaioSession, type MakaioSessionAgent, type SessionMessage } from '@makaio/contracts';
 import { buildRecoveryContext, recoverAgent, verifyAndRecoverAgents } from '../session-orchestrator-helpers.js';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN } from '../recovery-plan.js';
-import { MakaioSessionService } from '../session-service.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { SessionEventStorageSubjects } from '../session-events/namespace.js';
 import { MessageStorageSubjects } from '../messages/namespace.js';
-import { createTestAgent, registerMemorySessionBackends } from './shared.js';
+import { RECOVERY_HELPERS_MACHINE_ID, RecoveryHelpersHarness } from './session-orchestrator.recovery.fixture.js';
 
 /** Machine the authority is composed with, and therefore claims under. */
-const MACHINE_ID = 'recovery-helpers-machine';
+const MACHINE_ID = RECOVERY_HELPERS_MACHINE_ID;
 
 /**
  * Recovery helpers on a host that composes the ownership authority.
@@ -32,20 +24,16 @@ const MACHINE_ID = 'recovery-helpers-machine';
  */
 describe('SessionOrchestrator recovery helpers', () => {
   let bus: IMakaioBus;
-  let service: MakaioSessionService;
-  let cleanups: Array<() => void> = [];
+  let harness: RecoveryHelpersHarness;
 
   beforeEach(async () => {
-    bus = createBusInstance();
-    cleanups = [...registerMemorySessionBackends(bus)];
-    service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
-    await service.init();
+    harness = new RecoveryHelpersHarness();
+    await harness.init();
+    bus = harness.bus;
   });
 
   afterEach(() => {
-    service.destroy();
-    for (let index = cleanups.length - 1; index >= 0; index -= 1) cleanups[index]?.();
-    cleanups = [];
+    harness.destroy();
   });
 
   /**
@@ -54,56 +42,29 @@ describe('SessionOrchestrator recovery helpers', () => {
    * @param overrides - Agent field overrides.
    * @returns The stored agent record.
    */
-  async function seedAgent(agentId: string, overrides?: Partial<MakaioSessionAgent>): Promise<MakaioSessionAgent> {
-    const sessionId = overrides?.sessionId ?? 'session-recovery-1';
-    await bus.request(SessionSubjects.create, { sessionId, machineId: MACHINE_ID });
-    const agent = createTestAgent(agentId, {
-      adapterName: 'claude-code',
-      adapterId: 'stale-adapter-id',
-      status: 'dead',
-      role: 'lead',
-      ...overrides,
-      sessionId,
-    });
-    await bus.request(AgentStorageSubjects.set, { agentId, agent });
-    return agent;
-  }
+  const seedAgent = (agentId: string, overrides?: Partial<MakaioSessionAgent>) => harness.seedAgent(agentId, overrides);
 
   /**
    * Answer rehydrates as the adapter does, recording every payload.
    * @returns The captured payloads, in order.
    */
-  function captureRehydrates(): Array<Record<string, unknown>> {
-    const payloads: Array<Record<string, unknown>> = [];
-    cleanups.push(
-      bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
-        payloads.push(ctx.payload);
-        ctx.setResult({ success: true });
-      }),
-    );
-    return payloads;
-  }
+  const captureRehydrates = () => harness.captureRehydrates();
 
   /**
    * Report every agent as dead, so the recovery path is the one under test.
    */
-  function reportAgentsDead(): void {
-    cleanups.push(
-      bus.on(AdapterSubjects.getAgent, (ctx) => {
-        ctx.setResult({ agent: null });
-      }),
-    );
-  }
+  const reportAgentsDead = () => harness.reportAgentsDead();
 
   it('verifyAndRecoverAgents returns usable agents and recovered IDs', async () => {
     const deadAgent = await seedAgent('dead-agent-1');
-    reportAgentsDead();
+    const probes = reportAgentsDead();
     const payloads = captureRehydrates();
 
     const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(bus, [deadAgent], {
       cwd: '/test/path',
       model: 'test-model',
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
     });
 
     expect(payloads[0]).toMatchObject({
@@ -114,6 +75,9 @@ describe('SessionOrchestrator recovery helpers', () => {
       // The service owns the row for a reserved recovery.
       callerOwnsAgentRow: true,
     });
+    expect(probes).toEqual([
+      { agentId: deadAgent.agentId, ownerInstanceId: harness.service.requireOwnershipInstanceId() },
+    ]);
     expect(usable).toHaveLength(1);
     expect(usable[0].agentId).toBe(deadAgent.agentId); // Identity preserved
     expect(recoveredAgentIds.has(deadAgent.agentId)).toBe(true);
@@ -127,42 +91,32 @@ describe('SessionOrchestrator recovery helpers', () => {
     reportAgentsDead();
     captureRehydrates();
 
-    await verifyAndRecoverAgents(bus, [deadAgent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
+    await verifyAndRecoverAgents(bus, [deadAgent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN, machineId: MACHINE_ID });
 
     const stored = await bus.request(AgentStorageSubjects.get, { agentId: deadAgent.agentId });
     expect(stored.agent?.status).toBe('idle');
   });
 
-  it('recoverAgent dispatches to the adapter it was given and preserves identity', async () => {
-    const deadAgent = await seedAgent('dead-agent-given-adapter');
-    // Registered to prove it is never consulted: the caller owns the resolution
-    // so the reservation it takes and the dispatch name one adapter instance.
-    let resolveIdCalls = 0;
-    cleanups.push(
-      bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
-        resolveIdCalls += 1;
-        ctx.setResult({ adapterId: 'resolved-by-the-callee' });
-      }),
-    );
+  it('recoverAgent resolves the live adapter inside its exclusive attempt and preserves identity', async () => {
+    const deadAgent = await seedAgent('dead-agent-given-adapter', { runtimeOwner: undefined });
     const payloads = captureRehydrates();
 
-    const recovered = await recoverAgent(
-      bus,
-      deadAgent,
-      { cwd: '/new/path', model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN },
-      { adapterId: 'current-adapter-id' },
-    );
+    const recovered = await recoverAgent(bus, deadAgent, {
+      cwd: '/new/path',
+      model: 'new-model',
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
+    });
 
     expect(payloads[0]).toMatchObject({
-      adapterId: 'current-adapter-id',
+      adapterId: 'live-claude-code',
       agentId: deadAgent.agentId,
       cwd: '/new/path',
       model: 'new-model',
     });
-    expect(resolveIdCalls).toBe(0);
     expect(recovered.kind).toBe('recovered');
     if (recovered.kind !== 'recovered') throw new Error('expected a recovered agent');
-    expect(recovered.agent.adapterId).toBe('current-adapter-id');
+    expect(recovered.agent.adapterId).toBe('live-claude-code');
     expect(recovered.agent).toBe(deadAgent); // Same reference - identity preserved
   });
 
@@ -174,12 +128,11 @@ describe('SessionOrchestrator recovery helpers', () => {
     });
     const payloads = captureRehydrates();
 
-    await recoverAgent(
-      bus,
-      deadAgent,
-      { model: 'new-model', plan: FRESH_WITH_HISTORY_RECOVERY_PLAN },
-      { adapterId: 'test-adapter' },
-    );
+    await recoverAgent(bus, deadAgent, {
+      model: 'new-model',
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
+    });
 
     expect(payloads[0]?.model).toBe('new-model');
   });
@@ -192,7 +145,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     });
     const payloads = captureRehydrates();
 
-    await recoverAgent(bus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN }, { adapterId: 'test-adapter' });
+    await recoverAgent(bus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN, machineId: MACHINE_ID });
 
     expect(payloads[0]?.model).toBe('existing-model');
   });
@@ -203,7 +156,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       adapterId: 'test-adapter',
       status: 'idle',
     });
-    cleanups.push(
+    harness.addCleanup(
       bus.on(AdapterSubjects.getAgent, (ctx) => {
         ctx.setResult({
           agent: {
@@ -234,7 +187,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     });
 
     const getAgentCalls: string[] = [];
-    cleanups.push(
+    harness.addCleanup(
       bus.on(AdapterSubjects.getAgent, (ctx) => {
         getAgentCalls.push(ctx.payload.agentId);
         if (ctx.payload.agentId === 'dead-agent') {
@@ -255,6 +208,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     const { usable, recoveredAgentIds } = await verifyAndRecoverAgents(bus, [deadAgent, aliveAgent], {
       cwd: '/test/path',
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
     });
 
     expect(usable).toHaveLength(2);
@@ -269,13 +223,14 @@ describe('SessionOrchestrator recovery helpers', () => {
     reportAgentsDead();
 
     let startAgentCalled = false;
-    cleanups.push(
+    harness.addCleanup(
       bus.on(AdapterSubjects.startAgent, (ctx) => {
         startAgentCalled = true;
         ctx.setResult({
           success: true,
           agentId: 'test-agent-id',
           adapterId: ctx.payload.adapterId,
+          ownerInstanceId: ctx.payload.ownerInstanceId ?? 'unused-start-owner',
           adapterSessionId: 'test-adapter-session-id',
           sessionId: 'test-session-id',
         });
@@ -283,7 +238,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     );
     const payloads = captureRehydrates();
 
-    await verifyAndRecoverAgents(bus, [deadAgent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
+    await verifyAndRecoverAgents(bus, [deadAgent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN, machineId: MACHINE_ID });
 
     expect(startAgentCalled).toBe(false);
     expect(payloads).toHaveLength(1);

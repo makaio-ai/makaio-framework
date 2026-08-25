@@ -16,6 +16,7 @@ import { registerMemoryMessageStorage } from '../messages/memory-handler.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { callerOwnedSuccessFields, registerCallerSettlementAckHandler } from '../testing/caller-owned-adapter-stub.js';
 import { MakaioSessionService } from '../session-service.js';
 import {
   FRESH_WITH_HISTORY_RECOVERY_PLAN,
@@ -55,14 +56,23 @@ describe('recovery plan', () => {
       // The session, agent and ownership backends share one state: a reserved
       // recovery verifies the `(agent, session)` pair it reserves against.
       ...registerMemorySessionBackends(bus),
+      registerCallerSettlementAckHandler(bus),
       registerMemoryMessageStorage(bus),
       registerMemorySessionEventStorage(bus),
       bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
         ctx.setResult({ adapterId: `current-${ctx.payload.adapterName}` });
       }),
+      bus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (ctx) => {
+        ctx.setResult({
+          adapterId: ctx.payload.adapterId,
+          adapterName: ctx.payload.adapterName,
+          machineId: ctx.payload.machineId,
+          ownerInstanceId: service.requireOwnershipInstanceId(),
+        });
+      }),
       bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydratePayloads.push(ctx.payload);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
       }),
     ];
     service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
@@ -156,7 +166,7 @@ async function executeRecovery(
   });
 
   await bus.request(AgentStorageSubjects.set, { agentId: AGENT_ID, agent });
-  await recoverAgent(bus, agent, { plan }, { adapterId: agent.adapterId });
+  await recoverAgent(bus, agent, { plan, machineId: MACHINE_ID });
   const context = await buildPlannedRecoveryContext(bus, session, plan);
 
   const payload = rehydratePayloads.at(-1);

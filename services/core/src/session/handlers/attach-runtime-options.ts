@@ -149,6 +149,7 @@ function omitUndefined<T extends object>(obj: T): Partial<T> {
  * @param resumeAdapterSessionId - Adapter session ID to resume (enables resume mode)
  * @param harnessId - Resolved harness ID for tool policy lookup
  * @param sessionContext - Session context carrying locality verdict for non-native paths
+ * @param ownerInstanceId - Exact runtime incarnation selected for dispatch
  * @returns StartAgentRequest payload
  */
 export function buildStartAgentRequest(
@@ -159,6 +160,7 @@ export function buildStartAgentRequest(
   resumeAdapterSessionId?: string,
   harnessId?: string,
   sessionContext?: SessionContext,
+  ownerInstanceId?: string,
 ): StartAgentRequest {
   if (resumeAdapterSessionId) {
     return {
@@ -167,6 +169,7 @@ export function buildStartAgentRequest(
       sessionId,
       adapterSessionId: resumeAdapterSessionId,
       role,
+      ...(ownerInstanceId !== undefined && { ownerInstanceId }),
       ...runtimeOptions,
       ...(harnessId !== undefined && { harnessId }),
     };
@@ -175,6 +178,7 @@ export function buildStartAgentRequest(
     adapterId,
     sessionId,
     role,
+    ...(ownerInstanceId !== undefined && { ownerInstanceId }),
     ...runtimeOptions,
     ...(harnessId !== undefined && { harnessId }),
     ...(sessionContext !== undefined && { sessionContext }),
@@ -200,6 +204,8 @@ export interface AttachLaunchTarget {
 export interface LaunchAttachAgentInput extends AttachLaunchTarget {
   /** Caller-minted agent identity; supplying it suppresses the adapter's own row write. */
   readonly agentId: string;
+  /** Exact runtime incarnation selected by the ownership authority. */
+  readonly ownerInstanceId: string;
   /** Resume target, present only for a reservation that took the provider session's key. */
   readonly resumeAdapterSessionId?: string;
   /** History-seeded context, present only for a non-native attach. */
@@ -240,6 +246,7 @@ export async function launchAttachAgent(
     resumeAdapterSessionId,
     harnessId,
     attachSessionContext,
+    ownerInstanceId,
   } = input;
 
   const startAgentRequest = buildStartAgentRequest(
@@ -250,6 +257,7 @@ export async function launchAttachAgent(
     resumeAdapterSessionId,
     harnessId,
     attachSessionContext,
+    ownerInstanceId,
   );
   const startResult = await bus.request(AdapterSubjects.startAgent, { ...startAgentRequest, agentId });
   if (!startResult.success) {

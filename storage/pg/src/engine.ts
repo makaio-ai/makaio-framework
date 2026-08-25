@@ -12,6 +12,7 @@ import { createNodePgClient } from './client.js';
 import { isPostgresDuplicateObjectError, isPostgresUniqueViolationError } from './errors.js';
 import { postgresFtsSearchStrategy } from './fts-strategy.js';
 import { acquirePostgresMigrationLock, buildPostgresLedgerDdl, POSTGRES_MIGRATION_BEGIN } from './migrations.js';
+import { postgresTransactionLocks } from './transaction-locks.js';
 
 /**
  * The Postgres storage engine.
@@ -77,6 +78,8 @@ export const postgresStorageEngine: StorageEngine = {
     acquireTransactionLock: acquirePostgresMigrationLock,
     extensionLedgerName: (sourceHash) => `__makaio_migrations_${sourceHash}`,
   },
+
+  transactionLocks: postgresTransactionLocks,
 
   fts: postgresFtsSearchStrategy,
 };

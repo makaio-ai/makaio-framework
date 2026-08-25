@@ -288,11 +288,15 @@ export {
   ResolveIdResponseSchema,
   ResolveNameRequestSchema,
   ResolveNameResponseSchema,
+  ResolveLiveIdentityRequestSchema,
+  ResolveLiveIdentityResponseSchema,
   type RegisteredAdapterRuntimeIdentityHandlers,
   type ResolveIdRequest,
   type ResolveIdResponse,
   type ResolveNameRequest,
   type ResolveNameResponse,
+  type ResolveLiveIdentityRequest,
+  type ResolveLiveIdentityResponse,
 } from './adapter-runtime/index.js';
 export {
   AgentInstanceStatusSchema,

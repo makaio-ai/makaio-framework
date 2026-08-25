@@ -44,6 +44,19 @@ export const MakaioSessionAgentSchema = z.object({
   adapterName: z.string(),
   /** Makaio session this agent belongs to */
   sessionId: z.string(),
+  /** Runtime process currently hosting this agent, independent of provider-session claims. */
+  runtimeOwner: z
+    .object({
+      machineId: z.string(),
+      instanceId: z.string(),
+    })
+    .optional(),
+  /**
+   * Opaque identity of the recovery attempt currently holding this row in
+   * `starting`. It fences terminal recovery writes even when a later attempt
+   * targets the same runtime binding.
+   */
+  recoveryAttemptId: z.string().optional(),
   /**
    * Provider's session ID — the agent's **immutable origin identity**.
    *

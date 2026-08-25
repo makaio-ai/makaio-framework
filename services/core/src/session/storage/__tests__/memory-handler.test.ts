@@ -160,6 +160,36 @@ describe('registerMemorySessionStorage', () => {
   });
 
   describe('import storage subjects', () => {
+    it('detaches nested metadata from import writes and returned sessions', async () => {
+      const metadata = { nested: { state: 'stored' } };
+      const result = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        externalSessionId: 'memory-detached-import-metadata',
+        source: 'claude-code',
+        cwd: '/repo',
+        kind: 'root',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        metadata,
+      });
+      metadata.nested.state = 'caller-mutation';
+
+      const firstRead = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: result.sessionId });
+      expect(firstRead.session?.metadata).toEqual({ nested: { state: 'stored' } });
+
+      const nestedMetadata = firstRead.session?.metadata?.nested;
+      if (
+        !nestedMetadata ||
+        typeof nestedMetadata !== 'object' ||
+        Array.isArray(nestedMetadata) ||
+        !('state' in nestedMetadata)
+      ) {
+        throw new Error('expected nested import metadata object');
+      }
+      nestedMetadata.state = 'returned-row-mutation';
+      const secondRead = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: result.sessionId });
+      expect(secondRead.session?.metadata).toEqual({ nested: { state: 'stored' } });
+    });
+
     it('upserts and retrieves imported sessions by adapter identity and log file path', async () => {
       const result = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
         externalSessionId: 'memory-external-1',

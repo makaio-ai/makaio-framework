@@ -7,17 +7,23 @@
  * a failed predicate means) stay with the operations in
  * `ownership-drizzle-handler.ts` and `ownership-drizzle-settle.ts`.
  *
- * {@link lockAgentAllocation} lives here for the same reason: it is the one
- * statement every operation of the aggregate opens with, and none of them owns
- * it. It is mechanism, not decision — what a zero-row lock *means* differs per
- * operation and is stated at each call site.
+ * {@link lockAgentAllocation} lives here for the same reason: every operation
+ * that transitions an agent opens with it after any keyed runtime allocation,
+ * and none of them owns it. It is mechanism, not decision — what a zero-row
+ * lock *means* differs per operation and is stated at each call site.
  * @packageDocumentation
  */
-import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
-import type { TransactionCallback } from '@makaio/storage-drizzle';
+import { and, asc, eq, inArray, isNull, ne, sql, type SQL } from 'drizzle-orm';
+import { resolveSchema, type MakaioDatabase, type TransactionCallback } from '@makaio/storage-drizzle';
+import type { IMakaioBus } from '@makaio/bus-core';
+import { SessionOwnershipStorageSubjects } from '@makaio/contracts';
 import type {
   AdapterSessionClaimRecord,
   AdapterSessionCurrencySnapshot,
+  OwnershipTopology,
+  RuntimeInstanceRecord,
+  SessionOwnershipClaimRequest,
+  SessionOwnershipClaimResult,
   SessionOwnershipListClaimsRequest,
 } from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
@@ -33,11 +39,47 @@ export type OwnershipTables = typeof sessionStorageSchema.sqlite;
 /** Row of `adapter_session_claims`. */
 export type ClaimRow = OwnershipTables['adapterSessionClaims']['$inferSelect'];
 
+/** Row of `runtime_instances`. */
+export type RuntimeInstanceRow = OwnershipTables['runtimeInstances']['$inferSelect'];
+
 /** Row of `agents`. */
 export type AgentRow = OwnershipTables['agents']['$inferSelect'];
 
 /** Transaction context handed to an `executeTransaction` callback. */
 export type OwnershipTransaction = Parameters<TransactionCallback<unknown>>[0];
+
+/** A keyed claim request normalized after contract validation. */
+export type KeyedClaimRequest = SessionOwnershipClaimRequest &
+  ClaimAcquisition & { readonly providerSessionId: string; readonly ownerInstance: { readonly instanceId: string } };
+
+/** What the sessions phase established about the lead designation. */
+export interface LeadDesignationOutcome {
+  /** Whether this call moved the designation. */
+  readonly leadDesignated: boolean;
+  /** Lead observed under the transaction's session-row lock. */
+  readonly previousLeadAgentId: string | null;
+}
+
+/** Claiming agent lock result. */
+export type LockedClaimant =
+  | { readonly kind: 'ok'; readonly agent: AgentRow }
+  | { readonly kind: 'refused'; readonly result: SessionOwnershipClaimResult };
+
+/** Transaction-abort signal carrying a modeled claim refusal. */
+export class ClaimRollbackSignal extends Error {
+  /** Modeled outcome reported after rollback. */
+  public readonly result: SessionOwnershipClaimResult;
+
+  /**
+   * Create the rollback signal.
+   * @param result - Modeled claim outcome to report after rollback.
+   */
+  public constructor(result: SessionOwnershipClaimResult) {
+    super(`session ownership claim rolled back: ${result.outcome}`);
+    this.name = 'ClaimRollbackSignal';
+    this.result = result;
+  }
+}
 
 /**
  * Serialize this agent's whole ownership state machine against every other
@@ -70,8 +112,9 @@ export type OwnershipTransaction = Parameters<TransactionCallback<unknown>>[0];
  * `lockWorklogSummaryForUsage`): PostgreSQL holds the row lock until the
  * transaction ends, so the second caller runs only after the first has
  * committed; SQLite acquires its writer lock, on top of the serialized handle
- * that already orders these transactions. It is written first so each
- * transaction stays write-first throughout.
+ * that already orders these transactions. Non-allocating operations write it
+ * first; keyed allocations write their machine counter first to preserve the
+ * aggregate lock order.
  *
  * **This lock is serialization, not authority.** Nothing downstream may read it
  * as permission: every write below still carries its whole predicate — the
@@ -152,6 +195,93 @@ function asInt(value: number): SQL {
   return sql`cast(${value} as integer)`;
 }
 
+/** Result of ensuring one runtime identity inside an allocating transaction. */
+export interface RuntimeInstanceAllocation {
+  /** Durable runtime identity. */
+  readonly instance: RuntimeInstanceRow;
+  /** Whether this transaction created the identity. */
+  readonly inserted: boolean;
+}
+
+/**
+ * Ensure the acting process has a durable row for the machine it is acting for.
+ *
+ * The incarnation is allocated by storage, never supplied by the caller. A
+ * counter upsert first locks the machine's row without advancing it; under that
+ * lock the exact runtime identity is checked, and only an absent identity
+ * advances the counter before `runtime_instances` is inserted. Reusing an
+ * owner therefore cannot consume an incarnation.
+ *
+ * The resulting lock order is `runtime_instance_incarnation_counters` →
+ * `runtime_instances` → `agents` → `adapter_session_claims` → `sessions`.
+ * @param tx - Open transaction.
+ * @param tables - Dialect-resolved session storage tables.
+ * @param owner - Runtime process and machine it is acting for.
+ * @param now - First-use timestamp for a newly inserted row.
+ * @returns The runtime-instance row and whether this transaction inserted it.
+ */
+export async function ensureRuntimeInstance(
+  tx: OwnershipTransaction,
+  tables: OwnershipTables,
+  owner: { readonly instanceId: string; readonly machineId: string },
+  now: number,
+): Promise<RuntimeInstanceAllocation> {
+  const { runtimeInstanceIncarnationCounters, runtimeInstances } = tables;
+  const [counter] = await tx
+    .insert(runtimeInstanceIncarnationCounters)
+    .values({ machineId: owner.machineId, lastAllocatedIncarnation: 0 })
+    .onConflictDoUpdate({
+      target: runtimeInstanceIncarnationCounters.machineId,
+      set: {
+        lastAllocatedIncarnation: runtimeInstanceIncarnationCounters.lastAllocatedIncarnation,
+      },
+    })
+    .returning({ machineId: runtimeInstanceIncarnationCounters.machineId });
+  if (counter === undefined)
+    throw new Error(`runtime incarnation allocation returned no counter for ${owner.machineId}`);
+
+  const [existing] = await tx
+    .select()
+    .from(runtimeInstances)
+    .where(and(eq(runtimeInstances.instanceId, owner.instanceId), eq(runtimeInstances.machineId, owner.machineId)))
+    .limit(1);
+  if (existing !== undefined) return { instance: existing, inserted: false };
+
+  const [allocation] = await tx
+    .update(runtimeInstanceIncarnationCounters)
+    .set({
+      lastAllocatedIncarnation: sql`${runtimeInstanceIncarnationCounters.lastAllocatedIncarnation} + 1`,
+    })
+    .where(eq(runtimeInstanceIncarnationCounters.machineId, owner.machineId))
+    .returning({ incarnation: runtimeInstanceIncarnationCounters.lastAllocatedIncarnation });
+  if (allocation === undefined)
+    throw new Error(`runtime incarnation counter disappeared while allocating for ${counter.machineId}`);
+
+  const [inserted] = await tx
+    .insert(runtimeInstances)
+    .values({
+      instanceId: owner.instanceId,
+      machineId: owner.machineId,
+      incarnation: allocation.incarnation,
+      startedAt: now,
+      retiredAt: null,
+    })
+    .onConflictDoNothing({ target: [runtimeInstances.instanceId, runtimeInstances.machineId] })
+    .returning();
+  if (inserted !== undefined) return { instance: inserted, inserted: true };
+
+  const [raced] = await tx
+    .select()
+    .from(runtimeInstances)
+    .where(and(eq(runtimeInstances.instanceId, owner.instanceId), eq(runtimeInstances.machineId, owner.machineId)))
+    .limit(1);
+  if (raced !== undefined) return { instance: raced, inserted: false };
+
+  // A primary-key conflict is the only conflict absorbed above. If no row can
+  // be read afterwards, the database violated the statement's own conclusion.
+  throw new Error(`runtime instance ${owner.instanceId}/${owner.machineId} was neither inserted nor found`);
+}
+
 /**
  * The greater of two integer expressions.
  *
@@ -169,8 +299,8 @@ function greatestOf(left: SQL, right: SQL): SQL {
  * The highest fence any claim the agent currently holds carries, or `0`.
  *
  * Read as a scalar subquery rather than in a preceding statement so the fence
- * allocation stays inside the single acquiring INSERT — the write must remain
- * the transaction's first statement.
+ * allocation stays inside the single acquiring INSERT after the runtime and
+ * agent locks have been taken.
  * @param tables - Dialect-resolved session storage tables.
  * @param agentId - Agent whose live claims bound the allocation.
  * @returns Scalar SQL expression yielding the agent's highest live claim fence.
@@ -255,12 +385,65 @@ export function mapClaim(row: ClaimRow): AdapterSessionClaimRecord {
     providerSessionId: row.providerSessionId,
     sessionId: row.sessionId,
     agentId: row.agentId,
+    ownerInstanceId: row.ownerInstanceId,
     claimToken: row.claimToken,
     fence: row.fence,
     status: row.status,
     claimedAt: row.claimedAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * Map a runtime-instance row onto its contract record.
+ * @param row - Row from `runtime_instances`.
+ * @returns The runtime instance as the contract reports it.
+ */
+export function mapRuntimeInstance(row: RuntimeInstanceRow): RuntimeInstanceRecord {
+  return {
+    instanceId: row.instanceId,
+    machineId: row.machineId,
+    incarnation: row.incarnation,
+    startedAt: row.startedAt,
+    retiredAt: row.retiredAt,
+  };
+}
+
+/**
+ * Register runtime-instance retirement and diagnostic reads.
+ *
+ * Retirement records only the process-liveness fact. Claims are intentionally
+ * untouched: a later claimant consumes the retired-owner predicate inside its
+ * own taking transaction, after teardown has completed.
+ * @param bus - Bus instance to register the handlers on.
+ * @param db - Database handle carrying the runtime-instance rows.
+ * @returns Cleanup functions for both handlers.
+ */
+export function registerRuntimeInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase): Array<() => void> {
+  const { runtimeInstances } = resolveSchema(db, sessionStorageSchema);
+  return [
+    bus.on(SessionOwnershipStorageSubjects.retireInstance, async (ctx) => {
+      const retired = await db
+        .update(runtimeInstances)
+        .set({ retiredAt: Date.now() })
+        .where(and(eq(runtimeInstances.instanceId, ctx.payload.instanceId), isNull(runtimeInstances.retiredAt)))
+        .returning({ machineId: runtimeInstances.machineId });
+      ctx.setResult({ retiredMachines: retired.length });
+    }),
+    bus.on(SessionOwnershipStorageSubjects.getRuntimeInstance, async (ctx) => {
+      const [row] = await db
+        .select()
+        .from(runtimeInstances)
+        .where(
+          and(
+            eq(runtimeInstances.instanceId, ctx.payload.instanceId),
+            eq(runtimeInstances.machineId, ctx.payload.machineId),
+          ),
+        )
+        .limit(1);
+      ctx.setResult({ instance: row === undefined ? null : mapRuntimeInstance(row) });
+    }),
+  ];
 }
 
 /**
@@ -301,6 +484,10 @@ export interface ClaimAcquisition {
   readonly sessionId: string;
   /** Agent that will own the provider session. */
   readonly agentId: string;
+  /** Runtime process taking the generation. */
+  readonly ownerInstanceId: string;
+  /** Topology under which an incumbent may be superseded. */
+  readonly topology: OwnershipTopology;
   /** Caller-minted identity for the generation being taken. */
   readonly claimToken: string;
 }
@@ -385,6 +572,7 @@ export function buildAcquisitionSelect(
     providerSessionId: asText(acquisition.providerSessionId),
     sessionId: asText(acquisition.sessionId),
     agentId: asText(acquisition.agentId),
+    ownerInstanceId: asText(acquisition.ownerInstanceId),
     claimToken: asText(acquisition.claimToken),
     fence: fenceAllocation(tables, acquisition.agentId, sql`${agents.currencyFence}`),
     status: asText('held'),
@@ -500,4 +688,47 @@ export function buildListClaimsPredicates(tables: OwnershipTables, payload: Sess
   }
   if (payload.statuses !== undefined) predicates.push(inArray(adapterSessionClaims.status, payload.statuses));
   return predicates;
+}
+
+/**
+ * Register the diagnostic ownership reads.
+ * @param bus - Bus carrying the storage subjects.
+ * @param db - Database storing the aggregate.
+ * @returns Cleanup functions for the registered handlers.
+ */
+export function registerOwnershipReadHandlers(bus: IMakaioBus, db: MakaioDatabase): (() => void)[] {
+  const tables = resolveSchema(db, sessionStorageSchema);
+  const { agents, adapterSessionClaims } = tables;
+  return [
+    bus.on(SessionOwnershipStorageSubjects.read, async (ctx) => {
+      const [agent] = await db.select().from(agents).where(eq(agents.agentId, ctx.payload.agentId)).limit(1);
+      if (agent === undefined) {
+        ctx.setResult({ ownership: null });
+        return;
+      }
+      const claims = await db
+        .select()
+        .from(adapterSessionClaims)
+        .where(eq(adapterSessionClaims.agentId, ctx.payload.agentId))
+        .orderBy(asc(adapterSessionClaims.fence), asc(adapterSessionClaims.claimId));
+      ctx.setResult({
+        ownership: {
+          agentId: agent.agentId,
+          sessionId: agent.sessionId,
+          currency: mapCurrency(agent),
+          revision: agent.revision,
+          currencyFence: agent.currencyFence,
+          claims: claims.map(mapClaim),
+        },
+      });
+    }),
+    bus.on(SessionOwnershipStorageSubjects.listClaims, async (ctx) => {
+      const rows = await db
+        .select()
+        .from(adapterSessionClaims)
+        .where(and(...buildListClaimsPredicates(tables, ctx.payload)))
+        .orderBy(asc(adapterSessionClaims.claimedAt), asc(adapterSessionClaims.claimId));
+      ctx.setResult({ claims: rows.map(mapClaim) });
+    }),
+  ];
 }

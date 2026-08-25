@@ -30,11 +30,13 @@ export interface RehydrateRuntime {
   model?: string | undefined;
   /** When set, the caller owns the agent row's status transitions. */
   callerOwnsAgentRow?: true | undefined;
+  /** Adapter-minted token for the exact caller-owned generation. */
+  settlementAckToken?: string | undefined;
   /**
    * The rehydrate's provider-key publication gate.
    *
-   * Never released: a rehydrate's answer *is* its hand-over, so a caller-owned
-   * one publishes nothing at all and an adapter-owned one publishes everything.
+   * Released only after the caller returns the acknowledgement token, so a
+   * caller-owned generation publishes nothing before durable settlement.
    * Carried rather than re-derived so every route inside the rehydrate asks the
    * one gate — see {@link ProviderKeyPublication}.
    */

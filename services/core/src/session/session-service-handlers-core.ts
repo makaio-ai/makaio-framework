@@ -2,14 +2,20 @@ import { TimeoutError, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type IMakaioSession, type OwnershipTopology } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turn/namespace.js';
 import { SessionEventStorageSubjects } from './session-events/namespace.js';
+import { AgentStorageSubjects } from './storage/agent-namespace.js';
 import { SessionStorageSubjects } from './storage/namespace.js';
 import {
   registerAdapterSessionIdReconciliationHandler,
   registerAgentAddedHandler,
   registerAgentRemovedHandler,
 } from './session-service-agent-handlers.js';
-import { registerAdapterSessionMovementObserver, registerSessionOwnershipAuthority } from './ownership/index.js';
+import {
+  registerAdapterSessionMovementObserver,
+  registerSessionOwnershipAuthority,
+  type OwnershipAuthorityHandle,
+} from './ownership/index.js';
 import { registerRestartAgentsHandler } from './handlers/restart-agents.js';
+import { retireTerminalAgentClaims } from './ownership/retire-agent-claims.js';
 
 /**
  * Dependencies required to register the framework-core session service handlers.
@@ -35,6 +41,16 @@ interface CoreSessionServiceHandlerDeps {
    * `'shared-machine'` — the reading no host can be wrong about.
    */
   topology?: OwnershipTopology;
+  /** Runtime-incarnation identity stamped onto ownership generations. */
+  instanceId?: string;
+}
+
+/** Core handler cleanups plus the private ownership lifecycle handle. */
+export interface RegisteredCoreSessionServiceHandlers {
+  /** Cleanup callbacks for the containing service. */
+  readonly cleanups: readonly (() => void)[];
+  /** Private authority shutdown capability. */
+  readonly ownership: OwnershipAuthorityHandle;
 }
 
 /**
@@ -53,29 +69,36 @@ interface CoreSessionServiceHandlerDeps {
  * `session.get` / `session.list` / `session.close` all delegate to
  * `SessionStorageSubjects.*` which may be unhandled in ephemeral mode.
  * @param deps - Bus, plus the identity the ownership authority is composed with
- * @returns Array of cleanup callbacks, one per registered handler
+ * @returns Cleanup callbacks plus the private ownership lifecycle handle.
  */
-export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandlerDeps): Array<() => void> {
-  return [
-    registerCreateHandler(deps),
-    registerGetHandler(deps),
-    registerListHandler(deps),
-    registerTurnAwaitHandler(deps),
-    registerCloseHandler(deps),
-    registerRestartAgentsHandler(deps.bus),
-    registerCoreUpdateHandler(deps),
-    registerCoreArchiveHandler(deps),
-    registerCorePurgeHandler(deps),
-    registerAgentAddedHandler(deps.bus),
-    registerAgentRemovedHandler(deps.bus),
-    registerAdapterSessionIdReconciliationHandler(deps.bus),
-    registerSessionOwnershipAuthority({
-      bus: deps.bus,
-      machineId: deps.machineId,
-      topology: deps.topology ?? 'shared-machine',
-    }),
-    registerAdapterSessionMovementObserver(deps.bus),
-  ];
+export function registerCoreSessionServiceHandlers(
+  deps: CoreSessionServiceHandlerDeps,
+): RegisteredCoreSessionServiceHandlers {
+  const authority = registerSessionOwnershipAuthority({
+    bus: deps.bus,
+    machineId: deps.machineId,
+    topology: deps.topology ?? 'shared-machine',
+    ...(deps.instanceId !== undefined && { instanceId: deps.instanceId }),
+  });
+  return {
+    cleanups: [
+      registerCreateHandler(deps),
+      registerGetHandler(deps),
+      registerListHandler(deps),
+      registerTurnAwaitHandler(deps),
+      registerCloseHandler(deps),
+      registerRestartAgentsHandler(deps.bus),
+      registerCoreUpdateHandler(deps),
+      registerCoreArchiveHandler(deps),
+      registerCorePurgeHandler(deps),
+      registerAgentAddedHandler(deps.bus),
+      registerAgentRemovedHandler(deps.bus),
+      registerAdapterSessionIdReconciliationHandler(deps.bus),
+      ...authority.cleanups,
+      registerAdapterSessionMovementObserver(deps.bus),
+    ],
+    ownership: authority.ownership,
+  };
 }
 
 /**
@@ -304,11 +327,23 @@ function registerCloseHandler(deps: CoreSessionServiceHandlerDeps): () => void {
       return;
     }
 
-    session.status = 'closed';
-    session.lastActivityAt = Date.now();
-    await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
-    await bus.emit(SessionSubjects.closed, { sessionId });
-    ctx.setResult({ success: true });
+    const transition = await bus.requestOptional(SessionStorageSubjects.update, {
+      sessionId,
+      status: 'closed',
+      lastActivityAt: Date.now(),
+      expectedStatus: ['active'],
+    });
+    if (transition.handled && transition.data.success) {
+      await bus.emit(SessionSubjects.closed, { sessionId });
+      ctx.setResult({ success: true });
+      return;
+    }
+
+    // A competing close may have committed between the read and this CAS. It is
+    // still idempotently successful, but this caller did not transition it and
+    // must not emit a second lifecycle event.
+    const current = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    ctx.setResult({ success: current.handled && current.data.session?.status === 'closed' });
   });
 }
 
@@ -382,11 +417,22 @@ function registerCoreArchiveHandler(deps: CoreSessionServiceHandlerDeps): () => 
       return;
     }
 
-    session.status = 'archived';
-    session.lastActivityAt = Date.now();
-    await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
-    await bus.emit(SessionSubjects.archived, { sessionId });
-    ctx.setResult({ success: true });
+    const transition = await bus.requestOptional(SessionStorageSubjects.update, {
+      sessionId,
+      status: 'archived',
+      lastActivityAt: Date.now(),
+      expectedStatus: ['closed'],
+    });
+    if (transition.handled && transition.data.success) {
+      await bus.emit(SessionSubjects.archived, { sessionId });
+      ctx.setResult({ success: true });
+      return;
+    }
+
+    // As with close, a successful competing archive remains idempotent without
+    // granting this losing CAS a second event emission.
+    const current = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    ctx.setResult({ success: current.handled && current.data.session?.status === 'archived' });
   });
 }
 
@@ -414,13 +460,38 @@ function registerCorePurgeHandler(deps: CoreSessionServiceHandlerDeps): () => vo
       return;
     }
 
+    const listedAgents = await bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
+    const agents = listedAgents.handled ? listedAgents.data.agents : [];
+    const sealed = await Promise.all(
+      agents.map(async (agent) => {
+        const result = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+          agentId: agent.agentId,
+          status: 'disposed',
+        });
+        return result.handled && result.data.success;
+      }),
+    );
+    if (sealed.some((success) => !success)) {
+      ctx.setResult({ success: false, error: 'Cannot purge session because an agent could not be sealed.' });
+      return;
+    }
+
+    const retired = await Promise.all(agents.map((agent) => retireTerminalAgentClaims(bus, agent.agentId)));
+    if (retired.some((result) => !result.released)) {
+      ctx.setResult({
+        success: false,
+        error: 'Cannot purge session while an owner runtime may still hold an agent connector.',
+      });
+      return;
+    }
+
     const listResult = await bus.requestOptional(SessionStorageSubjects.list, { status: 'all' });
     const sessions = listResult.handled ? listResult.data.sessions : [];
     for (const child of sessions) {
       if (child.parentSessionId === sessionId) {
-        await bus.requestOptional(SessionStorageSubjects.set, {
+        await bus.requestOptional(SessionStorageSubjects.update, {
           sessionId: child.sessionId,
-          session: { ...child, parentSessionId: undefined },
+          parentSessionId: null,
         });
       }
     }

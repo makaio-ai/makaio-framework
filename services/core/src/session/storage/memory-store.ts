@@ -1,4 +1,9 @@
-import type { IMakaioSession, MakaioSessionAgent, AdapterSessionClaimRecord } from '@makaio/contracts';
+import type {
+  IMakaioSession,
+  MakaioSessionAgent,
+  AdapterSessionClaimRecord,
+  RuntimeInstanceRecord,
+} from '@makaio/contracts';
 
 /**
  * In-memory backing state shared by the session, agent and ownership memory handlers.
@@ -16,6 +21,8 @@ export interface SessionStorageMemoryState {
   readonly agents: Map<string, MakaioSessionAgent>;
   /** Claim rows keyed by `claimId`. */
   readonly claims: Map<string, AdapterSessionClaimRecord>;
+  /** Runtime-instance rows keyed by the process/machine pair. */
+  readonly runtimeInstances: Map<string, RuntimeInstanceRecord>;
 }
 
 /**
@@ -31,6 +38,7 @@ export function createSessionStorageMemoryState(): SessionStorageMemoryState {
     sessions: new Map<string, IMakaioSession>(),
     agents: new Map<string, MakaioSessionAgent>(),
     claims: new Map<string, AdapterSessionClaimRecord>(),
+    runtimeInstances: new Map<string, RuntimeInstanceRecord>(),
   };
 }
 

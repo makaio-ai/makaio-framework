@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, SessionSubjects, type MakaioSessionAgent } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  SessionOwnershipStorageSubjects,
+  SessionSubjects,
+  type MakaioSessionAgent,
+} from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
+import { buildDeterministicAdapterId, registerAdapterRuntimeIdentityHandlers } from '../../adapter-runtime/identity.js';
 import { MakaioSessionService } from '../session-service.js';
+import { registerSessionOwnershipAuthority } from '../ownership/authority.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
+import { callerOwnedSuccessFields, registerCallerSettlementAckHandler } from '../testing/caller-owned-adapter-stub.js';
 import { verifyAndRecoverAgents } from '../utils/agent-recovery.js';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN } from '../recovery-plan.js';
 import { createTestAgent, registerMemorySessionBackends } from './shared.js';
@@ -12,6 +20,12 @@ import { createTestAgent, registerMemorySessionBackends } from './shared.js';
 const MACHINE_ID = 'recovery-identity-machine';
 /** Session both agents live in. */
 const SESSION_ID = 'session-multi-adapter';
+/** Foreign runtime hosting an explicitly configured, non-derived adapter id. */
+const FOREIGN_MACHINE_ID = 'recovery-identity-foreign-machine';
+/** The persisted adapter instance must be routable without deterministic derivation. */
+const OPAQUE_FOREIGN_ADAPTER_ID = 'adapter-instance-from-foreign-host';
+/** Runtime incarnation used only for owner-specific routing. */
+const OPAQUE_FOREIGN_OWNER_INSTANCE_ID = 'owner-instance-from-foreign-host';
 
 /**
  * Adapter identity of a reserved recovery, on a host that composes the
@@ -30,6 +44,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
     bus = createBusInstance();
     cleanups = [
       ...registerMemorySessionBackends(bus),
+      registerCallerSettlementAckHandler(bus),
       bus.on(AdapterSubjects.getAgent, (ctx) => {
         ctx.setResult({ agent: null }); // every agent in these cases is dead
       }),
@@ -50,14 +65,21 @@ describe('verifyAndRecoverAgents adapter identity', () => {
    * that never happens is visible in the dispatch.
    * @param agentId - Agent identifier
    * @param adapterName - Adapter type this agent belongs to
+   * @param overrides - Optional persisted-agent fields to override.
    * @returns The stored agent record
    */
-  async function seedDeadAgent(agentId: string, adapterName: string): Promise<MakaioSessionAgent> {
+  async function seedDeadAgent(
+    agentId: string,
+    adapterName: string,
+    overrides: Partial<MakaioSessionAgent> = {},
+  ): Promise<MakaioSessionAgent> {
     const agent = createTestAgent(agentId, {
       sessionId: SESSION_ID,
       adapterName,
       adapterId: `stale-${adapterName}`,
       status: 'dead',
+      runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
+      ...overrides,
     });
     await bus.request(AgentStorageSubjects.set, { agentId, agent });
     return agent;
@@ -66,10 +88,16 @@ describe('verifyAndRecoverAgents adapter identity', () => {
   it('resolves an adapter instance per dead agent, so a batch may span adapters', async () => {
     // One recovery config, two adapters: a batch-wide adapter ID would
     // rehydrate one of these agents into the other adapter's instance.
-    const agents = [await seedDeadAgent('dead-claude', 'claude-code'), await seedDeadAgent('dead-codex', 'codex')];
+    const agents = [
+      await seedDeadAgent('dead-claude', 'claude-code', { adapterId: 'live-claude-code' }),
+      await seedDeadAgent('dead-codex', 'codex', { adapterId: 'live-codex' }),
+    ];
     cleanups.push(
       bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
         ctx.setResult({ adapterId: `live-${ctx.payload.adapterName}` });
+      }),
+      bus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (ctx) => {
+        ctx.setResult({ ...ctx.payload, ownerInstanceId: service.requireOwnershipInstanceId() });
       }),
     );
 
@@ -81,12 +109,13 @@ describe('verifyAndRecoverAgents adapter identity', () => {
           adapterId: ctx.payload.adapterId,
           ...(ctx.payload.callerOwnsAgentRow !== undefined && { callerOwnsAgentRow: ctx.payload.callerOwnsAgentRow }),
         });
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
       }),
     );
 
     const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(bus, agents, {
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
     });
 
     // Case 96: the recovery dispatches with `callerOwnsAgentRow`, which is what
@@ -102,24 +131,27 @@ describe('verifyAndRecoverAgents adapter identity', () => {
     expect(deferredAgentIds.size).toBe(0);
   });
 
-  it('resolves the instance for the machine its ownership acts name', async () => {
+  it('uses the durable owner’s exact adapter instance for recovery', async () => {
     // One identity for the whole recovery. The instance ID is derived from
     // `(machineId, adapterName)` and the reservation is filed under `machineId`,
     // so resolving the instance for this runtime's own machine while reserving
     // for the caller's would build a key no other actor computes.
-    const agent = await seedDeadAgent('dead-scoped', 'claude-code');
+    const agent = await seedDeadAgent('dead-scoped', 'claude-code', { adapterId: 'live-claude-code' });
     const lookups: Array<{ adapterName: string; machineId?: string }> = [];
     cleanups.push(
       bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
         lookups.push({ adapterName: ctx.payload.adapterName, machineId: ctx.payload.machineId });
         ctx.setResult({ adapterId: `live-${ctx.payload.adapterName}` });
       }),
+      bus.on(AdapterRuntimeSubjects.resolveLiveIdentity, (ctx) => {
+        ctx.setResult({ ...ctx.payload, ownerInstanceId: service.requireOwnershipInstanceId() });
+      }),
     );
     const rehydrateTargets: string[] = [];
     cleanups.push(
       bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydrateTargets.push(ctx.payload.adapterId);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
       }),
     );
 
@@ -128,7 +160,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
       machineId: MACHINE_ID,
     });
 
-    expect(lookups).toEqual([{ adapterName: 'claude-code', machineId: MACHINE_ID }]);
+    expect(lookups).toEqual([]);
     expect(rehydrateTargets).toEqual(['live-claude-code']);
     expect(deferredAgentIds.size).toBe(0);
     // The send path's plan is fresh-with-history, so the reservation is keyless
@@ -153,7 +185,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
     cleanups.push(
       bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydrateTargets.push(ctx.payload.adapterId);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
       }),
     );
 
@@ -192,7 +224,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
     cleanups.push(
       bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydrateTargets.push(ctx.payload.agentId);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
       }),
     );
 
@@ -207,23 +239,142 @@ describe('verifyAndRecoverAgents adapter identity', () => {
     expect(stored?.status).toBe('idle');
   });
 
-  it('falls back to the stored adapter ID when the caller names no machine', async () => {
-    // The unscoped form, and the asymmetry is the point: with no machine named,
-    // every act of this recovery is unscoped too, so the stored instance cannot
-    // mix two identities. Recovery must still be attempted — an unresolvable
-    // adapter name is a routing question, not evidence that the agent is beyond
-    // recovery.
+  it('defers without dispatch when the caller cannot name the connector machine', async () => {
+    // A keyless reservation may designate under an internal sentinel, but a
+    // recovery creates a connector and must persist its exact runtime owner.
+    // Without a machine there is no target pair to dispatch or persist.
     const agent = await seedDeadAgent('dead-unresolvable', 'claude-code');
     const rehydrateTargets: string[] = [];
     cleanups.push(
       bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
         rehydrateTargets.push(ctx.payload.adapterId);
-        ctx.setResult({ success: true });
+        ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
       }),
     );
 
-    await verifyAndRecoverAgents(bus, [agent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
+    const result = await verifyAndRecoverAgents(bus, [agent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
 
-    expect(rehydrateTargets).toEqual(['stale-claude-code']);
+    expect(result.deferredAgentIds).toEqual(new Set(['dead-unresolvable']));
+    expect(rehydrateTargets).toEqual([]);
+  });
+
+  it('re-proves an opaque adapter separately from its owner incarnation after one stale native-resume plan', async () => {
+    const agentId = 'dead-opaque-owner-replan';
+    const originalProviderSessionId = 'provider-opaque-owner-original';
+    const movedProviderSessionId = 'provider-opaque-owner-moved';
+    const derivedForeignAdapterId = buildDeterministicAdapterId(FOREIGN_MACHINE_ID, 'claude-code');
+    const opaqueOwnerAgent = await seedDeadAgent(agentId, 'claude-code', {
+      adapterId: OPAQUE_FOREIGN_ADAPTER_ID,
+      adapterSessionId: originalProviderSessionId,
+      // The liveness probe, rather than a stale status marker, determines this
+      // connector is gone. This preserves the row's normal idle recovery state
+      // across the forced stale-plan retry.
+      status: 'idle',
+      runtimeOwner: { machineId: FOREIGN_MACHINE_ID, instanceId: OPAQUE_FOREIGN_OWNER_INSTANCE_ID },
+    });
+    const foreignAuthority = registerSessionOwnershipAuthority({
+      bus,
+      machineId: FOREIGN_MACHINE_ID,
+      topology: 'shared-machine',
+      instanceId: OPAQUE_FOREIGN_OWNER_INSTANCE_ID,
+    });
+    cleanups.push(...foreignAuthority.cleanups);
+
+    const { registry, cleanup } = registerAdapterRuntimeIdentityHandlers(bus, { currentMachineId: MACHINE_ID });
+    cleanups.push(cleanup);
+    registry.rememberLiveIdentity({
+      adapterId: OPAQUE_FOREIGN_ADAPTER_ID,
+      adapterName: 'claude-code',
+      machineId: FOREIGN_MACHINE_ID,
+      ownerInstanceId: OPAQUE_FOREIGN_OWNER_INSTANCE_ID,
+    });
+
+    const liveProofs: Array<{ adapterId: string; adapterName: string; machineId: string }> = [];
+    const derivedResolutions: Array<{ adapterName: string; machineId?: string }> = [];
+    cleanups.push(
+      bus.on(
+        AdapterRuntimeSubjects.resolveLiveIdentity,
+        async (ctx) => {
+          liveProofs.push(ctx.payload);
+          await ctx.next();
+        },
+        { priority: 100 },
+      ),
+      bus.on(
+        AdapterRuntimeSubjects.resolveId,
+        async (ctx) => {
+          derivedResolutions.push(ctx.payload);
+          await ctx.next();
+        },
+        { priority: 100 },
+      ),
+    );
+
+    let stalePlanInjected = false;
+    cleanups.push(
+      bus.on(
+        SessionSubjects.ownership.reserveStart,
+        async (ctx) => {
+          if (!stalePlanInjected && ctx.payload.recoveryGuard !== undefined) {
+            stalePlanInjected = true;
+            const moved = await bus.request(SessionOwnershipStorageSubjects.settleMovement, {
+              machineId: FOREIGN_MACHINE_ID,
+              adapterId: OPAQUE_FOREIGN_ADAPTER_ID,
+              adapterName: 'claude-code',
+              ownerInstance: { instanceId: 'opaque-owner-currency-mover' },
+              sessionId: SESSION_ID,
+              agentId,
+              expectedRevision: 0,
+              movement: {
+                kind: 'confirmed',
+                providerSessionId: movedProviderSessionId,
+                claimToken: crypto.randomUUID(),
+              },
+            });
+            if (moved.outcome !== 'settled' || moved.claim === null) {
+              throw new Error(`failed to move the opaque-owner recovery currency: ${moved.outcome}`);
+            }
+            await bus.request(SessionOwnershipStorageSubjects.release, {
+              agentId,
+              claimToken: moved.claim.claimToken,
+              disposition: 'released',
+            });
+          }
+          await ctx.next();
+        },
+        { priority: 1000 },
+      ),
+    );
+    const dispatched: Array<{ adapterId: string; resumeAdapterSessionId?: string }> = [];
+    cleanups.push(
+      bus.on(AdapterSubjects.rehydrateAgent, (ctx) => {
+        dispatched.push({
+          adapterId: ctx.payload.adapterId,
+          resumeAdapterSessionId: ctx.payload.resumeAdapterSessionId,
+        });
+        ctx.setResult({ success: true, ...callerOwnedSuccessFields(ctx.payload) });
+      }),
+    );
+
+    const result = await verifyAndRecoverAgents(bus, [opaqueOwnerAgent], {
+      plan: { kind: 'native-resume', resumeAdapterSessionId: originalProviderSessionId },
+      machineId: FOREIGN_MACHINE_ID,
+    });
+
+    const expectedProof = {
+      adapterId: OPAQUE_FOREIGN_ADAPTER_ID,
+      adapterName: 'claude-code',
+      machineId: FOREIGN_MACHINE_ID,
+    };
+    expect(stalePlanInjected).toBe(true);
+    expect(liveProofs).toEqual([expectedProof, expectedProof]);
+    expect(derivedResolutions).toEqual([]);
+    expect(derivedForeignAdapterId).not.toBe(OPAQUE_FOREIGN_ADAPTER_ID);
+    expect(OPAQUE_FOREIGN_OWNER_INSTANCE_ID).not.toBe(OPAQUE_FOREIGN_ADAPTER_ID);
+    expect(dispatched).toEqual([
+      { adapterId: OPAQUE_FOREIGN_ADAPTER_ID, resumeAdapterSessionId: movedProviderSessionId },
+    ]);
+    expect(result.recoveredAgentIds).toEqual(new Set([agentId]));
+    expect(result.deferredAgentIds).toEqual(new Set());
   });
 });

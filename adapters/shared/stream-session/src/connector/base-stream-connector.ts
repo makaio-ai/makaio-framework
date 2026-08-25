@@ -10,6 +10,7 @@ import {
   type BaseAgentConnectorConfig,
   type LedgerSessionContext,
   type AIReasoningLevel,
+  rejectQueuedHandles,
 } from '@makaio/ai-adapters-core';
 import type { ScopedBus } from '@makaio/bus-core';
 import {
@@ -486,10 +487,13 @@ export abstract class BaseStreamConnector<
     // generation on this agent id would drive its state machine. `detached` is a
     // weaker claim about the *provider*, not a licence to stay wired locally.
     const turnEventDrain = this.closeTurnEventLifecycle();
+    // The connector owns this queue, so terminal close must settle accepted
+    // handles when it removes the turn-finished handler that normally drains it.
+    rejectQueuedHandles(this.userMessageQueue);
     const session = this.session;
     this.session = undefined;
-    // `close()` synchronously closes the session queue before awaiting the
-    // active turn pause. Start it before any close-time drain can yield so a
+    // `close()` synchronously closes the session's dispatch gate before awaiting
+    // the active turn pause. Start it before any close-time drain can yield so a
     // retained session reference cannot dispatch after terminal close begins.
     const closeSession = session?.close();
     await turnEventDrain;

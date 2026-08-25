@@ -46,6 +46,9 @@ const StartAgentBaseSchema = z
     /** Target adapter instance ID */
     adapterId: z.string(),
 
+    /** Exact runtime incarnation to target when owner routing is required. */
+    ownerInstanceId: z.string().optional(),
+
     /**
      * Agent identity minted by the caller.
      *
@@ -226,6 +229,9 @@ export const StartAgentSchema = {
       /** Adapter instance that owns this agent */
       adapterId: z.string(),
 
+      /** Runtime incarnation that owns this agent. */
+      ownerInstanceId: z.string(),
+
       /** Adapter's own session ID (from provider SDK). May be undefined for idle fork starts. */
       adapterSessionId: z.string().optional(),
 
@@ -234,6 +240,9 @@ export const StartAgentSchema = {
 
       /** ID of the initial message being processed. Absent for idle agent creation. */
       messageId: z.string().optional(),
+
+      /** Opaque token required to acknowledge a caller-owned settlement. */
+      settlementAckToken: z.string().optional(),
     }),
     z.object({
       success: z.literal(false),

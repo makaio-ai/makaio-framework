@@ -24,6 +24,7 @@ import { SessionStartError } from '../session-start-error.js';
 import {
   abandonDispatchedStart,
   applySettlementOutcome,
+  rollbackReservedStart,
   StartClaimTokens,
   type StartCleanupPolicy,
 } from '../lead-start-cleanup.js';
@@ -44,14 +45,17 @@ describe('start cleanup release discipline (I15b)', () => {
   let service: MakaioSessionService;
   let cleanups: Array<() => void> = [];
   let stoppedAgentIds: string[];
+  let stoppedOwnerInstanceIds: Array<string | undefined>;
 
   beforeEach(async () => {
     stoppedAgentIds = [];
+    stoppedOwnerInstanceIds = [];
     bus = createBusInstance();
     cleanups = [
       ...registerMemorySessionBackends(bus),
       bus.on(AdapterSubjects.stopAgent, (ctx) => {
         stoppedAgentIds.push(ctx.payload.agentId);
+        stoppedOwnerInstanceIds.push(ctx.payload.ownerInstanceId);
         ctx.setResult({ success: true, evidence: 'released' });
       }),
     ];
@@ -85,6 +89,26 @@ describe('start cleanup release discipline (I15b)', () => {
     return agentId;
   }
 
+  it('does not treat an unhandled deletion as a confirmed rollback', async () => {
+    const rollbackBus = createBusInstance();
+    const agentId = 'unremoved-agent';
+    const unsubscribe = rollbackBus.on(AgentStorageSubjects.get, (context) => {
+      context.setResult({
+        agent: createTestAgent(agentId, {
+          sessionId: 'unhandled-delete-session',
+          adapterId: ADAPTER_ID,
+          adapterName: ADAPTER_NAME,
+          status: 'starting',
+        }),
+      });
+    });
+
+    const rollback = await rollbackReservedStart(rollbackBus, agentId, undefined);
+
+    unsubscribe();
+    expect(rollback).toEqual({ rowDeleted: false });
+  });
+
   /**
    * Take a real member reservation on one provider-session key.
    * @param sessionId - Session the reservation is taken in.
@@ -102,8 +126,10 @@ describe('start cleanup release discipline (I15b)', () => {
       agentId,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
       role: 'member',
       resumeProviderSessionId: providerSessionId,
+      claimToken: crypto.randomUUID(),
     });
     if (result.outcome !== 'reserved') throw new Error(`reservation refused: ${result.outcome}`);
     return result.reservation;
@@ -126,6 +152,7 @@ describe('start cleanup release discipline (I15b)', () => {
       agentId,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
       movement: { confirmed: true, providerSessionId },
     });
   }
@@ -193,6 +220,7 @@ describe('start cleanup release discipline (I15b)', () => {
       bus,
       ADAPTER_ID,
       agentId,
+      service.requireOwnershipInstanceId(),
       refusal,
       CALLER_OWNED,
       new StartClaimTokens([mine.claim?.claimToken]),
@@ -201,6 +229,7 @@ describe('start cleanup release discipline (I15b)', () => {
     expect(failure).toBeInstanceOf(SessionStartError);
     expect(failure instanceof SessionStartError ? failure.code : undefined).toBe(code);
     expect(stoppedAgentIds).toEqual([agentId]);
+    expect(stoppedOwnerInstanceIds).toEqual([service.requireOwnershipInstanceId()]);
     expect(await claimStates()).toEqual([
       ['provider-foreign', 'held'],
       ['provider-mine', status],
@@ -228,7 +257,15 @@ describe('start cleanup release discipline (I15b)', () => {
     expect(settled.outcome === 'idempotent' ? settled.claim?.claimToken : undefined).toBe(observerToken);
     // Accepted, so it returns — and the effective generation is recorded on the
     // way through, which is the whole point of recording before deciding.
-    await applySettlementOutcome(bus, ADAPTER_ID, agentId, settled, CALLER_OWNED, claimTokens);
+    await applySettlementOutcome(
+      bus,
+      ADAPTER_ID,
+      agentId,
+      service.requireOwnershipInstanceId(),
+      settled,
+      CALLER_OWNED,
+      claimTokens,
+    );
 
     // The later failure: the status compare-and-swap this attempt loses.
     await abandonDispatchedStart(bus, agentId, CALLER_OWNED, claimTokens);
@@ -251,6 +288,7 @@ describe('start cleanup release discipline (I15b)', () => {
       agentId,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
+      ownerInstanceId: service.requireOwnershipInstanceId(),
       movement: { confirmed: true, providerSessionId: 'provider-caller-token' },
       claimToken,
     });
@@ -302,6 +340,7 @@ function buildRefusal(
         agentId: 'other-agent',
         claimToken: 'holder-token',
         fence: 1,
+        ownerInstanceId: 'holder-owner-instance',
         status: 'held',
         claimedAt: Date.now(),
         updatedAt: Date.now(),

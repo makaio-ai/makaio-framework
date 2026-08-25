@@ -1,17 +1,23 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { SessionContext, StartAgentResponse } from '@makaio/contracts';
+import type { SessionContext, SessionOwnershipReservation, StartAgentResponse } from '@makaio/contracts';
 import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { mintClaimToken } from '../ownership/claim-token.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import { AttachStartError } from './attach-error.js';
-import type { AttachIdentity, AttachLocalityResult } from './attach-execution-types.js';
-import type { OwnedAdapterInstance } from '../utils/resolution.js';
+import type { AttachIdentity, AttachLeadTransition, AttachLocalityResult } from './attach-execution-types.js';
+import type { MachineScopedAdapterInstance } from '../utils/resolution.js';
 import { persistAttachAgentRow } from './attach-identity-persistence.js';
 import { reserveAttachStart, type AttachReservationResult } from './attach-reservation.js';
 import { launchAttachAgent, type AttachLaunchTarget } from './attach-runtime-options.js';
 import { completeCallerOwnedStart, type CallerOwnedStart } from './caller-owned-start.js';
-import { abandonDispatchedStart, rollbackReservedStart, StartClaimTokens } from './lead-start-cleanup.js';
+import {
+  abandonDispatchedStart,
+  rollbackReservedStart,
+  StartClaimTokens,
+  stopStartedConnector,
+  type StartCleanupPolicy,
+} from './lead-start-cleanup.js';
 
 /** Everything the reserved attach needs, resolved before it takes anything. */
 export interface ReservedAttachStart {
@@ -25,8 +31,10 @@ export interface ReservedAttachStart {
   readonly locality: AttachLocalityResult;
   /** Lead the caller observed on the session row, or `null` when it names none. */
   readonly expectedLeadAgentId: string | null;
+  /** Semantic lead transition decided before the reservation mutates designation state. */
+  readonly leadTransition: AttachLeadTransition;
   /** Instance the dispatch addresses, and the machine every ownership act names. */
-  readonly instance: OwnedAdapterInstance;
+  readonly instance: MachineScopedAdapterInstance;
 }
 
 /** A dispatched attach, and everything its completion or its unwinding needs. */
@@ -76,7 +84,7 @@ export async function startReservedAttachAgent(
   try {
     await persistAttachAgentRow(bus, {
       agentId,
-      adapterId: launch.adapterId,
+      instance: input.instance,
       identity,
       runtime: {
         ...launch.effectiveRuntimeOptions,
@@ -143,14 +151,18 @@ export async function startReservedAttachAgent(
     adapterName: identity.adapterName,
     claimTokens,
     settlementClaimToken,
-    policy: { writesAgentStatus: true, ...(reservation !== undefined && { reservation }) },
+    policy: buildAttachCleanupPolicy(input.leadTransition, reservation),
     ...(identity.providerConfigId !== undefined && { providerConfigId: identity.providerConfigId }),
-    ...(input.instance.machineId !== undefined && { machineId: input.instance.machineId }),
+    // Keyless designation can use the authority sentinel, but a live connector
+    // always settles and persists the machine that its dispatch targeted.
+    machineId: input.instance.machineId,
+    ownerInstanceId: reservation.ownerInstanceId,
   };
 
-  const startResult = await dispatchAttach(bus, input, dispatched, {
+  const startResult = await dispatchAttach(bus, input, reservation, dispatched, {
     ...launch,
     agentId,
+    ownerInstanceId: reservation.ownerInstanceId,
     ...(native && input.locality.resumeAdapterSessionId !== undefined
       ? { resumeAdapterSessionId: input.locality.resumeAdapterSessionId }
       : {}),
@@ -168,8 +180,31 @@ export async function startReservedAttachAgent(
   // activity states — would find nothing it may write. The start ends at its
   // settlement, exactly as Path A's does; the initial turn is the next
   // operation, not the last stage of this one.
-  await completeCallerOwnedStart(bus, dispatched, startResult.adapterSessionId);
+  await completeCallerOwnedStart(
+    bus,
+    dispatched,
+    startResult.adapterSessionId,
+    startResult.settlementAckToken,
+    startResult.ownerInstanceId,
+  );
   return { startResult, sessionContext, dispatched };
+}
+
+/**
+ * Build the post-dispatch policy from the semantic transition, not reservation artifacts.
+ * @param transition - Materialized lead transition decided before reservation.
+ * @param reservation - Reservation whose prior designation a replacement may restore.
+ * @returns Cleanup rights for failures after provider dispatch.
+ */
+function buildAttachCleanupPolicy(
+  transition: AttachLeadTransition,
+  reservation: SessionOwnershipReservation,
+): StartCleanupPolicy {
+  return {
+    writesAgentStatus: true,
+    connectorOnlyTeardown: true,
+    ...(transition === 'replace' && { reservation }),
+  };
 }
 
 /**
@@ -177,9 +212,11 @@ export async function startReservedAttachAgent(
  *
  * `abandoned` and never a deletion: deleting the row cascades its claims away
  * and thereby frees an ownership key for a provider session nobody has proven is
- * closed. The designation goes with it, because the policy names the reservation
- * that made it — a session pointed at a `dead` lead with no connector is worse
- * than one pointed at nothing.
+ * closed. A replacement restores the transaction-read previous lead. A first
+ * lead stays designated even when dead, because it remains the session's
+ * canonical recovery target; clearing it would make the next default send
+ * create a second lead instead of recovering the failed one. Members never
+ * touch designation.
  *
  * The second transition is what the shared cleanup cannot express. It unwinds a
  * start still in `starting`; an attach that failed at its *initial turn* has
@@ -193,11 +230,16 @@ export async function startReservedAttachAgent(
 export async function retireStartedAttach(bus: IMakaioBus, started: StartedAttachAgent): Promise<void> {
   const { dispatched } = started;
   await abandonDispatchedStart(bus, dispatched.agentId, dispatched.policy, dispatched.claimTokens);
-  await bus.requestOptional(AgentStorageSubjects.updateStatus, {
-    agentId: dispatched.agentId,
-    status: 'dead',
-    expectedStatus: ['idle', 'active'],
-  });
+  try {
+    await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+      agentId: dispatched.agentId,
+      status: 'dead',
+      expectedStatus: ['idle', 'active'],
+    });
+  } catch (error) {
+    console.debug(`[attach-handler] marking started agent ${dispatched.agentId} dead failed:`, error);
+  }
+  await stopStartedConnector(bus, dispatched.adapterId, dispatched.agentId, dispatched.ownerInstanceId, true);
 }
 
 /**
@@ -232,7 +274,19 @@ async function reserveOrRollBack(
       expectedLeadAgentId: input.expectedLeadAgentId,
     });
   } catch (error) {
-    await rollbackReservedStart(bus, agentId, undefined);
+    await rollbackReservedStart(
+      bus,
+      agentId,
+      undefined,
+      identity.role === 'lead'
+        ? {
+            sessionId: identity.sessionId,
+            agentId,
+            expectedLeadAgentId: input.expectedLeadAgentId,
+            transition: input.leadTransition === 'replace' ? 'replace' : 'fresh',
+          }
+        : undefined,
+    );
     throw new AttachStartError(
       'reservation-refused',
       `[attach-handler] reserving the start of agent ${agentId} failed`,
@@ -245,12 +299,28 @@ async function reserveOrRollBack(
   // Nothing was designated and nothing was claimed — a refused reservation rolls
   // its whole transaction back — so the row this attempt wrote is all there is
   // to take back.
-  await rollbackReservedStart(bus, agentId, undefined);
+  const rollback = await rollbackReservedStart(bus, agentId, undefined);
   if (reserved.kind === 'conflict') {
+    if (!rollback.rowDeleted) {
+      throw new AttachStartError(
+        'start-failed',
+        `[attach-handler] lost lead designation for agent ${agentId}, but its rollback could not be confirmed`,
+        'not-dispatched',
+      );
+    }
     throw new AttachStartError(
       'lead-conflict',
       `[attach-handler] session ${identity.sessionId} is led by ${reserved.currentLeadAgentId ?? 'no agent'}, not by ${agentId}`,
       'not-dispatched',
+    );
+  }
+  if (reserved.outcome === 'session-not-active') {
+    throw new AttachStartError(
+      'session-not-active',
+      `[attach-handler] session ${identity.sessionId} is ${reserved.status}`,
+      'not-dispatched',
+      undefined,
+      reserved.status,
     );
   }
   throw new AttachStartError(
@@ -286,6 +356,7 @@ async function seedFinalContext(bus: IMakaioBus, input: ReservedAttachStart): Pr
  * cleanly, while a throw carries no disposition at all and must retire it.
  * @param bus - Bus the dispatch is issued on.
  * @param input - The attach being started.
+ * @param reservation - Reservation used by the pre-dispatch rollback, irrespective of later cleanup policy.
  * @param dispatched - The start's cleanup handle.
  * @param target - The composed launch target.
  * @returns The successful start, re-stamped with the identity attach minted.
@@ -293,21 +364,56 @@ async function seedFinalContext(bus: IMakaioBus, input: ReservedAttachStart): Pr
 async function dispatchAttach(
   bus: IMakaioBus,
   input: ReservedAttachStart,
+  reservation: SessionOwnershipReservation,
   dispatched: CallerOwnedStart,
   target: Parameters<typeof launchAttachAgent>[1],
-): Promise<Extract<StartAgentResponse, { success: true }>> {
+): Promise<Extract<StartAgentResponse, { success: true }> & { readonly ownerInstanceId: string }> {
   const { agentId } = input;
   let startResult: Extract<StartAgentResponse, { success: true }>;
   try {
     startResult = await launchAttachAgent(bus, target);
   } catch (error) {
     const notDispatched = error instanceof AttachStartError && error.dispatch === 'not-dispatched';
-    if (notDispatched) await rollbackReservedStart(bus, agentId, dispatched.policy.reservation);
-    else await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
+    if (notDispatched) await rollbackReservedStart(bus, agentId, reservation);
+    else {
+      await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
+      await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+    }
     throw error;
   }
-  // The adapter echoes the identity it was given, but the row this attempt owns
-  // is the one it minted — so every consumer downstream reads it from here.
+  if (startResult.ownerInstanceId === undefined) {
+    await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
+    await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+    throw new AttachStartError(
+      'start-failed',
+      `[attach-handler] adapter omitted its owner instance for agent ${agentId}`,
+      'dispatch-uncertain',
+    );
+  }
+  if (startResult.ownerInstanceId !== target.ownerInstanceId) {
+    await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
+    await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+    throw new AttachStartError(
+      'start-failed',
+      `[attach-handler] adapter owner mismatch for agent ${agentId}: expected ${target.ownerInstanceId}, received ${startResult.ownerInstanceId}`,
+      'dispatch-uncertain',
+    );
+  }
+  if (
+    startResult.agentId !== target.agentId ||
+    startResult.adapterId !== target.adapterId ||
+    startResult.sessionId !== target.sessionId
+  ) {
+    await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
+    await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+    throw new AttachStartError(
+      'start-failed',
+      `[attach-handler] adapter response identity mismatch for agent ${agentId}`,
+      'dispatch-uncertain',
+    );
+  }
+  // The adapter may only confirm the identity it was given. Once confirmed, the
+  // pre-dispatch target remains the sole identity every downstream act reads.
   //
   // **Nothing fallible runs between here and the settlement.** The connector is
   // live on the key it confirmed — which for a degraded attach, or one whose
@@ -318,5 +424,11 @@ async function dispatchAttach(
   // retires a reservation that never named the confirmed key at all. The
   // session-close revalidation that used to sit here now runs after the start is
   // complete, where the teardown for a committed start already lives.
-  return { ...startResult, agentId };
+  return {
+    ...startResult,
+    agentId: target.agentId,
+    adapterId: target.adapterId,
+    sessionId: target.sessionId,
+    ownerInstanceId: target.ownerInstanceId,
+  };
 }

@@ -13,6 +13,7 @@ export {
   resolveModelCapabilities,
   resolveExecutionTarget,
   resolveOwnedAdapterInstance,
+  resolveAnnouncedAdapterInstance,
   type MachineScopedAdapterInstance,
   type OwnedAdapterInstance,
   type OwnedAdapterInstanceTarget,

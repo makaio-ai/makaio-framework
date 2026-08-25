@@ -42,6 +42,8 @@ export interface LeadDesignationRequest {
   readonly expectedLeadAgentId: string | null;
   /** Unset the designation instead of pointing it at `agentId`. */
   readonly clear?: true;
+  /** Mark this as failed-start cleanup restoring a prior non-null lead. */
+  readonly restore?: true;
 }
 
 /**
@@ -73,6 +75,7 @@ export async function designateSessionLead(
     designateLead: {
       expectedLeadAgentId: request.expectedLeadAgentId,
       ...(request.clear === true && { clear: true as const }),
+      ...(request.restore === true && { restore: true as const }),
     },
   });
   return result.handled ? result.data : undefined;

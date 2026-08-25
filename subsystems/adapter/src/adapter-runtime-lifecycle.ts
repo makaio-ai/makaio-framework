@@ -11,16 +11,16 @@
  * - {@link extractAdapterIdFromPackageName} — stable short-name derivation
  * - {@link toAvailableAdapter} — settings-facing adapter shape conversion
  * - {@link shutdownAdapterInstances} — best-effort shutdown of live instances
- * - {@link initializeEnabledAdapters} — factory invocation for enabled adapters
+ * - internal enabled-adapter initialization — factory invocation owned by the runtime registry
  * - {@link ensureAdapterConfigs} — file-backed config bootstrap
  * @see {@link AdapterSubsystemService} for the event-driven replacement.
  */
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects } from '@makaio/contracts';
+import { AdapterSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from './namespace.js';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
-import type { LoadedAdapter, AdapterInstance, AdapterInitOptions } from './adapter-runtime-types.js';
+import type { LoadedAdapter, AdapterInstance } from './adapter-runtime-types.js';
 import { resolveDefaultClientId } from './adapter-client-refs.js';
 import {
   AdapterInstanceCloseTimeoutError,
@@ -33,13 +33,36 @@ import {
 /** Maximum time to wait for an adapter instance close hook before continuing shutdown. */
 export const ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS = 5_000;
 
-type AdapterCloseHook = () => void | Promise<void>;
+type AdapterCloseHook = () => void | ConnectorTeardownResult | Promise<void | ConnectorTeardownResult>;
 
 interface CloseableAdapterInstance extends AdapterInstance {
   readonly shutdown?: AdapterCloseHook;
   readonly closeAsync?: AdapterCloseHook;
   readonly close?: AdapterCloseHook;
 }
+
+/** Evidence available at the close budget, plus a hook that remains active beyond it. */
+export interface AdapterRetirementAttempt {
+  /** Classified teardown evidence available immediately. */
+  readonly report: AdapterInstanceTeardownResult;
+  /** Completion signal when the close hook outlived its budget. */
+  readonly pendingCompletion?: Promise<AdapterInstanceTeardownResult>;
+}
+
+type AdapterInitializationRollback = (
+  adapterId: string,
+  adapterName: string,
+  ownerInstanceId: string,
+  instance: AdapterInstance,
+  initializedPublicationBegan: boolean,
+) => Promise<void>;
+
+type IsCurrentAdapter = (adapter: LoadedAdapter) => boolean;
+
+type CloseHookOutcome =
+  | { readonly kind: 'settled'; readonly reported: void | ConnectorTeardownResult }
+  | { readonly kind: 'failed'; readonly error: unknown }
+  | { readonly kind: 'timed-out'; readonly pendingCloseCompletion: Promise<void | ConnectorTeardownResult> };
 
 // ---------------------------------------------------------------------------
 // Re-exported public types
@@ -123,7 +146,48 @@ export async function closeAdapterInstance(
   if (!closeHook) {
     return;
   }
-  await runAdapterCloseHook(adapterId, closeHook, timeoutMs);
+  const outcome = await runAdapterCloseHook(closeHook, timeoutMs);
+  if (outcome.kind === 'failed') throw outcome.error;
+  if (outcome.kind === 'timed-out') throw new AdapterInstanceCloseTimeoutError(adapterId, timeoutMs);
+}
+
+/**
+ * Attempt one adapter retirement and classify exactly what the attempt proved.
+ *
+ * Unlike {@link closeAdapterInstance}, this boundary turns a close failure into
+ * an explicit teardown result. Dynamic lifecycle callers need that distinction:
+ * a weak result keeps the handle retired-but-owned instead of admitting a
+ * replacement over resources that may still be running.
+ * @param adapterId - Runtime adapter ID used for diagnostics.
+ * @param instance - Adapter instance to retire.
+ * @param timeoutMs - Maximum time to wait for the close hook.
+ * @returns The immediate evidence and a completion signal when the hook timed out.
+ */
+export async function retireAdapterInstance(
+  adapterId: string,
+  instance: AdapterInstance,
+  timeoutMs = ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS,
+): Promise<AdapterRetirementAttempt> {
+  const closeHook = resolveAdapterCloseHook(instance);
+  let failure: unknown;
+  let reported: ConnectorTeardownResult | void = undefined;
+  let pendingCompletion: Promise<AdapterInstanceTeardownResult> | undefined;
+  if (closeHook !== undefined) {
+    const outcome = await runAdapterCloseHook(closeHook, timeoutMs);
+    if (outcome.kind === 'settled') {
+      reported = outcome.reported;
+    } else if (outcome.kind === 'failed') {
+      failure = outcome.error;
+    } else {
+      failure = new AdapterInstanceCloseTimeoutError(adapterId, timeoutMs);
+      pendingCompletion = outcome.pendingCloseCompletion.then(
+        (lateReported) => classifyAdapterInstanceClose(adapterId, undefined, true, lateReported),
+        (lateFailure) => classifyAdapterInstanceClose(adapterId, lateFailure, true, undefined),
+      );
+    }
+  }
+  const report = classifyAdapterInstanceClose(adapterId, failure, closeHook !== undefined, reported);
+  return pendingCompletion === undefined ? { report } : { report, pendingCompletion };
 }
 
 /**
@@ -134,12 +198,11 @@ export async function closeAdapterInstance(
  * twice to answer that would let the two resolutions disagree about which of
  * `shutdown`/`closeAsync`/`close` an instance exposes. Callers that only need the
  * close go through {@link closeAdapterInstance}.
- * @param adapterId - Runtime adapter ID used for diagnostics.
  * @param closeHook - Hook resolved from the instance.
  * @param timeoutMs - Maximum time to wait for the hook.
- * @throws AdapterInstanceCloseTimeoutError When the hook does not return in time.
+ * @returns Whether the hook settled, failed, or remained active past its budget.
  */
-async function runAdapterCloseHook(adapterId: string, closeHook: AdapterCloseHook, timeoutMs: number): Promise<void> {
+async function runAdapterCloseHook(closeHook: AdapterCloseHook, timeoutMs: number): Promise<CloseHookOutcome> {
   const hookSettled = Promise.resolve().then(closeHook);
   // A hook that rejects *after* losing the race below has no consumer left, and an
   // unobserved rejection would take the whole shutdown down with it. The timeout is
@@ -148,12 +211,19 @@ async function runAdapterCloseHook(adapterId: string, closeHook: AdapterCloseHoo
   hookSettled.catch(() => undefined);
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  const hookOutcome: Promise<CloseHookOutcome> = hookSettled.then(
+    (reported): CloseHookOutcome => ({ kind: 'settled', reported }),
+    (error): CloseHookOutcome => ({ kind: 'failed', error }),
+  );
   try {
-    await Promise.race([
-      hookSettled,
-      new Promise<never>((_, reject) => {
+    return await Promise.race([
+      hookOutcome,
+      new Promise<CloseHookOutcome>((resolve) => {
         timeout = setTimeout(() => {
-          reject(new AdapterInstanceCloseTimeoutError(adapterId, timeoutMs));
+          resolve({
+            kind: 'timed-out',
+            pendingCloseCompletion: hookSettled,
+          });
         }, timeoutMs);
       }),
     ]);
@@ -206,36 +276,66 @@ async function shutDownOneAdapterInstance(
   adapterId: string,
   instance: AdapterInstance,
 ): Promise<AdapterInstanceTeardownResult> {
-  const closeHook = resolveAdapterCloseHook(instance);
-  let failure: unknown;
-  if (closeHook !== undefined) {
-    try {
-      await runAdapterCloseHook(adapterId, closeHook, ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
-    } catch (shutdownError) {
-      failure = shutdownError;
-      console.error(`[adapter-runtime] Error shutting down adapter ${adapterId}:`, shutdownError);
-    }
+  const { report: result } = await retireAdapterInstance(adapterId, instance);
+  if (result.evidence === 'unknown') {
+    console.error(`[adapter-runtime] Error shutting down adapter ${adapterId}:`, result.detail);
   }
-  return classifyAdapterInstanceClose(adapterId, failure, closeHook !== undefined);
+  return result;
 }
 
 /**
- * Roll back a live instance that was stored before its initialized event fully
- * published.
- * @param adapterId - Runtime adapter ID used as the instance map key.
- * @param instance - Instance to shut down before removal.
- * @param instances - Mutable instance registry.
+ * Retire a failed factory result through the registry-owned rollback boundary.
+ * @param adapter - Definition whose factory result failed admission.
+ * @param adapterId - Runtime identifier assigned to the result.
+ * @param ownerInstanceId - Authority incarnation that constructed the result.
+ * @param instance - Factory result to retire.
+ * @param rollback - Registry-owned retirement transition.
+ * @param initializedPublicationBegan - Whether initialized publication may have reached a subscriber.
  */
-async function rollbackInitializedAdapterInstance(
+async function retireFailedAdapterInitialization(
+  adapter: LoadedAdapter,
   adapterId: string,
+  ownerInstanceId: string,
   instance: AdapterInstance,
-  instances: Map<string, AdapterInstance>,
+  rollback: AdapterInitializationRollback,
+  initializedPublicationBegan: boolean,
 ): Promise<void> {
   try {
-    await closeAdapterInstance(adapterId, instance);
-  } finally {
-    instances.delete(adapterId);
+    await rollback(adapterId, adapter.name, ownerInstanceId, instance, initializedPublicationBegan);
+  } catch (rollbackError) {
+    console.error(`[adapter-runtime] Error rolling back adapter ${adapter.name}:`, rollbackError);
   }
+}
+
+/**
+ * Publish the initialized lifecycle event for one validated adapter instance.
+ * @param bus - Global lifecycle bus.
+ * @param adapter - Loaded definition for the initialized adapter.
+ * @param adapterId - Validated runtime identifier.
+ * @param machineId - Machine hosting the instance.
+ * @param ownerInstanceId - Authority incarnation hosting the instance.
+ * @param instance - Initialized adapter instance.
+ */
+async function publishAdapterInitialized(
+  bus: IMakaioBus,
+  adapter: LoadedAdapter,
+  adapterId: string,
+  machineId: string,
+  ownerInstanceId: string,
+  instance: AdapterInstance,
+): Promise<void> {
+  const metadata = instance as AdapterInstance & {
+    readonly capabilities?: readonly string[];
+    readonly nativeTools?: readonly string[];
+  };
+  await bus.emit(AdapterSubjects.initialized, {
+    adapterId,
+    adapterName: adapter.name,
+    machineId,
+    ownerInstanceId,
+    capabilities: [...(metadata.capabilities ?? [])],
+    ...(metadata.nativeTools !== undefined ? { nativeTools: [...metadata.nativeTools] } : {}),
+  });
 }
 
 /**
@@ -278,6 +378,74 @@ function resolveAdapterCloseHook(instance: AdapterInstance): AdapterCloseHook | 
   return undefined;
 }
 
+interface AdapterInitializationContext {
+  readonly bus: IMakaioBus;
+  readonly machineId: string;
+  readonly adapterInstances: Map<string, AdapterInstance>;
+  readonly platformDefaults: PlatformDefaults;
+  readonly resolveOwnerInstanceId: () => string;
+  readonly onInitialized: (adapterId: string, ownerInstanceId: string) => void;
+  readonly onRollback: AdapterInitializationRollback;
+  readonly isCurrentAdapter: IsCurrentAdapter;
+}
+
+/**
+ * Initialize one enabled definition while preserving its exact activation epoch.
+ * @param adapter - Exact loaded definition to initialize.
+ * @param context - Registry-owned lifecycle and activation dependencies.
+ */
+async function initializeOneEnabledAdapter(
+  adapter: LoadedAdapter,
+  context: AdapterInitializationContext,
+): Promise<void> {
+  const { bus, machineId, adapterInstances, platformDefaults, onRollback, isCurrentAdapter } = context;
+  if (!(await isAdapterEnabled(bus, adapter.name))) {
+    console.info(`Skipping disabled adapter: ${adapter.name}`);
+    return;
+  }
+  if (!isCurrentAdapter(adapter)) return;
+
+  const expectedAdapterId = resolveLoadedAdapterId(adapter, machineId);
+  const ownerInstanceId = context.resolveOwnerInstanceId();
+  const clientId = resolveDefaultClientId(adapter.options, adapter.clients);
+  const instance = await adapter.factory({
+    ...adapter.options,
+    adapterId: expectedAdapterId,
+    machineId,
+    ownerInstanceId,
+    platformDefaults,
+    definitionProviders: adapter.providers,
+    clientId,
+    globalBus: bus,
+  });
+
+  if (!isCurrentAdapter(adapter)) {
+    await retireFailedAdapterInitialization(adapter, expectedAdapterId, ownerInstanceId, instance, onRollback, false);
+    return;
+  }
+  if (instance.adapterId !== expectedAdapterId) {
+    await retireFailedAdapterInitialization(adapter, expectedAdapterId, ownerInstanceId, instance, onRollback, false);
+    throw new Error(
+      `Adapter '${adapter.name}' initialized with mismatched adapterId (expected '${expectedAdapterId}', got '${instance.adapterId}')`,
+    );
+  }
+
+  adapterInstances.set(expectedAdapterId, instance);
+  try {
+    context.onInitialized(expectedAdapterId, ownerInstanceId);
+  } catch (activationError) {
+    await retireFailedAdapterInitialization(adapter, expectedAdapterId, ownerInstanceId, instance, onRollback, false);
+    throw activationError;
+  }
+  try {
+    await publishAdapterInitialized(bus, adapter, expectedAdapterId, machineId, ownerInstanceId, instance);
+  } catch (emitError) {
+    await retireFailedAdapterInitialization(adapter, expectedAdapterId, ownerInstanceId, instance, onRollback, true);
+    throw emitError;
+  }
+  console.info(`Initialized adapter: ${adapter.name} (${adapter.packageName})`);
+}
+
 /**
  * Initialize the subset of loaded adapters that are enabled in settings.
  * @param bus - Bus instance used for adapter-subsystem requests.
@@ -285,6 +453,10 @@ function resolveAdapterCloseHook(instance: AdapterInstance): AdapterCloseHook | 
  * @param adapters - Loaded adapter definitions to initialize.
  * @param adapterInstances - Mutable instance registry.
  * @param platformDefaults - Platform-provided adapter defaults.
+ * @param resolveOwnerInstanceId - Resolve the active ownership-authority incarnation.
+ * @param onInitialized - Record the exact owner paired with each initialized instance.
+ * @param onRollback - Retire a failed activation through the owning registry.
+ * @param isCurrentAdapter - Confirm the exact definition epoch remains active across awaits.
  */
 export async function initializeEnabledAdapters(
   bus: IMakaioBus,
@@ -292,62 +464,26 @@ export async function initializeEnabledAdapters(
   adapters: readonly LoadedAdapter[],
   adapterInstances: Map<string, AdapterInstance>,
   platformDefaults: PlatformDefaults,
+  resolveOwnerInstanceId: () => string,
+  onInitialized: (adapterId: string, ownerInstanceId: string) => void,
+  onRollback: AdapterInitializationRollback,
+  isCurrentAdapter: IsCurrentAdapter,
 ): Promise<void> {
   const failedAdapters: Array<{ adapterName: string; error: unknown }> = [];
+  const context: AdapterInitializationContext = {
+    bus,
+    machineId,
+    adapterInstances,
+    platformDefaults,
+    resolveOwnerInstanceId,
+    onInitialized,
+    onRollback,
+    isCurrentAdapter,
+  };
 
   for (const adapter of adapters) {
     try {
-      if (!(await isAdapterEnabled(bus, adapter.name))) {
-        console.info(`Skipping disabled adapter: ${adapter.name}`);
-        continue;
-      }
-
-      const expectedAdapterId = resolveLoadedAdapterId(adapter, machineId);
-      const clientId = resolveDefaultClientId(adapter.options, adapter.clients);
-      const instance = await adapter.factory({
-        ...adapter.options,
-        adapterId: expectedAdapterId,
-        platformDefaults,
-        definitionProviders: adapter.providers,
-        clientId,
-        globalBus: bus,
-      } as AdapterInitOptions);
-
-      if (instance.adapterId !== expectedAdapterId) {
-        const mismatchError = new Error(
-          `Adapter '${adapter.name}' initialized with mismatched adapterId (expected '${expectedAdapterId}', got '${instance.adapterId}')`,
-        );
-        try {
-          await closeAdapterInstance(expectedAdapterId, instance);
-        } catch (rollbackError) {
-          console.error(`[adapter-runtime] Error rolling back adapter ${adapter.name}:`, rollbackError);
-        }
-        throw mismatchError;
-      }
-
-      adapterInstances.set(expectedAdapterId, instance);
-      const initializedMetadata = instance as AdapterInstance & {
-        readonly capabilities?: readonly string[];
-        readonly nativeTools?: readonly string[];
-      };
-      try {
-        await bus.emit(AdapterSubjects.initialized, {
-          adapterId: expectedAdapterId,
-          adapterName: adapter.name,
-          capabilities: [...(initializedMetadata.capabilities ?? [])],
-          ...(initializedMetadata.nativeTools !== undefined
-            ? { nativeTools: [...initializedMetadata.nativeTools] }
-            : {}),
-        });
-      } catch (emitError) {
-        try {
-          await rollbackInitializedAdapterInstance(expectedAdapterId, instance, adapterInstances);
-        } catch (rollbackError) {
-          console.error(`[adapter-runtime] Error rolling back adapter ${adapter.name}:`, rollbackError);
-        }
-        throw emitError;
-      }
-      console.info(`Initialized adapter: ${adapter.name} (${adapter.packageName})`);
+      await initializeOneEnabledAdapter(adapter, context);
     } catch (error) {
       failedAdapters.push({ adapterName: adapter.name, error });
     }

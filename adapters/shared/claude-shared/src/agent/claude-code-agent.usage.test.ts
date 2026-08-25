@@ -131,6 +131,8 @@ async function makeAgent(): Promise<{ agent: TestClaudeAgent; connector: TestCla
     agentId: TEST_AGENT_ID,
     adapterId: TEST_ADAPTER_ID,
     adapterName: 'claude-shared-test',
+    machineId: 'test-machine',
+    ownerInstanceId: 'test-owner-instance',
     adapterBus,
     teardownArbiter: new AgentTeardownArbiter(),
     globalBus: MakaioBus,

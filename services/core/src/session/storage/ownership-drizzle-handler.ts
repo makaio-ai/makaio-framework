@@ -66,46 +66,66 @@
  * *zero-row* lock means differs per operation and is therefore decided at each
  * call site.
  *
- * **Statement order is agents → claims → sessions** in every operation of the
- * aggregate — claim, settle, movement and release alike — so no two of them can
- * take the three tables in opposite orders and deadlock. The settle's claim-row
- * touch sits inside that order rather than beside it — `agents` (own row) →
- * `claims` (own generation) → `agents` (already held) → `sessions` — and every
- * operation only ever locks *its own* agent's row, so a settle and a takeover
- * meet on the claim row alone, which both take after their agents row. There is
- * no cycle.
+ * **Statement order for a keyed allocation is incarnation counters →
+ * runtime_instances → agents → claims → sessions**, so a guarded recovery
+ * cannot invert the allocation and agent-lock order used by an ordinary keyed
+ * claim. The settle's
+ * claim-row touch sits inside its portion of that order rather than beside it —
+ * `agents` (own row) → `claims` (own generation) → `agents` (already held) →
+ * `sessions`. Movement additionally acquires its full mutable stable-key set
+ * before takeover or retirement, so crossed movements share the engine-defined
+ * transaction-lock order instead of row-ID order.
  *
  * **The keyless reservation is the one shape with an empty claims phase.** A
  * fresh start has no provider identity to own yet, so `claim` with
  * `providerSessionId: null` writes no claim row at all and its whole effect is
  * the lead designation and the currency mirror that goes with it — still one
- * transaction, still compare-and-swap. Its agent guards are stated against the
- * row `lockAgentAllocation` has already taken rather than as conjuncts of a
+ * transaction, still compare-and-swap. A guarded keyless reservation still
+ * registers the runtime identity before its agent and sessions phases: it
+ * publishes that identity onto the agent row, so later authority teardown must
+ * be able to retire it. Its agent guards are stated against the row
+ * `lockAgentAllocation` has already taken rather than as conjuncts of a
  * claim-table statement, because there is no such statement; the lock makes that
  * row unchangeable for the rest of the transaction, so the two are equally
  * self-guarding.
  * @packageDocumentation
  */
-import { and, asc, eq, isNull, or, type SQL } from 'drizzle-orm';
-import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { and, eq, isNull, or, type SQL } from 'drizzle-orm';
+import {
+  acquireTransactionLocks,
+  executeTransaction,
+  resolveSchema,
+  type MakaioDatabase,
+} from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
+  isInactiveSafeLeadDesignationMutation,
+  normalizeSessionOwnershipClaimRequest,
+  SessionOwnershipSettleMovementRequestSchema,
   SessionOwnershipStorageSubjects,
   type SessionOwnershipClaimRequest,
   type SessionOwnershipClaimResult,
   type SessionOwnershipReleaseAgentClaimsRequest,
   type SessionOwnershipReleaseAgentClaimsResult,
-  type SessionOwnershipReleaseRequest,
-  type SessionOwnershipReleaseResult,
 } from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
-import { readClaimByKey, readClaimByToken } from './ownership-drizzle-reads.js';
+import { leadConflict, takenClaim } from './ownership-drizzle-claim-outcomes.js';
+import { acquisitionOwnershipClaimTransactionLock } from './ownership-drizzle-claim-keys.js';
+import { runFinalizeRecovery } from './ownership-drizzle-finalize-recovery.js';
+import { readClaimByKey } from './ownership-drizzle-reads.js';
+import { runRelease } from './ownership-drizzle-release.js';
+import {
+  attemptGuardedRecoveryTakeover,
+  drizzleRecoveryConflict,
+  evaluateDrizzleRecoveryGuard,
+  finishDrizzleRecoveryClaim,
+} from './ownership-drizzle-recovery.js';
 import { runSettleCurrency } from './ownership-drizzle-settle.js';
 import { runSettleMovement } from './ownership-drizzle-movement.js';
 import {
   insertClaimGeneration,
-  isIncumbentUnusable,
   resolveClaimTargets,
+  resolveTakeoverAuthorization,
   takeOverClaimRow,
   type TakeoverAuthorization,
 } from './ownership-drizzle-acquire.js';
@@ -113,22 +133,21 @@ import {
   buildAgentGuard,
   type AgentGuardMode,
   buildLeadCurrencyMirror,
-  buildListClaimsPredicates,
+  ClaimRollbackSignal,
+  ensureRuntimeInstance,
+  type KeyedClaimRequest,
+  type LeadDesignationOutcome,
   lockAgentAllocation,
+  type LockedClaimant,
   mapClaim,
-  mapCurrency,
+  registerOwnershipReadHandlers,
+  registerRuntimeInstanceHandlers,
   type AgentRow,
-  type ClaimAcquisition,
   type ClaimRow,
   type OwnershipTables,
   type OwnershipTransaction,
+  type RuntimeInstanceAllocation,
 } from './ownership-drizzle-rows.js';
-
-/** Handler dependencies for the session ownership handlers. */
-interface OwnershipHandlerDeps {
-  readonly bus: IMakaioBus;
-  readonly db: MakaioDatabase;
-}
 
 /**
  * Rollback signal for a claim that must leave nothing written at all.
@@ -143,32 +162,6 @@ interface OwnershipHandlerDeps {
  * carries the whole modeled result rather than one outcome's fields, so a new
  * rollback reason needs no second class.
  */
-class ClaimRollbackSignal extends Error {
-  /** Modeled outcome to report once the transaction has rolled back. */
-  public readonly result: SessionOwnershipClaimResult;
-
-  /**
-   * Create the rollback signal.
-   * @param result - Modeled claim outcome to report after the rollback.
-   */
-  public constructor(result: SessionOwnershipClaimResult) {
-    super(`session ownership claim rolled back: ${result.outcome}`);
-    this.name = 'ClaimRollbackSignal';
-    this.result = result;
-  }
-}
-
-/** A claim request whose ownership key is present — everything but a keyless reservation. */
-type KeyedClaimRequest = SessionOwnershipClaimRequest & ClaimAcquisition;
-
-/** What the sessions phase of a claim established about the lead designation. */
-interface LeadDesignationOutcome {
-  /** Whether this call moved the session's lead designation. */
-  readonly leadDesignated: boolean;
-  /** Lead the session named inside this transaction, before any designation. */
-  readonly previousLeadAgentId: string | null;
-}
-
 /**
  * Take the session row and read the lead it names, in one statement.
  *
@@ -185,21 +178,23 @@ interface LeadDesignationOutcome {
  * @param tx - Open transaction.
  * @param tables - Dialect-resolved session storage tables.
  * @param sessionId - Session whose designation is being taken.
- * @returns The lead the session names, `null` when it has none, `undefined` when
- *   the session row does not exist.
+ * @returns The locked admission phase, or `undefined` when the session row does
+ *   not exist.
  */
 async function touchSessionLead(
   tx: OwnershipTransaction,
   tables: OwnershipTables,
   sessionId: string,
-): Promise<string | null | undefined> {
+): Promise<
+  { readonly leadAgentId: string | null; readonly status: 'active' | 'closed' | 'archived' | 'discovered' } | undefined
+> {
   const { sessions } = tables;
   const [row] = await tx
     .update(sessions)
     .set({ lastActivityAt: sessions.lastActivityAt })
     .where(eq(sessions.sessionId, sessionId))
-    .returning({ leadAgentId: sessions.leadAgentId });
-  return row === undefined ? undefined : (row.leadAgentId ?? null);
+    .returning({ leadAgentId: sessions.leadAgentId, status: sessions.status });
+  return row === undefined ? undefined : { leadAgentId: row.leadAgentId ?? null, status: row.status };
 }
 
 /**
@@ -266,10 +261,14 @@ async function applyLeadDesignation(
   payload: SessionOwnershipClaimRequest,
 ): Promise<LeadDesignationOutcome> {
   const { sessions } = tables;
-  const previousLeadAgentId = await touchSessionLead(tx, tables, payload.sessionId);
-  if (previousLeadAgentId === undefined) {
+  const session = await touchSessionLead(tx, tables, payload.sessionId);
+  if (session === undefined) {
     throw new ClaimRollbackSignal({ outcome: 'not-found', missing: 'session' });
   }
+  if (session.status !== 'active' && (session.status !== 'closed' || !isInactiveSafeLeadDesignationMutation(payload))) {
+    throw new ClaimRollbackSignal({ outcome: 'session-not-active', status: session.status });
+  }
+  const previousLeadAgentId = session.leadAgentId;
   const designation = payload.designateLead;
   if (designation === undefined) return { leadDesignated: false, previousLeadAgentId };
 
@@ -298,15 +297,6 @@ async function applyLeadDesignation(
 
   if (matched.length === 0) return refuseDesignation(tx, tables, payload, previousLeadAgentId, guard);
   return { leadDesignated: promotes, previousLeadAgentId };
-}
-
-/**
- * Name the modeled `lead-conflict` outcome.
- * @param currentLeadAgentId - Lead the session actually names, or `null`.
- * @returns The `lead-conflict` result.
- */
-function leadConflict(currentLeadAgentId: string | null): SessionOwnershipClaimResult {
-  return { outcome: 'lead-conflict', currentLeadAgentId };
 }
 
 /**
@@ -350,36 +340,15 @@ async function refuseDesignation(
 }
 
 /**
- * Report a claim that was taken, or recognized as already taken.
- * @param outcome - Whether this call took the generation or found its own.
- * @param claim - The generation as it now stands, or `null` for a keyless reservation.
- * @param lead - What the sessions phase established.
- * @returns The modeled claim outcome.
- */
-function takenClaim(
-  outcome: 'claimed' | 'idempotent',
-  claim: ClaimRow | null,
-  lead: LeadDesignationOutcome,
-): SessionOwnershipClaimResult {
-  return {
-    outcome,
-    claim: claim === null ? null : mapClaim(claim),
-    leadDesignated: lead.leadDesignated,
-    previousLeadAgentId: lead.previousLeadAgentId,
-  };
-}
-
-/**
  * Take the incumbent generation over, and classify a takeover that wrote nothing.
  *
  * The write itself is {@link takeOverClaimRow}, which carries the whole
  * authority. A zero-row UPDATE is then classified against the key as it stands
  * *now* — never against the row the classifying read produced:
  * - the key still carries the very generation that was named: the CAS held and
- *   it was the agent guard, or the incumbent's disposal, that refused. A broken
- *   `(agent, session)` pair or a removed taker is named by
- *   {@link resolveClaimTargets}; an incumbent that is no longer disposed leaves
- *   nothing to report but the holder;
+ *   the agent or owner-identity guard refused. A broken `(agent, session)` pair
+ *   or a removed taker is named by {@link resolveClaimTargets}; a failed
+ *   owner-identity predicate leaves nothing to report but the holder;
  * - the key carries a different generation: it moved on, which is
  *   `already-claimed` naming *that* holder;
  * - the key carries nothing at all: the named generation was released while this
@@ -403,7 +372,15 @@ async function takeOverClaim(
   authorization: TakeoverAuthorization,
   now: number,
 ): Promise<SessionOwnershipClaimResult | typeof RETRY_ACQUISITION> {
-  const updated = await takeOverClaimRow(tx, tables, payload, incumbent, authorization, now);
+  const updated = await takeOverClaimRow(
+    tx,
+    tables,
+    payload,
+    incumbent,
+    authorization,
+    now,
+    payload.recoveryGuard?.ownerGeneration ?? undefined,
+  );
   if (updated !== undefined) return takenClaim('claimed', updated, await applyLeadDesignation(tx, tables, payload));
 
   const holder = await readClaimByKey(tx, tables, payload);
@@ -469,30 +446,6 @@ async function repeatClaim(
 const RETRY_ACQUISITION = Symbol('retry-acquisition');
 
 /**
- * Decide what, if anything, permits taking the incumbent's key.
- *
- * The token the caller named comes first: it is an explicit conclusion about a
- * specific generation, and honouring it regardless of the incumbent's state is
- * what `supersedes` means. Failing that, an incumbent whose owning agent is
- * `disposed` is taken over unconditionally — a removed agent can never
- * legitimately hold a key, so no caller evidence is needed or wanted.
- * @param tx - Open transaction.
- * @param tables - Dialect-resolved session storage tables.
- * @param payload - Claim request contending for the key.
- * @param incumbent - Claim row currently holding it.
- * @returns What authorizes the takeover, or `undefined` when nothing does.
- */
-async function resolveTakeoverAuthorization(
-  tx: OwnershipTransaction,
-  tables: OwnershipTables,
-  payload: KeyedClaimRequest,
-  incumbent: ClaimRow,
-): Promise<TakeoverAuthorization | undefined> {
-  if (payload.supersedes?.claimToken === incumbent.claimToken) return 'named-token';
-  return (await isIncumbentUnusable(tx, tables, incumbent)) ? 'incumbent-disposed' : undefined;
-}
-
-/**
  * Attempt one acquisition of the ownership key.
  * @param tx - Open transaction.
  * @param tables - Dialect-resolved session storage tables.
@@ -508,10 +461,18 @@ async function attemptAcquisition(
   payload: KeyedClaimRequest,
   now: number,
 ): Promise<SessionOwnershipClaimResult | typeof RETRY_ACQUISITION> {
+  if (payload.recoveryGuard?.ownerGeneration) {
+    return attemptGuardedRecoveryTakeover(tx, tables, payload, async (incumbent, authorization) => {
+      const result = await takeOverClaim(tx, tables, payload, incumbent, authorization, now);
+      return result === RETRY_ACQUISITION ? undefined : result;
+    });
+  }
+
   const inserted = await insertClaimGeneration(tx, tables, payload, now);
   if (inserted !== undefined) return takenClaim('claimed', inserted, await applyLeadDesignation(tx, tables, payload));
 
   const existing = await readClaimByKey(tx, tables, payload);
+  if (payload.recoveryGuard !== undefined) return drizzleRecoveryConflict(payload, existing);
   if (existing === undefined) {
     // The insert produced no row and nothing holds the key. Either a guard in
     // the acquiring SELECT did not hold — a missing row, an agent that is not a
@@ -537,7 +498,13 @@ async function attemptAcquisition(
     return { outcome: 'already-claimed', holder: mapClaim(existing) };
   }
 
-  const authorization = await resolveTakeoverAuthorization(tx, tables, payload, existing);
+  const authorization = await resolveTakeoverAuthorization(
+    tx,
+    tables,
+    payload,
+    existing,
+    payload.supersedes?.claimToken === existing.claimToken,
+  );
   if (authorization === undefined) return { outcome: 'already-claimed', holder: mapClaim(existing) };
   return takeOverClaim(tx, tables, payload, existing, authorization, now);
 }
@@ -578,11 +545,6 @@ async function runKeylessReservation(
   return takenClaim('claimed', null, await applyLeadDesignation(tx, tables, payload));
 }
 
-/** The claiming agent's locked row, or the refusal to report instead. */
-type LockedClaimant =
-  | { readonly kind: 'ok'; readonly agent: AgentRow }
-  | { readonly kind: 'refused'; readonly result: SessionOwnershipClaimResult };
-
 /**
  * Open the claim on the claiming agent's row.
  *
@@ -620,39 +582,116 @@ async function lockClaimingAgent(
 }
 
 /**
+ * Complete a keyless claim after entering its transaction.
+ *
+ * Guarded reservations allocate their exact runtime target before locking the
+ * agent; every subsequent refusal is signaled for transaction rollback, so an
+ * attempted recovery never consumes an incarnation without publishing it.
+ * @param tx - Open ownership transaction.
+ * @param tables - Dialect-resolved ownership tables.
+ * @param payload - Keyless claim request.
+ * @param ownerInstance - Optional runtime identity from the request.
+ * @param now - Allocation timestamp.
+ * @returns The modeled keyless claim outcome.
+ */
+async function runKeylessClaim(
+  tx: OwnershipTransaction,
+  tables: OwnershipTables,
+  payload: SessionOwnershipClaimRequest,
+  ownerInstance: { readonly instanceId: string } | undefined,
+  now: number,
+): Promise<SessionOwnershipClaimResult> {
+  let guardedKeylessOwner: RuntimeInstanceAllocation | undefined;
+  if (payload.recoveryGuard !== undefined) {
+    if (ownerInstance === undefined) throw new Error('guarded recovery claim requires ownerInstance');
+    guardedKeylessOwner = await ensureRuntimeInstance(
+      tx,
+      tables,
+      { instanceId: ownerInstance.instanceId, machineId: payload.machineId },
+      now,
+    );
+  }
+  const claimant = await lockClaimingAgent(tx, tables, payload);
+  if (claimant.kind === 'refused') {
+    if (guardedKeylessOwner !== undefined) throw new ClaimRollbackSignal(claimant.result);
+    return claimant.result;
+  }
+  const guardRefusal = await evaluateDrizzleRecoveryGuard(tx, tables, payload, claimant.agent);
+  if (guardRefusal !== undefined) {
+    if (guardedKeylessOwner !== undefined) throw new ClaimRollbackSignal(guardRefusal);
+    return guardRefusal;
+  }
+  const result = await runKeylessReservation(tx, tables, payload, claimant.agent);
+  if (guardedKeylessOwner !== undefined && result.outcome !== 'claimed') throw new ClaimRollbackSignal(result);
+  return finishDrizzleRecoveryClaim(tx, tables, payload, result);
+}
+
+/**
  * Take or take over the ownership claim on a provider session — or reserve a
  * start that has no provider session yet.
  * @param db - Database handle.
- * @param payload - Claim request.
+ * @param request - Claim request.
  * @returns The modeled claim outcome.
  * @throws When a competitor keeps taking and freeing the key faster than this
  *   call can acquire it. Sustained contention of that shape is not a modeled
  *   outcome — no row is missing and no holder exists to report — so it surfaces
  *   as a failure the caller retries, rather than as a fabricated `not-found`.
  */
-async function runClaim(
-  db: MakaioDatabase,
-  payload: SessionOwnershipClaimRequest,
-): Promise<SessionOwnershipClaimResult> {
+async function runClaim(db: MakaioDatabase, request: unknown): Promise<SessionOwnershipClaimResult> {
+  const payload = normalizeSessionOwnershipClaimRequest(request);
   const tables = resolveSchema(db, sessionStorageSchema);
   const now = Date.now();
+  const ownerInstance = payload.ownerInstance;
+  if (payload.providerSessionId !== null && ownerInstance === undefined) {
+    throw new Error('keyed session ownership claim requires ownerInstance');
+  }
+  if (payload.recoveryGuard !== undefined && ownerInstance === undefined) {
+    throw new Error('guarded recovery claim requires ownerInstance');
+  }
 
   try {
     return await executeTransaction(db, async (tx): Promise<SessionOwnershipClaimResult> => {
-      const claimant = await lockClaimingAgent(tx, tables, payload);
-      if (claimant.kind === 'refused') return claimant.result;
-
       const { providerSessionId } = payload;
-      if (providerSessionId === null) return runKeylessReservation(tx, tables, payload, claimant.agent);
+      if (providerSessionId !== null) {
+        if (ownerInstance === undefined) throw new Error('keyed session ownership claim requires ownerInstance');
+        const owner = await ensureRuntimeInstance(
+          tx,
+          tables,
+          { instanceId: ownerInstance.instanceId, machineId: payload.machineId },
+          now,
+        );
 
-      const keyed: KeyedClaimRequest = { ...payload, providerSessionId };
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const result = await attemptAcquisition(tx, tables, keyed, now);
-        if (result !== RETRY_ACQUISITION) return result;
+        const claimant = await lockClaimingAgent(tx, tables, payload);
+        if (claimant.kind === 'refused') {
+          if (owner.inserted) throw new ClaimRollbackSignal(claimant.result);
+          return claimant.result;
+        }
+        const keyed: KeyedClaimRequest = {
+          ...payload,
+          providerSessionId,
+          ownerInstance,
+          ownerInstanceId: ownerInstance.instanceId,
+        };
+        await acquireTransactionLocks(db, tx, [acquisitionOwnershipClaimTransactionLock(keyed)]);
+        if (payload.recoveryGuard !== undefined) {
+          const guardRefusal = await evaluateDrizzleRecoveryGuard(tx, tables, payload, claimant.agent);
+          if (guardRefusal !== undefined) {
+            if (owner.inserted) throw new ClaimRollbackSignal(guardRefusal);
+            return guardRefusal;
+          }
+        }
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const result = await attemptAcquisition(tx, tables, keyed, now);
+          if (result === RETRY_ACQUISITION) continue;
+          if (owner.inserted && result.outcome !== 'claimed') throw new ClaimRollbackSignal(result);
+          return finishDrizzleRecoveryClaim(tx, tables, payload, result);
+        }
+        throw new Error(
+          `session ownership claim could not be acquired: the key ${payload.machineId}/${payload.adapterId}/${providerSessionId} was taken and freed by a competitor on every attempt`,
+        );
       }
-      throw new Error(
-        `session ownership claim could not be acquired: the key ${payload.machineId}/${payload.adapterId}/${providerSessionId} was taken and freed by a competitor on every attempt`,
-      );
+
+      return runKeylessClaim(tx, tables, payload, ownerInstance, now);
     });
   } catch (error) {
     if (error instanceof ClaimRollbackSignal) return error.result;
@@ -699,71 +738,6 @@ async function runClaim(
  * @param payload - Release request.
  * @returns The modeled release outcome.
  */
-async function runRelease(
-  db: MakaioDatabase,
-  payload: SessionOwnershipReleaseRequest,
-): Promise<SessionOwnershipReleaseResult> {
-  const tables = resolveSchema(db, sessionStorageSchema);
-  const { adapterSessionClaims } = tables;
-  const now = Date.now();
-
-  return executeTransaction(db, async (tx): Promise<SessionOwnershipReleaseResult> => {
-    // **Zero rows locked is not terminal here**, unlike in a claim. A release
-    // allocates no fence, so there is nothing an unserialized run could get
-    // wrong — and a claim whose agent row is gone must stay releasable, or its
-    // row would block the ownership key against everyone forever. With no agent
-    // row there is also no settle left that could race this release: every
-    // settle refuses an agent that does not exist.
-    await lockAgentAllocation(tx, tables, payload.agentId);
-
-    const generation = and(
-      eq(adapterSessionClaims.claimToken, payload.claimToken),
-      eq(adapterSessionClaims.agentId, payload.agentId),
-    );
-
-    if (payload.disposition === 'released') {
-      // **The row is deleted, not tombstoned.** A retired token therefore
-      // becomes storable again, and nothing here would refuse a caller that
-      // presents it a second time. The alternative — keeping every retired
-      // generation as a durable ledger row — grows without bound for the life of
-      // the store, and buys protection against exactly one thing: a caller
-      // reusing a token it minted itself. The contract makes tokens fresh random
-      // per attempt (see `claimToken`), so that guard belongs to the caller, and
-      // the storage side keeps the key free the moment it is genuinely free.
-      //
-      // **The predicate names token and agent only — never the status — and
-      // that is deliberate.** A generation already marked `abandoned` is
-      // therefore released cleanly by a delayed `released` of its own, which
-      // looks like it bypasses "blocks until a takeover" and does not:
-      // `abandoned` is a *presumption* filed by an observer that the owner died
-      // with teardown unconfirmed, and it blocks everyone else precisely because
-      // no one else can know. A `released` carrying that generation's own token
-      // is the one party who can know refuting it, and the row's purpose —
-      // keeping a possibly-live provider conversation from being attached to
-      // twice — is then fulfilled, not bypassed. Adding a status condition here
-      // would instead strand the key: the owner that came back to confirm its
-      // own teardown would have no way to say so.
-      const deleted = await tx
-        .delete(adapterSessionClaims)
-        .where(generation)
-        .returning({ claimId: adapterSessionClaims.claimId });
-      if (deleted.length > 0) return { outcome: 'released' };
-    } else {
-      const [marked] = await tx
-        .update(adapterSessionClaims)
-        .set({ status: payload.disposition, updatedAt: now })
-        .where(generation)
-        .returning();
-      if (marked !== undefined) return { outcome: 'marked', claim: mapClaim(marked) };
-    }
-
-    // Nothing was given up: either no claim carries the token at all, or one
-    // does and it belongs to somebody else.
-    const claim = await readClaimByToken(tx, tables, payload.claimToken);
-    return claim === undefined ? { outcome: 'not-found' } : { outcome: 'not-owner', holder: mapClaim(claim) };
-  });
-}
-
 /**
  * Give up every claim an agent holds, or exactly one of them.
  *
@@ -833,71 +807,6 @@ async function runReleaseAgentClaims(
 }
 
 /**
- * Register handler for `storage:sessionOwnership.read`.
- *
- * Two statements rather than a transaction, and therefore **not a consistent
- * snapshot in either direction**: a concurrent claim can leave a claim the
- * agent's `currencyFence` does not yet account for, and a concurrent release can
- * leave a `currencyFence` whose authoring claim is already gone. Both are
- * legitimate instants of the aggregate — a reader that needs authority asks
- * `settleCurrency` for it rather than inferring it here — so paying for a
- * transaction on a diagnostic read would buy nothing.
- * @param deps - Handler dependencies (bus and db).
- * @returns Cleanup function to unsubscribe the handler.
- */
-function registerReadHandler(deps: OwnershipHandlerDeps): () => void {
-  const { bus, db } = deps;
-  const { agents, adapterSessionClaims } = resolveSchema(db, sessionStorageSchema);
-
-  return bus.on(SessionOwnershipStorageSubjects.read, async (ctx) => {
-    const { agentId } = ctx.payload;
-    const [agent] = await db.select().from(agents).where(eq(agents.agentId, agentId)).limit(1);
-    if (agent === undefined) {
-      ctx.setResult({ ownership: null });
-      return;
-    }
-
-    const claims = await db
-      .select()
-      .from(adapterSessionClaims)
-      .where(eq(adapterSessionClaims.agentId, agentId))
-      .orderBy(asc(adapterSessionClaims.fence), asc(adapterSessionClaims.claimId));
-
-    ctx.setResult({
-      ownership: {
-        agentId: agent.agentId,
-        sessionId: agent.sessionId,
-        currency: mapCurrency(agent),
-        revision: agent.revision,
-        currencyFence: agent.currencyFence,
-        claims: claims.map(mapClaim),
-      },
-    });
-  });
-}
-
-/**
- * Register handler for `storage:sessionOwnership.listClaims`.
- * @param deps - Handler dependencies (bus and db).
- * @returns Cleanup function to unsubscribe the handler.
- */
-function registerListClaimsHandler(deps: OwnershipHandlerDeps): () => void {
-  const { bus, db } = deps;
-  const tables = resolveSchema(db, sessionStorageSchema);
-  const { adapterSessionClaims } = tables;
-
-  return bus.on(SessionOwnershipStorageSubjects.listClaims, async (ctx) => {
-    const rows = await db
-      .select()
-      .from(adapterSessionClaims)
-      .where(and(...buildListClaimsPredicates(tables, ctx.payload)))
-      .orderBy(asc(adapterSessionClaims.claimedAt), asc(adapterSessionClaims.claimId));
-
-    ctx.setResult({ claims: rows.map(mapClaim) });
-  });
-}
-
-/**
  * Register Drizzle-based session ownership storage handlers.
  *
  * These are the only writers of the agent currency columns, of the claim table
@@ -916,17 +825,20 @@ function registerListClaimsHandler(deps: OwnershipHandlerDeps): () => void {
  * ```
  */
 export function registerDrizzleSessionOwnershipStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
-  const deps: OwnershipHandlerDeps = { bus, db };
   const cleanups = [
-    registerReadHandler(deps),
+    ...registerOwnershipReadHandlers(bus, db),
     bus.on(SessionOwnershipStorageSubjects.claim, async (ctx) => {
       ctx.setResult(await runClaim(db, ctx.payload));
+    }),
+    bus.on(SessionOwnershipStorageSubjects.finalizeRecovery, async (ctx) => {
+      ctx.setResult(await runFinalizeRecovery(db, ctx.payload));
     }),
     bus.on(SessionOwnershipStorageSubjects.settleCurrency, async (ctx) => {
       ctx.setResult(await runSettleCurrency(db, ctx.payload));
     }),
     bus.on(SessionOwnershipStorageSubjects.settleMovement, async (ctx) => {
-      ctx.setResult(await runSettleMovement(db, ctx.payload));
+      const payload = SessionOwnershipSettleMovementRequestSchema.parse(ctx.payload);
+      ctx.setResult(await runSettleMovement(db, payload));
     }),
     bus.on(SessionOwnershipStorageSubjects.release, async (ctx) => {
       ctx.setResult(await runRelease(db, ctx.payload));
@@ -934,7 +846,7 @@ export function registerDrizzleSessionOwnershipStorage(bus: IMakaioBus, db: Maka
     bus.on(SessionOwnershipStorageSubjects.releaseAgentClaims, async (ctx) => {
       ctx.setResult(await runReleaseAgentClaims(db, ctx.payload));
     }),
-    registerListClaimsHandler(deps),
+    ...registerRuntimeInstanceHandlers(bus, db),
   ];
 
   return () => {

@@ -14,7 +14,7 @@ import {
   emitSessionClientAccountChangedIfNeeded,
 } from './client-account-change-events.js';
 import { registerMemorySessionImportHandlers } from './memory-import-handlers.js';
-import { isIdentityBackfillRefused } from './session-identity-backfill.js';
+import { isAdapterSessionReconciliationRefused, isIdentityBackfillRefused } from './session-identity-backfill.js';
 
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines-per-function: ["error", { "max": 145 }] */
@@ -130,7 +130,9 @@ function preserveCasOwnedFields(next: IMakaioSession, previous: IMakaioSession |
  */
 function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayload): void {
   assignDefinedSessionField(session, 'status', update.status);
-  assignDefinedSessionField(session, 'parentSessionId', update.parentSessionId);
+  if (update.parentSessionId !== undefined) {
+    session.parentSessionId = update.parentSessionId ?? undefined;
+  }
   assignDefinedSessionField(session, 'contextInheritance', update.contextInheritance);
   assignDefinedSessionField(session, 'rootSessionId', update.rootSessionId);
   assignDefinedSessionField(session, 'forkPointMessageId', update.forkPointMessageId);
@@ -153,6 +155,12 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
     session.adapterName = update.identity.adapterName;
     session.adapterId = update.identity.adapterId;
     assignDefinedSessionField(session, 'adapterSessionId', update.identity.adapterSessionId);
+  }
+  if (update.reconcileAdapterSession !== undefined) {
+    session.adapterName = update.reconcileAdapterSession.adapterName;
+    session.adapterId = update.reconcileAdapterSession.adapterId;
+    session.adapterSessionId = update.reconcileAdapterSession.adapterSessionId;
+    session.lastActivityAt = update.reconcileAdapterSession.lastActivityAt;
   }
 
   assignNullableSessionField(session, 'executionTargetId', update.executionTargetId);
@@ -227,6 +235,10 @@ function registerUpdateHandler(bus: IMakaioBus, store: Map<string, IMakaioSessio
     // backend has no statement to hang a predicate on, so "atomic with the write"
     // means evaluated against the stored row inside the handler that writes it.
     if (isIdentityBackfillRefused(session, payload)) {
+      ctx.setResult({ success: false, clientAccountChanged: false });
+      return;
+    }
+    if (isAdapterSessionReconciliationRefused(session, payload)) {
       ctx.setResult({ success: false, clientAccountChanged: false });
       return;
     }

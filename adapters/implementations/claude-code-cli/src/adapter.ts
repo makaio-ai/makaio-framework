@@ -1,4 +1,4 @@
-import { AIAdapter, type AIAdapterConfig } from '@makaio/ai-adapters-core';
+import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
 
 import { ClaudeCodeCliAgent } from './agent.js';
 import { ClaudeCliConnector } from './connector.js';
@@ -12,7 +12,7 @@ export { ClaudeCodeCliAdapterName };
 /**
  * Configuration for the Claude Code CLI adapter.
  */
-export type ClaudeCodeCliAdapterConfig = Partial<AIAdapterConfig>;
+export type ClaudeCodeCliAdapterConfig = AIAdapterRuntimeConfig;
 
 /**
  * Claude Code CLI Adapter - Domain-level adapter using the three-layer architecture.
@@ -42,12 +42,13 @@ export type ClaudeCodeCliAdapterConfig = Partial<AIAdapterConfig>;
  */
 export class ClaudeCodeCliAdapter extends AIAdapter<ClaudeCodeCliConnectorBus, ClaudeCliConnector, ClaudeCodeCliAgent> {
   /**
-   * Create a Claude Code CLI adapter with optional runtime overrides.
-   * @param config - Optional adapter configuration overrides (for example custom `definitionProviders`)
+   * Create a Claude Code CLI adapter with host-injected runtime identity.
+   * @param config - Runtime configuration, including the owning authority and optional overrides
    * merged with Claude Code CLI defaults.
    */
-  public constructor(config?: ClaudeCodeCliAdapterConfig) {
+  public constructor(config: ClaudeCodeCliAdapterConfig) {
     super({
+      ...config,
       name: ClaudeCodeCliAdapterName,
       capabilities: [
         'tools',
@@ -58,7 +59,7 @@ export class ClaudeCodeCliAdapter extends AIAdapter<ClaudeCodeCliConnectorBus, C
         'session:resume',
         'session:fork',
       ],
-      ...config,
+      nativeTools: [],
       namespace: ClaudeCodeCliConnectorNamespace,
       agentFactory: (agentConfig) => new ClaudeCodeCliAgent(agentConfig),
       configFactory: ClaudeCodeCliConfig.getConfig,
@@ -69,17 +70,17 @@ export class ClaudeCodeCliAdapter extends AIAdapter<ClaudeCodeCliConnectorBus, C
           mcpUpstreamServers: typedConfig.mcpSessionContext?.servers,
         });
       },
-      definitionProviders: config?.definitionProviders,
+      definitionProviders: config.definitionProviders,
     });
   }
 }
 
 /**
  * Factory function to create and initialize a Claude Code CLI adapter.
- * @param config - Optional adapter configuration
+ * @param config - Runtime configuration, including the owning authority.
  * @returns Initialized ClaudeCodeCliAdapter instance
  */
-export async function createClaudeCliAdapter(config?: ClaudeCodeCliAdapterConfig): Promise<ClaudeCodeCliAdapter> {
+export async function createClaudeCliAdapter(config: ClaudeCodeCliAdapterConfig): Promise<ClaudeCodeCliAdapter> {
   const adapter = new ClaudeCodeCliAdapter(config);
   await adapter.init();
   return adapter;

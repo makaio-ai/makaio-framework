@@ -17,7 +17,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
 
 // Using the factory function (recommended)
-const adapter = await createGitHubCopilotSDKAdapter();
+const adapter = await createGitHubCopilotSDKAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 
 const result = await MakaioBus.request(AdapterSubjects.startAgent, {
   adapterId: adapter.adapterId,
@@ -26,7 +26,7 @@ const result = await MakaioBus.request(AdapterSubjects.startAgent, {
 });
 
 // Or using the class directly
-const directAdapter = new GitHubCopilotAdapter();
+const directAdapter = new GitHubCopilotAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
 await directAdapter.init();
 
 const directResult = await MakaioBus.request(AdapterSubjects.startAgent, {

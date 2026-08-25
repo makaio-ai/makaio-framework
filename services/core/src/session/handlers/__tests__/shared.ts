@@ -31,6 +31,10 @@ import { registerSessionOwnershipAuthority } from '../../ownership/index.js';
 import { registerMemoryAgentStorage } from '../../storage/agent-memory-handler.js';
 import { registerMemorySessionOwnershipStorage } from '../../storage/ownership-memory-handler.js';
 import { createSessionStorageMemoryState } from '../../storage/memory-store.js';
+import {
+  callerOwnedSuccessFields,
+  registerCallerSettlementAckHandler,
+} from '../../testing/caller-owned-adapter-stub.js';
 
 /**
  * Registers a mock handler for agent.sendMessage that succeeds.
@@ -186,6 +190,7 @@ export const ATTACH_TEST_IDS = {
   adapterName: 'adapter-456',
   agentId: 'agent-789',
   adapterSessionId: 'adapter-session-101',
+  ownerInstanceId: 'test-owner-instance',
   messageId: 'msg-001',
 } as const;
 
@@ -253,6 +258,8 @@ export interface HeldProviderSession {
   readonly adapterName: string;
   /** Machine the key is namespaced by. */
   readonly machineId: string;
+  /** Runtime incarnation that owns the foreign adapter. */
+  readonly ownerInstanceId?: string;
   /** Provider session the generation owns. */
   readonly providerSessionId: string;
 }
@@ -287,7 +294,9 @@ export async function holdProviderSession(held: HeldProviderSession): Promise<vo
     adapterId: held.adapterId,
     adapterName: held.adapterName,
     role: 'member',
+    ownerInstanceId: held.ownerInstanceId ?? ATTACH_TEST_IDS.ownerInstanceId,
     resumeProviderSessionId: held.providerSessionId,
+    claimToken: crypto.randomUUID(),
     machineId: held.machineId,
   });
   if (reserved.outcome !== 'reserved') {
@@ -306,11 +315,17 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
   resetBusHandlers();
   const turnManager = new SessionTurnManager(MakaioBus);
   const unsubscribers: Array<() => void> = [];
+  const fixtureMachineId = currentMachineId ?? DEFAULT_TEST_MACHINE_ID;
   const { registry: adapterIdentityRegistry, unsubscribe: unsubscribeAdapterIdentityRegistry } =
-    registerMockAdapterIdentityHandlers(
-      currentMachineId === null ? undefined : (currentMachineId ?? DEFAULT_TEST_MACHINE_ID),
-    );
+    registerMockAdapterIdentityHandlers(currentMachineId === null ? undefined : fixtureMachineId);
   unsubscribers.push(unsubscribeAdapterIdentityRegistry);
+  // Attach resolves an adapter name to a live, owner-qualified runtime before
+  // it may reserve or dispatch. Publish the default fixture through the same
+  // lifecycle event as a real adapter rather than letting the deterministic ID
+  // resolver stand in for liveness.
+  if (currentMachineId !== null) {
+    void adapterIdentityRegistry.registerKnownAdapter(ATTACH_TEST_IDS.adapterName);
+  }
   // Attach is a reserved, caller-owned start: it writes its own `starting` agent
   // row and reserves the provider session against it, so a no-op persistence
   // stub is no longer a neutral simplification — the reservation reads the row
@@ -329,12 +344,14 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
     unsubscribers.push(registerMemoryAgentStorage(MakaioBus, memoryState));
     unsubscribers.push(registerMemorySessionOwnershipStorage(MakaioBus, memoryState));
     unsubscribers.push(
-      registerSessionOwnershipAuthority({
+      ...registerSessionOwnershipAuthority({
         bus: MakaioBus,
-        machineId: DEFAULT_TEST_MACHINE_ID,
+        machineId: fixtureMachineId,
+        instanceId: 'test-owner-instance',
         topology: 'shared-machine',
-      }),
+      }).cleanups,
     );
+    unsubscribers.push(registerCallerSettlementAckHandler(MakaioBus));
     unsubscribers.push(
       MakaioBus.on(
         AdapterSubjects.startAgent,
@@ -478,6 +495,10 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
      * the handlers do not.
      */
     restoreOwnershipComposition(): void {
+      unsubscribers.push(adapterIdentityRegistry.registerHandlers());
+      if (currentMachineId !== null) {
+        void adapterIdentityRegistry.registerKnownAdapter(ATTACH_TEST_IDS.adapterName);
+      }
       composeOwnership();
     },
 
@@ -520,6 +541,7 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
           adapterSessionId: ids.adapterSessionId,
           sessionId: ids.sessionId,
           messageId: ids.messageId,
+          ...callerOwnedSuccessFields(context.payload),
           ...overrides,
         });
       });
@@ -537,8 +559,8 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
       });
     },
 
-    registerKnownAdapter(adapterName: string, adapterId?: string): Promise<void> {
-      return adapterIdentityRegistry.registerKnownAdapter(adapterName, adapterId);
+    registerKnownAdapter(adapterName: string, adapterId?: string, machineId?: string): Promise<void> {
+      return adapterIdentityRegistry.registerKnownAdapter(adapterName, adapterId, machineId);
     },
 
     /**
@@ -583,7 +605,7 @@ export interface AttachHandlerTestContext {
     receivedRequests: StartAgentRequestPayload[];
   };
   registerFailingStartAgentHandler: (errorMessage: string) => () => void;
-  registerKnownAdapter: (adapterName: string, adapterId?: string) => Promise<void>;
+  registerKnownAdapter: (adapterName: string, adapterId?: string, machineId?: string) => Promise<void>;
   registerHandler: (machineId?: string) => () => void;
   destroy: () => void;
 }

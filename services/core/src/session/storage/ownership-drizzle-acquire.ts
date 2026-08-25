@@ -13,8 +13,8 @@
  * or the reason there is none.
  * @packageDocumentation
  */
-import { and, eq, sql } from 'drizzle-orm';
-import type { SessionOwnershipClaimResult } from '@makaio/contracts';
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import type { SessionOwnershipClaimResult, SessionOwnershipRecoveryOwnerGeneration } from '@makaio/contracts';
 import { readAgent, readLeadAgentId } from './ownership-drizzle-reads.js';
 import {
   buildAcquisitionSelect,
@@ -127,16 +127,53 @@ export async function insertClaimGeneration(
  * - `named-token` — the caller named the generation through `supersedes`, having
  *   separately established its owner is gone. Storage records that conclusion;
  *   it does not evaluate the evidence behind it.
- * - `incumbent-disposed` — the incumbent's own agent row carries
- *   `status: 'disposed'`, which needs no caller evidence at all: a removed agent
- *   can never legitimately hold a key, so the takeover is always correct. It is
- *   a *predicate*, not an assessment, which is what makes it impossible for the
- *   evidence to be stale, replayed or contradicted by a concurrent writer.
+ * - `same-instance`, `owner-retired`, and `owner-superseded` — durable runtime
+ *   identity proves T1, T3, or T4 respectively. T4 is only resolved for an
+ *   explicitly machine-exclusive topology.
  *
  * A *deleted* agent or session is neither: both foreign keys cascade, so the
  * claim row goes with its parent and the next claimant does a plain acquisition.
  */
-export type TakeoverAuthorization = 'named-token' | 'incumbent-disposed';
+export type TakeoverAuthorization = 'named-token' | 'same-instance' | 'owner-retired' | 'owner-superseded';
+
+/**
+ * Build the storage-provable predicate for an owner-identity takeover.
+ *
+ * The classification read only chooses a branch. This predicate repeats the
+ * fact in the repointing UPDATE, so a generation can never be taken because a
+ * stale service-side observation said it was eligible.
+ * @param tables - Dialect-resolved session storage tables.
+ * @param acquisition - Generation being taken.
+ * @param authorization - Owner-identity authorization being exercised.
+ * @returns Predicate that must still hold on the incumbent row.
+ */
+function buildOwnerAuthorizationPredicate(
+  tables: OwnershipTables,
+  acquisition: ClaimAcquisition,
+  authorization: Exclude<TakeoverAuthorization, 'named-token'>,
+) {
+  const { adapterSessionClaims, runtimeInstances } = tables;
+  if (authorization === 'same-instance') {
+    return and(
+      eq(adapterSessionClaims.status, 'held'),
+      eq(adapterSessionClaims.agentId, acquisition.agentId),
+      eq(adapterSessionClaims.ownerInstanceId, acquisition.ownerInstanceId),
+    );
+  }
+  if (authorization === 'owner-retired') {
+    return sql`exists (select 1 from ${runtimeInstances} where ${and(
+      eq(runtimeInstances.instanceId, adapterSessionClaims.ownerInstanceId),
+      eq(runtimeInstances.machineId, adapterSessionClaims.machineId),
+      isNotNull(runtimeInstances.retiredAt),
+    )})`;
+  }
+  return sql`(select ${runtimeInstances.incarnation} from ${runtimeInstances}
+      where ${eq(runtimeInstances.instanceId, acquisition.ownerInstanceId)}
+        and ${eq(runtimeInstances.machineId, adapterSessionClaims.machineId)})
+    > (select ${runtimeInstances.incarnation} from ${runtimeInstances}
+      where ${eq(runtimeInstances.instanceId, adapterSessionClaims.ownerInstanceId)}
+        and ${eq(runtimeInstances.machineId, adapterSessionClaims.machineId)})`;
+}
 
 /**
  * Repoint the incumbent generation at the taking agent, fencing it out.
@@ -155,10 +192,6 @@ export type TakeoverAuthorization = 'named-token' | 'incumbent-disposed';
  *   UPDATE off the foreign keys, where a missing row would fail as a driver
  *   error rather than as the `not-found` the contract models. `agents.session_id`
  *   is itself a foreign key, so a matching agent proves the session exists too;
- * - an `incumbent-disposed` takeover restates the incumbent's disposal as a
- *   correlated `exists` over the row being updated, because that status is what
- *   authorizes the takeover and a status read a statement earlier is exactly the
- *   read-then-write this seam removes;
  * - the fence is allocated by the statement ({@link buildTakeoverFence}) rather
  *   than computed from the classifying read.
  *
@@ -188,6 +221,8 @@ export type TakeoverAuthorization = 'named-token' | 'incumbent-disposed';
  * @param incumbent - Claim row currently holding the key.
  * @param authorization - What permits repointing the incumbent.
  * @param now - Takeover timestamp.
+ * @param expectedOwnerGeneration - Exact generation a guarded recovery observed;
+ *   omitted by ordinary claims and movements.
  * @returns The repointed row, or `undefined` when a guard did not hold.
  */
 export async function takeOverClaimRow(
@@ -197,13 +232,23 @@ export async function takeOverClaimRow(
   incumbent: ClaimRow,
   authorization: TakeoverAuthorization,
   now: number,
+  expectedOwnerGeneration?: SessionOwnershipRecoveryOwnerGeneration,
 ): Promise<ClaimRow | undefined> {
-  const { adapterSessionClaims, agents } = tables;
-
-  const incumbentDisposed = sql`exists (select 1 from ${agents} where ${and(
-    eq(agents.agentId, adapterSessionClaims.agentId),
-    eq(agents.status, 'disposed'),
-  )})`;
+  const { adapterSessionClaims } = tables;
+  const ownerAuthorization =
+    authorization === 'named-token' ? undefined : buildOwnerAuthorizationPredicate(tables, acquisition, authorization);
+  const expectedOwner =
+    expectedOwnerGeneration === undefined
+      ? undefined
+      : and(
+          eq(adapterSessionClaims.claimId, expectedOwnerGeneration.claimId),
+          eq(adapterSessionClaims.claimToken, expectedOwnerGeneration.claimToken),
+          eq(adapterSessionClaims.fence, expectedOwnerGeneration.fence),
+          expectedOwnerGeneration.ownerInstanceId === null
+            ? isNull(adapterSessionClaims.ownerInstanceId)
+            : eq(adapterSessionClaims.ownerInstanceId, expectedOwnerGeneration.ownerInstanceId),
+          eq(adapterSessionClaims.status, expectedOwnerGeneration.status),
+        );
 
   const [updated] = await tx
     .update(adapterSessionClaims)
@@ -213,6 +258,7 @@ export async function takeOverClaimRow(
       agentId: acquisition.agentId,
       sessionId: acquisition.sessionId,
       adapterName: acquisition.adapterName,
+      ownerInstanceId: acquisition.ownerInstanceId,
       status: 'held',
       claimedAt: now,
       updatedAt: now,
@@ -221,8 +267,10 @@ export async function takeOverClaimRow(
       and(
         eq(adapterSessionClaims.claimId, incumbent.claimId),
         eq(adapterSessionClaims.claimToken, incumbent.claimToken),
+        isNotNull(adapterSessionClaims.ownerInstanceId),
         buildAgentGuard(tables, acquisition.agentId, acquisition.sessionId, 'live'),
-        ...(authorization === 'incumbent-disposed' ? [incumbentDisposed] : []),
+        ...(ownerAuthorization === undefined ? [] : [ownerAuthorization]),
+        ...(expectedOwner === undefined ? [] : [expectedOwner]),
       ),
     )
     .returning();
@@ -231,33 +279,67 @@ export async function takeOverClaimRow(
 }
 
 /**
- * Whether the key's incumbent may be taken over without the caller naming it.
+ * Decide which storage-provable fact permits replacing an incumbent.
  *
- * The only durable unusability there is. A claim whose agent or session row is
- * *gone* cannot exist — both foreign keys cascade — so deleting either parent
- * frees the key by removing the row, and the next claimant performs an ordinary
- * free acquisition. What remains is an incumbent whose agent row is still there
- * and carries `status: 'disposed'`: a claim that nothing may ever act on, held
- * by an agent that may never re-acquire authority.
- *
- * A claim whose rows are live but whose owning *process* died is deliberately
- * **not** covered. Nothing durable can distinguish it from a healthy owner, and
- * inventing an assessment here is exactly the read-then-write the aggregate
- * refuses. Such a claim keeps blocking its key until an owner-process identity
- * makes death provable, or a human intervenes.
- *
- * This read only *chooses the branch*; the takeover UPDATE restates the disposal
- * as its own predicate, so a status that changes in between cannot be acted on.
+ * Legacy rows have no owner identity, so no replacement authorization applies
+ * to them. Movement has its narrower same-generation adoption rule at its own
+ * fast path.
  * @param tx - Open transaction.
  * @param tables - Dialect-resolved session storage tables.
- * @param incumbent - Claim row currently holding the key.
- * @returns Whether the incumbent's owning agent is disposed.
+ * @param acquisition - Generation contending for the key.
+ * @param incumbent - Generation currently holding the key.
+ * @param namedToken - Whether the caller explicitly named this generation.
+ * @returns The authorization to repeat in the takeover UPDATE, or `undefined`.
  */
-export async function isIncumbentUnusable(
+export async function resolveTakeoverAuthorization(
   tx: OwnershipTransaction,
   tables: OwnershipTables,
+  acquisition: ClaimAcquisition,
   incumbent: ClaimRow,
-): Promise<boolean> {
-  const owner = await readAgent(tx, tables, incumbent.agentId);
-  return owner?.status === 'disposed';
+  namedToken: boolean,
+): Promise<TakeoverAuthorization | undefined> {
+  // An unknown process owner cannot satisfy any takeover predicate. The one
+  // migration bridge is movement's same-agent fast path, which adopts the row
+  // without replacing its generation.
+  if (incumbent.ownerInstanceId === null) return undefined;
+  if (namedToken) return 'named-token';
+
+  if (
+    incumbent.status === 'held' &&
+    incumbent.agentId === acquisition.agentId &&
+    incumbent.ownerInstanceId === acquisition.ownerInstanceId
+  ) {
+    return 'same-instance';
+  }
+
+  const { runtimeInstances } = tables;
+  const [owner] = await tx
+    .select()
+    .from(runtimeInstances)
+    .where(
+      and(
+        eq(runtimeInstances.instanceId, incumbent.ownerInstanceId),
+        eq(runtimeInstances.machineId, incumbent.machineId),
+      ),
+    )
+    .limit(1);
+  if (owner?.retiredAt !== null && owner?.retiredAt !== undefined) return 'owner-retired';
+
+  if (acquisition.topology === 'machine-exclusive') {
+    const [requester] = await tx
+      .select()
+      .from(runtimeInstances)
+      .where(
+        and(
+          eq(runtimeInstances.instanceId, acquisition.ownerInstanceId),
+          eq(runtimeInstances.machineId, acquisition.machineId),
+        ),
+      )
+      .limit(1);
+    if (owner !== undefined && requester !== undefined && requester.incarnation > owner.incarnation) {
+      return 'owner-superseded';
+    }
+  }
+
+  return undefined;
 }

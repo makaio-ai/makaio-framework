@@ -679,7 +679,13 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // 9. Adapter runtime identity
     // -----------------------------------------------------------------------
-    const adapterRuntimeIdentity = activateAdapterRuntimeIdentity({ bus, currentMachineId: machineId });
+    const adapterRuntimeIdentity = activateAdapterRuntimeIdentity({
+      bus,
+      currentMachineId: machineId,
+      resolveLiveAdapterId: (adapterName) => adapterServiceRef.current?.resolveLiveAdapterId(adapterName),
+      resolveLiveAdapterIdentity: (adapterId) => adapterServiceRef.current?.resolveLiveAdapterIdentity(adapterId),
+      listLiveAdapterIdentities: () => adapterServiceRef.current?.getLiveAdapterIdentities() ?? [],
+    });
     shutdownSteps.push(adapterRuntimeIdentity.cleanup);
 
     // -----------------------------------------------------------------------

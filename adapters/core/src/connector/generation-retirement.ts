@@ -120,14 +120,18 @@ export class GenerationRetirementLedger {
    * without it, a synchronous retirement would silently claim what an asynchronous
    * one has to prove.
    *
-   * A no-op in effect, because {@link supersede} already booked the generation as
-   * unproven. It is kept as an explicit statement of intent: a caller that never
-   * intends to wait says so, rather than leaving the reader to infer it from the
-   * absence of a `retire`.
+   * The caller still does not wait, but the ledger continues observing the end it
+   * already holds. Once that promise fulfils, the generation is proven retired and
+   * no longer caps later teardowns. A rejected observation remains unproven: it
+   * did not establish that the resource ended.
    * @param generation - Generation returned by {@link supersede}.
    */
   public abandon(generation: SupersededGeneration): void {
     this.unproven.add(generation.generation);
+    void generation.exited?.then(
+      () => this.unproven.delete(generation.generation),
+      () => undefined,
+    );
   }
 
   /**

@@ -1,16 +1,43 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
+import { teardownWasObserved } from '@makaio/contracts';
 import {
-  closeAdapterInstance,
-  initializeEnabledAdapters,
+  retireAdapterInstance,
   resolveLoadedAdapterId,
-  shutdownAdapterInstances,
   toAvailableAdapter,
+  type AdapterRetirementAttempt,
   type PlatformDefaults,
 } from './adapter-runtime-lifecycle.js';
 import { AdapterSubsystemSubjects } from './namespace.js';
-import type { AdapterInstance, LoadedAdapter } from './adapter-runtime-types.js';
-import type { AdapterInstanceShutdownReport } from './adapter-instance-teardown.js';
+import {
+  completeAdapterRetirementFlight,
+  completeDeferredAdapterDeregistration,
+  deinitializedAdapterIdentity,
+  removeAdapterNameFromPackageTracking,
+} from './adapter-runtime-deferred-cleanup.js';
+import {
+  deferAdapterActivationAfterActive,
+  settleDeferredAdapterDeregistration,
+  settleDeferredActivationsForShutdown,
+  type DeferredAdapterActivation,
+} from './adapter-runtime-deferred-activation.js';
+import {
+  initializeAdapterRuntime,
+  restartAdapterRuntime,
+  type AdapterRuntimeAdmissionDependencies,
+} from './adapter-runtime-admission.js';
+import type {
+  AdapterInstance,
+  AdapterRuntimeEntry,
+  AdapterRuntimeRetirementFlight,
+  LoadedAdapter,
+} from './adapter-runtime-types.js';
+import {
+  aggregateAdapterInstanceTeardowns,
+  type AdapterInstanceShutdownReport,
+  type AdapterInstanceTeardownResult,
+} from './adapter-instance-teardown.js';
+import { startAdapterRetirementAttempt } from './adapter-runtime-deinitialization.js';
 
 // ---------------------------------------------------------------------------
 // Constructor options
@@ -24,6 +51,8 @@ export interface AdapterRuntimeRegistryOptions {
   readonly bus: IMakaioBus;
   /** Stable machine identifier used for deterministic adapter ID derivation. */
   readonly machineId: string;
+  /** Resolve the active session-ownership authority incarnation for each new adapter. */
+  readonly resolveOwnerInstanceId?: () => string;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +93,7 @@ export interface PublishAdapterRegisteredOptions {
 export class AdapterRuntimeRegistry {
   private readonly bus: IMakaioBus;
   private readonly machineId: string;
+  private readonly resolveOwnerInstanceId: () => string;
 
   /**
    * All loaded adapter definitions, keyed by adapter name.
@@ -74,12 +104,16 @@ export class AdapterRuntimeRegistry {
   private readonly loadedAdapters = new Map<string, LoadedAdapter>();
 
   /**
-   * Live adapter instances, keyed by `adapterId`.
+   * Managed adapter-runtime slots, keyed by `adapterId`.
    *
-   * Only contains entries for adapters whose file-backed config has
-   * `enabled: true`. Instances are shut down when the owning package stops.
+   * A slot is either live and dispatchable, or retiring after its routing was
+   * withdrawn. Retiring handles are retained only until a later close attempt
+   * proves they stopped or the host itself retires.
    */
-  private readonly adapterInstances = new Map<string, AdapterInstance>();
+  private readonly adapterEntries = new Map<string, AdapterRuntimeEntry>();
+
+  /** Replacement activations coalesced by the exact loaded-definition epoch. */
+  private readonly deferredActivations = new Map<LoadedAdapter, DeferredAdapterActivation>();
 
   /**
    * Maps each package name to the adapter names it contributed.
@@ -105,6 +139,11 @@ export class AdapterRuntimeRegistry {
   public constructor(options: AdapterRuntimeRegistryOptions) {
     this.bus = options.bus;
     this.machineId = options.machineId;
+    this.resolveOwnerInstanceId =
+      options.resolveOwnerInstanceId ??
+      (() => {
+        throw new Error('Adapter initialization requires a session ownership authority incarnation');
+      });
   }
 
   // ---------------------------------------------------------------------------
@@ -130,7 +169,11 @@ export class AdapterRuntimeRegistry {
    * @returns Readonly map of adapter ID to live adapter instance.
    */
   public getAdapterInstances(): ReadonlyMap<string, AdapterInstance> {
-    return this.adapterInstances;
+    return new Map(
+      [...this.adapterEntries].flatMap(([adapterId, entry]) =>
+        entry.state === 'live' ? [[adapterId, entry.instance] as const] : [],
+      ),
+    );
   }
 
   /**
@@ -139,7 +182,7 @@ export class AdapterRuntimeRegistry {
    * @returns True when the runtime has initialized this adapter.
    */
   public hasAdapterInstance(adapter: LoadedAdapter): boolean {
-    return this.adapterInstances.has(this.resolveLoadedAdapterId(adapter));
+    return this.adapterEntries.get(this.resolveLoadedAdapterId(adapter))?.state === 'live';
   }
 
   /**
@@ -149,6 +192,61 @@ export class AdapterRuntimeRegistry {
    */
   public resolveLoadedAdapterId(adapter: LoadedAdapter): string {
     return resolveLoadedAdapterId(adapter, this.machineId);
+  }
+
+  /**
+   * Resolve a named adapter to its currently registered live instance ID.
+   *
+   * A loaded definition alone is not sufficient: disabled, deferred, failed,
+   * stopped, and rollback-removed adapters have no entry in the live instance
+   * map and therefore cannot be addressed by name.
+   * @param adapterName - Adapter driver name.
+   * @returns Registered live instance ID, or undefined when none is live.
+   */
+  public resolveLiveAdapterId(adapterName: string): string | undefined {
+    const adapter = this.loadedAdapters.get(adapterName);
+    if (!adapter) return undefined;
+
+    const adapterId = this.resolveLoadedAdapterId(adapter);
+    return this.adapterEntries.get(adapterId)?.state === 'live' ? adapterId : undefined;
+  }
+
+  /**
+   * Return the current live identity for an instance ID, if it is still registered.
+   * @param adapterId - Instance ID to verify against the current live registry.
+   * @returns Exact identity, or `undefined` after deregistration or failed startup.
+   */
+  public resolveLiveAdapterIdentity(
+    adapterId: string,
+  ): { adapterId: string; adapterName: string; machineId: string; ownerInstanceId: string } | undefined {
+    for (const adapter of this.loadedAdapters.values()) {
+      const entry = this.adapterEntries.get(adapterId);
+      if (this.resolveLoadedAdapterId(adapter) === adapterId && entry?.state === 'live') {
+        return {
+          adapterId,
+          adapterName: adapter.name,
+          machineId: this.machineId,
+          ownerInstanceId: entry.ownerInstanceId,
+        };
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Snapshot the identities currently dispatchable on this runtime.
+   * @returns Exact identities for every currently registered adapter instance.
+   */
+  public getLiveAdapterIdentities(): Array<{
+    adapterId: string;
+    adapterName: string;
+    machineId: string;
+    ownerInstanceId: string;
+  }> {
+    return [...this.adapterEntries.keys()].flatMap((adapterId) => {
+      const identity = this.resolveLiveAdapterIdentity(adapterId);
+      return identity === undefined ? [] : [identity];
+    });
   }
 
   /**
@@ -172,6 +270,19 @@ export class AdapterRuntimeRegistry {
   public registerAdapter(loadedAdapter: LoadedAdapter, packageName: string): void {
     const existing = this.loadedAdapters.get(loadedAdapter.name);
     if (existing) {
+      const existingId = this.resolveLoadedAdapterId(existing);
+      if (
+        existing.packageName === packageName &&
+        this.resolveLoadedAdapterId(loadedAdapter) === existingId &&
+        this.adapterEntries.get(existingId)?.state === 'retiring'
+      ) {
+        this.loadedAdapters.set(loadedAdapter.name, loadedAdapter);
+        const packageAdapterNames = this.packageAdapters.get(packageName) ?? [];
+        if (!packageAdapterNames.includes(loadedAdapter.name)) {
+          this.packageAdapters.set(packageName, [...packageAdapterNames, loadedAdapter.name]);
+        }
+        return;
+      }
       throw new Error(
         `Duplicate adapter name '${loadedAdapter.name}' from owners '${existing.packageName}' and '${packageName}'.`,
       );
@@ -209,12 +320,33 @@ export class AdapterRuntimeRegistry {
   ): Promise<LoadedAdapter[]> {
     const updatedAdapters: LoadedAdapter[] = [];
     for (const adapter of this.loadedAdapters.values()) {
+      // A pending close retains a stopped adapter definition until teardown is observed.
+      // Do not turn that package's provider cleanup into a replacement activation.
+      if (adapter.packageName === packageName) continue;
       const providers = adapter.providers.filter((provider) => provider.providerPackageName !== packageName);
       if (providers.length === adapter.providers.length) continue;
       const updated = { ...adapter, providers };
       this.loadedAdapters.set(adapter.name, updated);
       updatedAdapters.push(updated);
-      if (this.hasAdapterInstance(updated)) {
+      const runtimeEntry = this.adapterEntries.get(this.resolveLoadedAdapterId(updated));
+      if (
+        runtimeEntry === undefined &&
+        deferAdapterActivationAfterActive(
+          this.deferredActivations,
+          updated,
+          platformDefaults,
+          () => this.loadedAdapters.get(updated.name) === updated,
+          (replacement, defaults) => this.initializeAdapterInternal(replacement, defaults, true),
+          (error) =>
+            console.error(
+              `[AdapterRuntimeRegistry] Error activating deferred adapter "${updated.name}" after provider package "${packageName}" stopped:`,
+              error,
+            ),
+        )
+      ) {
+        continue;
+      }
+      if (runtimeEntry?.state === 'live' || runtimeEntry?.flight !== undefined) {
         try {
           await this.restartAdapterInstance(updated, platformDefaults);
         } catch (error) {
@@ -229,8 +361,11 @@ export class AdapterRuntimeRegistry {
   }
 
   /**
-   * Shut down the live instance (if any) for a named adapter and remove it
-   * from in-memory tracking only after shutdown succeeds.
+   * Retire the managed instance (if any) for a named adapter.
+   *
+   * Every attempt immediately removes the instance from routing. Only observed
+   * teardown evidence releases its slot; weak evidence retains a non-routable
+   * handle for a later retry.
    * @param adapterName - Adapter driver name to deregister.
    */
   public async deregisterAdapter(adapterName: string): Promise<void> {
@@ -238,12 +373,33 @@ export class AdapterRuntimeRegistry {
     if (!adapter) return;
 
     const adapterId = this.resolveLoadedAdapterId(adapter);
-    const instance = this.adapterInstances.get(adapterId);
-    if (instance) {
-      await closeAdapterInstance(adapterId, instance);
-      this.adapterInstances.delete(adapterId);
+    const deferredSettled = await settleDeferredAdapterDeregistration(
+      this.deferredActivations,
+      adapter,
+      () => this.loadedAdapters.get(adapterName) === adapter,
+      () => this.adapterEntries.get(adapterId),
+      () => {
+        this.loadedAdapters.delete(adapterName);
+        removeAdapterNameFromPackageTracking(this.packageAdapters, adapter.packageName, adapterName);
+      },
+    );
+    if (deferredSettled) return;
+    const attempt = await this.retireAdapterEntry(adapterId, adapter.name);
+    if (attempt === undefined || teardownWasObserved(attempt.report.evidence)) this.loadedAdapters.delete(adapterName);
+    else if (attempt.pendingCompletion !== undefined) {
+      void attempt.pendingCompletion.then((lateReport) => {
+        if (teardownWasObserved(lateReport.evidence)) {
+          completeDeferredAdapterDeregistration(
+            this.loadedAdapters,
+            this.adapterEntries,
+            this.packageAdapters,
+            adapterName,
+            adapter,
+            adapterId,
+          );
+        }
+      });
     }
-    this.loadedAdapters.delete(adapterName);
   }
 
   /**
@@ -257,6 +413,17 @@ export class AdapterRuntimeRegistry {
    * @param packageName - Package name whose tracking entry should be removed.
    */
   public removePackageTracking(packageName: string): void {
+    const adapterNames = this.packageAdapters.get(packageName);
+    if (
+      adapterNames?.some((adapterName) => {
+        const adapter = this.loadedAdapters.get(adapterName);
+        return (
+          adapter !== undefined && this.adapterEntries.get(this.resolveLoadedAdapterId(adapter))?.state === 'retiring'
+        );
+      })
+    ) {
+      return;
+    }
     this.packageAdapters.delete(packageName);
   }
 
@@ -275,6 +442,13 @@ export class AdapterRuntimeRegistry {
     for (const adapterName of adapterNames) {
       try {
         await this.deregisterAdapter(adapterName);
+        const adapter = this.loadedAdapters.get(adapterName);
+        if (
+          adapter !== undefined &&
+          this.adapterEntries.get(this.resolveLoadedAdapterId(adapter))?.state === 'retiring'
+        ) {
+          failed = true;
+        }
       } catch (err) {
         failed = true;
         console.error(`[AdapterRuntimeRegistry] Error shutting down adapter "${adapterName}":`, err);
@@ -298,7 +472,7 @@ export class AdapterRuntimeRegistry {
    */
   public publishAdapterRegistered(options: PublishAdapterRegisteredOptions): Promise<void> {
     const { adapterName, displayName, packageName, enabled, adapterId, providerDefinitionIds } = options;
-    const initialized = this.adapterInstances.has(adapterId);
+    const initialized = this.adapterEntries.get(adapterId)?.state === 'live';
 
     const publication = this.publicationChain
       .catch(() => undefined)
@@ -329,32 +503,58 @@ export class AdapterRuntimeRegistry {
    * @param platformDefaults - Platform-provided defaults forwarded to the factory.
    */
   public async initializeAdapter(adapter: LoadedAdapter, platformDefaults: PlatformDefaults): Promise<void> {
-    await initializeEnabledAdapters(this.bus, this.machineId, [adapter], this.adapterInstances, platformDefaults);
+    await this.initializeAdapterInternal(adapter, platformDefaults, false);
   }
 
   /**
-   * Recreate an enabled live adapter instance from the current loaded
-   * definition.
+   * Initialize one adapter, optionally from the deferred activation that owns its flight.
+   * @param adapter - Loaded adapter definition to initialize.
+   * @param platformDefaults - Platform-provided defaults forwarded to the factory.
+   * @param fromDeferredActivation - True only for this registry's deferred continuation.
+   */
+  private async initializeAdapterInternal(
+    adapter: LoadedAdapter,
+    platformDefaults: PlatformDefaults,
+    fromDeferredActivation: boolean,
+  ): Promise<void> {
+    await initializeAdapterRuntime({
+      dependencies: this.createAdmissionDependencies(),
+      adapter,
+      platformDefaults,
+      fromDeferredActivation,
+    });
+  }
+
+  /**
+   * Recreate an enabled adapter instance from the current loaded definition.
    *
    * Used when provider definitions change while the adapter package remains
-   * active. The stale instance is removed before reinitialization so disabled
-   * provider metadata cannot remain observable if the replacement fails.
+   * active. A replacement is admitted only after the prior handle has proved
+   * it stopped; weak evidence leaves that handle retiring for a later retry.
    * @param adapter - Loaded adapter definition to instantiate.
    * @param platformDefaults - Platform-provided defaults forwarded to the factory.
    */
   public async restartAdapterInstance(adapter: LoadedAdapter, platformDefaults: PlatformDefaults): Promise<void> {
-    const adapterId = this.resolveLoadedAdapterId(adapter);
-    const instance = this.adapterInstances.get(adapterId);
-    if (instance) {
-      try {
-        await closeAdapterInstance(adapterId, instance);
-      } catch (error) {
-        console.error(`[AdapterRuntimeRegistry] Error shutting down adapter "${adapter.name}" before restart:`, error);
-        throw error;
-      }
-      this.adapterInstances.delete(adapterId);
-    }
-    await this.initializeAdapter(adapter, platformDefaults);
+    await restartAdapterRuntime({ dependencies: this.createAdmissionDependencies(), adapter, platformDefaults });
+  }
+
+  /**
+   * Bind the registry-owned maps and retirement operation for runtime admission.
+   * @returns Dependencies shared by initialization and replacement admission.
+   */
+  private createAdmissionDependencies(): AdapterRuntimeAdmissionDependencies {
+    return {
+      bus: this.bus,
+      machineId: this.machineId,
+      resolveOwnerInstanceId: this.resolveOwnerInstanceId,
+      loadedAdapters: this.loadedAdapters,
+      adapterEntries: this.adapterEntries,
+      deferredActivations: this.deferredActivations,
+      resolveLoadedAdapterId: (adapter) => this.resolveLoadedAdapterId(adapter),
+      retireAdapterEntry: (adapterId, adapterName, publishDeinitialization) =>
+        this.retireAdapterEntry(adapterId, adapterName, publishDeinitialization),
+      initializeAdapter: (adapter, platformDefaults) => this.initializeAdapter(adapter, platformDefaults),
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -371,9 +571,86 @@ export class AdapterRuntimeRegistry {
    * @returns Per-instance teardown results and the class standing for all of them.
    */
   public async shutdownAll(): Promise<AdapterInstanceShutdownReport> {
-    const report = await shutdownAdapterInstances(this.adapterInstances);
+    await settleDeferredActivationsForShutdown(this.deferredActivations);
+    const results = await Promise.all(
+      [...this.adapterEntries.keys()].map(async (adapterId) => {
+        const adapterName = [...this.loadedAdapters.values()].find(
+          (candidate) => this.resolveLoadedAdapterId(candidate) === adapterId,
+        )?.name;
+        if (adapterName === undefined) throw new Error(`Managed adapter ${adapterId} has no loaded definition`);
+        const attempt = await this.retireAdapterEntry(adapterId, adapterName);
+        return attempt === undefined ? { adapterId, evidence: 'released' as const } : attempt.report;
+      }),
+    );
+    const report = aggregateAdapterInstanceTeardowns(results);
     this.loadedAdapters.clear();
     this.packageAdapters.clear();
+    this.adapterEntries.clear();
     return report;
+  }
+
+  /**
+   * Retire one adapter slot without admitting a replacement over weak evidence.
+   * @param adapterId - Runtime identifier of the adapter to retire.
+   * @param adapterName - Stable adapter implementation name for withdrawal.
+   * @param publishDeinitialization - Whether a previous initialized publication may need withdrawal.
+   * @returns The retirement result, or `undefined` when no slot was managed.
+   */
+  private async retireAdapterEntry(
+    adapterId: string,
+    adapterName: string,
+    publishDeinitialization = true,
+  ): Promise<AdapterRetirementAttempt | undefined> {
+    const entry = this.adapterEntries.get(adapterId);
+    if (entry === undefined) return undefined;
+
+    if (entry.state === 'retiring' && entry.flight !== undefined) {
+      return { report: { adapterId, ...entry.report }, pendingCompletion: entry.flight.completion };
+    }
+
+    const report =
+      entry.state === 'retiring'
+        ? entry.report
+        : { evidence: 'unknown' as const, detail: 'Adapter retirement is in progress.' };
+    const { promise: completion, resolve: resolveCompletion } = Promise.withResolvers<AdapterInstanceTeardownResult>();
+    const { promise: cancellationCompletion, resolve: resolveCancellationCompletion } = Promise.withResolvers<void>();
+    const flight: AdapterRuntimeRetirementFlight = { completion, cancellationCompletion };
+    this.adapterEntries.set(adapterId, {
+      state: 'retiring',
+      instance: entry.instance,
+      ownerInstanceId: entry.ownerInstanceId,
+      report,
+      flight,
+    });
+    const attempt = await startAdapterRetirementAttempt(
+      this.bus,
+      deinitializedAdapterIdentity(this.adapterEntries, this.machineId, adapterId, adapterName),
+      () => retireAdapterInstance(adapterId, entry.instance),
+      entry.state === 'live' && publishDeinitialization,
+    );
+    resolveCancellationCompletion();
+    if (attempt.pendingCompletion !== undefined) {
+      this.adapterEntries.set(adapterId, {
+        state: 'retiring',
+        instance: entry.instance,
+        ownerInstanceId: entry.ownerInstanceId,
+        report: attempt.report,
+        flight,
+      });
+      void attempt.pendingCompletion.then(
+        (lateReport) => {
+          completeAdapterRetirementFlight(this.adapterEntries, adapterId, entry.instance, flight, lateReport);
+          resolveCompletion(lateReport);
+        },
+        () => {
+          completeAdapterRetirementFlight(this.adapterEntries, adapterId, entry.instance, flight, attempt.report);
+          resolveCompletion(attempt.report);
+        },
+      );
+      return { report: attempt.report, pendingCompletion: flight.completion };
+    }
+    completeAdapterRetirementFlight(this.adapterEntries, adapterId, entry.instance, flight, attempt.report);
+    resolveCompletion(attempt.report);
+    return attempt;
   }
 }

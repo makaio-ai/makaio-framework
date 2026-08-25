@@ -33,6 +33,10 @@ export interface AgentConfigHost<TBus extends ScopedBus<string>, TConnector exte
   readonly adapterId: string;
   /** Adapter type name. */
   readonly adapterName: string;
+  /** Stable machine identity of the adapter runtime. */
+  readonly machineId: string;
+  /** Exact authority incarnation hosting the adapter runtime. */
+  readonly ownerInstanceId: string;
   /** Global bus for cross-namespace communication. */
   readonly globalBus: IMakaioBus;
   /** Scoped bus for adapter-specific events. */
@@ -85,6 +89,8 @@ export function buildAgentConfig<TBus extends ScopedBus<string>, TConnector exte
     agentId: host.agentId,
     adapterId: host.adapterId,
     adapterName: host.adapterName,
+    machineId: host.machineId,
+    ownerInstanceId: host.ownerInstanceId,
     globalBus: host.globalBus,
     adapterBus: host.adapterBus,
     teardownArbiter: host.teardownArbiter,

@@ -13,8 +13,9 @@
  */
 import { MakaioBus } from '@makaio/bus-core';
 import type { ExtractSubjectResponse } from '@makaio/core';
-import { AdapterSubjects, SessionSubjects, type IMakaioSession } from '@makaio/contracts';
+import { AdapterSubjects, SessionSubjects, type IMakaioSession, type StartAgentResponse } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '../../../adapter-runtime/index.js';
+import { registerSessionOwnershipAuthority } from '../../ownership/authority.js';
 import { AgentStorageSubjects } from '../../storage/agent-namespace.js';
 import { ATTACH_TEST_IDS, createAttachHandlerContext, type AttachHandlerTestContext } from './shared.js';
 import type { StartAgentRequestPayload } from './shared.js';
@@ -48,6 +49,12 @@ export interface ReservedAttachContext {
    * registered one would be shadowed by this composition and pass vacuously.
    */
   readonly stopped: string[];
+  /** Every owner-targeted stop request the composition observed. */
+  readonly stoppedTargets: Array<{
+    readonly agentId: string;
+    readonly ownerInstanceId: string | undefined;
+    readonly teardown: 'connector-only' | undefined;
+  }>;
   /**
    * Seed the session a native resume attach runs against.
    * @param overrides - Fields to place on the session row.
@@ -57,7 +64,12 @@ export interface ReservedAttachContext {
    * Answer `adapter.startAgent` as an adapter does, recording every payload.
    * @param respond - What the adapter answers, and any side effect it runs first.
    */
-  registerAdapter: (respond?: (payload: StartAgentRequestPayload) => Promise<unknown> | unknown) => void;
+  registerAdapter: (
+    respond?: (
+      payload: StartAgentRequestPayload,
+    ) => Promise<StartAgentResponse | undefined> | StartAgentResponse | undefined,
+    options?: { readonly omitResponseOwnerInstanceId?: boolean },
+  ) => void;
   /**
    * Issue the attach under test.
    * @param overrides - Payload fields beyond the session and adapter selection.
@@ -84,10 +96,34 @@ export function createReservedAttachContext(): ReservedAttachContext {
   const dispatched: StartAgentRequestPayload[] = [];
   const claimsAtDispatch: number[] = [];
   const stopped: string[] = [];
+  const stoppedTargets: Array<{
+    readonly agentId: string;
+    readonly ownerInstanceId: string | undefined;
+    readonly teardown: 'connector-only' | undefined;
+  }> = [];
   let attachHandlerRegistered = false;
+  void MakaioBus.emit(AdapterSubjects.initialized, {
+    adapterId: ADAPTER_ID,
+    adapterName,
+    machineId: MACHINE,
+    ownerInstanceId: ATTACH_TEST_IDS.ownerInstanceId,
+    capabilities: [],
+  });
+  const authority = registerSessionOwnershipAuthority({
+    bus: MakaioBus,
+    machineId: MACHINE,
+    instanceId: ATTACH_TEST_IDS.ownerInstanceId,
+    topology: 'shared-machine',
+  });
+  for (const cleanup of authority.cleanups) ctx.trackUnsubscribe(cleanup);
   ctx.trackUnsubscribe(
     MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
       stopped.push(context.payload.agentId);
+      stoppedTargets.push({
+        agentId: context.payload.agentId,
+        ownerInstanceId: context.payload.ownerInstanceId,
+        teardown: context.payload.teardown,
+      });
       // "Succeeded" is never evidence a connector closed (I15); the cases that
       // care assert that they did not treat it as such.
       context.setResult({ success: true, evidence: 'released' });
@@ -99,6 +135,7 @@ export function createReservedAttachContext(): ReservedAttachContext {
     dispatched,
     claimsAtDispatch,
     stopped,
+    stoppedTargets,
     seedSession: (overrides) => {
       const session = ctx.createMockSession({
         machineId: MACHINE,
@@ -109,7 +146,7 @@ export function createReservedAttachContext(): ReservedAttachContext {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(session));
       return session;
     },
-    registerAdapter: (respond) => {
+    registerAdapter: (respond, options) => {
       ctx.trackUnsubscribe(
         MakaioBus.on(AdapterSubjects.startAgent, async (context) => {
           const payload = context.payload;
@@ -122,7 +159,21 @@ export function createReservedAttachContext(): ReservedAttachContext {
           claimsAtDispatch.push(ctx.getAgentClaims(payload.agentId).length);
           const answer = await respond?.(payload);
           if (answer !== undefined) {
-            context.setResult(answer as never);
+            context.setResult(
+              (answer.success
+                ? (() => {
+                    if (options?.omitResponseOwnerInstanceId) {
+                      const { ownerInstanceId: _responseOwnerInstanceId, ...answerWithoutOwner } = answer;
+                      return answerWithoutOwner;
+                    }
+                    return {
+                      ...answer,
+                      ownerInstanceId: answer.ownerInstanceId ?? payload.ownerInstanceId ?? 'reserved-attach-owner',
+                      settlementAckToken: answer.settlementAckToken ?? `ack-${payload.agentId}`,
+                    };
+                  })()
+                : answer) as never,
+            );
             return;
           }
           // The connector lands on the key it was asked to resume, or on one of
@@ -135,6 +186,8 @@ export function createReservedAttachContext(): ReservedAttachContext {
             adapterSessionId: payload.mode === 'resume' ? payload.adapterSessionId : `fresh-${dispatched.length}`,
             sessionId,
             messageId: 'msg-001',
+            ownerInstanceId: payload.ownerInstanceId ?? 'reserved-attach-owner',
+            settlementAckToken: `ack-${payload.agentId}`,
           });
         }),
       );
@@ -174,7 +227,9 @@ export function createReservedAttachContext(): ReservedAttachContext {
         adapterId: ADAPTER_ID,
         adapterName,
         role: 'member',
+        ownerInstanceId: ATTACH_TEST_IDS.ownerInstanceId,
         resumeProviderSessionId: providerSessionId,
+        claimToken: crypto.randomUUID(),
         machineId: MACHINE,
       });
     },

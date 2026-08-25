@@ -3,6 +3,7 @@ import { AgentSubjects, SessionSubjects, type SessionOwnershipClaimResult } from
 import { SessionStorageSubjects } from './storage/namespace.js';
 import { AgentStorageSubjects } from './storage/agent-namespace.js';
 import { designateSessionLead } from './ownership/index.js';
+import { retireTerminalAgentClaims } from './ownership/retire-agent-claims.js';
 
 /**
  * Report a designation this handler asked for and did not get.
@@ -45,6 +46,29 @@ function logRefusedDesignation(agentId: string, result: SessionOwnershipClaimRes
   }
   if (result.outcome !== 'claimed' && result.outcome !== 'idempotent') {
     console.debug(`[session.agent.added] lead designation for ${agentId} refused: ${result.outcome}`);
+  }
+}
+
+/**
+ * Error raised when the storage backend did not prove a terminal status transition.
+ * @param agentId - Agent whose terminal transition was unproved.
+ * @returns Error preserving the failed terminalization as the primary outcome.
+ */
+function terminalizationFailure(agentId: string): Error {
+  return new Error(`[session.agent.removed] Failed to terminalize agent ${agentId}`);
+}
+
+/**
+ * Attempt one removal act without preventing the remaining terminal cleanup.
+ * @param action - One durable or runtime cleanup operation.
+ * @returns The thrown error, if any, after the action has been attempted.
+ */
+async function attemptRemovalAct(action: () => Promise<void>): Promise<unknown | undefined> {
+  try {
+    await action();
+    return undefined;
+  } catch (error) {
+    return error;
   }
 }
 
@@ -193,15 +217,14 @@ async function establishSessionAdapterIdentity(
  * Three acts, in an order the ownership seam is written around:
  * 1. the agent row is marked `disposed`, which is absorbing for ownership — from
  *    here on no reservation, settlement or takeover can give it authority again;
- * 2. every claim it still holds is given up cleanly, because a removal is a
- *    deliberate stop rather than a failure of unknown extent, and only a clean
- *    release frees the ownership key;
- * 3. its lead designation is cleared through the reserving transaction, under a
+ * 2. its lead designation is cleared through the reserving transaction, under a
  *    compare-and-swap naming the departing agent — so a designation that has
  *    since moved to someone else is left standing, and removing a **non-lead**
  *    agent writes nothing at all.
+ * 3. every exact owner runtime is retired or stopped with observed evidence;
+ *    claims are released only when the terminal row transition was proved.
  *
- * The clear runs last and is deliberately not refused for a disposed agent:
+ * The clear runs before connector teardown and is deliberately not refused for a disposed agent:
  * giving authority up is the one ownership act a removed agent must still
  * perform, and a guard here would strand the designation this step exists to
  * unset. Its outcome is not inspected either, unlike the added handler's: a
@@ -219,64 +242,39 @@ export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
     const session = result.handled ? result.data.session : undefined;
     if (!session) return;
 
-    await bus.requestOptional(AgentStorageSubjects.updateStatus, {
-      agentId: ctx.payload.agentId,
-      status: 'disposed',
+    const terminalizationError = await attemptRemovalAct(async () => {
+      const status = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+        agentId: ctx.payload.agentId,
+        status: 'disposed',
+      });
+      // With no expected predecessor, a successful non-transition means the
+      // storage row was already disposed; that is an idempotently proved terminal state.
+      if (!status.handled || !status.data.success) {
+        throw terminalizationFailure(ctx.payload.agentId);
+      }
     });
-    // **Accepted residual — the release can outrun the connector it frees.**
-    // `released` says this key is free for anyone to claim, and the evidence
-    // behind it is that a caller asked `adapter.stopAgent` and it returned. That
-    // return does not mean the connector is closed: the registry's disposal
-    // schedules `agent.close()` and does not await it, and close hooks time out
-    // and are swallowed, so the previous writer can still be speaking to the
-    // provider session while the next claimant takes it.
-    //
-    // **`stopAgent` now reports observed teardown, and this release deliberately
-    // does not read it yet.** Gating the disposition on `teardownWasObserved`
-    // here would document a guarantee the surrounding mechanism cannot keep, and
-    // it would do so twice over:
-    //
-    // - **A weak class does not mean the previous writer is live.** `success:
-    //   false` — and with it the weakest classes — is the ordinary answer of a
-    //   peer that does not host this agent: the instance is deterministic, the
-    //   registry answer is local, and the dispatch is first-result-wins. A
-    //   disposition derived from that answer refuses releases for agents that are
-    //   simply somewhere else.
-    // - **And the alternative disposition would protect nothing.** Step 1 above
-    //   writes `disposed` first, and a takeover accepts a disposed incumbent with
-    //   no condition on its claim's disposition. So `abandoned` blocks no second
-    //   writer on the path that actually produces one; the gate would only make
-    //   the release fail while the takeover it was supposed to stop still
-    //   succeeds.
-    //
-    // What the consumer needs is therefore not evidence but *owner-process
-    // identity* — a stop that provably reaches **the** owner, plus a takeover
-    // predicate for which `disposed` is not sufficient. Both are Wave 5's core,
-    // and this wave built the evidence Wave 5 will read here rather than a half
-    // gate that reads like a guarantee.
-    //
-    // What bounds it today: the release is a deliberate teardown of an agent the
-    // caller has stopped, and the next claimant is refused nothing — so the
-    // exposure is a second writer on a provider session for as long as the old
-    // connector's close takes, not an unbounded one.
-    await bus.requestOptional(SessionSubjects.ownership.release, {
-      agentId: ctx.payload.agentId,
-      disposition: 'released',
+    const leadError = await attemptRemovalAct(async () => {
+      await designateSessionLead(bus, {
+        sessionId: ctx.payload.sessionId,
+        agentId: ctx.payload.agentId,
+        expectedLeadAgentId: ctx.payload.agentId,
+        clear: true,
+      });
     });
-    await designateSessionLead(bus, {
-      sessionId: ctx.payload.sessionId,
-      agentId: ctx.payload.agentId,
-      expectedLeadAgentId: ctx.payload.agentId,
-      clear: true,
+    const teardownError = await attemptRemovalAct(async () => {
+      await retireTerminalAgentClaims(bus, ctx.payload.agentId, { releaseClaims: terminalizationError === undefined });
+    });
+    const activityError = await attemptRemovalAct(async () => {
+      await bus.requestOptional(SessionStorageSubjects.update, {
+        sessionId: ctx.payload.sessionId,
+        lastActivityAt: Date.now(),
+      });
     });
 
-    // Activity only, and through the narrow write for the reason the added
-    // handler states: a whole record would carry this handler's pre-teardown
-    // snapshot back over a `session.close` that landed while it worked.
-    await bus.requestOptional(SessionStorageSubjects.update, {
-      sessionId: ctx.payload.sessionId,
-      lastActivityAt: Date.now(),
-    });
+    if (terminalizationError !== undefined) throw terminalizationError;
+    if (leadError !== undefined) throw leadError;
+    if (teardownError !== undefined) throw teardownError;
+    if (activityError !== undefined) throw activityError;
   });
 }
 
@@ -302,13 +300,10 @@ export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
  * Idempotent: only writes when the stored value is missing.
  * Write-once: the first qualifying `agent.started` event wins.
  *
- * **Still a read-check-write, and deliberately so.** The condition this handler
- * writes under is not the announcement's: it fills the provider key while *that*
- * column is unset, against an identity that may already be established and must
- * then match. `expectIdentityOpenForLead` states the opposite condition — the
- * identity is open — so the guarded write is not the predicate this path needs,
- * and giving it one is a separate composite condition with its own arms rather
- * than a reuse of this one.
+ * **One atomic reconciliation write.** Storage owns the composite predicate:
+ * provider session ID remains unset, this agent remains the lead, and identity is
+ * fully open or exactly matches this announcement. This keeps the read used for
+ * agent-level backfill from becoming authority for session-level storage.
  * @param bus - Message bus used by the session service
  * @returns Cleanup function
  */
@@ -330,48 +325,15 @@ export function registerAdapterSessionIdReconciliationHandler(bus: IMakaioBus): 
       });
     }
 
-    // ── Session storage reconciliation ───────────────────────────────
-    const sessionResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
-    const session = sessionResult.handled ? sessionResult.data.session : null;
-    if (!session) return;
-
-    // **The session row's adapter identity and resume key are its lead's.** One
-    // rule for both halves of this write, because three rounds of narrowing one
-    // condition at a time each left the other half open:
-    //
-    // - *whose* — the lead's, and no one else's. Not the first agent observed,
-    //   not a sibling instance, not a member that confirmed first. The column is
-    //   what a resume targets while no settlement has published currency for the
-    //   session, so an agent that is not the lead points the session at a
-    //   conversation that is not its own.
-    // - *when* — once, while it is unset, and never again.
-    //
-    // **An absent lead is not evidence of a host that cannot designate.** That
-    // was the standing exception, and it does not hold: a start that carries an
-    // initial message emits this event from inside its own start call, before
-    // that start's `session.agent.added` announces the agent at all — so the
-    // session legitimately has no lead yet, in a fully designated composition,
-    // every time the first turn confirms a provider session. Reading `undefined`
-    // as "nothing can designate here" therefore admits an ordinary start's
-    // member, which is the case the guard exists for. A host that genuinely
-    // cannot designate a lead cannot own a session either (see
-    // {@link logRefusedDesignation}), and it gets no session-level identity from
-    // here — its lead's own first turn establishes it, as every other session's
-    // does.
-    if (!session.adapterSessionId && session.leadAgentId === agentId) {
-      // The instance, not only the adapter *type*: a provider session is minted
-      // inside one instance, and two instances of one adapter name are two
-      // machines. Checked only where the identity is already established —
-      // where it is not, this agent *is* the identity, being the lead.
-      if (session.adapterName !== undefined && (adapterName !== session.adapterName || adapterId !== session.adapterId))
-        return;
-
-      session.adapterSessionId = adapterSessionId;
-      session.adapterName = adapterName;
-      session.adapterId = adapterId;
-
-      session.lastActivityAt = Date.now();
-      await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
-    }
+    await bus.requestOptional(SessionStorageSubjects.update, {
+      sessionId,
+      reconcileAdapterSession: {
+        agentId,
+        adapterName,
+        adapterId,
+        adapterSessionId,
+        lastActivityAt: Date.now(),
+      },
+    });
   });
 }
