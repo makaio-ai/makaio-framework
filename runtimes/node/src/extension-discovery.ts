@@ -173,7 +173,7 @@ export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
       const normalizedPattern = pattern.split(path.sep).join('/');
       let matches: string[];
       try {
-        matches = await glob(normalizedPattern, { windowsPathsNoEscape: true });
+        matches = await glob(normalizedPattern, { nodir: true, windowsPathsNoEscape: true });
       } catch (err) {
         console.warn(
           `[extensions] Skipping scan for pattern ${normalizedPattern}:`,
