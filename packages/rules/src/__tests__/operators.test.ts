@@ -202,6 +202,36 @@ describe('$nin operator', () => {
 });
 
 // ---------------------------------------------------------------------------
+// $contains operator
+// ---------------------------------------------------------------------------
+
+describe('$contains operator', () => {
+  it('returns true when the array contains the value', () => {
+    expect(evalField({ $contains: 'b' }, ['a', 'b', 'c'])).toBe(true);
+  });
+
+  it('returns false when the array does not contain the value', () => {
+    expect(evalField({ $contains: 'd' }, ['a', 'b', 'c'])).toBe(false);
+  });
+
+  it('returns false for an empty array', () => {
+    expect(evalField({ $contains: 'anything' }, [])).toBe(false);
+  });
+
+  it('uses strict scalar comparison', () => {
+    expect(evalField({ $contains: 2 }, ['1', '2', '3'])).toBe(false);
+  });
+
+  it('matches null when the array contains null', () => {
+    expect(evalField({ $contains: null }, ['other', null])).toBe(true);
+  });
+
+  it('returns false for non-array values', () => {
+    expect(evalField({ $contains: 'ell' }, 'hello')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // $exists operator
 // ---------------------------------------------------------------------------
 
