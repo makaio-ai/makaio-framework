@@ -4574,7 +4574,7 @@ __metadata:
     "@makaio/bus-transport-websocket": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@makaio/runtime-node": "workspace:*"
-    hono: "npm:^4.12.27"
+    hono: "npm:^4.12.34"
   peerDependencies:
     vite: ^8.0.12
   languageName: unknown
@@ -4655,7 +4655,7 @@ __metadata:
     "@types/react": "npm:^19.2.15"
     commander: "npm:^14.0.3"
     esbuild: "npm:^0.28.0"
-    hono: "npm:^4.12.27"
+    hono: "npm:^4.12.34"
     ink: "npm:^6.5.1"
     ink-testing-library: "npm:^3.0.0"
     react: "npm:^19.0.0"
@@ -4833,7 +4833,7 @@ __metadata:
     dotenv: "npm:^17.2.3"
     electrobun: "npm:^1.16.0"
     get-port: "npm:^7.0.0"
-    hono: "npm:^4.12.27"
+    hono: "npm:^4.12.34"
     lucide-react: "npm:^0.562.0"
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
@@ -4877,7 +4877,7 @@ __metadata:
     electron-builder: "npm:^26.15.7"
     esbuild: "npm:^0.28.0"
     get-port: "npm:^7.0.0"
-    hono: "npm:^4.12.27"
+    hono: "npm:^4.12.34"
     lucide-react: "npm:^0.562.0"
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
@@ -5339,7 +5339,7 @@ __metadata:
     find-up: "npm:^7.0.0"
     glob: "npm:13.0.6"
     globby: "npm:^14.1.0"
-    hono: "npm:^4.12.25"
+    hono: "npm:^4.12.34"
     human-id: "npm:^4.1.3"
     jsdom: "npm:^26.1.0"
     knip: "npm:^6.14.2"
@@ -5386,7 +5386,7 @@ __metadata:
     drizzle-orm: "npm:^0.45.2"
     execa: "npm:^9.5.2"
     glob: "npm:13.0.6"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.34"
     piscina: "npm:^5.1.4"
     tsx: "npm:^4.22.3"
     type-fest: "npm:^5.2.0"
@@ -5735,7 +5735,7 @@ __metadata:
   dependencies:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
-    hono: "npm:^4.12.27"
+    hono: "npm:^4.12.34"
   languageName: unknown
   linkType: soft
 
@@ -5774,7 +5774,7 @@ __metadata:
     "@makaio/kernel": "workspace:*"
     "@makaio/runtime-node": "workspace:*"
     "@types/bun": "npm:^1.3.14"
-    hono: "npm:^4.12.27"
+    hono: "npm:^4.12.34"
     ws: "npm:^8.21.1"
   languageName: unknown
   linkType: soft
@@ -5815,7 +5815,7 @@ __metadata:
     drizzle-orm: "npm:0.45.2"
     execa: "npm:^9.5.2"
     glob: "npm:13.0.6"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.34"
     minimatch: "npm:^10.0.3"
     piscina: "npm:^5.1.4"
     tsdown: "npm:0.22.0"
@@ -17872,10 +17872,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"hono@npm:4.12.25":
-  version: 4.12.25
-  resolution: "hono@npm:4.12.25"
-  checksum: 10c0/9216d647fe2f39b17855b0e74913688b837e3fa9519d367c7beeec399265b36608a820928cc33ab926eee58fe2daf7e33296235b52e56dbfac0fbcd51a5e818e
+"hono@npm:4.12.34":
+  version: 4.12.34
+  resolution: "hono@npm:4.12.34"
+  checksum: 10c0/9d184cb95bc630622d3a8885706feb8e98170556650ce139f09e54c96b9429b3194a296ad4fb0791e7b642a21a03acbf592cb0d19d906ab5e8b78a13337d61bc
   languageName: node
   linkType: hard
 
