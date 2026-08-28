@@ -113,6 +113,10 @@ function matchesOperator(actual: unknown, operator: FieldOperator): boolean {
     return !operator.$nin.includes(actual as (typeof operator.$nin)[number]);
   }
 
+  if ('$contains' in operator) {
+    return Array.isArray(actual) && actual.includes(operator.$contains);
+  }
+
   if ('$exists' in operator) {
     // null is treated as "present": only undefined signals absence (PayloadFilter compatibility).
     const exists = actual !== undefined;

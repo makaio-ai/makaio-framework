@@ -51,6 +51,7 @@ export const FieldOperatorSchema: z.ZodType<FieldOperator> = z.union([
   z.object({ $ne: ScalarValueSchema }).strict(),
   z.object({ $in: z.array(ScalarValueSchema) }).strict(),
   z.object({ $nin: z.array(ScalarValueSchema) }).strict(),
+  z.object({ $contains: ScalarValueSchema }).strict(),
   z.object({ $exists: z.boolean() }).strict(),
   z.object({ $startsWith: z.string() }).strict(),
   z.object({ $endsWith: z.string() }).strict(),

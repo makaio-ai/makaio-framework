@@ -154,6 +154,10 @@ describe('FieldOperatorSchema', () => {
     expect(FieldOperatorSchema.parse({ $nin: [1, 2] })).toEqual({ $nin: [1, 2] });
   });
 
+  it('accepts $contains', () => {
+    expect(FieldOperatorSchema.parse({ $contains: 'member' })).toEqual({ $contains: 'member' });
+  });
+
   it('accepts $exists: true', () => {
     expect(FieldOperatorSchema.parse({ $exists: true })).toEqual({ $exists: true });
   });
@@ -188,6 +192,10 @@ describe('FieldOperatorSchema', () => {
 
   it('rejects $in with a non-scalar element (object in array)', () => {
     expect(FieldOperatorSchema.safeParse({ $in: [{ nested: 1 }] }).success).toBe(false);
+  });
+
+  it('rejects $contains with a non-scalar value', () => {
+    expect(FieldOperatorSchema.safeParse({ $contains: ['member'] }).success).toBe(false);
   });
 });
 
