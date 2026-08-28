@@ -117,6 +117,13 @@ function matchesOperator(actual: unknown, operator: FieldOperator): boolean {
     return Array.isArray(actual) && actual.includes(operator.$contains);
   }
 
+  if ('$containsPrefix' in operator) {
+    return (
+      Array.isArray(actual) &&
+      actual.some((value: unknown) => typeof value === 'string' && value.startsWith(operator.$containsPrefix))
+    );
+  }
+
   if ('$exists' in operator) {
     // null is treated as "present": only undefined signals absence (PayloadFilter compatibility).
     const exists = actual !== undefined;
