@@ -44,6 +44,7 @@ export type FieldOperator =
   | { $in: ScalarValue[] }
   | { $nin: ScalarValue[] }
   | { $contains: ScalarValue }
+  | { $containsPrefix: string }
   | { $exists: boolean }
   | { $startsWith: string }
   | { $endsWith: string }

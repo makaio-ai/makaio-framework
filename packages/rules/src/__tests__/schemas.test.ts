@@ -158,6 +158,12 @@ describe('FieldOperatorSchema', () => {
     expect(FieldOperatorSchema.parse({ $contains: 'member' })).toEqual({ $contains: 'member' });
   });
 
+  it('accepts $containsPrefix', () => {
+    expect(FieldOperatorSchema.parse({ $containsPrefix: 'repo:' })).toEqual({
+      $containsPrefix: 'repo:',
+    });
+  });
+
   it('accepts $exists: true', () => {
     expect(FieldOperatorSchema.parse({ $exists: true })).toEqual({ $exists: true });
   });
@@ -196,6 +202,14 @@ describe('FieldOperatorSchema', () => {
 
   it('rejects $contains with a non-scalar value', () => {
     expect(FieldOperatorSchema.safeParse({ $contains: ['member'] }).success).toBe(false);
+  });
+
+  it('rejects $containsPrefix with a non-string value', () => {
+    expect(FieldOperatorSchema.safeParse({ $containsPrefix: 42 }).success).toBe(false);
+  });
+
+  it('rejects $containsPrefix combined with another operator (strict mode)', () => {
+    expect(FieldOperatorSchema.safeParse({ $containsPrefix: 'repo:', $eq: 'a' }).success).toBe(false);
   });
 });
 

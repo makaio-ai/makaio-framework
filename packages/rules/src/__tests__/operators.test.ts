@@ -232,6 +232,40 @@ describe('$contains operator', () => {
 });
 
 // ---------------------------------------------------------------------------
+// $containsPrefix operator
+// ---------------------------------------------------------------------------
+
+describe('$containsPrefix operator', () => {
+  it('returns true when one array element starts with the prefix', () => {
+    expect(evalField({ $containsPrefix: 'repo:' }, ['team:core', 'repo:ai-factory'])).toBe(true);
+  });
+
+  it('returns false when no array element starts with the prefix', () => {
+    expect(evalField({ $containsPrefix: 'repo:' }, ['team:core', 'area:rules'])).toBe(false);
+  });
+
+  it('returns false for an empty array', () => {
+    expect(evalField({ $containsPrefix: 'repo:' }, [])).toBe(false);
+  });
+
+  it('returns false for a string value that starts with the prefix', () => {
+    expect(evalField({ $containsPrefix: 'repo:' }, 'repo:ai-factory')).toBe(false);
+  });
+
+  it('ignores non-string array elements', () => {
+    expect(evalField({ $containsPrefix: '1' }, [1, null, true])).toBe(false);
+  });
+
+  it('matches any string element for an empty prefix', () => {
+    expect(evalField({ $containsPrefix: '' }, ['anything'])).toBe(true);
+  });
+
+  it('does not match an empty prefix when no element is a string', () => {
+    expect(evalField({ $containsPrefix: '' }, [1, null])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // $exists operator
 // ---------------------------------------------------------------------------
 

@@ -77,6 +77,7 @@ const matched = evaluateRules(rules, { session: { turnCount: 25 } });
 | `{ $in }` | `{ $in: ["a", "b"] }` | Value in array |
 | `{ $nin }` | `{ $nin: ["x"] }` | Value not in array |
 | `{ $contains }` | `{ $contains: "admin" }` | Array contains value |
+| `{ $containsPrefix }` | `{ $containsPrefix: "repo:" }` | Array contains a string with prefix |
 | `{ $exists }` | `{ $exists: true }` | Field is not `undefined` |
 | `{ $startsWith }` | `{ $startsWith: "src/" }` | String prefix |
 | `{ $endsWith }` | `{ $endsWith: ".ts" }` | String suffix |
