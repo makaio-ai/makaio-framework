@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { WorkerNodeSubjects, type OutcomeAckDecision, type WorkflowRunResult } from '@makaio/contracts';
+import { WorkerSubjects, type OutcomeAckDecision, type WorkflowRunResult } from '@makaio/contracts';
 
 // ─────────────────────────────────────────────────────────────
 // Configuration
@@ -269,7 +269,7 @@ export async function submitOutcomeWithAck(
         throw createDeadlineExceededError(payload.result);
       }
       const { decision } = await bus.request(
-        WorkerNodeSubjects.control.outcome.submit,
+        WorkerSubjects.control.outcome.submit,
         {
           executionAttemptId: payload.executionAttemptId,
           executionId: payload.executionId,

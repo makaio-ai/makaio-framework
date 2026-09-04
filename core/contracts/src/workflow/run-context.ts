@@ -3,8 +3,8 @@ import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schema
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkerContributionManifestSchema, WorkflowTriggerModeSchema } from './worker.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { SuspensionStrategySchema } from '../worker-node/suspension.js';
-import { WorkerMaterializationSpecSchema } from '../capabilities/worker-node/types.js';
+import { SuspensionStrategySchema } from '../worker/suspension.js';
+import { WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
 
 /**
  * Durable source descriptor for a workflow execution.
@@ -38,7 +38,7 @@ export type WorkflowRunContextSource = z.infer<typeof WorkflowRunContextSourceSc
  *
  * Created at execution start by the host, pulled by the executor over the
  * authenticated bus after connecting. Replaces the push-model delivery of
- * {@link WorkflowWorkerConfig} for WorkerNode providers.
+ * {@link WorkflowWorkerConfig} for Worker providers.
  *
  * Does NOT contain: bus URL, auth secret, credential values, or git tokens.
  * Those are transport/bootstrap or secret material, not durable run context.

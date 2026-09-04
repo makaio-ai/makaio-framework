@@ -15,7 +15,7 @@ import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js'
 import { AIReasoningLevelSchema } from '../model/index.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowDelegateResultFinalizerIdSchema, WorkflowFinalizerIdSchema } from './finalization.js';
-import { WorkerNodeRequirementsSchema } from '../capabilities/worker-node/index.js';
+import { WorkerRequirementsSchema } from '../capabilities/worker/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Automation Trigger Binding
@@ -940,8 +940,8 @@ export const WorkflowDefinitionSchema = z.object({
   source: WorkflowDefinitionProvenanceSchema.optional(),
   /** Portable executable source for worker dispatch (see `ExecutableSourceSchema`). */
   executableSource: ExecutableSourceSchema.optional(),
-  /** Resource requirements for WorkerNode provider selection. */
-  requirements: WorkerNodeRequirementsSchema.optional(),
+  /** Resource requirements for Worker provider selection. */
+  requirements: WorkerRequirementsSchema.optional(),
   /**
    * Framework finalizer selected by the compiled workflow definition after a
    * successful execution. This immutable definition-owned selector cannot be

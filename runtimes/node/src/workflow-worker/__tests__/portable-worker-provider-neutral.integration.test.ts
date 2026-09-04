@@ -8,7 +8,7 @@ import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
-  WorkerNodeSubjects,
+  WorkerSubjects,
   WorkflowRunResultSchema,
   WorkflowSubjects,
   type OutcomeAckDecision,
@@ -287,7 +287,7 @@ async function createAuthoritySide(
   );
 
   // Capture attempt-ready events
-  const offAttemptReady = authority.on(WorkerNodeSubjects.control['attempt-ready'], (ctx) => {
+  const offAttemptReady = authority.on(WorkerSubjects.control['attempt-ready'], (ctx) => {
     state.capture.attemptReadyEvents.push({
       executionAttemptId: ctx.payload.executionAttemptId,
       executionId: ctx.payload.executionId,
@@ -296,7 +296,7 @@ async function createAuthoritySide(
   });
 
   // Handle outcome submission
-  const offOutcomeSubmit = authority.on(WorkerNodeSubjects.control.outcome.submit, (ctx) => {
+  const offOutcomeSubmit = authority.on(WorkerSubjects.control.outcome.submit, (ctx) => {
     state.capture.outcomeSubmissions.push({
       executionAttemptId: ctx.payload.executionAttemptId,
       executionId: ctx.payload.executionId,
@@ -420,7 +420,7 @@ describe('portable provider-neutral harness', () => {
       const offKernelReady = authority.bus.on(KernelSubjects.ready, () => {
         readyOrder.push('kernel-ready');
       });
-      const offAttemptReady = authority.bus.on(WorkerNodeSubjects.control['attempt-ready'], () => {
+      const offAttemptReady = authority.bus.on(WorkerSubjects.control['attempt-ready'], () => {
         readyOrder.push('attempt-ready');
       });
 

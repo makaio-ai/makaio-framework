@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { WorkerNodeNamespace, WorkerNodeSubjects } from '@makaio/contracts';
-import type { ProviderAllocationRef, WorkflowRunResult, WorkerNodeRequirements } from '@makaio/contracts';
+import { WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
+import type { ProviderAllocationRef, WorkflowRunResult, WorkerRequirements } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
-import { hasWorkerNodeDispatchRequirements, createWorkerNodeDispatchRunner } from '../worker-node-dispatch-runner.js';
+import { hasWorkerDispatchRequirements, createWorkerDispatchRunner } from '../worker-dispatch-runner.js';
 import { launchDefinitionExecutionTask } from '../workflow-definition-dispatch.js';
 import type { StartExecutionDeps } from '../workflow-execution-start.js';
 import type { DefinitionRunnerTaskParams } from '../workflow-runner-tasks.js';
 import { beginTestProvisioning, createInMemoryAttemptRepository } from '../testing/index.js';
 
-function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerNodeDispatchRunner>>['run']>[0] {
+function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerDispatchRunner>>['run']>[0] {
   return {
     source: { kind: 'definition', workflowId: 'workflow-1' },
     executionId: 'wfx-1',
@@ -35,59 +35,59 @@ const TEST_ALLOCATION_REF: ProviderAllocationRef = {
 // Tests
 // ─────────────────────────────────────────────────────────────
 
-describe('hasWorkerNodeDispatchRequirements', () => {
+describe('hasWorkerDispatchRequirements', () => {
   it('returns false when no requirements are present', () => {
-    expect(hasWorkerNodeDispatchRequirements(undefined)).toBe(false);
+    expect(hasWorkerDispatchRequirements(undefined)).toBe(false);
   });
 
   it('returns false when customCapabilities are empty', () => {
-    const requirements: WorkerNodeRequirements = {
+    const requirements: WorkerRequirements = {
       customCapabilities: [],
     };
-    expect(hasWorkerNodeDispatchRequirements(requirements)).toBe(false);
+    expect(hasWorkerDispatchRequirements(requirements)).toBe(false);
   });
 
   it('returns false for an empty requirements object', () => {
-    expect(hasWorkerNodeDispatchRequirements({})).toBe(false);
+    expect(hasWorkerDispatchRequirements({})).toBe(false);
   });
 
   it('returns true when customCapabilities are present', () => {
-    const requirements: WorkerNodeRequirements = {
+    const requirements: WorkerRequirements = {
       customCapabilities: ['workflow.remote'],
     };
-    expect(hasWorkerNodeDispatchRequirements(requirements)).toBe(true);
+    expect(hasWorkerDispatchRequirements(requirements)).toBe(true);
   });
 
   it('returns true when only recoverableAllocation is set', () => {
-    expect(hasWorkerNodeDispatchRequirements({ recoverableAllocation: true })).toBe(true);
+    expect(hasWorkerDispatchRequirements({ recoverableAllocation: true })).toBe(true);
   });
 
   it('returns true when only materializationModes are set', () => {
     expect(
-      hasWorkerNodeDispatchRequirements({
+      hasWorkerDispatchRequirements({
         materializationModes: ['workspace-snapshot'],
       }),
     ).toBe(true);
   });
 
   it('returns false for materializationModes with an empty array', () => {
-    expect(hasWorkerNodeDispatchRequirements({ materializationModes: [] })).toBe(false);
+    expect(hasWorkerDispatchRequirements({ materializationModes: [] })).toBe(false);
   });
 
   it('returns true when only persistentStorage is set', () => {
-    expect(hasWorkerNodeDispatchRequirements({ persistentStorage: true })).toBe(true);
+    expect(hasWorkerDispatchRequirements({ persistentStorage: true })).toBe(true);
   });
 
   it('returns true when only maxRuntimeMs is set', () => {
-    expect(hasWorkerNodeDispatchRequirements({ maxRuntimeMs: 60_000 })).toBe(true);
+    expect(hasWorkerDispatchRequirements({ maxRuntimeMs: 60_000 })).toBe(true);
   });
 });
 
-describe('createWorkerNodeDispatchRunner', () => {
+describe('createWorkerDispatchRunner', () => {
   it('returns undefined when no capability constraint exists', () => {
     const bus = createBusInstance();
     const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
-    const runner = createWorkerNodeDispatchRunner({
+    const runner = createWorkerDispatchRunner({
       bus,
       requirements: undefined,
       authority,
@@ -98,7 +98,7 @@ describe('createWorkerNodeDispatchRunner', () => {
   it('returns undefined when customCapabilities are empty', () => {
     const bus = createBusInstance();
     const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
-    const runner = createWorkerNodeDispatchRunner({
+    const runner = createWorkerDispatchRunner({
       bus,
       requirements: { customCapabilities: [] },
       authority,
@@ -108,10 +108,10 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('abandons the durable pending attempt and removes its waiter when dispatch has no handler', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
-    const runner = createWorkerNodeDispatchRunner({
+    const runner = createWorkerDispatchRunner({
       bus,
       requirements: { customCapabilities: ['workflow.remote'] },
       authority,
@@ -130,18 +130,18 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('rejects the runner without terminalizing durable state when dispatch rejects its local waiter', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
     const localFailure = new Error('provider cleanup requires recovery');
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       await beginTestProvisioning(authority, ctx.payload.executionAttemptId, ctx.payload.config.executionId);
       authority.rejectAndDiscardWaiter(ctx.payload.executionAttemptId, localFailure);
       throw localFailure;
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { customCapabilities: ['workflow.remote'] },
         authority,
@@ -165,10 +165,10 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('awaits the canonical outcome when allocation persists before the dispatch acknowledgement rejects', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       const claim = await beginTestProvisioning(
         authority,
         ctx.payload.executionAttemptId,
@@ -192,7 +192,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { customCapabilities: ['workflow.remote'] },
         authority,
@@ -217,19 +217,19 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('cleans up the waiter when pending abandonment itself rejects', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
     const repository = createInMemoryAttemptRepository();
     const abandonError = new Error('attempt storage unavailable');
     vi.spyOn(repository, 'abandonPendingAttempt').mockRejectedValue(abandonError);
     const authority = new ExecutionAttemptAuthority(repository);
     let executionAttemptId: string | undefined;
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, (ctx) => {
       executionAttemptId = ctx.payload.executionAttemptId;
       throw new Error('dispatch acknowledgement lost');
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { customCapabilities: ['workflow.remote'] },
         authority,
@@ -254,10 +254,10 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('does not abandon an attempt when the outcome fails after dispatch acknowledgement', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, (ctx) => {
       ctx.setResult({
         executionAttemptId: ctx.payload.executionAttemptId,
         allocationRef: TEST_ALLOCATION_REF,
@@ -266,7 +266,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { customCapabilities: ['workflow.remote'] },
         authority,
@@ -288,13 +288,13 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('creates an attempt before dispatch and includes executionAttemptId in the request', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
 
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedAttemptId: string | undefined;
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       capturedAttemptId = ctx.payload.executionAttemptId;
       const result: WorkflowRunResult = {
         executionId: ctx.payload.config.executionId,
@@ -312,7 +312,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { customCapabilities: ['workflow.remote'] },
         authority,
@@ -331,13 +331,13 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('forwards dispatch metadata in the bus request', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
 
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedMetadata: Record<string, unknown> | undefined;
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       capturedMetadata = ctx.payload.metadata;
       const result: WorkflowRunResult = {
         executionId: ctx.payload.config.executionId,
@@ -354,7 +354,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { customCapabilities: ['workflow.remote'] },
         dispatchMetadata: { poolId: 'pool-1', resume: true },
@@ -371,13 +371,13 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('routes through dispatch and carries full requirements when only recoverableAllocation is set', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
 
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedRequirements: Record<string, unknown> | undefined;
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       capturedRequirements = ctx.payload.requirements;
       const result: WorkflowRunResult = {
         executionId: ctx.payload.config.executionId,
@@ -394,7 +394,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { recoverableAllocation: true },
         authority,
@@ -411,13 +411,13 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('routes through dispatch and carries full requirements when only materializationModes is set', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
 
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedRequirements: Record<string, unknown> | undefined;
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       capturedRequirements = ctx.payload.requirements;
       const result: WorkflowRunResult = {
         executionId: ctx.payload.config.executionId,
@@ -434,7 +434,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: { materializationModes: ['workspace-snapshot'] },
         authority,
@@ -453,13 +453,13 @@ describe('createWorkerNodeDispatchRunner', () => {
 
   it('forwards capability requirements in the bus request', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
 
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedRequirements: Record<string, unknown> | undefined;
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       capturedRequirements = ctx.payload.requirements;
       const result: WorkflowRunResult = {
         executionId: ctx.payload.config.executionId,
@@ -476,7 +476,7 @@ describe('createWorkerNodeDispatchRunner', () => {
     });
 
     try {
-      const runner = createWorkerNodeDispatchRunner({
+      const runner = createWorkerDispatchRunner({
         bus,
         requirements: {
           customCapabilities: ['workflow.remote', 'workflow.github-actions'],
@@ -500,16 +500,16 @@ describe('createWorkerNodeDispatchRunner', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('launchDefinitionExecutionTask requirements threading', () => {
-  it('routes through WorkerNode dispatch when definition declares customCapabilities', async () => {
+  it('routes through Worker dispatch when definition declares customCapabilities', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
 
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
 
     let dispatchCalled = false;
     let capturedRequirements: Record<string, unknown> | undefined;
-    const offDispatch = bus.on(WorkerNodeSubjects.dispatch, async (ctx) => {
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       dispatchCalled = true;
       capturedRequirements = ctx.payload.requirements;
       const result: WorkflowRunResult = {
@@ -629,7 +629,7 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
         name: 'test-workflow-no-req',
         root: { id: 'root', type: 'sequence', nodes: [] },
         scope: { type: 'global' },
-        // No requirements — should NOT route through WorkerNode dispatch.
+        // No requirements — should NOT route through Worker dispatch.
       },
       source: { kind: 'definition', workflowId: 'workflow-no-req' },
       coordinatorSessionId: 'session-2',

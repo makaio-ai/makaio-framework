@@ -1,14 +1,14 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type {
-  IWorkerNodeProvider,
+  IWorkerProvider,
   IWorkflowRunner,
-  NormalizedWorkerNodeCapabilities,
+  NormalizedWorkerCapabilities,
   ProviderAllocationRef,
-  WorkerNodeAllocatedOutcome,
-  WorkerNodeCapabilities,
-  WorkerNodeHandle,
-  WorkerNodeInfrastructureConclusion,
-  WorkerNodeProvisionRequest,
+  WorkerAllocatedOutcome,
+  WorkerCapabilities,
+  WorkerHandle,
+  WorkerInfrastructureConclusion,
+  WorkerProvisionRequest,
   WorkflowRunResult,
 } from '@makaio/contracts';
 import {
@@ -16,8 +16,8 @@ import {
   PROVIDER_ALLOCATION_REF_VERSION,
   ProviderAllocationRefSchema,
   RECOVERY_EVIDENCE_LIMITS,
-  WorkerNodeCapabilitiesSchema,
-  WorkerNodeSubjects,
+  WorkerCapabilitiesSchema,
+  WorkerSubjects,
 } from '@makaio/contracts';
 import { OutcomeDeliveryError, submitOutcomeWithAck, type OutcomeSubmitRetryConfig } from './outcome-submission.js';
 import type { ThinWorkflowPiscinaRunWithReadiness } from './thin-workflow-piscina-runner.js';
@@ -61,7 +61,7 @@ export interface PiscinaThinWorkflowProviderOptions {
    * call site instead of having the value silently dropped. See
    * {@link PiscinaThinWorkflowProvider}.
    */
-  readonly baseCapabilities?: Omit<Partial<WorkerNodeCapabilities>, 'supportsRecovery'>;
+  readonly baseCapabilities?: Omit<Partial<WorkerCapabilities>, 'supportsRecovery'>;
   /**
    * Optional retry configuration for outcome submission.
    *
@@ -85,7 +85,7 @@ const PISCINA_OUTCOME_RETRY_DEFAULTS: OutcomeSubmitRetryConfig = {
   deadlineMs: 10_000,
 };
 
-const DEFAULT_BASE_CAPABILITIES: NormalizedWorkerNodeCapabilities = {
+const DEFAULT_BASE_CAPABILITIES: NormalizedWorkerCapabilities = {
   persistentStorage: true,
   customCapabilities: ['workflow.local-runtime', 'workflow.thin-runner'],
   suspensionStrategy: 'wait-in-process',
@@ -110,9 +110,9 @@ export interface ReadinessAwareWorkflowRunner extends IWorkflowRunner {
    * @returns Terminal result promise and post-composition readiness promise.
    */
   runWithReadiness(
-    config: WorkerNodeProvisionRequest['workerConfig'],
+    config: WorkerProvisionRequest['workerConfig'],
     signal: AbortSignal,
-    manifest?: WorkerNodeProvisionRequest['workerManifest'],
+    manifest?: WorkerProvisionRequest['workerManifest'],
   ): ThinWorkflowPiscinaRunWithReadiness;
 }
 
@@ -123,7 +123,7 @@ interface InfrastructureConclusionSignal {
   /** Record the first terminal conclusion and notify every current observer. */
   readonly conclude: (summary: string) => void;
   /** Observe the conclusion, replaying it synchronously when it already happened. */
-  readonly observe: (observer: (conclusion: WorkerNodeInfrastructureConclusion) => void) => () => void;
+  readonly observe: (observer: (conclusion: WorkerInfrastructureConclusion) => void) => () => void;
 }
 
 /**
@@ -131,7 +131,7 @@ interface InfrastructureConclusionSignal {
  *
  * The first conclusion wins and is retained, so observers registered after it
  * receive the same conclusion synchronously. Each observer is notified at most
- * once, matching the {@link WorkerNodeHandle.observeInfrastructureConclusion}
+ * once, matching the {@link WorkerHandle.observeInfrastructureConclusion}
  * contract.
  *
  * The summary is validated through the contract's own evidence schema here,
@@ -141,8 +141,8 @@ interface InfrastructureConclusionSignal {
  * @returns Conclusion reporter and observer registration.
  */
 function createInfrastructureConclusionSignal(source: string): InfrastructureConclusionSignal {
-  const observers = new Set<(conclusion: WorkerNodeInfrastructureConclusion) => void>();
-  let conclusion: WorkerNodeInfrastructureConclusion | undefined;
+  const observers = new Set<(conclusion: WorkerInfrastructureConclusion) => void>();
+  let conclusion: WorkerInfrastructureConclusion | undefined;
 
   return {
     conclude: (summary: string): void => {
@@ -186,7 +186,7 @@ function createInfrastructureConclusionSignal(source: string): InfrastructureCon
  * the whole provision request reachable, including the worker configuration
  * with its trigger payload and the contribution manifest.
  */
-class PiscinaAllocationHandle implements WorkerNodeHandle {
+class PiscinaAllocationHandle implements WorkerHandle {
   /**
    * @param executionAttemptId - Authority-created attempt identifier for this allocation.
    * @param controller - Controller wired to the runner's cancellation signal.
@@ -206,7 +206,7 @@ class PiscinaAllocationHandle implements WorkerNodeHandle {
    * @returns Promise that resolves when cancellation has been dispatched.
    */
   public cancel(reason?: string): Promise<void> {
-    this.controller.abort(reason ?? 'WorkerNode cancelled');
+    this.controller.abort(reason ?? 'Worker cancelled');
     this.detachCallerAbort();
     return Promise.resolve();
   }
@@ -216,7 +216,7 @@ class PiscinaAllocationHandle implements WorkerNodeHandle {
    * @returns Promise that resolves when termination has been dispatched.
    */
   public terminate(): Promise<void> {
-    this.controller.abort('WorkerNode terminated');
+    this.controller.abort('Worker terminated');
     this.detachCallerAbort();
     return Promise.resolve();
   }
@@ -239,9 +239,7 @@ class PiscinaAllocationHandle implements WorkerNodeHandle {
    * @param observer - Callback invoked at most once for a terminal conclusion.
    * @returns Cleanup function that stops observing the provider signal.
    */
-  public observeInfrastructureConclusion(
-    observer: (conclusion: WorkerNodeInfrastructureConclusion) => void,
-  ): () => void {
+  public observeInfrastructureConclusion(observer: (conclusion: WorkerInfrastructureConclusion) => void): () => void {
     return this.infrastructure.observe(observer);
   }
 }
@@ -254,7 +252,7 @@ class PiscinaAllocationHandle implements WorkerNodeHandle {
  * with the framework capability registry and participate in pool-driven
  * dispatch. Each {@link provision} call starts the underlying runner and
  * returns a validated {@link ProviderAllocationRef} together with an
- * infrastructure-only {@link WorkerNodeHandle}.
+ * infrastructure-only {@link WorkerHandle}.
  *
  * The handle controls allocation lifecycle (cancel/terminate) but does
  * NOT expose readiness or workflow results. Readiness is signaled via
@@ -272,7 +270,7 @@ class PiscinaAllocationHandle implements WorkerNodeHandle {
  * recovery capability, and `supportsRecovery` stays `false` regardless of the
  * capability overrides a host supplies.
  */
-export class PiscinaThinWorkflowProvider implements IWorkerNodeProvider {
+export class PiscinaThinWorkflowProvider implements IWorkerProvider {
   /** Execution environment tag used for pool provider matching. */
   public readonly environment = 'piscina' as const;
   /**
@@ -283,13 +281,13 @@ export class PiscinaThinWorkflowProvider implements IWorkerNodeProvider {
    */
   public readonly allocationLifetime = 'provisioner-process-bound' as const;
   /** Capabilities advertised to the pool dispatch selector. */
-  public readonly baseCapabilities: NormalizedWorkerNodeCapabilities;
+  public readonly baseCapabilities: NormalizedWorkerCapabilities;
 
   /**
    * @param options - Provider identity, runner, and optional capability overrides.
    */
   public constructor(private readonly options: PiscinaThinWorkflowProviderOptions) {
-    this.baseCapabilities = WorkerNodeCapabilitiesSchema.parse({
+    this.baseCapabilities = WorkerCapabilitiesSchema.parse({
       ...DEFAULT_BASE_CAPABILITIES,
       ...options.baseCapabilities,
       suspensionStrategy: options.baseCapabilities?.suspensionStrategy ?? DEFAULT_BASE_CAPABILITIES.suspensionStrategy,
@@ -327,7 +325,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerNodeProvider {
    * runner. Cancellation is never flattened into an outcome, so callers
    * can tell it apart from an ambiguous infrastructure rejection.
    *
-   * The return type is narrower than {@link IWorkerNodeProvider.provision}:
+   * The return type is narrower than {@link IWorkerProvider.provision}:
    * this provider allocates a local worker thread or rejects, and it has no
    * way to positively prove that nothing was created. The narrow type states
    * what it can prove today. Gaining the ability to confirm absence means
@@ -336,10 +334,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerNodeProvider {
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
    * @returns Allocated outcome with a validated allocation reference and infrastructure handle.
    */
-  public async provision(
-    request: WorkerNodeProvisionRequest,
-    signal: AbortSignal,
-  ): Promise<WorkerNodeAllocatedOutcome> {
+  public async provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerAllocatedOutcome> {
     signal.throwIfAborted();
 
     const controller = new AbortController();
@@ -380,7 +375,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerNodeProvider {
         .then(
           async (ready) => {
             if (!controller.signal.aborted) {
-              await this.options.bus.emit(WorkerNodeSubjects.control['attempt-ready'], {
+              await this.options.bus.emit(WorkerSubjects.control['attempt-ready'], {
                 executionAttemptId,
                 executionId,
                 adapters: [...ready.adapters],

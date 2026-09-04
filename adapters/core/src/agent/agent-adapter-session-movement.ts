@@ -160,7 +160,7 @@ export async function emitAdapterSessionMoved(
     // `onInit` registers the adapter-session movement observer. The main
     // runtime pairs `prepareAdapterRuntime` with the framework core package set
     // (which only ever filters the session *orchestrator* out), and the remote
-    // worker-node runtime composes the session service deliberately even though
+    // Worker Runtime composes the session service deliberately even though
     // it owns no database. There the transport carries the consumer's *own*
     // storage hop, and that is a correlated request rather than an event: the
     // handler awaits the authority's response, so `emit` still settles behind

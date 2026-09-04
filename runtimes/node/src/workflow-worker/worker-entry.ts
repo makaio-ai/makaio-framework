@@ -12,10 +12,10 @@ import { createWorkflowWorkerReadyMessage } from './worker-ready-message.js';
 import {
   bootWorkerBus,
   bootWorkerRuntime,
-  type WorkerBusHandle,
+  type WorkerRuntimeBusHandle,
   type WorkerRuntimeHandle,
 } from './runtime/worker-boot.js';
-import { loadWorkerContributions } from './runtime/worker-contributions.js';
+import { loadWorkerRuntimeContributions } from './runtime/worker-contributions.js';
 import { resolveAwaitTriggerConfig } from './await-trigger.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
     }
   }
 
-  let handle: WorkerBusHandle | undefined;
+  let handle: WorkerRuntimeBusHandle | undefined;
   let runtime: WorkerRuntimeHandle | undefined;
   let cancelCleanup: (() => void) | undefined;
 
@@ -118,7 +118,7 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
 
     // Step 3: Import only the entrypoints verified by materialization. Import
     // failures are fatal — workers never proceed with a partial set.
-    const contributions = await loadWorkerContributions(params.contributionEntrypoints, {
+    const contributions = await loadWorkerRuntimeContributions(params.contributionEntrypoints, {
       bus: handle.bus,
       signal: abortController.signal,
     });

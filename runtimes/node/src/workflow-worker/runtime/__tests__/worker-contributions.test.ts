@@ -3,9 +3,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { loadWorkerContributions } from '../worker-contributions.js';
+import { loadWorkerRuntimeContributions } from '../worker-contributions.js';
 
-describe('loadWorkerContributions', () => {
+describe('loadWorkerRuntimeContributions', () => {
   let root: string;
   let toolsEntrypoint: string;
   let adaptersEntrypoint: string;
@@ -34,14 +34,14 @@ describe('loadWorkerContributions', () => {
   });
 
   it('imports toolsets only from verified worker-local entrypoints', async () => {
-    const result = await loadWorkerContributions([toolsEntrypoint, adaptersEntrypoint]);
+    const result = await loadWorkerRuntimeContributions([toolsEntrypoint, adaptersEntrypoint]);
 
     expect(result.toolsets).toHaveLength(1);
     expect(result.toolsets[0]?.metadata.name).toBe('tools');
   });
 
   it('accepts an empty verified identity realization', async () => {
-    await expect(loadWorkerContributions([])).resolves.toEqual({ toolsets: [] });
+    await expect(loadWorkerRuntimeContributions([])).resolves.toEqual({ toolsets: [] });
   });
 
   it('passes worker-local bus and cancellation to contribution factories', async () => {
@@ -50,7 +50,7 @@ describe('loadWorkerContributions', () => {
       contextEntrypoint,
       `export default { name: 'context', displayName: 'Context', tools: { createToolsets: (ctx) => [{ metadata: { name: ctx.bus && ctx.signal ? 'present' : 'missing', description: 'context', version: '1.0.0' }, tools: {} }] } };`,
     );
-    const result = await loadWorkerContributions([contextEntrypoint], {
+    const result = await loadWorkerRuntimeContributions([contextEntrypoint], {
       bus: createBusInstance(),
       signal: new AbortController().signal,
     });
@@ -59,10 +59,14 @@ describe('loadWorkerContributions', () => {
   });
 
   it('fails closed when a verified entrypoint cannot import', async () => {
-    await expect(loadWorkerContributions([toolsEntrypoint, brokenEntrypoint])).rejects.toThrow('module load failure');
+    await expect(loadWorkerRuntimeContributions([toolsEntrypoint, brokenEntrypoint])).rejects.toThrow(
+      'module load failure',
+    );
   });
 
   it('fails closed when an entrypoint is not an extension contribution', async () => {
-    await expect(loadWorkerContributions([invalidEntrypoint])).rejects.toThrow('No recognizable extension export');
+    await expect(loadWorkerRuntimeContributions([invalidEntrypoint])).rejects.toThrow(
+      'No recognizable extension export',
+    );
   });
 });

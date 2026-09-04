@@ -41,7 +41,7 @@ import { buildDeferred, type Deferred } from './runtime/deferred.js';
  * In-process waiter for a committed outcome.
  *
  * Built via {@link buildDeferred}. The Authority holds one waiter per active
- * attempt so callers (e.g. WorkerNodeRunner) can `await` the durable outcome
+ * attempt so callers (e.g. WorkerRunner) can `await` the durable outcome
  * without polling.
  *
  * Settlement lifecycle:

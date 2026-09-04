@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   ProviderAllocationRef,
   WorkerContributionManifest,
-  WorkerNodeDispatch,
+  WorkerDispatch,
   WorkflowRunResult,
 } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
-import { WorkerNodeRunner } from '../worker-node-runner.js';
+import { WorkerRunner } from '../worker-runner.js';
 import { createInMemoryAttemptRepository, makeBeginProvisioningInput } from '@makaio/subsystem-workflow-engine/testing';
 import { makeWorkerConfig } from './fixtures.js';
 
@@ -20,11 +20,11 @@ function createTestAuthority(): ExecutionAttemptAuthority {
   return new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
 }
 
-describe('WorkerNodeRunner', () => {
+describe('WorkerRunner', () => {
   it('creates an attempt before dispatch and returns authority-committed', async () => {
     const authority = createTestAuthority();
     let capturedAttemptId: string | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    const dispatch: WorkerDispatch = async (request) => {
       capturedAttemptId = request.executionAttemptId;
       // Simulate outcome commitment by the worker via the Authority
       const result: WorkflowRunResult = {
@@ -36,7 +36,7 @@ describe('WorkerNodeRunner', () => {
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
-    const runner = new WorkerNodeRunner({ dispatch, authority });
+    const runner = new WorkerRunner({ dispatch, authority });
     const signal = new AbortController().signal;
 
     const completion = await runner.run(makeWorkerConfig(), signal);
@@ -48,8 +48,8 @@ describe('WorkerNodeRunner', () => {
 
   it('forwards executionAttemptId and authority terminalization in the dispatch request', async () => {
     const authority = createTestAuthority();
-    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
+    const dispatch: WorkerDispatch = async (request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -61,7 +61,7 @@ describe('WorkerNodeRunner', () => {
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const manifest: WorkerContributionManifest = { contributionRefs: [] };
-    const runner = new WorkerNodeRunner({ dispatch, authority, manifest });
+    const runner = new WorkerRunner({ dispatch, authority, manifest });
     const signal = new AbortController().signal;
 
     const config = makeWorkerConfig({ terminalAuthority: 'worker' });
@@ -80,8 +80,8 @@ describe('WorkerNodeRunner', () => {
     const authority = createTestAuthority();
     const manifest: WorkerContributionManifest = { contributionRefs: [] };
     const requirements = { persistentStorage: true, customCapabilities: [] };
-    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
+    const dispatch: WorkerDispatch = async (request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -92,7 +92,7 @@ describe('WorkerNodeRunner', () => {
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
-    const runner = new WorkerNodeRunner({ dispatch, authority, manifest, requirements });
+    const runner = new WorkerRunner({ dispatch, authority, manifest, requirements });
     const signal = new AbortController().signal;
 
     await runner.run(makeWorkerConfig(), signal);
@@ -103,8 +103,8 @@ describe('WorkerNodeRunner', () => {
   it('forwards per-run dispatch metadata to the dispatch function', async () => {
     const authority = createTestAuthority();
     const dispatchMetadata = { resume: true, providerRunId: 'gha-1' };
-    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
+    const dispatch: WorkerDispatch = async (request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -115,7 +115,7 @@ describe('WorkerNodeRunner', () => {
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
-    const runner = new WorkerNodeRunner({ dispatch, authority });
+    const runner = new WorkerRunner({ dispatch, authority });
     const signal = new AbortController().signal;
 
     await runner.run(makeWorkerConfig(), signal, undefined, { dispatchMetadata });
@@ -126,8 +126,8 @@ describe('WorkerNodeRunner', () => {
   it('omits requirements from the dispatch payload when not provided', async () => {
     const authority = createTestAuthority();
     const manifest: WorkerContributionManifest = { contributionRefs: [] };
-    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
+    const dispatch: WorkerDispatch = async (request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -138,7 +138,7 @@ describe('WorkerNodeRunner', () => {
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
-    const runner = new WorkerNodeRunner({ dispatch, authority, manifest });
+    const runner = new WorkerRunner({ dispatch, authority, manifest });
     const signal = new AbortController().signal;
 
     await runner.run(makeWorkerConfig(), signal);
@@ -148,8 +148,8 @@ describe('WorkerNodeRunner', () => {
 
   it('omits manifest from the dispatch payload when no manifest source is provided', async () => {
     const authority = createTestAuthority();
-    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
+    const dispatch: WorkerDispatch = async (request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -160,7 +160,7 @@ describe('WorkerNodeRunner', () => {
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
-    const runner = new WorkerNodeRunner({ dispatch, authority });
+    const runner = new WorkerRunner({ dispatch, authority });
     const signal = new AbortController().signal;
 
     await runner.run(makeWorkerConfig(), signal);
@@ -171,7 +171,7 @@ describe('WorkerNodeRunner', () => {
   it('propagates dispatch rejection to caller and discards waiter', async () => {
     const authority = createTestAuthority();
     const dispatch = vi.fn().mockRejectedValue(new Error('Dispatch failed'));
-    const runner = new WorkerNodeRunner({ dispatch, authority });
+    const runner = new WorkerRunner({ dispatch, authority });
 
     await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow('Dispatch failed');
   });
@@ -180,7 +180,7 @@ describe('WorkerNodeRunner', () => {
     const abandonPendingAttempt = vi.fn().mockResolvedValue({ kind: 'abandoned' as const });
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority({ ...repository, abandonPendingAttempt });
-    const runner = new WorkerNodeRunner({
+    const runner = new WorkerRunner({
       dispatch: vi.fn().mockRejectedValue(new Error('dispatch failed')),
       authority,
     });
@@ -191,7 +191,7 @@ describe('WorkerNodeRunner', () => {
 
   it('awaits the Authority outcome when allocation persists before the dispatch acknowledgement rejects', async () => {
     const authority = createTestAuthority();
-    const runner = new WorkerNodeRunner({
+    const runner = new WorkerRunner({
       authority,
       dispatch: async (request) => {
         const begun = await authority.beginProvisioning(
@@ -220,8 +220,8 @@ describe('WorkerNodeRunner', () => {
 
   it('forwards static requirements to dispatch without merging', async () => {
     const authority = createTestAuthority();
-    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
+    const dispatch: WorkerDispatch = async (request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'exec-1',
@@ -232,7 +232,7 @@ describe('WorkerNodeRunner', () => {
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
-    const runner = new WorkerNodeRunner({
+    const runner = new WorkerRunner({
       dispatch,
       authority,
       requirements: { customCapabilities: ['base'] },
@@ -258,7 +258,7 @@ describe('WorkerNodeRunner', () => {
   it('discards waiter on dispatch error to prevent memory leak', async () => {
     const authority = createTestAuthority();
     const dispatch = vi.fn().mockRejectedValue(new Error('provision failed'));
-    const runner = new WorkerNodeRunner({ dispatch, authority });
+    const runner = new WorkerRunner({ dispatch, authority });
 
     await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow('provision failed');
 
@@ -273,7 +273,7 @@ describe('WorkerNodeRunner', () => {
       resolveOutcome = resolve;
     });
 
-    const dispatch: WorkerNodeDispatch = async (request) => {
+    const dispatch: WorkerDispatch = async (request) => {
       // Simulate: dispatch returns after allocation, outcome arrives later
       setTimeout(async () => {
         const result: WorkflowRunResult = {
@@ -289,7 +289,7 @@ describe('WorkerNodeRunner', () => {
       // Dispatch returns before outcome is committed
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
-    const runner = new WorkerNodeRunner({ dispatch, authority });
+    const runner = new WorkerRunner({ dispatch, authority });
 
     const completion = await runner.run(makeWorkerConfig(), new AbortController().signal);
     await outcomeBarrier;
@@ -306,7 +306,7 @@ describe('WorkerNodeRunner', () => {
     const dispatchStartedPromise = new Promise<void>((resolve) => {
       dispatchStarted = resolve;
     });
-    const runner = new WorkerNodeRunner({
+    const runner = new WorkerRunner({
       authority,
       dispatch: async (request, signal) => {
         setTimeout(async () => {

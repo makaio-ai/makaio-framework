@@ -1,18 +1,18 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { WorkerNodeSubjects, type IWorkflowRunner, type WorkerNodeRequirements } from '@makaio/contracts';
+import { WorkerSubjects, type IWorkflowRunner, type WorkerRequirements } from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 
 /**
- * Check whether requirements declare WorkerNode-backed dispatch.
+ * Check whether requirements declare Worker-backed dispatch.
  *
  * Returns `true` when ANY meaningful constraint is defined: custom capabilities,
  * persistent storage, runtime limits, recoverable allocation, or materialization
  * mode requirements. An empty or `undefined` requirements object produces `false`.
- * @param requirements - Canonical worker-node requirements.
+ * @param requirements - Canonical worker requirements.
  * @returns True when at least one requirement field constrains provider selection.
  */
-export function hasWorkerNodeDispatchRequirements(requirements: WorkerNodeRequirements | undefined): boolean {
+export function hasWorkerDispatchRequirements(requirements: WorkerRequirements | undefined): boolean {
   if (requirements === undefined) return false;
   if ((requirements.customCapabilities ?? []).length > 0) return true;
   if (requirements.persistentStorage !== undefined) return true;
@@ -23,14 +23,14 @@ export function hasWorkerNodeDispatchRequirements(requirements: WorkerNodeRequir
 }
 
 /**
- * Options for creating a bus-backed WorkerNode dispatch runner.
+ * Options for creating a bus-backed Worker dispatch runner.
  */
-export interface WorkerNodeDispatchRunnerOptions {
-  /** Message bus used to call the generic WorkerNode dispatch seam. */
+export interface WorkerDispatchRunnerOptions {
+  /** Message bus used to call the generic Worker dispatch seam. */
   readonly bus: IMakaioBus;
-  /** Canonical worker-node requirements for provider selection. */
-  readonly requirements?: WorkerNodeRequirements;
-  /** Opaque metadata forwarded to the WorkerNode dispatch request. */
+  /** Canonical worker requirements for provider selection. */
+  readonly requirements?: WorkerRequirements;
+  /** Opaque metadata forwarded to the Worker dispatch request. */
   readonly dispatchMetadata?: Record<string, unknown>;
   /**
    * Execution attempt Authority for creating attempts before dispatch
@@ -40,7 +40,7 @@ export interface WorkerNodeDispatchRunnerOptions {
 }
 
 /**
- * Create a bus-backed runner when requirements require WorkerNode
+ * Create a bus-backed runner when requirements require Worker
  * provider selection.
  *
  * Custom capabilities are hard provider-selection constraints.
@@ -53,12 +53,12 @@ export interface WorkerNodeDispatchRunnerOptions {
  * `authority-committed` completions.
  * @param options - Bus, requirements, optional dispatch metadata,
  *   and Authority.
- * @returns A WorkerNode dispatch runner, or `undefined` when no
+ * @returns A Worker dispatch runner, or `undefined` when no
  *   capability constraint exists.
  */
-export function createWorkerNodeDispatchRunner(options: WorkerNodeDispatchRunnerOptions): IWorkflowRunner | undefined {
+export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions): IWorkflowRunner | undefined {
   const { bus, requirements, dispatchMetadata, authority } = options;
-  if (!hasWorkerNodeDispatchRequirements(requirements)) return undefined;
+  if (!hasWorkerDispatchRequirements(requirements)) return undefined;
   return {
     run: (config, signal) =>
       runAuthorityDispatchedAttempt({
@@ -66,7 +66,7 @@ export function createWorkerNodeDispatchRunner(options: WorkerNodeDispatchRunner
         executionId: config.executionId,
         dispatch: (executionAttemptId) =>
           bus.request(
-            WorkerNodeSubjects.dispatch,
+            WorkerSubjects.dispatch,
             {
               executionAttemptId,
               config,

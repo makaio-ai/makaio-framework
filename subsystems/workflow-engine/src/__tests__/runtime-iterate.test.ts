@@ -429,7 +429,7 @@ describe('executeIterateNode', () => {
       timeoutMs: null,
       when: "item == 'pause'",
     } satisfies WorkflowGateNode;
-    const workerNode = {
+    const stationNode = {
       id: 'iter-pause__worker',
       type: 'station',
       prompt: 'Worker',
@@ -443,7 +443,7 @@ describe('executeIterateNode', () => {
       body: {
         id: 'iter-pause__body',
         type: 'sequence',
-        nodes: [waitForSiblingNode, gateNode, workerNode],
+        nodes: [waitForSiblingNode, gateNode, stationNode],
       },
     };
 

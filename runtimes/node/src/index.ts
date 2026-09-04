@@ -118,7 +118,7 @@ export {
 export { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
 export type { WorkspaceRootInfo } from './find-workspace-root.js';
 // Intentionally export only the thin Piscina name; the previous runner name
-// implied self-contained WorkerNode execution isolation that this path does not provide.
+// implied self-contained Worker Runtime execution isolation that this path does not provide.
 export {
   ThinWorkflowPiscinaRunner,
   resolveWorkflowWorkerEntry,

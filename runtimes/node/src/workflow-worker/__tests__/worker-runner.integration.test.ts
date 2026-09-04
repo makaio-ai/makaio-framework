@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { WorkerNodeNamespace } from '@makaio/contracts';
+import { WorkerNamespace } from '@makaio/contracts';
 import type { ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
-import { WorkerNodeRunner } from '../worker-node-runner.js';
+import { WorkerRunner } from '../worker-runner.js';
 import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
 import { makeWorkerConfig } from './fixtures.js';
 
@@ -13,10 +13,10 @@ const TEST_ALLOCATION_REF: ProviderAllocationRef = {
   providerData: {},
 };
 
-describe('WorkerNodeRunner integration', () => {
+describe('WorkerRunner integration', () => {
   it('creates attempt, forwards requirements, dispatches through bus, and returns authority-committed on cancellation', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
 
     const repository = createInMemoryAttemptRepository();
     const authority = new ExecutionAttemptAuthority(repository);
@@ -26,10 +26,10 @@ describe('WorkerNodeRunner integration', () => {
       dispatchStarted = resolve;
     });
 
-    const runner = new WorkerNodeRunner({
+    const runner = new WorkerRunner({
       dispatch: async (request, signal) => {
         dispatchStarted();
-        if (signal === undefined) throw new Error('WorkerNodeRunner did not forward its cancellation signal');
+        if (signal === undefined) throw new Error('WorkerRunner did not forward its cancellation signal');
 
         expect(request.executionAttemptId).toBeTruthy();
         expect(request.requirements).toEqual({ customCapabilities: ['workflow.remote-reader'] });

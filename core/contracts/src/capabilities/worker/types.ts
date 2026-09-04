@@ -2,17 +2,17 @@ import { z } from 'zod';
 import type { ICapabilityProvider } from '../../capability/index.js';
 import type { WorkflowWorkerConfig, WorkerContributionManifest } from '../../workflow/index.js';
 import { JsonObjectContractSchema } from '../../shared/json-value.js';
-import { SuspensionStrategySchema } from '../../worker-node/suspension.js';
+import { SuspensionStrategySchema } from '../../worker/suspension.js';
 
-/** Capability identifier used for WorkerNode providers. */
-export const WORKER_NODE_CAPABILITY_ID = 'worker-node' as const;
+/** Capability identifier used for Worker providers. */
+export const WORKER_CAPABILITY_ID = 'worker' as const;
 
 /**
  * Provider identifier reserved for the runtime-node built-in thin workflow provider.
  *
- * The previous Piscina WorkerNode export name is intentionally not preserved as
+ * The previous Piscina Worker export name is intentionally not preserved as
  * an alias: this pre-release API must keep thin local orchestration distinct
- * from self-contained WorkerNode providers.
+ * from self-contained Worker providers.
  */
 export const BUILT_IN_THIN_WORKFLOW_PROVIDER_ID = 'makaio.runtime-node.piscina-local' as const;
 
@@ -162,7 +162,7 @@ export const AMBIGUOUS_ALLOCATION_MATCH_CODE = 'ambiguous-allocation-match' as c
  *
  * This is the only situation in which a provider can positively prove that no
  * allocation exists for an attempt, so it is also the only code that may
- * accompany a {@link WorkerNodeConfirmedAbsentOutcome}.
+ * accompany a {@link WorkerConfirmedAbsentOutcome}.
  */
 export const PRE_REQUEST_REJECTION_CODE = 'pre-request-rejection' as const;
 
@@ -190,7 +190,7 @@ export const ALLOCATION_STATES = [
  * Zod schema for provider allocation lifecycle states.
  *
  * These states describe the infrastructure-level lifecycle of a provider
- * allocation as reported by {@link IWorkerNodeRecoveryCapability.inspect}.
+ * allocation as reported by {@link IWorkerRecoveryCapability.inspect}.
  * They are infrastructure evidence, never canonical workflow truth:
  *
  * - `unknown`: the provider cannot determine the current state.
@@ -413,12 +413,12 @@ export type WorkerContributionRef = z.infer<typeof WorkerContributionRefSchema>;
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Zod schema for the capabilities advertised by a WorkerNode provider.
+ * Zod schema for the capabilities advertised by a Worker provider.
  *
  * `customCapabilities` is an open list so hosts can declare environment-
  * specific tags (e.g. `'workflow.bus-events'`) without modifying the contract.
  */
-export const WorkerNodeCapabilitiesSchema = z.object({
+export const WorkerCapabilitiesSchema = z.object({
   /** Optional upper bound on a single execution's wall-clock duration, in milliseconds. */
   maxRuntimeMs: z.number().int().positive().optional(),
   /** Whether the execution environment retains state across restarts. */
@@ -438,8 +438,8 @@ export const WorkerNodeCapabilitiesSchema = z.object({
    * Whether this provider supports allocation recovery.
    *
    * Providers that advertise `true` must implement
-   * {@link IRecoverableWorkerNodeProvider} and expose a
-   * {@link IWorkerNodeRecoveryCapability} object with `discoverProvisioning`,
+   * {@link IRecoverableWorkerProvider} and expose a
+   * {@link IWorkerRecoveryCapability} object with `discoverProvisioning`,
    * `attach`, `inspect`, and `terminateAllocation` methods.
    *
    * Defaults to `false`. Non-recoverable providers (e.g. Piscina) leave
@@ -460,13 +460,13 @@ export const WorkerNodeCapabilitiesSchema = z.object({
 });
 
 /** Raw provider capability input accepted before schema defaults are applied. */
-export type WorkerNodeCapabilitiesInput = z.input<typeof WorkerNodeCapabilitiesSchema>;
+export type WorkerCapabilitiesInput = z.input<typeof WorkerCapabilitiesSchema>;
 
 /** Provider capabilities advertised after schema defaults have been applied. */
-export type WorkerNodeCapabilities = z.output<typeof WorkerNodeCapabilitiesSchema>;
+export type WorkerCapabilities = z.output<typeof WorkerCapabilitiesSchema>;
 
 /** Provider capabilities after schema defaults have been applied. */
-export type NormalizedWorkerNodeCapabilities = WorkerNodeCapabilities;
+export type NormalizedWorkerCapabilities = WorkerCapabilities;
 
 /**
  * Zod schema for the resource requirements a workflow dispatch can express
@@ -475,7 +475,7 @@ export type NormalizedWorkerNodeCapabilities = WorkerNodeCapabilities;
  * All fields are optional: omitted requirements impose no constraint on
  * provider selection.
  */
-export const WorkerNodeRequirementsSchema = z.object({
+export const WorkerRequirementsSchema = z.object({
   /** Maximum acceptable wall-clock duration for the execution, in milliseconds. */
   maxRuntimeMs: z.number().int().positive().optional(),
   /** Whether the target environment must offer persistent storage. */
@@ -485,8 +485,8 @@ export const WorkerNodeRequirementsSchema = z.object({
   /**
    * Whether the selected provider must support allocation recovery.
    *
-   * When `true`, only providers whose {@link WorkerNodeCapabilities.supportsRecovery}
-   * is `true` (and that implement {@link IRecoverableWorkerNodeProvider}) satisfy
+   * When `true`, only providers whose {@link WorkerCapabilities.supportsRecovery}
+   * is `true` (and that implement {@link IRecoverableWorkerProvider}) satisfy
    * this requirement.
    *
    * When omitted or `false`, recovery support is not required and any
@@ -497,31 +497,31 @@ export const WorkerNodeRequirementsSchema = z.object({
    * Materialization modes the dispatch requires the provider to support.
    *
    * When specified, only providers that advertise at least one of the
-   * listed modes in their {@link WorkerNodeCapabilities.materializationModes}
+   * listed modes in their {@link WorkerCapabilities.materializationModes}
    * satisfy this requirement. When omitted, materialization mode imposes
    * no constraint on provider selection.
    */
   materializationModes: z.array(MaterializationModeSchema).optional(),
 });
 
-/** Resource requirements that constrain WorkerNode provider selection. */
-export type WorkerNodeRequirements = z.input<typeof WorkerNodeRequirementsSchema>;
+/** Resource requirements that constrain Worker provider selection. */
+export type WorkerRequirements = z.input<typeof WorkerRequirementsSchema>;
 
 /** Resource requirements after schema defaults have been applied. */
-export type NormalizedWorkerNodeRequirements = z.output<typeof WorkerNodeRequirementsSchema>;
+export type NormalizedWorkerRequirements = z.output<typeof WorkerRequirementsSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Provision Request
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Request handed to a WorkerNode provider after pool dispatch has selected it.
+ * Request handed to a Worker provider after pool dispatch has selected it.
  *
  * The Authority creates `executionAttemptId` before dispatch. Providers and
  * pools never generate it. Pool identity and resource allocation details live
  * in the host-owned dispatch layer above this contract.
  */
-export interface WorkerNodeProvisionRequest {
+export interface WorkerProvisionRequest {
   /** Unique workflow execution identifier. */
   readonly executionId: string;
   /** Authority-created attempt identifier for this dispatch. */
@@ -570,7 +570,7 @@ export interface WorkerNodeProvisionRequest {
  * explanation could not cross that boundary would leave the consumer unable to
  * record why the allocation ended.
  */
-export interface WorkerNodeInfrastructureConclusion {
+export interface WorkerInfrastructureConclusion {
   /**
    * Bounded, durable, non-secret evidence describing the terminal allocation.
    *
@@ -583,9 +583,9 @@ export interface WorkerNodeInfrastructureConclusion {
 }
 
 /**
- * In-process handle for a provisioned WorkerNode allocation.
+ * In-process handle for a provisioned Worker allocation.
  *
- * Returned as part of the {@link IWorkerNodeProvider.provision} result and
+ * Returned as part of the {@link IWorkerProvider.provision} result and
  * held by the caller until the allocation is no longer needed.
  *
  * The handle controls allocation infrastructure only. It does NOT expose a
@@ -594,7 +594,7 @@ export interface WorkerNodeInfrastructureConclusion {
  * submitted and acknowledged through the Authority's `control.outcome.submit`
  * bus subject.
  */
-export interface WorkerNodeHandle {
+export interface WorkerHandle {
   /** Authority-created attempt identifier for this allocation. */
   readonly executionAttemptId: string;
   /**
@@ -633,7 +633,7 @@ export interface WorkerNodeHandle {
    * @param observer - Callback invoked at most once for a terminal conclusion.
    * @returns Cleanup function that stops observing the provider signal.
    */
-  observeInfrastructureConclusion?(observer: (conclusion: WorkerNodeInfrastructureConclusion) => void): () => void;
+  observeInfrastructureConclusion?(observer: (conclusion: WorkerInfrastructureConclusion) => void): () => void;
   /**
    * Observe a refined allocation reference for this allocation.
    *
@@ -659,10 +659,10 @@ export interface WorkerNodeHandle {
 /**
  * Ordered constant array of every allocation lifetime a provider may declare.
  *
- * Source of truth for {@link WorkerNodeAllocationLifetimeSchema} and the
- * {@link WorkerNodeAllocationLifetime} union.
+ * Source of truth for {@link WorkerAllocationLifetimeSchema} and the
+ * {@link WorkerAllocationLifetime} union.
  */
-export const WORKER_NODE_ALLOCATION_LIFETIMES = ['provisioner-process-bound', 'provider-managed'] as const;
+export const WORKER_ALLOCATION_LIFETIMES = ['provisioner-process-bound', 'provider-managed'] as const;
 
 /**
  * Zod schema for the lifetime of allocations created by a provider.
@@ -673,7 +673,7 @@ export const WORKER_NODE_ALLOCATION_LIFETIMES = ['provisioner-process-bound', 'p
  *   and survives the loss of the provisioning process, so it must be
  *   rediscovered and converged rather than assumed gone.
  */
-export const WorkerNodeAllocationLifetimeSchema = z.enum(WORKER_NODE_ALLOCATION_LIFETIMES);
+export const WorkerAllocationLifetimeSchema = z.enum(WORKER_ALLOCATION_LIFETIMES);
 
 /**
  * Lifetime of allocations created by a provider.
@@ -682,25 +682,25 @@ export const WorkerNodeAllocationLifetimeSchema = z.enum(WORKER_NODE_ALLOCATION_
  * not placement capability data, it is never matched against dispatch
  * requirements, and it has no default: every provider states it explicitly.
  */
-export type WorkerNodeAllocationLifetime = z.infer<typeof WorkerNodeAllocationLifetimeSchema>;
+export type WorkerAllocationLifetime = z.infer<typeof WorkerAllocationLifetimeSchema>;
 
 /**
  * Outcome of a provision attempt that created a provider allocation.
  */
-export interface WorkerNodeAllocatedOutcome {
+export interface WorkerAllocatedOutcome {
   /** Discriminant for an accepted allocation. */
   readonly kind: 'allocated';
   /** Versioned, JSON-safe, non-secret allocation reference. */
   readonly allocationRef: ProviderAllocationRef;
   /** Infrastructure-only handle for the provisioned allocation. */
-  readonly handle: WorkerNodeHandle;
+  readonly handle: WorkerHandle;
 }
 
 /**
  * Outcome of a provision attempt the provider positively knows created
  * nothing.
  */
-export interface WorkerNodeConfirmedAbsentOutcome {
+export interface WorkerConfirmedAbsentOutcome {
   /** Discriminant for a provider-confirmed absence of any allocation. */
   readonly kind: 'confirmed-absent';
   /** Bounded, durable, non-secret evidence supporting the absence claim. */
@@ -708,7 +708,7 @@ export interface WorkerNodeConfirmedAbsentOutcome {
 }
 
 /**
- * Outcome returned by {@link IWorkerNodeProvider.provision}.
+ * Outcome returned by {@link IWorkerProvider.provision}.
  *
  * Only these two results are conclusions. `confirmed-absent` is a positive
  * claim a provider may make only when it knows no allocation can exist —
@@ -720,20 +720,20 @@ export interface WorkerNodeConfirmedAbsentOutcome {
  * establish absence. Cancellation is rethrown rather than reported as an
  * outcome.
  */
-export type WorkerNodeProvisionOutcome = WorkerNodeAllocatedOutcome | WorkerNodeConfirmedAbsentOutcome;
+export type WorkerProvisionOutcome = WorkerAllocatedOutcome | WorkerConfirmedAbsentOutcome;
 
 /**
- * Capability provider that can provision one-shot workflow execution nodes.
+ * Capability provider that can provision one-shot Worker allocations for workflow execution.
  *
  * Implementations must extend {@link ICapabilityProvider} and declare the
  * execution `environment` tag used to match dispatch requirements, plus the
- * {@link WorkerNodeAllocationLifetime} of the allocations they create.
+ * {@link WorkerAllocationLifetime} of the allocations they create.
  *
  * Provisioning accepts a cancellation signal from its first async operation.
  * The returned handle controls allocation lifecycle only; readiness and
  * outcomes travel through the bus.
  */
-export interface IWorkerNodeProvider extends ICapabilityProvider {
+export interface IWorkerProvider extends ICapabilityProvider {
   /** Environment tag advertised to dispatch selectors (e.g. `'piscina'`, `'process'`). */
   readonly environment: string;
   /**
@@ -742,11 +742,11 @@ export interface IWorkerNodeProvider extends ICapabilityProvider {
    * Declared directly on the provider because it governs how a lost
    * provisioner is converged, not where a workflow may be placed.
    */
-  readonly allocationLifetime: WorkerNodeAllocationLifetime;
+  readonly allocationLifetime: WorkerAllocationLifetime;
   /** Capabilities supported by this provider instance after schema defaults are applied. */
-  readonly baseCapabilities: WorkerNodeCapabilities;
+  readonly baseCapabilities: WorkerCapabilities;
   /**
-   * Provision a new isolated execution node for the given request.
+   * Provision a new isolated Worker for the given request.
    *
    * Resolves once the provider has reached a conclusion: either an accepted
    * allocation with a validated reference and infrastructure-only handle, or
@@ -756,7 +756,7 @@ export interface IWorkerNodeProvider extends ICapabilityProvider {
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
    * @returns Allocated reference and handle, or confirmed absence with bounded evidence.
    */
-  provision(request: WorkerNodeProvisionRequest, signal: AbortSignal): Promise<WorkerNodeProvisionOutcome>;
+  provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerProvisionOutcome>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -838,7 +838,7 @@ export type ProvisioningDiscovery = z.infer<typeof ProvisioningDiscoverySchema>;
  * - `inspect` reports infrastructure evidence, never canonical workflow truth.
  * - `terminateAllocation` is idempotent; already absent is success.
  */
-export interface IWorkerNodeRecoveryCapability {
+export interface IWorkerRecoveryCapability {
   /**
    * Search provider infrastructure for an allocation belonging to an attempt.
    *
@@ -855,12 +855,12 @@ export interface IWorkerNodeRecoveryCapability {
    * @param signal - AbortSignal for cooperative cancellation of the discovery operation.
    * @returns Discovered allocation, proven absence, or retained uncertainty.
    */
-  discoverProvisioning(request: WorkerNodeProvisionRequest, signal: AbortSignal): Promise<ProvisioningDiscovery>;
+  discoverProvisioning(request: WorkerProvisionRequest, signal: AbortSignal): Promise<ProvisioningDiscovery>;
 
   /**
    * Re-attach to an existing allocation for the same attempt.
    *
-   * Creates a fresh in-process {@link WorkerNodeHandle} without creating a
+   * Creates a fresh in-process {@link WorkerHandle} without creating a
    * new provider resource. Used after an Authority restart to regain
    * infrastructure control of a still-running allocation.
    *
@@ -874,9 +874,9 @@ export interface IWorkerNodeRecoveryCapability {
    */
   attach(
     allocationRef: ProviderAllocationRef,
-    request: WorkerNodeProvisionRequest,
+    request: WorkerProvisionRequest,
     signal: AbortSignal,
-  ): Promise<WorkerNodeHandle>;
+  ): Promise<WorkerHandle>;
 
   /**
    * Inspect the infrastructure state of an existing allocation.
@@ -892,7 +892,7 @@ export interface IWorkerNodeRecoveryCapability {
    */
   inspect(
     allocationRef: ProviderAllocationRef,
-    request: WorkerNodeProvisionRequest,
+    request: WorkerProvisionRequest,
     signal: AbortSignal,
   ): Promise<AllocationInspection>;
 
@@ -908,25 +908,25 @@ export interface IWorkerNodeRecoveryCapability {
    */
   terminateAllocation(
     allocationRef: ProviderAllocationRef,
-    request: WorkerNodeProvisionRequest,
+    request: WorkerProvisionRequest,
     signal: AbortSignal,
   ): Promise<void>;
 }
 
 /**
- * WorkerNode provider that supports allocation recovery.
+ * Worker provider that supports allocation recovery.
  *
- * Extends {@link IWorkerNodeProvider} with a required `recovery` property
- * containing the coherent {@link IWorkerNodeRecoveryCapability}. Providers
+ * Extends {@link IWorkerProvider} with a required `recovery` property
+ * containing the coherent {@link IWorkerRecoveryCapability}. Providers
  * that advertise `supportsRecovery: true` in their capabilities must
  * implement this interface.
  *
  * The `recovery` property is required, not optional, so that omitting any
  * of the four recovery methods is a compile-time type error.
  */
-export interface IRecoverableWorkerNodeProvider extends IWorkerNodeProvider {
+export interface IRecoverableWorkerProvider extends IWorkerProvider {
   /** Coherent recovery capability containing discovery, attach, inspect, and termination. */
-  readonly recovery: IWorkerNodeRecoveryCapability;
+  readonly recovery: IWorkerRecoveryCapability;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -961,7 +961,7 @@ export const OutcomeAckDecisionSchema = z.enum(['accepted', 'duplicate', 'confli
  * reference so callers can correlate the allocation with later lifecycle
  * and outcome events.
  */
-export interface WorkerNodeDispatchAck {
+export interface WorkerDispatchAck {
   /** Authority-created attempt identifier for this allocation. */
   readonly executionAttemptId: string;
   /** Provider allocation reference persisted through the Authority. */
@@ -988,13 +988,13 @@ export interface WorkerNodeDispatchAck {
  * @param signal - AbortSignal for cooperative cancellation.
  * @returns Allocation acknowledgment after provider provisioning succeeds.
  */
-export type WorkerNodeDispatch = (
+export type WorkerDispatch = (
   request: {
     readonly executionAttemptId: string;
     readonly config: WorkflowWorkerConfig;
     readonly manifest?: WorkerContributionManifest;
-    readonly requirements?: WorkerNodeRequirements;
+    readonly requirements?: WorkerRequirements;
     readonly metadata?: z.infer<typeof JsonObjectContractSchema>;
   },
   signal: AbortSignal,
-) => Promise<WorkerNodeDispatchAck>;
+) => Promise<WorkerDispatchAck>;

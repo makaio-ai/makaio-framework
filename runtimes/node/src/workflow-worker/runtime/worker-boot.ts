@@ -4,13 +4,13 @@ import { FrameworkContractNamespaces, FrameworkStorageNamespaces, type WorkflowW
 import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import type { Toolset } from '@makaio/tools-core';
-import type { WorkerContributions } from './worker-contributions.js';
+import type { WorkerRuntimeContributions } from './worker-contributions.js';
 
 /**
  * Handle returned by {@link bootWorkerBus} representing an active
  * worker bus connection.
  */
-export interface WorkerBusHandle {
+export interface WorkerRuntimeBusHandle {
   /** The isolated bus instance for this worker. */
   bus: IMakaioBus;
   /** Disconnect the bus and release resources. */
@@ -38,7 +38,7 @@ export interface WorkerRuntimeHandle {
 export async function bootWorkerBus(config: {
   readonly busUrl?: string;
   readonly busAuth: WorkflowWorkerBusAuth;
-}): Promise<WorkerBusHandle> {
+}): Promise<WorkerRuntimeBusHandle> {
   const bus = createBusInstance();
   bus.registerNamespaces(FrameworkContractNamespaces);
   bus.registerNamespaces(FrameworkStorageNamespaces);
@@ -83,8 +83,8 @@ export async function bootWorkerBus(config: {
  * @returns Runtime handle that closes all worker-local resources.
  */
 export async function bootWorkerRuntime(
-  handle: WorkerBusHandle,
-  contributions: WorkerContributions,
+  handle: WorkerRuntimeBusHandle,
+  contributions: WorkerRuntimeContributions,
 ): Promise<WorkerRuntimeHandle> {
   const toolRegistry = new ToolRegistry({ bus: handle.bus });
   const mcpBridge = new McpServerBridgeService(handle.bus);

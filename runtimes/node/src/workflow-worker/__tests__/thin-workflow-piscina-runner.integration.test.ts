@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { WorkerContributionManifest } from '@makaio/contracts';
-import { PROVIDER_ALLOCATION_REF_VERSION, WorkerNodeNamespace, WorkerNodeSubjects } from '@makaio/contracts';
+import { PROVIDER_ALLOCATION_REF_VERSION, WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
 import type {
   BeginProvisioningInput,
   ExecutionAttemptRepository,
@@ -138,9 +138,9 @@ function createProviderService(workerEntry: string, id: string): ProviderService
     idleTimeoutMs: 100,
   });
   const bus = createBusInstance();
-  bus.registerNamespace(WorkerNodeNamespace);
+  bus.registerNamespace(WorkerNamespace);
   const acknowledged = Promise.withResolvers<string>();
-  const offSubmit = bus.on(WorkerNodeSubjects.control.outcome.submit, (ctx) => {
+  const offSubmit = bus.on(WorkerSubjects.control.outcome.submit, (ctx) => {
     ctx.setResult({ decision: 'accepted' });
     acknowledged.resolve(ctx.payload.executionAttemptId);
   });
@@ -258,7 +258,7 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
       idleTimeoutMs: 100,
     });
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-integration',
       displayName: 'Piscina Integration',

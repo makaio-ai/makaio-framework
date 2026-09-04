@@ -269,7 +269,7 @@ export interface DefinitionRunnerTaskParams {
   /** Component that owns the execution's durable terminal transition. */
   readonly terminalAuthority?: WorkflowWorkerConfig['terminalAuthority'];
   /**
-   * Opaque metadata forwarded to the WorkerNode dispatch request.
+   * Opaque metadata forwarded to the Worker dispatch request.
    *
    * Used by the resume path to signal `{ resume: true }` so providers
    * applying `exit-and-redispatch` can apply the correct re-dispatch strategy.
@@ -521,7 +521,7 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
  * without requiring the caller to reconstruct every field manually.
  *
  * The `options.resume` flag merges the durable run-context dispatch metadata
- * with `{ resume: true }` so WorkerNode dispatch runners can signal the
+ * with `{ resume: true }` so Worker dispatch runners can signal the
  * provider that this is a resume, not a fresh dispatch, without dropping the
  * original dispatch target identity. In-process runners ignore it.
  * @param runContext - Persisted run-context snapshot for the paused execution.

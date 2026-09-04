@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { SuspensionStrategySchema } from '../worker-node/suspension.js';
+import { SuspensionStrategySchema } from '../worker/suspension.js';
 import { ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/index.js';
-import { WorkerContributionRefSchema, WorkerMaterializationSpecSchema } from '../capabilities/worker-node/types.js';
+import { WorkerContributionRefSchema, WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -346,7 +346,7 @@ export const WorkflowRunResultSchema = z.discriminatedUnion('status', [
  * Reference to an extension package that a workflow worker process should import.
  *
  * Fully serializable so it can cross worker-thread, process, container, or
- * remote node boundaries without carrying runtime objects.
+ * remote host boundaries without carrying runtime objects.
  *
 /**
  * Serializable manifest declaring the exact worker-local extension packages.
@@ -371,7 +371,7 @@ export interface WorkflowRunnerRunOptions {
   /**
    * Opaque metadata forwarded to dispatch layers that support it.
    *
-   * Runners that do not call through WorkerNode dispatch may ignore this.
+   * Runners that do not call through Worker dispatch may ignore this.
    */
   readonly dispatchMetadata?: z.infer<typeof JsonObjectContractSchema>;
 }
@@ -390,7 +390,7 @@ export interface WorkflowRunnerRunOptions {
  *   park the execution (in-process and Piscina runners).
  * - `authority-committed`: the Authority outcome RPC has converged canonical
  *   state. The host executor verifies durable state but must not invoke
- *   the fallback finalizer (WorkerNode dispatch runners).
+ *   the fallback finalizer (Worker dispatch runners).
  */
 export type WorkflowRunnerCompletion =
   | { readonly state: 'uncommitted'; readonly result: WorkflowRunResult }
@@ -413,7 +413,7 @@ export interface IWorkflowRunner {
    *
    * When `manifest` is supplied it takes precedence over any manifest baked
    * into the runner at construction time, enabling per-call contribution
-   * sets (e.g. when the WorkerNode pool dispatches with a request-specific
+   * sets (e.g. when the Worker pool dispatches with a request-specific
    * manifest). Callers that do not need per-call control may omit it.
    * @param config - Full workflow worker configuration including source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.

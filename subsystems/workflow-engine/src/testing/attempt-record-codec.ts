@@ -14,10 +14,10 @@
  * module states them itself and every realization imports them from there.
  * @packageDocumentation
  */
-import type { ProviderAllocationRef, WorkerNodeAllocationLifetime, WorkflowRunResult } from '@makaio/contracts';
+import type { ProviderAllocationRef, WorkerAllocationLifetime, WorkflowRunResult } from '@makaio/contracts';
 import {
   ProviderAllocationRefSchema,
-  WorkerNodeAllocationLifetimeSchema,
+  WorkerAllocationLifetimeSchema,
   WorkflowRunResultSchema,
 } from '@makaio/contracts';
 import type {
@@ -148,10 +148,8 @@ export function parseWorkflowResult(result: WorkflowRunResult): WorkflowRunResul
  * @returns The same value, validated.
  * @throws When the value is outside the contract vocabulary.
  */
-export function parseAllocationLifetime(
-  allocationLifetime: WorkerNodeAllocationLifetime,
-): WorkerNodeAllocationLifetime {
-  return WorkerNodeAllocationLifetimeSchema.parse(allocationLifetime);
+export function parseAllocationLifetime(allocationLifetime: WorkerAllocationLifetime): WorkerAllocationLifetime {
+  return WorkerAllocationLifetimeSchema.parse(allocationLifetime);
 }
 
 /**

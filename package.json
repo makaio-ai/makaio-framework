@@ -118,7 +118,7 @@
     "tree-kill": "^1.2.2",
     "type-fest": "^5.2.0",
     "ws": "^8.21.0",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.45.2"

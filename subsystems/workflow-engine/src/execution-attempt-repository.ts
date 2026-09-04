@@ -1,7 +1,7 @@
 import type {
   BoundedRecoveryEvidence,
   ProviderAllocationRef,
-  WorkerNodeAllocationLifetime,
+  WorkerAllocationLifetime,
   WorkflowRunResult,
 } from '@makaio/contracts';
 import { canonicalStringify } from '@makaio/utils';
@@ -162,7 +162,7 @@ export interface ExecutionAttemptRecord {
    * Immutable alongside {@link providerId}. Remediation reads it to decide
    * whether losing the provisioning process also loses the allocation.
    */
-  readonly allocationLifetime: WorkerNodeAllocationLifetime | null;
+  readonly allocationLifetime: WorkerAllocationLifetime | null;
   /**
    * Provisioner process incarnation that performed the provider call, or
    * `null` before provisioning began.
@@ -229,7 +229,7 @@ export interface RecoverableAttemptRecord extends ExecutionAttemptRecord {
   /** Always bound for recoverable attempts. */
   readonly providerId: string;
   /** Always bound for recoverable attempts. */
-  readonly allocationLifetime: WorkerNodeAllocationLifetime;
+  readonly allocationLifetime: WorkerAllocationLifetime;
   /** Always bound for recoverable attempts. */
   readonly provisionerIncarnationId: string;
 }
@@ -266,7 +266,7 @@ export interface BeginProvisioningInput {
   /** Provider to bind to the attempt, immutably. */
   readonly providerId: string;
   /** Allocation lifetime declared by that provider, immutably. */
-  readonly allocationLifetime: WorkerNodeAllocationLifetime;
+  readonly allocationLifetime: WorkerAllocationLifetime;
   /** Provisioner process incarnation performing the call, immutably. */
   readonly provisionerIncarnationId: string;
   /** Controller process incarnation that will hold the initial claim. */
@@ -557,7 +557,7 @@ export type ProvisioningAbsenceDecision =
  */
 export type ProvisionerIncarnationLossDecision =
   | { readonly kind: 'recorded' }
-  | { readonly kind: 'not-process-bound'; readonly allocationLifetime: WorkerNodeAllocationLifetime | null }
+  | { readonly kind: 'not-process-bound'; readonly allocationLifetime: WorkerAllocationLifetime | null }
   | { readonly kind: 'incarnation-mismatch'; readonly provisionerIncarnationId: string | null }
   | { readonly kind: 'allocated'; readonly allocationRef: ProviderAllocationRef }
   | { readonly kind: 'resolved' }

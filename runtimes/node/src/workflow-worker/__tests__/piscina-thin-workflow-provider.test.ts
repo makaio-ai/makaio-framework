@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type {
   WorkerContributionManifest,
-  WorkerNodeCapabilities,
+  WorkerCapabilities,
   WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import {
   PROVIDER_ALLOCATION_REF_VERSION,
   ProviderAllocationRefSchema,
-  WorkerNodeNamespace,
-  WorkerNodeSubjects,
+  WorkerNamespace,
+  WorkerSubjects,
 } from '@makaio/contracts';
 import { PiscinaThinWorkflowProvider, type ReadinessAwareWorkflowRunner } from '../piscina-thin-workflow-provider.js';
 import { createWorkflowWorkerReadyMessage, type WorkflowWorkerReadyMessage } from '../worker-ready-message.js';
@@ -21,19 +21,19 @@ import { makeWorkerConfig } from './fixtures.js';
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Create a bus instance with the WorkerNode namespace registered.
+ * Create a bus instance with the Worker namespace registered.
  * @returns A bus instance ready for provider construction.
  */
 function createTestBus() {
   const bus = createBusInstance();
-  bus.registerNamespace(WorkerNodeNamespace);
+  bus.registerNamespace(WorkerNamespace);
   return bus;
 }
 
 /**
  * Build a minimal provision request matching the current contract.
  * @param overrides - Optional field overrides.
- * @returns A valid WorkerNodeProvisionRequest.
+ * @returns A valid WorkerProvisionRequest.
  */
 function makeProvisionRequest(
   overrides?: Partial<{
@@ -152,7 +152,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     // dropped. Overrides that arrive as an already-built value — from plain
     // JavaScript, or across a config boundary — are not literals and are not
     // rejected, so the runtime pin is the only thing left holding the line.
-    const overridesFromUntypedCaller: Partial<WorkerNodeCapabilities> = { supportsRecovery: true };
+    const overridesFromUntypedCaller: Partial<WorkerCapabilities> = { supportsRecovery: true };
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
@@ -310,11 +310,11 @@ describe('PiscinaThinWorkflowProvider', () => {
     const request = makeProvisionRequest();
 
     await provider.provision(request, new AbortController().signal);
-    expect(emit).not.toHaveBeenCalledWith(WorkerNodeSubjects.control['attempt-ready'], expect.anything());
+    expect(emit).not.toHaveBeenCalledWith(WorkerSubjects.control['attempt-ready'], expect.anything());
 
     resolveReady(createWorkflowWorkerReadyMessage(request.executionId, request.workerConfig.cancelSubject, ['tools']));
     await vi.waitFor(() =>
-      expect(emit).toHaveBeenCalledWith(WorkerNodeSubjects.control['attempt-ready'], {
+      expect(emit).toHaveBeenCalledWith(WorkerSubjects.control['attempt-ready'], {
         executionAttemptId: request.executionAttemptId,
         executionId: request.executionId,
         adapters: ['tools'],
@@ -614,7 +614,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   it('submits a completed result through the bus after the runner resolves', async () => {
     const bus = createTestBus();
     const submissions: Array<{ executionAttemptId: string; executionId: string; result: unknown }> = [];
-    bus.on(WorkerNodeSubjects.control.outcome.submit, (ctx) => {
+    bus.on(WorkerSubjects.control.outcome.submit, (ctx) => {
       submissions.push({ ...ctx.payload });
       ctx.setResult({ decision: 'accepted' });
     });
@@ -648,7 +648,7 @@ describe('PiscinaThinWorkflowProvider', () => {
   it('submits a failed result through the bus when the runner rejects', async () => {
     const bus = createTestBus();
     const submissions: Array<{ executionAttemptId: string; executionId: string; result: unknown }> = [];
-    bus.on(WorkerNodeSubjects.control.outcome.submit, (ctx) => {
+    bus.on(WorkerSubjects.control.outcome.submit, (ctx) => {
       submissions.push({ ...ctx.payload });
       ctx.setResult({ decision: 'accepted' });
     });
@@ -683,7 +683,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     const bus = createTestBus();
     const submissions: Array<{ executionAttemptId: string; executionId: string; result: unknown }> = [];
     let callCount = 0;
-    bus.on(WorkerNodeSubjects.control.outcome.submit, (ctx) => {
+    bus.on(WorkerSubjects.control.outcome.submit, (ctx) => {
       callCount++;
       submissions.push({ ...ctx.payload });
       if (callCount <= 1) {

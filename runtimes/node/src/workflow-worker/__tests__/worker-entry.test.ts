@@ -11,7 +11,7 @@ const mockBootWorkerBus = vi.fn();
 const mockBootWorkerRuntime = vi.fn();
 const mockLoadWorkflowModule = vi.fn();
 const mockRunWorkflowOrchestrator = vi.fn();
-const mockLoadWorkerContributions = vi.fn();
+const mockLoadWorkerRuntimeContributions = vi.fn();
 const mockParentPortPostMessage = vi.fn();
 
 vi.mock('node:worker_threads', () => ({
@@ -24,7 +24,7 @@ vi.mock('../runtime/worker-boot.js', () => ({
 }));
 
 vi.mock('../runtime/worker-contributions.js', () => ({
-  loadWorkerContributions: mockLoadWorkerContributions,
+  loadWorkerRuntimeContributions: mockLoadWorkerRuntimeContributions,
 }));
 
 vi.mock('../workflow-file-loader.js', () => ({
@@ -82,7 +82,7 @@ function makeLoadedWorkflow() {
 }
 
 /**
- * Build a mock WorkerBusHandle.
+ * Build a mock WorkerRuntimeBusHandle.
  * @returns Mock bus handle with bus object and close spy.
  */
 function makeBusHandle() {
@@ -169,7 +169,7 @@ describe('runWorkflowInWorker', () => {
     };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce(contributions);
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce(contributions);
     mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
     mockLoadWorkflowModule.mockResolvedValueOnce(loadedWorkflow);
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
@@ -186,7 +186,7 @@ describe('runWorkflowInWorker', () => {
     });
 
     expect(mockBootWorkerBus).toHaveBeenCalledOnce();
-    expect(mockLoadWorkerContributions).toHaveBeenCalledOnce();
+    expect(mockLoadWorkerRuntimeContributions).toHaveBeenCalledOnce();
     expect(mockBootWorkerRuntime).toHaveBeenCalledOnce();
     expect(mockLoadWorkflowModule).toHaveBeenCalledOnce();
     expect(mockLoadWorkflowModule).toHaveBeenCalledWith(config.source);
@@ -203,7 +203,7 @@ describe('runWorkflowInWorker', () => {
     };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
@@ -234,7 +234,7 @@ describe('runWorkflowInWorker', () => {
     const contributions = { toolsets: [{ name: 'test', tools: [] }] };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce(contributions);
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce(contributions);
     mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
@@ -260,7 +260,7 @@ describe('runWorkflowInWorker', () => {
     const contributions = { toolsets: [{ name: 'test', tools: [] }] };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce(contributions);
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce(contributions);
     mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockRejectedValueOnce(new Error('Orchestrator exploded'));
@@ -284,7 +284,7 @@ describe('runWorkflowInWorker', () => {
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
     // No toolsets or adapters
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(loadedWorkflow);
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
@@ -303,7 +303,7 @@ describe('runWorkflowInWorker', () => {
     const busHandle = makeBusHandle();
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
       executionId: 'exec-001',
@@ -347,7 +347,7 @@ describe('runWorkflowInWorker', () => {
     };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
     const config = makeConfig({
@@ -379,7 +379,7 @@ describe('runWorkflowInWorker', () => {
     const busHandle = makeBusHandle();
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
 
     const config = makeConfig({
       source: { kind: 'definition', workflowId: 'wf-001' },
@@ -400,7 +400,7 @@ describe('runWorkflowInWorker', () => {
     const busHandle = makeBusHandle();
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockRejectedValueOnce(new Error('contribution import failure'));
+    mockLoadWorkerRuntimeContributions.mockRejectedValueOnce(new Error('contribution import failure'));
 
     await expect(
       runWorkflowInWorker({
@@ -426,7 +426,7 @@ describe('runWorkflowInWorker', () => {
     const busHandle = makeBusHandle();
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
       executionId: 'exec-001',
@@ -442,7 +442,7 @@ describe('runWorkflowInWorker', () => {
     };
     await runWorkflowInWorker({ config: makeConfig(), manifest, contributionEntrypoints: entrypoints });
 
-    expect(mockLoadWorkerContributions).toHaveBeenCalledWith(entrypoints, {
+    expect(mockLoadWorkerRuntimeContributions).toHaveBeenCalledWith(entrypoints, {
       bus: busHandle.bus,
       signal: expect.any(AbortSignal),
     });

@@ -10,7 +10,7 @@ import type { SchemaRecord } from '@makaio/core';
  * SubagentTemplate - User-configured template stored in settings.
  *
  * A convenience layer over the Subagent system for user-configured background
- * tasks. Not to be confused with WorkerNode (one-shot workflow execution unit).
+ * tasks. Not to be confused with Worker (the allocation for a one-shot workflow execution).
  */
 export const SubagentTemplateSchema = z.object({
   id: z.string(),

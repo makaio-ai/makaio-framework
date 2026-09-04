@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { WorkerNodeSchemas } from '../schemas.js';
+import { WorkerSchemas } from '../schemas.js';
 
-describe('WorkerNode bootstrap claim schema', () => {
+describe('Worker bootstrap claim schema', () => {
   it('validates execution-scoped bootstrap claims without a repeated secret', () => {
-    const request = WorkerNodeSchemas['control.bootstrap.claim'].request.parse({
+    const request = WorkerSchemas['control.bootstrap.claim'].request.parse({
       executionId: 'exec-1',
       executionAttemptId: 'attempt-1',
     });
-    const response = WorkerNodeSchemas['control.bootstrap.claim'].response.parse({
+    const response = WorkerSchemas['control.bootstrap.claim'].response.parse({
       busUrl: 'wss://makaio-server.example/bus',
       busAuthSecret: 'execution-secret',
     });
@@ -18,7 +18,7 @@ describe('WorkerNode bootstrap claim schema', () => {
 
   it('rejects bootstrap claim with old nodeId field', () => {
     expect(() =>
-      WorkerNodeSchemas['control.bootstrap.claim'].request.parse({
+      WorkerSchemas['control.bootstrap.claim'].request.parse({
         executionId: 'exec-1',
         nodeId: 'node-1',
       }),
@@ -27,7 +27,7 @@ describe('WorkerNode bootstrap claim schema', () => {
 
   it('rejects bootstrap claim request with unknown fields', () => {
     expect(() =>
-      WorkerNodeSchemas['control.bootstrap.claim'].request.parse({
+      WorkerSchemas['control.bootstrap.claim'].request.parse({
         executionId: 'exec-1',
         executionAttemptId: 'attempt-1',
         unknownField: 'should-fail',
@@ -37,7 +37,7 @@ describe('WorkerNode bootstrap claim schema', () => {
 
   it('rejects bootstrap claim response with unknown fields', () => {
     expect(() =>
-      WorkerNodeSchemas['control.bootstrap.claim'].response.parse({
+      WorkerSchemas['control.bootstrap.claim'].response.parse({
         busUrl: 'wss://example/bus',
         busAuthSecret: 'secret',
         unknownField: 'should-fail',
@@ -47,7 +47,7 @@ describe('WorkerNode bootstrap claim schema', () => {
 
   it('rejects bootstrap claim request with empty strings', () => {
     expect(() =>
-      WorkerNodeSchemas['control.bootstrap.claim'].request.parse({
+      WorkerSchemas['control.bootstrap.claim'].request.parse({
         executionId: '',
         executionAttemptId: 'attempt-1',
       }),
@@ -57,7 +57,7 @@ describe('WorkerNode bootstrap claim schema', () => {
 
 describe('control.attempt-ready schema', () => {
   it('validates attempt-ready events with executionAttemptId', () => {
-    const parsed = WorkerNodeSchemas['control.attempt-ready'].parse({
+    const parsed = WorkerSchemas['control.attempt-ready'].parse({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       adapters: ['claude-code'],
@@ -69,7 +69,7 @@ describe('control.attempt-ready schema', () => {
   });
 
   it('defaults adapters to an empty array', () => {
-    const parsed = WorkerNodeSchemas['control.attempt-ready'].parse({
+    const parsed = WorkerSchemas['control.attempt-ready'].parse({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
     });
@@ -79,7 +79,7 @@ describe('control.attempt-ready schema', () => {
 
   it('rejects attempt-ready with old nodeId field', () => {
     expect(() =>
-      WorkerNodeSchemas['control.attempt-ready'].parse({
+      WorkerSchemas['control.attempt-ready'].parse({
         nodeId: 'node-1',
         executionId: 'exec-1',
       }),
@@ -88,7 +88,7 @@ describe('control.attempt-ready schema', () => {
 
   it('rejects attempt-ready with missing executionAttemptId', () => {
     expect(() =>
-      WorkerNodeSchemas['control.attempt-ready'].parse({
+      WorkerSchemas['control.attempt-ready'].parse({
         executionId: 'exec-1',
       }),
     ).toThrow();
@@ -96,7 +96,7 @@ describe('control.attempt-ready schema', () => {
 
   it('rejects attempt-ready with unknown fields (strict)', () => {
     expect(() =>
-      WorkerNodeSchemas['control.attempt-ready'].parse({
+      WorkerSchemas['control.attempt-ready'].parse({
         executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
         unknownField: 'should-fail',
@@ -107,7 +107,7 @@ describe('control.attempt-ready schema', () => {
 
 describe('control.outcome.submit schema', () => {
   it('validates outcome submission with executionAttemptId', () => {
-    const request = WorkerNodeSchemas['control.outcome.submit'].request.parse({
+    const request = WorkerSchemas['control.outcome.submit'].request.parse({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       result: {
@@ -122,7 +122,7 @@ describe('control.outcome.submit schema', () => {
   });
 
   it('validates failed outcome submission', () => {
-    const request = WorkerNodeSchemas['control.outcome.submit'].request.parse({
+    const request = WorkerSchemas['control.outcome.submit'].request.parse({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       result: {
@@ -137,7 +137,7 @@ describe('control.outcome.submit schema', () => {
   });
 
   it('validates cancelled outcome submission', () => {
-    const request = WorkerNodeSchemas['control.outcome.submit'].request.parse({
+    const request = WorkerSchemas['control.outcome.submit'].request.parse({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       result: {
@@ -152,7 +152,7 @@ describe('control.outcome.submit schema', () => {
   });
 
   it('validates paused outcome submission', () => {
-    const request = WorkerNodeSchemas['control.outcome.submit'].request.parse({
+    const request = WorkerSchemas['control.outcome.submit'].request.parse({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       result: {
@@ -169,7 +169,7 @@ describe('control.outcome.submit schema', () => {
 
   it('rejects outcome when envelope and result executionId differ', () => {
     expect(() =>
-      WorkerNodeSchemas['control.outcome.submit'].request.parse({
+      WorkerSchemas['control.outcome.submit'].request.parse({
         executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
         result: {
@@ -183,7 +183,7 @@ describe('control.outcome.submit schema', () => {
 
   it('rejects outcome request with old nodeId field', () => {
     expect(() =>
-      WorkerNodeSchemas['control.outcome.submit'].request.parse({
+      WorkerSchemas['control.outcome.submit'].request.parse({
         nodeId: 'node-1',
         executionId: 'exec-1',
         result: {
@@ -197,7 +197,7 @@ describe('control.outcome.submit schema', () => {
 
   it('rejects outcome request with unknown fields (strict)', () => {
     expect(() =>
-      WorkerNodeSchemas['control.outcome.submit'].request.parse({
+      WorkerSchemas['control.outcome.submit'].request.parse({
         executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
         result: {
@@ -212,7 +212,7 @@ describe('control.outcome.submit schema', () => {
 
   it('returns ACK decision in response', () => {
     for (const decision of ['accepted', 'duplicate', 'conflict', 'fenced'] as const) {
-      const response = WorkerNodeSchemas['control.outcome.submit'].response.parse({
+      const response = WorkerSchemas['control.outcome.submit'].response.parse({
         decision,
       });
       expect(response.decision).toBe(decision);
@@ -221,7 +221,7 @@ describe('control.outcome.submit schema', () => {
 
   it('rejects unknown ACK decisions in response', () => {
     expect(() =>
-      WorkerNodeSchemas['control.outcome.submit'].response.parse({
+      WorkerSchemas['control.outcome.submit'].response.parse({
         decision: 'rejected',
       }),
     ).toThrow();
@@ -229,7 +229,7 @@ describe('control.outcome.submit schema', () => {
 
   it('rejects response with unknown fields (strict)', () => {
     expect(() =>
-      WorkerNodeSchemas['control.outcome.submit'].response.parse({
+      WorkerSchemas['control.outcome.submit'].response.parse({
         decision: 'accepted',
         extraField: 'should-fail',
       }),

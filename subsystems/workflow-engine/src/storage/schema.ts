@@ -22,7 +22,7 @@ import type {
   JsonPatchOperation,
   WorkerMaterializationSpec,
 } from '@makaio/contracts';
-import type { NormalizedWorkerNodeRequirements } from '@makaio/contracts';
+import type { NormalizedWorkerRequirements } from '@makaio/contracts';
 import type { DualColumnBundle } from '@makaio/storage-drizzle';
 
 /**
@@ -89,14 +89,14 @@ export const workflowDefinitionsDual = defineDualTable(
     source: c.jsonCol<WorkflowDefinitionProvenance>('source'),
     /**
      * Portable executable source for worker dispatch (JSON).
-     * Tells the runtime where to load the workflow module on a worker node.
+     * Tells the runtime where to load the workflow module on a worker.
      */
     executableSource: c.jsonCol<WorkflowWorkerSource>('executable_source'),
     /**
-     * Resource requirements for WorkerNode provider selection (JSON).
+     * Resource requirements for Worker provider selection (JSON).
      * Constrains pool/provider matching during dispatch.
      */
-    requirements: c.jsonCol<NormalizedWorkerNodeRequirements>('requirements'),
+    requirements: c.jsonCol<NormalizedWorkerRequirements>('requirements'),
     /** Definition-owned finalizer selected after successful execution. */
     successFinalizerId: c.text('success_finalizer_id'),
   }),

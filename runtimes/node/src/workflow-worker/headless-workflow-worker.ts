@@ -4,7 +4,7 @@ import {
   createWorkflowCancelSubject,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
-  WorkerNodeSubjects,
+  WorkerSubjects,
   WorkflowSubjects,
   type OutcomeAckDecision,
   type WorkerBootstrapClaimResponse,
@@ -38,7 +38,7 @@ export type HeadlessWorkerBootstrapCredentials = WorkerBootstrapClaimResponse;
 /**
  * Bootstrap the worker by claiming execution-scoped bus credentials.
  *
- * Implementations issue `WorkerNodeSubjects.control['bootstrap.claim']`
+ * Implementations issue `WorkerSubjects.control['bootstrap.claim']`
  * against an unauthenticated or bootstrap-authenticated bus and return the
  * execution-scoped credentials for the authenticated connection.
  * @param signal - Cancellation signal. Abort rejects the bootstrap.
@@ -458,7 +458,7 @@ async function runWorkflowLifecycle(
     effectiveSignal.throwIfAborted();
     const { adapters } = await runtime.bus.request(AdapterSubsystemSubjects.listAdapters, {});
     effectiveSignal.throwIfAborted();
-    await runtime.bus.emit(WorkerNodeSubjects.control['attempt-ready'], {
+    await runtime.bus.emit(WorkerSubjects.control['attempt-ready'], {
       executionAttemptId: deps.executionAttemptId,
       executionId: deps.executionId,
       adapters: adapters.map((adapter) => adapter.name),

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import {
-  WorkerNodeNamespace,
-  WorkerNodeSubjects,
+  WorkerNamespace,
+  WorkerSubjects,
   createWorkflowFinalizerNamespace,
   type WorkflowRunResult,
 } from '@makaio/contracts';
@@ -209,7 +209,7 @@ describe('outcome submission handler', () => {
     repository = createInMemoryAttemptRepository();
     authority = new ExecutionAttemptAuthority(repository);
     setup = await setupWorkflowExecutorTest();
-    MakaioBus.registerNamespace(WorkerNodeNamespace);
+    MakaioBus.registerNamespace(WorkerNamespace);
     handlerCleanup = registerOutcomeSubmissionHandler(MakaioBus, {
       bus: MakaioBus,
       authority,
@@ -257,7 +257,7 @@ describe('outcome submission handler', () => {
     const attempt = await authority.createAttempt(executionId);
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -274,7 +274,7 @@ describe('outcome submission handler', () => {
     const attempt = await authority.createAttempt(executionId);
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'failed', error: 'crash' };
 
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -291,12 +291,12 @@ describe('outcome submission handler', () => {
     const attempt = await authority.createAttempt(executionId);
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
-    await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
     });
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -309,12 +309,12 @@ describe('outcome submission handler', () => {
     const workflow = await seedExecution(executionId);
     const attempt = await authority.createAttempt(executionId);
 
-    await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result: { executionId, workflowId: workflow.id, status: 'completed' },
     });
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result: { executionId, workflowId: workflow.id, status: 'failed', error: 'oops' },
@@ -332,7 +332,7 @@ describe('outcome submission handler', () => {
     await authority.createAttempt(executionId);
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt1.executionAttemptId,
       executionId,
       result,
@@ -354,7 +354,7 @@ describe('outcome submission handler', () => {
       pausedAtFrameId: 'frame-1',
     };
 
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -386,7 +386,7 @@ describe('outcome submission handler', () => {
 
     try {
       await expect(
-        MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+        MakaioBus.request(WorkerSubjects.control.outcome.submit, {
           executionAttemptId: attempt.executionAttemptId,
           executionId,
           result: { executionId, workflowId: 'workflow-wrong', ...outcome },
@@ -412,7 +412,7 @@ describe('outcome submission handler', () => {
     // Workflow state was NOT converged yet (simulates fault).
 
     // Retry submission: should get duplicate and still converge workflow state.
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -439,7 +439,7 @@ describe('outcome submission handler', () => {
     await authority.commitOutcome(attempt.executionAttemptId, executionId, result);
 
     // Retry: should converge workflow state and ACK duplicate.
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -469,7 +469,7 @@ describe('outcome submission handler', () => {
       // Attacker attempt submits a completed result with the victim's executionId
       // inside the nested result object.
       await expect(
-        MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+        MakaioBus.request(WorkerSubjects.control.outcome.submit, {
           executionAttemptId: attempt.executionAttemptId,
           executionId: attackerId,
           result: {
@@ -501,7 +501,7 @@ describe('outcome submission handler', () => {
     process.env.NODE_ENV = 'production';
     try {
       await expect(
-        MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+        MakaioBus.request(WorkerSubjects.control.outcome.submit, {
           executionAttemptId: attempt.executionAttemptId,
           executionId: attackerId,
           result: {
@@ -551,7 +551,7 @@ describe('outcome submission handler', () => {
 
     // The submission itself should throw because convergence fails.
     await expect(
-      MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+      MakaioBus.request(WorkerSubjects.control.outcome.submit, {
         executionAttemptId: attempt.executionAttemptId,
         executionId,
         result,
@@ -587,7 +587,7 @@ describe('outcome submission handler', () => {
 
     // First submission: convergence fails, but outcome is durably accepted.
     await expect(
-      MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+      MakaioBus.request(WorkerSubjects.control.outcome.submit, {
         executionAttemptId: attempt.executionAttemptId,
         executionId,
         result,
@@ -607,7 +607,7 @@ describe('outcome submission handler', () => {
     });
 
     // Retry submission: receives duplicate, converges, and settles waiter.
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -640,7 +640,7 @@ describe('outcome submission handler', () => {
     // The waiter should NOT be resolved yet since convergence hasn't happened.
 
     // Retry submission: duplicate + converge.
-    const { decision } = await MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
       executionId,
       result,
@@ -672,7 +672,7 @@ describe('outcome submission handler', () => {
     // remote peer context. The re-registration approach ensures the handler
     // sees the correct origin.
     const off = MakaioBus.on(
-      WorkerNodeSubjects.control.outcome.submit,
+      WorkerSubjects.control.outcome.submit,
       (ctx) => {
         // Simulate what the transport layer does: derive identity from
         // authenticated peer context, not from payload.
@@ -710,7 +710,7 @@ describe('outcome submission handler', () => {
     );
     try {
       await expect(
-        MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+        MakaioBus.request(WorkerSubjects.control.outcome.submit, {
           executionAttemptId: attempt.executionAttemptId,
           executionId,
           result: { executionId, workflowId: workflow.id, status: 'completed' },
@@ -727,7 +727,7 @@ describe('outcome submission handler', () => {
     const attempt = await authority.createAttempt(executionId);
 
     const off = MakaioBus.on(
-      WorkerNodeSubjects.control.outcome.submit,
+      WorkerSubjects.control.outcome.submit,
       (ctx) => {
         const remotePeer = {
           kind: 'workflow-execution-attempt' as const,
@@ -750,7 +750,7 @@ describe('outcome submission handler', () => {
     );
     try {
       await expect(
-        MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+        MakaioBus.request(WorkerSubjects.control.outcome.submit, {
           executionAttemptId: attempt.executionAttemptId,
           executionId,
           result: { executionId, workflowId: workflow.id, status: 'completed' },
@@ -777,7 +777,7 @@ describe('outcome submission handler', () => {
       // executionId matches the attacker. The handler-level correlation check
       // catches this regardless of caller origin (local or remote).
       await expect(
-        MakaioBus.request(WorkerNodeSubjects.control.outcome.submit, {
+        MakaioBus.request(WorkerSubjects.control.outcome.submit, {
           executionAttemptId: attempt.executionAttemptId,
           executionId,
           result: {

@@ -104,7 +104,7 @@ export class WorkflowExecutor extends BaseService {
    * @param bus - The message bus for communication
    * @param config - Optional partial configuration (merged with defaults)
    * @param workflowRunner - Optional workflow-level runner for isolated execution
-   * @param executionAttemptAuthority - Optional Authority for WorkerNode dispatch runners
+   * @param executionAttemptAuthority - Optional Authority for Worker dispatch runners
    */
   public constructor(
     bus: IMakaioBus,

@@ -12,7 +12,7 @@ import {
   WorkerContributionRefSchema,
   WorkerMaterializationSpecSchema,
   WorkspaceSnapshotMaterializationSchema,
-} from '../../capabilities/worker-node/index.js';
+} from '../../capabilities/worker/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
