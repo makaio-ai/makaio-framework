@@ -87,11 +87,11 @@ export interface StartExecutionDeps {
    */
   runExecution(executionId: string): Promise<void>;
   /**
-   * Execution attempt Authority for WorkerNode dispatch runners.
+   * Execution attempt Authority for Worker dispatch runners.
    *
    * When present, the dispatch runner uses this Authority to create
    * attempts before dispatch and wait for committed outcomes. When absent,
-   * WorkerNode dispatch is unavailable.
+   * Worker dispatch is unavailable.
    */
   executionAttemptAuthority?: ExecutionAttemptAuthority;
   /** Host seams that resolve immutable workspace references for path starts. */

@@ -224,10 +224,10 @@ describe('allowedSubjects restriction', () => {
     const identityId = 'bootstrap-identity';
     registerHmacIdentitySecret(identityId, 'bootstrap-secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker-node.control.bootstrap.claim'],
+      allowedSubjects: ['worker.control.bootstrap.claim'],
     });
 
-    expect(resolveHmacIdentityAllowedSubjects(identityId)).toEqual(new Set(['worker-node.control.bootstrap.claim']));
+    expect(resolveHmacIdentityAllowedSubjects(identityId)).toEqual(new Set(['worker.control.bootstrap.claim']));
   });
 
   it('returns null for identities without allowedSubjects', () => {
@@ -245,19 +245,19 @@ describe('allowedSubjects restriction', () => {
     const identityId = 'rotate-restricted';
     registerHmacIdentitySecret(identityId, 'old-secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker-node.control.bootstrap.claim'],
+      allowedSubjects: ['worker.control.bootstrap.claim'],
     });
 
     rotateHmacIdentitySecret(identityId, 'new-secret');
 
-    expect(resolveHmacIdentityAllowedSubjects(identityId)).toEqual(new Set(['worker-node.control.bootstrap.claim']));
+    expect(resolveHmacIdentityAllowedSubjects(identityId)).toEqual(new Set(['worker.control.bootstrap.claim']));
   });
 
   it('cleanup removes allowedSubjects along with registration', () => {
     const identityId = 'cleanup-restricted';
     const cleanup = registerHmacIdentitySecret(identityId, 'secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker-node.control.bootstrap.claim'],
+      allowedSubjects: ['worker.control.bootstrap.claim'],
     });
 
     cleanup();

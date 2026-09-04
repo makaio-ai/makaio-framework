@@ -36,7 +36,7 @@ export interface InProcessWorkflowRunnerOptions {
  * In-process implementation of {@link IWorkflowRunner}.
  *
  * Executes a full workflow inside the calling process using the shared host
- * bus. Unlike the Piscina and WorkerNode runners, this runner does not spawn
+ * bus. Unlike the Piscina and Worker runners, this runner does not spawn
  * isolated processes or threads — the workflow orchestrator runs inline on the
  * caller's bus.
  *

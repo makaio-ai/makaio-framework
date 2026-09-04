@@ -53,14 +53,14 @@ describe('createNodeWorkflowRunnerPackageOptions construction gates', () => {
   });
 
   // ─────────────────────────────────────────────────────────
-  // Gate 2: WorkerNode mode fails fast without a repository
+  // Gate 2: Worker mode fails fast without a repository
   // ─────────────────────────────────────────────────────────
 
-  it('worker-node mode fails fast without an ExecutionAttemptRepository', () => {
+  it('worker mode fails fast without an ExecutionAttemptRepository', () => {
     expect(() =>
       createNodeWorkflowRunnerPackageOptions({
         ...baseParams,
-        workflowRunner: { mode: 'worker-node' },
+        workflowRunner: { mode: 'worker' },
         bus: MakaioBus,
       }),
     ).toThrow('ExecutionAttemptRepository');
@@ -70,10 +70,10 @@ describe('createNodeWorkflowRunnerPackageOptions construction gates', () => {
   // Gate 3: Factory composition boots with the injected repository
   // ─────────────────────────────────────────────────────────
 
-  it('worker-node mode succeeds when an ExecutionAttemptRepository is provided', () => {
+  it('worker mode succeeds when an ExecutionAttemptRepository is provided', () => {
     const options = createNodeWorkflowRunnerPackageOptions({
       ...baseParams,
-      workflowRunner: { mode: 'worker-node' },
+      workflowRunner: { mode: 'worker' },
       bus: MakaioBus,
       executionAttemptRepository: stubRepository,
     });

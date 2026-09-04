@@ -105,8 +105,8 @@ import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
   BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
-  registerWorkerNodeProvider,
-  unregisterWorkerNodeProvider,
+  registerWorkerProvider,
+  unregisterWorkerProvider,
 } from '@makaio/contracts';
 import {
   ThinWorkflowPiscinaRunner,
@@ -631,7 +631,7 @@ export async function bootMakaioRuntimeCore(
     // ThinWorkflowPiscinaRunner so that the worker-pool dispatch path can
     // resolve 'piscina' environments without any external provider package.
     // This path isolates workflow orchestration only; it is not the
-    // self-contained external WorkerNode runtime model.
+    // self-contained external Worker Runtime model.
     // Registration happens after coordinator.startAll() so that
     // CapabilityService has registered its capability.register handler.
     // The provider uses the same worker-entry resolution logic as the
@@ -653,14 +653,14 @@ export async function bootMakaioRuntimeCore(
       bus,
     });
     try {
-      await registerWorkerNodeProvider(bus, piscinaProvider);
+      await registerWorkerProvider(bus, piscinaProvider);
     } catch (error) {
       await piscinaRunner.dispose().catch(() => undefined);
       throw error;
     }
     shutdownSteps.push(async () => {
       try {
-        await unregisterWorkerNodeProvider(bus, piscinaProvider.id);
+        await unregisterWorkerProvider(bus, piscinaProvider.id);
       } finally {
         await piscinaRunner.dispose().catch(() => undefined);
       }

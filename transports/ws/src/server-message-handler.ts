@@ -97,7 +97,7 @@ function isSubscriptionSubjects(value: unknown): value is Record<string, number[
 /**
  * Check whether a subscription subject key is a wildcard pattern.
  *
- * Wildcard patterns end with `*` (e.g. `adapter.*`, `worker-node:*`, or the
+ * Wildcard patterns end with `*` (e.g. `adapter.*`, `worker.*`, or the
  * global `*`).
  * @param subject - Subscription subject key to check.
  * @returns `true` when the key is a wildcard pattern.

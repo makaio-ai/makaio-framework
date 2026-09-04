@@ -284,7 +284,7 @@ describe('createInboundMessageHandler', () => {
 // ---------------------------------------------------------------------------
 
 describe('subject restriction enforcement', () => {
-  const ALLOWED_SUBJECT = 'worker-node.control.bootstrap.claim';
+  const ALLOWED_SUBJECT = 'worker.control.bootstrap.claim';
   const BOOTSTRAP_IDENTITY = 'bootstrap-test-id';
   const BOOTSTRAP_SECRET = 'bootstrap-test-secret';
 
@@ -326,7 +326,7 @@ describe('subject restriction enforcement', () => {
     await routeMessage(
       {
         type: 'request',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'control.bootstrap.claim',
         correlationId: 'corr-1',
         messageId: 'msg-1',
@@ -354,7 +354,7 @@ describe('subject restriction enforcement', () => {
     await routeMessage(
       {
         type: 'request',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'control.outcome.submit',
         correlationId: 'corr-2',
         messageId: 'msg-2',
@@ -393,7 +393,7 @@ describe('subject restriction enforcement', () => {
     await routeMessage(
       {
         type: 'event',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'lifecycle.ready',
         messageId: 'msg-3',
         payload: {},
@@ -422,7 +422,7 @@ describe('subject restriction enforcement', () => {
     await routeMessage(
       {
         type: 'broadcast',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'lifecycle.ready',
         correlationId: 'corr-3',
         messageId: 'msg-4',
@@ -448,7 +448,7 @@ describe('subject restriction enforcement', () => {
     await routeMessage(
       {
         type: 'request',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'control.outcome.submit',
         correlationId: 'corr-4',
         messageId: 'msg-5',
@@ -473,7 +473,7 @@ describe('subject restriction enforcement', () => {
     await routeMessage(
       {
         type: 'request',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'control.outcome.submit',
         correlationId: 'corr-5',
         messageId: 'msg-6',
@@ -493,7 +493,7 @@ describe('subject restriction enforcement', () => {
 // ---------------------------------------------------------------------------
 
 describe('subscribe/unsubscribe subject restriction', () => {
-  const ALLOWED_SUBJECT = 'worker-node.control.bootstrap.claim';
+  const ALLOWED_SUBJECT = 'worker.control.bootstrap.claim';
   const BOOTSTRAP_IDENTITY = 'bootstrap-sub-test';
   const BOOTSTRAP_SECRET = 'bootstrap-sub-secret';
 
@@ -540,11 +540,11 @@ describe('subscribe/unsubscribe subject restriction', () => {
         type: 'subscribe',
         subjects: {
           [ALLOWED_SUBJECT]: [100],
-          'worker-node.lifecycle.ready': [100],
+          'worker.lifecycle.ready': [100],
         },
         deliveryClasses: {
           [ALLOWED_SUBJECT]: 'relayable',
-          'worker-node.lifecycle.ready': 'relayable',
+          'worker.lifecycle.ready': 'relayable',
         },
       },
       restrictedSocket,
@@ -564,7 +564,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     const subscribeCalls = handler.mock.calls.filter(([msg]) => msg.type === 'subscribe');
     for (const [msg] of subscribeCalls) {
       if (msg.type === 'subscribe') {
-        expect(msg.subjects).not.toHaveProperty('worker-node.lifecycle.ready');
+        expect(msg.subjects).not.toHaveProperty('worker.lifecycle.ready');
       }
     }
   });
@@ -585,8 +585,8 @@ describe('subscribe/unsubscribe subject restriction', () => {
       {
         type: 'subscribe',
         subjects: {
-          'worker-node.lifecycle.ready': [100],
-          'worker-node.control.outcome.submit': [100],
+          'worker.lifecycle.ready': [100],
+          'worker.control.outcome.submit': [100],
         },
         deliveryClasses: {},
       },
@@ -627,7 +627,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
         type: 'unsubscribe',
         subjects: {
           [ALLOWED_SUBJECT]: [100],
-          'worker-node.lifecycle.ready': [100],
+          'worker.lifecycle.ready': [100],
         },
       },
       restrictedSocket,
@@ -638,7 +638,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     const unsubCalls = handler.mock.calls.filter(([msg]) => msg.type === 'unsubscribe');
     for (const [msg] of unsubCalls) {
       if (msg.type === 'unsubscribe') {
-        expect(msg.subjects).not.toHaveProperty('worker-node.lifecycle.ready');
+        expect(msg.subjects).not.toHaveProperty('worker.lifecycle.ready');
       }
     }
   });
@@ -658,7 +658,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     await routeMessage(
       {
         type: 'subscribe',
-        subjects: { 'worker-node.*': [100] },
+        subjects: { 'worker.*': [100] },
         deliveryClasses: {},
       },
       restrictedSocket,
@@ -672,7 +672,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
   it('allows wildcard subscription when it appears verbatim in allowedSubjects', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker-node.*'],
+      allowedSubjects: ['worker.*'],
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -684,7 +684,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     await routeMessage(
       {
         type: 'subscribe',
-        subjects: { 'worker-node.*': [100] },
+        subjects: { 'worker.*': [100] },
         deliveryClasses: {},
       },
       restrictedSocket,
@@ -695,7 +695,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'subscribe',
-        subjects: expect.objectContaining({ 'worker-node.*': expect.any(Array) }),
+        subjects: expect.objectContaining({ 'worker.*': expect.any(Array) }),
       }),
       expect.anything(),
     );
@@ -717,7 +717,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
       {
         type: 'subscribe',
         subjects: {
-          'worker-node.*': [100],
+          'worker.*': [100],
           'adapter.*': [100],
         },
         deliveryClasses: {},
@@ -732,7 +732,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     expect(subCalls.length).toBeGreaterThanOrEqual(1);
     const lastSubMsg = subCalls[subCalls.length - 1]![0];
     if (lastSubMsg.type === 'subscribe') {
-      expect(lastSubMsg.subjects).toHaveProperty('worker-node.*');
+      expect(lastSubMsg.subjects).toHaveProperty('worker.*');
       expect(lastSubMsg.subjects).toHaveProperty('adapter.*');
     }
   });
@@ -754,7 +754,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
       {
         type: 'subscribe',
         subjects: {
-          'worker-node.lifecycle.ready': [100],
+          'worker.lifecycle.ready': [100],
         },
         deliveryClasses: {},
       },
@@ -772,7 +772,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
 // ---------------------------------------------------------------------------
 
 describe('outbound subject restriction on forwarding', () => {
-  const ALLOWED_SUBJECT = 'worker-node.control.bootstrap.claim';
+  const ALLOWED_SUBJECT = 'worker.control.bootstrap.claim';
   const BOOTSTRAP_IDENTITY = 'bootstrap-fwd-test';
   const BOOTSTRAP_SECRET = 'bootstrap-fwd-secret';
 
@@ -820,7 +820,7 @@ describe('outbound subject restriction on forwarding', () => {
     // that the inbound layer should have caught — defense-in-depth).
     registry.handleSubscribeMessage(restrictedSocket, {
       type: 'subscribe',
-      subjects: { 'worker-node.lifecycle.ready': [100] },
+      subjects: { 'worker.lifecycle.ready': [100] },
       deliveryClasses: {},
     });
 
@@ -829,7 +829,7 @@ describe('outbound subject restriction on forwarding', () => {
       senderSocket,
       {
         type: 'event',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'lifecycle.ready',
         messageId: 'fwd-1',
         payload: {},
@@ -889,7 +889,7 @@ describe('outbound subject restriction on forwarding', () => {
       senderSocket,
       {
         type: 'event',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'control.bootstrap.claim',
         messageId: 'fwd-2',
         payload: {},
@@ -922,7 +922,7 @@ describe('outbound subject restriction on forwarding', () => {
 
     registry.handleSubscribeMessage(unrestrictedSocket, {
       type: 'subscribe',
-      subjects: { 'worker-node.lifecycle.ready': [100] },
+      subjects: { 'worker.lifecycle.ready': [100] },
       deliveryClasses: {},
     });
 
@@ -930,7 +930,7 @@ describe('outbound subject restriction on forwarding', () => {
       senderSocket,
       {
         type: 'event',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'lifecycle.ready',
         messageId: 'fwd-3',
         payload: {},
@@ -980,11 +980,11 @@ describe('outbound subject restriction on forwarding', () => {
     // Restricted peer subscribes (simulating bypass).
     registry.handleSubscribeMessage(restrictedSocket, {
       type: 'subscribe',
-      subjects: { 'worker-node.lifecycle.ready': [100] },
+      subjects: { 'worker.lifecycle.ready': [100] },
       deliveryClasses: {},
     });
 
-    const interested = registry.getInterestedClients('worker-node.lifecycle.ready', {}, senderSocket);
+    const interested = registry.getInterestedClients('worker.lifecycle.ready', {}, senderSocket);
 
     // Restricted peer must NOT appear in interested clients for a disallowed subject.
     expect(interested).not.toContain(restrictedSocket);
@@ -1045,7 +1045,7 @@ describe('outbound subject restriction on forwarding', () => {
       senderSocket,
       {
         type: 'event',
-        namespace: 'worker-node',
+        namespace: 'worker',
         subject: 'control.bootstrap.claim',
         messageId: 'fwd-revoked',
         payload: {},

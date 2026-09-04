@@ -19,10 +19,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import {
   ToolSubjects,
-  WorkerNodeNamespace,
-  WorkerNodeSubjects,
+  WorkerNamespace,
+  WorkerSubjects,
   type ProviderAllocationRef,
-  type WorkerNodeDispatch,
+  type WorkerDispatch,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
@@ -39,7 +39,7 @@ import {
   selectFrameworkCorePackages,
 } from '../boot.js';
 import { createNodeWorkflowRunner } from '../workflow-worker/index.js';
-import { WorkerNodeRunner } from '../workflow-worker/worker-node-runner.js';
+import { WorkerRunner } from '../workflow-worker/worker-runner.js';
 import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-runner.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
 import { loadBootExtensions } from '../boot-extension-loading.js';
@@ -866,29 +866,29 @@ describe('workflow-level runner boot composition', () => {
     expect(runner).toBeInstanceOf(InProcessWorkflowRunner);
   });
 
-  it('creates a WorkerNodeRunner for worker-node mode', () => {
+  it('creates a WorkerRunner for worker mode', () => {
     const dispatch = vi.fn();
     const runner = createNodeWorkflowRunner({
       moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: {
-        mode: 'worker-node',
+        mode: 'worker',
         dispatch,
         manifest: { contributionRefs: [] },
       },
       authority: stubAuthority,
     });
 
-    expect(runner).toBeInstanceOf(WorkerNodeRunner);
+    expect(runner).toBeInstanceOf(WorkerRunner);
   });
 
-  it('creates a WorkerNodeRunner with optional requirements forwarded', () => {
+  it('creates a WorkerRunner with optional requirements forwarded', () => {
     const dispatch = vi.fn();
     const runner = createNodeWorkflowRunner({
       moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: {
-        mode: 'worker-node',
+        mode: 'worker',
         dispatch,
         manifest: { contributionRefs: [] },
         requirements: { persistentStorage: true, customCapabilities: [] },
@@ -896,14 +896,14 @@ describe('workflow-level runner boot composition', () => {
       authority: stubAuthority,
     });
 
-    expect(runner).toBeInstanceOf(WorkerNodeRunner);
+    expect(runner).toBeInstanceOf(WorkerRunner);
   });
 
-  it('creates a bus-backed WorkerNodeRunner when worker-node mode omits dispatch', async () => {
+  it('creates a bus-backed WorkerRunner when worker mode omits dispatch', async () => {
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
+    bus.registerNamespace(WorkerNamespace);
     let capturedConfig: unknown;
-    const cleanup = bus.on(WorkerNodeSubjects.dispatch, (ctx) => {
+    const cleanup = bus.on(WorkerSubjects.dispatch, (ctx) => {
       capturedConfig = ctx.payload.config;
       const result = {
         executionId: ctx.payload.config.executionId,
@@ -920,19 +920,19 @@ describe('workflow-level runner boot composition', () => {
     const runner = createNodeWorkflowRunner({
       moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
-      runner: { mode: 'worker-node' },
+      runner: { mode: 'worker' },
       bus,
       authority: stubAuthority,
     });
 
     try {
       if (runner === undefined) {
-        throw new Error('Expected worker-node runner');
+        throw new Error('Expected worker runner');
       }
       const config = makeWorkerConfig();
       const completion = await runner.run(config, new AbortController().signal);
 
-      expect(runner).toBeInstanceOf(WorkerNodeRunner);
+      expect(runner).toBeInstanceOf(WorkerRunner);
       expect(completion.result.status).toBe('completed');
       expect(capturedConfig).toEqual({ ...config, terminalAuthority: 'authority' });
     } finally {
@@ -940,9 +940,9 @@ describe('workflow-level runner boot composition', () => {
     }
   });
 
-  it('preserves omitted manifests for worker-node mode', async () => {
-    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
-    const dispatch: WorkerNodeDispatch = async (request) => {
+  it('preserves omitted manifests for worker mode', async () => {
+    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
+    const dispatch: WorkerDispatch = async (request) => {
       capturedRequest = request;
       const result = {
         executionId: 'wfx-1',
@@ -963,7 +963,7 @@ describe('workflow-level runner boot composition', () => {
       moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: {
-        mode: 'worker-node',
+        mode: 'worker',
         dispatch,
       },
       authority: stubAuthority,
@@ -971,9 +971,9 @@ describe('workflow-level runner boot composition', () => {
     const signal = new AbortController().signal;
 
     if (runner === undefined) {
-      throw new Error('Expected worker-node runner');
+      throw new Error('Expected worker runner');
     }
-    expect(runner).toBeInstanceOf(WorkerNodeRunner);
+    expect(runner).toBeInstanceOf(WorkerRunner);
     await runner.run(makeWorkerConfig(), signal);
 
     if (capturedRequest === undefined) {

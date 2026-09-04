@@ -5,7 +5,7 @@ import type {
   StepRunnerPlatformDefaults,
   WorkerContributionManifest,
 } from '@makaio/contracts';
-import { WorkerNodeSubjects } from '@makaio/contracts';
+import { WorkerSubjects } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   ExecutionAttemptAuthority,
@@ -16,7 +16,7 @@ import type { WorkflowRunnerBootOptions } from '../boot-types.js';
 import type { WorkflowWorkerEntryMode } from './worker-entry-resolver.js';
 import { ThinWorkflowPiscinaRunner } from './thin-workflow-piscina-runner.js';
 import { resolveWorkflowWorkerEntry } from './worker-entry-resolver.js';
-import { WorkerNodeRunner } from './worker-node-runner.js';
+import { WorkerRunner } from './worker-runner.js';
 import { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
 
 /** Parameters for composing workflow engine runner package options. */
@@ -35,14 +35,14 @@ export interface CreateNodeWorkflowRunnerPackageOptionsParams {
    * Host-owned bus instance forwarded to in-process runner construction.
    *
    * Required when `workflowRunner.mode` is `'in-process'` or omitted on an
-   * explicit runner object. Also used by WorkerNode mode when no explicit
+   * explicit runner object. Also used by Worker mode when no explicit
    * dispatch function is supplied. Ignored for Piscina mode.
    */
   readonly bus?: IMakaioBus;
   /**
    * Injected execution attempt persistence port.
    *
-   * Required when `workflowRunner.mode` is `'worker-node'`. Threaded
+   * Required when `workflowRunner.mode` is `'worker'`. Threaded
    * through to the workflow engine service options so the Authority
    * service can delegate durable decisions.
    */
@@ -73,14 +73,14 @@ export interface NodeWorkflowRunnerPackageOptions {
   /**
    * Injected execution attempt persistence port.
    *
-   * Present only when the workflow runner uses WorkerNode dispatch mode.
+   * Present only when the workflow runner uses Worker dispatch mode.
    * Forwarded to the workflow engine service for Authority construction.
    */
   readonly executionAttemptRepository?: ExecutionAttemptRepository;
   /**
    * Execution attempt Authority constructed from the injected repository.
    *
-   * Present only when the workflow runner uses WorkerNode dispatch mode.
+   * Present only when the workflow runner uses Worker dispatch mode.
    * Shared between the runner (for attempt creation before dispatch) and
    * the workflow engine service (for outcome commitment).
    */
@@ -105,12 +105,12 @@ function createEmptyWorkerContributionManifest(): WorkerContributionManifest {
 export function createNodeWorkflowRunnerPackageOptions(
   params: CreateNodeWorkflowRunnerPackageOptionsParams,
 ): NodeWorkflowRunnerPackageOptions {
-  // Construction gate: WorkerNode mode requires an injected repository.
-  if (params.workflowRunner?.mode === 'worker-node' && !params.executionAttemptRepository) {
+  // Construction gate: Worker mode requires an injected repository.
+  if (params.workflowRunner?.mode === 'worker' && !params.executionAttemptRepository) {
     throw new Error(
-      `WorkerNode dispatch mode requires an ExecutionAttemptRepository. ` +
+      `Worker dispatch mode requires an ExecutionAttemptRepository. ` +
         `Pass 'executionAttemptRepository' to createNodeWorkflowRunnerPackageOptions ` +
-        `when workflowRunner.mode is 'worker-node'.`,
+        `when workflowRunner.mode is 'worker'.`,
     );
   }
 
@@ -165,14 +165,14 @@ interface CreateNodeWorkflowRunnerParams {
    * Host-owned bus instance forwarded to {@link InProcessWorkflowRunner}.
    *
    * Required when `runner` is present and its `mode` is `'in-process'` or
-   * omitted. Also required for `'worker-node'` mode when no explicit dispatch
+   * omitted. Also required for `'worker'` mode when no explicit dispatch
    * function is supplied. Ignored for Piscina mode.
    */
   readonly bus?: IMakaioBus;
   /**
-   * Execution attempt Authority injected into WorkerNode runners.
+   * Execution attempt Authority injected into Worker runners.
    *
-   * Required when `runner.mode` is `'worker-node'`. The runner uses this
+   * Required when `runner.mode` is `'worker'`. The runner uses this
    * to create attempts before dispatch and wait for committed outcomes.
    */
   readonly authority?: ExecutionAttemptAuthority;
@@ -205,11 +205,11 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
       return new InProcessWorkflowRunner({ bus: params.bus });
     }
 
-    case 'worker-node': {
+    case 'worker': {
       if (params.authority === undefined) {
         throw new Error(
-          `WorkerNodeRunner requires an ExecutionAttemptAuthority. ` +
-            `Pass 'authority' to createNodeWorkflowRunner when runner.mode is 'worker-node'.`,
+          `WorkerRunner requires an ExecutionAttemptAuthority. ` +
+            `Pass 'authority' to createNodeWorkflowRunner when runner.mode is 'worker'.`,
         );
       }
       const bus = params.bus;
@@ -219,7 +219,7 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
           ? undefined
           : (request, signal) =>
               bus.request(
-                WorkerNodeSubjects.dispatch,
+                WorkerSubjects.dispatch,
                 {
                   executionAttemptId: request.executionAttemptId,
                   config: request.config,
@@ -231,11 +231,11 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
               ));
       if (dispatch === undefined) {
         throw new Error(
-          `WorkerNodeRunner requires either a dispatch function or a bus instance. ` +
-            `Pass 'bus' to createNodeWorkflowRunner when runner.mode is 'worker-node'.`,
+          `WorkerRunner requires either a dispatch function or a bus instance. ` +
+            `Pass 'bus' to createNodeWorkflowRunner when runner.mode is 'worker'.`,
         );
       }
-      return new WorkerNodeRunner({
+      return new WorkerRunner({
         dispatch,
         authority: params.authority,
         ...(runner.manifest !== undefined && { manifest: runner.manifest }),

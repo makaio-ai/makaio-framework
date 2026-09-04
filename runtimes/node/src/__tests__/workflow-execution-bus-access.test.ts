@@ -256,8 +256,8 @@ describe('workflow execution bus access', () => {
       const allowed = resolveHmacIdentityAllowedSubjects('attempt-1');
       expect(allowed).not.toBeNull();
       // Verify static subjects are present.
-      expect(allowed!.has('worker-node.control.attempt-ready')).toBe(true);
-      expect(allowed!.has('worker-node.control.outcome.submit')).toBe(true);
+      expect(allowed!.has('worker.control.attempt-ready')).toBe(true);
+      expect(allowed!.has('worker.control.outcome.submit')).toBe(true);
       expect(allowed!.has('workflow.getRunContext')).toBe(true);
       expect(allowed!.has('storage:workflow.getExecution')).toBe(true);
       expect(allowed!.has('workflow.frame.started')).toBe(true);
@@ -327,8 +327,8 @@ describe('workflow execution bus access', () => {
       expect(subjects.length).toBeGreaterThan(0);
 
       // Check representative subjects from each category.
-      expect(subjects).toContain('worker-node.control.attempt-ready');
-      expect(subjects).toContain('worker-node.control.outcome.submit');
+      expect(subjects).toContain('worker.control.attempt-ready');
+      expect(subjects).toContain('worker.control.outcome.submit');
       expect(subjects).toContain('workflow.getRunContext');
       expect(subjects).toContain('adapterSubsystem.listAdapters');
       expect(subjects).toContain('workflow.bootstrapAuthorityState');

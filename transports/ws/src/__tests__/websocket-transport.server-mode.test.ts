@@ -84,7 +84,7 @@ describe('Server mode behavior', () => {
     const identityId = 'restricted-request-target';
     registerHmacIdentitySecret(identityId, 'request-target-secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker-node.control.bootstrap.claim'],
+      allowedSubjects: ['worker.control.bootstrap.claim'],
     });
 
     const wss = new MockWebSocketServer();
@@ -98,13 +98,13 @@ describe('Server mode behavior', () => {
       await transport.connect();
       wss.simulateConnection(restrictedClient);
       await new Promise((resolve) => setTimeout(resolve, 10));
-      subscribeClient(restrictedClient, 'worker-node.control.outcome.submit');
+      subscribeClient(restrictedClient, 'worker.control.outcome.submit');
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       await expect(
         transport.send({
           type: 'request',
-          namespace: 'worker-node',
+          namespace: 'worker',
           subject: 'control.outcome.submit',
           payload: {},
           correlationId: 'restricted-request',
@@ -136,7 +136,7 @@ describe('Server mode behavior', () => {
       await expect(
         transport.send({
           type: 'request',
-          namespace: 'worker-node',
+          namespace: 'worker',
           subject: 'control.bootstrap.claim',
           payload: {},
           correlationId: 'revoked-request',
@@ -155,7 +155,7 @@ describe('Server mode behavior', () => {
     const identityId = 'restricted-response-observer';
     registerHmacIdentitySecret(identityId, 'response-observer-secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker-node.control.bootstrap.claim'],
+      allowedSubjects: ['worker.control.bootstrap.claim'],
     });
 
     const wss = new MockWebSocketServer();
@@ -179,7 +179,7 @@ describe('Server mode behavior', () => {
       requester.receiveMessage(
         JSON.stringify({
           type: 'request',
-          namespace: 'worker-node',
+          namespace: 'worker',
           subject: 'control.bootstrap.claim',
           payload: {},
           correlationId: 'request-owner',

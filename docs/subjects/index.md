@@ -95,7 +95,7 @@ next: false
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`worker-node`](./worker-node.md) | bus | 12 | 9E / 3R |
+| [`worker`](./worker.md) | bus | 12 | 9E / 3R |
 | [`workflow`](./workflow.md) | bus | 58 | 26E / 32R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 

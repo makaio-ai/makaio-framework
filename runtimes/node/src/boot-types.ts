@@ -9,8 +9,8 @@ import type {
   MakaioNodeExtension,
   TrayManifest,
   WorkerContributionManifest,
-  WorkerNodeDispatch,
-  WorkerNodeRequirements,
+  WorkerDispatch,
+  WorkerRequirements,
 } from '@makaio/contracts';
 import type {
   ExecutionAttemptRepository,
@@ -96,22 +96,22 @@ export type WorkflowRunnerBootOptions =
     }
   | {
       /**
-       * Delegate workflow executions to a product-owned WorkerNode dispatch seam.
+       * Delegate workflow executions to a product-owned Worker dispatch seam.
        *
        * The dispatch function is supplied by the host composition root and
        * typically wired to `workerPool.dispatch`. Framework code remains
        * decoupled from any pool implementation details.
        */
-      readonly mode: 'worker-node';
+      readonly mode: 'worker';
       /**
-       * WorkerNode dispatch function injected by the host composition root.
+       * Worker dispatch function injected by the host composition root.
        *
        * Called once per workflow execution with the full worker config and
        * manifest. Product hosts may wire this to `workerPool.dispatch`.
        * When omitted, the Node runtime dispatches through the framework
-       * `worker-node.dispatch` bus subject and requires a bus instance.
+       * `worker.dispatch` bus subject and requires a bus instance.
        */
-      readonly dispatch?: WorkerNodeDispatch;
+      readonly dispatch?: WorkerDispatch;
       /**
        * Contribution manifest forwarded to each dispatch call.
        *
@@ -126,7 +126,7 @@ export type WorkflowRunnerBootOptions =
        * When provided, the pool uses these to select a compatible provider.
        * Omit to accept any available pool with no constraints.
        */
-      readonly requirements?: WorkerNodeRequirements;
+      readonly requirements?: WorkerRequirements;
     };
 
 /**
@@ -432,14 +432,14 @@ export interface CoreBootOptions {
   readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
 
   /**
-   * Injected execution attempt persistence port for WorkerNode dispatch.
+   * Injected execution attempt persistence port for Worker dispatch.
    *
-   * Required when `workflowRunner.mode` is `'worker-node'`. The consuming
+   * Required when `workflowRunner.mode` is `'worker'`. The consuming
    * Factory provides the concrete implementation that owns durable attempt
    * records and accept/duplicate/conflict/fence decisions.
    *
    * When omitted, framework-only, in-process, and Piscina modes operate
-   * without attempt tracking. WorkerNode mode fails fast at boot when this
+   * without attempt tracking. Worker mode fails fast at boot when this
    * is not provided.
    */
   readonly executionAttemptRepository?: ExecutionAttemptRepository;

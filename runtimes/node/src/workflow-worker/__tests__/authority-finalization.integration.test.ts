@@ -13,7 +13,7 @@ import {
   WorkflowSubjects,
   AgentSubjects,
   AdapterSubjects,
-  WorkerNodeSubjects,
+  WorkerSubjects,
   SubagentSubjects,
   createClientDefinition,
 } from '@makaio/contracts';
@@ -33,7 +33,7 @@ import { createWorkflowDefinition } from '../../../../../subsystems/workflow-eng
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { createIsolatedWorkflowRuntime } from '../isolated-workflow-runtime.js';
-import { WorkerNodeRunner } from '../worker-node-runner.js';
+import { WorkerRunner } from '../worker-runner.js';
 import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
 import {
   createDeterministicAdapterContribution,
@@ -46,7 +46,7 @@ const testAllocationRef: ProviderAllocationRef = {
   providerData: {},
 };
 
-describe('authority WorkerNode finalization integration', () => {
+describe('authority Worker finalization integration', () => {
   const cleanups: Array<() => Promise<void> | void> = [];
 
   afterEach(async () => {
@@ -141,7 +141,7 @@ describe('authority WorkerNode finalization integration', () => {
       }),
     );
     cleanups.push(
-      MakaioBus.on(WorkerNodeSubjects.control['attempt-ready'], (ctx) => {
+      MakaioBus.on(WorkerSubjects.control['attempt-ready'], (ctx) => {
         readyEvents.push(ctx.payload);
       }),
     );
@@ -150,7 +150,7 @@ describe('authority WorkerNode finalization integration', () => {
     const dispatchComplete = new Promise<string>((resolve) => {
       resolveDispatchComplete = resolve;
     });
-    const runner = new WorkerNodeRunner({
+    const runner = new WorkerRunner({
       authority,
       manifest: { contributionRefs: [] },
       dispatch: async (request, signal) => {
@@ -264,7 +264,7 @@ describe('authority WorkerNode finalization integration', () => {
               authMethods: [{ id: 'native', mode: 'inferred' }],
             },
           });
-          await runtime.bus.emit(WorkerNodeSubjects.control['attempt-ready'], {
+          await runtime.bus.emit(WorkerSubjects.control['attempt-ready'], {
             executionAttemptId: request.executionAttemptId,
             executionId: request.config.executionId,
             adapters: [adapterCapture.adapterId],

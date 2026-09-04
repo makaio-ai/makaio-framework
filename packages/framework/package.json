@@ -197,9 +197,9 @@
       "types": "./dist/contracts/variant/index.d.mts",
       "default": "./dist/contracts/variant/index.mjs"
     },
-    "./contracts/worker-node": {
-      "types": "./dist/contracts/worker-node/index.d.mts",
-      "default": "./dist/contracts/worker-node/index.mjs"
+    "./contracts/worker": {
+      "types": "./dist/contracts/worker/index.d.mts",
+      "default": "./dist/contracts/worker/index.mjs"
     },
     "./kernel": {
       "types": "./dist/kernel/index.d.mts",

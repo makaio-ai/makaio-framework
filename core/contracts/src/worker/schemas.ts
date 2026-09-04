@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
-import { WorkerNodeRequirementsSchema } from '../capabilities/worker-node/index.js';
-import { OutcomeAckDecisionSchema, ProviderAllocationRefSchema } from '../capabilities/worker-node/types.js';
+import { WorkerRequirementsSchema } from '../capabilities/worker/index.js';
+import { OutcomeAckDecisionSchema, ProviderAllocationRefSchema } from '../capabilities/worker/types.js';
 import {
   WorkflowRunResultSchema,
   WorkflowWorkerConfigSchema,
@@ -10,12 +10,12 @@ import {
 } from '../workflow/index.js';
 
 /**
- * Base fields present on every WorkerNode lifecycle event.
+ * Base fields present on every Worker lifecycle event.
  *
  * Pool identity is deliberately absent — pool assignment is host-owned and
  * must not leak into the framework lifecycle payload surface.
  */
-const WorkerNodeLifecycleBaseSchema = z.object({
+const WorkerLifecycleBaseSchema = z.object({
   /** Authority-created attempt identifier for this dispatch. */
   executionAttemptId: z.string().min(1),
   /** Unique workflow execution identifier. */
@@ -27,13 +27,13 @@ const WorkerNodeLifecycleBaseSchema = z.object({
 });
 
 /**
- * Framework-level WorkerNode dispatch request.
+ * Framework-level Worker dispatch request.
  *
  * Pool selection and provider allocation remain caller-owned. This request is
- * the generic bus seam used by workflow-level runners that need WorkerNode
+ * the generic bus seam used by workflow-level runners that need Worker
  * execution without importing a concrete pool service.
  */
-export const WorkerNodeDispatchRequestSchema = z.object({
+export const WorkerDispatchRequestSchema = z.object({
   /** Authority-created attempt identifier for this dispatch. */
   executionAttemptId: z.string().min(1),
   /** Full workflow worker configuration. */
@@ -47,20 +47,20 @@ export const WorkerNodeDispatchRequestSchema = z.object({
    */
   manifest: WorkerContributionManifestSchema.optional(),
   /** Optional resource requirements used by the dispatch implementation. */
-  requirements: WorkerNodeRequirementsSchema.optional(),
+  requirements: WorkerRequirementsSchema.optional(),
   /** Opaque caller metadata forwarded to lifecycle and provisioning payloads. */
   metadata: JsonObjectContractSchema.optional(),
 });
 
 /**
- * Framework-level WorkerNode dispatch response.
+ * Framework-level Worker dispatch response.
  *
  * Returns an allocation acknowledgment after the provider has provisioned
  * a resource and the allocation reference has been persisted. Callers
  * that need the workflow result must await it through the Authority's
  * in-process waiter (`waitForOutcome`).
  */
-export const WorkerNodeDispatchResponseSchema = z
+export const WorkerDispatchResponseSchema = z
   .object({
     executionAttemptId: z.string().min(1),
     allocationRef: ProviderAllocationRefSchema,
@@ -68,37 +68,37 @@ export const WorkerNodeDispatchResponseSchema = z
   .strict();
 
 /**
- * WorkerNode lifecycle bus schemas.
+ * Worker lifecycle bus schemas.
  *
- * All keys map to `worker-node.<key>` subjects on the bus. Each subject
- * represents a discrete phase in the node lifecycle so listeners can react
+ * All keys map to `worker.<key>` subjects on the bus. Each subject
+ * represents a discrete phase in the Worker lifecycle so listeners can react
  * selectively without receiving unrelated payloads.
  *
  * Lifecycle states in order:
- * - `lifecycle.provisioning` — dispatch has selected a provider; node allocation is in progress
+ * - `lifecycle.provisioning` — dispatch has selected a provider; Worker allocation is in progress
  * - `lifecycle.booting`      — environment is initialising (importing packages, connecting to bus)
- * - `lifecycle.ready`        — node is connected and ready to accept work
- * - `lifecycle.busy`         — node has started executing the workflow
+ * - `lifecycle.ready`        — Worker Runtime is connected and ready to accept work
+ * - `lifecycle.busy`         — Worker Runtime has started executing the workflow
  * - `lifecycle.completed`    — execution finished successfully
  * - `lifecycle.failed`       — execution terminated with an error
- * - `lifecycle.terminated`   — node environment has been torn down
- * - `lifecycle.paused`       — node parked at a gate and exited for later resume
+ * - `lifecycle.terminated`   — Worker environment has been torn down
+ * - `lifecycle.paused`       — Worker Runtime parked at a gate and exited for later resume
  *
  * Control subjects:
  * - `control.attempt-ready`  — worker reports readiness for its attempt
  * - `control.outcome.submit` — worker submits an execution outcome for durable ACK
  * - `control.bootstrap.claim`— worker claims execution-scoped bus credentials
  */
-export const WorkerNodeSchemas = {
+export const WorkerSchemas = {
   /**
-   * Dispatch a workflow execution to a WorkerNode dispatcher.
+   * Dispatch a workflow execution to a Worker dispatcher.
    *
-   * Subject: `worker-node.dispatch`
+   * Subject: `worker.dispatch`
    * Type: Request (RPC)
    */
   dispatch: {
-    request: WorkerNodeDispatchRequestSchema,
-    response: WorkerNodeDispatchResponseSchema,
+    request: WorkerDispatchRequestSchema,
+    response: WorkerDispatchResponseSchema,
   },
 
   /**
@@ -108,7 +108,7 @@ export const WorkerNodeSchemas = {
    * The Authority and lifecycle emitters consume this to transition the
    * attempt into the active execution phase.
    *
-   * Subject: `worker-node.control.attempt-ready`
+   * Subject: `worker.control.attempt-ready`
    * Type: Event
    */
   'control.attempt-ready': z
@@ -129,7 +129,7 @@ export const WorkerNodeSchemas = {
    * injected repository, and returns an ACK decision. Workers must not
    * exit until they receive the ACK.
    *
-   * Subject: `worker-node.control.outcome.submit`
+   * Subject: `worker.control.outcome.submit`
    * Type: Request (RPC)
    */
   'control.outcome.submit': {
@@ -161,14 +161,14 @@ export const WorkerNodeSchemas = {
   },
 
   /**
-   * Worker node claims its execution-scoped bus credentials during bootstrap.
+   * Worker claims its execution-scoped bus credentials during bootstrap.
    *
-   * The node authenticates its WebSocket connection as a bootstrap peer, then
+   * The Worker Runtime authenticates its WebSocket connection as a bootstrap peer, then
    * presents its execution/attempt identity. The server validates that trusted
    * transport identity and the durable allocation before exchanging it for an
    * execution-scoped `busAuthSecret` used for subsequent communication.
    *
-   * Subject: `worker-node.control.bootstrap.claim`
+   * Subject: `worker.control.bootstrap.claim`
    * Type: Request (RPC)
    */
   'control.bootstrap.claim': {
@@ -182,7 +182,7 @@ export const WorkerNodeSchemas = {
       .strict(),
     response: z
       .object({
-        /** WebSocket URL of the bus server the node should connect to. */
+        /** WebSocket URL of the bus server the Worker Runtime should connect to. */
         busUrl: z.string().min(1),
         /**
          * Execution-scoped HMAC secret for authenticating subsequent bus
@@ -194,81 +194,81 @@ export const WorkerNodeSchemas = {
   },
 
   /**
-   * Dispatch has selected a provider; node allocation is in progress.
+   * Dispatch has selected a provider; Worker allocation is in progress.
    *
-   * Subject: `worker-node.lifecycle.provisioning`
+   * Subject: `worker.lifecycle.provisioning`
    * Type: Event
    */
-  'lifecycle.provisioning': WorkerNodeLifecycleBaseSchema,
+  'lifecycle.provisioning': WorkerLifecycleBaseSchema,
 
   /**
    * Environment is initialising (importing packages, connecting to bus).
    *
-   * Subject: `worker-node.lifecycle.booting`
+   * Subject: `worker.lifecycle.booting`
    * Type: Event
    */
-  'lifecycle.booting': WorkerNodeLifecycleBaseSchema,
+  'lifecycle.booting': WorkerLifecycleBaseSchema,
 
   /**
-   * Node is connected and ready to accept work.
+   * Worker Runtime is connected and ready to accept work.
    *
-   * Subject: `worker-node.lifecycle.ready`
+   * Subject: `worker.lifecycle.ready`
    * Type: Event
    */
-  'lifecycle.ready': WorkerNodeLifecycleBaseSchema.extend({
-    /** Adapter identifiers that have been loaded and registered inside this node. */
+  'lifecycle.ready': WorkerLifecycleBaseSchema.extend({
+    /** Adapter identifiers that have been loaded and registered inside this Worker Runtime. */
     adapters: z.array(z.string().min(1)).default([]),
   }),
 
   /**
-   * Node has started executing the workflow.
+   * Worker Runtime has started executing the workflow.
    *
-   * Subject: `worker-node.lifecycle.busy`
+   * Subject: `worker.lifecycle.busy`
    * Type: Event
    */
-  'lifecycle.busy': WorkerNodeLifecycleBaseSchema,
+  'lifecycle.busy': WorkerLifecycleBaseSchema,
 
   /**
    * Execution finished successfully.
    *
-   * Subject: `worker-node.lifecycle.completed`
+   * Subject: `worker.lifecycle.completed`
    * Type: Event
    */
-  'lifecycle.completed': WorkerNodeLifecycleBaseSchema,
+  'lifecycle.completed': WorkerLifecycleBaseSchema,
 
   /**
    * Execution terminated with an error.
    *
-   * Subject: `worker-node.lifecycle.failed`
+   * Subject: `worker.lifecycle.failed`
    * Type: Event
    */
-  'lifecycle.failed': WorkerNodeLifecycleBaseSchema.extend({
+  'lifecycle.failed': WorkerLifecycleBaseSchema.extend({
     /** Human-readable error message describing the failure. */
     error: z.string().min(1),
   }),
 
   /**
-   * Node environment has been torn down.
+   * Worker environment has been torn down.
    *
-   * Subject: `worker-node.lifecycle.terminated`
+   * Subject: `worker.lifecycle.terminated`
    * Type: Event
    */
-  'lifecycle.terminated': WorkerNodeLifecycleBaseSchema.extend({
+  'lifecycle.terminated': WorkerLifecycleBaseSchema.extend({
     /** Optional reason for termination (e.g. `'cancelled'`, `'timeout'`). */
     reason: z.string().optional(),
   }),
 
   /**
-   * Node has suspended at a gate and the worker has exited.
+   * Worker has suspended at a gate and the Worker Runtime has exited.
    *
    * Emitted by providers using `exit-and-redispatch` or `exit-and-resume`
    * suspension strategies before the environment tears down. In-process
    * providers that block at the gate do not emit this event.
    *
-   * Subject: `worker-node.lifecycle.paused`
+   * Subject: `worker.lifecycle.paused`
    * Type: Event
    */
-  'lifecycle.paused': WorkerNodeLifecycleBaseSchema.extend({
+  'lifecycle.paused': WorkerLifecycleBaseSchema.extend({
     /** Node ID of the gate at which execution paused. */
     pausedAtGateId: z.string().min(1),
     /** Frame ID of the suspended gate instance. */
@@ -277,7 +277,7 @@ export const WorkerNodeSchemas = {
 } satisfies SchemaRecord;
 
 /** Bootstrap coordinates presented by a remote worker. */
-export type WorkerBootstrapClaimRequest = z.infer<(typeof WorkerNodeSchemas)['control.bootstrap.claim']['request']>;
+export type WorkerBootstrapClaimRequest = z.infer<(typeof WorkerSchemas)['control.bootstrap.claim']['request']>;
 
 /** Execution-scoped credentials issued after a successful bootstrap claim. */
-export type WorkerBootstrapClaimResponse = z.infer<(typeof WorkerNodeSchemas)['control.bootstrap.claim']['response']>;
+export type WorkerBootstrapClaimResponse = z.infer<(typeof WorkerSchemas)['control.bootstrap.claim']['response']>;

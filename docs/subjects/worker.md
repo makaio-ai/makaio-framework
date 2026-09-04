@@ -1,43 +1,43 @@
 ---
-title: "worker-node"
+title: "worker"
 editUrl: false
 prev: false
 next: false
 ---
 
-# `worker-node`
+# `worker`
 
 | Field | Value |
 |-------|-------|
-| Prefix | `worker-node` |
-| Namespace constant | `WorkerNodeNamespace` |
-| Subjects constant | `WorkerNodeSubjects` |
+| Prefix | `worker` |
+| Namespace constant | `WorkerNamespace` |
+| Subjects constant | `WorkerSubjects` |
 | Kind | bus |
-| Schema record | `WorkerNodeSchemas` |
+| Schema record | `WorkerSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`core/contracts/src/worker-node/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/namespace.ts) |
+| Defined in | [`core/contracts/src/worker/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `control.attempt-ready` | [`worker-node.control.attempt-ready`](#worker-node.control.attempt-ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `control.bootstrap.claim` | [`worker-node.control.bootstrap.claim`](#worker-node.control.bootstrap.claim) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `control.outcome.submit` | [`worker-node.control.outcome.submit`](#worker-node.control.outcome.submit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `dispatch` | [`worker-node.dispatch`](#worker-node.dispatch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.booting` | [`worker-node.lifecycle.booting`](#worker-node.lifecycle.booting) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.busy` | [`worker-node.lifecycle.busy`](#worker-node.lifecycle.busy) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.completed` | [`worker-node.lifecycle.completed`](#worker-node.lifecycle.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.failed` | [`worker-node.lifecycle.failed`](#worker-node.lifecycle.failed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.paused` | [`worker-node.lifecycle.paused`](#worker-node.lifecycle.paused) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.provisioning` | [`worker-node.lifecycle.provisioning`](#worker-node.lifecycle.provisioning) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.ready` | [`worker-node.lifecycle.ready`](#worker-node.lifecycle.ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
-| `lifecycle.terminated` | [`worker-node.lifecycle.terminated`](#worker-node.lifecycle.terminated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker-node/schemas.ts) |
+| `control.attempt-ready` | [`worker.control.attempt-ready`](#worker.control.attempt-ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `control.bootstrap.claim` | [`worker.control.bootstrap.claim`](#worker.control.bootstrap.claim) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `control.outcome.submit` | [`worker.control.outcome.submit`](#worker.control.outcome.submit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `dispatch` | [`worker.dispatch`](#worker.dispatch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.booting` | [`worker.lifecycle.booting`](#worker.lifecycle.booting) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.busy` | [`worker.lifecycle.busy`](#worker.lifecycle.busy) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.completed` | [`worker.lifecycle.completed`](#worker.lifecycle.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.failed` | [`worker.lifecycle.failed`](#worker.lifecycle.failed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.paused` | [`worker.lifecycle.paused`](#worker.lifecycle.paused) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.provisioning` | [`worker.lifecycle.provisioning`](#worker.lifecycle.provisioning) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.ready` | [`worker.lifecycle.ready`](#worker.lifecycle.ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `lifecycle.terminated` | [`worker.lifecycle.terminated`](#worker.lifecycle.terminated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 
 ## Subject Details
 
-### <a id="worker-node.control.attempt-ready"></a>`worker-node.control.attempt-ready` (event)
+### <a id="worker.control.attempt-ready"></a>`worker.control.attempt-ready` (event)
 
 Worker reports that it has booted, connected to the bus, and is ready
 to execute the workflow for its assigned attempt.
@@ -45,7 +45,7 @@ to execute the workflow for its assigned attempt.
 The Authority and lifecycle emitters consume this to transition the
 attempt into the active execution phase.
 
-Subject: `worker-node.control.attempt-ready`
+Subject: `worker.control.attempt-ready`
 Type: Event
 
 | Field | Type | Required |
@@ -54,16 +54,16 @@ Type: Event
 | `executionAttemptId` | `string` | yes |
 | `executionId` | `string` | yes |
 
-### <a id="worker-node.control.bootstrap.claim"></a>`worker-node.control.bootstrap.claim` (rpc)
+### <a id="worker.control.bootstrap.claim"></a>`worker.control.bootstrap.claim` (rpc)
 
-Worker node claims its execution-scoped bus credentials during bootstrap.
+Worker claims its execution-scoped bus credentials during bootstrap.
 
-The node authenticates its WebSocket connection as a bootstrap peer, then
+The Worker Runtime authenticates its WebSocket connection as a bootstrap peer, then
 presents its execution/attempt identity. The server validates that trusted
 transport identity and the durable allocation before exchanging it for an
 execution-scoped `busAuthSecret` used for subsequent communication.
 
-Subject: `worker-node.control.bootstrap.claim`
+Subject: `worker.control.bootstrap.claim`
 Type: Request (RPC)
 
 **Request:**
@@ -80,7 +80,7 @@ Type: Request (RPC)
 | `busAuthSecret` | `string` | yes |
 | `busUrl` | `string` | yes |
 
-### <a id="worker-node.control.outcome.submit"></a>`worker-node.control.outcome.submit` (rpc)
+### <a id="worker.control.outcome.submit"></a>`worker.control.outcome.submit` (rpc)
 
 Worker submits a terminal workflow outcome for durable acknowledgement.
 
@@ -88,7 +88,7 @@ The Authority validates the attempt, commits the outcome through the
 injected repository, and returns an ACK decision. Workers must not
 exit until they receive the ACK.
 
-Subject: `worker-node.control.outcome.submit`
+Subject: `worker.control.outcome.submit`
 Type: Request (RPC)
 
 **Request:**
@@ -105,11 +105,11 @@ Type: Request (RPC)
 |-------|------|----------|
 | `decision` | `"accepted" \| "duplicate" \| "conflict" \| "fenced"` | yes |
 
-### <a id="worker-node.dispatch"></a>`worker-node.dispatch` (rpc)
+### <a id="worker.dispatch"></a>`worker.dispatch` (rpc)
 
-Dispatch a workflow execution to a WorkerNode dispatcher.
+Dispatch a workflow execution to a Worker dispatcher.
 
-Subject: `worker-node.dispatch`
+Subject: `worker.dispatch`
 Type: Request (RPC)
 
 **Request:**
@@ -129,11 +129,11 @@ Type: Request (RPC)
 | `allocationRef` | `{ version: 1; providerId: string; providerData: Record<string, unknown>; }` | yes |
 | `executionAttemptId` | `string` | yes |
 
-### <a id="worker-node.lifecycle.booting"></a>`worker-node.lifecycle.booting` (event)
+### <a id="worker.lifecycle.booting"></a>`worker.lifecycle.booting` (event)
 
 Environment is initialising (importing packages, connecting to bus).
 
-Subject: `worker-node.lifecycle.booting`
+Subject: `worker.lifecycle.booting`
 Type: Event
 
 | Field | Type | Required |
@@ -143,11 +143,11 @@ Type: Event
 | `executionId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 
-### <a id="worker-node.lifecycle.busy"></a>`worker-node.lifecycle.busy` (event)
+### <a id="worker.lifecycle.busy"></a>`worker.lifecycle.busy` (event)
 
-Node has started executing the workflow.
+Worker Runtime has started executing the workflow.
 
-Subject: `worker-node.lifecycle.busy`
+Subject: `worker.lifecycle.busy`
 Type: Event
 
 | Field | Type | Required |
@@ -157,11 +157,11 @@ Type: Event
 | `executionId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 
-### <a id="worker-node.lifecycle.completed"></a>`worker-node.lifecycle.completed` (event)
+### <a id="worker.lifecycle.completed"></a>`worker.lifecycle.completed` (event)
 
 Execution finished successfully.
 
-Subject: `worker-node.lifecycle.completed`
+Subject: `worker.lifecycle.completed`
 Type: Event
 
 | Field | Type | Required |
@@ -171,11 +171,11 @@ Type: Event
 | `executionId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 
-### <a id="worker-node.lifecycle.failed"></a>`worker-node.lifecycle.failed` (event)
+### <a id="worker.lifecycle.failed"></a>`worker.lifecycle.failed` (event)
 
 Execution terminated with an error.
 
-Subject: `worker-node.lifecycle.failed`
+Subject: `worker.lifecycle.failed`
 Type: Event
 
 | Field | Type | Required |
@@ -186,15 +186,15 @@ Type: Event
 | `executionId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 
-### <a id="worker-node.lifecycle.paused"></a>`worker-node.lifecycle.paused` (event)
+### <a id="worker.lifecycle.paused"></a>`worker.lifecycle.paused` (event)
 
-Node has suspended at a gate and the worker has exited.
+Worker has suspended at a gate and the Worker Runtime has exited.
 
 Emitted by providers using `exit-and-redispatch` or `exit-and-resume`
 suspension strategies before the environment tears down. In-process
 providers that block at the gate do not emit this event.
 
-Subject: `worker-node.lifecycle.paused`
+Subject: `worker.lifecycle.paused`
 Type: Event
 
 | Field | Type | Required |
@@ -206,11 +206,11 @@ Type: Event
 | `pausedAtFrameId` | `string` | yes |
 | `pausedAtGateId` | `string` | yes |
 
-### <a id="worker-node.lifecycle.provisioning"></a>`worker-node.lifecycle.provisioning` (event)
+### <a id="worker.lifecycle.provisioning"></a>`worker.lifecycle.provisioning` (event)
 
-Dispatch has selected a provider; node allocation is in progress.
+Dispatch has selected a provider; Worker allocation is in progress.
 
-Subject: `worker-node.lifecycle.provisioning`
+Subject: `worker.lifecycle.provisioning`
 Type: Event
 
 | Field | Type | Required |
@@ -220,11 +220,11 @@ Type: Event
 | `executionId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 
-### <a id="worker-node.lifecycle.ready"></a>`worker-node.lifecycle.ready` (event)
+### <a id="worker.lifecycle.ready"></a>`worker.lifecycle.ready` (event)
 
-Node is connected and ready to accept work.
+Worker Runtime is connected and ready to accept work.
 
-Subject: `worker-node.lifecycle.ready`
+Subject: `worker.lifecycle.ready`
 Type: Event
 
 | Field | Type | Required |
@@ -235,11 +235,11 @@ Type: Event
 | `executionId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 
-### <a id="worker-node.lifecycle.terminated"></a>`worker-node.lifecycle.terminated` (event)
+### <a id="worker.lifecycle.terminated"></a>`worker.lifecycle.terminated` (event)
 
-Node environment has been torn down.
+Worker environment has been torn down.
 
-Subject: `worker-node.lifecycle.terminated`
+Subject: `worker.lifecycle.terminated`
 Type: Event
 
 | Field | Type | Required |

@@ -14,39 +14,39 @@ import {
   PROVISIONING_DISCOVERY_KINDS,
   ProvisioningDiscoverySchema,
   RECOVERY_EVIDENCE_LIMITS,
-  WORKER_NODE_ALLOCATION_LIFETIMES,
-  WORKER_NODE_CAPABILITY_ID,
+  WORKER_ALLOCATION_LIFETIMES,
+  WORKER_CAPABILITY_ID,
   LocalDirectoryMaterializationSchema,
   OutcomeAckDecisionSchema,
   ProviderAllocationRefSchema,
   WorkerContributionRefSchema,
   WorkerMaterializationSpecSchema,
-  WorkerNodeAllocationLifetimeSchema,
-  WorkerNodeCapabilitiesSchema,
-  WorkerNodeRequirementsSchema,
+  WorkerAllocationLifetimeSchema,
+  WorkerCapabilitiesSchema,
+  WorkerRequirementsSchema,
   WorkspaceSnapshotMaterializationSchema,
 } from '../index.js';
-import { SuspensionStrategySchema } from '../../../worker-node/suspension.js';
-import type { SuspensionStrategy } from '../../../worker-node/suspension.js';
-import type { WorkerNodeCapabilitiesInput } from '../types.js';
+import { SuspensionStrategySchema } from '../../../worker/suspension.js';
+import type { SuspensionStrategy } from '../../../worker/suspension.js';
+import type { WorkerCapabilitiesInput } from '../types.js';
 import type {
   AllocationInspection,
   AllocationState,
   BoundedRecoveryEvidence,
-  IRecoverableWorkerNodeProvider,
-  IWorkerNodeProvider,
-  IWorkerNodeRecoveryCapability,
+  IRecoverableWorkerProvider,
+  IWorkerProvider,
+  IWorkerRecoveryCapability,
   OutcomeAckDecision,
   ProviderAllocationRef,
   ProvisioningDiscovery,
   WorkerContributionRef,
   WorkerMaterializationSpec,
-  WorkerNodeAllocationLifetime,
-  WorkerNodeCapabilities,
-  WorkerNodeHandle,
-  WorkerNodeProvisionOutcome,
-  WorkerNodeProvisionRequest,
-  WorkerNodeRequirements,
+  WorkerAllocationLifetime,
+  WorkerCapabilities,
+  WorkerHandle,
+  WorkerProvisionOutcome,
+  WorkerProvisionRequest,
+  WorkerRequirements,
 } from '../index.js';
 
 /** Bounded evidence fixture reused by outcome and discovery assertions. */
@@ -56,13 +56,13 @@ const EVIDENCE: BoundedRecoveryEvidence = {
   observedAt: '2026-07-23T10:00:00Z',
 };
 
-describe('worker-node capability contracts', () => {
-  it('uses the stable worker-node capability id', () => {
-    expect(WORKER_NODE_CAPABILITY_ID).toBe('worker-node');
+describe('worker capability contracts', () => {
+  it('uses the stable worker capability id', () => {
+    expect(WORKER_CAPABILITY_ID).toBe('worker');
   });
 
-  it('validates minimal worker-node capabilities', () => {
-    const parsed = WorkerNodeCapabilitiesSchema.parse({
+  it('validates minimal worker capabilities', () => {
+    const parsed = WorkerCapabilitiesSchema.parse({
       persistentStorage: false,
       customCapabilities: ['workflow.bus-events'],
     });
@@ -77,10 +77,10 @@ describe('worker-node capability contracts', () => {
   });
 
   it('allows callers to omit capability arrays that schemas default', () => {
-    const capabilities = { persistentStorage: true } satisfies WorkerNodeCapabilitiesInput;
-    const requirements = { persistentStorage: true } satisfies WorkerNodeRequirements;
+    const capabilities = { persistentStorage: true } satisfies WorkerCapabilitiesInput;
+    const requirements = { persistentStorage: true } satisfies WorkerRequirements;
 
-    expect(WorkerNodeCapabilitiesSchema.parse(capabilities)).toEqual({
+    expect(WorkerCapabilitiesSchema.parse(capabilities)).toEqual({
       persistentStorage: true,
       customCapabilities: [],
       suspensionStrategy: 'wait-in-process',
@@ -90,9 +90,9 @@ describe('worker-node capability contracts', () => {
     expect(requirements).toEqual({ persistentStorage: true });
   });
 
-  it('defaults worker-node suspension to in-process waiting', () => {
+  it('defaults worker suspension to in-process waiting', () => {
     expect(SuspensionStrategySchema.parse('exit-and-redispatch')).toBe('exit-and-redispatch');
-    expect(WorkerNodeCapabilitiesSchema.parse({ persistentStorage: true })).toEqual({
+    expect(WorkerCapabilitiesSchema.parse({ persistentStorage: true })).toEqual({
       persistentStorage: true,
       customCapabilities: [],
       suspensionStrategy: 'wait-in-process',
@@ -102,15 +102,15 @@ describe('worker-node capability contracts', () => {
   });
 
   it('requires providers to expose normalized capabilities', () => {
-    expectTypeOf<WorkerNodeCapabilities['suspensionStrategy']>().toEqualTypeOf<SuspensionStrategy>();
+    expectTypeOf<WorkerCapabilities['suspensionStrategy']>().toEqualTypeOf<SuspensionStrategy>();
 
-    const provider: IWorkerNodeProvider = {
-      id: 'test.worker-node',
-      displayName: 'Test WorkerNode',
+    const provider: IWorkerProvider = {
+      id: 'test.worker',
+      displayName: 'Test Worker',
       environment: 'test',
       allocationLifetime: 'provisioner-process-bound',
-      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: true }),
-      provision: async (): Promise<WorkerNodeProvisionOutcome> => {
+      baseCapabilities: WorkerCapabilitiesSchema.parse({ persistentStorage: true }),
+      provision: async (): Promise<WorkerProvisionOutcome> => {
         throw new Error('not used');
       },
     };
@@ -120,13 +120,13 @@ describe('worker-node capability contracts', () => {
   });
 });
 
-describe('WorkerNodeProvisionRequest uses executionAttemptId', () => {
+describe('WorkerProvisionRequest uses executionAttemptId', () => {
   it('requires executionAttemptId on provision requests', () => {
-    const request: WorkerNodeProvisionRequest = {
+    const request: WorkerProvisionRequest = {
       executionId: 'exec-1',
       executionAttemptId: 'attempt-1',
       environment: 'piscina',
-      workerConfig: {} as WorkerNodeProvisionRequest['workerConfig'],
+      workerConfig: {} as WorkerProvisionRequest['workerConfig'],
       workerManifest: { contributionRefs: [] },
       provisioningStartedAt: '2026-07-23T10:00:00Z',
     };
@@ -136,20 +136,20 @@ describe('WorkerNodeProvisionRequest uses executionAttemptId', () => {
   });
 
   it('does not have the old nodeId field', () => {
-    expectTypeOf<WorkerNodeProvisionRequest>().not.toHaveProperty('nodeId');
+    expectTypeOf<WorkerProvisionRequest>().not.toHaveProperty('nodeId');
   });
 
   it('requires the provisioning instant a bounded remote search is floored at', () => {
     // A clock-derived stand-in computes a floor that can exclude the attempt's
     // own allocation, so the field carries no `undefined` for a caller to
     // substitute one into.
-    expectTypeOf<WorkerNodeProvisionRequest['provisioningStartedAt']>().toEqualTypeOf<string>();
+    expectTypeOf<WorkerProvisionRequest['provisioningStartedAt']>().toEqualTypeOf<string>();
   });
 });
 
-describe('WorkerNodeHandle is allocation-only', () => {
+describe('WorkerHandle is allocation-only', () => {
   it('carries executionAttemptId instead of nodeId', () => {
-    const handle: WorkerNodeHandle = {
+    const handle: WorkerHandle = {
       executionAttemptId: 'attempt-1',
       cancel: async () => {},
       terminate: async () => {},
@@ -157,32 +157,32 @@ describe('WorkerNodeHandle is allocation-only', () => {
     };
 
     expect(handle.executionAttemptId).toBe('attempt-1');
-    expectTypeOf<WorkerNodeHandle>().not.toHaveProperty('nodeId');
+    expectTypeOf<WorkerHandle>().not.toHaveProperty('nodeId');
   });
 
   it('does not expose a ready promise', () => {
-    expectTypeOf<WorkerNodeHandle>().not.toHaveProperty('ready');
+    expectTypeOf<WorkerHandle>().not.toHaveProperty('ready');
   });
 
   it('does not expose waitForResult', () => {
-    expectTypeOf<WorkerNodeHandle>().not.toHaveProperty('waitForResult');
+    expectTypeOf<WorkerHandle>().not.toHaveProperty('waitForResult');
   });
 
   it('exposes cancel, terminate, and release methods', () => {
-    expectTypeOf<WorkerNodeHandle['cancel']>().toEqualTypeOf<(reason?: string) => Promise<void>>();
-    expectTypeOf<WorkerNodeHandle['terminate']>().toEqualTypeOf<() => Promise<void>>();
-    expectTypeOf<WorkerNodeHandle['release']>().toEqualTypeOf<() => Promise<void>>();
+    expectTypeOf<WorkerHandle['cancel']>().toEqualTypeOf<(reason?: string) => Promise<void>>();
+    expectTypeOf<WorkerHandle['terminate']>().toEqualTypeOf<() => Promise<void>>();
+    expectTypeOf<WorkerHandle['release']>().toEqualTypeOf<() => Promise<void>>();
   });
 });
 
-describe('IWorkerNodeProvider provision contract', () => {
+describe('IWorkerProvider provision contract', () => {
   it('requires AbortSignal as second argument to provision', () => {
-    const provider: IWorkerNodeProvider = {
+    const provider: IWorkerProvider = {
       id: 'test.provider',
       displayName: 'Test Provider',
       environment: 'test',
       allocationLifetime: 'provider-managed',
-      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false }),
+      baseCapabilities: WorkerCapabilitiesSchema.parse({ persistentStorage: false }),
       provision: async (_request, _signal) => ({
         kind: 'allocated' as const,
         allocationRef: {
@@ -199,16 +199,16 @@ describe('IWorkerNodeProvider provision contract', () => {
       }),
     };
 
-    expectTypeOf(provider.provision).parameters.toEqualTypeOf<[WorkerNodeProvisionRequest, AbortSignal]>();
+    expectTypeOf(provider.provision).parameters.toEqualTypeOf<[WorkerProvisionRequest, AbortSignal]>();
   });
 
   it('returns allocationRef and handle from provision', async () => {
-    const provider: IWorkerNodeProvider = {
+    const provider: IWorkerProvider = {
       id: 'test.provider',
       displayName: 'Test Provider',
       environment: 'test',
       allocationLifetime: 'provider-managed',
-      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false }),
+      baseCapabilities: WorkerCapabilitiesSchema.parse({ persistentStorage: false }),
       provision: async () => ({
         kind: 'allocated' as const,
         allocationRef: {
@@ -230,7 +230,7 @@ describe('IWorkerNodeProvider provision contract', () => {
         executionId: 'exec-1',
         executionAttemptId: 'attempt-1',
         environment: 'test',
-        workerConfig: {} as WorkerNodeProvisionRequest['workerConfig'],
+        workerConfig: {} as WorkerProvisionRequest['workerConfig'],
         workerManifest: { contributionRefs: [] },
         provisioningStartedAt: '2026-07-23T10:00:00Z',
       },
@@ -245,7 +245,7 @@ describe('IWorkerNodeProvider provision contract', () => {
   });
 
   it('does not expose resumeExecution', () => {
-    expectTypeOf<IWorkerNodeProvider>().not.toHaveProperty('resumeExecution');
+    expectTypeOf<IWorkerProvider>().not.toHaveProperty('resumeExecution');
   });
 });
 
@@ -611,35 +611,35 @@ describe('WorkerContributionRef', () => {
   });
 });
 
-describe('WorkerNodeAllocationLifetime', () => {
+describe('WorkerAllocationLifetime', () => {
   it('exports the constant array of the two lifetimes', () => {
-    expect(WORKER_NODE_ALLOCATION_LIFETIMES).toEqual(['provisioner-process-bound', 'provider-managed']);
+    expect(WORKER_ALLOCATION_LIFETIMES).toEqual(['provisioner-process-bound', 'provider-managed']);
   });
 
   it('validates both lifetimes', () => {
-    expect(WorkerNodeAllocationLifetimeSchema.parse('provisioner-process-bound')).toBe('provisioner-process-bound');
-    expect(WorkerNodeAllocationLifetimeSchema.parse('provider-managed')).toBe('provider-managed');
+    expect(WorkerAllocationLifetimeSchema.parse('provisioner-process-bound')).toBe('provisioner-process-bound');
+    expect(WorkerAllocationLifetimeSchema.parse('provider-managed')).toBe('provider-managed');
   });
 
   it('rejects unknown lifetimes', () => {
-    expect(() => WorkerNodeAllocationLifetimeSchema.parse('ephemeral')).toThrow();
-    expect(() => WorkerNodeAllocationLifetimeSchema.parse('')).toThrow();
+    expect(() => WorkerAllocationLifetimeSchema.parse('ephemeral')).toThrow();
+    expect(() => WorkerAllocationLifetimeSchema.parse('')).toThrow();
   });
 
   it('has a type equal to the two-member union', () => {
-    expectTypeOf<WorkerNodeAllocationLifetime>().toEqualTypeOf<'provisioner-process-bound' | 'provider-managed'>();
+    expectTypeOf<WorkerAllocationLifetime>().toEqualTypeOf<'provisioner-process-bound' | 'provider-managed'>();
   });
 
   it('is a direct provider property with no default', () => {
-    expectTypeOf<IWorkerNodeProvider>().toHaveProperty('allocationLifetime');
-    expectTypeOf<IWorkerNodeProvider['allocationLifetime']>().toEqualTypeOf<WorkerNodeAllocationLifetime>();
+    expectTypeOf<IWorkerProvider>().toHaveProperty('allocationLifetime');
+    expectTypeOf<IWorkerProvider['allocationLifetime']>().toEqualTypeOf<WorkerAllocationLifetime>();
   });
 
   it('is not placement capability, requirement, or inspection data', () => {
-    expectTypeOf<WorkerNodeCapabilities>().not.toHaveProperty('allocationLifetime');
-    expectTypeOf<WorkerNodeRequirements>().not.toHaveProperty('allocationLifetime');
+    expectTypeOf<WorkerCapabilities>().not.toHaveProperty('allocationLifetime');
+    expectTypeOf<WorkerRequirements>().not.toHaveProperty('allocationLifetime');
     expectTypeOf<AllocationInspection>().not.toHaveProperty('allocationLifetime');
-    expect(WorkerNodeCapabilitiesSchema.parse({ persistentStorage: false })).not.toHaveProperty('allocationLifetime');
+    expect(WorkerCapabilitiesSchema.parse({ persistentStorage: false })).not.toHaveProperty('allocationLifetime');
   });
 });
 
@@ -728,9 +728,9 @@ describe('BoundedRecoveryEvidence', () => {
   });
 });
 
-describe('WorkerNodeProvisionOutcome', () => {
+describe('WorkerProvisionOutcome', () => {
   it('carries the allocation reference and handle when allocated', () => {
-    const outcome: WorkerNodeProvisionOutcome = {
+    const outcome: WorkerProvisionOutcome = {
       kind: 'allocated',
       allocationRef: {
         version: PROVIDER_ALLOCATION_REF_VERSION,
@@ -751,7 +751,7 @@ describe('WorkerNodeProvisionOutcome', () => {
   });
 
   it('carries only bounded evidence when confirmed absent', () => {
-    const outcome: WorkerNodeProvisionOutcome = { kind: 'confirmed-absent', evidence: EVIDENCE };
+    const outcome: WorkerProvisionOutcome = { kind: 'confirmed-absent', evidence: EVIDENCE };
 
     if (outcome.kind !== 'confirmed-absent') throw new Error('expected a confirmed-absent outcome');
     expect(outcome.evidence).toEqual(EVIDENCE);
@@ -760,11 +760,11 @@ describe('WorkerNodeProvisionOutcome', () => {
   });
 
   it('has exactly two discriminants', () => {
-    expectTypeOf<WorkerNodeProvisionOutcome['kind']>().toEqualTypeOf<'allocated' | 'confirmed-absent'>();
+    expectTypeOf<WorkerProvisionOutcome['kind']>().toEqualTypeOf<'allocated' | 'confirmed-absent'>();
   });
 
   it('is the provision return type', () => {
-    expectTypeOf<Awaited<ReturnType<IWorkerNodeProvider['provision']>>>().toEqualTypeOf<WorkerNodeProvisionOutcome>();
+    expectTypeOf<Awaited<ReturnType<IWorkerProvider['provision']>>>().toEqualTypeOf<WorkerProvisionOutcome>();
   });
 });
 
@@ -992,72 +992,72 @@ describe('AllocationInspection', () => {
   });
 });
 
-describe('IWorkerNodeRecoveryCapability', () => {
+describe('IWorkerRecoveryCapability', () => {
   it('requires discovery, attach, inspect, and terminateAllocation together', () => {
     // Compile-time proof: all four methods are required on the interface
-    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('discoverProvisioning');
-    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('attach');
-    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('inspect');
-    expectTypeOf<IWorkerNodeRecoveryCapability>().toHaveProperty('terminateAllocation');
+    expectTypeOf<IWorkerRecoveryCapability>().toHaveProperty('discoverProvisioning');
+    expectTypeOf<IWorkerRecoveryCapability>().toHaveProperty('attach');
+    expectTypeOf<IWorkerRecoveryCapability>().toHaveProperty('inspect');
+    expectTypeOf<IWorkerRecoveryCapability>().toHaveProperty('terminateAllocation');
   });
 
   it('rejects partial recovery capabilities', () => {
     // Each of these omits exactly one member of the coherent capability and
     // must therefore not satisfy the interface.
     expectTypeOf<
-      Omit<IWorkerNodeRecoveryCapability, 'discoverProvisioning'>
-    >().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
-    expectTypeOf<Omit<IWorkerNodeRecoveryCapability, 'attach'>>().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
-    expectTypeOf<Omit<IWorkerNodeRecoveryCapability, 'inspect'>>().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
+      Omit<IWorkerRecoveryCapability, 'discoverProvisioning'>
+    >().not.toMatchTypeOf<IWorkerRecoveryCapability>();
+    expectTypeOf<Omit<IWorkerRecoveryCapability, 'attach'>>().not.toMatchTypeOf<IWorkerRecoveryCapability>();
+    expectTypeOf<Omit<IWorkerRecoveryCapability, 'inspect'>>().not.toMatchTypeOf<IWorkerRecoveryCapability>();
     expectTypeOf<
-      Omit<IWorkerNodeRecoveryCapability, 'terminateAllocation'>
-    >().not.toMatchTypeOf<IWorkerNodeRecoveryCapability>();
+      Omit<IWorkerRecoveryCapability, 'terminateAllocation'>
+    >().not.toMatchTypeOf<IWorkerRecoveryCapability>();
   });
 
   it('discoverProvisioning takes the provision request and a signal', () => {
-    expectTypeOf<IWorkerNodeRecoveryCapability['discoverProvisioning']>().parameters.toEqualTypeOf<
-      [WorkerNodeProvisionRequest, AbortSignal]
+    expectTypeOf<IWorkerRecoveryCapability['discoverProvisioning']>().parameters.toEqualTypeOf<
+      [WorkerProvisionRequest, AbortSignal]
     >();
   });
 
   it('discoverProvisioning returns a ProvisioningDiscovery', () => {
     expectTypeOf<
-      Awaited<ReturnType<IWorkerNodeRecoveryCapability['discoverProvisioning']>>
+      Awaited<ReturnType<IWorkerRecoveryCapability['discoverProvisioning']>>
     >().toEqualTypeOf<ProvisioningDiscovery>();
   });
 
-  it('attach returns a fresh WorkerNodeHandle', () => {
-    expectTypeOf<Awaited<ReturnType<IWorkerNodeRecoveryCapability['attach']>>>().toEqualTypeOf<WorkerNodeHandle>();
+  it('attach returns a fresh WorkerHandle', () => {
+    expectTypeOf<Awaited<ReturnType<IWorkerRecoveryCapability['attach']>>>().toEqualTypeOf<WorkerHandle>();
   });
 
   it('inspect returns an AllocationInspection', () => {
-    expectTypeOf<Awaited<ReturnType<IWorkerNodeRecoveryCapability['inspect']>>>().toEqualTypeOf<AllocationInspection>();
+    expectTypeOf<Awaited<ReturnType<IWorkerRecoveryCapability['inspect']>>>().toEqualTypeOf<AllocationInspection>();
   });
 
   it('terminateAllocation returns void', () => {
-    expectTypeOf<Awaited<ReturnType<IWorkerNodeRecoveryCapability['terminateAllocation']>>>().toEqualTypeOf<void>();
+    expectTypeOf<Awaited<ReturnType<IWorkerRecoveryCapability['terminateAllocation']>>>().toEqualTypeOf<void>();
   });
 
   it('attach takes allocationRef, request, and signal', () => {
-    expectTypeOf<IWorkerNodeRecoveryCapability['attach']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerNodeProvisionRequest, AbortSignal]
+    expectTypeOf<IWorkerRecoveryCapability['attach']>().parameters.toEqualTypeOf<
+      [ProviderAllocationRef, WorkerProvisionRequest, AbortSignal]
     >();
   });
 
   it('inspect takes allocationRef, request, and signal', () => {
-    expectTypeOf<IWorkerNodeRecoveryCapability['inspect']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerNodeProvisionRequest, AbortSignal]
+    expectTypeOf<IWorkerRecoveryCapability['inspect']>().parameters.toEqualTypeOf<
+      [ProviderAllocationRef, WorkerProvisionRequest, AbortSignal]
     >();
   });
 
   it('terminateAllocation takes ref, request, and signal', () => {
-    expectTypeOf<IWorkerNodeRecoveryCapability['terminateAllocation']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerNodeProvisionRequest, AbortSignal]
+    expectTypeOf<IWorkerRecoveryCapability['terminateAllocation']>().parameters.toEqualTypeOf<
+      [ProviderAllocationRef, WorkerProvisionRequest, AbortSignal]
     >();
   });
 
   it('can be implemented as a concrete object', () => {
-    const recovery: IWorkerNodeRecoveryCapability = {
+    const recovery: IWorkerRecoveryCapability = {
       discoverProvisioning: async (_request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
       attach: async (_ref, _request, _signal) => ({
         executionAttemptId: 'attempt-1',
@@ -1083,14 +1083,14 @@ describe('IWorkerNodeRecoveryCapability', () => {
   });
 });
 
-describe('IRecoverableWorkerNodeProvider', () => {
-  it('extends IWorkerNodeProvider with a required recovery property', () => {
-    const provider: IRecoverableWorkerNodeProvider = {
+describe('IRecoverableWorkerProvider', () => {
+  it('extends IWorkerProvider with a required recovery property', () => {
+    const provider: IRecoverableWorkerProvider = {
       id: 'fly.machines',
       displayName: 'Fly Machines',
       environment: 'fly',
       allocationLifetime: 'provider-managed',
-      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({
+      baseCapabilities: WorkerCapabilitiesSchema.parse({
         persistentStorage: true,
         supportsRecovery: true,
       }),
@@ -1135,27 +1135,27 @@ describe('IRecoverableWorkerNodeProvider', () => {
     expect(provider.recovery.terminateAllocation).toBeDefined();
   });
 
-  it('is assignable to IWorkerNodeProvider', () => {
-    expectTypeOf<IRecoverableWorkerNodeProvider>().toMatchTypeOf<IWorkerNodeProvider>();
+  it('is assignable to IWorkerProvider', () => {
+    expectTypeOf<IRecoverableWorkerProvider>().toMatchTypeOf<IWorkerProvider>();
   });
 
   it('has recovery as a required property, not optional', () => {
-    // This verifies that IRecoverableWorkerNodeProvider.recovery is not optional.
+    // This verifies that IRecoverableWorkerProvider.recovery is not optional.
     // If recovery were optional, this type assertion would be
-    // IWorkerNodeRecoveryCapability | undefined.
-    expectTypeOf<IRecoverableWorkerNodeProvider['recovery']>().toEqualTypeOf<IWorkerNodeRecoveryCapability>();
+    // IWorkerRecoveryCapability | undefined.
+    expectTypeOf<IRecoverableWorkerProvider['recovery']>().toEqualTypeOf<IWorkerRecoveryCapability>();
   });
 });
 
 describe('non-recoverable provider shape', () => {
-  it('IWorkerNodeProvider does not require recovery', () => {
-    // A plain IWorkerNodeProvider without recovery must compile
-    const provider: IWorkerNodeProvider = {
+  it('IWorkerProvider does not require recovery', () => {
+    // A plain IWorkerProvider without recovery must compile
+    const provider: IWorkerProvider = {
       id: 'piscina',
       displayName: 'Piscina Local',
       environment: 'piscina',
       allocationLifetime: 'provisioner-process-bound',
-      baseCapabilities: WorkerNodeCapabilitiesSchema.parse({
+      baseCapabilities: WorkerCapabilitiesSchema.parse({
         persistentStorage: false,
       }),
       provision: async () => ({
@@ -1179,9 +1179,9 @@ describe('non-recoverable provider shape', () => {
   });
 });
 
-describe('WorkerNodeCapabilities recovery advertisement', () => {
+describe('WorkerCapabilities recovery advertisement', () => {
   it('defaults supportsRecovery to false', () => {
-    const parsed = WorkerNodeCapabilitiesSchema.parse({
+    const parsed = WorkerCapabilitiesSchema.parse({
       persistentStorage: false,
     });
 
@@ -1189,7 +1189,7 @@ describe('WorkerNodeCapabilities recovery advertisement', () => {
   });
 
   it('accepts explicit supportsRecovery true', () => {
-    const parsed = WorkerNodeCapabilitiesSchema.parse({
+    const parsed = WorkerCapabilitiesSchema.parse({
       persistentStorage: true,
       supportsRecovery: true,
     });
@@ -1198,7 +1198,7 @@ describe('WorkerNodeCapabilities recovery advertisement', () => {
   });
 
   it('accepts explicit supportsRecovery false', () => {
-    const parsed = WorkerNodeCapabilitiesSchema.parse({
+    const parsed = WorkerCapabilitiesSchema.parse({
       persistentStorage: false,
       supportsRecovery: false,
     });
@@ -1207,31 +1207,31 @@ describe('WorkerNodeCapabilities recovery advertisement', () => {
   });
 });
 
-describe('WorkerNodeRequirements recovery field', () => {
+describe('WorkerRequirements recovery field', () => {
   it('allows omitting recoverableAllocation', () => {
-    const requirements: WorkerNodeRequirements = {
+    const requirements: WorkerRequirements = {
       persistentStorage: true,
     };
 
-    const parsed = WorkerNodeRequirementsSchema.parse(requirements);
+    const parsed = WorkerRequirementsSchema.parse(requirements);
     expect(parsed.recoverableAllocation).toBeUndefined();
   });
 
   it('accepts recoverableAllocation true', () => {
-    const requirements: WorkerNodeRequirements = {
+    const requirements: WorkerRequirements = {
       recoverableAllocation: true,
     };
 
-    const parsed = WorkerNodeRequirementsSchema.parse(requirements);
+    const parsed = WorkerRequirementsSchema.parse(requirements);
     expect(parsed.recoverableAllocation).toBe(true);
   });
 
   it('accepts recoverableAllocation false', () => {
-    const requirements: WorkerNodeRequirements = {
+    const requirements: WorkerRequirements = {
       recoverableAllocation: false,
     };
 
-    const parsed = WorkerNodeRequirementsSchema.parse(requirements);
+    const parsed = WorkerRequirementsSchema.parse(requirements);
     expect(parsed.recoverableAllocation).toBe(false);
   });
 });
@@ -1255,9 +1255,9 @@ describe('MaterializationMode', () => {
   });
 });
 
-describe('WorkerNodeCapabilities materialization modes', () => {
+describe('WorkerCapabilities materialization modes', () => {
   it('defaults materializationModes to local-directory', () => {
-    const parsed = WorkerNodeCapabilitiesSchema.parse({
+    const parsed = WorkerCapabilitiesSchema.parse({
       persistentStorage: false,
     });
 
@@ -1265,7 +1265,7 @@ describe('WorkerNodeCapabilities materialization modes', () => {
   });
 
   it('accepts explicit materialization modes', () => {
-    const parsed = WorkerNodeCapabilitiesSchema.parse({
+    const parsed = WorkerCapabilitiesSchema.parse({
       persistentStorage: true,
       materializationModes: ['workspace-snapshot'],
     });
@@ -1274,7 +1274,7 @@ describe('WorkerNodeCapabilities materialization modes', () => {
   });
 
   it('accepts multiple materialization modes', () => {
-    const parsed = WorkerNodeCapabilitiesSchema.parse({
+    const parsed = WorkerCapabilitiesSchema.parse({
       persistentStorage: true,
       materializationModes: ['local-directory', 'workspace-snapshot'],
     });
@@ -1284,7 +1284,7 @@ describe('WorkerNodeCapabilities materialization modes', () => {
 
   it('rejects empty materialization modes array', () => {
     expect(() =>
-      WorkerNodeCapabilitiesSchema.parse({
+      WorkerCapabilitiesSchema.parse({
         persistentStorage: false,
         materializationModes: [],
       }),
@@ -1293,7 +1293,7 @@ describe('WorkerNodeCapabilities materialization modes', () => {
 
   it('rejects unknown materialization mode values', () => {
     expect(() =>
-      WorkerNodeCapabilitiesSchema.parse({
+      WorkerCapabilitiesSchema.parse({
         persistentStorage: false,
         materializationModes: ['docker-image'],
       }),
@@ -1301,9 +1301,9 @@ describe('WorkerNodeCapabilities materialization modes', () => {
   });
 });
 
-describe('WorkerNodeRequirements materialization modes', () => {
+describe('WorkerRequirements materialization modes', () => {
   it('allows omitting materializationModes', () => {
-    const parsed = WorkerNodeRequirementsSchema.parse({
+    const parsed = WorkerRequirementsSchema.parse({
       persistentStorage: true,
     });
 
@@ -1311,7 +1311,7 @@ describe('WorkerNodeRequirements materialization modes', () => {
   });
 
   it('accepts materialization mode requirements', () => {
-    const parsed = WorkerNodeRequirementsSchema.parse({
+    const parsed = WorkerRequirementsSchema.parse({
       materializationModes: ['workspace-snapshot'],
     });
 
@@ -1320,7 +1320,7 @@ describe('WorkerNodeRequirements materialization modes', () => {
 
   it('rejects unknown materialization mode in requirements', () => {
     expect(() =>
-      WorkerNodeRequirementsSchema.parse({
+      WorkerRequirementsSchema.parse({
         materializationModes: ['s3-bucket'],
       }),
     ).toThrow();

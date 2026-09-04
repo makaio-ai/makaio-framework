@@ -8,7 +8,7 @@ import {
 import { getFullSubjectForSubjectDefinition } from '@makaio/core';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
-import { ArtifactSubjects, SubagentSubjects, WorkerNodeSubjects, WorkflowSubjects } from '@makaio/contracts';
+import { ArtifactSubjects, SubagentSubjects, WorkerSubjects, WorkflowSubjects } from '@makaio/contracts';
 
 /** Registered per-attempt HMAC secret and cleanup handle. */
 export interface WorkflowExecutionBusSecret {
@@ -66,8 +66,8 @@ export interface RotateWorkflowExecutionBusSecretParams {
 
 /** Static execution subjects derived from their canonical definitions. */
 const STATIC_EXECUTION_SUBJECTS = [
-  WorkerNodeSubjects.control['attempt-ready'],
-  WorkerNodeSubjects.control.outcome.submit,
+  WorkerSubjects.control['attempt-ready'],
+  WorkerSubjects.control.outcome.submit,
   WorkflowSubjects.getRunContext,
   AdapterSubsystemSubjects.listAdapters,
   WorkflowSubjects.bootstrapAuthorityState,

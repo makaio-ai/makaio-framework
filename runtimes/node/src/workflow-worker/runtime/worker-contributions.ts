@@ -10,7 +10,7 @@ import type { Toolset } from '@makaio/tools-core';
  * processes: toolsets for tool execution. Agent steps spawn subagents to the
  * host, so adapter contributions are not harvested for workers.
  */
-export interface WorkerContributions {
+export interface WorkerRuntimeContributions {
   /** Toolsets extracted from loaded packages. */
   readonly toolsets: Toolset[];
 }
@@ -29,7 +29,7 @@ interface ExtensionModuleShape {
 }
 
 /** Runtime context available while extracting worker-local contributions. */
-export interface WorkerContributionLoadOptions {
+export interface WorkerRuntimeContributionLoadOptions {
   /** Worker-local bus instance. */
   readonly bus?: IMakaioBus;
   /** Cancellation signal for worker-local contribution setup. */
@@ -93,7 +93,7 @@ function resolveExtensionExport(
  * @param options - Worker-local runtime surfaces exposed during extraction.
  * @returns Context object passed to extension toolset factories.
  */
-function createWorkerToolsetContext(options?: WorkerContributionLoadOptions): Readonly<Record<string, unknown>> {
+function createWorkerToolsetContext(options?: WorkerRuntimeContributionLoadOptions): Readonly<Record<string, unknown>> {
   return Object.freeze({
     bus: options?.bus,
     identity: Object.freeze({ extensionName: '__worker__' }),
@@ -128,10 +128,10 @@ function createWorkerToolsetContext(options?: WorkerContributionLoadOptions): Re
  * @returns Combined toolsets from all loaded packages.
  * @throws When any declared package fails to import, export, or create toolsets.
  */
-export async function loadWorkerContributions(
+export async function loadWorkerRuntimeContributions(
   entrypoints: readonly string[],
-  options?: WorkerContributionLoadOptions,
-): Promise<WorkerContributions> {
+  options?: WorkerRuntimeContributionLoadOptions,
+): Promise<WorkerRuntimeContributions> {
   const results = await Promise.all(entrypoints.map((entrypoint) => loadSinglePackage(entrypoint, options)));
 
   const toolsets: Toolset[] = [];
@@ -156,7 +156,7 @@ export async function loadWorkerContributions(
  */
 async function loadSinglePackage(
   entrypoint: string,
-  options?: WorkerContributionLoadOptions,
+  options?: WorkerRuntimeContributionLoadOptions,
 ): Promise<{ toolsets: Toolset[] }> {
   if (!path.isAbsolute(entrypoint)) {
     throw new Error(`Worker contribution entrypoint must be an absolute materialized path: ${entrypoint}`);

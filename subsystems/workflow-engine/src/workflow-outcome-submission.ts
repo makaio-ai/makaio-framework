@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
-  WorkerNodeSubjects,
+  WorkerSubjects,
   WorkflowRunResultSchema,
   type OutcomeAckDecision,
   type WorkflowExecution,
@@ -149,7 +149,7 @@ async function convergePausedState(bus: IMakaioBus, executionId: string, result:
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Register the `worker-node.control.outcome.submit` bus handler.
+ * Register the `worker.control.outcome.submit` bus handler.
  *
  * The handler:
  * 1. Derives attempt identity from the authenticated peer context.
@@ -166,7 +166,7 @@ async function convergePausedState(bus: IMakaioBus, executionId: string, result:
  * @returns Cleanup function for handler deregistration.
  */
 export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeSubmissionDeps): () => void {
-  return bus.on(WorkerNodeSubjects.control.outcome.submit, async (ctx) => {
+  return bus.on(WorkerSubjects.control.outcome.submit, async (ctx) => {
     const identity = resolveAttemptIdentity(ctx, ctx.payload);
     if (identity === null) {
       throw new Error('Outcome submission requires an authenticated ' + 'workflow-execution-attempt peer');

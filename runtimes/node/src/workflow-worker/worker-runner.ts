@@ -1,8 +1,8 @@
 import type {
   IWorkflowRunner,
   WorkerContributionManifest,
-  WorkerNodeDispatch,
-  WorkerNodeRequirements,
+  WorkerDispatch,
+  WorkerRequirements,
   WorkflowRunnerCompletion,
   WorkflowRunnerRunOptions,
   WorkflowWorkerConfig,
@@ -11,16 +11,16 @@ import type { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engin
 import { runAuthorityDispatchedAttempt } from '@makaio/subsystem-workflow-engine';
 
 /**
- * Construction options for {@link WorkerNodeRunner}.
+ * Construction options for {@link WorkerRunner}.
  */
-export interface WorkerNodeRunnerOptions {
+export interface WorkerRunnerOptions {
   /**
    * Dispatch seam injected by the host composition root.
    *
    * Product hosts wire this to `workerPool.dispatch` or another implementation.
    * Framework code calls through this seam without coupling to any pool.
    */
-  readonly dispatch: WorkerNodeDispatch;
+  readonly dispatch: WorkerDispatch;
   /**
    * Execution attempt Authority used to create attempts before dispatch and
    * wait for committed outcomes after dispatch returns.
@@ -42,11 +42,11 @@ export interface WorkerNodeRunnerOptions {
    * When provided, the receiving pool uses these to select a compatible
    * provider. Omit to accept any available pool.
    */
-  readonly requirements?: WorkerNodeRequirements;
+  readonly requirements?: WorkerRequirements;
 }
 
 /**
- * Workflow runner that delegates full workflow execution to a WorkerNode
+ * Workflow runner that delegates full workflow execution to a Worker
  * dispatch seam supplied by the host composition root.
  *
  * This class implements the {@link IWorkflowRunner} contract while remaining
@@ -57,11 +57,11 @@ export interface WorkerNodeRunnerOptions {
  * The runner creates an execution attempt through the injected Authority
  * before dispatch and waits for the committed outcome after dispatch returns.
  */
-export class WorkerNodeRunner implements IWorkflowRunner {
+export class WorkerRunner implements IWorkflowRunner {
   /**
    * @param options - Dispatch seam, authority, optional manifest, and optional requirements.
    */
-  public constructor(private readonly options: WorkerNodeRunnerOptions) {}
+  public constructor(private readonly options: WorkerRunnerOptions) {}
 
   /**
    * Execute a complete workflow by delegating to the injected dispatch seam.
@@ -86,7 +86,7 @@ export class WorkerNodeRunner implements IWorkflowRunner {
     manifest?: WorkerContributionManifest,
     options?: WorkflowRunnerRunOptions,
   ): Promise<WorkflowRunnerCompletion> {
-    // WorkerNodeRunner owns attempt creation and waits for the Authority's
+    // WorkerRunner owns attempt creation and waits for the Authority's
     // canonical outcome, so dispatched workers must submit rather than
     // terminalize the workflow execution themselves.
     const authorityCommittedConfig: WorkflowWorkerConfig = {

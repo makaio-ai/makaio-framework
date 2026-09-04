@@ -20,7 +20,7 @@ import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } fro
 import { ExecutionLinkListQuerySchema, ExecutionLinkSchema, SpanRecordSchema } from './span.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowRunContextSchema } from './run-context.js';
-import { WorkerMaterializationSpecSchema } from '../capabilities/worker-node/types.js';
+import { WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
 import { WorkLogExecutionSummarySchema, WorkLogFrameEntrySchema, WorkLogStatsSchema } from './worklog.js';
 import { JsonPatchOperationSchema } from './json-patch.js';
 import {

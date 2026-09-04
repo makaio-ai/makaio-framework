@@ -1,29 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { WorkerNodeSchemas, WorkerNodeSubjects } from '../index.js';
+import { WorkerSchemas, WorkerSubjects } from '../index.js';
 
-describe('worker-node namespace', () => {
-  it('registers lifecycle subjects under worker-node', () => {
-    expect(WorkerNodeSubjects.lifecycle.ready.$meta.namespace).toBe('worker-node');
-    expect(WorkerNodeSubjects.lifecycle.ready.subject).toBe('lifecycle.ready');
+describe('worker namespace', () => {
+  it('registers lifecycle subjects under worker', () => {
+    expect(WorkerSubjects.lifecycle.ready.$meta.namespace).toBe('worker');
+    expect(WorkerSubjects.lifecycle.ready.subject).toBe('lifecycle.ready');
   });
 
-  it('registers dispatch under worker-node', () => {
-    expect(WorkerNodeSubjects.dispatch.$meta.namespace).toBe('worker-node');
-    expect(WorkerNodeSubjects.dispatch.subject).toBe('dispatch');
+  it('registers dispatch under worker', () => {
+    expect(WorkerSubjects.dispatch.$meta.namespace).toBe('worker');
+    expect(WorkerSubjects.dispatch.subject).toBe('dispatch');
   });
 
-  it('registers control.attempt-ready under worker-node', () => {
-    expect(WorkerNodeSubjects.control['attempt-ready'].$meta.namespace).toBe('worker-node');
-    expect(WorkerNodeSubjects.control['attempt-ready'].subject).toBe('control.attempt-ready');
+  it('registers control.attempt-ready under worker', () => {
+    expect(WorkerSubjects.control['attempt-ready'].$meta.namespace).toBe('worker');
+    expect(WorkerSubjects.control['attempt-ready'].subject).toBe('control.attempt-ready');
   });
 
-  it('registers control.outcome.submit under worker-node', () => {
-    expect(WorkerNodeSubjects.control.outcome.submit.$meta.namespace).toBe('worker-node');
-    expect(WorkerNodeSubjects.control.outcome.submit.subject).toBe('control.outcome.submit');
+  it('registers control.outcome.submit under worker', () => {
+    expect(WorkerSubjects.control.outcome.submit.$meta.namespace).toBe('worker');
+    expect(WorkerSubjects.control.outcome.submit.subject).toBe('control.outcome.submit');
   });
 
   it('keeps pool identity out of framework lifecycle payloads', () => {
-    const parsed = WorkerNodeSchemas['lifecycle.ready'].parse({
+    const parsed = WorkerSchemas['lifecycle.ready'].parse({
       executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
@@ -43,7 +43,7 @@ describe('worker-node namespace', () => {
   });
 
   it('lifecycle events use executionAttemptId instead of nodeId', () => {
-    const parsed = WorkerNodeSchemas['lifecycle.ready'].parse({
+    const parsed = WorkerSchemas['lifecycle.ready'].parse({
       executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
@@ -54,7 +54,7 @@ describe('worker-node namespace', () => {
   });
 
   it('parses control attempt-ready payloads', () => {
-    const parsed = WorkerNodeSchemas['control.attempt-ready'].parse({
+    const parsed = WorkerSchemas['control.attempt-ready'].parse({
       executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       adapters: ['claude-code'],
@@ -69,7 +69,7 @@ describe('worker-node namespace', () => {
 
   describe('lifecycle.paused', () => {
     it('defines lifecycle.paused with required gate and frame identity', () => {
-      const parsed = WorkerNodeSchemas['lifecycle.paused'].parse({
+      const parsed = WorkerSchemas['lifecycle.paused'].parse({
         executionAttemptId: 'attempt-1',
         executionId: 'wfx-1',
         environment: 'piscina',
@@ -87,7 +87,7 @@ describe('worker-node namespace', () => {
 
     it('rejects lifecycle.paused without pausedAtGateId', () => {
       expect(() =>
-        WorkerNodeSchemas['lifecycle.paused'].parse({
+        WorkerSchemas['lifecycle.paused'].parse({
           executionAttemptId: 'attempt-1',
           executionId: 'wfx-1',
           environment: 'piscina',
@@ -98,7 +98,7 @@ describe('worker-node namespace', () => {
 
     it('rejects lifecycle.paused without pausedAtFrameId', () => {
       expect(() =>
-        WorkerNodeSchemas['lifecycle.paused'].parse({
+        WorkerSchemas['lifecycle.paused'].parse({
           executionAttemptId: 'attempt-1',
           executionId: 'wfx-1',
           environment: 'piscina',

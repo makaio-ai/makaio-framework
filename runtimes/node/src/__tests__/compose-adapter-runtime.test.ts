@@ -6,7 +6,7 @@ import { AdapterRuntimeSubjects, buildDeterministicAdapterId } from '@makaio/ser
 import { activateAdapterRuntimeIdentity } from '../compose-adapter-runtime.js';
 
 /**
- * These tests exercise the locality kernel of the self-contained WorkerNode
+ * These tests exercise the locality kernel of the self-contained Worker
  * runtime: `activateAdapterRuntimeIdentity` registers `resolveId` so that an
  * adapter name resolves to the deterministic id derived from THIS runtime's
  * machine id. An adapter started inside a container must therefore resolve to

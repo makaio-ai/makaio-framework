@@ -40,7 +40,7 @@
     "./toast": "./src/toast/index.ts",
     "./timeout": "./src/timeout/index.ts",
     "./variant": "./src/variant/index.ts",
-    "./worker-node": "./src/worker-node/index.ts",
+    "./worker": "./src/worker/index.ts",
     "./platform": "./src/platform/index.ts",
     "./facet": "./src/facet/index.ts",
     "./materialization": "./src/materialization/index.ts",
@@ -175,9 +175,9 @@
         "types": "./dist/variant/index.d.ts",
         "default": "./dist/variant/index.mjs"
       },
-      "./worker-node": {
-        "types": "./dist/worker-node/index.d.ts",
-        "default": "./dist/worker-node/index.mjs"
+      "./worker": {
+        "types": "./dist/worker/index.d.ts",
+        "default": "./dist/worker/index.mjs"
       },
       "./platform": {
         "types": "./dist/platform/index.d.ts",

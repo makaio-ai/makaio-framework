@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { WorkerNodeNamespace, WorkerNodeSubjects } from '@makaio/contracts';
+import { WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
 import type { OutcomeAckDecision, WorkflowRunResult } from '@makaio/contracts';
 import { submitOutcomeWithAck, OutcomeDeliveryError, DELIVERED_DECISIONS } from '../outcome-submission.js';
 
@@ -9,7 +9,7 @@ import { submitOutcomeWithAck, OutcomeDeliveryError, DELIVERED_DECISIONS } from 
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Create a bus with the WorkerNode namespace and an outcome handler.
+ * Create a bus with the Worker namespace and an outcome handler.
  * @param options - Handler behavior configuration.
  * @returns Bus and submission tracking.
  */
@@ -21,7 +21,7 @@ function createOutcomeBus(options: {
   decisions: ReadonlyArray<OutcomeAckDecision | 'throw'>;
 }) {
   const bus = createBusInstance();
-  bus.registerNamespace(WorkerNodeNamespace);
+  bus.registerNamespace(WorkerNamespace);
 
   const submissions: Array<{
     executionAttemptId: string;
@@ -30,7 +30,7 @@ function createOutcomeBus(options: {
   }> = [];
 
   let callIndex = 0;
-  bus.on(WorkerNodeSubjects.control.outcome.submit, (ctx) => {
+  bus.on(WorkerSubjects.control.outcome.submit, (ctx) => {
     submissions.push({ ...ctx.payload });
     const entry = options.decisions[callIndex++];
     if (entry === 'throw' || entry === undefined) {
@@ -252,8 +252,8 @@ describe('submitOutcomeWithAck', () => {
   it('bounds a never-settling request to the overall deadline', async () => {
     vi.useFakeTimers();
     const bus = createBusInstance();
-    bus.registerNamespace(WorkerNodeNamespace);
-    bus.on(WorkerNodeSubjects.control.outcome.submit, async () => await new Promise<never>(() => {}));
+    bus.registerNamespace(WorkerNamespace);
+    bus.on(WorkerSubjects.control.outcome.submit, async () => await new Promise<never>(() => {}));
 
     try {
       const submission = submitOutcomeWithAck(

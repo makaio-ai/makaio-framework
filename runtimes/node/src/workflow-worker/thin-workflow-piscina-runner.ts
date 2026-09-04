@@ -52,7 +52,7 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
    * Execute a complete workflow in a pooled worker thread.
    *
    * When `manifest` is provided it overrides the runner's construction-time
-   * default, so per-request contribution sets from the WorkerNode pool are
+   * default, so per-request contribution sets from the Worker pool are
    * applied correctly without requiring a new runner instance.
    * @param config - Full workflow worker configuration with source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.

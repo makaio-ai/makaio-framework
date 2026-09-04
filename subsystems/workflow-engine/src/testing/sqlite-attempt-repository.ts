@@ -14,7 +14,7 @@ import type { ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts
 import {
   BoundedRecoveryEvidenceSchema,
   ProviderAllocationRefSchema,
-  WorkerNodeAllocationLifetimeSchema,
+  WorkerAllocationLifetimeSchema,
   WorkflowRunResultSchema,
   type BoundedRecoveryEvidence,
 } from '@makaio/contracts';
@@ -213,7 +213,7 @@ function toAttemptRecord(row: AttemptRow): ExecutionAttemptRecord {
     createdAt: row.created_at,
     providerId: row.provider_id,
     allocationLifetime:
-      row.allocation_lifetime === null ? null : WorkerNodeAllocationLifetimeSchema.parse(row.allocation_lifetime),
+      row.allocation_lifetime === null ? null : WorkerAllocationLifetimeSchema.parse(row.allocation_lifetime),
     provisionerIncarnationId: row.provisioner_incarnation_id,
     settlementKind:
       row.settlement_kind === null

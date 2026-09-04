@@ -29,7 +29,7 @@ export interface WorkflowEngineServiceOptions {
   /**
    * Injected execution attempt persistence port.
    *
-   * Required when the workflow runner uses WorkerNode dispatch mode. The
+   * Required when the workflow runner uses Worker dispatch mode. The
    * consuming host application provides the concrete implementation that owns
    * durable attempt records and accept/duplicate/conflict/fence decisions.
    *
@@ -114,7 +114,7 @@ export class WorkflowEngineService extends BaseService {
    * Execution attempt Authority owned by this package service.
    *
    * Present only when an {@link ExecutionAttemptRepository} was injected at
-   * construction time (WorkerNode dispatch mode). Returns `undefined` for
+   * construction time (Worker dispatch mode). Returns `undefined` for
    * framework-only, in-process, and Piscina modes.
    * @returns Authority instance, or `undefined` when no repository is injected.
    */

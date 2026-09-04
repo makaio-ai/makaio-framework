@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Strategy a WorkerNode provider uses when a workflow reaches a suspension point.
+ * Strategy a Worker provider uses when a workflow reaches a suspension point.
  *
  * - `wait-in-process`: the worker blocks in-process until the gate is resolved
  *   (default, suitable for local Piscina threads and in-process runners).

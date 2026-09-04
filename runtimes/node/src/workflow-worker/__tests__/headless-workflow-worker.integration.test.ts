@@ -10,7 +10,7 @@ import {
   CapabilitySubjects,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
-  WorkerNodeSubjects,
+  WorkerSubjects,
   WorkflowRunResultSchema,
   WorkflowSubjects,
   type OutcomeAckDecision,
@@ -178,7 +178,7 @@ async function createAuthoritySide(executionId: string): Promise<AuthoritySide> 
   );
 
   // Capture attempt-ready events
-  const offAttemptReady = authority.on(WorkerNodeSubjects.control['attempt-ready'], (ctx) => {
+  const offAttemptReady = authority.on(WorkerSubjects.control['attempt-ready'], (ctx) => {
     state.capture.attemptReadyEvents.push({
       executionAttemptId: ctx.payload.executionAttemptId,
       executionId: ctx.payload.executionId,
@@ -188,7 +188,7 @@ async function createAuthoritySide(executionId: string): Promise<AuthoritySide> 
 
   // Handle outcome submission with configurable decision and transient failures
   let outcomeCallCount = 0;
-  const offOutcomeSubmit = authority.on(WorkerNodeSubjects.control.outcome.submit, (ctx) => {
+  const offOutcomeSubmit = authority.on(WorkerSubjects.control.outcome.submit, (ctx) => {
     state.capture.outcomeSubmissions.push({
       executionAttemptId: ctx.payload.executionAttemptId,
       executionId: ctx.payload.executionId,
@@ -401,7 +401,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     const offKernelReady = authoritySide.bus.on(KernelSubjects.ready, () => {
       readyOrder.push('kernel-ready');
     });
-    const offAttemptReady = authoritySide.bus.on(WorkerNodeSubjects.control['attempt-ready'], () => {
+    const offAttemptReady = authoritySide.bus.on(WorkerSubjects.control['attempt-ready'], () => {
       readyOrder.push('attempt-ready');
     });
 
