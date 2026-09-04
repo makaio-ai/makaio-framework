@@ -4,7 +4,10 @@ import { WorkerNamespace } from '@makaio/contracts';
 import type { ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
 import { WorkerRunner } from '../worker-runner.js';
-import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
+import {
+  createInMemoryAttemptRepository,
+  workflowRunResultOutcomeCodec,
+} from '@makaio/subsystem-workflow-engine/testing';
 import { makeWorkerConfig } from './fixtures.js';
 
 const TEST_ALLOCATION_REF: ProviderAllocationRef = {
@@ -18,7 +21,7 @@ describe('WorkerRunner integration', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     let dispatchStarted!: () => void;
@@ -48,7 +51,11 @@ describe('WorkerRunner integration', () => {
         };
 
         // Commit the outcome through the Authority (simulates worker outcome submission)
-        const decision = await authority.commitOutcome(request.executionAttemptId, request.config.executionId, result);
+        const decision = await authority.commitOutcome(
+          request.executionAttemptId,
+          request.config.executionId,
+          authority.canonicalizeOutcome(result),
+        );
         authority.settleOutcome(request.executionAttemptId, decision);
 
         return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };

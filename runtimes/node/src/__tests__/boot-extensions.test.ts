@@ -26,7 +26,10 @@ import {
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
-import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
+import {
+  createInMemoryAttemptRepository,
+  workflowRunResultOutcomeCodec,
+} from '@makaio/subsystem-workflow-engine/testing';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -843,7 +846,7 @@ describe('owner-anchored automation cron scheduler host policy', () => {
 
 describe('workflow-level runner boot composition', () => {
   // These tests verify runner wiring, not repository behavior.
-  const stubAuthority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
+  const stubAuthority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
 
   it('returns undefined when no runner is configured', () => {
     const runner = createNodeWorkflowRunner({
@@ -913,7 +916,11 @@ describe('workflow-level runner boot composition', () => {
       // Commit the outcome through the Authority so the runner's
       // outcomePromise settles, mirroring real worker behavior.
       void stubAuthority
-        .commitOutcome(ctx.payload.executionAttemptId, ctx.payload.config.executionId, result)
+        .commitOutcome(
+          ctx.payload.executionAttemptId,
+          ctx.payload.config.executionId,
+          stubAuthority.canonicalizeOutcome(result),
+        )
         .then((decision) => stubAuthority.settleOutcome(ctx.payload.executionAttemptId, decision));
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
@@ -954,7 +961,7 @@ describe('workflow-level runner boot composition', () => {
       const decision = await stubAuthority.commitOutcome(
         request.executionAttemptId,
         request.config.executionId,
-        result,
+        stubAuthority.canonicalizeOutcome(result),
       );
       stubAuthority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };

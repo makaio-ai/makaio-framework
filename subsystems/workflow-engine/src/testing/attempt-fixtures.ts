@@ -1,6 +1,10 @@
 import type { BoundedRecoveryEvidence, ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
-import { PROVIDER_ALLOCATION_REF_VERSION } from '@makaio/contracts';
-import type { BeginProvisioningInput, ProvisioningClaimDecision } from '../execution-attempt-repository.js';
+import { PROVIDER_ALLOCATION_REF_VERSION, WorkflowRunResultSchema } from '@makaio/contracts';
+import type {
+  BeginProvisioningInput,
+  OutcomeCodec,
+  ProvisioningClaimDecision,
+} from '../execution-attempt-repository.js';
 import type { ProcessBoundProvisionerLossProof, ProviderOperationClaim } from '../provider-operation.js';
 
 /** Controller process incarnation used by tests that need one fixed owner. */
@@ -133,6 +137,15 @@ export function makeTestAllocationRef(
 ): ProviderAllocationRef {
   return { version: PROVIDER_ALLOCATION_REF_VERSION, providerId, providerData };
 }
+
+/**
+ * Outcome codec for the workflow adapter: validates through
+ * {@link WorkflowRunResultSchema} and persists the canonical JSON text.
+ */
+export const workflowRunResultOutcomeCodec: OutcomeCodec<WorkflowRunResult> = {
+  parse: (input) => WorkflowRunResultSchema.parse(input),
+  serialize: (outcome) => JSON.stringify(outcome),
+};
 
 /**
  * Build a terminal workflow result the port can commit.

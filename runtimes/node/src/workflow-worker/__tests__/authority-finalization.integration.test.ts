@@ -34,7 +34,10 @@ import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { createIsolatedWorkflowRuntime } from '../isolated-workflow-runtime.js';
 import { WorkerRunner } from '../worker-runner.js';
-import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
+import {
+  createInMemoryAttemptRepository,
+  workflowRunResultOutcomeCodec,
+} from '@makaio/subsystem-workflow-engine/testing';
 import {
   createDeterministicAdapterContribution,
   type DeterministicAdapterCapture,
@@ -145,7 +148,7 @@ describe('authority Worker finalization integration', () => {
         readyEvents.push(ctx.payload);
       }),
     );
-    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
+    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
     let resolveDispatchComplete!: (executionId: string) => void;
     const dispatchComplete = new Promise<string>((resolve) => {
       resolveDispatchComplete = resolve;
@@ -285,7 +288,7 @@ describe('authority Worker finalization integration', () => {
           const decision = await authority.commitOutcome(
             request.executionAttemptId,
             request.config.executionId,
-            result,
+            authority.canonicalizeOutcome(result),
           );
           authority.settleOutcome(request.executionAttemptId, decision);
           return { executionAttemptId: request.executionAttemptId, allocationRef: testAllocationRef };

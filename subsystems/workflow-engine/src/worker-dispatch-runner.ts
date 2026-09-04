@@ -1,5 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { WorkerSubjects, type IWorkflowRunner, type WorkerRequirements } from '@makaio/contracts';
+import {
+  WorkerSubjects,
+  type IWorkflowRunner,
+  type WorkerRequirements,
+  type WorkflowRunResult,
+} from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 
@@ -36,7 +41,7 @@ export interface WorkerDispatchRunnerOptions {
    * Execution attempt Authority for creating attempts before dispatch
    * and waiting for committed outcomes.
    */
-  readonly authority: ExecutionAttemptAuthority;
+  readonly authority: ExecutionAttemptAuthority<WorkflowRunResult>;
 }
 
 /**
@@ -60,8 +65,10 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
   const { bus, requirements, dispatchMetadata, authority } = options;
   if (!hasWorkerDispatchRequirements(requirements)) return undefined;
   return {
-    run: (config, signal) =>
-      runAuthorityDispatchedAttempt({
+    run: async (config, signal) => {
+      // The runner contract owes a completion wrapper; the generic dispatch
+      // path yields the committed outcome itself.
+      const result = await runAuthorityDispatchedAttempt({
         authority,
         executionId: config.executionId,
         dispatch: (executionAttemptId) =>
@@ -75,6 +82,8 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
             },
             { signal },
           ),
-      }),
+      });
+      return { state: 'authority-committed', result };
+    },
   };
 }

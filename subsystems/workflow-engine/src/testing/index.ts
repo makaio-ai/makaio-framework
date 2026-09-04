@@ -32,5 +32,6 @@ export {
   TEST_OWNER_ID,
   TEST_PROVIDER_ID,
   TEST_PROVISIONER_INCARNATION_ID,
+  workflowRunResultOutcomeCodec,
 } from './attempt-fixtures.js';
 export type { ProvisioningClaimGrantor } from './attempt-fixtures.js';

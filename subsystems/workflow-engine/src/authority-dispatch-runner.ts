@@ -1,31 +1,31 @@
-import type { WorkflowRunnerCompletion, WorkflowRunResult } from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
-import type { PendingAttemptAbandonmentDecision } from './execution-attempt-repository.js';
+import type { ExecutionOwnerId, PendingAttemptAbandonmentDecision } from './execution-attempt-repository.js';
 
 /**
- * Inputs for dispatching an Authority-owned workflow attempt.
+ * Inputs for dispatching an Authority-owned attempt.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export interface AuthorityDispatchRunnerOptions {
+export interface AuthorityDispatchRunnerOptions<TOutcome> {
   /** Authority that persists and owns the execution attempt. */
-  readonly authority: ExecutionAttemptAuthority;
-  /** Workflow execution that owns the attempt. */
-  readonly executionId: string;
+  readonly authority: ExecutionAttemptAuthority<TOutcome>;
+  /** Owner identifier of the aggregate that owns the attempt. */
+  readonly executionId: ExecutionOwnerId;
   /** Dispatch operation whose successful return acknowledges acceptance. */
   readonly dispatch: (executionAttemptId: string) => Promise<unknown>;
 }
 
 /**
- * Dispatch an Authority-owned attempt and await its canonical terminal outcome.
+ * Dispatch an Authority-owned attempt and await its canonical outcome.
  *
  * A rejected dispatch operation is not proof that no provider received the
  * request. The pending-abandonment CAS distinguishes a confirmed pre-allocation
  * failure from a lost acknowledgement after provisioning, allocation, or settlement.
- * @param options - Authority, execution identity, and dispatch operation.
- * @returns The Authority-committed workflow completion.
+ * @param options - Authority, owner identity, and dispatch operation.
+ * @returns The Authority-committed outcome.
  */
-export async function runAuthorityDispatchedAttempt(
-  options: AuthorityDispatchRunnerOptions,
-): Promise<WorkflowRunnerCompletion> {
+export async function runAuthorityDispatchedAttempt<TOutcome>(
+  options: AuthorityDispatchRunnerOptions<TOutcome>,
+): Promise<TOutcome> {
   const { authority, executionId, dispatch } = options;
   const attempt = await authority.createAttempt(executionId);
   const outcomePromise = authority.waitForOutcome(attempt.executionAttemptId);
@@ -53,14 +53,14 @@ export async function runAuthorityDispatchedAttempt(
     });
   }
 
-  return toAuthorityCommittedCompletion(outcomePromise);
+  return outcomePromise;
 }
 
-interface UnacknowledgedDispatchFailureOptions {
-  readonly authority: ExecutionAttemptAuthority;
-  readonly executionId: string;
+interface UnacknowledgedDispatchFailureOptions<TOutcome> {
+  readonly authority: ExecutionAttemptAuthority<TOutcome>;
+  readonly executionId: ExecutionOwnerId;
   readonly executionAttemptId: string;
-  readonly outcomePromise: Promise<WorkflowRunResult>;
+  readonly outcomePromise: Promise<TOutcome>;
   readonly dispatchError: unknown;
 }
 
@@ -72,11 +72,11 @@ interface UnacknowledgedDispatchFailureOptions {
  * unreachable waiter. `provisioning`, `allocated`, and `already-settled` instead retain the
  * waiter because the Authority still owns a canonical terminalization.
  * @param options - Failed dispatch and the Authority-owned attempt state.
- * @returns The canonical completion when allocation or settlement won the race.
+ * @returns The canonical outcome when allocation or settlement won the race.
  */
-async function handleUnacknowledgedDispatchFailure(
-  options: UnacknowledgedDispatchFailureOptions,
-): Promise<WorkflowRunnerCompletion> {
+async function handleUnacknowledgedDispatchFailure<TOutcome>(
+  options: UnacknowledgedDispatchFailureOptions<TOutcome>,
+): Promise<TOutcome> {
   const { authority, executionId, executionAttemptId, outcomePromise, dispatchError } = options;
 
   let abandonment: PendingAttemptAbandonmentDecision;
@@ -101,11 +101,11 @@ async function handleUnacknowledgedDispatchFailure(
     case 'allocated':
     case 'provisioning':
     case 'already-settled':
-      return toAuthorityCommittedCompletion(outcomePromise);
+      return outcomePromise;
     case 'fenced':
       authority.settleOutcome(executionAttemptId, { kind: 'fenced' });
       try {
-        return await toAuthorityCommittedCompletion(outcomePromise);
+        return await outcomePromise;
       } catch (fenceError) {
         throw new AggregateError(
           [dispatchError, fenceError],
@@ -114,15 +114,4 @@ async function handleUnacknowledgedDispatchFailure(
         );
       }
   }
-}
-
-/**
- * Convert a canonical Authority outcome into the workflow runner contract.
- * @param outcomePromise - Waiter that resolves after Authority convergence.
- * @returns Authority-committed workflow completion.
- */
-async function toAuthorityCommittedCompletion(
-  outcomePromise: Promise<WorkflowRunResult>,
-): Promise<WorkflowRunnerCompletion> {
-  return { state: 'authority-committed', result: await outcomePromise };
 }

@@ -11,6 +11,7 @@ import type {
   WorkerContributionManifest,
   WorkerDispatch,
   WorkerRequirements,
+  WorkflowRunResult,
 } from '@makaio/contracts';
 import type {
   ExecutionAttemptRepository,
@@ -442,7 +443,7 @@ export interface CoreBootOptions {
    * without attempt tracking. Worker mode fails fast at boot when this
    * is not provided.
    */
-  readonly executionAttemptRepository?: ExecutionAttemptRepository;
+  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowRunResult>;
 
   /**
    * Runtime data home for config, database, machine identity, and installed

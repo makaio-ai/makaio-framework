@@ -96,7 +96,7 @@ export class WorkflowExecutor extends BaseService {
   private readonly lifecyclePublications = new Map<string, Promise<void>>();
   private readonly publishingLifecycleExecutions = new Set<string>();
   private readonly workflowRunner?: IWorkflowRunner;
-  private readonly executionAttemptAuthority?: ExecutionAttemptAuthority;
+  private readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>;
   private readonly materializationSpecResolvers = new Set<WorkflowMaterializationSpecResolver>();
 
   /**
@@ -110,7 +110,7 @@ export class WorkflowExecutor extends BaseService {
     bus: IMakaioBus,
     config?: Partial<ExecutorConfig>,
     workflowRunner?: IWorkflowRunner,
-    executionAttemptAuthority?: ExecutionAttemptAuthority,
+    executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>,
   ) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };

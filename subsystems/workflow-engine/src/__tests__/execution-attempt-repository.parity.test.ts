@@ -1,8 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RECOVERY_EVIDENCE_LIMITS } from '@makaio/contracts';
+import { sql } from 'drizzle-orm';
+import { RECOVERY_EVIDENCE_LIMITS, type WorkflowRunResult } from '@makaio/contracts';
 import { createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
-import type { BeginProvisioningInput, ExecutionAttemptRecord, ExecutionAttemptRepository } from '../index.js';
+import type {
+  BeginProvisioningInput,
+  ExecutionAttemptRecord,
+  ExecutionAttemptRepository,
+  OutcomeCodec,
+} from '../index.js';
 import { DuplicateExecutionAttemptError } from '../index.js';
+import {
+  counterCodec,
+  generationCounterCodec,
+  roundingCounterCodec,
+  type CounterOutcome,
+  type GenerationCounterOutcome,
+} from './counter-outcome.js';
+import { urlOutcomeCodec } from './url-outcome.js';
+import { bytesOutcomeCodec } from './bytes-outcome.js';
 import { createSqliteAttemptRepository } from '../testing/sqlite.js';
 import {
   TEST_PROVIDER_ID,
@@ -15,6 +30,7 @@ import {
   makeTestAllocationRef,
   makeTestWorkflowResult,
   type ProvisioningClaimGrantor,
+  workflowRunResultOutcomeCodec,
 } from '../testing/index.js';
 import type { ProviderOperationClaim } from '../provider-operation.js';
 
@@ -24,33 +40,103 @@ import type { ProviderOperationClaim } from '../provider-operation.js';
  * The port is a specification, so a rule that only one realization obeys is a
  * rule the specification does not actually have. Everything in this suite is
  * asserted against every realization the package ships.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-interface RealizationHarness {
+interface RealizationHarness<TOutcome> {
   /** Repository exposing the full port surface. */
-  readonly repository: Required<ExecutionAttemptRepository>;
+  readonly repository: Required<ExecutionAttemptRepository<TOutcome>>;
+  /**
+   * Write an attempt's committed outcome text behind the port's back.
+   *
+   * The only way to produce durable state the port itself cannot create: a
+   * stored text the injected codec rejects, which is what corruption or a
+   * codec changed under an existing row looks like on read.
+   * @param executionAttemptId - Attempt whose stored outcome text to replace.
+   * @param text - Durable text to store.
+   */
+  readonly writeStoredOutcomeText: (executionAttemptId: string, text: string) => Promise<void>;
   /** Release whatever the realization holds open. */
   readonly dispose: () => void;
 }
 
-const REALIZATIONS: ReadonlyArray<readonly [string, () => Promise<RealizationHarness>]> = [
+/**
+ * Build one realization around an owner-injected codec.
+ *
+ * Generic rather than bound to `WorkflowRunResult` so the outcome cases below
+ * can drive the same two realizations with a non-workflow outcome type.
+ */
+interface RealizationFactory {
+  /**
+   * @param codec - Owner-injected codec the realization validates outcomes with.
+   * @returns The realization and its teardown.
+   * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
+   */
+  <TOutcome>(codec: OutcomeCodec<TOutcome>): Promise<RealizationHarness<TOutcome>>;
+}
+
+const REALIZATIONS: ReadonlyArray<readonly [string, RealizationFactory]> = [
   [
     'in-memory',
-    async () => ({
-      repository: createInMemoryAttemptRepository(),
-      dispose: () => {},
-    }),
+    async (codec) => {
+      const repository = createInMemoryAttemptRepository(codec);
+      return {
+        repository,
+        writeStoredOutcomeText: async (executionAttemptId, text) => {
+          repository.committedOutcomes.set(executionAttemptId, text);
+        },
+        dispose: () => {},
+      };
+    },
   ],
   [
     'sqlite',
-    async () => {
+    async (codec) => {
       const context: TestDbContext = await createTempDb('execution-attempt-parity');
       return {
-        repository: await createSqliteAttemptRepository(context.db),
+        repository: await createSqliteAttemptRepository(context.db, codec),
+        writeStoredOutcomeText: async (executionAttemptId, text) => {
+          await context.exec(
+            sql`UPDATE test_execution_attempt SET workflow_result = ${text}
+              WHERE execution_attempt_id = ${executionAttemptId}`,
+          );
+        },
         dispose: context.cleanup,
       };
     },
   ],
 ];
+
+/**
+ * One owner outcome type the commitment cases are asserted against.
+ *
+ * `TOutcome` is a type parameter of the port, so a rule the port owes is owed
+ * for whatever outcome an owner injects a codec for — not only for the
+ * workflow adapter's own result.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
+ */
+interface OutcomeVariant<TOutcome> {
+  /** Codec the realization is built with. */
+  readonly codec: OutcomeCodec<TOutcome>;
+  /**
+   * Build one of two unequal outcomes.
+   * @param executionId - Execution the outcome belongs to, where the type carries one.
+   * @param seed - `0` for the outcome a case commits, `1` for a competing one.
+   * @returns The outcome to submit.
+   */
+  readonly makeOutcome: (executionId: string, seed: 0 | 1) => TOutcome;
+}
+
+const WORKFLOW_OUTCOME_VARIANT: OutcomeVariant<WorkflowRunResult> = {
+  codec: workflowRunResultOutcomeCodec,
+  makeOutcome: (executionId, seed) => makeTestWorkflowResult(executionId, seed === 0 ? 'completed' : 'failed'),
+};
+
+// Seed `0` is the number `0`: a committed outcome a truthiness probe reads as
+// absence, which is what makes this variant the presence check's witness.
+const COUNTER_OUTCOME_VARIANT: OutcomeVariant<CounterOutcome> = {
+  codec: counterCodec,
+  makeOutcome: (_executionId, seed) => seed,
+};
 
 let sequence = 0;
 
@@ -72,7 +158,7 @@ function nextIds(): { readonly executionId: string; readonly executionAttemptId:
  * @throws When provisioning does not start.
  */
 async function startAttempt(
-  repository: Required<ExecutionAttemptRepository>,
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
   ids: { readonly executionId: string; readonly executionAttemptId: string },
   overrides: Partial<BeginProvisioningInput> = {},
 ): Promise<ProviderOperationClaim> {
@@ -86,10 +172,10 @@ async function startAttempt(
 }
 
 describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization, createHarness) => {
-  let harness: RealizationHarness;
+  let harness: RealizationHarness<WorkflowRunResult>;
 
   beforeAll(async () => {
-    harness = await createHarness();
+    harness = await createHarness(workflowRunResultOutcomeCodec);
   });
 
   afterAll(() => {
@@ -488,17 +574,426 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
     expect(operation?.leaseExpiresAt).toBe('2026-07-27T11:30:00.000Z');
     expect(renewal.kind === 'claimed' ? renewal.claim.leaseExpiresAt : null).toBe('2026-07-27T11:30:00.000Z');
   });
+});
 
-  it('commits an outcome and reports the stored result, not the caller object', async () => {
+// ─────────────────────────────────────────────────────────────
+// Outcome commitment, per realization and per owner outcome type
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Assert the outcome decisions one realization owes for one outcome type.
+ *
+ * Defined as a function rather than a `describe.each` row so each outcome type
+ * keeps its own `TOutcome` instead of collapsing into a union, and so the
+ * cases that never touch an outcome are not re-run once per outcome type.
+ * @param realization - Name of the realization under test.
+ * @param createHarness - Factory that builds it around a codec.
+ * @param outcomeName - Name of the outcome type under test.
+ * @param variant - Codec and outcome builder for that type.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
+ */
+function defineOutcomeParity<TOutcome>(
+  realization: string,
+  createHarness: RealizationFactory,
+  outcomeName: string,
+  variant: OutcomeVariant<TOutcome>,
+): void {
+  describe(`execution attempt outcome parity (${realization}, ${outcomeName})`, () => {
+    let harness: RealizationHarness<TOutcome>;
+
+    beforeAll(async () => {
+      harness = await createHarness(variant.codec);
+    });
+
+    afterAll(() => {
+      harness.dispose();
+    });
+
+    it('commits an outcome, reports the stored one on replay, and conflicts on a different one', async () => {
+      const ids = nextIds();
+      await harness.repository.createAttempt(ids);
+      const result = variant.makeOutcome(ids.executionId, 0);
+
+      const storedText = harness.repository.canonicalizeOutcome(result).text;
+      const accepted = await harness.repository.commitOutcome({
+        ...ids,
+        result: harness.repository.canonicalizeOutcome(result),
+      });
+
+      expect(accepted).toEqual({ kind: 'accepted', outcome: result, text: storedText });
+      // Presence, not truthiness, decides that an outcome is already
+      // committed: the counter variant commits `0` here, and a realization
+      // that probed the stored value for truthiness would answer `accepted` a
+      // second time. The reported outcome is the stored one, which for a
+      // durable realization means it came back through the codec rather than
+      // straight out of the column.
+      const replay = await harness.repository.commitOutcome({
+        ...ids,
+        result: harness.repository.canonicalizeOutcome(variant.makeOutcome(ids.executionId, 0)),
+      });
+      expect(replay).toEqual({ kind: 'duplicate', outcome: result, text: storedText });
+
+      const competing = await harness.repository.commitOutcome({
+        ...ids,
+        result: harness.repository.canonicalizeOutcome(variant.makeOutcome(ids.executionId, 1)),
+      });
+      expect(competing).toEqual({ kind: 'conflict' });
+    });
+  });
+}
+
+for (const [realization, createHarness] of REALIZATIONS) {
+  defineOutcomeParity(realization, createHarness, 'workflow run result', WORKFLOW_OUTCOME_VARIANT);
+  defineOutcomeParity(realization, createHarness, 'counter', COUNTER_OUTCOME_VARIANT);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Normalizing codec
+//
+// Not a `defineOutcomeParity` variant, because that block's contract is that
+// a committed outcome comes back as it was submitted. A codec is allowed to
+// normalize while serializing, and this block states what the port owes then:
+// the durable value decides, in every realization.
+// ─────────────────────────────────────────────────────────────
+
+describe.each(
+  REALIZATIONS,
+)('execution attempt outcome parity (%s, normalizing codec)', (_realization, createHarness) => {
+  let harness: RealizationHarness<CounterOutcome>;
+
+  beforeAll(async () => {
+    harness = await createHarness(roundingCounterCodec);
+  });
+
+  afterAll(() => {
+    harness.dispose();
+  });
+
+  it('commits, replays, and conflicts on the truncated counter the codec persists', async () => {
     const ids = nextIds();
     await harness.repository.createAttempt(ids);
-    const result = makeTestWorkflowResult(ids.executionId);
 
-    const accepted = await harness.repository.commitOutcome({ ...ids, result });
+    // The column holds `1`, so `1` is what the attempt committed — a
+    // realization reporting the submitted `1.2` would report an outcome no
+    // reload ever yields, and the owner would converge on it.
+    const accepted = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(1.2),
+    });
+    expect(accepted).toEqual({ kind: 'accepted', outcome: 1, text: '{"counter":1}' });
 
-    expect(accepted).toEqual({ kind: 'accepted', outcome: result });
-    const replay = await harness.repository.commitOutcome({ ...ids, result: makeTestWorkflowResult(ids.executionId) });
-    expect(replay).toEqual({ kind: 'duplicate', outcome: result });
+    // A different submission with the same durable form is the same answer
+    // replayed, so it owes `duplicate` — comparing the submitted values would
+    // make this a `conflict` and reject a worker's honest retry.
+    const replay = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(1.7),
+    });
+    // The text is the *stored* one, which the retry's own rendering also
+    // happens to equal here — the truncating codec renders `1.2` and `1.7`
+    // alike.
+    expect(replay).toEqual({ kind: 'duplicate', outcome: 1, text: '{"counter":1}' });
+
+    // Normalization narrows what counts as the same outcome; it does not
+    // dissolve the distinction. `2.5` persists as `2`, which is a second,
+    // different answer for an attempt that already has one.
+    const competing = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(2.5),
+    });
+    expect(competing).toEqual({ kind: 'conflict' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Codec whose serialization is not a fixed point
+//
+// A codec is required to be deterministic and to make
+// `parse(JSON.parse(serialize(o)))` succeed — not to serialize the result
+// back to the same text. This block pins the rule that survives that freedom:
+// an attempt is compared against the text it stored, never against a fresh
+// serialization of what that text decodes to.
+// ─────────────────────────────────────────────────────────────
+
+describe.each(
+  REALIZATIONS,
+)('execution attempt outcome parity (%s, non-idempotent serialization)', (_realization, createHarness) => {
+  let harness: RealizationHarness<GenerationCounterOutcome>;
+
+  beforeAll(async () => {
+    harness = await createHarness(generationCounterCodec);
+  });
+
+  afterAll(() => {
+    harness.dispose();
+  });
+
+  it('replays an identical submission as duplicate against the text it stored', async () => {
+    const ids = nextIds();
+    await harness.repository.createAttempt(ids);
+    const submitted: GenerationCounterOutcome = { counter: 0, generation: 0 };
+
+    // The determinism the port leans on: rendering one outcome twice yields
+    // one text, which is what lets a retry be compared against the text an
+    // earlier commit stored.
+    expect(generationCounterCodec.serialize(submitted)).toBe(generationCounterCodec.serialize(submitted));
+
+    // One serialization decides both facts: the column holds generation `1`
+    // and the attempt therefore committed generation `1`.
+    const rendering = harness.repository.canonicalizeOutcome(submitted);
+    expect(rendering).toEqual({ text: '{"counter":0,"generation":1}', outcome: { counter: 0, generation: 1 } });
+    const accepted = await harness.repository.commitOutcome({ ...ids, result: rendering });
+    expect(accepted).toEqual({
+      kind: 'accepted',
+      outcome: { counter: 0, generation: 1 },
+      text: '{"counter":0,"generation":1}',
+    });
+
+    // The worker's honest retry. Its submission would write the same text
+    // the first commit wrote, so it is the same answer replayed. A
+    // realization that re-serialized the committed generation `1` would
+    // compare generation `2` against generation `1` and reject the retry as a
+    // conflicting outcome, stranding the waiter it owes a settlement.
+    const replay = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome({ counter: 0, generation: 0 }),
+    });
+    expect(replay).toEqual({
+      kind: 'duplicate',
+      outcome: { counter: 0, generation: 1 },
+      text: '{"counter":0,"generation":1}',
+    });
+
+    // A genuinely different submission still conflicts: comparing stored
+    // texts narrows nothing beyond what the codec itself collapses.
+    const competing = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome({ counter: 4, generation: 0 }),
+    });
+    expect(competing).toEqual({ kind: 'conflict' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Outcome type that cannot be structured-cloned
+//
+// The codec contract says what an outcome must survive: `serialize` and
+// `parse`. It says nothing about `structuredClone`, so a realization that
+// clones a submission on the way in rejects conforming owner outcomes.
+// ─────────────────────────────────────────────────────────────
+
+describe.each(
+  REALIZATIONS,
+)('execution attempt outcome parity (%s, non-cloneable outcome)', (_realization, createHarness) => {
+  let harness: RealizationHarness<URL>;
+
+  beforeAll(async () => {
+    harness = await createHarness(urlOutcomeCodec);
+  });
+
+  afterAll(() => {
+    harness.dispose();
+  });
+
+  it('commits and replays an outcome structuredClone would refuse', async () => {
+    const ids = nextIds();
+    await harness.repository.createAttempt(ids);
+    // Proof the type is outside `structuredClone`: the assertion below would
+    // pass vacuously if a URL were cloneable after all.
+    expect(() => structuredClone(new URL('https://outcome.test/a'))).toThrow();
+    const submitted = new URL('https://outcome.test/a');
+
+    const accepted = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(submitted),
+    });
+
+    expect(accepted.kind).toBe('accepted');
+    const committed = accepted.kind === 'accepted' ? accepted.outcome : null;
+    expect(committed?.href).toBe('https://outcome.test/a');
+    // The identity witness: what the port reports came out of the codec, not
+    // out of the caller's hand, so a submitter that mutates its own object
+    // afterwards changes nothing the owner converges on.
+    expect(committed).not.toBe(submitted);
+
+    const replay = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(new URL('https://outcome.test/a')),
+    });
+    expect(replay.kind).toBe('duplicate');
+    expect(replay.kind === 'duplicate' ? replay.outcome.href : null).toBe('https://outcome.test/a');
+
+    const competing = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(new URL('https://outcome.test/b')),
+    });
+    expect(competing).toEqual({ kind: 'conflict' });
+  });
+
+  // A `URL` keeps its state in internal slots, so `Object.freeze` does not
+  // make it immutable: assigning `pathname` still rewrites `href`. What keeps
+  // a committed outcome stable is therefore not the freeze but the rule that
+  // every read decodes the stored text again — a realization that handed out
+  // one shared instance would report the mutation back to the next reader.
+  it('reports a committed outcome no earlier reader can have mutated', async () => {
+    const ids = nextIds();
+    await harness.repository.createAttempt(ids);
+
+    const accepted = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(new URL('https://outcome.test/a')),
+    });
+    const first = accepted.kind === 'accepted' ? accepted.outcome : null;
+    // Proof the outcome type is mutable through the freeze, so the assertion
+    // below is not passing because the mutation silently failed.
+    if (first !== null) first.pathname = '/mutated';
+    expect(first?.href).toBe('https://outcome.test/mutated');
+
+    const replay = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(new URL('https://outcome.test/a')),
+    });
+
+    expect(replay.kind).toBe('duplicate');
+    const second = replay.kind === 'duplicate' ? replay.outcome : null;
+    expect(second?.href).toBe('https://outcome.test/a');
+    expect(second).not.toBe(first);
+  });
+
+  // The rendering's decoded value is what a caller validates before it
+  // commits, and a mutable one it can change there. The `accepted` decision
+  // must still report what the stored text yields — anything else hands the
+  // owner a value no later read of the attempt ever produces.
+  it('reports an accepted outcome decoded from the stored text, not the rendering the caller held', async () => {
+    const ids = nextIds();
+    await harness.repository.createAttempt(ids);
+    const rendering = harness.repository.canonicalizeOutcome(new URL('https://outcome.test/a'));
+    // Exactly what a pre-commit validation is handed, mutated exactly where a
+    // validator could mutate it. The assertion proves the mutation took, so
+    // the ones below cannot pass vacuously.
+    rendering.outcome.pathname = '/mutated';
+    expect(rendering.outcome.href).toBe('https://outcome.test/mutated');
+    expect(rendering.text).toBe('"https://outcome.test/a"');
+
+    const accepted = await harness.repository.commitOutcome({ ...ids, result: rendering });
+
+    expect(accepted.kind).toBe('accepted');
+    expect(accepted.kind === 'accepted' ? accepted.outcome.href : null).toBe('https://outcome.test/a');
+    // And the attempt holds the original, so the honest replay is a duplicate
+    // rather than a conflict against a mutation nobody committed.
+    const replay = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(new URL('https://outcome.test/a')),
+    });
+    expect(replay.kind).toBe('duplicate');
+    expect(replay.kind === 'duplicate' ? replay.outcome.href : null).toBe('https://outcome.test/a');
+  });
+
+  // The read rule the port owes, and the one an owner boundary settles its
+  // waiter from: the stored text is the only copy of an outcome no caller has
+  // touched, and every decode of it is a value of its own.
+  it('decodes a durable text into a fresh outcome on every call', async () => {
+    const text = harness.repository.canonicalizeOutcome(new URL('https://outcome.test/a')).text;
+
+    const decoded = harness.repository.decodeOutcome(text);
+
+    expect(decoded.href).toBe('https://outcome.test/a');
+    expect(decoded).not.toBe(harness.repository.decodeOutcome(text));
+    // A text the codec refuses fails loudly rather than yielding an outcome.
+    expect(() => harness.repository.decodeOutcome('5')).toThrow('UrlOutcome requires a URL or an absolute URL string');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Outcome type that cannot be frozen
+//
+// The codec contract says what an outcome must survive: `serialize` and
+// `parse`. It says nothing about `Object.freeze`, which throws outright for a
+// non-empty typed array — so a realization that freezes what a codec produced
+// rejects conforming owner outcomes before any durable decision.
+// ─────────────────────────────────────────────────────────────
+
+describe.each(
+  REALIZATIONS,
+)('execution attempt outcome parity (%s, unfreezable outcome)', (_realization, createHarness) => {
+  let harness: RealizationHarness<Uint8Array>;
+
+  beforeAll(async () => {
+    harness = await createHarness(bytesOutcomeCodec);
+  });
+
+  afterAll(() => {
+    harness.dispose();
+  });
+
+  it('commits and replays an outcome Object.freeze would refuse', async () => {
+    const ids = nextIds();
+    await harness.repository.createAttempt(ids);
+    // Proof the type is outside `Object.freeze`: the assertions below would
+    // pass vacuously if a populated typed array were freezable after all.
+    expect(() => Object.freeze(Uint8Array.from([1, 2, 3]))).toThrow();
+    const submitted = Uint8Array.from([1, 2, 3]);
+
+    const rendering = harness.repository.canonicalizeOutcome(submitted);
+
+    expect(rendering.text).toBe('[1,2,3]');
+    const accepted = await harness.repository.commitOutcome({ ...ids, result: rendering });
+    expect(accepted.kind).toBe('accepted');
+    const committed = accepted.kind === 'accepted' ? accepted.outcome : null;
+    expect(committed).toEqual(Uint8Array.from([1, 2, 3]));
+    // The identity witness: what the port reports came out of the codec, not
+    // out of the caller's hand.
+    expect(committed).not.toBe(submitted);
+
+    const replay = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(Uint8Array.from([1, 2, 3])),
+    });
+    expect(replay.kind).toBe('duplicate');
+    expect(replay.kind === 'duplicate' ? replay.outcome : null).toEqual(Uint8Array.from([1, 2, 3]));
+
+    const competing = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(Uint8Array.from([4])),
+    });
+    expect(competing).toEqual({ kind: 'conflict' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Stored outcome text the codec rejects
+//
+// Only reachable by writing the column behind the port's back, which is what
+// durable corruption — or a codec changed under an existing row — looks like
+// on read. The port owes the same answer in every realization: fail loudly,
+// rather than report broken durable state as an ordinary caller conflict.
+// ─────────────────────────────────────────────────────────────
+
+describe.each(
+  REALIZATIONS,
+)('execution attempt outcome parity (%s, invalid stored outcome)', (_realization, createHarness) => {
+  let harness: RealizationHarness<CounterOutcome>;
+
+  beforeAll(async () => {
+    harness = await createHarness(counterCodec);
+  });
+
+  afterAll(() => {
+    harness.dispose();
+  });
+
+  it('throws instead of reporting conflict when the stored outcome does not parse', async () => {
+    const ids = nextIds();
+    await harness.repository.createAttempt(ids);
+    // Valid JSON the codec refuses, so the failure is the codec's and not
+    // `JSON.parse` choking on a truncated write.
+    await harness.writeStoredOutcomeText(ids.executionAttemptId, '"not-a-number"');
+
+    // A submission that differs from the stored text: the branch that used to
+    // answer `conflict` without ever consulting the codec.
+    await expect(
+      harness.repository.commitOutcome({ ...ids, result: harness.repository.canonicalizeOutcome(5) }),
+    ).rejects.toThrow('CounterOutcome requires a numeric counter');
   });
 });
 
@@ -512,13 +1007,13 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
 
 describe('execution attempt port parity (inconsistent durable state)', () => {
   it('fences an outcome whose active attempt has no record behind it', async () => {
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     repository.activeAttempts.set('ghost-exec', 'ghost-attempt');
 
     const decision = await repository.commitOutcome({
       executionId: 'ghost-exec',
       executionAttemptId: 'ghost-attempt',
-      result: makeTestWorkflowResult('ghost-exec'),
+      result: repository.canonicalizeOutcome(makeTestWorkflowResult('ghost-exec')),
     });
 
     // An accepted outcome obliges the caller to converge workflow state, so
@@ -528,7 +1023,7 @@ describe('execution attempt port parity (inconsistent durable state)', () => {
   });
 
   it('breaks a creation-instant tie by attempt identifier', async () => {
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     // Two attempts created within one millisecond is reachable durably but not
     // reproducible through the port, so the tie is written directly here.
     const createdAt = new Date().toISOString();
@@ -554,7 +1049,7 @@ describe('execution attempt port parity (inconsistent durable state)', () => {
   });
 
   it('fails recovery on a selected attempt whose provider binding is incomplete', async () => {
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const inconsistent: ExecutionAttemptRecord = {
       executionAttemptId: 'partial-attempt',
       executionId: 'partial-exec',

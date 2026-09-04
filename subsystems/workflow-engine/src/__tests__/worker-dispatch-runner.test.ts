@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
-import type { ProviderAllocationRef, WorkflowRunResult, WorkerRequirements } from '@makaio/contracts';
+import type { ProviderAllocationRef, WorkerRequirements, WorkflowRunResult } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { hasWorkerDispatchRequirements, createWorkerDispatchRunner } from '../worker-dispatch-runner.js';
 import { launchDefinitionExecutionTask } from '../workflow-definition-dispatch.js';
 import type { StartExecutionDeps } from '../workflow-execution-start.js';
 import type { DefinitionRunnerTaskParams } from '../workflow-runner-tasks.js';
-import { beginTestProvisioning, createInMemoryAttemptRepository } from '../testing/index.js';
+import {
+  beginTestProvisioning,
+  createInMemoryAttemptRepository,
+  workflowRunResultOutcomeCodec,
+} from '../testing/index.js';
 
 function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerDispatchRunner>>['run']>[0] {
   return {
@@ -86,7 +90,7 @@ describe('hasWorkerDispatchRequirements', () => {
 describe('createWorkerDispatchRunner', () => {
   it('returns undefined when no capability constraint exists', () => {
     const bus = createBusInstance();
-    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
+    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
     const runner = createWorkerDispatchRunner({
       bus,
       requirements: undefined,
@@ -97,7 +101,7 @@ describe('createWorkerDispatchRunner', () => {
 
   it('returns undefined when customCapabilities are empty', () => {
     const bus = createBusInstance();
-    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
+    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
     const runner = createWorkerDispatchRunner({
       bus,
       requirements: { customCapabilities: [] },
@@ -109,7 +113,7 @@ describe('createWorkerDispatchRunner', () => {
   it('abandons the durable pending attempt and removes its waiter when dispatch has no handler', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
     const runner = createWorkerDispatchRunner({
       bus,
@@ -131,7 +135,7 @@ describe('createWorkerDispatchRunner', () => {
   it('rejects the runner without terminalizing durable state when dispatch rejects its local waiter', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
     const localFailure = new Error('provider cleanup requires recovery');
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
@@ -166,7 +170,7 @@ describe('createWorkerDispatchRunner', () => {
   it('awaits the canonical outcome when allocation persists before the dispatch acknowledgement rejects', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       const claim = await beginTestProvisioning(
@@ -184,7 +188,7 @@ describe('createWorkerDispatchRunner', () => {
         const decision = await authority.commitOutcome(
           ctx.payload.executionAttemptId,
           ctx.payload.config.executionId,
-          result,
+          authority.canonicalizeOutcome(result),
         );
         authority.settleOutcome(ctx.payload.executionAttemptId, decision);
       });
@@ -218,7 +222,7 @@ describe('createWorkerDispatchRunner', () => {
   it('cleans up the waiter when pending abandonment itself rejects', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const abandonError = new Error('attempt storage unavailable');
     vi.spyOn(repository, 'abandonPendingAttempt').mockRejectedValue(abandonError);
     const authority = new ExecutionAttemptAuthority(repository);
@@ -255,7 +259,7 @@ describe('createWorkerDispatchRunner', () => {
   it('does not abandon an attempt when the outcome fails after dispatch acknowledgement', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
     const offDispatch = bus.on(WorkerSubjects.dispatch, (ctx) => {
       ctx.setResult({
@@ -290,7 +294,7 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedAttemptId: string | undefined;
@@ -305,7 +309,7 @@ describe('createWorkerDispatchRunner', () => {
       const decision = await authority.commitOutcome(
         ctx.payload.executionAttemptId,
         ctx.payload.config.executionId,
-        result,
+        authority.canonicalizeOutcome(result),
       );
       authority.settleOutcome(ctx.payload.executionAttemptId, decision);
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
@@ -333,7 +337,7 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedMetadata: Record<string, unknown> | undefined;
@@ -347,7 +351,7 @@ describe('createWorkerDispatchRunner', () => {
       const decision = await authority.commitOutcome(
         ctx.payload.executionAttemptId,
         ctx.payload.config.executionId,
-        result,
+        authority.canonicalizeOutcome(result),
       );
       authority.settleOutcome(ctx.payload.executionAttemptId, decision);
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
@@ -373,7 +377,7 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedRequirements: Record<string, unknown> | undefined;
@@ -387,7 +391,7 @@ describe('createWorkerDispatchRunner', () => {
       const decision = await authority.commitOutcome(
         ctx.payload.executionAttemptId,
         ctx.payload.config.executionId,
-        result,
+        authority.canonicalizeOutcome(result),
       );
       authority.settleOutcome(ctx.payload.executionAttemptId, decision);
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
@@ -413,7 +417,7 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedRequirements: Record<string, unknown> | undefined;
@@ -427,7 +431,7 @@ describe('createWorkerDispatchRunner', () => {
       const decision = await authority.commitOutcome(
         ctx.payload.executionAttemptId,
         ctx.payload.config.executionId,
-        result,
+        authority.canonicalizeOutcome(result),
       );
       authority.settleOutcome(ctx.payload.executionAttemptId, decision);
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
@@ -455,7 +459,7 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     let capturedRequirements: Record<string, unknown> | undefined;
@@ -469,7 +473,7 @@ describe('createWorkerDispatchRunner', () => {
       const decision = await authority.commitOutcome(
         ctx.payload.executionAttemptId,
         ctx.payload.config.executionId,
-        result,
+        authority.canonicalizeOutcome(result),
       );
       authority.settleOutcome(ctx.payload.executionAttemptId, decision);
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
@@ -504,7 +508,7 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     let dispatchCalled = false;
@@ -521,7 +525,7 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
       const decision = await authority.commitOutcome(
         ctx.payload.executionAttemptId,
         ctx.payload.config.executionId,
-        result,
+        authority.canonicalizeOutcome(result),
       );
       authority.settleOutcome(ctx.payload.executionAttemptId, decision);
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
@@ -594,7 +598,7 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
   it('falls through to in-process runner when definition has no requirements', async () => {
     const bus = createBusInstance();
 
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository);
 
     const fallbackRunner = vi.fn().mockResolvedValue(undefined);

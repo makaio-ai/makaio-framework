@@ -1,9 +1,4 @@
-import type {
-  BoundedRecoveryEvidence,
-  ProviderAllocationRef,
-  WorkerAllocationLifetime,
-  WorkflowRunResult,
-} from '@makaio/contracts';
+import type { BoundedRecoveryEvidence, ProviderAllocationRef, WorkerAllocationLifetime } from '@makaio/contracts';
 import { canonicalStringify } from '@makaio/utils';
 import type {
   ProcessBoundProvisionerLossProof,
@@ -46,9 +41,9 @@ export const EXECUTION_ATTEMPT_SETTLEMENT_KINDS = ['outcome', 'abandoned', 'infr
 /**
  * How a settled attempt reached its terminal state.
  *
- * - `outcome`: a worker submitted a workflow result that was accepted.
+ * - `outcome`: a worker submitted an outcome that was accepted.
  * - `infrastructure-failure`: the provider allocation terminated without
- *   an acknowledged worker outcome. The workflow run may be retried.
+ *   an acknowledged worker outcome. The owner may retry the work.
  * - `abandoned`: dispatch ended before allocation, including a positively
  *   proven absence recorded through
  *   {@link ExecutionAttemptRepository.recordProvisioningAbsent} or a
@@ -87,17 +82,207 @@ export function sameAllocationRef(stored: ProviderAllocationRef, candidate: Prov
 }
 
 /**
- * Compare two terminal workflow results as values.
+ * Identifier of the durable aggregate that owns a series of attempts.
  *
- * The rule {@link sameAllocationRef} states, for the same reason: a result may
- * carry caller-authored data whose key order is incidental, and a replay of the
- * identical result must be reported as `duplicate` by every realization.
- * @param committed - Result already committed for the attempt.
- * @param candidate - Result the caller presented.
- * @returns `true` when the two denote the same terminal result.
+ * For the workflow adapter this is the `WorkflowExecution` id. The generic
+ * port never interprets it; it is the fence key that decides which attempt is
+ * active for an owner. The alias is scoped to the repository port, the
+ * authority, the dispatch runner, and the convergence ports — wire claims and
+ * workflow-storage lookup keys keep plain `string`.
  */
-export function sameWorkflowResult(committed: WorkflowRunResult, candidate: WorkflowRunResult): boolean {
-  return canonicalStringify(committed) === canonicalStringify(candidate);
+export type ExecutionOwnerId = string;
+
+/**
+ * Compare two durable outcome texts as values.
+ *
+ * The rule {@link sameAllocationRef} states, for the same reason: an outcome
+ * may carry caller-authored data whose key order is incidental, and a replay
+ * of the identical outcome must be reported as `duplicate` by every
+ * realization. The texts are parsed back before canonicalization because a
+ * codec is free to emit whatever key order it likes, and key order is not
+ * part of the value.
+ *
+ * Both operands are the codec's durable text — the only representation every
+ * realization shares. The stored one is what the attempt actually holds, read
+ * out of the realization's own record rather than reproduced from the decoded
+ * value: a codec may normalize while serializing, and the contract requires
+ * `parse(JSON.parse(serialize(outcome)))` only to succeed, never to serialize
+ * back to the same text. Re-serializing the decoded outcome would therefore
+ * compare a retry against a text the first commit never wrote, and would
+ * answer `conflict` for a worker's honest replay. Comparing texts also keeps
+ * a value such as a `bigint` — which a codec may legitimately encode, and
+ * which has no JSON form of its own — away from the canonicalizer entirely.
+ * @param stored - Durable text the attempt committed.
+ * @param candidate - Durable text the caller's submission would commit.
+ * @returns `true` when the two denote the same outcome.
+ */
+export function sameDurableOutcome(stored: string, candidate: string): boolean {
+  return canonicalStringify(JSON.parse(stored) as unknown) === canonicalStringify(JSON.parse(candidate) as unknown);
+}
+
+/**
+ * The durable text a submission commits as, with the value that text yields.
+ *
+ * The two are produced together, by one call to {@link durableOutcome}, because
+ * they are one durable fact: the text is what a realization writes, and the
+ * outcome is what a reload of that text returns. Deriving either from the
+ * other later would re-serialize an already-normalized value, and a codec is
+ * not required to serialize such a value back to the text it came from.
+ *
+ * It is the currency of the whole outcome path. A caller renders a submission
+ * once through {@link ExecutionAttemptRepository.canonicalizeOutcome},
+ * validates `outcome`, and hands the same rendering to
+ * {@link ExecutionAttemptRepository.commitOutcome}, which stores `text`
+ * verbatim. Nothing between those steps re-reads the submitter's object, so a
+ * mutable outcome the caller changes afterwards cannot make the committed
+ * value differ from the validated one.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
+ */
+export interface DurableOutcome<TOutcome> {
+  /** The codec text a realization persists for this submission. */
+  readonly text: string;
+  /** The outcome that text reads back as, produced by the same rendering. */
+  readonly outcome: TOutcome;
+}
+
+/**
+ * Render a caller-supplied outcome as the durable fact a commit would write.
+ *
+ * The rendering rule every realization owes, stated once here for the same
+ * reason {@link sameDurableOutcome} is: it decides what an attempt holds, so
+ * two realizations deriving it independently could disagree about it.
+ *
+ * Three steps, in this order and each exactly once. `parse` validates the
+ * submission before any durable decision, so a value the codec rejects is
+ * refused at the same point by every realization. `serialize` produces the
+ * text to persist — the single serialization the pair is built from.
+ * `parse(JSON.parse(text))` yields what a reload returns, which is the
+ * outcome the port reports and an owner converges on; a codec may normalize
+ * while serializing, so it is not in general the submitted value.
+ *
+ * Nothing is cloned and nothing is frozen. The round trip already produces a
+ * value derived from freshly parsed JSON rather than from the caller's
+ * object, so no reference reaches back into anything the caller still holds.
+ * A `structuredClone` in front of it would reject an outcome type that is
+ * codec-serializable but not structured-cloneable, such as a `URL`, and an
+ * `Object.freeze` behind it would throw outright for one that is not
+ * freezable, such as a non-empty `Uint8Array` — both of which the codec
+ * contract allows. What keeps a committed outcome stable instead is that a
+ * realization stores the text and decodes it afresh on every read, so a
+ * caller that mutates the value it was handed changes nothing a later read
+ * reports.
+ * @param codec - Owner-injected codec that owns the durable representation.
+ * @param outcome - Outcome the caller presented.
+ * @returns The text to persist and the outcome it reads back as.
+ * @throws When the codec rejects the outcome or its own durable text.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
+ */
+export function durableOutcome<TOutcome>(codec: OutcomeCodec<TOutcome>, outcome: TOutcome): DurableOutcome<TOutcome> {
+  const text = codec.serialize(codec.parse(outcome));
+  return { text, outcome: decodeDurableOutcome(codec, text) };
+}
+
+/**
+ * Read a committed durable text back as the outcome it holds.
+ *
+ * The read rule every realization owes, stated once here for the same reason
+ * {@link durableOutcome} states the write rule: what a stored text yields
+ * must not depend on which realization reads it. `JSON.parse` undoes the
+ * transport form and `parse` validates the envelope, so a text the codec
+ * refuses — durable corruption, or a codec an owner changed under an existing
+ * row — fails loudly rather than reaching a caller as an ordinary outcome.
+ *
+ * Every read decodes afresh, and nothing is shared, cloned, or frozen. A
+ * codec may reconstruct a mutable object whose state a freeze does not even
+ * reach, such as a `URL`, so one reader mutating the value it was handed must
+ * not change what the next read reports; the stored text stays the only
+ * source of truth.
+ * @param codec - Owner-injected codec that owns the durable representation.
+ * @param text - Durable text an attempt committed.
+ * @returns The outcome that text holds, held by nobody else.
+ * @throws When the text is not JSON, or not JSON the codec accepts.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
+ */
+export function decodeDurableOutcome<TOutcome>(codec: OutcomeCodec<TOutcome>, text: string): TOutcome {
+  return codec.parse(JSON.parse(text) as unknown);
+}
+
+/**
+ * Validates and serializes the owner-specific outcome type of an attempt.
+ *
+ * Injected into every {@link ExecutionAttemptRepository} realization so the
+ * generic port can enforce "input validation precedes every durable decision"
+ * without knowing the outcome shape. `parse` runs on every submitted outcome
+ * before the durable decision and on every committed outcome read back from
+ * storage; `serialize` produces the durable representation.
+ *
+ * **The durable representation is JSON text, and the two members round-trip
+ * through it.** A realization persists exactly what `serialize` returned,
+ * reads it back with `JSON.parse`, and hands the parsed value to `parse`; a
+ * codec must therefore accept `JSON.parse(serialize(outcome))` for every
+ * outcome it produced. Which envelope lives inside that text is the codec's
+ * own choice — no realization may assume it is `JSON.stringify(outcome)`.
+ *
+ * **The text is strict JSON, in the sense `JSON.stringify` defines.** Only
+ * values that function can represent are inside the contract: finite numbers,
+ * strings, booleans, `null`, arrays, and plain objects. A non-finite number —
+ * `Infinity`, `-Infinity`, `NaN`, written as `1e9999` or any other spelling —
+ * is outside it, as is anything else JSON has no form for, because the port
+ * decides outcome equality by canonicalizing the parsed text with
+ * `canonicalStringify` (see {@link sameDurableOutcome}), which renders every
+ * such value as `null` and would report two different outcomes as the same
+ * one. A codec whose outcomes need those values encodes them as values JSON
+ * does have — a string, or a tagged envelope — which is the codec's own job
+ * and not something a realization can do for it. Equality follows JSON
+ * semantics for the same reason: signed zero is outside the contract, `-0`
+ * and `0` are one and the same outcome, because `JSON.stringify` renders both
+ * as `0` and the canonical form cannot tell them apart. A codec that needs the
+ * sign encodes it explicitly, as it would any other value JSON does not carry.
+ *
+ * **Both members are deterministic, pure functions of their argument.** The
+ * same outcome serializes to the same text every time and the same value
+ * parses to the same outcome every time; neither may consult history, a
+ * counter, a clock, or any state outside the argument it was handed.
+ *
+ * The port itself renders a submission exactly once, through
+ * {@link ExecutionAttemptRepository.canonicalizeOutcome}, and carries that one
+ * {@link DurableOutcome} into {@link ExecutionAttemptRepository.commitOutcome}
+ * — so validation, the durable write, and convergence are one rendering and
+ * cannot drift apart. Determinism is still owed, because two renderings of
+ * the same outcome do meet: `commitOutcome` compares the text a retry renders
+ * against the text the first commit stored, and a codec that closed over a
+ * counter would misclassify a worker's honest retry.
+ *
+ * Determinism is not idempotence. `serialize` need not map its own decoded
+ * output back to the text it came from: a codec may normalize, and every
+ * decision the port makes about a committed outcome is made on the text that
+ * commit actually stored rather than on a re-serialization of it.
+ *
+ * `null` and `undefined` are not outcomes. A realization records "no outcome
+ * committed" as the absence of a stored value, so a codec that accepted a
+ * nullish outcome would make the two indistinguishable.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
+ */
+export interface OutcomeCodec<TOutcome> {
+  /**
+   * Validate an untrusted value as an outcome.
+   *
+   * Deterministic and pure: the same input always yields the same outcome.
+   * @param input - Value to validate.
+   * @returns The validated outcome.
+   * @throws When the value violates the outcome contract, including when it is nullish.
+   */
+  parse(input: unknown): TOutcome;
+  /**
+   * Serialize an outcome for durable storage.
+   *
+   * Deterministic and pure: the same outcome always yields the same text,
+   * because a retry's rendering is compared against the text an earlier
+   * commit stored.
+   * @param outcome - Outcome to serialize.
+   * @returns The JSON text to persist, which `parse` accepts after `JSON.parse`.
+   */
+  serialize(outcome: TOutcome): string;
 }
 
 /**
@@ -138,8 +323,8 @@ export class DuplicateExecutionAttemptError extends Error {
 export interface ExecutionAttemptRecord {
   /** Authority-created attempt identifier. */
   readonly executionAttemptId: string;
-  /** Workflow execution identifier this attempt belongs to. */
-  readonly executionId: string;
+  /** Owner identifier of the aggregate this attempt belongs to. */
+  readonly executionId: ExecutionOwnerId;
   /** Current lifecycle status of the attempt. */
   readonly status: ExecutionAttemptStatus;
   /** Provider allocation reference, set after allocation recording. */
@@ -246,8 +431,8 @@ export interface RecoverableAttemptRecord extends ExecutionAttemptRecord {
 export interface ExecutionAttemptCreate {
   /** Authority-created attempt identifier. */
   readonly executionAttemptId: string;
-  /** Workflow execution identifier. */
-  readonly executionId: string;
+  /** Owner identifier the attempt belongs to. */
+  readonly executionId: ExecutionOwnerId;
 }
 
 /**
@@ -261,8 +446,8 @@ export interface ExecutionAttemptCreate {
 export interface BeginProvisioningInput {
   /** Attempt whose provider call is about to begin. */
   readonly executionAttemptId: string;
-  /** Workflow execution identifier the attempt must belong to. */
-  readonly executionId: string;
+  /** Owner identifier the attempt must belong to. */
+  readonly executionId: ExecutionOwnerId;
   /** Provider to bind to the attempt, immutably. */
   readonly providerId: string;
   /** Allocation lifetime declared by that provider, immutably. */
@@ -282,14 +467,22 @@ export interface BeginProvisioningInput {
  * and returns the canonical outcome for convergence. Outcome commitment
  * carries no claim: a worker's answer never depends on who currently owns
  * the attempt's provider operation.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export interface ExecutionAttemptOutcomeCommit {
+export interface ExecutionAttemptOutcomeCommit<TOutcome> {
   /** Authority-created attempt identifier. */
   readonly executionAttemptId: string;
-  /** Workflow execution identifier. */
-  readonly executionId: string;
-  /** Terminal workflow result to commit. */
-  readonly result: WorkflowRunResult;
+  /** Owner identifier the attempt belongs to. */
+  readonly executionId: ExecutionOwnerId;
+  /**
+   * The rendering to commit, from
+   * {@link ExecutionAttemptRepository.canonicalizeOutcome}.
+   *
+   * A rendering rather than a raw outcome so the value a caller validated and
+   * the value that becomes durable are the same one: the caller renders the
+   * submission once and never reads its own object again.
+   */
+  readonly result: DurableOutcome<TOutcome>;
 }
 
 /** Input for extending the lease of a currently held provider operation. */
@@ -371,8 +564,8 @@ export interface RecordAllocationInput {
 export interface RecordProvisioningAbsentInput {
   /** Claim authorizing the record. */
   readonly claim: ProviderOperationClaim;
-  /** Workflow execution identifier the attempt must belong to. */
-  readonly executionId: string;
+  /** Owner identifier the attempt must belong to. */
+  readonly executionId: ExecutionOwnerId;
   /** Bounded evidence supporting the absence claim. */
   readonly evidence: BoundedRecoveryEvidence;
 }
@@ -388,8 +581,8 @@ export interface RecordProvisioningAbsentInput {
 export interface RecordProvisionerIncarnationLostInput {
   /** Claim authorizing the record. */
   readonly claim: ProviderOperationClaim;
-  /** Workflow execution identifier the attempt must belong to. */
-  readonly executionId: string;
+  /** Owner identifier the attempt must belong to. */
+  readonly executionId: ExecutionOwnerId;
   /** Proof that a specific provisioner process incarnation is gone. */
   readonly proof: ProcessBoundProvisionerLossProof;
 }
@@ -411,8 +604,8 @@ export interface RecordAllocationTerminatedInput {
 export interface RecordInfrastructureFailureInput {
   /** Claim authorizing the settlement. */
   readonly claim: ProviderOperationClaim;
-  /** Workflow execution identifier the attempt must belong to. */
-  readonly executionId: string;
+  /** Owner identifier the attempt must belong to. */
+  readonly executionId: ExecutionOwnerId;
 }
 
 /**
@@ -429,8 +622,8 @@ export interface RecordInfrastructureFailureInput {
 export interface AllocationRefEvolution {
   /** Claim authorizing the evolution. */
   readonly claim: ProviderOperationClaim;
-  /** Workflow execution identifier the attempt must belong to. */
-  readonly executionId: string;
+  /** Owner identifier the attempt must belong to. */
+  readonly executionId: ExecutionOwnerId;
   /**
    * The allocation reference the caller believes is currently stored.
    *
@@ -644,17 +837,30 @@ export type PendingAttemptAbandonmentDecision =
  * Durable outcome decision returned by {@link ExecutionAttemptRepository.commitOutcome}.
  *
  * - `accepted`: the outcome was committed as canonical for the first time.
- * - `duplicate`: an outcome {@link sameWorkflowResult} judges identical to the
- *   committed one was submitted again; this is a replay. The committed outcome
- *   is reported, never the caller's copy of it.
+ *   The stored text decoded is reported, never the caller's copy of it.
+ * - `duplicate`: an outcome whose durable text {@link sameDurableOutcome}
+ *   judges identical to the committed one was submitted again; this is a
+ *   replay. The committed outcome is reported, never the caller's copy of it.
  * - `conflict`: the attempt already reached a different terminal state — either
  *   a different committed outcome, or a competing terminal transition that
  *   settled it without one.
  * - `fenced`: the attempt is no longer the active attempt for this execution.
+ *
+ * Both settling kinds carry `text`: the durable text the attempt holds for
+ * this outcome. For `accepted` that is the text the commit just wrote; for
+ * `duplicate` it is the text the earlier commit wrote, which is not
+ * necessarily the retry's own rendering — {@link sameDurableOutcome} judges
+ * two texts the same outcome while member order, and anything else a codec
+ * may render differently, still differs between them. A caller that needs a
+ * copy of the committed outcome nobody else has held decodes this text
+ * through {@link ExecutionAttemptRepository.decodeOutcome}; decoding its own
+ * submission's text instead would hand out the retry's representation rather
+ * than the committed one.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export type ExecutionAttemptOutcomeDecision =
-  | { readonly kind: 'accepted'; readonly outcome: WorkflowRunResult }
-  | { readonly kind: 'duplicate'; readonly outcome: WorkflowRunResult }
+export type ExecutionAttemptOutcomeDecision<TOutcome> =
+  | { readonly kind: 'accepted'; readonly outcome: TOutcome; readonly text: string }
+  | { readonly kind: 'duplicate'; readonly outcome: TOutcome; readonly text: string }
   | { readonly kind: 'conflict' }
   | { readonly kind: 'fenced' };
 
@@ -705,7 +911,7 @@ export type ExecutionAttemptOutcomeDecision =
  *    let a caller assert that infrastructure ended without ever recording the
  *    evidence that it did, and the settlement is irreversible.
  *
- * 2. **Provider-side evidence is claim-fenced; workflow outcome is not.**
+ * 2. **Provider-side evidence is claim-fenced; the worker outcome is not.**
  *    Every provider-side mutation requires the current generation and token.
  *    {@link commitOutcome} deliberately requires neither, so a worker can
  *    always deliver its canonical answer.
@@ -748,9 +954,46 @@ export type ExecutionAttemptOutcomeDecision =
  * — including when the caller's claim is also stale. Validating after the
  * guards would make the rejection depend on ownership, so the same malformed
  * payload would throw against one implementation and return `stale` from
- * another.
+ * another. Submitted outcomes follow the same rule through the injected
+ * {@link OutcomeCodec}: `parse` runs before the durable outcome decision. A
+ * committed outcome is always a defined value — a nullish outcome is outside
+ * this port, because "no outcome committed" is itself recorded as the absence
+ * of a stored value and the two would be indistinguishable.
+ *
+ * **The codec's durable text is what an attempt holds, and it is rendered
+ * exactly once per submission.** {@link canonicalizeOutcome} produces the
+ * {@link DurableOutcome} — the text to persist and the outcome that text
+ * reads back as — and {@link commitOutcome} receives that rendering rather
+ * than a raw value, persisting `text` verbatim. What an attempt reports is
+ * therefore never the submitter's copy, which a normalizing codec makes a
+ * different value, and never a second serialization, which a codec whose
+ * serialization is not a fixed point makes a different text. Every later
+ * decision about that outcome is made on the stored text or on the value it
+ * yields: {@link commitOutcome} compares a retry's rendered text against the
+ * stored one through {@link sameDurableOutcome}.
+ *
+ * **Every stored outcome is parsed before it decides anything.** An
+ * implementation that finds a committed text takes it through `parse` ahead
+ * of the duplicate-or-conflict decision, not only on the branch that reports
+ * a value. A text the codec rejects is broken durable state — corruption, or
+ * a codec changed under an existing row — and it fails loudly rather than
+ * reaching the caller as an ordinary competing outcome. For the same reason
+ * an outcome is decoded on every read instead of being handed out as one
+ * shared instance: a codec may reconstruct a mutable object — one that no
+ * freeze even reaches, or that cannot be frozen at all — and one reader
+ * mutating it must not change what the next read reports.
+ * {@link decodeOutcome} is that read, stated on the port so a caller holding
+ * only a durable text can perform it too.
+ *
+ * **An `accepted` decision reports that same fresh decode of the text it just
+ * stored**, not the outcome half of the rendering it was handed. The two are
+ * one value only until someone touches it: a caller validates
+ * {@link DurableOutcome.outcome} before the commit, and a mutable outcome it
+ * changed there would otherwise be reported back as the committed one — a
+ * value no reload of the attempt ever yields.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export interface ExecutionAttemptRepository {
+export interface ExecutionAttemptRepository<TOutcome> {
   /**
    * Persist a new execution attempt record.
    *
@@ -949,11 +1192,60 @@ export interface ExecutionAttemptRepository {
    *
    * Returns `null` when the attempt does not exist or has been superseded
    * (fenced) by a newer attempt for the same execution.
-   * @param executionId - Workflow execution identifier.
+   * @param executionId - Owner identifier the attempt belongs to.
    * @param executionAttemptId - Attempt identifier to look up.
    * @returns The attempt record if active, or `null`.
    */
-  getActiveAttempt(executionId: string, executionAttemptId: string): Promise<ExecutionAttemptRecord | null>;
+  getActiveAttempt(executionId: ExecutionOwnerId, executionAttemptId: string): Promise<ExecutionAttemptRecord | null>;
+
+  /**
+   * Render a submission as the durable fact a commit of it would write.
+   *
+   * **The port renders an outcome exactly once, and this is where.** A
+   * realization stores the codec's durable text and reports what a reload of
+   * that text yields, so the value an owner converges on is not in general
+   * the value the submitter handed in — a codec may normalize while
+   * serializing. This member produces both halves of that fact together,
+   * without committing anything, so a caller can validate the outcome it will
+   * actually receive and then hand the very same rendering to
+   * {@link commitOutcome}.
+   *
+   * Carrying the rendering rather than re-deriving it is what closes the gap
+   * between the two calls: the submitter's object is read once, so neither a
+   * mutation of it nor a second serialization can make the committed outcome
+   * differ from the validated one.
+   *
+   * Synchronous and free of durable effects: it consults the injected
+   * {@link OutcomeCodec} and nothing else — {@link durableOutcome} is the
+   * rendering rule, and a realization has no freedom to deviate from it.
+   * @param outcome - Outcome a caller is about to submit.
+   * @returns The text a commit would persist and the outcome that text yields.
+   * @throws When the codec rejects the outcome or its own durable text.
+   */
+  canonicalizeOutcome(outcome: TOutcome): DurableOutcome<TOutcome>;
+
+  /**
+   * Read a committed durable text back as the outcome it holds.
+   *
+   * The counterpart of {@link canonicalizeOutcome}: that member says what a
+   * commit writes, this one says what a read of that text yields. Both are
+   * the codec's rules rather than a realization's, so
+   * {@link decodeDurableOutcome} is the rendering and a realization has no
+   * freedom to deviate from it.
+   *
+   * It exists because the durable text is the only copy of an outcome nobody
+   * can have touched. Every value the port hands out is decoded from it, and
+   * a caller that has passed one on — to an owner validation, to convergence
+   * — and needs the committed outcome again asks for a fresh decode instead
+   * of reusing a value some other step may have mutated. Each call returns
+   * its own value; a mutation of one changes nothing the next one reports.
+   *
+   * Synchronous and free of durable effects: the caller supplies the text.
+   * @param text - Durable text an attempt committed, as {@link DurableOutcome.text} carries it.
+   * @returns The outcome that text holds, held by nobody else.
+   * @throws When the text is not JSON, or not JSON the codec accepts.
+   */
+  decodeOutcome(text: string): TOutcome;
 
   /**
    * Commit a terminal outcome for an attempt.
@@ -968,12 +1260,13 @@ export interface ExecutionAttemptRepository {
    *
    * 1. `fenced` — the attempt is no longer the active attempt for its
    *    execution. Evaluated first because `accepted` and `duplicate` oblige
-   *    the caller to converge workflow state, and a superseded attempt must
+   *    the caller to converge owner state, and a superseded attempt must
    *    never drive that convergence.
    * 2. `duplicate` / `conflict` — an outcome is already committed for this
-   *    attempt: `duplicate` when {@link sameWorkflowResult} judges it
-   *    canonically equal, including member-order-insensitive objects;
-   *    `conflict` when it differs under that rule.
+   *    attempt: `duplicate` when {@link sameDurableOutcome} judges the text
+   *    the submission would commit canonically equal to the stored one,
+   *    including member-order-insensitive objects; `conflict` when it differs
+   *    under that rule.
    * 3. `conflict` — a competing terminal transition already settled the
    *    attempt without committing an outcome, that is
    *    {@link recordInfrastructureFailure} or
@@ -983,10 +1276,24 @@ export interface ExecutionAttemptRepository {
    *    `settlementKind` nor reopen the attempt.
    * 4. `accepted` — the outcome becomes canonical, the attempt settles as
    *    `outcome`, and its operation closes.
-   * @param input - Attempt identity and terminal result to commit.
+   *
+   * The submission arrives already rendered, as the {@link DurableOutcome} the
+   * caller obtained from {@link canonicalizeOutcome}. An implementation
+   * persists `result.text` verbatim and never re-serializes: a second
+   * rendering is what would let the durable answer differ from the one the
+   * owner validated. What it reports for `accepted` is that text decoded
+   * again — {@link decodeOutcome} of `result.text` — rather than
+   * `result.outcome`, which the caller has held since before its own
+   * validation and may have mutated there.
+   *
+   * A settling decision also reports the durable text the attempt holds:
+   * `result.text` for `accepted`, and the stored text for `duplicate` — the
+   * record's own, not the submission's, because the two are the same outcome
+   * without being the same text.
+   * @param input - Attempt identity and the rendering to commit.
    * @returns The durable decision with the canonical outcome when applicable.
    */
-  commitOutcome(input: ExecutionAttemptOutcomeCommit): Promise<ExecutionAttemptOutcomeDecision>;
+  commitOutcome(input: ExecutionAttemptOutcomeCommit<TOutcome>): Promise<ExecutionAttemptOutcomeDecision<TOutcome>>;
 
   /**
    * Settle a pending attempt when dispatch cannot continue before provisioning.
@@ -995,10 +1302,13 @@ export interface ExecutionAttemptRepository {
    * mean provisioning already began, so the caller must converge the provider
    * operation instead of abandoning the attempt.
    * @param executionAttemptId - Pending attempt to abandon.
-   * @param executionId - Workflow execution identifier.
+   * @param executionId - Owner identifier the attempt belongs to.
    * @returns The durable abandonment decision.
    */
-  abandonPendingAttempt(executionAttemptId: string, executionId: string): Promise<PendingAttemptAbandonmentDecision>;
+  abandonPendingAttempt(
+    executionAttemptId: string,
+    executionId: ExecutionOwnerId,
+  ): Promise<PendingAttemptAbandonmentDecision>;
 
   /**
    * Recovery operations, present only on a recovery-capable repository.
@@ -1097,8 +1407,8 @@ export interface ExecutionAttemptRecoveryOperations {
    * same millisecond from ordering differently on two stores. An
    * implementation that returned an arbitrary order would make a caller that
    * bounds its pass reclaim a different subset on each realization.
-   * @param executionId - Workflow execution identifier.
+   * @param executionId - Owner identifier the attempts belong to.
    * @returns Allocated, non-settled attempts eligible for recovery, oldest first.
    */
-  getRecoverableAttempts(executionId: string): Promise<readonly RecoverableAttemptRecord[]>;
+  getRecoverableAttempts(executionId: ExecutionOwnerId): Promise<readonly RecoverableAttemptRecord[]>;
 }

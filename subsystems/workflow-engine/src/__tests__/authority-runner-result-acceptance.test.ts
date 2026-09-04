@@ -16,7 +16,11 @@ import {
   type WorkflowExecutorTestSetup,
 } from './workflow-executor.test-setup.js';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
-import { createInMemoryAttemptRepository, type InMemoryAttemptRepository } from '../testing/index.js';
+import {
+  createInMemoryAttemptRepository,
+  type InMemoryAttemptRepository,
+  workflowRunResultOutcomeCodec,
+} from '../testing/index.js';
 
 describe('authority runner result acceptance', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
@@ -201,12 +205,12 @@ describe('authority runner result acceptance', () => {
 
 describe('outcome submission handler', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
-  let repository: InMemoryAttemptRepository;
-  let authority: ExecutionAttemptAuthority;
+  let repository: InMemoryAttemptRepository<WorkflowRunResult>;
+  let authority: ExecutionAttemptAuthority<WorkflowRunResult>;
   let handlerCleanup: () => void;
 
   beforeEach(async () => {
-    repository = createInMemoryAttemptRepository();
+    repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     authority = new ExecutionAttemptAuthority(repository);
     setup = await setupWorkflowExecutorTest();
     MakaioBus.registerNamespace(WorkerNamespace);
@@ -365,6 +369,58 @@ describe('outcome submission handler', () => {
     expect(stored.execution?.status).toBe('paused');
   });
 
+  it('resumes a paused execution on a second attempt and fences the paused attempt', async () => {
+    const executionId = 'outcome-paused-resumed';
+    const workflow = await seedExecution(executionId);
+    const paused = await authority.createAttempt(executionId);
+    const pausedResult: WorkflowRunResult = {
+      executionId,
+      workflowId: workflow.id,
+      status: 'paused',
+      pausedAtGateId: 'gate-1',
+      pausedAtFrameId: 'frame-1',
+    };
+    await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+      executionAttemptId: paused.executionAttemptId,
+      executionId,
+      result: pausedResult,
+    });
+
+    // Resuming the gate puts the execution back to `running` and dispatches a
+    // second attempt for it, which supersedes the paused one the moment it
+    // exists. The storage write is the one the resume path performs itself.
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    if (!execution) throw new Error('Paused execution was not persisted.');
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+      execution: { ...execution, status: 'running' },
+    });
+    const resumed = await authority.createAttempt(executionId);
+    const resumedWaiter = authority.waitForOutcome(resumed.executionAttemptId);
+    const terminal: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
+
+    const resumedDecision = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+      executionAttemptId: resumed.executionAttemptId,
+      executionId,
+      result: terminal,
+    });
+
+    expect(resumedDecision.decision).toBe('accepted');
+    await expect(resumedWaiter).resolves.toEqual(terminal);
+
+    // The paused attempt's own worker may still retry: its outcome stays
+    // durably committed, but the execution it would converge is no longer its
+    // own to converge.
+    const lateReplay = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+      executionAttemptId: paused.executionAttemptId,
+      executionId,
+      result: pausedResult,
+    });
+
+    expect(lateReplay.decision).toBe('fenced');
+    const converged = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    expect(converged.execution?.status).toBe('completed');
+  });
+
   it.each([
     { status: 'completed' as const },
     {
@@ -408,7 +464,7 @@ describe('outcome submission handler', () => {
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
     // Commit the outcome directly through the authority (simulates partial commit).
-    await authority.commitOutcome(attempt.executionAttemptId, executionId, result);
+    await authority.commitOutcome(attempt.executionAttemptId, executionId, authority.canonicalizeOutcome(result));
     // Workflow state was NOT converged yet (simulates fault).
 
     // Retry submission: should get duplicate and still converge workflow state.
@@ -436,7 +492,7 @@ describe('outcome submission handler', () => {
     };
 
     // Commit attempt outcome (simulates partial commit before workflow park).
-    await authority.commitOutcome(attempt.executionAttemptId, executionId, result);
+    await authority.commitOutcome(attempt.executionAttemptId, executionId, authority.canonicalizeOutcome(result));
 
     // Retry: should converge workflow state and ACK duplicate.
     const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
@@ -633,7 +689,7 @@ describe('outcome submission handler', () => {
     };
 
     // Commit the outcome directly (simulates partial commit / fault).
-    await authority.commitOutcome(attempt.executionAttemptId, executionId, result);
+    await authority.commitOutcome(attempt.executionAttemptId, executionId, authority.canonicalizeOutcome(result));
 
     // At this point there is no waiter because commitOutcome does not install
     // one for retry paths. Install a fresh waiter to observe the retry.

@@ -9,17 +9,16 @@
  * disagree about it — the ordering rule as a comparator, which a realization
  * with a query engine expresses as an `ORDER BY` over the same fields instead.
  *
- * Value equality is the one rule that does not live here. `sameAllocationRef`
- * and `sameWorkflowResult` decide two of the port's own decisions, so the port
- * module states them itself and every realization imports them from there.
+ * Three rules do not live here, because they are the port's own decisions
+ * rather than shared value handling: `sameAllocationRef` (what counts as the
+ * same reference), `sameDurableOutcome` (what counts as the same committed
+ * outcome), and `durableOutcome` (what an outcome is durably rendered as).
+ * The port module states those itself, and every realization imports them
+ * from there.
  * @packageDocumentation
  */
-import type { ProviderAllocationRef, WorkerAllocationLifetime, WorkflowRunResult } from '@makaio/contracts';
-import {
-  ProviderAllocationRefSchema,
-  WorkerAllocationLifetimeSchema,
-  WorkflowRunResultSchema,
-} from '@makaio/contracts';
+import type { ProviderAllocationRef, WorkerAllocationLifetime } from '@makaio/contracts';
+import { ProviderAllocationRefSchema, WorkerAllocationLifetimeSchema } from '@makaio/contracts';
 import type {
   AllocationRefEvolution,
   ExecutionAttemptRecord,
@@ -126,16 +125,6 @@ function snapshot<TValue>(value: TValue, parse: (candidate: unknown) => TValue):
  */
 export function parseAllocationRef(allocationRef: ProviderAllocationRef): ProviderAllocationRef {
   return snapshot(allocationRef, (candidate) => ProviderAllocationRefSchema.parse(candidate));
-}
-
-/**
- * Snapshot a caller-supplied workflow result for durable storage.
- * @param result - Terminal result the caller presented.
- * @returns A frozen, schema-valid copy.
- * @throws When the result violates {@link WorkflowRunResultSchema}.
- */
-export function parseWorkflowResult(result: WorkflowRunResult): WorkflowRunResult {
-  return snapshot(result, (candidate) => WorkflowRunResultSchema.parse(candidate));
 }
 
 /**
