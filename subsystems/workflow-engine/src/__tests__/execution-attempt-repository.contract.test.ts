@@ -10,6 +10,7 @@ import {
   type RawSqlSession,
 } from '@makaio/storage-drizzle';
 import { createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
+import type { WorkflowRunResult } from '@makaio/contracts';
 import type { ExecutionAttemptRepository, ProviderOperationClaim } from '../index.js';
 import { createSqliteAttemptRepository } from '../testing/sqlite.js';
 import {
@@ -22,6 +23,7 @@ import {
   makeProcessLossProof,
   makeTestAllocationRef,
   makeTestWorkflowResult,
+  workflowRunResultOutcomeCodec,
 } from '../testing/index.js';
 import type { BeginProvisioningInput } from '../execution-attempt-repository.js';
 
@@ -33,8 +35,8 @@ import type { BeginProvisioningInput } from '../execution-attempt-repository.js'
  * database identity, while their state agreement still comes from durable rows.
  */
 interface ContractHarness {
-  readonly alpha: Required<ExecutionAttemptRepository>;
-  readonly beta: Required<ExecutionAttemptRepository>;
+  readonly alpha: Required<ExecutionAttemptRepository<WorkflowRunResult>>;
+  readonly beta: Required<ExecutionAttemptRepository<WorkflowRunResult>>;
   /** Primary handle, used to read raw rows the port deliberately does not expose. */
   readonly db: MakaioDatabase;
 }
@@ -132,7 +134,7 @@ async function readActivePointer(executionId: string): Promise<string | null> {
  * @throws When provisioning does not start.
  */
 async function startAttempt(
-  repository: Required<ExecutionAttemptRepository>,
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
   ids: { readonly executionId: string; readonly executionAttemptId: string },
   overrides: Partial<BeginProvisioningInput> = {},
 ): Promise<ProviderOperationClaim> {
@@ -150,8 +152,8 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     const secondary = await createDatabaseClient({ url: `file:${context.dbPath}` });
     secondaryClose = secondary.close;
     harness = {
-      alpha: await createSqliteAttemptRepository(context.db),
-      beta: await createSqliteAttemptRepository(secondary.db),
+      alpha: await createSqliteAttemptRepository(context.db, workflowRunResultOutcomeCodec),
+      beta: await createSqliteAttemptRepository(secondary.db, workflowRunResultOutcomeCodec),
       db: context.db,
     };
   });
@@ -196,7 +198,7 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
      * @param repository - Controller attempting the provider call.
      * @returns Whether this controller was authorized to call the provider.
      */
-    const dispatch = async (repository: Required<ExecutionAttemptRepository>): Promise<boolean> => {
+    const dispatch = async (repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>): Promise<boolean> => {
       const decision = await repository.beginProvisioning(input);
       if (decision.kind !== 'started') return false;
       provisionCalls += 1;
@@ -582,13 +584,13 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
         observedAt: leaseAt(120_000),
         leaseExpiresAt: leaseAt(180_000),
       }),
-      harness.alpha.commitOutcome({ ...ids, result }),
+      harness.alpha.commitOutcome({ ...ids, result: harness.alpha.canonicalizeOutcome(result) }),
     ]);
 
     // Independent connections may reach the shared write gate in either
     // order. The takeover either wins ownership or observes the settlement.
     expect(['claimed', 'resolved']).toContain(takeover.kind);
-    expect(commit).toEqual({ kind: 'accepted', outcome: result });
+    expect(commit).toEqual({ kind: 'accepted', outcome: result, text: harness.alpha.canonicalizeOutcome(result).text });
     const settled = await readRawAttempt(ids.executionAttemptId);
     expect(settled.settlement_kind).toBe('outcome');
     // A settled attempt leaves no owned operation behind, whoever took it.
@@ -602,19 +604,21 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     await harness.alpha.createAttempt(ids);
     const result = makeTestWorkflowResult(ids.executionId, 'completed');
 
-    const accepted = await harness.alpha.commitOutcome({ ...ids, result });
+    const accepted = await harness.alpha.commitOutcome({ ...ids, result: harness.alpha.canonicalizeOutcome(result) });
     // The replay is served by the other controller, from the stored row.
     const replay = await harness.beta.commitOutcome({
       ...ids,
-      result: makeTestWorkflowResult(ids.executionId, 'completed'),
+      result: harness.beta.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'completed')),
     });
     const divergent = await harness.beta.commitOutcome({
       ...ids,
-      result: makeTestWorkflowResult(ids.executionId, 'failed'),
+      result: harness.beta.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'failed')),
     });
 
-    expect(accepted).toEqual({ kind: 'accepted', outcome: result });
-    expect(replay).toEqual({ kind: 'duplicate', outcome: result });
+    // Both decisions report the text the row holds: the first commit's.
+    const storedText = harness.alpha.canonicalizeOutcome(result).text;
+    expect(accepted).toEqual({ kind: 'accepted', outcome: result, text: storedText });
+    expect(replay).toEqual({ kind: 'duplicate', outcome: result, text: storedText });
     expect(divergent).toEqual({ kind: 'conflict' });
     const stored = await readRawAttempt(ids.executionAttemptId);
     expect(stored.workflow_result === null ? null : JSON.parse(stored.workflow_result)).toEqual(result);
@@ -629,7 +633,7 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     const failure = await harness.beta.recordInfrastructureFailure({ claim, executionId: ids.executionId });
     const lateOutcome = await harness.alpha.commitOutcome({
       ...ids,
-      result: makeTestWorkflowResult(ids.executionId, 'completed'),
+      result: harness.alpha.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'completed')),
     });
 
     expect(failure).toEqual({ kind: 'recorded' });
@@ -671,7 +675,10 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     expect(await harness.alpha.recovery.getRecoverableAttempts(first.executionId)).toEqual([]);
     // A worker answering for the superseded attempt is fenced, not accepted.
     expect(
-      await harness.alpha.commitOutcome({ ...first, result: makeTestWorkflowResult(first.executionId, 'completed') }),
+      await harness.alpha.commitOutcome({
+        ...first,
+        result: harness.alpha.canonicalizeOutcome(makeTestWorkflowResult(first.executionId, 'completed')),
+      }),
     ).toEqual({ kind: 'fenced' });
     // The attempt itself stays readable for remediation.
     const readBack = await harness.alpha.recovery.getAttemptWithAllocation(first.executionAttemptId);
@@ -950,8 +957,8 @@ describe('execution attempt repository contract (without write-lock isolation)',
     // application code lets both report `evolved` and silently keeps whichever
     // committed last.
     const shared = withoutTransactionIsolation(openConnection());
-    const alpha = await createSqliteAttemptRepository(handleOver(shared));
-    const beta = await createSqliteAttemptRepository(handleOver(shared));
+    const alpha = await createSqliteAttemptRepository(handleOver(shared), workflowRunResultOutcomeCodec);
+    const beta = await createSqliteAttemptRepository(handleOver(shared), workflowRunResultOutcomeCodec);
 
     const ids = { executionId: 'unisolated-exec', executionAttemptId: 'unisolated-attempt' };
     await alpha.createAttempt(ids);
@@ -1001,6 +1008,7 @@ describe('execution attempt repository contract (failed rollback)', () => {
           return inner.all<TRow>(query);
         },
       }),
+      workflowRunResultOutcomeCodec,
     );
 
     await expect(
@@ -1026,6 +1034,7 @@ describe('execution attempt repository contract (failed rollback)', () => {
           return inner.all<TRow>(query);
         },
       }),
+      workflowRunResultOutcomeCodec,
     );
     const ids = { executionId: 'rollback-exec', executionAttemptId: 'rollback-attempt' };
     await repository.createAttempt(ids);
@@ -1051,8 +1060,8 @@ describe('execution attempt repository contract (one unbranded handle)', () => {
     // and without sharing it they would both open a transaction on that one
     // connection.
     const db: MakaioDatabase = drizzle({ connection: { url: ':memory:' } });
-    const alpha = await createSqliteAttemptRepository(db);
-    const beta = await createSqliteAttemptRepository(db);
+    const alpha = await createSqliteAttemptRepository(db, workflowRunResultOutcomeCodec);
+    const beta = await createSqliteAttemptRepository(db, workflowRunResultOutcomeCodec);
     const ids = { executionId: 'unbranded-exec', executionAttemptId: 'unbranded-attempt' };
     await alpha.createAttempt(ids);
     const input = makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId);

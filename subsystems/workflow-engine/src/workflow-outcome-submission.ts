@@ -9,6 +9,12 @@ import {
 import type { BaseMessageContext } from '@makaio/core';
 import { resolveExecutionAttemptPeer, type ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
+import {
+  submitAttemptOutcome,
+  type OutcomeConvergence,
+  type OutcomeConvergenceInput,
+  type OutcomePreCommitValidation,
+} from './outcome-convergence.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
 
@@ -56,7 +62,7 @@ export interface OutcomeSubmissionDeps {
   /** Message bus for storage and lifecycle requests. */
   readonly bus: IMakaioBus;
   /** Execution attempt Authority service. */
-  readonly authority: ExecutionAttemptAuthority;
+  readonly authority: ExecutionAttemptAuthority<WorkflowRunResult>;
   /**
    * Accept a terminal runner result through the executor's idempotent
    * workflow-state convergence path.
@@ -145,6 +151,57 @@ async function convergePausedState(bus: IMakaioBus, executionId: string, result:
 }
 
 // ─────────────────────────────────────────────────────────────
+// Workflow Owner Adapter
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Workflow-engine realization of the generic convergence port.
+ *
+ * Dispatches on the committed outcome: a `paused` result parks the execution
+ * through durable suspension, every other result goes through the executor's
+ * idempotent terminal acceptance. Both branches read the canonical committed
+ * copy the port hands over, never the submitter's copy.
+ */
+class WorkflowOutcomeConvergence implements OutcomeConvergence<WorkflowRunResult> {
+  public constructor(
+    private readonly bus: IMakaioBus,
+    private readonly acceptTerminalResult: OutcomeSubmissionDeps['acceptTerminalResult'],
+  ) {}
+
+  /**
+   * Converge workflow state with a committed outcome.
+   * @param input - Attempt identity and the committed workflow result.
+   */
+  public async converge(input: OutcomeConvergenceInput<WorkflowRunResult>): Promise<void> {
+    if (input.outcome.status === 'paused') {
+      await convergePausedState(this.bus, input.executionId, input.outcome);
+      return;
+    }
+    await this.acceptTerminalResult(input.executionId, input.outcome);
+  }
+}
+
+/**
+ * Workflow-engine realization of the pre-commit validation port.
+ *
+ * Wraps {@link validateOutcomeExecutionIdentity}: reads only, so a rejected
+ * outcome never becomes an immutable attempt outcome.
+ */
+class WorkflowOutcomeValidation implements OutcomePreCommitValidation<WorkflowRunResult> {
+  public constructor(private readonly bus: IMakaioBus) {}
+
+  /**
+   * Validate a workflow result against the durable execution identity.
+   * @param executionId - Trusted execution identity derived from the peer.
+   * @param outcome - Parsed worker result to validate.
+   * @returns Resolves when the result is correlated with the durable identity.
+   */
+  public validate(executionId: string, outcome: WorkflowRunResult): Promise<void> {
+    return validateOutcomeExecutionIdentity(this.bus, executionId, outcome);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Handler Registration
 // ─────────────────────────────────────────────────────────────
 
@@ -166,6 +223,8 @@ async function convergePausedState(bus: IMakaioBus, executionId: string, result:
  * @returns Cleanup function for handler deregistration.
  */
 export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeSubmissionDeps): () => void {
+  const convergence = new WorkflowOutcomeConvergence(bus, deps.acceptTerminalResult);
+  const validation = new WorkflowOutcomeValidation(bus);
   return bus.on(WorkerSubjects.control.outcome.submit, async (ctx) => {
     const identity = resolveAttemptIdentity(ctx, ctx.payload);
     if (identity === null) {
@@ -211,34 +270,23 @@ export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeS
     // may skip schema validation in production, so this parse also
     // serves as a defense-in-depth structural check.
     const typedResult = WorkflowRunResultSchema.parse(result);
-    await validateOutcomeExecutionIdentity(bus, identity.executionId, typedResult);
 
-    // Step 1: Commit the outcome through the Authority repository.
-    // The Authority records the durable decision but does NOT settle
-    // in-process waiters for accepted/duplicate outcomes — waiters are
-    // settled only after workflow-state convergence succeeds (Step 2).
-    const isPaused = typedResult.status === 'paused';
-    const decision = await deps.authority.commitOutcome(identity.executionAttemptId, identity.executionId, typedResult);
+    // Validate, commit, converge (accepted/duplicate only), settle: the
+    // generic owner boundary owns that order. A throwing convergence leaves
+    // the outcome durably committed and the waiter pending, so the worker's
+    // retry yields `duplicate` and converges again; the error propagates so
+    // the RPC errors and the worker retries.
+    const decision = await submitAttemptOutcome(
+      { authority: deps.authority, convergence, validation },
+      {
+        executionId: identity.executionId,
+        executionAttemptId: identity.executionAttemptId,
+        outcome: typedResult,
+      },
+    );
 
-    // Step 2: Converge workflow state for accepted/duplicate outcomes,
-    // then settle the waiter. If convergence fails, reject the waiter.
-    const ackDecision = decisionToAck(decision.kind);
-    if (decision.kind === 'accepted' || decision.kind === 'duplicate') {
-      // Convergence or settling may throw. When that happens the outcome
-      // is already durably committed and immutable, so do NOT reject or
-      // delete the waiter. A worker retry will resubmit the same outcome,
-      // receive a `duplicate` decision, and converge the workflow state.
-      // Let the error propagate so the RPC errors and the worker retries.
-      if (isPaused) {
-        await convergePausedState(bus, identity.executionId, typedResult);
-      } else {
-        await deps.acceptTerminalResult(identity.executionId, decision.outcome);
-      }
-      deps.authority.settleOutcome(identity.executionAttemptId, decision);
-    }
-
-    // Step 3: ACK only after both durable steps succeed.
-    ctx.setResult({ decision: ackDecision });
+    // ACK only after durable commit and convergence both succeeded.
+    ctx.setResult({ decision: decisionToAck(decision) });
   });
 }
 

@@ -5,7 +5,7 @@ import type {
   StepRunnerPlatformDefaults,
   WorkerContributionManifest,
 } from '@makaio/contracts';
-import { WorkerSubjects } from '@makaio/contracts';
+import { WorkerSubjects, type WorkflowRunResult } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   ExecutionAttemptAuthority,
@@ -46,7 +46,7 @@ export interface CreateNodeWorkflowRunnerPackageOptionsParams {
    * through to the workflow engine service options so the Authority
    * service can delegate durable decisions.
    */
-  readonly executionAttemptRepository?: ExecutionAttemptRepository;
+  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowRunResult>;
   /** Host-owned resolvers for portable path-backed workflow starts. */
   readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
 }
@@ -76,7 +76,7 @@ export interface NodeWorkflowRunnerPackageOptions {
    * Present only when the workflow runner uses Worker dispatch mode.
    * Forwarded to the workflow engine service for Authority construction.
    */
-  readonly executionAttemptRepository?: ExecutionAttemptRepository;
+  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowRunResult>;
   /**
    * Execution attempt Authority constructed from the injected repository.
    *
@@ -84,7 +84,7 @@ export interface NodeWorkflowRunnerPackageOptions {
    * Shared between the runner (for attempt creation before dispatch) and
    * the workflow engine service (for outcome commitment).
    */
-  readonly executionAttemptAuthority?: ExecutionAttemptAuthority;
+  readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>;
   /** Host-owned resolvers forwarded to the workflow engine service. */
   readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
 }
@@ -175,7 +175,7 @@ interface CreateNodeWorkflowRunnerParams {
    * Required when `runner.mode` is `'worker'`. The runner uses this
    * to create attempts before dispatch and wait for committed outcomes.
    */
-  readonly authority?: ExecutionAttemptAuthority;
+  readonly authority?: ExecutionAttemptAuthority<WorkflowRunResult>;
 }
 
 /**

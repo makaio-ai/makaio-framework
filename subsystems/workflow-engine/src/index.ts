@@ -28,14 +28,27 @@ export type { WorkflowSuccessFinalizer } from './workflow-execution-finalizer.js
 export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 export { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 export type { AuthorityDispatchRunnerOptions } from './authority-dispatch-runner.js';
+export { submitAttemptOutcome } from './outcome-convergence.js';
+export type {
+  AttemptOutcomeSubmission,
+  AttemptOutcomeSubmissionDeps,
+  OutcomeConvergence,
+  OutcomeConvergenceInput,
+  OutcomePreCommitValidation,
+} from './outcome-convergence.js';
 export {
   DuplicateExecutionAttemptError,
   EXECUTION_ATTEMPT_STATUSES,
   EXECUTION_ATTEMPT_SETTLEMENT_KINDS,
+  decodeDurableOutcome,
+  durableOutcome,
   sameAllocationRef,
-  sameWorkflowResult,
+  sameDurableOutcome,
 } from './execution-attempt-repository.js';
 export type {
+  DurableOutcome,
+  ExecutionOwnerId,
+  OutcomeCodec,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   ExecutionAttemptRecord,

@@ -5,6 +5,7 @@ import type {
   WorkerRequirements,
   WorkflowRunnerCompletion,
   WorkflowRunnerRunOptions,
+  WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
@@ -28,7 +29,7 @@ export interface WorkerRunnerOptions {
    * Required for authority-committed completions. When absent, the runner
    * cannot create attempts or wait for durable outcomes.
    */
-  readonly authority: ExecutionAttemptAuthority;
+  readonly authority: ExecutionAttemptAuthority<WorkflowRunResult>;
   /**
    * Extension contribution manifest forwarded to dispatched workers.
    *
@@ -98,7 +99,9 @@ export class WorkerRunner implements IWorkflowRunner {
     const resolvedRequirements = this.options.requirements;
     const dispatchMetadata = options?.dispatchMetadata;
 
-    return runAuthorityDispatchedAttempt({
+    // The runner contract owes a completion wrapper; the generic dispatch
+    // path yields the committed outcome itself.
+    const result = await runAuthorityDispatchedAttempt({
       authority: this.options.authority,
       executionId: config.executionId,
       dispatch: (executionAttemptId) =>
@@ -113,5 +116,6 @@ export class WorkerRunner implements IWorkflowRunner {
           signal,
         ),
     });
+    return { state: 'authority-committed', result };
   }
 }

@@ -7,7 +7,11 @@ import type {
 } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
 import { WorkerRunner } from '../worker-runner.js';
-import { createInMemoryAttemptRepository, makeBeginProvisioningInput } from '@makaio/subsystem-workflow-engine/testing';
+import {
+  createInMemoryAttemptRepository,
+  makeBeginProvisioningInput,
+  workflowRunResultOutcomeCodec,
+} from '@makaio/subsystem-workflow-engine/testing';
 import { makeWorkerConfig } from './fixtures.js';
 
 const TEST_ALLOCATION_REF: ProviderAllocationRef = {
@@ -16,8 +20,8 @@ const TEST_ALLOCATION_REF: ProviderAllocationRef = {
   providerData: {},
 };
 
-function createTestAuthority(): ExecutionAttemptAuthority {
-  return new ExecutionAttemptAuthority(createInMemoryAttemptRepository());
+function createTestAuthority(): ExecutionAttemptAuthority<WorkflowRunResult> {
+  return new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
 }
 
 describe('WorkerRunner', () => {
@@ -32,7 +36,11 @@ describe('WorkerRunner', () => {
         workflowId: 'workflow-1',
         status: 'completed',
       };
-      const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+      const decision = await authority.commitOutcome(
+        request.executionAttemptId,
+        'wfx-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
@@ -56,7 +64,11 @@ describe('WorkerRunner', () => {
         workflowId: 'workflow-1',
         status: 'completed',
       };
-      const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+      const decision = await authority.commitOutcome(
+        request.executionAttemptId,
+        'wfx-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
@@ -88,7 +100,11 @@ describe('WorkerRunner', () => {
         workflowId: 'workflow-1',
         status: 'completed',
       };
-      const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+      const decision = await authority.commitOutcome(
+        request.executionAttemptId,
+        'wfx-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
@@ -111,7 +127,11 @@ describe('WorkerRunner', () => {
         workflowId: 'workflow-1',
         status: 'completed',
       };
-      const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+      const decision = await authority.commitOutcome(
+        request.executionAttemptId,
+        'wfx-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
@@ -134,7 +154,11 @@ describe('WorkerRunner', () => {
         workflowId: 'workflow-1',
         status: 'completed',
       };
-      const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+      const decision = await authority.commitOutcome(
+        request.executionAttemptId,
+        'wfx-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
@@ -156,7 +180,11 @@ describe('WorkerRunner', () => {
         workflowId: 'workflow-1',
         status: 'completed',
       };
-      const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+      const decision = await authority.commitOutcome(
+        request.executionAttemptId,
+        'wfx-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
@@ -178,8 +206,8 @@ describe('WorkerRunner', () => {
 
   it('abandons the durable pending attempt when dispatch rejects', async () => {
     const abandonPendingAttempt = vi.fn().mockResolvedValue({ kind: 'abandoned' as const });
-    const repository = createInMemoryAttemptRepository();
-    const authority = new ExecutionAttemptAuthority({ ...repository, abandonPendingAttempt });
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority<WorkflowRunResult>({ ...repository, abandonPendingAttempt });
     const runner = new WorkerRunner({
       dispatch: vi.fn().mockRejectedValue(new Error('dispatch failed')),
       authority,
@@ -205,7 +233,11 @@ describe('WorkerRunner', () => {
             workflowId: 'workflow-1',
             status: 'completed',
           };
-          const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+          const decision = await authority.commitOutcome(
+            request.executionAttemptId,
+            'wfx-1',
+            authority.canonicalizeOutcome(result),
+          );
           authority.settleOutcome(request.executionAttemptId, decision);
         });
         throw new Error('dispatch acknowledgement lost');
@@ -228,7 +260,11 @@ describe('WorkerRunner', () => {
         workflowId: 'factory:intake',
         status: 'completed',
       };
-      const decision = await authority.commitOutcome(request.executionAttemptId, 'exec-1', result);
+      const decision = await authority.commitOutcome(
+        request.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(request.executionAttemptId, decision);
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
@@ -281,7 +317,11 @@ describe('WorkerRunner', () => {
           workflowId: 'workflow-1',
           status: 'completed',
         };
-        const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+        const decision = await authority.commitOutcome(
+          request.executionAttemptId,
+          'wfx-1',
+          authority.canonicalizeOutcome(result),
+        );
         authority.settleOutcome(request.executionAttemptId, decision);
         resolveOutcome();
       }, 10);
@@ -300,8 +340,8 @@ describe('WorkerRunner', () => {
 
   it('waits for the Authority outcome after cancellation instead of inferring infrastructure failure', async () => {
     const recordInfrastructureFailure = vi.fn().mockResolvedValue({ kind: 'recorded' as const });
-    const repository = createInMemoryAttemptRepository();
-    const authority = new ExecutionAttemptAuthority({ ...repository, recordInfrastructureFailure });
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority<WorkflowRunResult>({ ...repository, recordInfrastructureFailure });
     let dispatchStarted!: () => void;
     const dispatchStartedPromise = new Promise<void>((resolve) => {
       dispatchStarted = resolve;
@@ -315,7 +355,11 @@ describe('WorkerRunner', () => {
             workflowId: 'workflow-1',
             status: 'cancelled',
           };
-          const decision = await authority.commitOutcome(request.executionAttemptId, 'wfx-1', result);
+          const decision = await authority.commitOutcome(
+            request.executionAttemptId,
+            'wfx-1',
+            authority.canonicalizeOutcome(result),
+          );
           authority.settleOutcome(request.executionAttemptId, decision);
         }, 0);
         expect(signal.aborted).toBe(false);

@@ -10,12 +10,11 @@
  * @packageDocumentation
  */
 import { sql, type SQL } from 'drizzle-orm';
-import type { ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
+import type { ProviderAllocationRef } from '@makaio/contracts';
 import {
   BoundedRecoveryEvidenceSchema,
   ProviderAllocationRefSchema,
   WorkerAllocationLifetimeSchema,
-  WorkflowRunResultSchema,
   type BoundedRecoveryEvidence,
 } from '@makaio/contracts';
 import {
@@ -31,8 +30,10 @@ import {
   DuplicateExecutionAttemptError,
   EXECUTION_ATTEMPT_SETTLEMENT_KINDS,
   EXECUTION_ATTEMPT_STATUSES,
+  decodeDurableOutcome,
+  durableOutcome,
   sameAllocationRef,
-  sameWorkflowResult,
+  sameDurableOutcome,
 } from '../execution-attempt-repository.js';
 import type {
   AllocationRecordingDecision,
@@ -41,6 +42,7 @@ import type {
   AllocationTerminationDecision,
   BeginProvisioningInput,
   DiscoveredAllocationDecision,
+  DurableOutcome,
   ExecutionAttemptCreate,
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
@@ -50,6 +52,7 @@ import type {
   ExecutionAttemptSettlementKind,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  OutcomeCodec,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
   ProvisioningAbsenceDecision,
@@ -77,7 +80,6 @@ import {
   parseAllocationLifetime,
   parseAllocationRef,
   parseAllocationRefEvolution,
-  parseWorkflowResult,
   requireAllocationRefProvider,
   toRecoverableAttempt,
 } from './attempt-record-codec.js';
@@ -530,9 +532,13 @@ function isActiveAttemptRow(): SQL {
  * the storage migration chain. It is test support, not production
  * persistence.
  * @param db - Open database handle the repository reads and writes through.
+ * @param codec - Owner-injected codec that validates and serializes outcomes.
  * @returns A repository exposing the full port surface, backed by SQLite.
  */
-export async function createSqliteAttemptRepository(db: MakaioDatabase): Promise<Required<ExecutionAttemptRepository>> {
+export async function createSqliteAttemptRepository<TOutcome>(
+  db: MakaioDatabase,
+  codec: OutcomeCodec<TOutcome>,
+): Promise<Required<ExecutionAttemptRepository<TOutcome>>> {
   const executor = getRawSqlExecutor(db);
   // SQLite's native busy handler waits synchronously. On this Node test
   // driver that blocks the event loop before the current writer can commit,
@@ -1277,10 +1283,23 @@ export async function createSqliteAttemptRepository(db: MakaioDatabase): Promise
       });
     },
 
-    async commitOutcome(input: ExecutionAttemptOutcomeCommit): Promise<ExecutionAttemptOutcomeDecision> {
-      const result = parseWorkflowResult(input.result);
+    canonicalizeOutcome(outcome: TOutcome): DurableOutcome<TOutcome> {
+      return durableOutcome(codec, outcome);
+    },
+
+    decodeOutcome(text: string): TOutcome {
+      return decodeDurableOutcome(codec, text);
+    },
+
+    async commitOutcome(
+      input: ExecutionAttemptOutcomeCommit<TOutcome>,
+    ): Promise<ExecutionAttemptOutcomeDecision<TOutcome>> {
+      // The text this submission writes and the value that text reads back
+      // as, rendered once by `canonicalizeOutcome` and carried here. Nothing
+      // is serialized again, so the column holds what the owner validated.
+      const submission = input.result;
       return transact((session) =>
-        decideByWrite<ExecutionAttemptOutcomeDecision>(
+        decideByWrite<ExecutionAttemptOutcomeDecision<TOutcome>>(
           async () => {
             // Deliberately claim-independent: a worker's answer is never fenced
             // by provider-operation ownership. The precedence below is the one
@@ -1292,11 +1311,32 @@ export async function createSqliteAttemptRepository(db: MakaioDatabase): Promise
             const attemptRow = await readAttemptRow(session, input.executionAttemptId);
             if (attemptRow === undefined) return { kind: 'fenced' };
 
-            const prior = parseJsonColumn<WorkflowRunResult>(attemptRow.workflow_result, (value) =>
-              WorkflowRunResultSchema.parse(value),
-            );
-            if (prior !== null) {
-              return sameWorkflowResult(prior, result) ? { kind: 'duplicate', outcome: prior } : { kind: 'conflict' };
+            // A `NULL` column is the only way this realization records "no
+            // outcome committed", which is why the port keeps nullish outcomes
+            // outside itself: a stored JSON `null` would be indistinguishable.
+            //
+            // The comparison runs on the column text itself, not on a
+            // re-serialization of what it decodes to: the stored text is what
+            // the first commit wrote, and a codec that normalizes need not
+            // serialize its own normalized value back to it.
+            const storedText = attemptRow.workflow_result;
+            if (storedText !== null) {
+              // Decoded before the decision, not only on the duplicate
+              // branch. A stored text the codec rejects — durable corruption,
+              // or a codec the owner changed under an existing row — is
+              // broken durable state, and answering `conflict` for it would
+              // report it to the caller as an ordinary competing outcome and
+              // reject the waiter with a misleading error. The port's rule is
+              // that every committed outcome read from storage passes its
+              // codec.
+              const committed = decodeDurableOutcome(codec, storedText);
+              // The column's own text travels with the decision, not the
+              // retry's rendering: the two are the same outcome under
+              // `sameDurableOutcome` without being the same text, and what a
+              // caller decodes for a waiter must be what the row holds.
+              return sameDurableOutcome(storedText, submission.text)
+                ? { kind: 'duplicate', outcome: committed, text: storedText }
+                : { kind: 'conflict' };
             }
             // A settlement without a committed outcome means a competing
             // terminal transition won the CAS. It keeps its settlement kind:
@@ -1305,7 +1345,7 @@ export async function createSqliteAttemptRepository(db: MakaioDatabase): Promise
 
             return async () => {
               const committed = await session.run(
-                sql`UPDATE test_execution_attempt SET workflow_result = ${JSON.stringify(result)}
+                sql`UPDATE test_execution_attempt SET workflow_result = ${submission.text}
                   WHERE execution_attempt_id = ${input.executionAttemptId}
                     AND workflow_result IS NULL
                     AND settlement_kind IS NULL
@@ -1321,7 +1361,12 @@ export async function createSqliteAttemptRepository(db: MakaioDatabase): Promise
               );
             };
           },
-          { kind: 'accepted', outcome: result },
+          // The accepted outcome is what a reload of the column returns:
+          // `submission.text` decoded again, never `submission.outcome`. That
+          // value has been in the caller's hands since before its own
+          // validation, and a mutable outcome mutated there would be reported
+          // as committed while the column holds the original.
+          { kind: 'accepted', outcome: decodeDurableOutcome(codec, submission.text), text: submission.text },
         ),
       );
     },

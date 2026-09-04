@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IWorkflowRunner } from '@makaio/contracts';
+import type { IWorkflowRunner, WorkflowRunResult } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
 import { WorkflowTriggerReconciler } from './workflow-trigger-reconciler.js';
@@ -36,7 +36,7 @@ export interface WorkflowEngineServiceOptions {
    * When omitted, the workflow engine operates without attempt tracking
    * (framework-only, in-process, and Piscina modes).
    */
-  executionAttemptRepository?: ExecutionAttemptRepository;
+  executionAttemptRepository?: ExecutionAttemptRepository<WorkflowRunResult>;
   /**
    * Pre-built execution attempt Authority.
    *
@@ -48,7 +48,7 @@ export interface WorkflowEngineServiceOptions {
    * construction. When both are provided, the pre-built Authority is used
    * and the repository is ignored.
    */
-  executionAttemptAuthority?: ExecutionAttemptAuthority;
+  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>;
   /** Host-owned resolvers that create portable specs for path-backed starts. */
   workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
   /**
@@ -75,7 +75,7 @@ export interface WorkflowEngineServiceOptions {
 export class WorkflowEngineService extends BaseService {
   private readonly workflowExecutor: WorkflowExecutor;
   private readonly triggerReconcilerInstance: WorkflowTriggerReconciler;
-  private readonly attemptAuthority: ExecutionAttemptAuthority | undefined;
+  private readonly attemptAuthority: ExecutionAttemptAuthority<WorkflowRunResult> | undefined;
   private readonly workspaceRootResolvers = new Set<WorkflowWorkspaceRootResolver>();
 
   /**
@@ -118,7 +118,7 @@ export class WorkflowEngineService extends BaseService {
    * framework-only, in-process, and Piscina modes.
    * @returns Authority instance, or `undefined` when no repository is injected.
    */
-  public get executionAttemptAuthority(): ExecutionAttemptAuthority | undefined {
+  public get executionAttemptAuthority(): ExecutionAttemptAuthority<WorkflowRunResult> | undefined {
     return this.attemptAuthority;
   }
 

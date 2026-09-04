@@ -4,7 +4,11 @@ import { PROVIDER_ALLOCATION_REF_VERSION } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { WorkflowEngineService } from '../workflow-engine-service.js';
-import type { ExecutionAttemptRepository } from '../execution-attempt-repository.js';
+import {
+  decodeDurableOutcome,
+  durableOutcome,
+  type ExecutionAttemptRepository,
+} from '../execution-attempt-repository.js';
 import type { ProviderOperationClaim } from '../provider-operation.js';
 import {
   TEST_OWNER_ID,
@@ -16,6 +20,7 @@ import {
   makeBeginProvisioningInput,
   makeEvidence,
   type InMemoryAttemptRepository,
+  workflowRunResultOutcomeCodec,
 } from '../testing/index.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -70,7 +75,10 @@ function makeAllocationRef(
  * @param claim - Claim authorizing the record.
  * @throws When the termination is not recorded.
  */
-async function terminateAllocation(authority: ExecutionAttemptAuthority, claim: ProviderOperationClaim): Promise<void> {
+async function terminateAllocation(
+  authority: ExecutionAttemptAuthority<WorkflowRunResult>,
+  claim: ProviderOperationClaim,
+): Promise<void> {
   const decision = await authority.recordAllocationTerminated({ claim, evidence: makeEvidence() });
   if (decision.kind !== 'recorded') throw new Error(`Expected termination to record, got '${decision.kind}'`);
 }
@@ -101,7 +109,7 @@ function makeCorrelatedAllocationRef(
  * Used to prove that recovery operations are gated rather than assumed.
  * @returns A repository without any recovery operation.
  */
-function createMinimalRepository(): ExecutionAttemptRepository {
+function createMinimalRepository(): ExecutionAttemptRepository<WorkflowRunResult> {
   const claim: ProviderOperationClaim = {
     executionAttemptId: 'attempt-1',
     generation: 1,
@@ -110,6 +118,8 @@ function createMinimalRepository(): ExecutionAttemptRepository {
     leaseExpiresAt: leaseAt(60_000),
   };
   return {
+    canonicalizeOutcome: (outcome) => durableOutcome(workflowRunResultOutcomeCodec, outcome),
+    decodeOutcome: (text) => decodeDurableOutcome(workflowRunResultOutcomeCodec, text),
     createAttempt: async (input) => ({
       executionAttemptId: input.executionAttemptId,
       executionId: input.executionId,
@@ -142,11 +152,11 @@ function createMinimalRepository(): ExecutionAttemptRepository {
 // ─────────────────────────────────────────────────────────────
 
 describe('ExecutionAttemptAuthority', () => {
-  let repository: InMemoryAttemptRepository;
-  let authority: ExecutionAttemptAuthority;
+  let repository: InMemoryAttemptRepository<WorkflowRunResult>;
+  let authority: ExecutionAttemptAuthority<WorkflowRunResult>;
 
   beforeEach(() => {
-    repository = createInMemoryAttemptRepository();
+    repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     authority = new ExecutionAttemptAuthority(repository);
   });
 
@@ -445,7 +455,7 @@ describe('ExecutionAttemptAuthority', () => {
       const decision = await authority.commitOutcome(
         attempt.executionAttemptId,
         'exec-1',
-        makeCompletedResult('exec-1'),
+        authority.canonicalizeOutcome(makeCompletedResult('exec-1')),
       );
       authority.settleOutcome(attempt.executionAttemptId, decision);
 
@@ -767,10 +777,18 @@ describe('ExecutionAttemptAuthority', () => {
       const attempt = await authority.createAttempt('exec-1');
       const result = makeCompletedResult('exec-1');
 
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
 
       expect(decision.kind).toBe('accepted');
-      expect(decision).toEqual({ kind: 'accepted', outcome: result });
+      expect(decision).toEqual({
+        kind: 'accepted',
+        outcome: result,
+        text: authority.canonicalizeOutcome(result).text,
+      });
 
       // commitOutcome no longer settles the waiter for accepted outcomes —
       // the caller must invoke settleOutcome after convergence succeeds.
@@ -784,7 +802,11 @@ describe('ExecutionAttemptAuthority', () => {
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
       expect(waiterPromise).toBeDefined();
 
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
 
       // Waiter is NOT resolved yet — convergence has not happened.
       // Settle it explicitly to simulate post-convergence settlement.
@@ -797,9 +819,17 @@ describe('ExecutionAttemptAuthority', () => {
       const attempt = await authority.createAttempt('exec-1');
       const result = makeFailedResult('exec-1');
 
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
 
-      expect(decision).toEqual({ kind: 'accepted', outcome: result });
+      expect(decision).toEqual({
+        kind: 'accepted',
+        outcome: result,
+        text: authority.canonicalizeOutcome(result).text,
+      });
     });
 
     it('accepts a worker outcome regardless of who owns the provider operation', async () => {
@@ -815,9 +845,12 @@ describe('ExecutionAttemptAuthority', () => {
       });
 
       const result = makeCompletedResult('exec-1');
-      await expect(authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result)).resolves.toEqual({
+      await expect(
+        authority.commitOutcome(attempt.executionAttemptId, 'exec-1', authority.canonicalizeOutcome(result)),
+      ).resolves.toEqual({
         kind: 'accepted',
         outcome: result,
+        text: authority.canonicalizeOutcome(result).text,
       });
     });
 
@@ -828,7 +861,7 @@ describe('ExecutionAttemptAuthority', () => {
       const decision = await authority.commitOutcome(
         attempt.executionAttemptId,
         'exec-1',
-        makeCompletedResult('exec-1'),
+        authority.canonicalizeOutcome(makeCompletedResult('exec-1')),
       );
       authority.settleOutcome(attempt.executionAttemptId, decision);
 
@@ -852,13 +885,23 @@ describe('ExecutionAttemptAuthority', () => {
       const attempt = await authority.createAttempt('exec-1');
       const result = makeCompletedResult('exec-1');
 
-      await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', authority.canonicalizeOutcome(result));
 
       // Replay the same outcome
-      const replayDecision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const replayDecision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
 
       expect(replayDecision.kind).toBe('duplicate');
-      expect(replayDecision).toEqual({ kind: 'duplicate', outcome: result });
+      // The text is the one the first commit stored, which the replay's own
+      // rendering equals here because both render the same result.
+      expect(replayDecision).toEqual({
+        kind: 'duplicate',
+        outcome: result,
+        text: authority.canonicalizeOutcome(result).text,
+      });
     });
   });
 
@@ -874,9 +917,13 @@ describe('ExecutionAttemptAuthority', () => {
       const result1 = makeCompletedResult('exec-1');
       const result2 = makeFailedResult('exec-1');
 
-      await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result1);
+      await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', authority.canonicalizeOutcome(result1));
 
-      const conflictDecision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result2);
+      const conflictDecision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result2),
+      );
 
       expect(conflictDecision).toEqual({ kind: 'conflict' });
       // Drain the waiter rejection so it doesn't leak.
@@ -888,12 +935,16 @@ describe('ExecutionAttemptAuthority', () => {
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
 
       const result1 = makeCompletedResult('exec-1');
-      await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result1);
+      await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', authority.canonicalizeOutcome(result1));
 
       // commitOutcome no longer settles the waiter for accepted outcomes.
       // A subsequent conflict commit rejects it.
       const result2 = makeFailedResult('exec-1');
-      const conflictDecision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result2);
+      const conflictDecision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result2),
+      );
       expect(conflictDecision).toEqual({ kind: 'conflict' });
 
       await expect(waiterPromise).rejects.toThrow('conflict');
@@ -916,7 +967,7 @@ describe('ExecutionAttemptAuthority', () => {
       const lateDecision = await authority.commitOutcome(
         attempt.executionAttemptId,
         'exec-1',
-        makeCompletedResult('exec-1'),
+        authority.canonicalizeOutcome(makeCompletedResult('exec-1')),
       );
 
       expect(lateDecision).toEqual({ kind: 'conflict' });
@@ -940,7 +991,7 @@ describe('ExecutionAttemptAuthority', () => {
       const lateDecision = await authority.commitOutcome(
         attempt.executionAttemptId,
         'exec-1',
-        makeCompletedResult('exec-1'),
+        authority.canonicalizeOutcome(makeCompletedResult('exec-1')),
       );
 
       expect(lateDecision).toEqual({ kind: 'conflict' });
@@ -965,7 +1016,11 @@ describe('ExecutionAttemptAuthority', () => {
       await authority.createAttempt('exec-1');
 
       const result = makeCompletedResult('exec-1');
-      const fencedDecision = await authority.commitOutcome(attempt1.executionAttemptId, 'exec-1', result);
+      const fencedDecision = await authority.commitOutcome(
+        attempt1.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
 
       expect(fencedDecision).toEqual({ kind: 'fenced' });
 
@@ -984,9 +1039,17 @@ describe('ExecutionAttemptAuthority', () => {
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
       const pausedResult = makePausedResult('exec-1');
 
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', pausedResult);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(pausedResult),
+      );
 
-      expect(decision).toEqual({ kind: 'accepted', outcome: pausedResult });
+      expect(decision).toEqual({
+        kind: 'accepted',
+        outcome: pausedResult,
+        text: authority.canonicalizeOutcome(pausedResult).text,
+      });
 
       // The waiter is NOT resolved yet — convergence must happen first.
       // Settle it explicitly to simulate post-convergence settlement.
@@ -998,7 +1061,7 @@ describe('ExecutionAttemptAuthority', () => {
       const attempt1 = await authority.createAttempt('exec-1');
       const pausedResult = makePausedResult('exec-1');
 
-      await authority.commitOutcome(attempt1.executionAttemptId, 'exec-1', pausedResult);
+      await authority.commitOutcome(attempt1.executionAttemptId, 'exec-1', authority.canonicalizeOutcome(pausedResult));
 
       // Resume creates a new attempt
       const attempt2 = await authority.createAttempt('exec-1');
@@ -1049,7 +1112,11 @@ describe('ExecutionAttemptAuthority', () => {
       const attempt = await authority.createAttempt('exec-1');
       const result = makeCompletedResult('exec-1');
 
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
       // Waiter still exists after commit (not settled yet).
       expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeDefined();
 
@@ -1147,7 +1214,11 @@ describe('ExecutionAttemptAuthority', () => {
       const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
       await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
       const result = makeCompletedResult('exec-1');
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(attempt.executionAttemptId, decision);
 
       // getActiveAttempt would return null for a settled attempt that has
@@ -1367,7 +1438,11 @@ describe('ExecutionAttemptAuthority', () => {
       await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       const result = makeCompletedResult('exec-1');
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(attempt.executionAttemptId, decision);
 
       const recoverable = await authority.getRecoverableAttempts('exec-1');
@@ -1397,7 +1472,11 @@ describe('ExecutionAttemptAuthority', () => {
       await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       const pausedResult = makePausedResult('exec-1');
-      const decision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', pausedResult);
+      const decision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(pausedResult),
+      );
       authority.settleOutcome(attempt.executionAttemptId, decision);
 
       const recoverable = await authority.getRecoverableAttempts('exec-1');
@@ -1455,7 +1534,11 @@ describe('ExecutionAttemptAuthority', () => {
       await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
       const result = makeCompletedResult('exec-1');
-      const outcomeDecision = await authority.commitOutcome(attempt.executionAttemptId, 'exec-1', result);
+      const outcomeDecision = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
       authority.settleOutcome(attempt.executionAttemptId, outcomeDecision);
 
       await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
@@ -1548,7 +1631,7 @@ describe('ExecutionAttemptAuthority', () => {
   // ─────────────────────────────────────────────────────────
 
   describe('recovery operation rejection without support', () => {
-    let minimalAuthority: ExecutionAttemptAuthority;
+    let minimalAuthority: ExecutionAttemptAuthority<WorkflowRunResult>;
     const claim: ProviderOperationClaim = {
       executionAttemptId: 'attempt-1',
       generation: 1,
@@ -1606,7 +1689,7 @@ describe('construction gates', () => {
   });
 
   it('service exposes the Authority when a repository is injected', () => {
-    const repository = createInMemoryAttemptRepository();
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const service = new WorkflowEngineService(MakaioBus, {
       executionAttemptRepository: repository,
     });

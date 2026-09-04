@@ -1,9 +1,10 @@
-import type { WorkflowRunResult } from '@makaio/contracts';
 import { BoundedRecoveryEvidenceSchema } from '@makaio/contracts';
 import {
   DuplicateExecutionAttemptError,
+  decodeDurableOutcome,
+  durableOutcome,
   sameAllocationRef,
-  sameWorkflowResult,
+  sameDurableOutcome,
 } from '../execution-attempt-repository.js';
 import type {
   AllocationRecordingDecision,
@@ -12,6 +13,7 @@ import type {
   AllocationTerminationDecision,
   BeginProvisioningInput,
   DiscoveredAllocationDecision,
+  DurableOutcome,
   ExecutionAttemptCreate,
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
@@ -20,6 +22,7 @@ import type {
   ExecutionAttemptRepository,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  OutcomeCodec,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
   ProvisioningAbsenceDecision,
@@ -47,7 +50,6 @@ import {
   parseAllocationLifetime,
   parseAllocationRef,
   parseAllocationRefEvolution,
-  parseWorkflowResult,
   requireAllocationRefProvider,
   toRecoverableAttempt,
 } from './attempt-record-codec.js';
@@ -56,17 +58,30 @@ import {
  * Durable state the in-memory realization keeps.
  *
  * The four maps mirror the four durable facts the port owns: canonical attempt
- * state, fenced provider-operation ownership, committed workflow outcomes, and
- * which attempt is currently active for an execution. They are exposed so a
- * test can seed state before the first call and assert against it afterwards.
+ * state, fenced provider-operation ownership, committed outcomes, and which
+ * attempt is currently active for an owner. They are exposed so a test can
+ * seed state before the first call and assert against it afterwards.
+ *
+ * Not generic over the outcome type: the committed outcomes are held as the
+ * codec's durable text, the same representation a store's column holds, so
+ * none of the four maps carries an outcome-typed value.
  */
 export interface InMemoryAttemptRepositoryState {
   /** Attempt records keyed by `executionAttemptId`. */
   readonly attempts: Map<string, ExecutionAttemptRecord>;
   /** Provider operation records keyed by `executionAttemptId`. */
   readonly operations: Map<string, ProviderOperationOwnershipRecord>;
-  /** Committed canonical outcomes keyed by `executionAttemptId`. */
-  readonly committedOutcomes: Map<string, WorkflowRunResult>;
+  /**
+   * Committed outcome texts keyed by `executionAttemptId`.
+   *
+   * The codec text and nothing else, exactly the `workflow_result` column a
+   * durable realization keeps: it is what a retry is compared against, and
+   * every outcome the port reports is a fresh decode of it. Keeping the
+   * decoded value here instead would hand every reader one shared instance,
+   * and a codec may reconstruct a mutable object — a `URL`, say — that no
+   * freeze can protect.
+   */
+  readonly committedOutcomes: Map<string, string>;
   /** Active attempt per `executionId`, the fence every bootstrap path reads. */
   readonly activeAttempts: Map<string, string>;
 }
@@ -80,9 +95,10 @@ export interface InMemoryAttemptRepositoryState {
  * a single failing durable write without losing the rest of the state machine.
  * Replacing a recovery operation means spreading `recovery` too, which is the
  * port's own rule that recovery is offered whole or not at all.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export interface InMemoryAttemptRepository
-  extends Required<ExecutionAttemptRepository>,
+export interface InMemoryAttemptRepository<TOutcome>
+  extends Required<ExecutionAttemptRepository<TOutcome>>,
     InMemoryAttemptRepositoryState {}
 
 /**
@@ -124,15 +140,18 @@ type ClaimAuthorization =
  * model transaction isolation. Use it wherever a test needs the port's
  * decisions without a database, and `createSqliteAttemptRepository` when the
  * test needs real transactional fencing between two independent connections.
+ * @param codec - Owner-injected codec that validates every submitted outcome.
  * @param seed - Pre-existing state to build on, shared with the caller.
  * @returns A repository exposing the full port surface, plus its backing state.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export function createInMemoryAttemptRepository(
+export function createInMemoryAttemptRepository<TOutcome>(
+  codec: OutcomeCodec<TOutcome>,
   seed: Partial<InMemoryAttemptRepositoryState> = {},
-): InMemoryAttemptRepository {
+): InMemoryAttemptRepository<TOutcome> {
   const attempts = seed.attempts ?? new Map<string, ExecutionAttemptRecord>();
   const operations = seed.operations ?? new Map<string, ProviderOperationOwnershipRecord>();
-  const committedOutcomes = seed.committedOutcomes ?? new Map<string, WorkflowRunResult>();
+  const committedOutcomes = seed.committedOutcomes ?? new Map<string, string>();
   const activeAttempts = seed.activeAttempts ?? new Map<string, string>();
 
   /**
@@ -282,7 +301,7 @@ export function createInMemoryAttemptRepository(
     },
   };
 
-  const repository: Omit<ExecutionAttemptRepository, 'recovery'> = {
+  const repository: Omit<ExecutionAttemptRepository<TOutcome>, 'recovery'> = {
     async createAttempt(input: ExecutionAttemptCreate): Promise<ExecutionAttemptRecord> {
       // A reused identifier would resurrect a possibly settled attempt with a
       // fresh pending record, orphan its operation, and leave any committed
@@ -530,8 +549,20 @@ export function createInMemoryAttemptRepository(
       return attempts.get(executionAttemptId) ?? null;
     },
 
-    async commitOutcome(input: ExecutionAttemptOutcomeCommit): Promise<ExecutionAttemptOutcomeDecision> {
-      const result = parseWorkflowResult(input.result);
+    canonicalizeOutcome(outcome: TOutcome): DurableOutcome<TOutcome> {
+      return durableOutcome(codec, outcome);
+    },
+
+    decodeOutcome(text: string): TOutcome {
+      return decodeDurableOutcome(codec, text);
+    },
+
+    async commitOutcome(
+      input: ExecutionAttemptOutcomeCommit<TOutcome>,
+    ): Promise<ExecutionAttemptOutcomeDecision<TOutcome>> {
+      // Already rendered by `canonicalizeOutcome`, and deliberately not
+      // rendered again: this is the exact text and value the owner validated.
+      const submission = input.result;
       // Deliberately claim-independent: a worker's answer is never fenced by
       // provider-operation ownership. The precedence below is the one the port
       // mandates — fence, then committed outcome, then competing settlement.
@@ -543,9 +574,25 @@ export function createInMemoryAttemptRepository(
       // would leave it behind with no attempt to attach it to.
       if (attempt === undefined) return { kind: 'fenced' };
 
-      const prior = committedOutcomes.get(input.executionAttemptId);
-      if (prior) {
-        return sameWorkflowResult(prior, result) ? { kind: 'duplicate', outcome: prior } : { kind: 'conflict' };
+      // Presence, not truthiness: `0`, `''`, and `false` are committed
+      // outcomes, and a replay of one owes `duplicate` rather than a second
+      // `accepted`. The port keeps nullish outcomes outside itself precisely
+      // so that the absence of a stored value can mean "nothing committed".
+      const storedText = committedOutcomes.get(input.executionAttemptId);
+      if (storedText !== undefined) {
+        // Decoded before the decision, not only on the duplicate branch: a
+        // stored text the codec rejects is broken durable state, and
+        // answering `conflict` for it would hide that behind an ordinary
+        // caller conflict. The decode is also what makes every read of a
+        // committed outcome a fresh value rather than one shared instance.
+        const committed = decodeDurableOutcome(codec, storedText);
+        // The stored text travels with the decision, not the retry's own:
+        // the two are the same outcome under `sameDurableOutcome` without
+        // being the same text, and what a caller decodes for a waiter must
+        // be the representation the attempt holds.
+        return sameDurableOutcome(storedText, submission.text)
+          ? { kind: 'duplicate', outcome: committed, text: storedText }
+          : { kind: 'conflict' };
       }
 
       // A settlement without a committed outcome means a competing terminal
@@ -553,7 +600,10 @@ export function createInMemoryAttemptRepository(
       // terminal race never rewrites the winner's answer.
       if (attempt.settlementKind != null) return { kind: 'conflict' };
 
-      committedOutcomes.set(input.executionAttemptId, result);
+      // What this realization keeps is the codec text and nothing else, the
+      // column a durable realization holds. Keeping the submitter's copy
+      // instead would let an owner converge on a value no reload ever yields.
+      committedOutcomes.set(input.executionAttemptId, submission.text);
       attempts.set(input.executionAttemptId, {
         ...attempt,
         status: 'settled',
@@ -562,7 +612,11 @@ export function createInMemoryAttemptRepository(
       });
       const operation = operations.get(input.executionAttemptId);
       if (operation) closeOperation(operation, operation.lastFailure);
-      return { kind: 'accepted', outcome: result };
+      // Decoded from the text that was just stored, not taken from
+      // `submission.outcome`: the caller has held that value since before its
+      // own validation, and a mutable outcome it changed there would be
+      // reported back as the committed one — a value no later read yields.
+      return { kind: 'accepted', outcome: decodeDurableOutcome(codec, submission.text), text: submission.text };
     },
 
     async abandonPendingAttempt(

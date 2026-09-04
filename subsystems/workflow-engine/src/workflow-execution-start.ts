@@ -10,6 +10,7 @@ import {
   type WorkflowExecution,
   type WorkflowExecutionScope,
   type WorkflowRunContext,
+  type WorkflowRunResult,
   type WorkflowTriggerMode,
   type WorkflowWorkerSource,
   WorkflowError,
@@ -93,7 +94,7 @@ export interface StartExecutionDeps {
    * attempts before dispatch and wait for committed outcomes. When absent,
    * Worker dispatch is unavailable.
    */
-  executionAttemptAuthority?: ExecutionAttemptAuthority;
+  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>;
   /** Host seams that resolve immutable workspace references for path starts. */
   materializationSpecResolvers: ReadonlySet<WorkflowMaterializationSpecResolver>;
 }

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { WorkerContributionManifest } from '@makaio/contracts';
+import type { WorkerContributionManifest, WorkflowRunResult } from '@makaio/contracts';
 import { PROVIDER_ALLOCATION_REF_VERSION, WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
 import type {
   BeginProvisioningInput,
@@ -15,6 +15,7 @@ import {
   leaseAt,
   makeProcessLossProof,
   TEST_PROVISIONER_INCARNATION_ID,
+  workflowRunResultOutcomeCodec,
 } from '@makaio/subsystem-workflow-engine/testing';
 import { createSqliteAttemptRepository } from '@makaio/subsystem-workflow-engine/testing/sqlite';
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
@@ -174,7 +175,7 @@ function createProviderService(workerEntry: string, id: string): ProviderService
  * @returns The claim the successful begin issued.
  */
 async function beginProcessBoundProvisioning(
-  repository: Required<ExecutionAttemptRepository>,
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
   executionAttemptId: string,
   executionId: string,
   overrides: Omit<Partial<BeginProvisioningInput>, 'allocationLifetime'> = {},
@@ -336,12 +337,12 @@ const FOREIGN_PROVISIONER_INCARNATION_ID = 'provisioner-incarnation-elsewhere';
  */
 describe('process-bound allocation lifetime', () => {
   const store = createRestartableTempDb('piscina-process-bound');
-  let repositoryA: Required<ExecutionAttemptRepository>;
-  let repositoryB: Required<ExecutionAttemptRepository>;
+  let repositoryA: Required<ExecutionAttemptRepository<WorkflowRunResult>>;
+  let repositoryB: Required<ExecutionAttemptRepository<WorkflowRunResult>>;
 
   beforeAll(async () => {
-    repositoryA = await createSqliteAttemptRepository(await store.connect());
-    repositoryB = await createSqliteAttemptRepository(await store.connect());
+    repositoryA = await createSqliteAttemptRepository(await store.connect(), workflowRunResultOutcomeCodec);
+    repositoryB = await createSqliteAttemptRepository(await store.connect(), workflowRunResultOutcomeCodec);
   });
 
   afterEach(removeTempDir);

@@ -1,4 +1,3 @@
-import type { WorkflowRunResult } from '@makaio/contracts';
 import type {
   AllocationRecordingDecision,
   AllocationRefEvolution,
@@ -6,10 +5,12 @@ import type {
   AllocationTerminationDecision,
   BeginProvisioningInput,
   DiscoveredAllocationDecision,
+  DurableOutcome,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
+  ExecutionOwnerId,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
   PendingAttemptAbandonmentDecision,
@@ -47,10 +48,11 @@ import { buildDeferred, type Deferred } from './runtime/deferred.js';
  * Settlement lifecycle:
  * - `conflict` / `fenced`: rejected immediately by {@link commitOutcome}.
  * - `accepted` / `duplicate`: NOT settled by commitOutcome. The caller
- *   must invoke {@link settleOutcome} after workflow-state convergence
+ *   must invoke {@link settleOutcome} after owner-state convergence
  *   succeeds.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-type OutcomeWaiter = Deferred<WorkflowRunResult, Error>;
+type OutcomeWaiter<TOutcome> = Deferred<TOutcome, Error>;
 
 // ─────────────────────────────────────────────────────────────
 // Authority Service
@@ -62,7 +64,7 @@ type OutcomeWaiter = Deferred<WorkflowRunResult, Error>;
  * Owns:
  * - attempt ID generation (`crypto.randomUUID()`);
  * - current-process waiters so runners can `await` a committed outcome;
- * - idempotent workflow-state convergence for both `accepted` and `duplicate`.
+ * - idempotent owner-state convergence for both `accepted` and `duplicate`.
  *
  * Delegates:
  * - durable attempt creation, provider-operation ownership, allocation
@@ -83,9 +85,10 @@ type OutcomeWaiter = Deferred<WorkflowRunResult, Error>;
  *
  * This service is stateless across process restarts. In-process waiters
  * are lost on crash; the host recovery coordinator owns recovery decisions.
+ * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export class ExecutionAttemptAuthority {
-  private readonly repository: ExecutionAttemptRepository;
+export class ExecutionAttemptAuthority<TOutcome> {
+  private readonly repository: ExecutionAttemptRepository<TOutcome>;
 
   /**
    * In-process waiters keyed by `executionAttemptId`.
@@ -94,12 +97,12 @@ export class ExecutionAttemptAuthority {
    * {@link settleOutcome} after convergence. Callers use
    * {@link waitForOutcome} to obtain the promise.
    */
-  private readonly waiters = new Map<string, OutcomeWaiter>();
+  private readonly waiters = new Map<string, OutcomeWaiter<TOutcome>>();
 
   /**
    * @param repository - Injected durable attempt persistence port.
    */
-  public constructor(repository: ExecutionAttemptRepository) {
+  public constructor(repository: ExecutionAttemptRepository<TOutcome>) {
     this.repository = repository;
   }
 
@@ -108,10 +111,10 @@ export class ExecutionAttemptAuthority {
    *
    * Persists the attempt through the repository and installs an in-process
    * waiter for the committed outcome. Must be called before dispatch.
-   * @param executionId - Workflow execution identifier.
+   * @param executionId - Owner identifier the attempt belongs to.
    * @returns The persisted attempt record.
    */
-  public async createAttempt(executionId: string): Promise<ExecutionAttemptRecord> {
+  public async createAttempt(executionId: ExecutionOwnerId): Promise<ExecutionAttemptRecord> {
     const executionAttemptId = crypto.randomUUID();
     const record = await this.repository.createAttempt({
       executionAttemptId,
@@ -174,7 +177,7 @@ export class ExecutionAttemptAuthority {
    *
    * The attempt keeps its durable state and stays remediable, so the local
    * waiter is left untouched: handoff transfers control, it does not answer
-   * the workflow.
+   * the owner.
    * @param input - Claim being released and optional bounded release evidence.
    * @returns The durable mutation decision.
    */
@@ -278,15 +281,49 @@ export class ExecutionAttemptAuthority {
    * Retrieve the active attempt for a given execution.
    *
    * Delegates directly to the repository.
-   * @param executionId - Workflow execution identifier.
+   * @param executionId - Owner identifier the attempt belongs to.
    * @param executionAttemptId - Attempt identifier to look up.
    * @returns The attempt record if active, or `null`.
    */
   public async getActiveAttempt(
-    executionId: string,
+    executionId: ExecutionOwnerId,
     executionAttemptId: string,
   ): Promise<ExecutionAttemptRecord | null> {
     return this.repository.getActiveAttempt(executionId, executionAttemptId);
+  }
+
+  /**
+   * Render a submission as the durable fact a commit of it would write.
+   *
+   * Delegates to the repository, which owns the codec and therefore the
+   * durable form. An owner boundary calls this once, before its own
+   * validation, so it inspects the value the attempt will actually hold
+   * rather than the copy the submitter offered — and then hands the same
+   * rendering to {@link commitOutcome}, which is what makes the committed
+   * outcome necessarily the validated one.
+   * @param outcome - Outcome a caller is about to submit.
+   * @returns The text a commit would persist and the outcome that text yields.
+   * @throws When the codec rejects the outcome or its own durable text.
+   */
+  public canonicalizeOutcome(outcome: TOutcome): DurableOutcome<TOutcome> {
+    return this.repository.canonicalizeOutcome(outcome);
+  }
+
+  /**
+   * Read a committed durable text back as the outcome it holds.
+   *
+   * Delegates to the repository, which owns the codec and therefore the
+   * durable form. An owner boundary uses it to obtain a copy of the committed
+   * outcome that no earlier step of its own can have touched: the value it
+   * handed to its validation and to convergence has been in other hands since,
+   * and a mutable outcome one of them changed must not be what a waiter
+   * observes. The text it decodes is the one the attempt stored.
+   * @param text - Durable text an attempt committed.
+   * @returns The outcome that text holds, held by nobody else.
+   * @throws When the text is not JSON, or not JSON the codec accepts.
+   */
+  public decodeOutcome(text: string): TOutcome {
+    return this.repository.decodeOutcome(text);
   }
 
   /**
@@ -296,17 +333,17 @@ export class ExecutionAttemptAuthority {
    * `fenced` decisions, the in-process waiter is rejected immediately because
    * no convergence step follows. For `accepted` and `duplicate` decisions, the
    * waiter is NOT settled here — the caller must invoke {@link settleOutcome}
-   * after workflow-state convergence succeeds.
+   * after owner-state convergence succeeds.
    * @param executionAttemptId - The attempt submitting the outcome.
-   * @param executionId - Workflow execution identifier.
-   * @param result - Terminal workflow result to commit.
+   * @param executionId - Owner identifier the attempt belongs to.
+   * @param result - The rendering to commit, from {@link canonicalizeOutcome}.
    * @returns The durable decision with the canonical outcome when applicable.
    */
   public async commitOutcome(
     executionAttemptId: string,
-    executionId: string,
-    result: WorkflowRunResult,
-  ): Promise<ExecutionAttemptOutcomeDecision> {
+    executionId: ExecutionOwnerId,
+    result: DurableOutcome<TOutcome>,
+  ): Promise<ExecutionAttemptOutcomeDecision<TOutcome>> {
     const decision = await this.repository.commitOutcome({
       executionAttemptId,
       executionId,
@@ -329,22 +366,22 @@ export class ExecutionAttemptAuthority {
    * Returns `undefined` when no waiter exists for the given attempt
    * (e.g. after a process restart or for attempts created by other hosts).
    * @param executionAttemptId - The attempt to wait for.
-   * @returns Promise that resolves with the canonical workflow result, or `undefined`.
+   * @returns Promise that resolves with the canonical outcome, or `undefined`.
    */
-  public waitForOutcome(executionAttemptId: string): Promise<WorkflowRunResult> | undefined {
+  public waitForOutcome(executionAttemptId: string): Promise<TOutcome> | undefined {
     return this.waiters.get(executionAttemptId)?.promise;
   }
 
   /**
-   * Settle the in-process waiter after workflow-state convergence succeeds.
+   * Settle the in-process waiter after owner-state convergence succeeds.
    *
-   * Called by the outcome-submission handler only after the durable workflow
+   * Called by the outcome-submission handler only after the durable owner
    * transition has completed. This ensures runners observe the committed
-   * outcome only when canonical workflow state is consistent.
+   * outcome only when canonical owner state is consistent.
    * @param executionAttemptId - The attempt whose waiter to settle.
    * @param decision - The durable outcome decision (must be accepted or duplicate).
    */
-  public settleOutcome(executionAttemptId: string, decision: ExecutionAttemptOutcomeDecision): void {
+  public settleOutcome(executionAttemptId: string, decision: ExecutionAttemptOutcomeDecision<TOutcome>): void {
     this.settleWaiterInternal(executionAttemptId, decision);
   }
 
@@ -460,10 +497,10 @@ export class ExecutionAttemptAuthority {
    *
    * Delegates to the repository's `getRecoverableAttempts` operation.
    * Throws when the repository does not support recovery.
-   * @param executionId - Workflow execution identifier.
+   * @param executionId - Owner identifier the attempts belong to.
    * @returns Allocated, non-settled attempts eligible for recovery, oldest first.
    */
-  public async getRecoverableAttempts(executionId: string): Promise<readonly RecoverableAttemptRecord[]> {
+  public async getRecoverableAttempts(executionId: ExecutionOwnerId): Promise<readonly RecoverableAttemptRecord[]> {
     return this.requireRecovery('getRecoverableAttempts').getRecoverableAttempts(executionId);
   }
 
@@ -501,12 +538,12 @@ export class ExecutionAttemptAuthority {
    * The repository refuses to use this transition for allocated attempts so a
    * dispatcher cannot silently strand live infrastructure.
    * @param executionAttemptId - Attempt whose pre-allocation dispatch ended.
-   * @param executionId - Workflow execution identifier.
+   * @param executionId - Owner identifier the attempt belongs to.
    * @returns The durable abandonment decision.
    */
   public async abandonPendingAttempt(
     executionAttemptId: string,
-    executionId: string,
+    executionId: ExecutionOwnerId,
   ): Promise<PendingAttemptAbandonmentDecision> {
     const decision = await this.repository.abandonPendingAttempt(executionAttemptId, executionId);
     if (decision.kind === 'abandoned' || decision.kind === 'already-abandoned') {
@@ -541,7 +578,7 @@ export class ExecutionAttemptAuthority {
    * @param executionAttemptId - Attempt to install a waiter for.
    */
   private installWaiter(executionAttemptId: string): void {
-    this.waiters.set(executionAttemptId, buildDeferred<WorkflowRunResult, Error>());
+    this.waiters.set(executionAttemptId, buildDeferred<TOutcome, Error>());
   }
 
   /**
@@ -552,7 +589,7 @@ export class ExecutionAttemptAuthority {
    * @param executionAttemptId - Attempt whose waiter to settle.
    * @param decision - The durable outcome decision from the repository.
    */
-  private settleWaiterInternal(executionAttemptId: string, decision: ExecutionAttemptOutcomeDecision): void {
+  private settleWaiterInternal(executionAttemptId: string, decision: ExecutionAttemptOutcomeDecision<TOutcome>): void {
     const waiter = this.waiters.get(executionAttemptId);
     if (!waiter) {
       return;
