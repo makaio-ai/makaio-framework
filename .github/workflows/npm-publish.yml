@@ -116,7 +116,7 @@ jobs:
               description: 'Dev package publish started.',
             });
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ steps.request.outputs.checkout-ref }}
           fetch-depth: 0
@@ -131,7 +131,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -144,7 +144,7 @@ jobs:
       - name: Restore Yarn cache
         if: github.ref != ''
         id: yarn-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -155,7 +155,7 @@ jobs:
       - name: Restore node_modules
         if: github.ref != ''
         id: nm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: '**/node_modules'
           key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
@@ -165,7 +165,7 @@ jobs:
 
       - name: Save Yarn cache
         if: github.ref != '' && steps.yarn-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -174,7 +174,7 @@ jobs:
 
       - name: Save node_modules
         if: github.ref != '' && steps.nm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: '**/node_modules'
           key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
