@@ -964,6 +964,51 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
     );
   });
 
+  it('replays registration and readiness during a workload, but fences a stale readiness report first', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    await admitTestOperation(harness.repository, ids, runtimeGeneration, 'workflow-run', 'replay-workload');
+    const before = await harness.repository.getAttemptControlState(ids.executionAttemptId);
+
+    expect(await harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: RUNTIME_INCARNATION_ID })).toEqual({
+      kind: 'duplicate',
+      runtimeGeneration,
+      runtimeReadyAt: before?.runtimeReadyAt,
+    });
+    expect(
+      await harness.repository.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() }),
+    ).toEqual({ kind: 'duplicate', acceptedAt: before?.runtimeReadyAt });
+    expect(
+      await harness.repository.markRuntimeReady({
+        ...ids,
+        runtimeGeneration: runtimeGeneration + 1,
+        readyAt: new Date().toISOString(),
+      }),
+    ).toEqual({ kind: 'stale-generation' });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toEqual(before);
+  });
+
+  it('reports settlement before replaying the last completed operation', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const operationId = await admitTestOperation(
+      harness.repository,
+      ids,
+      runtimeGeneration,
+      'workflow-run',
+      'complete',
+    );
+    const completion = { executionAttemptId: ids.executionAttemptId, operationId, runtimeGeneration };
+    expect(await harness.repository.completeOperation(completion)).toEqual({ kind: 'completed' });
+    expect(await harness.repository.completeOperation(completion)).toEqual({ kind: 'duplicate' });
+    const settlement = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId)),
+    });
+    expect(settlement.kind).toBe('accepted');
+    expect(await harness.repository.completeOperation(completion)).toEqual({ kind: 'resolved' });
+  });
+
   it('admits the bounded probe before readiness and refuses every other kind', async () => {
     const ids = nextIds();
     await allocateAttempt(harness.repository, ids);

@@ -52,8 +52,15 @@ export {
   durableOutcome,
   sameAllocationRef,
   sameDurableOutcome,
+  evaluateAttemptReachability,
+  evaluateRuntimeRegistration,
+  evaluateOperationAdmission,
+  evaluateOperationCompletion,
+  evaluateRuntimeReadiness,
 } from './execution-attempt-repository.js';
 export type {
+  AttemptReachability,
+  AttemptReachabilityDecision,
   AdmitOperationInput,
   AttemptControlState,
   AttemptOperationStartGate,
