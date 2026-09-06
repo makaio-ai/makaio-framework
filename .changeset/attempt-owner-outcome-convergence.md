@@ -5,7 +5,7 @@
 "@makaio/runtime-node": major
 ---
 
-Make the execution attempt boundary generic over the owner's outcome type (#1262). `ExecutionAttemptRepository<TOutcome>`, `ExecutionAttemptAuthority<TOutcome>`, `ExecutionAttemptOutcomeCommit<TOutcome>`, `ExecutionAttemptOutcomeDecision<TOutcome>`, and `AuthorityDispatchRunnerOptions<TOutcome>` take a required type parameter with no default; the workflow engine binds them to `WorkflowRunResult`. New exports from `@makaio/subsystem-workflow-engine`: `ExecutionOwnerId`, `OutcomeCodec`, `OutcomeConvergence`, `OutcomeConvergenceInput`, `OutcomePreCommitValidation`, and `submitAttemptOutcome`, the lifted validate → commit → converge → settle invariant that the `worker.control.outcome.submit` handler now delegates to. `OutcomeConvergence.converge` takes the named `OutcomeConvergenceInput<TOutcome>` rather than an inline shape.
+Make the execution attempt boundary generic over the owner's outcome type. `ExecutionAttemptRepository<TOutcome>`, `ExecutionAttemptAuthority<TOutcome>`, `ExecutionAttemptOutcomeCommit<TOutcome>`, `ExecutionAttemptOutcomeDecision<TOutcome>`, and `AuthorityDispatchRunnerOptions<TOutcome>` take a required type parameter with no default; the workflow engine binds them to `WorkflowRunResult`. New exports from `@makaio/subsystem-workflow-engine`: `ExecutionOwnerId`, `OutcomeCodec`, `OutcomeConvergence`, `OutcomeConvergenceInput`, `OutcomePreCommitValidation`, and `submitAttemptOutcome`, the lifted validate → commit → converge → settle invariant that the `worker.control.outcome.submit` handler now delegates to. `OutcomeConvergence.converge` takes the named `OutcomeConvergenceInput<TOutcome>` rather than an inline shape.
 
 Breaking:
 

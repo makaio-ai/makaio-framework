@@ -341,7 +341,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     // The clear is deliberately NOT restored when startThread rejects: the executor announced the
     // abandonment (unconfirmed move) before this dispatch, so the session row already stopped
     // advertising the old thread. Resurrecting the target would let a later dispatch resume a
-    // thread whose abandonment was announced — the bug class #1222 closed. Recovery after a
+    // thread whose abandonment was announced, the bug class this guard closed. Recovery after a
     // failed fresh start is the service tier's decision (fresh-with-history), not the connector's.
     if (!this.thread && options?.useNativeResume === false) this.turnCtx.resumeAdapterSessionId = undefined;
     if (!this.thread) await startThread(this.turnCtx);

@@ -5,7 +5,7 @@
 "@makaio/runtime-node": major
 ---
 
-Rename the `WorkerNode` contract family to `Worker` as one coordinated breaking cut (#1261). `Worker` is the attempt-bound provider allocation; `Worker Runtime` is the process inside it. No aliases or compatibility re-exports are provided.
+Rename the `WorkerNode` contract family to `Worker` as one coordinated breaking cut. `Worker` is the attempt-bound provider allocation; `Worker Runtime` is the process inside it. No aliases or compatibility re-exports are provided.
 
 Wire and config literals:
 

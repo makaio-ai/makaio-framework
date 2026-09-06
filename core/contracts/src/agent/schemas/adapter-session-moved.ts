@@ -47,7 +47,7 @@ export const AdapterSessionMovedSchema = BaseAgentEventSchema.extend({
   // advertises a successor the provider never acknowledged.
   //
   // This refinement is TypeScript-side only: the exported protocol manifest
-  // (`framework/sdks/manifest/makaio-bus-protocol.json`) is generated from this
+  // (`sdks/manifest/makaio-bus-protocol.json`) is generated from this
   // schema through `z.toJSONSchema`, which drops refinements because JSON Schema
   // cannot express them. The manifest therefore shows `adapterSessionId` as a
   // plain optional string. Hand-editing it to add the discriminant is not an
