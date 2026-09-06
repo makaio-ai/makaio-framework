@@ -62,6 +62,8 @@ import {
 } from './workflow-resume-state.js';
 import { registerAuthorityStateBootstrapHandler } from './authority-state-bootstrap.js';
 import { registerOutcomeSubmissionHandler } from './workflow-outcome-submission.js';
+import { registerRuntimeRegistrationHandler } from './runtime-registration.js';
+import { registerOperationAdmissionHandler } from './operation-admission.js';
 import { registerDelegateResultFinalizationGateway } from './delegate-result-finalization-gateway.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 
@@ -307,6 +309,12 @@ export class WorkflowExecutor extends BaseService {
           authority: this.executionAttemptAuthority,
           acceptTerminalResult: (executionId, result) => this.acceptAuthorityRunnerResult(executionId, result),
         }),
+      );
+      this.addCleanup(
+        registerRuntimeRegistrationHandler(this.bus, { bus: this.bus, authority: this.executionAttemptAuthority }),
+      );
+      this.addCleanup(
+        registerOperationAdmissionHandler(this.bus, { bus: this.bus, authority: this.executionAttemptAuthority }),
       );
     }
     for (const cleanup of registerWorkflowStorageDelegationHandlers(this.bus)) {

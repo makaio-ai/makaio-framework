@@ -8,12 +8,12 @@ import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websoc
 import {
   createWorkflowFinalizerNamespace,
   createWorkflowDelegateResultFinalizerNamespace,
+  ExecutionAttemptSubjects,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
   WorkflowSubjects,
   AgentSubjects,
   AdapterSubjects,
-  WorkerSubjects,
   SubagentSubjects,
   createClientDefinition,
 } from '@makaio/contracts';
@@ -22,7 +22,12 @@ import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ClientStorageSubjects, ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
-import { ExecutionAttemptAuthority, WorkflowExecutor } from '@makaio/subsystem-workflow-engine';
+import {
+  ExecutionAttemptAuthority,
+  registerOperationAdmissionHandler,
+  registerRuntimeRegistrationHandler,
+  WorkflowExecutor,
+} from '@makaio/subsystem-workflow-engine';
 import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
 import { WorkflowStorageSubjects } from '../../../../../subsystems/workflow-engine/src/storage/namespace.js';
 import {
@@ -36,12 +41,14 @@ import { createIsolatedWorkflowRuntime } from '../isolated-workflow-runtime.js';
 import { WorkerRunner } from '../worker-runner.js';
 import {
   createInMemoryAttemptRepository,
+  driveTestAttemptToAllocated,
   workflowRunResultOutcomeCodec,
 } from '@makaio/subsystem-workflow-engine/testing';
 import {
   createDeterministicAdapterContribution,
   type DeterministicAdapterCapture,
 } from './deterministic-adapter-fixture.js';
+import { installOperationDeliveryEndpoint, registerWorkerRuntime } from '../runtime-registration-client.js';
 
 const testAllocationRef: ProviderAllocationRef = {
   version: 1,
@@ -144,11 +151,17 @@ describe('authority Worker finalization integration', () => {
       }),
     );
     cleanups.push(
-      MakaioBus.on(WorkerSubjects.control['attempt-ready'], (ctx) => {
+      MakaioBus.on(ExecutionAttemptSubjects.runtime.ready, (ctx) => {
         readyEvents.push(ctx.payload);
       }),
     );
     const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
+    // The Authority-side ExecutionAttempt gates the dispatched runtime speaks to.
+    cleanups.push(
+      registerRuntimeRegistrationHandler(MakaioBus, { bus: MakaioBus, authority }),
+      registerOperationAdmissionHandler(MakaioBus, { bus: MakaioBus, authority }),
+    );
+    let dispatchedAttemptId: string | undefined;
     let resolveDispatchComplete!: (executionId: string) => void;
     const dispatchComplete = new Promise<string>((resolve) => {
       resolveDispatchComplete = resolve;
@@ -158,6 +171,10 @@ describe('authority Worker finalization integration', () => {
       manifest: { contributionRefs: [] },
       dispatch: async (request, signal) => {
         attemptExecutionIds.set(request.executionAttemptId, request.config.executionId);
+        dispatchedAttemptId = request.executionAttemptId;
+        // A created attempt is not yet registrable; this stands in for the
+        // provisioner a provider-backed dispatch would have run.
+        await driveTestAttemptToAllocated(authority, request.executionAttemptId, request.config.executionId);
         const runtime = await createIsolatedWorkflowRuntime({
           connectAuthority: async (bus) => {
             bus.registerTransport(
@@ -267,11 +284,22 @@ describe('authority Worker finalization integration', () => {
               authMethods: [{ id: 'native', mode: 'inferred' }],
             },
           });
-          await runtime.bus.emit(WorkerSubjects.control['attempt-ready'], {
-            executionAttemptId: request.executionAttemptId,
-            executionId: request.config.executionId,
-            adapters: [adapterCapture.adapterId],
-          });
+          // Readiness is the Authority's to publish: the runtime installs its
+          // delivery endpoint, registers, and the Authority proves the endpoint
+          // with a bounded probe before it announces the attempt ready.
+          const runtimeIncarnationId = `authority-finalization-${request.executionAttemptId}`;
+          const deliveryEndpoint = await installOperationDeliveryEndpoint(
+            runtime.bus,
+            { executionAttemptId: request.executionAttemptId, runtimeIncarnationId },
+            {},
+          );
+          cleanups.push(() => deliveryEndpoint.cleanup());
+          deliveryEndpoint.bindGeneration(
+            await registerWorkerRuntime(runtime.bus, {
+              executionAttemptId: request.executionAttemptId,
+              runtimeIncarnationId,
+            }),
+          );
           const { definitionSnapshot } = await runtime.bus.request(WorkflowSubjects.getRunContext, {
             executionId: request.config.executionId,
           });
@@ -407,11 +435,14 @@ describe('authority Worker finalization integration', () => {
     expect(usageEvents).toContainEqual(
       expect.objectContaining({ adapterName: 'workflow-test-adapter', totalTokens: 2, costUnits: 2 }),
     );
-    expect(readyEvents).toContainEqual({
-      executionAttemptId: expect.any(String),
-      executionId,
-      adapters: [adapterCapture.adapterId],
-    });
+    expect(dispatchedAttemptId).toBeDefined();
+    expect(readyEvents).toEqual([
+      {
+        executionAttemptId: dispatchedAttemptId,
+        runtimeGeneration: expect.any(Number),
+        acceptedAt: expect.any(String),
+      },
+    ]);
     expect(adapterCapture.starts).toContainEqual({
       cwd,
       allowedTools: ['read_file'],

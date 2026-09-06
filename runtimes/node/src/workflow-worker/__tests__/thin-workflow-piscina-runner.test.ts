@@ -28,6 +28,9 @@ vi.mock('../local-directory-materializer.js', () => ({
 // Import after mocking
 const { ThinWorkflowPiscinaRunner } = await import('../thin-workflow-piscina-runner.js');
 
+/** Attempt every readiness-aware dispatch below binds its worker thread to. */
+const TEST_ATTEMPT_ID = 'attempt-readiness';
+
 /**
  * Create a minimal WorkflowWorkerConfig for testing.
  * @param overrides - Optional config fields to replace in the fixture.
@@ -115,7 +118,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
 
     expect(mockPoolRun).toHaveBeenCalledOnce();
     expect(mockPoolRun).toHaveBeenCalledWith(
-      { config, manifest: options.manifest, contributionEntrypoints: [] },
+      { kind: 'unbound', config, manifest: options.manifest, contributionEntrypoints: [] },
       signal,
     );
     expect(result).toEqual({ state: 'uncommitted', result: expectedResult });
@@ -164,6 +167,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
     });
     expect(mockPoolRun).toHaveBeenCalledWith(
       {
+        kind: 'unbound',
         config: {
           ...config,
           source: { kind: 'path', path: '/workspace-a/workflows/example.mjs' },
@@ -223,19 +227,46 @@ describe('ThinWorkflowPiscinaRunner', () => {
     await expect(runner.run(makeConfig(), new AbortController().signal)).rejects.toThrow('Worker thread crashed');
   });
 
+  it('dispatches an attempt-bound task when readiness is requested', async () => {
+    mockPoolRun.mockResolvedValueOnce({ executionId: 'test-exec', workflowId: 'test-workflow', status: 'completed' });
+    const runner = new ThinWorkflowPiscinaRunner(makeOptions());
+
+    const run = runner.runWithReadiness(makeConfig(), new AbortController().signal, undefined, {
+      executionAttemptId: TEST_ATTEMPT_ID,
+    });
+    // This worker never posts a ready message, so readiness is rejected by the
+    // run's own settlement; observing it keeps that rejection handled.
+    await expect(run.ready).rejects.toThrow('completed before ready signal');
+    await run.result;
+
+    // The attempt identity travels as its own task shape, so the attempt-free
+    // `run()` task never carries an empty attempt field.
+    expect(mockPoolRun).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'attempt-bound', executionAttemptId: TEST_ATTEMPT_ID }),
+      expect.anything(),
+    );
+  });
+
   it('resolves readiness from the matching worker ready message', async () => {
     const result = createDeferred<{ executionId: string; workflowId: string; status: 'completed' }>();
     mockPoolRun.mockReturnValueOnce(result.promise);
     const runner = new ThinWorkflowPiscinaRunner(makeOptions());
     const config = makeConfig();
 
-    const run = runner.runWithReadiness(config, new AbortController().signal);
+    const run = runner.runWithReadiness(config, new AbortController().signal, undefined, {
+      executionAttemptId: TEST_ATTEMPT_ID,
+    });
 
-    emitPoolMessage(createWorkflowWorkerReadyMessage('other-exec', config.cancelSubject));
+    emitPoolMessage(createWorkflowWorkerReadyMessage('other-exec', config.cancelSubject, TEST_ATTEMPT_ID));
     await expect(Promise.race([run.ready.then(() => 'ready'), Promise.resolve('pending')])).resolves.toBe('pending');
 
-    emitPoolMessage(createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, ['adapter-a']));
-    await expect(run.ready).resolves.toMatchObject({ adapters: ['adapter-a'] });
+    // Another attempt's thread reporting on the same pool is a correlation
+    // miss, not this dispatch's readiness.
+    emitPoolMessage(createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, 'attempt-elsewhere'));
+    await expect(Promise.race([run.ready.then(() => 'ready'), Promise.resolve('pending')])).resolves.toBe('pending');
+
+    emitPoolMessage(createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, TEST_ATTEMPT_ID));
+    await expect(run.ready).resolves.toMatchObject({ executionAttemptId: TEST_ATTEMPT_ID });
     result.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' });
     await expect(run.result).resolves.toMatchObject({ status: 'completed' });
   });
@@ -245,7 +276,9 @@ describe('ThinWorkflowPiscinaRunner', () => {
     mockPoolRun.mockRejectedValueOnce(error);
     const runner = new ThinWorkflowPiscinaRunner(makeOptions());
 
-    const run = runner.runWithReadiness(makeConfig(), new AbortController().signal);
+    const run = runner.runWithReadiness(makeConfig(), new AbortController().signal, undefined, {
+      executionAttemptId: TEST_ATTEMPT_ID,
+    });
 
     await expect(run.ready).rejects.toThrow('worker crashed');
     await expect(run.result).rejects.toBe(error);
@@ -255,7 +288,9 @@ describe('ThinWorkflowPiscinaRunner', () => {
     mockPoolRun.mockResolvedValueOnce({ executionId: 'test-exec', workflowId: 'test-workflow', status: 'completed' });
     const runner = new ThinWorkflowPiscinaRunner(makeOptions());
 
-    const run = runner.runWithReadiness(makeConfig(), new AbortController().signal);
+    const run = runner.runWithReadiness(makeConfig(), new AbortController().signal, undefined, {
+      executionAttemptId: TEST_ATTEMPT_ID,
+    });
 
     await expect(run.ready).rejects.toThrow('Workflow worker completed before ready signal: test-exec');
   });

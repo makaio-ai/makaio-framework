@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { RECOVERY_EVIDENCE_LIMITS, type WorkflowRunResult } from '@makaio/contracts';
+import {
+  RECOVERY_EVIDENCE_LIMITS,
+  type ExecutionAttemptOperationKind,
+  type WorkflowRunResult,
+} from '@makaio/contracts';
 import { createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
 import type {
   BeginProvisioningInput,
@@ -20,6 +24,7 @@ import { urlOutcomeCodec } from './url-outcome.js';
 import { bytesOutcomeCodec } from './bytes-outcome.js';
 import { createSqliteAttemptRepository } from '../testing/sqlite.js';
 import {
+  INITIAL_ATTEMPT_CONTROL_STATE,
   TEST_PROVIDER_ID,
   TEST_PROVISIONER_INCARNATION_ID,
   createInMemoryAttemptRepository,
@@ -169,6 +174,101 @@ async function startAttempt(
   );
   if (decision.kind !== 'started') throw new Error(`Expected provisioning to start, got '${decision.kind}'`);
   return decision.claim;
+}
+
+/** Runtime incarnation the control-state cases register unless they need a second one. */
+const RUNTIME_INCARNATION_ID = 'runtime-incarnation-1';
+
+/**
+ * Create an attempt, win its provisioning claim, and record an allocation.
+ * @param repository - Repository under test.
+ * @param ids - Execution and attempt identifiers to use.
+ * @returns The claim the winning begin issued.
+ * @throws When provisioning does not start or the allocation is not recorded.
+ */
+async function allocateAttempt(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  ids: { readonly executionId: string; readonly executionAttemptId: string },
+): Promise<ProviderOperationClaim> {
+  const claim = await startAttempt(repository, ids);
+  const decision = await repository.recordAllocation({ claim, allocationRef: makeTestAllocationRef() });
+  if (decision.kind !== 'recorded') throw new Error(`Expected the allocation to be recorded, got '${decision.kind}'`);
+  return claim;
+}
+
+/**
+ * Register a runtime incarnation as the attempt's endpoint.
+ * @param repository - Repository under test.
+ * @param ids - Execution and attempt identifiers to use.
+ * @param runtimeIncarnationId - Incarnation to register.
+ * @returns The generation the repository allocated.
+ * @throws When the registration is refused.
+ */
+async function registerTestRuntime(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  ids: { readonly executionId: string; readonly executionAttemptId: string },
+  runtimeIncarnationId: string = RUNTIME_INCARNATION_ID,
+): Promise<number> {
+  const decision = await repository.registerRuntime({ ...ids, runtimeIncarnationId });
+  if (decision.kind !== 'registered') throw new Error(`Expected the runtime to register, got '${decision.kind}'`);
+  return decision.runtimeGeneration;
+}
+
+/**
+ * Prove readiness for a registered generation.
+ * @param repository - Repository under test.
+ * @param ids - Execution and attempt identifiers to use.
+ * @param runtimeGeneration - Generation the proof belongs to.
+ * @returns The instant the repository accepted.
+ * @throws When readiness is refused.
+ */
+async function proveTestReadiness(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  ids: { readonly executionId: string; readonly executionAttemptId: string },
+  runtimeGeneration: number,
+): Promise<string> {
+  const decision = await repository.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() });
+  if (decision.kind !== 'ready') throw new Error(`Expected readiness to be accepted, got '${decision.kind}'`);
+  return decision.acceptedAt;
+}
+
+/**
+ * Admit one operation through the attempt's start gate.
+ * @param repository - Repository under test.
+ * @param ids - Execution and attempt identifiers to use.
+ * @param runtimeGeneration - Generation the admission is fenced against.
+ * @param operationKind - Kind of operation to admit.
+ * @param admissionKey - Idempotency key for the admission.
+ * @returns The identifier the repository minted.
+ * @throws When the admission is refused.
+ */
+async function admitTestOperation(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  ids: { readonly executionId: string; readonly executionAttemptId: string },
+  runtimeGeneration: number,
+  operationKind: ExecutionAttemptOperationKind,
+  admissionKey: string,
+): Promise<string> {
+  const decision = await repository.admitOperation({ ...ids, operationKind, admissionKey, runtimeGeneration });
+  if (decision.kind !== 'admitted') throw new Error(`Expected the operation to be admitted, got '${decision.kind}'`);
+  return decision.operationId;
+}
+
+/**
+ * Bring an attempt all the way to a proven runtime endpoint.
+ * @param repository - Repository under test.
+ * @param ids - Execution and attempt identifiers to use.
+ * @returns The generation the proven runtime holds.
+ * @throws When any step of the handshake is refused.
+ */
+async function readyAttempt(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  ids: { readonly executionId: string; readonly executionAttemptId: string },
+): Promise<number> {
+  await allocateAttempt(repository, ids);
+  const runtimeGeneration = await registerTestRuntime(repository, ids);
+  await proveTestReadiness(repository, ids, runtimeGeneration);
+  return runtimeGeneration;
 }
 
 describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization, createHarness) => {
@@ -573,6 +673,556 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
     // as the canonical instant regardless of how the caller spelled it.
     expect(operation?.leaseExpiresAt).toBe('2026-07-27T11:30:00.000Z');
     expect(renewal.kind === 'claimed' ? renewal.claim.leaseExpiresAt : null).toBe('2026-07-27T11:30:00.000Z');
+  });
+
+  // ───────────────────────────────────────────────────────────
+  // Runtime registration and operation admission.
+  //
+  // Every case below is one of the races the port has to answer the same way
+  // on both realizations: what happens when two callers reach the same durable
+  // fact at once, and what a process that lost its own memory reads back.
+  // ───────────────────────────────────────────────────────────
+
+  it('never refuses a worker outcome that races an admission', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const result = makeTestWorkflowResult(ids.executionId);
+
+    const [admission, commit] = await Promise.all([
+      harness.repository.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'run-against-outcome',
+        runtimeGeneration,
+      }),
+      harness.repository.commitOutcome({ ...ids, result: harness.repository.canonicalizeOutcome(result) }),
+    ]);
+
+    // Admission never gates the canonical answer: whichever order the two
+    // reach durable state in, the worker's outcome is accepted and the
+    // admission is either in before the settlement or refused by it.
+    expect(commit).toEqual({
+      kind: 'accepted',
+      outcome: result,
+      text: harness.repository.canonicalizeOutcome(result).text,
+    });
+    expect(['admitted', 'resolved']).toContain(admission.kind);
+  });
+
+  it('advances the runtime generation once for two concurrent reports of one incarnation', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.repository, ids);
+    const report = { ...ids, runtimeIncarnationId: RUNTIME_INCARNATION_ID };
+
+    const decisions = await Promise.all([
+      harness.repository.registerRuntime(report),
+      harness.repository.registerRuntime(report),
+    ]);
+
+    // The incarnation identifier is the registration idempotency key, so the
+    // second report is a replay rather than a second endpoint.
+    expect(decisions.map((decision) => decision.kind).sort()).toEqual(['duplicate', 'registered']);
+    expect(decisions).toContainEqual({ kind: 'duplicate', runtimeGeneration: 1, runtimeReadyAt: null });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration: 1,
+      runtimeIncarnationId: RUNTIME_INCARNATION_ID,
+      runtimeReadyAt: null,
+    });
+  });
+
+  it('allocates one generation per incarnation when two race for the endpoint', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.repository, ids);
+
+    const decisions = await Promise.all([
+      harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-a' }),
+      harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-b' }),
+    ]);
+
+    // Two incarnations claiming one attempt is an anomaly the generation exists
+    // for: each registration allocates its own, so the later one fences the
+    // earlier one instead of sharing its fence.
+    const generations = decisions.flatMap((decision) =>
+      decision.kind === 'registered' ? [decision.runtimeGeneration] : [],
+    );
+    expect(generations.sort()).toEqual([1, 2]);
+    // Exactly one incarnation owns the endpoint afterwards, with no readiness
+    // inherited from the one it displaced.
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration: 2,
+      runtimeReadyAt: null,
+      activeOperationId: null,
+    });
+  });
+
+  it('refuses a completion fenced against a superseded generation', async () => {
+    const ids = nextIds();
+    const first = await readyAttempt(harness.repository, ids);
+    const probe = await admitTestOperation(harness.repository, ids, first, 'runtime-probe', 'probe-1');
+    expect(
+      await harness.repository.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId: probe,
+        runtimeGeneration: first,
+      }),
+    ).toEqual({ kind: 'completed' });
+
+    const second = await registerTestRuntime(harness.repository, ids, 'runtime-incarnation-2');
+    await proveTestReadiness(harness.repository, ids, second);
+    const running = await admitTestOperation(harness.repository, ids, second, 'workflow-run', 'run-1');
+
+    // The superseded runtime answering for an operation it never owned changes
+    // nothing: the fence is what tells the two incarnations apart.
+    expect(
+      await harness.repository.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId: running,
+        runtimeGeneration: first,
+      }),
+    ).toEqual({ kind: 'stale-generation' });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      activeOperationId: running,
+      activeOperationGeneration: second,
+      lastCompletedOperationId: probe,
+    });
+  });
+
+  it('answers two concurrent admissions of one key with the operation it admitted once', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const command = {
+      ...ids,
+      operationKind: 'workflow-run',
+      admissionKey: 'run-key',
+      runtimeGeneration,
+    } as const;
+
+    const decisions = await Promise.all([
+      harness.repository.admitOperation(command),
+      harness.repository.admitOperation(command),
+    ]);
+
+    expect(decisions.map((decision) => decision.kind).sort()).toEqual(['admitted', 'duplicate']);
+    // The retry receives the identifier the first admission was given, which is
+    // the only way a caller that lost the reply learns which operation it got.
+    const operationIds = decisions.flatMap((decision) =>
+      decision.kind === 'admitted' || decision.kind === 'duplicate' ? [decision.operationId] : [],
+    );
+    expect(operationIds).toHaveLength(2);
+    expect(new Set(operationIds).size).toBe(1);
+  });
+
+  it('answers an admission on a settled attempt as resolved, over a closed gate', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId)),
+    });
+
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'after-settlement',
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'resolved' });
+    // The gate is closed underneath that answer; `resolved` wins because it
+    // says why, and the gate only says that it happened.
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      operationStartGate: 'closed',
+    });
+  });
+
+  it('refuses an admission while another operation occupies the attempt', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const running = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'workflow-run', 'run-1');
+
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'run-2',
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'operation-active', operationId: running });
+  });
+
+  it('refuses a completion for another operation and replays the matching one as duplicate', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const running = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'workflow-run', 'run-1');
+    const complete = async (operationId: string): Promise<unknown> =>
+      harness.repository.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId,
+        runtimeGeneration,
+      });
+
+    expect(await complete('operation-nobody-admitted')).toEqual({ kind: 'mismatch', activeOperationId: running });
+    expect(await complete(running)).toEqual({ kind: 'completed' });
+    // The replay is answered from the last completion, because the active
+    // operation it names is gone by then.
+    expect(await complete(running)).toEqual({ kind: 'duplicate' });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      activeOperationId: null,
+      activeOperationKind: null,
+      activeOperationKey: null,
+      activeOperationGeneration: null,
+      lastCompletedOperationId: running,
+    });
+  });
+
+  it('closes the superseded attempt gate in the transaction that moves the pointer', async () => {
+    const first = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, first);
+    const replacement = { executionId: first.executionId, executionAttemptId: `${first.executionAttemptId}-next` };
+
+    await harness.repository.createAttempt(replacement);
+
+    expect(await harness.repository.getAttemptControlState(first.executionAttemptId)).toMatchObject({
+      operationStartGate: 'closed',
+    });
+    // The new attempt opens its own gate rather than inheriting anything.
+    expect(await harness.repository.getAttemptControlState(replacement.executionAttemptId)).toMatchObject({
+      operationStartGate: 'open',
+      runtimeGeneration: 0,
+    });
+    // The fence outranks the gate in the refusal order, so what the superseded
+    // attempt reports is why it can never admit again, not merely that it
+    // cannot.
+    expect(
+      await harness.repository.admitOperation({
+        ...first,
+        operationKind: 'workflow-run',
+        admissionKey: 'after-supersession',
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'fenced' });
+  });
+
+  it('closes the start gate of the pending attempt it abandons', async () => {
+    const ids = nextIds();
+    await harness.repository.createAttempt(ids);
+
+    expect(await harness.repository.abandonPendingAttempt(ids.executionAttemptId, ids.executionId)).toEqual({
+      kind: 'abandoned',
+    });
+    // Abandonment is a terminal settlement and owes the same gate close every
+    // other one does, however early it arrives: an attempt whose answer is
+    // already fixed never starts work again.
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      operationStartGate: 'closed',
+    });
+  });
+
+  it('reports the control state a process that lost its own memory recovers from', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const running = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'workflow-run', 'run-key');
+
+    const control = await harness.repository.getAttemptControlState(ids.executionAttemptId);
+    expect(control).toMatchObject({
+      runtimeGeneration,
+      runtimeIncarnationId: RUNTIME_INCARNATION_ID,
+      operationStartGate: 'open',
+      activeOperationId: running,
+      activeOperationKind: 'workflow-run',
+      activeOperationKey: 'run-key',
+      activeOperationGeneration: runtimeGeneration,
+      lastCompletedOperationId: null,
+    });
+    expect(control?.runtimeReadyAt).not.toBeNull();
+    // Recovery re-presents the key it recorded rather than admitting again.
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'run-key',
+        runtimeGeneration,
+      }),
+    ).toEqual({
+      kind: 'duplicate',
+      operationId: running,
+      runtimeGeneration,
+      admittedAt: control?.activeOperationAdmittedAt,
+    });
+    expect(control?.activeOperationAdmittedAt).toEqual(expect.any(String));
+  });
+
+  it('refuses a registration while an operation occupies the attempt', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const running = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'workflow-run', 'run-1');
+
+    // Advancing the generation here would fence the running operation's own
+    // completion, so the operation in the way is reported instead.
+    expect(await harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-2' })).toEqual(
+      { kind: 'operation-active', operationId: running },
+    );
+  });
+
+  it('admits the bounded probe before readiness and refuses every other kind', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.repository, ids);
+    const runtimeGeneration = await registerTestRuntime(harness.repository, ids);
+
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'run-before-readiness',
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'not-ready' });
+    // The probe is what proves readiness, so requiring readiness of it would
+    // make readiness unreachable.
+    const probe = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'runtime-probe', 'probe-1');
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      activeOperationId: probe,
+      activeOperationKind: 'runtime-probe',
+      runtimeReadyAt: null,
+    });
+  });
+
+  it('refuses readiness while an operation occupies the attempt', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.repository, ids);
+    const runtimeGeneration = await registerTestRuntime(harness.repository, ids);
+    const probe = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'runtime-probe', 'probe-1');
+
+    expect(
+      await harness.repository.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() }),
+    ).toEqual({ kind: 'operation-active', operationId: probe });
+  });
+
+  it('refuses readiness for an attempt superseded after its probe completed', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.repository, ids);
+    const runtimeGeneration = await registerTestRuntime(harness.repository, ids);
+    const probe = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'runtime-probe', 'probe-1');
+    expect(
+      await harness.repository.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId: probe,
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'completed' });
+
+    // A newer attempt for the same execution moves the active pointer between
+    // the probe's completion and the readiness write. The generation still
+    // matches, so only the active-attempt fence can see the endpoint is gone.
+    await allocateAttempt(harness.repository, {
+      executionId: ids.executionId,
+      executionAttemptId: `${ids.executionAttemptId}-successor`,
+    });
+
+    expect(
+      await harness.repository.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() }),
+    ).toEqual({ kind: 'fenced' });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration,
+      runtimeReadyAt: null,
+      activeOperationId: null,
+      operationStartGate: 'closed',
+    });
+  });
+
+  it('clears readiness when a new incarnation takes the endpoint', async () => {
+    const ids = nextIds();
+    const first = await readyAttempt(harness.repository, ids);
+    const second = await registerTestRuntime(harness.repository, ids, 'runtime-incarnation-2');
+
+    expect(second).toBe(first + 1);
+    // Readiness was proven by the incarnation this one replaces, and says
+    // nothing about the new one.
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration: second,
+      runtimeIncarnationId: 'runtime-incarnation-2',
+      runtimeReadyAt: null,
+    });
+
+    await proveTestReadiness(harness.repository, ids, second);
+    const running = await admitTestOperation(harness.repository, ids, second, 'workflow-run', 'run-1');
+    // A third incarnation arriving mid-operation is refused, however ready the
+    // attempt was a moment ago.
+    expect(await harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-3' })).toEqual(
+      { kind: 'operation-active', operationId: running },
+    );
+  });
+
+  it('answers resolved for a settled attempt that still carries a leftover operation', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const running = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'workflow-run', 'run-1');
+
+    const commit = await harness.repository.commitOutcome({
+      ...ids,
+      result: harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId)),
+    });
+
+    expect(commit.kind).toBe('accepted');
+    // The settlement keeps the active operation on purpose: it is what lets a
+    // late completion learn that nobody is waiting for it any more.
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      activeOperationId: running,
+      operationStartGate: 'closed',
+    });
+    // The precedence that matters: `resolved` outranks `operation-active`, so
+    // neither caller is told to wait for an operation nothing will complete.
+    expect(await harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-2' })).toEqual(
+      { kind: 'resolved' },
+    );
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'after-settlement',
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'resolved' });
+    expect(
+      await harness.repository.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId: running,
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'resolved' });
+  });
+
+  it('refuses registration and admission once the allocation is confirmed terminated, before settlement', async () => {
+    const ids = nextIds();
+    const claim = await allocateAttempt(harness.repository, ids);
+    const runtimeGeneration = await registerTestRuntime(harness.repository, ids);
+    await proveTestReadiness(harness.repository, ids, runtimeGeneration);
+
+    // Termination is durable on the operation row before the attempt settles;
+    // in that window the attempt still carries its allocation reference while
+    // nothing can run on it any more.
+    const termination = await harness.repository.recordAllocationTerminated({
+      claim,
+      evidence: makeEvidence({ summary: 'provider reported the allocation terminated' }),
+    });
+    expect(termination).toEqual({ kind: 'recorded' });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration,
+      operationStartGate: 'open',
+    });
+
+    expect(await harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-2' })).toEqual(
+      { kind: 'not-allocated' },
+    );
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'after-termination',
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'not-allocated' });
+    // Nothing moved: the generation the dead allocation held is still the
+    // current one, and no operation occupies the attempt.
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration,
+      runtimeIncarnationId: RUNTIME_INCARNATION_ID,
+      activeOperationId: null,
+    });
+
+    // Settlement then takes over with its own answer.
+    const settlement = await harness.repository.recordInfrastructureFailure({ claim, executionId: ids.executionId });
+    expect(settlement).toEqual({ kind: 'recorded' });
+    expect(await harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-2' })).toEqual(
+      { kind: 'resolved' },
+    );
+  });
+
+  it('refuses readiness once the allocation is confirmed terminated, even after the probe completed', async () => {
+    const ids = nextIds();
+    const claim = await allocateAttempt(harness.repository, ids);
+    const runtimeGeneration = await registerTestRuntime(harness.repository, ids);
+    const probe = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'runtime-probe', 'probe-1');
+
+    // Termination lands while the probe is in flight. The probe still
+    // completes — completion is claim-independent — but the readiness it
+    // would prove belongs to an allocation nothing can run on any more.
+    expect(
+      await harness.repository.recordAllocationTerminated({
+        claim,
+        evidence: makeEvidence({ summary: 'provider reported the allocation terminated' }),
+      }),
+    ).toEqual({ kind: 'recorded' });
+    expect(
+      await harness.repository.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId: probe,
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'completed' });
+
+    expect(
+      await harness.repository.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() }),
+    ).toEqual({ kind: 'not-allocated' });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration,
+      runtimeReadyAt: null,
+      activeOperationId: null,
+    });
+  });
+
+  it('reclaims a probe orphaned by a dead handshake when a new incarnation registers', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.repository, ids);
+    const firstGeneration = await registerTestRuntime(harness.repository, ids);
+    const orphan = await admitTestOperation(harness.repository, ids, firstGeneration, 'runtime-probe', 'probe-1');
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      activeOperationId: orphan,
+      activeOperationKind: 'runtime-probe',
+    });
+
+    // The handshake that admitted the probe never completed it. The next
+    // incarnation takes the endpoint anyway: the probe is the authority's own
+    // operation, not workload, and the new generation clears it.
+    const registration = await harness.repository.registerRuntime({
+      ...ids,
+      runtimeIncarnationId: 'runtime-incarnation-2',
+    });
+    expect(registration).toEqual({ kind: 'registered', runtimeGeneration: firstGeneration + 1 });
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration: firstGeneration + 1,
+      runtimeIncarnationId: 'runtime-incarnation-2',
+      runtimeReadyAt: null,
+      activeOperationId: null,
+      activeOperationKind: null,
+      activeOperationKey: null,
+      activeOperationGeneration: null,
+    });
+
+    // The dead handshake's own completion is now fenced out rather than
+    // completing something the attempt no longer runs.
+    expect(
+      await harness.repository.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId: orphan,
+        runtimeGeneration: firstGeneration,
+      }),
+    ).toEqual({ kind: 'not-active' });
+  });
+
+  it('does not reclaim a workload operation when a new incarnation registers', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const running = await admitTestOperation(harness.repository, ids, runtimeGeneration, 'workflow-run', 'run-1');
+
+    expect(await harness.repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-2' })).toEqual(
+      { kind: 'operation-active', operationId: running },
+    );
+    expect(await harness.repository.getAttemptControlState(ids.executionAttemptId)).toMatchObject({
+      runtimeGeneration,
+      activeOperationId: running,
+      activeOperationKind: 'workflow-run',
+    });
   });
 });
 
@@ -1029,6 +1679,7 @@ describe('execution attempt port parity (inconsistent durable state)', () => {
     const createdAt = new Date().toISOString();
     for (const executionAttemptId of ['tie-b', 'tie-a']) {
       repository.attempts.set(executionAttemptId, {
+        ...INITIAL_ATTEMPT_CONTROL_STATE,
         executionAttemptId,
         executionId: 'tie-exec',
         status: 'allocated',
@@ -1051,6 +1702,7 @@ describe('execution attempt port parity (inconsistent durable state)', () => {
   it('fails recovery on a selected attempt whose provider binding is incomplete', async () => {
     const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
     const inconsistent: ExecutionAttemptRecord = {
+      ...INITIAL_ATTEMPT_CONTROL_STATE,
       executionAttemptId: 'partial-attempt',
       executionId: 'partial-exec',
       status: 'allocated',

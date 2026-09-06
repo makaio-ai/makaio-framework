@@ -17,10 +17,13 @@ import {
   ProviderAllocationRefSchema,
   RECOVERY_EVIDENCE_LIMITS,
   WorkerCapabilitiesSchema,
-  WorkerSubjects,
 } from '@makaio/contracts';
+import { mintOrRotateWorkflowExecutionBusSecret } from '../workflow-execution-bus-access.js';
 import { OutcomeDeliveryError, submitOutcomeWithAck, type OutcomeSubmitRetryConfig } from './outcome-submission.js';
-import type { ThinWorkflowPiscinaRunWithReadiness } from './thin-workflow-piscina-runner.js';
+import type {
+  ThinWorkflowPiscinaAttemptBinding,
+  ThinWorkflowPiscinaRunWithReadiness,
+} from './thin-workflow-piscina-runner.js';
 
 /**
  * Construction options for {@link PiscinaThinWorkflowProvider}.
@@ -38,9 +41,10 @@ export interface PiscinaThinWorkflowProviderOptions {
    * can supply lightweight fakes without spawning real worker threads.
    *
    * Readiness is part of the requirement rather than an optional refinement:
-   * this provider publishes `control.attempt-ready` from the runner's
-   * post-composition signal, and a runner without one would silently never
-   * make an attempt ready instead of failing where it is wired.
+   * the thread's own registration is what makes the attempt ready, and this
+   * provider watches that signal to abort the allocation when it fails. A
+   * runner without one would silently swallow a refused registration instead
+   * of failing where it is wired.
    */
   readonly runner: ReadinessAwareWorkflowRunner;
   /**
@@ -103,16 +107,18 @@ const DEFAULT_BASE_CAPABILITIES: NormalizedWorkerCapabilities = {
  */
 export interface ReadinessAwareWorkflowRunner extends IWorkflowRunner {
   /**
-   * Run once and separately expose the worker's post-composition readiness.
+   * Run once and separately expose the worker's own registration readiness.
    * @param config - Worker configuration for the run.
    * @param signal - AbortSignal that cancels the run.
    * @param manifest - Optional per-call contribution manifest.
-   * @returns Terminal result promise and post-composition readiness promise.
+   * @param attempt - Attempt identity the dispatched worker registers against.
+   * @returns Terminal result promise and registration readiness promise.
    */
   runWithReadiness(
     config: WorkerProvisionRequest['workerConfig'],
     signal: AbortSignal,
-    manifest?: WorkerProvisionRequest['workerManifest'],
+    manifest: WorkerProvisionRequest['workerManifest'] | undefined,
+    attempt: ThinWorkflowPiscinaAttemptBinding,
   ): ThinWorkflowPiscinaRunWithReadiness;
 }
 
@@ -192,12 +198,14 @@ class PiscinaAllocationHandle implements WorkerHandle {
    * @param controller - Controller wired to the runner's cancellation signal.
    * @param detachCallerAbort - Removes this allocation's forwarder from the caller's signal.
    * @param infrastructure - Single-shot terminal infrastructure conclusion signal.
+   * @param revokeBusIdentity - Unregisters the attempt-scoped bus secret minted for this allocation.
    */
   public constructor(
     public readonly executionAttemptId: string,
     private readonly controller: AbortController,
     private readonly detachCallerAbort: () => void,
     private readonly infrastructure: InfrastructureConclusionSignal,
+    private readonly revokeBusIdentity: () => void,
   ) {}
 
   /**
@@ -206,6 +214,9 @@ class PiscinaAllocationHandle implements WorkerHandle {
    * @returns Promise that resolves when cancellation has been dispatched.
    */
   public cancel(reason?: string): Promise<void> {
+    // The bus identity survives a cancel: the thread is still connected and
+    // still owes the Authority its outcome, and fencing its socket here would
+    // turn a cooperative cancellation into a lost result.
     this.controller.abort(reason ?? 'Worker cancelled');
     this.detachCallerAbort();
     return Promise.resolve();
@@ -218,19 +229,21 @@ class PiscinaAllocationHandle implements WorkerHandle {
   public terminate(): Promise<void> {
     this.controller.abort('Worker terminated');
     this.detachCallerAbort();
+    this.revokeBusIdentity();
     return Promise.resolve();
   }
 
   /**
    * Release provider resources for this allocation.
    *
-   * For the local Piscina provider this is a no-op beyond detaching the caller
-   * abort listener, which is the only per-allocation resource. The runner and
-   * abort controller are intentionally left untouched.
+   * The per-allocation resources are the caller abort forwarder and the
+   * attempt-scoped bus identity minted for the worker thread. Both are given
+   * up here; the runner and abort controller are intentionally left untouched.
    * @returns Promise that resolves immediately.
    */
   public release(): Promise<void> {
     this.detachCallerAbort();
+    this.revokeBusIdentity();
     return Promise.resolve();
   }
 
@@ -255,10 +268,11 @@ class PiscinaAllocationHandle implements WorkerHandle {
  * infrastructure-only {@link WorkerHandle}.
  *
  * The handle controls allocation lifecycle (cancel/terminate) but does
- * NOT expose readiness or workflow results. Readiness is signaled via
- * the worker protocol (`control.attempt-ready` bus subject) after runtime
- * composition. Workflow outcomes are submitted and acknowledged through
- * the Authority's `control.outcome.submit` bus subject.
+ * NOT expose readiness or workflow results. Readiness is the worker thread's
+ * own business: it registers its runtime with the ExecutionAttempt authority,
+ * which publishes `execution-attempt.runtime.ready`. Workflow outcomes are
+ * submitted and acknowledged through the Authority's `control.outcome.submit`
+ * bus subject.
  *
  * Piscina is a local thin workflow runner: it declares that it is NOT
  * recoverable. Allocation references are process-local and non-durable.
@@ -330,9 +344,14 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * way to positively prove that nothing was created. The narrow type states
    * what it can prove today. Gaining the ability to confirm absence means
    * deliberately widening this signature back to the contract union.
+   * A worker configuration without a bus URL is rejected loudly rather than
+   * allocated: the thread would have no transport, so it could never
+   * authenticate as the attempt or register its runtime, and the allocation
+   * would be a worker that is provisioned and permanently unready.
    * @param request - Full provision request containing worker config and manifest.
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
    * @returns Allocated outcome with a validated allocation reference and infrastructure handle.
+   * @throws When the worker configuration carries no bus URL.
    */
   public async provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerAllocatedOutcome> {
     signal.throwIfAborted();
@@ -349,14 +368,40 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
     // The forwarder is owned by the returned handle. Every path that ends this
     // provider's interest in the caller's signal detaches it through here.
     const detachCallerAbort = (): void => signal.removeEventListener('abort', onCallerAbort);
+    // Set once the attempt-scoped identity exists. A provision that rejects
+    // after minting must not leave a registered identity behind, so the failure
+    // path below gives it up again.
+    let revokeBusIdentity: (() => void) | undefined;
 
     try {
       // Construct the complete allocation response before the runner can
       // settle. A rejected provision must never leave a runner that can submit
       // an outcome for an allocation the caller could not record.
       const { executionAttemptId, executionId, workerConfig } = request;
+      if (!workerConfig.busUrl) {
+        // A thread with no transport cannot hold an authenticated, fenced
+        // control endpoint, so it can never register its runtime with the
+        // attempt. Failing here is the honest answer; allocating it would
+        // produce a worker that is provisioned but permanently unready.
+        throw new Error(
+          `PiscinaThinWorkflowProvider requires a bus URL to provision an execution attempt ` +
+            `(executionAttemptId=${executionAttemptId}, executionId=${executionId})`,
+        );
+      }
       const allocationRef = this.buildAllocationRef(executionAttemptId);
-      const handle = new PiscinaAllocationHandle(executionAttemptId, controller, detachCallerAbort, infrastructure);
+      // The thread authenticates as the attempt, not as this process: the
+      // registration and admission gates take the caller's identity from the
+      // authenticated transport peer. Same move a remote provider makes when
+      // it mints the bootstrap credentials its container connects with.
+      const busIdentity = mintOrRotateWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+      revokeBusIdentity = busIdentity.cleanup;
+      const handle = new PiscinaAllocationHandle(
+        executionAttemptId,
+        controller,
+        detachCallerAbort,
+        infrastructure,
+        busIdentity.cleanup,
+      );
 
       // The caller can abort after the entry check but before the forwarder is
       // attached. Re-check at the last synchronous boundary before startup so
@@ -367,31 +412,38 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       // protocol when it settles. The submission is fire-and-forget from the
       // provider's perspective — the Authority owns durable convergence.
       const dispatch = this.options.runner.runWithReadiness(
-        request.workerConfig,
+        { ...workerConfig, busAuth: { kind: 'hmac', secret: busIdentity.secret } },
         controller.signal,
         request.workerManifest,
+        { executionAttemptId },
       );
-      void dispatch.ready
-        .then(
-          async (ready) => {
-            if (!controller.signal.aborted) {
-              await this.options.bus.emit(WorkerSubjects.control['attempt-ready'], {
-                executionAttemptId,
-                executionId,
-                adapters: [...ready.adapters],
-              });
-            }
-          },
-          () => undefined,
-        )
-        .catch((error: unknown) => controller.abort(error));
-
-      void this.submitOutcomeOnSettlement(
-        dispatch.result,
-        executionId,
-        executionAttemptId,
-        workerConfig.workflowId,
-        infrastructure.conclude,
+      // Readiness is the Authority's own published fact now, so nothing is
+      // emitted here. What the provider owns is how the thread ends. Admitted:
+      // its terminal result is the attempt's workflow outcome. Refused before
+      // admission (registration refused, probe failed, allocation never
+      // visible): no workflow ran, so the thread's rejection is not an outcome
+      // and must not be submitted as one — the Authority would settle the
+      // attempt as a workflow failure instead of letting infrastructure
+      // convergence reconcile it. That refusal aborts the allocation and is
+      // reported as terminal infrastructure evidence, the way a dead worker is.
+      void dispatch.ready.then(
+        () =>
+          this.submitOutcomeOnSettlement(
+            dispatch.result,
+            executionId,
+            executionAttemptId,
+            workerConfig.workflowId,
+            infrastructure.conclude,
+          ),
+        (error: unknown) => {
+          controller.abort(error);
+          // The result settles with the same refusal; nobody consumes it.
+          void dispatch.result.catch(() => undefined);
+          infrastructure.conclude(
+            `Piscina worker for attempt '${executionAttemptId}' was refused before its workflow run was admitted: ` +
+              (error instanceof Error ? error.message : String(error)),
+          );
+        },
       );
 
       return {
@@ -401,9 +453,11 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       };
     } catch (error) {
       // No handle reaches the caller on this path, so no later lifecycle owner
-      // can stop a runner that did start or detach the caller forwarder.
+      // can stop a runner that did start, detach the caller forwarder, or give
+      // up the attempt-scoped identity.
       controller.abort(error);
       detachCallerAbort();
+      revokeBusIdentity?.();
       throw error;
     }
   }
@@ -413,7 +467,9 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * the runner promise settles.
    *
    * On success, submits the runner's result directly. On failure, builds
-   * a `failed` {@link WorkflowRunResult} from the error message.
+   * a `failed` {@link WorkflowRunResult} from the error message. Attached
+   * only once the thread's run was admitted: a rejection before admission is
+   * infrastructure evidence, not a workflow outcome, and never reaches here.
    *
    * Uses the shared {@link submitOutcomeWithAck} helper for decision-aware
    * retry with bounded exponential back-off. Since the Piscina provider
@@ -437,6 +493,13 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
     try {
       result = await resultPromise;
     } catch (error) {
+      // A rejection the provider itself caused, by aborting the task on
+      // `cancel()`, lands here as a failed outcome too: the thread is killed
+      // before its cooperative cancellation path can run. Classifying it as
+      // cancelled must go by the rejection's cause, the provider's own abort
+      // signal, never by a stop-request marker, which would also hide a real
+      // failure that races a cancel. That classification belongs to the cancel
+      // seam of the technical control protocol that follows this cut.
       result = {
         executionId,
         workflowId,

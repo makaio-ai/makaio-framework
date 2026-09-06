@@ -126,6 +126,13 @@ export {
   createIsolatedWorkflowRuntime,
   runHeadlessWorkflowWorker,
   OutcomeDeliveryError,
+  installOperationDeliveryEndpoint,
+  registerWorkerRuntime,
+  admitWorkflowRunOperation,
+  registerAndAdmitWorkflowRun,
+  ALLOCATION_VISIBILITY_DEADLINE_MS,
+  RuntimeRegistrationRefusedError,
+  OperationAdmissionRefusedError,
 } from './workflow-worker/index.js';
 export type {
   IWorkflowRunner,
@@ -148,6 +155,15 @@ export type {
   HeadlessWorkerPostCommitObserver,
   HeadlessWorkflowWorkerDeps,
   HeadlessWorkflowWorkerResult,
+  DeliverableOperationKind,
+  OperationDeliveryHandler,
+  OperationDeliveryHandlers,
+  OperationDeliveryEndpoint,
+  OperationDeliveryEndpointIdentity,
+  RegisterWorkerRuntimeOptions,
+  AdmitWorkflowRunOperationOptions,
+  RegisterAndAdmitWorkflowRunOptions,
+  AdmittedWorkflowRun,
 } from './workflow-worker/index.js';
 // Opt-in CodeExecution provider. It is never registered implicitly: the
 // composing host decides whether a runtime may execute submitted code, and it

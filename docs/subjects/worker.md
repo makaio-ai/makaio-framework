@@ -22,7 +22,6 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `control.attempt-ready` | [`worker.control.attempt-ready`](#worker.control.attempt-ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `control.bootstrap.claim` | [`worker.control.bootstrap.claim`](#worker.control.bootstrap.claim) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `control.outcome.submit` | [`worker.control.outcome.submit`](#worker.control.outcome.submit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `dispatch` | [`worker.dispatch`](#worker.dispatch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
@@ -36,23 +35,6 @@ next: false
 | `lifecycle.terminated` | [`worker.lifecycle.terminated`](#worker.lifecycle.terminated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 
 ## Subject Details
-
-### <a id="worker.control.attempt-ready"></a>`worker.control.attempt-ready` (event)
-
-Worker reports that it has booted, connected to the bus, and is ready
-to execute the workflow for its assigned attempt.
-
-The Authority and lifecycle emitters consume this to transition the
-attempt into the active execution phase.
-
-Subject: `worker.control.attempt-ready`
-Type: Event
-
-| Field | Type | Required |
-|-------|------|----------|
-| `adapters` | `string[] \| undefined` | no |
-| `executionAttemptId` | `string` | yes |
-| `executionId` | `string` | yes |
 
 ### <a id="worker.control.bootstrap.claim"></a>`worker.control.bootstrap.claim` (rpc)
 
@@ -103,7 +85,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `decision` | `"accepted" \| "duplicate" \| "conflict" \| "fenced"` | yes |
+| `decision` | `"accepted" \| "duplicate" \| "fenced" \| "conflict"` | yes |
 
 ### <a id="worker.dispatch"></a>`worker.dispatch` (rpc)
 
@@ -224,12 +206,16 @@ Type: Event
 
 Worker Runtime is connected and ready to accept work.
 
+Projected by the worker pool from `execution-attempt.runtime.ready`, which is
+the subject that carries the proven runtime endpoint. This event stays a plain
+lifecycle payload: adapter composition is a workflow-runtime concern and is not
+part of the readiness surface.
+
 Subject: `worker.lifecycle.ready`
 Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `adapters` | `string[] \| undefined` | no |
 | `environment` | `string` | yes |
 | `executionAttemptId` | `string` | yes |
 | `executionId` | `string` | yes |

@@ -9,13 +9,49 @@ import { isWorkflowWorkerReadyMessage, type WorkflowWorkerReadyMessage } from '.
 import { PiscinaPoolRunner } from './runtime/piscina-pool-runner.js';
 import { materializeLocalDirectory } from './local-directory-materializer.js';
 
-interface ThinWorkflowPiscinaRunnerTask {
+/** Fields every worker-thread task carries, whatever gate it runs behind. */
+interface ThinWorkflowPiscinaTaskBase {
   /** Workflow worker configuration with source, inputs, and bus info. */
   readonly config: WorkflowWorkerConfig;
   /** Contribution manifest declaring which extension packages to load in workers. */
   readonly manifest: WorkerContributionManifest;
   /** Verified worker-local entrypoints matching `manifest.contributionRefs`. */
   readonly contributionEntrypoints: readonly string[];
+}
+
+/**
+ * Task for a workflow run that no ExecutionAttempt owns.
+ *
+ * The host drove this run through {@link ThinWorkflowPiscinaRunner.run}, so
+ * there is no attempt to register a runtime with and no start gate to pass.
+ */
+interface ThinWorkflowPiscinaRunnerTask extends ThinWorkflowPiscinaTaskBase {
+  /** Discriminator selecting the attempt-free arm of the worker entrypoint. */
+  readonly kind: 'unbound';
+}
+
+/**
+ * Task for a workflow run an ExecutionAttempt owns.
+ *
+ * The attempt identifier is required, not optional: the thread registers its
+ * runtime and admits the run against exactly this attempt before it composes
+ * anything, and its `config.busAuth` is the attempt-scoped secret the
+ * provisioning provider minted for that identity.
+ */
+interface ThinWorkflowPiscinaAttemptTask extends ThinWorkflowPiscinaTaskBase {
+  /** Discriminator selecting the attempt-bound arm of the worker entrypoint. */
+  readonly kind: 'attempt-bound';
+  /** Authority-created attempt this thread registers its runtime for. */
+  readonly executionAttemptId: string;
+}
+
+/** Every task shape the Piscina worker entrypoint accepts. */
+type ThinWorkflowPiscinaTask = ThinWorkflowPiscinaRunnerTask | ThinWorkflowPiscinaAttemptTask;
+
+/** Attempt identity a readiness-aware dispatch binds its worker thread to. */
+export interface ThinWorkflowPiscinaAttemptBinding {
+  /** Authority-created attempt the dispatched thread registers against. */
+  readonly executionAttemptId: string;
 }
 
 /** Result and readiness promises for one workflow worker dispatch. */
@@ -38,7 +74,7 @@ export interface ThinWorkflowPiscinaRunWithReadiness {
  */
 export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
   private readonly manifest: WorkerContributionManifest;
-  private pool: PiscinaPoolRunner<ThinWorkflowPiscinaRunnerTask, WorkflowRunResult> | undefined;
+  private pool: PiscinaPoolRunner<ThinWorkflowPiscinaTask, WorkflowRunResult> | undefined;
 
   /**
    * @param options - Piscina runner configuration including worker entry path
@@ -72,21 +108,27 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
   }
 
   /**
-   * Execute a workflow and expose the worker bus readiness signal separately.
+   * Execute an attempt-bound workflow and expose its readiness signal separately.
    *
    * The terminal result remains the {@link IWorkflowRunner} contract. The ready
-   * promise is used by {@link PiscinaThinWorkflowProvider} so pool lifecycle
-   * `ready` is not emitted before the worker has connected its bus and subscribed
-   * to cancellation routing.
+   * promise resolves once the worker thread's own
+   * `execution-attempt.runtime.register` reply came back, so readiness here
+   * means the authority accepted that runtime rather than that a thread booted.
+   *
+   * The attempt binding is required because readiness has no meaning without
+   * it: a thread with no attempt registers nothing, posts no ready message, and
+   * would leave this promise to be rejected by the run's own settlement.
    * @param config - Full workflow worker configuration with source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.
    * @param manifest - Optional per-call manifest override.
+   * @param attempt - Attempt identity the dispatched thread registers against.
    * @returns Terminal result and readiness promises for this worker run.
    */
   public runWithReadiness(
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
-    manifest?: WorkerContributionManifest,
+    manifest: WorkerContributionManifest | undefined,
+    attempt: ThinWorkflowPiscinaAttemptBinding,
   ): ThinWorkflowPiscinaRunWithReadiness {
     this.pool ??= new PiscinaPoolRunner(this.options);
     const pool = this.pool;
@@ -98,6 +140,7 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
       rejectReady = reject;
       cleanupReadyListener = pool.onMessage((message) => {
         if (!isWorkflowWorkerReadyMessage(message)) return;
+        if (message.executionAttemptId !== attempt.executionAttemptId) return;
         if (message.executionId !== config.executionId || message.cancelSubject !== config.cancelSubject) return;
         settledReady = true;
         cleanupReadyListener?.();
@@ -106,7 +149,9 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
     });
 
     const resolvedManifest = manifest ?? this.manifest;
-    const result = this.materializeTask(config, resolvedManifest, signal).then((task) => pool.run(task, signal));
+    const result = this.materializeTask(config, resolvedManifest, signal).then((task) =>
+      pool.run({ ...task, kind: 'attempt-bound', executionAttemptId: attempt.executionAttemptId }, signal),
+    );
     void result.then(
       () => {
         if (settledReady) return;
@@ -136,6 +181,11 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
    * Realize portable filesystem references before transferring a task to
    * Piscina. Worker threads receive only verified absolute paths, never an
    * Authority-relative source or unchecked contribution package path.
+   *
+   * The task is returned as the `unbound` arm; the readiness-aware path
+   * re-stamps it `attempt-bound` with its attempt identity afterwards, so the
+   * attempt identity never becomes an optional field on the shape the
+   * attempt-free path also uses.
    * @param config - Portable worker configuration.
    * @param manifest - Exact contribution identities for this execution.
    * @param signal - Cancellation signal for the dispatch.
@@ -149,7 +199,7 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
     signal.throwIfAborted();
     const requiresMaterialization = config.source.kind === 'path' || manifest.contributionRefs.length > 0;
     if (!requiresMaterialization) {
-      return { config, manifest, contributionEntrypoints: [] };
+      return { kind: 'unbound', config, manifest, contributionEntrypoints: [] };
     }
 
     const spec = config.materializationSpec;
@@ -172,6 +222,7 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
       throw new Error('local-directory materialization requires a path-backed workflow source.');
     }
     return {
+      kind: 'unbound',
       config: {
         ...config,
         source: { kind: 'path', path: runtimeContext.sourcePath },

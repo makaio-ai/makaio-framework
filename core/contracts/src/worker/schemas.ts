@@ -77,7 +77,7 @@ export const WorkerDispatchResponseSchema = z
  * Lifecycle states in order:
  * - `lifecycle.provisioning` — dispatch has selected a provider; Worker allocation is in progress
  * - `lifecycle.booting`      — environment is initialising (importing packages, connecting to bus)
- * - `lifecycle.ready`        — Worker Runtime is connected and ready to accept work
+ * - `lifecycle.ready`        — projected from `execution-attempt.runtime.ready`
  * - `lifecycle.busy`         — Worker Runtime has started executing the workflow
  * - `lifecycle.completed`    — execution finished successfully
  * - `lifecycle.failed`       — execution terminated with an error
@@ -85,7 +85,6 @@ export const WorkerDispatchResponseSchema = z
  * - `lifecycle.paused`       — Worker Runtime parked at a gate and exited for later resume
  *
  * Control subjects:
- * - `control.attempt-ready`  — worker reports readiness for its attempt
  * - `control.outcome.submit` — worker submits an execution outcome for durable ACK
  * - `control.bootstrap.claim`— worker claims execution-scoped bus credentials
  */
@@ -100,27 +99,6 @@ export const WorkerSchemas = {
     request: WorkerDispatchRequestSchema,
     response: WorkerDispatchResponseSchema,
   },
-
-  /**
-   * Worker reports that it has booted, connected to the bus, and is ready
-   * to execute the workflow for its assigned attempt.
-   *
-   * The Authority and lifecycle emitters consume this to transition the
-   * attempt into the active execution phase.
-   *
-   * Subject: `worker.control.attempt-ready`
-   * Type: Event
-   */
-  'control.attempt-ready': z
-    .object({
-      /** Authority-created attempt identifier. */
-      executionAttemptId: z.string().min(1),
-      /** Workflow execution identifier owned by this worker. */
-      executionId: z.string().min(1),
-      /** Adapter identifiers loaded inside the worker before readiness. */
-      adapters: z.array(z.string().min(1)).default([]),
-    })
-    .strict(),
 
   /**
    * Worker submits a terminal workflow outcome for durable acknowledgement.
@@ -212,13 +190,15 @@ export const WorkerSchemas = {
   /**
    * Worker Runtime is connected and ready to accept work.
    *
+   * Projected by the worker pool from `execution-attempt.runtime.ready`, which is
+   * the subject that carries the proven runtime endpoint. This event stays a plain
+   * lifecycle payload: adapter composition is a workflow-runtime concern and is not
+   * part of the readiness surface.
+   *
    * Subject: `worker.lifecycle.ready`
    * Type: Event
    */
-  'lifecycle.ready': WorkerLifecycleBaseSchema.extend({
-    /** Adapter identifiers that have been loaded and registered inside this Worker Runtime. */
-    adapters: z.array(z.string().min(1)).default([]),
-  }),
+  'lifecycle.ready': WorkerLifecycleBaseSchema,
 
   /**
    * Worker Runtime has started executing the workflow.

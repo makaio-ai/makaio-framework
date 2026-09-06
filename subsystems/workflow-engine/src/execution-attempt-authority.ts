@@ -1,9 +1,12 @@
 import type {
+  AdmitOperationInput,
   AllocationRecordingDecision,
   AllocationRefEvolution,
   AllocationRefEvolutionDecision,
   AllocationTerminationDecision,
+  AttemptControlState,
   BeginProvisioningInput,
+  CompleteOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptOutcomeDecision,
@@ -13,6 +16,9 @@ import type {
   ExecutionOwnerId,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  MarkRuntimeReadyInput,
+  OperationAdmissionDecision,
+  OperationCompletionDecision,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
   ProvisioningAbsenceDecision,
@@ -24,7 +30,10 @@ import type {
   RecordProvisionerIncarnationLostInput,
   RecordProvisioningAbsentInput,
   RecoverableAttemptRecord,
+  RegisterRuntimeInput,
   RenewProviderOperationClaimInput,
+  RuntimeReadinessDecision,
+  RuntimeRegistrationDecision,
   TakeOverProviderOperationInput,
 } from './execution-attempt-repository.js';
 import type {
@@ -275,6 +284,69 @@ export class ExecutionAttemptAuthority<TOutcome> {
     input: RecordAllocationTerminatedInput,
   ): Promise<AllocationTerminationDecision> {
     return this.repository.recordAllocationTerminated(input);
+  }
+
+  /**
+   * Register a runtime incarnation as an attempt's endpoint.
+   *
+   * Delegates directly to the repository, which allocates the generation. No
+   * waiter changes: registering an endpoint says nothing about the attempt's
+   * canonical answer, and a refusal is a statement about the runtime rather
+   * than about the outcome anybody is waiting for.
+   * @param input - Attempt identity, owning execution, and the runtime incarnation.
+   * @returns The durable registration decision.
+   */
+  public async registerRuntime(input: RegisterRuntimeInput): Promise<RuntimeRegistrationDecision> {
+    return this.repository.registerRuntime(input);
+  }
+
+  /**
+   * Admit one operation through an attempt's start gate.
+   *
+   * Delegates directly to the repository, which mints the operation identifier
+   * and enforces the at-most-one guard.
+   * @param input - Attempt identity, owning execution, kind, idempotency key, and fence.
+   * @returns The durable admission decision.
+   */
+  public async admitOperation(input: AdmitOperationInput): Promise<OperationAdmissionDecision> {
+    return this.repository.admitOperation(input);
+  }
+
+  /**
+   * Release the attempt's active operation.
+   *
+   * Delegates directly to the repository. A completed operation is not a
+   * canonical answer, so the waiter stays pending: what settles an attempt is
+   * a committed outcome or a terminal transition, never a freed slot.
+   * @param input - Attempt identity, the operation being completed, and its fence.
+   * @returns The durable completion decision.
+   */
+  public async completeOperation(input: CompleteOperationInput): Promise<OperationCompletionDecision> {
+    return this.repository.completeOperation(input);
+  }
+
+  /**
+   * Record that a registered runtime proved itself ready.
+   *
+   * Delegates directly to the repository.
+   * @param input - Attempt identity, the generation the proof belongs to, and when it was observed.
+   * @returns The durable readiness decision.
+   */
+  public async markRuntimeReady(input: MarkRuntimeReadyInput): Promise<RuntimeReadinessDecision> {
+    return this.repository.markRuntimeReady(input);
+  }
+
+  /**
+   * Read an attempt's runtime and operation control state.
+   *
+   * Delegates directly to the repository. Unfenced and regardless of status,
+   * because a process recovering its view of an attempt needs exactly the
+   * superseded and settled ones too.
+   * @param executionAttemptId - Attempt whose control state to read.
+   * @returns The control state, or `null` when no such attempt exists.
+   */
+  public async getAttemptControlState(executionAttemptId: string): Promise<AttemptControlState | null> {
+    return this.repository.getAttemptControlState(executionAttemptId);
   }
 
   /**

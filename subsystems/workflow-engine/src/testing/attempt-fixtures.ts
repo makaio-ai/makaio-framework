@@ -1,9 +1,13 @@
 import type { BoundedRecoveryEvidence, ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
 import { PROVIDER_ALLOCATION_REF_VERSION, WorkflowRunResultSchema } from '@makaio/contracts';
 import type {
+  AllocationRecordingDecision,
   BeginProvisioningInput,
+  ExecutionAttemptRecord,
+  ExecutionOwnerId,
   OutcomeCodec,
   ProvisioningClaimDecision,
+  RecordAllocationInput,
 } from '../execution-attempt-repository.js';
 import type { ProcessBoundProvisionerLossProof, ProviderOperationClaim } from '../provider-operation.js';
 
@@ -161,4 +165,69 @@ export function makeTestWorkflowResult(
   return status === 'completed'
     ? { ...base, status: 'completed' }
     : { ...base, status: 'failed', error: 'contract failure' };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Allocation driver
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * The operations that bring an attempt from creation to `allocated`.
+ *
+ * The durable repository and the Authority expose all three with the same
+ * shapes, so one driver serves harnesses at either layer.
+ */
+export interface AttemptAllocationDriver extends ProvisioningClaimGrantor {
+  /**
+   * Persist a new attempt for its owner.
+   * @param executionId - Owner identifier the attempt belongs to.
+   * @returns The persisted attempt record.
+   */
+  createAttempt(executionId: ExecutionOwnerId): Promise<ExecutionAttemptRecord>;
+  /**
+   * Record the allocation the provider returned for the claimed attempt.
+   * @param input - The claim and the allocation reference to record.
+   * @returns The durable allocation recording decision.
+   */
+  recordAllocation(input: RecordAllocationInput): Promise<AllocationRecordingDecision>;
+}
+
+/**
+ * Drive an existing attempt to `allocated`, the state a runtime may register against.
+ *
+ * A created attempt answers `not-allocated` to every registration, so a
+ * harness that lets a runtime register owes these two moves. They are the
+ * test-side stand-in for the provisioner a real dispatch would run.
+ * @param driver - Repository or Authority owning the attempt.
+ * @param executionAttemptId - Attempt to provision and allocate.
+ * @param executionId - Owner the attempt belongs to.
+ * @throws When provisioning does not start or the allocation is not recorded.
+ */
+export async function driveTestAttemptToAllocated(
+  driver: Pick<AttemptAllocationDriver, 'beginProvisioning' | 'recordAllocation'>,
+  executionAttemptId: string,
+  executionId: ExecutionOwnerId,
+): Promise<void> {
+  const claim = await driver.beginProvisioning(makeBeginProvisioningInput(executionAttemptId, executionId));
+  if (claim.kind !== 'started') throw new Error(`Expected provisioning to start, got '${claim.kind}'`);
+  const allocation = await driver.recordAllocation({ claim: claim.claim, allocationRef: makeTestAllocationRef() });
+  if (allocation.kind !== 'recorded') {
+    throw new Error(`Expected the allocation to be recorded, got '${allocation.kind}'`);
+  }
+}
+
+/**
+ * Create one attempt through the Authority and drive it to `allocated`.
+ * @param driver - Authority owning the attempt; it mints the attempt identifier.
+ * @param executionId - Owner the attempt belongs to.
+ * @returns The allocated attempt's identifier.
+ * @throws When provisioning does not start or the allocation is not recorded.
+ */
+export async function allocateTestAttempt(
+  driver: AttemptAllocationDriver,
+  executionId: ExecutionOwnerId,
+): Promise<string> {
+  const { executionAttemptId } = await driver.createAttempt(executionId);
+  await driveTestAttemptToAllocated(driver, executionAttemptId, executionId);
+  return executionAttemptId;
 }

@@ -55,56 +55,6 @@ describe('Worker bootstrap claim schema', () => {
   });
 });
 
-describe('control.attempt-ready schema', () => {
-  it('validates attempt-ready events with executionAttemptId', () => {
-    const parsed = WorkerSchemas['control.attempt-ready'].parse({
-      executionAttemptId: 'attempt-1',
-      executionId: 'exec-1',
-      adapters: ['claude-code'],
-    });
-
-    expect(parsed.executionAttemptId).toBe('attempt-1');
-    expect(parsed.executionId).toBe('exec-1');
-    expect(parsed.adapters).toEqual(['claude-code']);
-  });
-
-  it('defaults adapters to an empty array', () => {
-    const parsed = WorkerSchemas['control.attempt-ready'].parse({
-      executionAttemptId: 'attempt-1',
-      executionId: 'exec-1',
-    });
-
-    expect(parsed.adapters).toEqual([]);
-  });
-
-  it('rejects attempt-ready with old nodeId field', () => {
-    expect(() =>
-      WorkerSchemas['control.attempt-ready'].parse({
-        nodeId: 'node-1',
-        executionId: 'exec-1',
-      }),
-    ).toThrow();
-  });
-
-  it('rejects attempt-ready with missing executionAttemptId', () => {
-    expect(() =>
-      WorkerSchemas['control.attempt-ready'].parse({
-        executionId: 'exec-1',
-      }),
-    ).toThrow();
-  });
-
-  it('rejects attempt-ready with unknown fields (strict)', () => {
-    expect(() =>
-      WorkerSchemas['control.attempt-ready'].parse({
-        executionAttemptId: 'attempt-1',
-        executionId: 'exec-1',
-        unknownField: 'should-fail',
-      }),
-    ).toThrow();
-  });
-});
-
 describe('control.outcome.submit schema', () => {
   it('validates outcome submission with executionAttemptId', () => {
     const request = WorkerSchemas['control.outcome.submit'].request.parse({
