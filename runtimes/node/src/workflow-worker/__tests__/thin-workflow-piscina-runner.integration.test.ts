@@ -21,10 +21,20 @@ import { createSqliteAttemptRepository } from '@makaio/subsystem-workflow-engine
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
 import { PiscinaThinWorkflowProvider } from '../piscina-thin-workflow-provider.js';
 import { ThinWorkflowPiscinaRunner } from '../thin-workflow-piscina-runner.js';
+import { WORKFLOW_WORKER_READY_MESSAGE_TYPE } from '../worker-ready-message.js';
 import { computeContributionPackageDigest, computeDirectoryDigest } from '../local-directory-materializer.js';
 import { makeWorkerConfig } from './fixtures.js';
 
 let tempDir: string | undefined;
+
+/**
+ * Bus URL every provisioned worker configuration below carries.
+ *
+ * The provider refuses to provision a thread with no transport, because such a
+ * thread can never authenticate as its attempt. The echo worker entries used
+ * here never dial it, so the value only has to exist.
+ */
+const PROVISION_BUS_URL = 'ws://127.0.0.1:65535/bus';
 
 /**
  * Remove the temporary directory the current test created, if any.
@@ -38,6 +48,13 @@ async function removeTempDir(): Promise<void> {
 
 /**
  * Create a temporary Piscina worker entry that echoes workflow task fields.
+ *
+ * An attempt-bound task first posts the ready message the shipped entry posts
+ * once the Authority accepted its runtime. No Authority exists in these tests,
+ * so the stub asserts what the entry would have proven; without it the
+ * provider treats the run as refused before admission and never submits its
+ * result as an outcome. The short pause lets the message reach the pool ahead
+ * of the task's own return, which travels on a different port.
  * @returns Absolute path to the worker entry module.
  */
 async function createEchoWorkerEntry(): Promise<string> {
@@ -46,7 +63,17 @@ async function createEchoWorkerEntry(): Promise<string> {
   await writeFile(
     workerEntry,
     [
+      "import { parentPort } from 'node:worker_threads';",
       'export default async function run(task) {',
+      "  if (task.kind === 'attempt-bound') {",
+      '    parentPort?.postMessage({',
+      `      type: '${WORKFLOW_WORKER_READY_MESSAGE_TYPE}',`,
+      '      executionId: task.config.executionId,',
+      '      cancelSubject: task.config.cancelSubject,',
+      '      executionAttemptId: task.executionAttemptId,',
+      '    });',
+      '    await new Promise((resolve) => setTimeout(resolve, 20));',
+      '  }',
       '  return {',
       '    executionId: task.config.executionId,',
       '    workflowId: task.config.workflowId,',
@@ -274,7 +301,10 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
           executionId: 'wfx-1',
           executionAttemptId: 'attempt-integration',
           environment: 'piscina',
-          workerConfig: makeWorkerConfig(),
+          // The bus URL is supplied per provision, not defaulted in the shared
+          // fixture: the same fixture drives the attempt-free runner path,
+          // where a bus URL would change what those tests exercise.
+          workerConfig: makeWorkerConfig({ busUrl: PROVISION_BUS_URL }),
           workerManifest: perCallManifest,
           provisioningStartedAt: new Date().toISOString(),
         },
@@ -483,7 +513,7 @@ describe('process-bound allocation lifetime', () => {
           executionId,
           executionAttemptId,
           environment: 'piscina',
-          workerConfig: makeWorkerConfig({ executionId }),
+          workerConfig: makeWorkerConfig({ executionId, busUrl: PROVISION_BUS_URL }),
           workerManifest: { contributionRefs: [] },
           provisioningStartedAt: new Date().toISOString(),
         },

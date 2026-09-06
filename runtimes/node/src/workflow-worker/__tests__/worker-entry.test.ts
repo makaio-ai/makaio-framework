@@ -13,6 +13,10 @@ const mockLoadWorkflowModule = vi.fn();
 const mockRunWorkflowOrchestrator = vi.fn();
 const mockLoadWorkerRuntimeContributions = vi.fn();
 const mockParentPortPostMessage = vi.fn();
+const mockInstallOperationDeliveryEndpoint = vi.fn();
+const mockRegisterAndAdmitWorkflowRun = vi.fn();
+const mockEndpointBindGeneration = vi.fn();
+const mockEndpointCleanup = vi.fn();
 
 vi.mock('node:worker_threads', () => ({
   parentPort: { postMessage: mockParentPortPostMessage },
@@ -25,6 +29,11 @@ vi.mock('../runtime/worker-boot.js', () => ({
 
 vi.mock('../runtime/worker-contributions.js', () => ({
   loadWorkerRuntimeContributions: mockLoadWorkerRuntimeContributions,
+}));
+
+vi.mock('../runtime-registration-client.js', () => ({
+  installOperationDeliveryEndpoint: mockInstallOperationDeliveryEndpoint,
+  registerAndAdmitWorkflowRun: mockRegisterAndAdmitWorkflowRun,
 }));
 
 vi.mock('../workflow-file-loader.js', () => ({
@@ -149,9 +158,17 @@ function makeWorkflowDefinition(): WorkflowDefinition {
 // Tests
 // ---------------------------------------------------------------------------
 
+/** Attempt the attempt-bound cases below register their runtime against. */
+const TEST_ATTEMPT_ID = 'attempt-001';
+
 describe('runWorkflowInWorker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockInstallOperationDeliveryEndpoint.mockResolvedValue({
+      bindGeneration: mockEndpointBindGeneration,
+      cleanup: mockEndpointCleanup,
+    });
+    mockRegisterAndAdmitWorkflowRun.mockResolvedValue({ runtimeGeneration: 7, operationId: 'operation-1' });
   });
 
   it('boots bus once, loads contributions once, boots runtime once, loads workflow once, and calls orchestrator once', async () => {
@@ -176,6 +193,7 @@ describe('runWorkflowInWorker', () => {
 
     const config = makeConfig();
     const result = await runWorkflowInWorker({
+      kind: 'unbound',
       config,
       manifest: {
         contributionRefs: [
@@ -194,7 +212,7 @@ describe('runWorkflowInWorker', () => {
     expect(result).toEqual(expectedResult);
   });
 
-  it('posts ready after cancel subscription is propagated', async () => {
+  it('posts ready after cancel subscription is propagated and the attempt accepted the runtime', async () => {
     const { busHandle, resolveSubscribe, transport } = makePropagationControlledBusHandle();
     const expectedResult = {
       executionId: 'exec-001',
@@ -208,7 +226,13 @@ describe('runWorkflowInWorker', () => {
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
     const config = makeConfig();
-    const runPromise = runWorkflowInWorker({ config, manifest: { contributionRefs: [] }, contributionEntrypoints: [] });
+    const runPromise = runWorkflowInWorker({
+      kind: 'attempt-bound',
+      executionAttemptId: TEST_ATTEMPT_ID,
+      config,
+      manifest: { contributionRefs: [] },
+      contributionEntrypoints: [],
+    });
     await vi.waitFor(() => expect(transport.subscribe).toHaveBeenCalled());
 
     expect(mockParentPortPostMessage).not.toHaveBeenCalled();
@@ -217,7 +241,7 @@ describe('runWorkflowInWorker', () => {
     await runPromise;
 
     expect(mockParentPortPostMessage).toHaveBeenCalledWith(
-      createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject),
+      createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, TEST_ATTEMPT_ID),
     );
     const cancelSubscriptionOrder = vi.mocked(transport.subscribe).mock.invocationCallOrder[0];
     const readyMessageOrder = mockParentPortPostMessage.mock.invocationCallOrder[0];
@@ -225,6 +249,85 @@ describe('runWorkflowInWorker', () => {
       throw new Error('Missing invocation order for ready message assertion');
     }
     expect(cancelSubscriptionOrder).toBeLessThan(readyMessageOrder);
+  });
+
+  it('registers and admits before it loads any contribution', async () => {
+    const busHandle = makeBusHandle();
+    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
+    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
+      executionId: 'exec-001',
+      workflowId: 'wf-001',
+      status: 'completed',
+    });
+
+    await runWorkflowInWorker({
+      kind: 'attempt-bound',
+      executionAttemptId: TEST_ATTEMPT_ID,
+      config: makeConfig(),
+      manifest: { contributionRefs: [] },
+      contributionEntrypoints: [],
+    });
+
+    // The delivery endpoint exists before registration, because the Authority
+    // delivers its bounded probe inside the register request.
+    const endpointOrder = mockInstallOperationDeliveryEndpoint.mock.invocationCallOrder[0];
+    const registerOrder = mockRegisterAndAdmitWorkflowRun.mock.invocationCallOrder[0];
+    const contributionOrder = mockLoadWorkerRuntimeContributions.mock.invocationCallOrder[0];
+    if (endpointOrder === undefined || registerOrder === undefined || contributionOrder === undefined) {
+      throw new Error('Missing invocation order for the attempt registration assertion');
+    }
+    expect(endpointOrder).toBeLessThan(registerOrder);
+    // Readiness must not depend on what the runtime later composes.
+    expect(registerOrder).toBeLessThan(contributionOrder);
+
+    // The endpoint is addressed to this attempt and this incarnation, and the
+    // same incarnation registers and admits the run.
+    const endpointIdentity = mockInstallOperationDeliveryEndpoint.mock.calls[0]?.[1] as {
+      executionAttemptId: string;
+      runtimeIncarnationId: string;
+    };
+    expect(endpointIdentity).toEqual({ executionAttemptId: TEST_ATTEMPT_ID, runtimeIncarnationId: expect.any(String) });
+    expect(mockInstallOperationDeliveryEndpoint).toHaveBeenCalledWith(busHandle.bus, endpointIdentity, {});
+    expect(mockRegisterAndAdmitWorkflowRun).toHaveBeenCalledWith(
+      busHandle.bus,
+      expect.objectContaining({
+        executionAttemptId: TEST_ATTEMPT_ID,
+        runtimeIncarnationId: endpointIdentity.runtimeIncarnationId,
+        endpoint: { bindGeneration: mockEndpointBindGeneration, cleanup: mockEndpointCleanup },
+      }),
+    );
+    // The endpoint is released when the run ends.
+    expect(mockEndpointCleanup).toHaveBeenCalledTimes(1);
+    // The thread claims the attempt on its socket: the Authority's gates read
+    // the caller identity off the authenticated transport peer.
+    expect(mockBootWorkerBus).toHaveBeenCalledWith(expect.objectContaining({ identityId: TEST_ATTEMPT_ID }));
+  });
+
+  it('neither registers nor reports readiness for a run no attempt owns', async () => {
+    mockBootWorkerBus.mockResolvedValueOnce(makeBusHandle());
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
+    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
+      executionId: 'exec-001',
+      workflowId: 'wf-001',
+      status: 'completed',
+    });
+
+    await runWorkflowInWorker({
+      kind: 'unbound',
+      config: makeConfig(),
+      manifest: { contributionRefs: [] },
+      contributionEntrypoints: [],
+    });
+
+    // There is no attempt to prove anything to, so there is no readiness fact
+    // to report either.
+    expect(mockInstallOperationDeliveryEndpoint).not.toHaveBeenCalled();
+    expect(mockRegisterAndAdmitWorkflowRun).not.toHaveBeenCalled();
+    expect(mockParentPortPostMessage).not.toHaveBeenCalled();
+    expect(mockBootWorkerBus).toHaveBeenCalledWith(expect.not.objectContaining({ identityId: expect.anything() }));
   });
 
   it('closes runtime and bus in the finally block on success', async () => {
@@ -244,6 +347,7 @@ describe('runWorkflowInWorker', () => {
     });
 
     await runWorkflowInWorker({
+      kind: 'unbound',
       config: makeConfig(),
       manifest: { contributionRefs: [] },
       contributionEntrypoints: [],
@@ -266,7 +370,12 @@ describe('runWorkflowInWorker', () => {
     mockRunWorkflowOrchestrator.mockRejectedValueOnce(new Error('Orchestrator exploded'));
 
     await expect(
-      runWorkflowInWorker({ config: makeConfig(), manifest: { contributionRefs: [] }, contributionEntrypoints: [] }),
+      runWorkflowInWorker({
+        kind: 'unbound',
+        config: makeConfig(),
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
+      }),
     ).rejects.toThrow('Orchestrator exploded');
 
     expect(runtimeHandle.close).toHaveBeenCalledOnce();
@@ -289,6 +398,7 @@ describe('runWorkflowInWorker', () => {
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
     await runWorkflowInWorker({
+      kind: 'unbound',
       config: makeConfig(),
       manifest: { contributionRefs: [] },
       contributionEntrypoints: [],
@@ -315,7 +425,12 @@ describe('runWorkflowInWorker', () => {
       busUrl: 'ws://localhost:9999',
       busAuth: { kind: 'hmac', secret: 'test-secret' },
     });
-    await runWorkflowInWorker({ config, manifest: { contributionRefs: [] }, contributionEntrypoints: [] });
+    await runWorkflowInWorker({
+      kind: 'unbound',
+      config,
+      manifest: { contributionRefs: [] },
+      contributionEntrypoints: [],
+    });
 
     expect(mockBootWorkerBus).toHaveBeenCalledWith(
       expect.objectContaining({ busUrl: 'ws://localhost:9999', busAuth: { kind: 'hmac', secret: 'test-secret' } }),
@@ -327,6 +442,7 @@ describe('runWorkflowInWorker', () => {
 
     await expect(
       runWorkflowInWorker({
+        kind: 'unbound',
         config: invalidConfig as WorkflowWorkerConfig,
         manifest: { contributionRefs: [] },
         contributionEntrypoints: [],
@@ -355,6 +471,7 @@ describe('runWorkflowInWorker', () => {
       definition,
     });
     const result = await runWorkflowInWorker({
+      kind: 'unbound',
       config,
       manifest: { contributionRefs: [] },
       contributionEntrypoints: [],
@@ -387,7 +504,12 @@ describe('runWorkflowInWorker', () => {
     });
 
     await expect(
-      runWorkflowInWorker({ config, manifest: { contributionRefs: [] }, contributionEntrypoints: [] }),
+      runWorkflowInWorker({
+        kind: 'unbound',
+        config,
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
+      }),
     ).rejects.toThrow(
       `Definition-sourced worker config for workflowId "wf-001" is missing the required 'definition' field.`,
     );
@@ -404,6 +526,7 @@ describe('runWorkflowInWorker', () => {
 
     await expect(
       runWorkflowInWorker({
+        kind: 'unbound',
         config: makeConfig(),
         manifest: {
           contributionRefs: [
@@ -440,7 +563,12 @@ describe('runWorkflowInWorker', () => {
         { packageName: 'test-pkg', version: '1.0.0', entrypoint: 'test.mjs', integrity: 'sha384-test' },
       ],
     };
-    await runWorkflowInWorker({ config: makeConfig(), manifest, contributionEntrypoints: entrypoints });
+    await runWorkflowInWorker({
+      kind: 'unbound',
+      config: makeConfig(),
+      manifest,
+      contributionEntrypoints: entrypoints,
+    });
 
     expect(mockLoadWorkerRuntimeContributions).toHaveBeenCalledWith(entrypoints, {
       bus: busHandle.bus,

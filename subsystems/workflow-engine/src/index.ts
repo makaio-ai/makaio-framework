@@ -26,6 +26,13 @@ export type {
 } from './types.js';
 export type { WorkflowSuccessFinalizer } from './workflow-execution-finalizer.js';
 export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
+export {
+  registerRuntimeRegistrationHandler,
+  RUNTIME_PROBE_DELIVERY_TIMEOUT_MS,
+} from './runtime-registration.js';
+export type { RuntimeRegistrationDeps } from './runtime-registration.js';
+export { registerOperationAdmissionHandler } from './operation-admission.js';
+export type { OperationAdmissionDeps } from './operation-admission.js';
 export { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 export type { AuthorityDispatchRunnerOptions } from './authority-dispatch-runner.js';
 export { submitAttemptOutcome } from './outcome-convergence.js';
@@ -37,6 +44,7 @@ export type {
   OutcomePreCommitValidation,
 } from './outcome-convergence.js';
 export {
+  ATTEMPT_OPERATION_START_GATES,
   DuplicateExecutionAttemptError,
   EXECUTION_ATTEMPT_STATUSES,
   EXECUTION_ATTEMPT_SETTLEMENT_KINDS,
@@ -46,9 +54,19 @@ export {
   sameDurableOutcome,
 } from './execution-attempt-repository.js';
 export type {
+  AdmitOperationInput,
+  AttemptControlState,
+  AttemptOperationStartGate,
+  CompleteOperationInput,
   DurableOutcome,
   ExecutionOwnerId,
+  MarkRuntimeReadyInput,
+  OperationAdmissionDecision,
+  OperationCompletionDecision,
   OutcomeCodec,
+  RegisterRuntimeInput,
+  RuntimeReadinessDecision,
+  RuntimeRegistrationDecision,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   ExecutionAttemptRecord,

@@ -1,7 +1,14 @@
-/** Message type posted by workflow workers once bus control routing is ready. */
+/** Message type posted by workflow workers once the authority accepted the runtime. */
 export const WORKFLOW_WORKER_READY_MESSAGE_TYPE = 'makaio.workflow-worker.ready' as const;
 
-/** Piscina worker-to-pool message emitted after cancel routing is subscribed. */
+/**
+ * Piscina worker-to-pool message emitted after the attempt accepted this runtime.
+ *
+ * The message is posted only by the attempt-bound arm of the worker entrypoint,
+ * after `execution-attempt.runtime.register` returned and the workflow run
+ * passed the attempt's start gate. It therefore means "the authority accepted
+ * this runtime", not "the worker finished composing itself".
+ */
 export interface WorkflowWorkerReadyMessage {
   /** Stable message discriminator. */
   readonly type: typeof WORKFLOW_WORKER_READY_MESSAGE_TYPE;
@@ -9,27 +16,27 @@ export interface WorkflowWorkerReadyMessage {
   readonly executionId: string;
   /** Dynamic workflow cancel subject observed by the worker. */
   readonly cancelSubject: string;
-  /** Adapter identifiers loaded in the worker runtime before readiness. */
-  readonly adapters: readonly string[];
+  /** Attempt whose runtime registration the authority accepted. */
+  readonly executionAttemptId: string;
 }
 
 /**
  * Build a workflow-worker ready message.
  * @param executionId - Workflow execution whose worker is ready.
  * @param cancelSubject - Dynamic cancel subject observed by the worker.
- * @param adapters - Adapter identifiers loaded in the worker runtime.
+ * @param executionAttemptId - Attempt whose runtime registration was accepted.
  * @returns Ready message posted from the worker thread to the Piscina pool.
  */
 export function createWorkflowWorkerReadyMessage(
   executionId: string,
   cancelSubject: string,
-  adapters: readonly string[] = [],
+  executionAttemptId: string,
 ): WorkflowWorkerReadyMessage {
   return {
     type: WORKFLOW_WORKER_READY_MESSAGE_TYPE,
     executionId,
     cancelSubject,
-    adapters,
+    executionAttemptId,
   };
 }
 
@@ -47,7 +54,6 @@ export function isWorkflowWorkerReadyMessage(message: unknown): message is Workf
     candidate.type === WORKFLOW_WORKER_READY_MESSAGE_TYPE &&
     typeof candidate.executionId === 'string' &&
     typeof candidate.cancelSubject === 'string' &&
-    Array.isArray(candidate.adapters) &&
-    candidate.adapters.every((adapter) => typeof adapter === 'string')
+    typeof candidate.executionAttemptId === 'string'
   );
 }

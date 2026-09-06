@@ -65,3 +65,21 @@ export {
   type WorkspaceRootResolver,
   type LocalDirectoryMaterializerOptions,
 } from './local-directory-materializer.js';
+export {
+  installOperationDeliveryEndpoint,
+  registerWorkerRuntime,
+  admitWorkflowRunOperation,
+  registerAndAdmitWorkflowRun,
+  ALLOCATION_VISIBILITY_DEADLINE_MS,
+  RuntimeRegistrationRefusedError,
+  OperationAdmissionRefusedError,
+  type DeliverableOperationKind,
+  type OperationDeliveryHandler,
+  type OperationDeliveryHandlers,
+  type OperationDeliveryEndpoint,
+  type OperationDeliveryEndpointIdentity,
+  type RegisterWorkerRuntimeOptions,
+  type AdmitWorkflowRunOperationOptions,
+  type RegisterAndAdmitWorkflowRunOptions,
+  type AdmittedWorkflowRun,
+} from './runtime-registration-client.js';

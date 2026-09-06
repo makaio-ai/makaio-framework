@@ -63,6 +63,15 @@ interface RawAttemptRow extends Record<string, unknown> {
   readonly provider_id: string | null;
   readonly allocation_lifetime: string | null;
   readonly provisioner_incarnation_id: string | null;
+  readonly runtime_generation: number;
+  readonly runtime_incarnation_id: string | null;
+  readonly runtime_ready_at: string | null;
+  readonly operation_start_gate: string;
+  readonly active_operation_id: string | null;
+  readonly active_operation_kind: string | null;
+  readonly active_operation_key: string | null;
+  readonly active_operation_generation: number | null;
+  readonly last_completed_operation_id: string | null;
 }
 
 let context: TestDbContext | undefined;
@@ -144,6 +153,48 @@ async function startAttempt(
   );
   if (decision.kind !== 'started') throw new Error(`Expected provisioning to start, got '${decision.kind}'`);
   return decision.claim;
+}
+
+/**
+ * Create an attempt, win its claim through one controller, and allocate it.
+ * @param repository - Controller that should hold the claim.
+ * @param ids - Execution and attempt identifiers to use.
+ * @returns The claim the winning begin issued.
+ * @throws When provisioning does not start or the allocation is not recorded.
+ */
+async function allocateAttempt(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  ids: { readonly executionId: string; readonly executionAttemptId: string },
+): Promise<ProviderOperationClaim> {
+  const claim = await startAttempt(repository, ids);
+  const decision = await repository.recordAllocation({ claim, allocationRef: makeTestAllocationRef() });
+  if (decision.kind !== 'recorded') throw new Error(`Expected the allocation to be recorded, got '${decision.kind}'`);
+  return claim;
+}
+
+/**
+ * Bring an attempt to a proven runtime endpoint through one controller.
+ * @param repository - Controller driving the handshake.
+ * @param ids - Execution and attempt identifiers to use.
+ * @returns The generation the proven runtime holds.
+ * @throws When any step of the handshake is refused.
+ */
+async function readyAttempt(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  ids: { readonly executionId: string; readonly executionAttemptId: string },
+): Promise<number> {
+  await allocateAttempt(repository, ids);
+  const registration = await repository.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-1' });
+  if (registration.kind !== 'registered') {
+    throw new Error(`Expected the runtime to register, got '${registration.kind}'`);
+  }
+  const readiness = await repository.markRuntimeReady({
+    ...ids,
+    runtimeGeneration: registration.runtimeGeneration,
+    readyAt: new Date().toISOString(),
+  });
+  if (readiness.kind !== 'ready') throw new Error(`Expected readiness to be accepted, got '${readiness.kind}'`);
+  return registration.runtimeGeneration;
 }
 
 describe('execution attempt repository contract (transactional SQLite)', () => {
@@ -775,6 +826,48 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     });
   });
 
+  it('recovers the control state of a running attempt through the other connection', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.alpha, ids);
+    const admission = await harness.alpha.admitOperation({
+      ...ids,
+      operationKind: 'workflow-run',
+      admissionKey: 'run-key',
+      runtimeGeneration,
+    });
+    if (admission.kind !== 'admitted') throw new Error(`Expected the run to be admitted, got '${admission.kind}'`);
+
+    // `beta` is a second repository over the same file: what a controller that
+    // lost its own memory of the attempt reads after a process loss.
+    const control = await harness.beta.getAttemptControlState(ids.executionAttemptId);
+
+    expect(control).toMatchObject({
+      runtimeGeneration,
+      runtimeIncarnationId: 'runtime-incarnation-1',
+      operationStartGate: 'open',
+      activeOperationId: admission.operationId,
+      activeOperationKind: 'workflow-run',
+      activeOperationKey: 'run-key',
+      activeOperationGeneration: runtimeGeneration,
+      lastCompletedOperationId: null,
+    });
+    expect(control?.runtimeReadyAt).not.toBeNull();
+    // The recovered key is answerable through the other connection too.
+    expect(
+      await harness.beta.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'run-key',
+        runtimeGeneration,
+      }),
+    ).toEqual({
+      kind: 'duplicate',
+      operationId: admission.operationId,
+      runtimeGeneration,
+      admittedAt: control?.activeOperationAdmittedAt,
+    });
+  });
+
   it('rejects an allocation reference evolution that lost the race', async () => {
     const ids = nextIds();
     const claim = await startAttempt(harness.alpha, ids);
@@ -887,6 +980,163 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     expect(abandonments.map((decision) => decision.kind).sort()).toEqual(['abandoned', 'already-abandoned']);
     expect(refused).toEqual({ kind: 'provisioning' });
   });
+
+  // ───────────────────────────────────────────────────────────
+  // Invariant 6: the runtime endpoint and the operation start gate are
+  // durable facts, agreed on by two independent connections.
+  // ───────────────────────────────────────────────────────────
+
+  it('accepts a worker outcome that races an admission on the other controller', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.alpha, ids);
+    const result = makeTestWorkflowResult(ids.executionId, 'completed');
+
+    const [admission, commit] = await Promise.all([
+      harness.beta.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'run-against-outcome',
+        runtimeGeneration,
+      }),
+      harness.alpha.commitOutcome({ ...ids, result: harness.alpha.canonicalizeOutcome(result) }),
+    ]);
+
+    // Admission never gates the canonical answer. Independent connections may
+    // reach the shared write gate in either order, so the admission is either
+    // in before the settlement or refused by it — never a refused outcome.
+    expect(commit.kind).toBe('accepted');
+    expect(['admitted', 'resolved']).toContain(admission.kind);
+    const settled = await readRawAttempt(ids.executionAttemptId);
+    expect(settled.settlement_kind).toBe('outcome');
+    expect(settled.operation_start_gate).toBe('closed');
+  });
+
+  it('advances the runtime generation once for one incarnation reporting to both controllers', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.alpha, ids);
+    const report = { ...ids, runtimeIncarnationId: 'runtime-incarnation-1' };
+
+    const decisions = await Promise.all([harness.alpha.registerRuntime(report), harness.beta.registerRuntime(report)]);
+
+    expect(decisions.map((decision) => decision.kind).sort()).toEqual(['duplicate', 'registered']);
+    // Durable state, not a local variable, is what makes the second report a
+    // replay: the row carries the incarnation the first one stored.
+    const row = await readRawAttempt(ids.executionAttemptId);
+    expect(row.runtime_generation).toBe(1);
+    expect(row.runtime_incarnation_id).toBe('runtime-incarnation-1');
+    expect(row.runtime_ready_at).toBeNull();
+  });
+
+  it('allocates one generation per incarnation when two controllers register different ones', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.alpha, ids);
+
+    const decisions = await Promise.all([
+      harness.alpha.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-a' }),
+      harness.beta.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-b' }),
+    ]);
+
+    // Each registration allocates its own generation, so the later one fences
+    // the earlier one rather than sharing its fence.
+    const generations = decisions.flatMap((decision) =>
+      decision.kind === 'registered' ? [decision.runtimeGeneration] : [],
+    );
+    expect(generations.sort()).toEqual([1, 2]);
+    const row = await readRawAttempt(ids.executionAttemptId);
+    expect(row.runtime_generation).toBe(2);
+    expect(row.runtime_ready_at).toBeNull();
+  });
+
+  it('admits one operation for an admission key presented to both controllers', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.alpha, ids);
+    const command = {
+      ...ids,
+      operationKind: 'workflow-run',
+      admissionKey: 'run-key',
+      runtimeGeneration,
+    } as const;
+
+    const decisions = await Promise.all([harness.alpha.admitOperation(command), harness.beta.admitOperation(command)]);
+
+    expect(decisions.map((decision) => decision.kind).sort()).toEqual(['admitted', 'duplicate']);
+    const operationIds = decisions.flatMap((decision) =>
+      decision.kind === 'admitted' || decision.kind === 'duplicate' ? [decision.operationId] : [],
+    );
+    expect(new Set(operationIds).size).toBe(1);
+    const row = await readRawAttempt(ids.executionAttemptId);
+    expect(row.active_operation_id).toBe(operationIds[0]);
+    expect(row.active_operation_key).toBe('run-key');
+    expect(row.active_operation_generation).toBe(runtimeGeneration);
+  });
+
+  it('admits the probe before readiness and refuses a run, across both controllers', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.alpha, ids);
+    const registration = await harness.alpha.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-1' });
+    if (registration.kind !== 'registered')
+      throw new Error(`Expected the runtime to register, got '${registration.kind}'`);
+
+    const refused = await harness.beta.admitOperation({
+      ...ids,
+      operationKind: 'workflow-run',
+      admissionKey: 'run-before-readiness',
+      runtimeGeneration: registration.runtimeGeneration,
+    });
+    const probe = await harness.beta.admitOperation({
+      ...ids,
+      operationKind: 'runtime-probe',
+      admissionKey: 'probe-1',
+      runtimeGeneration: registration.runtimeGeneration,
+    });
+
+    expect(refused).toEqual({ kind: 'not-ready' });
+    expect(probe.kind).toBe('admitted');
+    const row = await readRawAttempt(ids.executionAttemptId);
+    expect(row.runtime_ready_at).toBeNull();
+    expect(row.active_operation_kind).toBe('runtime-probe');
+  });
+
+  it('answers resolved from both controllers for a settled attempt with a leftover operation', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.alpha, ids);
+    const admission = await harness.alpha.admitOperation({
+      ...ids,
+      operationKind: 'workflow-run',
+      admissionKey: 'run-1',
+      runtimeGeneration,
+    });
+    if (admission.kind !== 'admitted')
+      throw new Error(`Expected the operation to be admitted, got '${admission.kind}'`);
+    await harness.alpha.commitOutcome({
+      ...ids,
+      result: harness.alpha.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'completed')),
+    });
+
+    // The settlement closes the gate and deliberately leaves the operation in
+    // place, so `resolved` outranks `operation-active` for every later caller.
+    const row = await readRawAttempt(ids.executionAttemptId);
+    expect(row.operation_start_gate).toBe('closed');
+    expect(row.active_operation_id).toBe(admission.operationId);
+    expect(await harness.beta.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-2' })).toEqual({
+      kind: 'resolved',
+    });
+    expect(
+      await harness.beta.admitOperation({
+        ...ids,
+        operationKind: 'workflow-run',
+        admissionKey: 'after-settlement',
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'resolved' });
+    expect(
+      await harness.beta.completeOperation({
+        executionAttemptId: ids.executionAttemptId,
+        operationId: admission.operationId,
+        runtimeGeneration,
+      }),
+    ).toEqual({ kind: 'resolved' });
+  });
 });
 
 /**
@@ -988,6 +1238,44 @@ describe('execution attempt repository contract (without write-lock isolation)',
     const winner = decisions[0].kind === 'evolved' ? first : second;
     expect(decisions.find((decision) => decision.kind === 'stale')).toEqual({ kind: 'stale', storedRef: winner });
     expect((await alpha.recovery.getAttemptWithAllocation(ids.executionAttemptId))?.allocationRef).toEqual(winner);
+  });
+
+  it('lets exactly one of two interleaved admissions take the operation slot', async () => {
+    // The same two-handles-over-one-connection setup: both repositories read
+    // `active_operation_id IS NULL` before either writes. A guard that lived in
+    // application code would admit both and silently keep whichever committed
+    // last, which is two workers running one attempt.
+    const shared = withoutTransactionIsolation(openConnection());
+    const alpha = await createSqliteAttemptRepository(handleOver(shared), workflowRunResultOutcomeCodec);
+    const beta = await createSqliteAttemptRepository(handleOver(shared), workflowRunResultOutcomeCodec);
+
+    const ids = { executionId: 'unisolated-admit-exec', executionAttemptId: 'unisolated-admit-attempt' };
+    await alpha.createAttempt(ids);
+    const begun = await alpha.beginProvisioning(makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId));
+    if (begun.kind !== 'started') throw new Error(`Expected provisioning to start, got '${begun.kind}'`);
+    await alpha.recordAllocation({ claim: begun.claim, allocationRef: makeTestAllocationRef() });
+    const registration = await alpha.registerRuntime({ ...ids, runtimeIncarnationId: 'runtime-incarnation-1' });
+    if (registration.kind !== 'registered') {
+      throw new Error(`Expected the runtime to register, got '${registration.kind}'`);
+    }
+    const { runtimeGeneration } = registration;
+    const readiness = await alpha.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() });
+    if (readiness.kind !== 'ready') throw new Error(`Expected readiness to be accepted, got '${readiness.kind}'`);
+
+    const decisions = await Promise.all([
+      alpha.admitOperation({ ...ids, operationKind: 'workflow-run', admissionKey: 'run-a', runtimeGeneration }),
+      beta.admitOperation({ ...ids, operationKind: 'workflow-run', admissionKey: 'run-b', runtimeGeneration }),
+    ]);
+
+    expect(decisions.map((decision) => decision.kind).sort()).toEqual(['admitted', 'operation-active']);
+    const admitted = decisions.find((decision) => decision.kind === 'admitted');
+    const refused = decisions.find((decision) => decision.kind === 'operation-active');
+    if (admitted?.kind !== 'admitted' || refused?.kind !== 'operation-active') {
+      throw new Error('Expected exactly one admission and one refusal');
+    }
+    // The loser is told which operation took the slot, and it is the winner's.
+    expect(refused.operationId).toBe(admitted.operationId);
+    expect((await alpha.getAttemptControlState(ids.executionAttemptId))?.activeOperationId).toBe(admitted.operationId);
   });
 });
 

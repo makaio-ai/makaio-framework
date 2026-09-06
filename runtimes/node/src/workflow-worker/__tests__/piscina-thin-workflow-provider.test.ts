@@ -12,8 +12,10 @@ import {
   WorkerNamespace,
   WorkerSubjects,
 } from '@makaio/contracts';
+import { resolveWorkflowExecutionBusSecret } from '../../workflow-execution-bus-access.js';
+import type { ThinWorkflowPiscinaAttemptBinding } from '../thin-workflow-piscina-runner.js';
 import { PiscinaThinWorkflowProvider, type ReadinessAwareWorkflowRunner } from '../piscina-thin-workflow-provider.js';
-import { createWorkflowWorkerReadyMessage, type WorkflowWorkerReadyMessage } from '../worker-ready-message.js';
+import { WORKFLOW_WORKER_READY_MESSAGE_TYPE, type WorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 import { makeWorkerConfig } from './fixtures.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -30,8 +32,15 @@ function createTestBus() {
   return bus;
 }
 
+/** Bus URL every provisionable worker configuration below carries. */
+const TEST_BUS_URL = 'ws://127.0.0.1:65535/bus';
+
 /**
  * Build a minimal provision request matching the current contract.
+ *
+ * The bus URL is supplied here rather than in the shared `makeWorkerConfig`
+ * fixture: the same fixture drives the attempt-free runner path, where a bus
+ * URL would silently change what those tests exercise.
  * @param overrides - Optional field overrides.
  * @returns A valid WorkerProvisionRequest.
  */
@@ -40,13 +49,14 @@ function makeProvisionRequest(
     executionAttemptId: string;
     executionId: string;
     workerManifest: WorkerContributionManifest;
+    workerConfig: WorkflowWorkerConfig;
   }>,
 ) {
   return {
     executionId: overrides?.executionId ?? 'wfx-1',
     executionAttemptId: overrides?.executionAttemptId ?? 'attempt-1',
     environment: 'piscina' as const,
-    workerConfig: makeWorkerConfig(),
+    workerConfig: overrides?.workerConfig ?? makeWorkerConfig({ busUrl: TEST_BUS_URL }),
     workerManifest: overrides?.workerManifest ?? { contributionRefs: [] },
     provisioningStartedAt: '2026-07-27T10:00:00.000Z',
   };
@@ -73,7 +83,10 @@ interface RunnerBehaviour {
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
   ) => Promise<WorkflowRunResult>;
-  /** Post-composition readiness signal. Defaults to one that never settles. */
+  /**
+   * Readiness signal. Defaults to one that resolves at once, the way an
+   * admitted thread's does; a test about the refused path rejects it.
+   */
   readonly ready?: Promise<WorkflowWorkerReadyMessage>;
 }
 
@@ -87,9 +100,21 @@ interface RunnerBehaviour {
  */
 function makeRunner(behaviour?: RunnerBehaviour) {
   const runWithReadiness = vi.fn(
-    (config: WorkflowWorkerConfig, signal: AbortSignal, manifest?: WorkerContributionManifest) => ({
+    (
+      config: WorkflowWorkerConfig,
+      signal: AbortSignal,
+      manifest: WorkerContributionManifest | undefined,
+      attempt: ThinWorkflowPiscinaAttemptBinding,
+    ) => ({
       result: behaviour?.result?.(config, signal, manifest) ?? Promise.resolve(COMPLETED_RESULT),
-      ready: behaviour?.ready ?? new Promise<WorkflowWorkerReadyMessage>(() => undefined),
+      ready:
+        behaviour?.ready ??
+        Promise.resolve({
+          type: WORKFLOW_WORKER_READY_MESSAGE_TYPE,
+          executionId: config.executionId,
+          cancelSubject: config.cancelSubject,
+          executionAttemptId: attempt.executionAttemptId,
+        }),
     }),
   );
   const runner: ReadinessAwareWorkflowRunner & { runWithReadiness: typeof runWithReadiness } = {
@@ -293,7 +318,9 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect('waitForResult' in handle).toBe(false);
   });
 
-  it('emits attempt-ready only after the runner reports post-composition readiness', async () => {
+  // ── Attempt readiness is the Authority's fact ─────────────
+
+  it('publishes nothing on a worker control subject when the runtime becomes ready', async () => {
     const bus = createTestBus();
     const emit = vi.spyOn(bus, 'emit');
     let resolveReady!: (value: WorkflowWorkerReadyMessage) => void;
@@ -310,16 +337,193 @@ describe('PiscinaThinWorkflowProvider', () => {
     const request = makeProvisionRequest();
 
     await provider.provision(request, new AbortController().signal);
-    expect(emit).not.toHaveBeenCalledWith(WorkerSubjects.control['attempt-ready'], expect.anything());
 
-    resolveReady(createWorkflowWorkerReadyMessage(request.executionId, request.workerConfig.cancelSubject, ['tools']));
-    await vi.waitFor(() =>
-      expect(emit).toHaveBeenCalledWith(WorkerSubjects.control['attempt-ready'], {
-        executionAttemptId: request.executionAttemptId,
-        executionId: request.executionId,
-        adapters: ['tools'],
-      }),
+    // Readiness is published by the Authority from the thread's own
+    // registration, so this provider has nothing left to announce.
+    resolveReady({
+      type: WORKFLOW_WORKER_READY_MESSAGE_TYPE,
+      executionId: request.executionId,
+      cancelSubject: request.workerConfig.cancelSubject,
+      executionAttemptId: request.executionAttemptId,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // `bus.emit` is subject-token generic, so the spy's recorded argument tuple
+    // widens to `never`; read the subject positionally instead of destructuring.
+    const emittedSubjects = (emit.mock.calls as ReadonlyArray<readonly unknown[]>).map((call) => String(call[0]));
+    expect(emittedSubjects.filter((subject) => subject.startsWith('worker.control.'))).toEqual([]);
+    // Nor does it announce readiness in the authority's own vocabulary: the
+    // thread registers itself, and only the authority publishes on
+    // `execution-attempt.*`.
+    expect(emittedSubjects.filter((subject) => subject.startsWith('execution-attempt.'))).toEqual([]);
+  });
+
+  it('aborts the allocation when the runtime never becomes ready', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const refusal = new Error('Runtime registration refused by the Authority');
+    const runner = makeRunner({
+      ready: Promise.reject(refusal),
+      result: (_config, signal) => {
+        capturedSignal = signal;
+        return new Promise<never>(() => {});
+      },
+    });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-ready',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    await provider.provision(makeProvisionRequest(), new AbortController().signal);
+
+    // A rejected readiness used to be swallowed. It now ends the allocation,
+    // which is the only honest answer for a runtime the Authority refused.
+    await vi.waitFor(() => expect(capturedSignal?.aborted).toBe(true));
+    expect(capturedSignal?.reason).toBe(refusal);
+  });
+
+  it('reports a refusal before admission as infrastructure evidence, never as a workflow outcome', async () => {
+    const bus = createTestBus();
+    const submissions: unknown[] = [];
+    bus.on(WorkerSubjects.control.outcome.submit, (ctx) => {
+      submissions.push(ctx.payload);
+      ctx.setResult({ decision: 'accepted' });
+    });
+    // The thread throws out of registration before any workflow ran, so its
+    // readiness and its result reject with the same refusal.
+    const refusal = new Error('Runtime registration refused by the Authority');
+    const runner = makeRunner({
+      ready: Promise.reject(refusal),
+      result: () => Promise.reject(refusal),
+    });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-refused',
+      displayName: 'Piscina',
+      runner,
+      bus,
+    });
+
+    const outcome = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    if (outcome.kind !== 'allocated') throw new Error(`Expected an allocation, got '${outcome.kind}'`);
+
+    const conclusions: string[] = [];
+    outcome.handle.observeInfrastructureConclusion?.((conclusion) => {
+      conclusions.push(conclusion.evidence.summary);
+    });
+
+    // The refusal is terminal infrastructure evidence for the allocation...
+    await vi.waitFor(() => expect(conclusions).toHaveLength(1));
+    expect(conclusions[0]).toContain('refused before its workflow run was admitted');
+    expect(conclusions[0]).toContain(refusal.message);
+    // ...and no `failed` outcome is manufactured from it: the Authority must
+    // converge the attempt as an infrastructure failure, not settle it as a
+    // workflow that ran and failed.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(submissions).toEqual([]);
+  });
+
+  // ── Attempt-scoped bus identity ───────────────────────────
+
+  it('rejects a provision whose worker configuration carries no bus URL', async () => {
+    const runner = makeRunner();
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-no-bus',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    await expect(
+      provider.provision(
+        makeProvisionRequest({
+          executionAttemptId: 'attempt-no-bus',
+          workerConfig: makeWorkerConfig(),
+        }),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('requires a bus URL');
+
+    // A thread with no transport could never register its runtime, so none is
+    // started and no identity is minted for an attempt that cannot use it.
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
+    expect(resolveWorkflowExecutionBusSecret('attempt-no-bus')).toBeUndefined();
+  });
+
+  it('hands the worker an attempt-scoped bus identity instead of the host process secret', async () => {
+    let capturedConfig: WorkflowWorkerConfig | undefined;
+    let capturedAttempt: ThinWorkflowPiscinaAttemptBinding | undefined;
+    const runner = makeRunner();
+    vi.mocked(runner.runWithReadiness).mockImplementation((config, _signal, _manifest, attempt) => {
+      capturedConfig = config;
+      capturedAttempt = attempt;
+      return {
+        result: new Promise<WorkflowRunResult>(() => undefined),
+        ready: new Promise<WorkflowWorkerReadyMessage>(() => undefined),
+      };
+    });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-identity',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+    const request = makeProvisionRequest({ executionAttemptId: 'attempt-identity' });
+
+    const { handle } = await provider.provision(request, new AbortController().signal);
+
+    expect(capturedAttempt).toEqual({ executionAttemptId: 'attempt-identity' });
+    expect(capturedConfig?.busUrl).toBe(TEST_BUS_URL);
+    // The registered identity is keyed by the attempt, which is what makes the
+    // thread an authenticated attempt peer at the Authority's gates.
+    expect(capturedConfig?.busAuth).toEqual({
+      kind: 'hmac',
+      secret: resolveWorkflowExecutionBusSecret('attempt-identity'),
+    });
+    expect(capturedConfig?.busAuth).not.toEqual(request.workerConfig.busAuth);
+
+    await handle.release();
+  });
+
+  it('gives up the minted bus identity when the allocation is released', async () => {
+    const runner = makeRunner({ result: () => new Promise<never>(() => {}) });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-identity',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    const { handle } = await provider.provision(
+      makeProvisionRequest({ executionAttemptId: 'attempt-released' }),
+      new AbortController().signal,
     );
+    expect(resolveWorkflowExecutionBusSecret('attempt-released')).toBeDefined();
+
+    await handle.release();
+
+    expect(resolveWorkflowExecutionBusSecret('attempt-released')).toBeUndefined();
+  });
+
+  it('gives up the minted bus identity when the allocation is terminated', async () => {
+    const runner = makeRunner({ result: () => new Promise<never>(() => {}) });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-identity',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    const { handle } = await provider.provision(
+      makeProvisionRequest({ executionAttemptId: 'attempt-terminated' }),
+      new AbortController().signal,
+    );
+    expect(resolveWorkflowExecutionBusSecret('attempt-terminated')).toBeDefined();
+
+    await handle.terminate();
+
+    expect(resolveWorkflowExecutionBusSecret('attempt-terminated')).toBeUndefined();
   });
 
   it('release resolves without affecting the runner', async () => {

@@ -7,11 +7,14 @@ import {
   sameDurableOutcome,
 } from '../execution-attempt-repository.js';
 import type {
+  AdmitOperationInput,
   AllocationRecordingDecision,
   AllocationRefEvolution,
   AllocationRefEvolutionDecision,
   AllocationTerminationDecision,
+  AttemptControlState,
   BeginProvisioningInput,
+  CompleteOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptCreate,
@@ -22,6 +25,9 @@ import type {
   ExecutionAttemptRepository,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  MarkRuntimeReadyInput,
+  OperationAdmissionDecision,
+  OperationCompletionDecision,
   OutcomeCodec,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
@@ -34,7 +40,10 @@ import type {
   RecordProvisionerIncarnationLostInput,
   RecordProvisioningAbsentInput,
   RecoverableAttemptRecord,
+  RegisterRuntimeInput,
   RenewProviderOperationClaimInput,
+  RuntimeReadinessDecision,
+  RuntimeRegistrationDecision,
   TakeOverProviderOperationInput,
 } from '../execution-attempt-repository.js';
 import type {
@@ -44,6 +53,7 @@ import type {
   ProviderOperationOwnershipRecord,
 } from '../provider-operation.js';
 import {
+  INITIAL_ATTEMPT_CONTROL_STATE,
   compareRecoveryOrder,
   instantOf,
   normalizeInstant,
@@ -51,6 +61,7 @@ import {
   parseAllocationRef,
   parseAllocationRefEvolution,
   requireAllocationRefProvider,
+  toAttemptControlState,
   toRecoverableAttempt,
 } from './attempt-record-codec.js';
 
@@ -118,6 +129,25 @@ type ClaimAuthorization =
   | { readonly kind: 'not-found' };
 
 /**
+ * Settle an attempt, closing its start gate in the same write.
+ *
+ * A settled attempt never starts work again. The active operation is
+ * deliberately left in place, so a completion that arrives after this reads
+ * `resolved` rather than `not-active`. Every terminal path goes through here so
+ * no realization branch can settle without closing the gate — the SQLite
+ * realization has the same rule in its one shared settle statement.
+ * @param attempt - Attempt record being settled.
+ * @param settlementKind - How the attempt settled.
+ * @returns The settled record.
+ */
+function settleAttempt(
+  attempt: ExecutionAttemptRecord,
+  settlementKind: NonNullable<ExecutionAttemptRecord['settlementKind']>,
+): ExecutionAttemptRecord {
+  return { ...attempt, status: 'settled', settlementKind, claimable: false, operationStartGate: 'closed' };
+}
+
+/**
  * Create the in-memory reference realization of {@link ExecutionAttemptRepository}.
  *
  * It is the canonical realization of the repository-owned state machine: the
@@ -151,6 +181,20 @@ export function createInMemoryAttemptRepository<TOutcome>(
 ): InMemoryAttemptRepository<TOutcome> {
   const attempts = seed.attempts ?? new Map<string, ExecutionAttemptRecord>();
   const operations = seed.operations ?? new Map<string, ProviderOperationOwnershipRecord>();
+
+  /**
+   * Whether the attempt's allocation is durably confirmed to have ended.
+   *
+   * Termination is recorded on the operation row before the attempt settles,
+   * so between those two writes the attempt still carries its allocation
+   * reference while nothing can run on it anymore. Registration and admission
+   * read the obligation for that reason: an allocation owing terminal
+   * convergence is not one to run on.
+   * @param executionAttemptId - Attempt whose operation to inspect.
+   * @returns True when the allocation's termination was recorded.
+   */
+  const allocationTerminated = (executionAttemptId: string): boolean =>
+    operations.get(executionAttemptId)?.obligation === 'terminal-convergence';
   const committedOutcomes = seed.committedOutcomes ?? new Map<string, string>();
   const activeAttempts = seed.activeAttempts ?? new Map<string, string>();
 
@@ -322,13 +366,20 @@ export function createInMemoryAttemptRepository<TOutcome>(
         settlementKind: null,
         claimable: false,
         claimExpiresAt: null,
+        ...INITIAL_ATTEMPT_CONTROL_STATE,
       };
       const activeAttemptId = activeAttempts.get(input.executionId);
       const activeAttempt = activeAttemptId === undefined ? undefined : attempts.get(activeAttemptId);
-      if (activeAttempt?.status === 'allocated') {
+      if (activeAttempt !== undefined) {
         // Replacement fences bootstrap claims without changing the host-owned
-        // expiry window recorded on the allocation.
-        attempts.set(activeAttempt.executionAttemptId, { ...activeAttempt, claimable: false });
+        // expiry window recorded on the allocation, and closes the superseded
+        // attempt's start gate: an attempt nobody addresses any more must not
+        // be able to admit an operation between here and any later cleanup.
+        attempts.set(activeAttempt.executionAttemptId, {
+          ...activeAttempt,
+          claimable: activeAttempt.status === 'allocated' ? false : activeAttempt.claimable,
+          operationStartGate: 'closed',
+        });
       }
       attempts.set(input.executionAttemptId, record);
       activeAttempts.set(input.executionId, input.executionAttemptId);
@@ -460,12 +511,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
       if (attempt.executionId !== input.executionId) return { kind: 'not-found' };
       if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
 
-      attempts.set(attempt.executionAttemptId, {
-        ...attempt,
-        status: 'settled',
-        settlementKind: 'abandoned',
-        claimable: false,
-      });
+      attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'abandoned'));
       closeOperation(operation, evidence);
       return { kind: 'recorded' };
     },
@@ -493,12 +539,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
       }
       if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
 
-      attempts.set(attempt.executionAttemptId, {
-        ...attempt,
-        status: 'settled',
-        settlementKind: 'abandoned',
-        claimable: false,
-      });
+      attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'abandoned'));
       closeOperation(operation, evidence);
       return { kind: 'recorded' };
     },
@@ -532,14 +573,158 @@ export function createInMemoryAttemptRepository<TOutcome>(
       // allocation control has not recorded that evidence yet.
       if (operation.obligation !== 'terminal-convergence') return { kind: 'not-terminated' };
 
-      attempts.set(attempt.executionAttemptId, {
-        ...attempt,
-        status: 'settled',
-        settlementKind: 'infrastructure-failure',
-        claimable: false,
-      });
+      attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'infrastructure-failure'));
       closeOperation(operation, operation.lastFailure);
       return { kind: 'recorded' };
+    },
+
+    async registerRuntime(input: RegisterRuntimeInput): Promise<RuntimeRegistrationDecision> {
+      const attempt = attempts.get(input.executionAttemptId);
+      if (attempt === undefined || attempt.executionId !== input.executionId) return { kind: 'not-found' };
+      if (attempt.settlementKind != null) return { kind: 'resolved' };
+      if (activeAttempts.get(input.executionId) !== input.executionAttemptId) return { kind: 'fenced' };
+      if (attempt.allocationRef === null || allocationTerminated(attempt.executionAttemptId)) {
+        return { kind: 'not-allocated' };
+      }
+      // The replay answer precedes the busy refusal on purpose: the operation
+      // in the way is frequently the very probe this registration started, and
+      // a runtime retrying its report must not be told to wait for itself.
+      if (attempt.runtimeIncarnationId === input.runtimeIncarnationId) {
+        return {
+          kind: 'duplicate',
+          runtimeGeneration: attempt.runtimeGeneration,
+          runtimeReadyAt: attempt.runtimeReadyAt,
+        };
+      }
+      // A workload operation in the way is refused; a probe in the way is
+      // reclaimed. The probe is the authority's own proof of an endpoint, so
+      // one left active belongs to a handshake that died before completing it,
+      // and it must not block the incarnation that replaces the dead one.
+      if (attempt.activeOperationId !== null && attempt.activeOperationKind !== 'runtime-probe') {
+        return { kind: 'operation-active', operationId: attempt.activeOperationId };
+      }
+
+      // The generation is allocated here and never proposed by the caller.
+      // Readiness is cleared with it: it was proven by the incarnation this one
+      // replaces, and says nothing about the new one. An orphaned probe is
+      // cleared in the same write, all five members at once.
+      const runtimeGeneration = attempt.runtimeGeneration + 1;
+      attempts.set(attempt.executionAttemptId, {
+        ...attempt,
+        runtimeGeneration,
+        runtimeIncarnationId: input.runtimeIncarnationId,
+        runtimeReadyAt: null,
+        activeOperationId: null,
+        activeOperationKind: null,
+        activeOperationKey: null,
+        activeOperationGeneration: null,
+        activeOperationAdmittedAt: null,
+      });
+      return { kind: 'registered', runtimeGeneration };
+    },
+
+    async admitOperation(input: AdmitOperationInput): Promise<OperationAdmissionDecision> {
+      const attempt = attempts.get(input.executionAttemptId);
+      if (attempt === undefined || attempt.executionId !== input.executionId) return { kind: 'not-found' };
+      if (attempt.settlementKind != null) return { kind: 'resolved' };
+      if (activeAttempts.get(input.executionId) !== input.executionAttemptId) return { kind: 'fenced' };
+      if (attempt.allocationRef === null || allocationTerminated(attempt.executionAttemptId)) {
+        return { kind: 'not-allocated' };
+      }
+      if (attempt.activeOperationId !== null) {
+        // One occupied slot, two readings of it: the caller's own admission
+        // retried, or somebody else's operation in the way.
+        return attempt.activeOperationKey === input.admissionKey
+          ? {
+              kind: 'duplicate',
+              operationId: attempt.activeOperationId,
+              runtimeGeneration: attempt.activeOperationGeneration ?? attempt.runtimeGeneration,
+              admittedAt: attempt.activeOperationAdmittedAt ?? normalizeInstant(new Date().toISOString()),
+            }
+          : { kind: 'operation-active', operationId: attempt.activeOperationId };
+      }
+      if (attempt.operationStartGate === 'closed') return { kind: 'gate-closed' };
+      // The bounded probe is the one kind admitted while readiness is unproven:
+      // it is what proves it, so requiring readiness of it would make readiness
+      // unreachable.
+      if (input.operationKind !== 'runtime-probe' && attempt.runtimeReadyAt === null) return { kind: 'not-ready' };
+      if (attempt.runtimeGeneration !== input.runtimeGeneration) {
+        return { kind: 'stale-generation', runtimeGeneration: attempt.runtimeGeneration };
+      }
+
+      const operationId = crypto.randomUUID();
+      const admittedAt = normalizeInstant(new Date().toISOString());
+      attempts.set(attempt.executionAttemptId, {
+        ...attempt,
+        activeOperationId: operationId,
+        activeOperationKind: input.operationKind,
+        activeOperationKey: input.admissionKey,
+        activeOperationGeneration: attempt.runtimeGeneration,
+        activeOperationAdmittedAt: admittedAt,
+      });
+      return { kind: 'admitted', operationId, runtimeGeneration: attempt.runtimeGeneration, admittedAt };
+    },
+
+    async completeOperation(input: CompleteOperationInput): Promise<OperationCompletionDecision> {
+      const attempt = attempts.get(input.executionAttemptId);
+      if (attempt === undefined) return { kind: 'not-found' };
+      // A terminal settlement leaves the active operation in place, so a late
+      // completion learns that the attempt resolved rather than that its
+      // operation was never active.
+      if (attempt.settlementKind != null) return { kind: 'resolved' };
+      // The replay is answered from the last completion, because by then the
+      // active operation this call names is gone.
+      if (attempt.lastCompletedOperationId === input.operationId) return { kind: 'duplicate' };
+      if (attempt.activeOperationId === null) return { kind: 'not-active' };
+      if (attempt.activeOperationId !== input.operationId) {
+        return { kind: 'mismatch', activeOperationId: attempt.activeOperationId };
+      }
+      if (attempt.activeOperationGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+
+      // One write clears all five members: a half-released operation would be
+      // neither active nor absent.
+      attempts.set(attempt.executionAttemptId, {
+        ...attempt,
+        activeOperationId: null,
+        activeOperationKind: null,
+        activeOperationKey: null,
+        activeOperationGeneration: null,
+        activeOperationAdmittedAt: null,
+        lastCompletedOperationId: input.operationId,
+      });
+      return { kind: 'completed' };
+    },
+
+    async markRuntimeReady(input: MarkRuntimeReadyInput): Promise<RuntimeReadinessDecision> {
+      const acceptedAt = normalizeInstant(input.readyAt);
+      const attempt = attempts.get(input.executionAttemptId);
+      if (attempt === undefined || attempt.executionId !== input.executionId) return { kind: 'not-found' };
+      if (attempt.settlementKind != null) return { kind: 'resolved' };
+      // A superseded attempt keeps its generation, so the generation fence
+      // below cannot see that the endpoint it proved is no longer current.
+      if (activeAttempts.get(input.executionId) !== input.executionAttemptId) return { kind: 'fenced' };
+      // A probe can complete on an allocation whose termination became durable
+      // while it was in flight; readiness recorded then would announce a dead
+      // endpoint, so the same guard registration and admission apply holds here.
+      if (attempt.allocationRef === null || allocationTerminated(attempt.executionAttemptId)) {
+        return { kind: 'not-allocated' };
+      }
+      // Readiness is stored per generation and cleared whenever one is
+      // allocated, so a stored instant always belongs to the current
+      // incarnation and a stale fence can never replay onto it.
+      if (attempt.runtimeGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+      if (attempt.runtimeReadyAt !== null) return { kind: 'duplicate', acceptedAt: attempt.runtimeReadyAt };
+      if (attempt.activeOperationId !== null) {
+        return { kind: 'operation-active', operationId: attempt.activeOperationId };
+      }
+
+      attempts.set(attempt.executionAttemptId, { ...attempt, runtimeReadyAt: acceptedAt });
+      return { kind: 'ready', acceptedAt };
+    },
+
+    async getAttemptControlState(executionAttemptId: string): Promise<AttemptControlState | null> {
+      const attempt = attempts.get(executionAttemptId);
+      return attempt === undefined ? null : toAttemptControlState(attempt);
     },
 
     async getActiveAttempt(executionId: string, executionAttemptId: string): Promise<ExecutionAttemptRecord | null> {
@@ -604,12 +789,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
       // column a durable realization holds. Keeping the submitter's copy
       // instead would let an owner converge on a value no reload ever yields.
       committedOutcomes.set(input.executionAttemptId, submission.text);
-      attempts.set(input.executionAttemptId, {
-        ...attempt,
-        status: 'settled',
-        settlementKind: 'outcome',
-        claimable: false,
-      });
+      attempts.set(input.executionAttemptId, settleAttempt(attempt, 'outcome'));
       const operation = operations.get(input.executionAttemptId);
       if (operation) closeOperation(operation, operation.lastFailure);
       // Decoded from the text that was just stored, not taken from
@@ -631,12 +811,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
       if (attempt.status === 'settled') {
         return { kind: attempt.settlementKind === 'abandoned' ? 'already-abandoned' : 'already-settled' };
       }
-      attempts.set(executionAttemptId, {
-        ...attempt,
-        status: 'settled',
-        settlementKind: 'abandoned',
-        claimable: false,
-      });
+      attempts.set(executionAttemptId, settleAttempt(attempt, 'abandoned'));
       return { kind: 'abandoned' };
     },
   };

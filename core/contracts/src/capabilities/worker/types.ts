@@ -589,8 +589,8 @@ export interface WorkerInfrastructureConclusion {
  * held by the caller until the allocation is no longer needed.
  *
  * The handle controls allocation infrastructure only. It does NOT expose a
- * `ready` promise or a `waitForResult()` method. Readiness is signaled
- * through the `control.attempt-ready` bus subject. Workflow outcomes are
+ * `ready` promise or a `waitForResult()` method. Readiness is signaled through
+ * the `execution-attempt.runtime.ready` bus subject. Workflow outcomes are
  * submitted and acknowledged through the Authority's `control.outcome.submit`
  * bus subject.
  */

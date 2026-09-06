@@ -12,9 +12,21 @@ import {
   type JsonValue,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
+import { HmacAuth, resolveHmacIdentityPeer, resolveHmacIdentitySecret } from '@makaio/bus-transport-websocket';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
+import { mintWorkflowExecutionBusSecret } from '../../workflow-execution-bus-access.js';
 import { runWorkflowInWorker } from '../worker-entry.js';
+import { createAttemptAuthorityHarness, type AttemptAuthorityHarness } from './attempt-authority-harness.js';
+
+/**
+ * Process-global HMAC secret of this host.
+ *
+ * Attempt-free workers authenticate with it and stay unrestricted, exactly as
+ * a host-owned worker connection does today. Attempt-owned workers claim their
+ * attempt identity instead and are resolved through the identity registry.
+ */
+const HOST_BUS_SECRET = 'worker-entry-integration-host-secret';
 
 interface HostWorkflowBus {
   /** WebSocket URL used by worker bus clients. */
@@ -23,7 +35,9 @@ interface HostWorkflowBus {
   readonly bus: IMakaioBus;
   /** Executions persisted through workflow storage subjects. */
   readonly executions: Map<string, WorkflowExecution>;
-  /** Release transport, storage handlers, and HTTP server. */
+  /** Authority-side ExecutionAttempt gates, attempt identity, and gate captures. */
+  readonly attempt: AttemptAuthorityHarness;
+  /** Release transport, storage handlers, attempt gates, and HTTP server. */
   readonly close: () => Promise<void>;
 }
 
@@ -31,16 +45,24 @@ interface HostWorkflowBus {
  * Start a real bus transport with in-memory workflow storage handlers.
  *
  * Registers handlers for the storage subjects the orchestrator writes during
- * a workflow run, including the atomic `setExecutionStart` launch checkpoint.
+ * a workflow run, including the atomic `setExecutionStart` launch checkpoint,
+ * and stands up the Authority-side ExecutionAttempt gates an attempt-owned
+ * worker registers against. Without those gates such a worker blocks on the
+ * request default rather than failing.
+ *
  * All cleanup callbacks are collected so `close()` can unregister them in one pass.
+ * @param executionId - Execution the host's attempt belongs to.
  * @returns Host bus resources for worker-entry integration tests.
  */
-async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
+async function startHostWorkflowBus(executionId: string): Promise<HostWorkflowBus> {
   const server = createServer();
   const port = await listenOnLoopback(server);
   const bus = createBusInstance({ context: createBusContext() });
   bus.registerNamespaces(FrameworkContractNamespaces);
   bus.registerNamespaces(FrameworkStorageNamespaces);
+  // Before the transport: the gates must be bound and the attempt allocated by
+  // the time a worker socket can reach them.
+  const attempt = await createAttemptAuthorityHarness(bus, executionId);
 
   const executions = new Map<string, WorkflowExecution>();
 
@@ -75,13 +97,40 @@ async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
     ctx.setResult({ id: ctx.payload.span.stepId });
   });
 
-  const cleanups: Array<() => void> = [offSetExecution, offSetExecutionStart, offUpdateExecution, offSetSpan];
+  // An attempt-owned worker runs with `terminalAuthority: 'authority'`, so it
+  // hands its loaded definition back through this gateway instead of writing
+  // the execution row itself — the attempt's transport allowlist does not
+  // carry the storage write subjects.
+  const offBootstrapAuthorityState = bus.on(WorkflowSubjects.bootstrapAuthorityState, (ctx) => {
+    const execution = executions.get(ctx.payload.executionId);
+    if (execution !== undefined) execution.workflowId = ctx.payload.definition.id;
+    ctx.setResult({ persisted: true });
+  });
 
-  const transport = new BusServerTransportProvider({ httpServer: server });
+  const cleanups: Array<() => void> = [
+    offSetExecution,
+    offSetExecutionStart,
+    offUpdateExecution,
+    offSetSpan,
+    offBootstrapAuthorityState,
+  ];
+
+  // The host's own auth, not the harness's: a Piscina worker builds its socket
+  // from the HMAC secret in its worker configuration, so the identity it can
+  // claim is the one the process-wide identity registry holds for its attempt.
+  const transport = new BusServerTransportProvider({
+    httpServer: server,
+    auth: new HmacAuth({
+      secret: HOST_BUS_SECRET,
+      resolveSecret: resolveHmacIdentitySecret,
+      resolvePeer: resolveHmacIdentityPeer,
+    }),
+  });
   try {
     await transport.connect(bus, 'workflow-worker-integration-host');
   } catch (error) {
     for (const off of cleanups) off();
+    await attempt.cleanup();
     await transport.disconnect();
     await closeHttpServer(server);
     throw error;
@@ -91,8 +140,10 @@ async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
     busUrl: `ws://127.0.0.1:${port}/bus`,
     bus,
     executions,
+    attempt,
     async close() {
       for (const off of cleanups) off();
+      await attempt.cleanup();
       await transport.disconnect();
       await closeHttpServer(server);
     },
@@ -120,7 +171,7 @@ function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
     inputs: {},
     scope: { type: 'global' },
     busUrl,
-    busAuth: { kind: 'none' },
+    busAuth: { kind: 'hmac', secret: HOST_BUS_SECRET },
     env: {},
     coordinatorSessionId: 'session-entry-integration',
     cancelSubject: 'workflow.cancel.exec-entry-integration',
@@ -168,10 +219,11 @@ function makeGateConfig(busUrl: string): WorkflowWorkerConfig {
 
 describe('runWorkflowInWorker integration', () => {
   it('runs a definition-sourced workflow through the real worker lifecycle and host bus storage', async () => {
-    const host = await startHostWorkflowBus();
+    const host = await startHostWorkflowBus('exec-entry-integration');
 
     try {
       const result = await runWorkflowInWorker({
+        kind: 'unbound',
         config: makeDefinitionConfig(host.busUrl),
         manifest: { contributionRefs: [] },
         contributionEntrypoints: [],
@@ -193,7 +245,7 @@ describe('runWorkflowInWorker integration', () => {
   });
 
   it('routes a gate approval from the host bus to the worker over WebSocket', async () => {
-    const host = await startHostWorkflowBus();
+    const host = await startHostWorkflowBus('exec-entry-gate');
 
     try {
       const gateEvents: Array<{ executionId: string; nodeId: string; prompt: string | undefined }> = [];
@@ -222,6 +274,7 @@ describe('runWorkflowInWorker integration', () => {
 
       try {
         const result = await runWorkflowInWorker({
+          kind: 'unbound',
           config: makeGateConfig(host.busUrl),
           manifest: { contributionRefs: [] },
           contributionEntrypoints: [],
@@ -248,7 +301,7 @@ describe('runWorkflowInWorker integration', () => {
   });
 
   it('terminates a running gate step when a cancel event reaches the worker over WebSocket', async () => {
-    const host = await startHostWorkflowBus();
+    const host = await startHostWorkflowBus('exec-entry-gate');
 
     try {
       let gateOpened!: () => void;
@@ -264,6 +317,7 @@ describe('runWorkflowInWorker integration', () => {
 
       try {
         const runPromise = runWorkflowInWorker({
+          kind: 'unbound',
           config: makeGateConfig(host.busUrl),
           manifest: { contributionRefs: [] },
           contributionEntrypoints: [],
@@ -287,6 +341,43 @@ describe('runWorkflowInWorker integration', () => {
         offGate();
       }
     } finally {
+      await host.close();
+    }
+  });
+
+  it('registers its runtime and admits the run before it executes anything', async () => {
+    const executionId = 'exec-entry-attempt';
+    const host = await startHostWorkflowBus(executionId);
+    const { executionAttemptId } = host.attempt;
+    // The provisioning provider mints this identity in production; here the
+    // test stands in for it, because the worker entry is driven directly.
+    const identity = mintWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+
+    try {
+      const result = await runWorkflowInWorker({
+        kind: 'attempt-bound',
+        executionAttemptId,
+        config: {
+          ...makeDefinitionConfig(host.busUrl),
+          executionId,
+          cancelSubject: `workflow.${executionId}.cancel`,
+          busAuth: { kind: 'hmac', secret: identity.secret },
+          terminalAuthority: 'authority',
+        },
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
+      });
+
+      // The Authority published readiness for this runtime, which it only does
+      // after its bounded probe reached the worker's delivery endpoint.
+      expect(host.attempt.runtimeReadyEvents).toMatchObject([{ executionAttemptId }]);
+      // The whole legacy run passed the start gate as one admitted operation.
+      expect(host.attempt.operationAdmittedEvents).toMatchObject([
+        { executionAttemptId, operationKind: 'workflow-run' },
+      ]);
+      expect(result).toMatchObject({ executionId, status: 'completed' });
+    } finally {
+      identity.cleanup();
       await host.close();
     }
   });

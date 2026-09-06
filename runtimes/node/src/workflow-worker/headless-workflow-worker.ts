@@ -1,10 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { createBusInstance, waitForSubscriptionPropagation, type IMakaioBus } from '@makaio/bus-core';
 import { resolveMakaioHome } from '../makaio-config.js';
 import {
   createWorkflowCancelSubject,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
-  WorkerSubjects,
   WorkflowSubjects,
   type OutcomeAckDecision,
   type WorkerBootstrapClaimResponse,
@@ -13,7 +13,6 @@ import {
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import type { KernelMakaioExtension } from '@makaio/kernel';
-import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import type { Toolset } from '@makaio/tools-core';
 import type { PrepareAdapterRuntimeInput } from '../compose-adapter-runtime.js';
 import {
@@ -22,6 +21,11 @@ import {
   type IsolatedWorkflowRuntimeContext,
 } from './isolated-workflow-runtime.js';
 import { submitOutcomeWithAck, type OutcomeSubmitRetryConfig } from './outcome-submission.js';
+import {
+  installOperationDeliveryEndpoint,
+  registerAndAdmitWorkflowRun,
+  type OperationDeliveryEndpoint,
+} from './runtime-registration-client.js';
 
 // ─────────────────────────────────────────────────────────────
 // Dependency types
@@ -410,6 +414,8 @@ async function executeAndDeliver(
  * @param runContext - Persisted portable run context.
  * @param signal - Cancellation signal from the process/caller.
  * @param machineId - Stable worker machine identity.
+ * @param incarnation - This runtime's identity and accepted generation, for the runtime-bus endpoint.
+ * @param releasePreDeliveryEndpoint - Removes the pre-composition delivery endpoint; idempotent.
  * @returns Terminal result and durable ACK decision.
  */
 async function runWorkflowLifecycle(
@@ -419,12 +425,15 @@ async function runWorkflowLifecycle(
   runContext: WorkflowRunContext,
   signal: AbortSignal,
   machineId: string,
+  incarnation: { readonly runtimeIncarnationId: string; readonly runtimeGeneration: number },
+  releasePreDeliveryEndpoint: () => void,
 ): Promise<HeadlessWorkflowWorkerResult> {
   const preCancellation = await subscribeToWorkflowCancellation(preBus, runContext.cancelSubject);
   const earlyEffectiveSignal = AbortSignal.any([signal, preCancellation.signal]);
   let lifecycleSignal = earlyEffectiveSignal;
   let runtime: IsolatedWorkflowRuntime | undefined;
   let runtimeCancellation: WorkflowCancellationSubscription | undefined;
+  let runtimeDeliveryEndpoint: OperationDeliveryEndpoint | undefined;
   let materializedCleanup: (() => Promise<void>) | undefined;
 
   try {
@@ -450,19 +459,21 @@ async function runWorkflowLifecycle(
       runContext.cancelSubject,
       preCancellation.signal,
     );
+    // The delivery endpoint moves with the cancel subscription: it is reachable
+    // on the runtime bus before the pre-composition socket goes away, so the
+    // attempt never stops answering `execution-attempt.operation.deliver`.
+    runtimeDeliveryEndpoint = await installOperationDeliveryEndpoint(
+      runtime.bus,
+      { executionAttemptId: deps.executionAttemptId, ...incarnation },
+      {},
+    );
     preCancellation.cleanup();
+    releasePreDeliveryEndpoint();
     preBus.disconnect();
 
     const effectiveSignal = AbortSignal.any([signal, runtimeCancellation.signal]);
     lifecycleSignal = effectiveSignal;
     effectiveSignal.throwIfAborted();
-    const { adapters } = await runtime.bus.request(AdapterSubsystemSubjects.listAdapters, {});
-    effectiveSignal.throwIfAborted();
-    await runtime.bus.emit(WorkerSubjects.control['attempt-ready'], {
-      executionAttemptId: deps.executionAttemptId,
-      executionId: deps.executionId,
-      adapters: adapters.map((adapter) => adapter.name),
-    });
     return await executeAndDeliver(deps, runtime, runContext, runtimeContext, effectiveSignal);
   } catch (phaseError) {
     const isCooperativeCancellation =
@@ -474,6 +485,7 @@ async function runWorkflowLifecycle(
   } finally {
     preCancellation.cleanup();
     runtimeCancellation?.cleanup();
+    runtimeDeliveryEndpoint?.cleanup();
     if (runtime !== undefined) {
       await runtime.shutdown().catch(() => undefined);
     }
@@ -486,12 +498,18 @@ async function runWorkflowLifecycle(
 /**
  * Run a single workflow execution through the portable headless worker harness.
  *
- * Kernel readiness is emitted by `createIsolatedWorkflowRuntime` internally;
- * attempt-ready follows after the runtime cancellation handoff completes.
+ * The runtime proves itself to the Authority before it asks for work: the
+ * delivery endpoint is installed first, `execution-attempt.runtime.register`
+ * returns only after the Authority made readiness durable, and the whole legacy
+ * run then passes the attempt's start gate as one admitted `workflow-run`
+ * operation. Kernel readiness is emitted later, by
+ * `createIsolatedWorkflowRuntime` during composition.
  * @param deps - Injected provider and product dependencies.
  * @param signal - Cancellation signal from the process/caller.
  * @returns Terminal result and durable ACK decision.
  * @throws {@link OutcomeDeliveryError} When the Authority rejects the outcome.
+ * @throws {@link RuntimeRegistrationRefusedError} When the Authority refuses this runtime.
+ * @throws {@link OperationAdmissionRefusedError} When the Authority refuses the run.
  * @throws When bootstrap, connection, materialization, or runtime composition fails.
  */
 export async function runHeadlessWorkflowWorker(
@@ -499,13 +517,36 @@ export async function runHeadlessWorkflowWorker(
   signal: AbortSignal,
 ): Promise<HeadlessWorkflowWorkerResult> {
   signal.throwIfAborted();
+  // One incarnation per invocation: it identifies this concrete runtime process
+  // to the Authority and keys both the registration and the run's admission.
+  const runtimeIncarnationId = randomUUID();
   const credentials = await deps.bootstrap(signal);
   signal.throwIfAborted();
 
   const preBus = createBusInstance();
   preBus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
+  let preDeliveryEndpoint: OperationDeliveryEndpoint | undefined;
+  const releasePreDeliveryEndpoint = (): void => {
+    const endpoint = preDeliveryEndpoint;
+    preDeliveryEndpoint = undefined;
+    endpoint?.cleanup();
+  };
   try {
     await deps.connectBus(preBus, credentials, signal);
+    // Before registration, not after: the Authority delivers its bounded probe
+    // inside the register request, and an unsubscribed runtime fails its own
+    // registration with `probe-failed`.
+    preDeliveryEndpoint = await installOperationDeliveryEndpoint(
+      preBus,
+      { executionAttemptId: deps.executionAttemptId, runtimeIncarnationId },
+      {},
+    );
+    const { runtimeGeneration } = await registerAndAdmitWorkflowRun(preBus, {
+      executionAttemptId: deps.executionAttemptId,
+      runtimeIncarnationId,
+      endpoint: preDeliveryEndpoint,
+      signal,
+    });
     const runContext = await preBus.request(
       WorkflowSubjects.getRunContext,
       { executionId: deps.executionId },
@@ -518,8 +559,11 @@ export async function runHeadlessWorkflowWorker(
       runContext,
       signal,
       `headless-worker-${deps.executionAttemptId}`,
+      { runtimeIncarnationId, runtimeGeneration },
+      releasePreDeliveryEndpoint,
     );
   } finally {
+    releasePreDeliveryEndpoint();
     try {
       preBus.disconnect();
     } catch {

@@ -11,6 +11,7 @@ import {
 } from '../execution-attempt-repository.js';
 import type { ProviderOperationClaim } from '../provider-operation.js';
 import {
+  INITIAL_ATTEMPT_CONTROL_STATE,
   TEST_OWNER_ID,
   TEST_PROVIDER_ID,
   TEST_PROVISIONER_INCARNATION_ID,
@@ -121,6 +122,7 @@ function createMinimalRepository(): ExecutionAttemptRepository<WorkflowRunResult
     canonicalizeOutcome: (outcome) => durableOutcome(workflowRunResultOutcomeCodec, outcome),
     decodeOutcome: (text) => decodeDurableOutcome(workflowRunResultOutcomeCodec, text),
     createAttempt: async (input) => ({
+      ...INITIAL_ATTEMPT_CONTROL_STATE,
       executionAttemptId: input.executionAttemptId,
       executionId: input.executionId,
       status: 'pending' as const,
@@ -144,6 +146,11 @@ function createMinimalRepository(): ExecutionAttemptRepository<WorkflowRunResult
     getActiveAttempt: async () => null,
     commitOutcome: async () => ({ kind: 'fenced' as const }),
     abandonPendingAttempt: async () => ({ kind: 'fenced' as const }),
+    registerRuntime: async () => ({ kind: 'not-found' as const }),
+    admitOperation: async () => ({ kind: 'not-found' as const }),
+    completeOperation: async () => ({ kind: 'not-found' as const }),
+    markRuntimeReady: async () => ({ kind: 'not-found' as const }),
+    getAttemptControlState: async () => null,
   };
 }
 

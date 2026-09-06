@@ -21,6 +21,7 @@ import type { ProviderAllocationRef, WorkerAllocationLifetime } from '@makaio/co
 import { ProviderAllocationRefSchema, WorkerAllocationLifetimeSchema } from '@makaio/contracts';
 import type {
   AllocationRefEvolution,
+  AttemptControlState,
   ExecutionAttemptRecord,
   RecoverableAttemptRecord,
 } from '../execution-attempt-repository.js';
@@ -198,6 +199,57 @@ export function requireAllocationRefProvider(
       `'${allocationRef.providerId}' but the attempt is bound to ` +
       `'${attempt.providerId ?? 'no provider'}'`,
   );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Runtime and operation control state
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * The control state a freshly created attempt holds.
+ *
+ * Stated once so both realizations open an attempt in the same place: no
+ * runtime, no readiness, nothing running, and a start gate that is open. A
+ * durable realization spells the same values as column defaults; that they
+ * agree is what makes a record built in memory and a row read back from
+ * storage the same attempt.
+ */
+export const INITIAL_ATTEMPT_CONTROL_STATE: AttemptControlState = {
+  runtimeGeneration: 0,
+  runtimeIncarnationId: null,
+  runtimeReadyAt: null,
+  operationStartGate: 'open',
+  activeOperationId: null,
+  activeOperationKind: null,
+  activeOperationKey: null,
+  activeOperationGeneration: null,
+  activeOperationAdmittedAt: null,
+  lastCompletedOperationId: null,
+};
+
+/**
+ * Project an attempt record onto its control state alone.
+ *
+ * The record carries all ten members as required, so this resolves nothing —
+ * it narrows. What it is for is the port's `getAttemptControlState`, which owes
+ * a caller the control facts and not the rest of the attempt, and the decision
+ * sites that read control state rather than reaching into a record for it.
+ * @param record - Attempt record whose control state to read.
+ * @returns The ten control facts the record holds.
+ */
+export function toAttemptControlState(record: ExecutionAttemptRecord): AttemptControlState {
+  return {
+    runtimeGeneration: record.runtimeGeneration,
+    runtimeIncarnationId: record.runtimeIncarnationId,
+    runtimeReadyAt: record.runtimeReadyAt,
+    operationStartGate: record.operationStartGate,
+    activeOperationId: record.activeOperationId,
+    activeOperationKind: record.activeOperationKind,
+    activeOperationKey: record.activeOperationKey,
+    activeOperationGeneration: record.activeOperationGeneration,
+    activeOperationAdmittedAt: record.activeOperationAdmittedAt,
+    lastCompletedOperationId: record.lastCompletedOperationId,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────

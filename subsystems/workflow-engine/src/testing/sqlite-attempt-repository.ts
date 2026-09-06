@@ -13,6 +13,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import type { ProviderAllocationRef } from '@makaio/contracts';
 import {
   BoundedRecoveryEvidenceSchema,
+  ExecutionAttemptOperationKindSchema,
   ProviderAllocationRefSchema,
   WorkerAllocationLifetimeSchema,
   type BoundedRecoveryEvidence,
@@ -27,6 +28,7 @@ import {
   type RawSqlSession,
 } from '@makaio/storage-drizzle';
 import {
+  ATTEMPT_OPERATION_START_GATES,
   DuplicateExecutionAttemptError,
   EXECUTION_ATTEMPT_SETTLEMENT_KINDS,
   EXECUTION_ATTEMPT_STATUSES,
@@ -36,11 +38,14 @@ import {
   sameDurableOutcome,
 } from '../execution-attempt-repository.js';
 import type {
+  AdmitOperationInput,
   AllocationRecordingDecision,
   AllocationRefEvolution,
   AllocationRefEvolutionDecision,
   AllocationTerminationDecision,
+  AttemptControlState,
   BeginProvisioningInput,
+  CompleteOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptCreate,
@@ -52,6 +57,9 @@ import type {
   ExecutionAttemptSettlementKind,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  MarkRuntimeReadyInput,
+  OperationAdmissionDecision,
+  OperationCompletionDecision,
   OutcomeCodec,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
@@ -64,7 +72,10 @@ import type {
   RecordProvisionerIncarnationLostInput,
   RecordProvisioningAbsentInput,
   RecoverableAttemptRecord,
+  RegisterRuntimeInput,
   RenewProviderOperationClaimInput,
+  RuntimeReadinessDecision,
+  RuntimeRegistrationDecision,
   TakeOverProviderOperationInput,
 } from '../execution-attempt-repository.js';
 import { PROVIDER_OPERATION_OBLIGATIONS } from '../provider-operation.js';
@@ -75,6 +86,7 @@ import type {
   ProviderOperationOwnershipRecord,
 } from '../provider-operation.js';
 import {
+  INITIAL_ATTEMPT_CONTROL_STATE,
   instantOf,
   normalizeInstant,
   parseAllocationLifetime,
@@ -109,7 +121,17 @@ const SCHEMA_STATEMENTS = [
      workflow_result TEXT,
      claimable INTEGER NOT NULL DEFAULT 0,
      claim_expires_at TEXT,
-     created_at TEXT NOT NULL
+     created_at TEXT NOT NULL,
+     runtime_generation INTEGER NOT NULL DEFAULT 0,
+     runtime_incarnation_id TEXT,
+     runtime_ready_at TEXT,
+     operation_start_gate TEXT NOT NULL DEFAULT 'open',
+     active_operation_id TEXT,
+     active_operation_kind TEXT,
+     active_operation_key TEXT,
+     active_operation_generation INTEGER,
+     active_operation_admitted_at TEXT,
+     last_completed_operation_id TEXT
    )`,
   `CREATE TABLE IF NOT EXISTS test_active_execution_attempt (
      execution_id TEXT PRIMARY KEY,
@@ -147,6 +169,16 @@ interface AttemptRow extends Record<string, unknown> {
   readonly claimable: number;
   readonly claim_expires_at: string | null;
   readonly created_at: string;
+  readonly runtime_generation: number;
+  readonly runtime_incarnation_id: string | null;
+  readonly runtime_ready_at: string | null;
+  readonly operation_start_gate: string;
+  readonly active_operation_id: string | null;
+  readonly active_operation_kind: string | null;
+  readonly active_operation_key: string | null;
+  readonly active_operation_generation: number | null;
+  readonly active_operation_admitted_at: string | null;
+  readonly last_completed_operation_id: string | null;
 }
 
 /** One row of `test_provider_operation`, exactly as SQLite returns it. */
@@ -200,12 +232,41 @@ function parseJsonColumn<TValue>(json: string | null, parse: (value: unknown) =>
 }
 
 /**
+ * Map an attempt row onto the port's runtime and operation control state.
+ *
+ * The ten columns are decoded together because every decision that reads one
+ * of them reads several: a realization that narrowed them one call site at a
+ * time would be free to disagree with itself about what an unset column means.
+ * @param row - Row read from `test_execution_attempt`.
+ * @returns The ten control facts the port defines.
+ */
+function toControlState(row: AttemptRow): AttemptControlState {
+  return {
+    runtimeGeneration: row.runtime_generation,
+    runtimeIncarnationId: row.runtime_incarnation_id,
+    runtimeReadyAt: row.runtime_ready_at,
+    operationStartGate: parseMember(ATTEMPT_OPERATION_START_GATES, row.operation_start_gate, 'operation_start_gate'),
+    activeOperationId: row.active_operation_id,
+    // Narrowed through the contract's own vocabulary rather than a literal of
+    // this module's: the kind crosses the wire, so a stored value outside it is
+    // corruption in exactly the sense `parseMember` means.
+    activeOperationKind:
+      row.active_operation_kind === null ? null : ExecutionAttemptOperationKindSchema.parse(row.active_operation_kind),
+    activeOperationKey: row.active_operation_key,
+    activeOperationGeneration: row.active_operation_generation,
+    activeOperationAdmittedAt: row.active_operation_admitted_at,
+    lastCompletedOperationId: row.last_completed_operation_id,
+  };
+}
+
+/**
  * Map an attempt row onto the port's attempt record.
  * @param row - Row read from `test_execution_attempt`.
  * @returns The JSON-safe attempt record the port defines.
  */
 function toAttemptRecord(row: AttemptRow): ExecutionAttemptRecord {
   return {
+    ...toControlState(row),
     executionAttemptId: row.execution_attempt_id,
     executionId: row.execution_id,
     status: parseMember(EXECUTION_ATTEMPT_STATUSES, row.status, 'status'),
@@ -647,6 +708,21 @@ export async function createSqliteAttemptRepository<TOutcome>(
     )[0];
 
   /**
+   * Whether the attempt's allocation is durably confirmed to have ended.
+   *
+   * Termination is recorded on the operation row before the attempt settles,
+   * so between those two writes the attempt still carries its allocation
+   * reference while nothing can run on it anymore. Registration and admission
+   * read the obligation for that reason, and their writes repeat it through
+   * `operationOwesTerminalConvergence`.
+   * @param session - Session inside the current transaction.
+   * @param executionAttemptId - Attempt whose operation to inspect.
+   * @returns True when the allocation's termination was recorded.
+   */
+  const allocationTerminated = async (session: RawSqlSession, executionAttemptId: string): Promise<boolean> =>
+    (await readOperationRow(session, executionAttemptId))?.obligation === 'terminal-convergence';
+
+  /**
    * Read which attempt is currently active for an execution.
    * @param session - Session inside the current transaction.
    * @param executionId - Execution whose pointer to read.
@@ -749,8 +825,12 @@ export async function createSqliteAttemptRepository<TOutcome>(
     lastFailure?: BoundedRecoveryEvidence,
   ): Promise<{ rowsAffected: number }> => {
     const settled = await session.run(
+      // The start gate closes with the settlement. The active operation is
+      // deliberately left in place, so a completion arriving after this reads
+      // `resolved` rather than `not-active`.
       sql`UPDATE test_execution_attempt
-          SET status = ${'settled'}, settlement_kind = ${settlementKind}, claimable = ${0}
+          SET status = ${'settled'}, settlement_kind = ${settlementKind}, claimable = ${0},
+              operation_start_gate = ${'closed'}
           WHERE execution_attempt_id = ${executionAttemptId}
             AND settlement_kind IS NULL
             AND ${guard}`,
@@ -942,6 +1022,19 @@ export async function createSqliteAttemptRepository<TOutcome>(
               )
                 AND status = ${'allocated'}`,
         );
+        // The superseded attempt's gate closes in this same transaction. One
+        // that stayed open could admit an operation between the pointer move
+        // and any later cleanup, which is work begun on an attempt nobody
+        // addresses any more.
+        await session.run(
+          sql`UPDATE test_execution_attempt
+              SET operation_start_gate = ${'closed'}
+              WHERE execution_attempt_id = (
+                SELECT execution_attempt_id
+                FROM test_active_execution_attempt
+                WHERE execution_id = ${input.executionId}
+              )`,
+        );
         await session.run(
           sql`INSERT INTO test_active_execution_attempt (execution_id, execution_attempt_id)
               VALUES (${input.executionId}, ${input.executionAttemptId})
@@ -949,6 +1042,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
               DO UPDATE SET execution_attempt_id = excluded.execution_attempt_id`,
         );
         return {
+          ...INITIAL_ATTEMPT_CONTROL_STATE,
           executionAttemptId: input.executionAttemptId,
           executionId: input.executionId,
           status: 'pending',
@@ -1272,6 +1366,244 @@ export async function createSqliteAttemptRepository<TOutcome>(
       );
     },
 
+    async registerRuntime(input: RegisterRuntimeInput): Promise<RuntimeRegistrationDecision> {
+      return transact(async (session) => {
+        // The generation the write allocates is one past the one it pins in its
+        // own predicate, so it exists only once the read has run. It is read
+        // back below solely on the branch where that write applied.
+        let allocatedGeneration = 0;
+        const decision = await decideByWrite<RuntimeRegistrationDecision | { readonly kind: 'applied' }>(
+          async () => {
+            const attemptRow = await readAttemptRow(session, input.executionAttemptId);
+            if (attemptRow === undefined || attemptRow.execution_id !== input.executionId) return { kind: 'not-found' };
+            if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
+            const activeAttemptId = await readActiveAttemptId(session, input.executionId);
+            if (activeAttemptId !== input.executionAttemptId) return { kind: 'fenced' };
+            if (attemptRow.allocation_ref === null || (await allocationTerminated(session, input.executionAttemptId))) {
+              return { kind: 'not-allocated' };
+            }
+            const control = toControlState(attemptRow);
+            // The replay answer precedes the busy refusal on purpose: the
+            // operation in the way is frequently the very probe this
+            // registration started, and a runtime retrying its report must not
+            // be told to wait for itself.
+            if (control.runtimeIncarnationId === input.runtimeIncarnationId) {
+              return {
+                kind: 'duplicate',
+                runtimeGeneration: control.runtimeGeneration,
+                runtimeReadyAt: control.runtimeReadyAt,
+              };
+            }
+            // A workload operation in the way is refused; a probe in the way
+            // is reclaimed. The probe is the authority's own proof of an
+            // endpoint, so one left active belongs to a handshake that died
+            // before completing it, and it must not block the incarnation that
+            // replaces the dead one.
+            if (control.activeOperationId !== null && control.activeOperationKind !== 'runtime-probe') {
+              return { kind: 'operation-active', operationId: control.activeOperationId };
+            }
+
+            allocatedGeneration = control.runtimeGeneration + 1;
+            // The monotonic-counter compare-and-set: pinning the generation the
+            // read saw is what makes two racing registrations advance it once.
+            // Readiness is cleared with it — it belonged to the incarnation
+            // this one replaces — and so is an orphaned probe, all four
+            // members in the one statement. The predicate admits only an idle
+            // slot or a probe, never a workload operation.
+            return () =>
+              session.run(
+                sql`UPDATE test_execution_attempt
+                    SET runtime_generation = ${allocatedGeneration},
+                        runtime_incarnation_id = ${input.runtimeIncarnationId},
+                        runtime_ready_at = NULL,
+                        active_operation_id = NULL,
+                        active_operation_kind = NULL,
+                        active_operation_key = NULL,
+                        active_operation_generation = NULL,
+                        active_operation_admitted_at = NULL
+                    WHERE execution_attempt_id = ${input.executionAttemptId}
+                      AND execution_id = ${input.executionId}
+                      AND runtime_generation = ${control.runtimeGeneration}
+                      AND settlement_kind IS NULL
+                      AND (active_operation_id IS NULL OR active_operation_kind = ${'runtime-probe'})
+                      AND allocation_ref IS NOT NULL
+                      AND NOT ${operationOwesTerminalConvergence(input.executionAttemptId)}
+                      AND ${isActiveAttemptRow()}`,
+              );
+          },
+          { kind: 'applied' },
+        );
+        return decision.kind === 'applied' ? { kind: 'registered', runtimeGeneration: allocatedGeneration } : decision;
+      });
+    },
+
+    async admitOperation(input: AdmitOperationInput): Promise<OperationAdmissionDecision> {
+      // Minted before the decision, so a contended re-read can never hand a
+      // second caller a different identifier for the same admission. The
+      // instant is minted with it, because it is stored with the operation and
+      // reported unchanged to every replay.
+      const operationId = crypto.randomUUID();
+      const admittedAt = normalizeInstant(new Date().toISOString());
+      // The bounded probe is the one kind admitted while readiness is unproven:
+      // it is what proves it, so requiring readiness of it would make readiness
+      // unreachable.
+      const requiresReadiness = input.operationKind !== 'runtime-probe';
+      const readinessGuard: SQL = requiresReadiness ? sql`runtime_ready_at IS NOT NULL` : sql`1 = 1`;
+      return transact((session) =>
+        decideByWrite<OperationAdmissionDecision>(
+          async () => {
+            const attemptRow = await readAttemptRow(session, input.executionAttemptId);
+            if (attemptRow === undefined || attemptRow.execution_id !== input.executionId) return { kind: 'not-found' };
+            if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
+            const activeAttemptId = await readActiveAttemptId(session, input.executionId);
+            if (activeAttemptId !== input.executionAttemptId) return { kind: 'fenced' };
+            if (attemptRow.allocation_ref === null || (await allocationTerminated(session, input.executionAttemptId))) {
+              return { kind: 'not-allocated' };
+            }
+            const control = toControlState(attemptRow);
+            if (control.activeOperationId !== null) {
+              // One occupied slot, two readings of it: the caller's own
+              // admission retried, or somebody else's operation in the way.
+              return control.activeOperationKey === input.admissionKey
+                ? {
+                    kind: 'duplicate',
+                    operationId: control.activeOperationId,
+                    runtimeGeneration: control.activeOperationGeneration ?? control.runtimeGeneration,
+                    admittedAt: control.activeOperationAdmittedAt ?? admittedAt,
+                  }
+                : { kind: 'operation-active', operationId: control.activeOperationId };
+            }
+            if (control.operationStartGate === 'closed') return { kind: 'gate-closed' };
+            if (requiresReadiness && control.runtimeReadyAt === null) return { kind: 'not-ready' };
+            if (control.runtimeGeneration !== input.runtimeGeneration) {
+              return { kind: 'stale-generation', runtimeGeneration: control.runtimeGeneration };
+            }
+
+            // The null-guard compare-and-set: `active_operation_id IS NULL` in
+            // the predicate is what admits exactly one of two racing callers,
+            // whatever either of them read.
+            return () =>
+              session.run(
+                sql`UPDATE test_execution_attempt
+                    SET active_operation_id = ${operationId},
+                        active_operation_kind = ${input.operationKind},
+                        active_operation_key = ${input.admissionKey},
+                        active_operation_generation = ${input.runtimeGeneration},
+                        active_operation_admitted_at = ${admittedAt}
+                    WHERE execution_attempt_id = ${input.executionAttemptId}
+                      AND execution_id = ${input.executionId}
+                      AND active_operation_id IS NULL
+                      AND operation_start_gate = ${'open'}
+                      AND runtime_generation = ${input.runtimeGeneration}
+                      AND settlement_kind IS NULL
+                      AND allocation_ref IS NOT NULL
+                      AND NOT ${operationOwesTerminalConvergence(input.executionAttemptId)}
+                      AND ${readinessGuard}
+                      AND ${isActiveAttemptRow()}`,
+              );
+          },
+          { kind: 'admitted', operationId, runtimeGeneration: input.runtimeGeneration, admittedAt },
+        ),
+      );
+    },
+
+    async completeOperation(input: CompleteOperationInput): Promise<OperationCompletionDecision> {
+      return transact((session) =>
+        decideByWrite<OperationCompletionDecision>(
+          async () => {
+            const attemptRow = await readAttemptRow(session, input.executionAttemptId);
+            if (attemptRow === undefined) return { kind: 'not-found' };
+            // A terminal settlement leaves the active operation in place, so a
+            // late completion learns that the attempt resolved rather than that
+            // its operation was never active.
+            if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
+            const control = toControlState(attemptRow);
+            // The replay is answered from the last completion, because by then
+            // the active operation this call names is gone.
+            if (control.lastCompletedOperationId === input.operationId) return { kind: 'duplicate' };
+            if (control.activeOperationId === null) return { kind: 'not-active' };
+            if (control.activeOperationId !== input.operationId) {
+              return { kind: 'mismatch', activeOperationId: control.activeOperationId };
+            }
+            if (control.activeOperationGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+
+            // One statement clears all four members: a half-released operation
+            // would be neither active nor absent.
+            return () =>
+              session.run(
+                sql`UPDATE test_execution_attempt
+                    SET active_operation_id = NULL,
+                        active_operation_kind = NULL,
+                        active_operation_key = NULL,
+                        active_operation_generation = NULL,
+                        active_operation_admitted_at = NULL,
+                        last_completed_operation_id = ${input.operationId}
+                    WHERE execution_attempt_id = ${input.executionAttemptId}
+                      AND settlement_kind IS NULL
+                      AND active_operation_id = ${input.operationId}
+                      AND active_operation_generation = ${input.runtimeGeneration}`,
+              );
+          },
+          { kind: 'completed' },
+        ),
+      );
+    },
+
+    async markRuntimeReady(input: MarkRuntimeReadyInput): Promise<RuntimeReadinessDecision> {
+      const acceptedAt = normalizeInstant(input.readyAt);
+      return transact((session) =>
+        decideByWrite<RuntimeReadinessDecision>(
+          async () => {
+            const attemptRow = await readAttemptRow(session, input.executionAttemptId);
+            if (attemptRow === undefined || attemptRow.execution_id !== input.executionId) return { kind: 'not-found' };
+            if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
+            // A superseded attempt keeps its generation, so the generation fence
+            // below cannot see that the endpoint it proved is no longer current.
+            const activeAttemptId = await readActiveAttemptId(session, input.executionId);
+            if (activeAttemptId !== input.executionAttemptId) return { kind: 'fenced' };
+            // A probe can complete on an allocation whose termination became
+            // durable while it was in flight; readiness recorded then would
+            // announce a dead endpoint, so the guard registration and admission
+            // apply holds here, in the read and in the write.
+            if (attemptRow.allocation_ref === null || (await allocationTerminated(session, input.executionAttemptId))) {
+              return { kind: 'not-allocated' };
+            }
+            const control = toControlState(attemptRow);
+            // Readiness is stored per generation and cleared whenever one is
+            // allocated, so a stored instant always belongs to the current
+            // incarnation and a stale fence can never replay onto it.
+            if (control.runtimeGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+            if (control.runtimeReadyAt !== null) return { kind: 'duplicate', acceptedAt: control.runtimeReadyAt };
+            if (control.activeOperationId !== null) {
+              return { kind: 'operation-active', operationId: control.activeOperationId };
+            }
+
+            return () =>
+              session.run(
+                sql`UPDATE test_execution_attempt SET runtime_ready_at = ${acceptedAt}
+                    WHERE execution_attempt_id = ${input.executionAttemptId}
+                      AND execution_id = ${input.executionId}
+                      AND settlement_kind IS NULL
+                      AND runtime_generation = ${input.runtimeGeneration}
+                      AND runtime_ready_at IS NULL
+                      AND active_operation_id IS NULL
+                      AND allocation_ref IS NOT NULL
+                      AND NOT ${operationOwesTerminalConvergence(input.executionAttemptId)}
+                      AND ${isActiveAttemptRow()}`,
+              );
+          },
+          { kind: 'ready', acceptedAt },
+        ),
+      );
+    },
+
+    async getAttemptControlState(executionAttemptId: string): Promise<AttemptControlState | null> {
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, executionAttemptId);
+        return row === undefined ? null : toControlState(row);
+      });
+    },
+
     async getActiveAttempt(executionId: string, executionAttemptId: string): Promise<ExecutionAttemptRecord | null> {
       return transact(async (session) => {
         // Settled is not superseded: a settled attempt is still the active
@@ -1390,8 +1722,12 @@ export async function createSqliteAttemptRepository<TOutcome>(
             }
             return () =>
               session.run(
+                // The start gate closes with the settlement, as it does for
+                // every other terminal transition: a settled attempt never
+                // starts work again.
                 sql`UPDATE test_execution_attempt
-                  SET status = ${'settled'}, settlement_kind = ${'abandoned'}, claimable = ${0}
+                  SET status = ${'settled'}, settlement_kind = ${'abandoned'}, claimable = ${0},
+                      operation_start_gate = ${'closed'}
                   WHERE execution_attempt_id = ${executionAttemptId}
                     AND execution_id = ${executionId}
                     AND status = ${'pending'}

@@ -1,4 +1,9 @@
-import type { BoundedRecoveryEvidence, ProviderAllocationRef, WorkerAllocationLifetime } from '@makaio/contracts';
+import type {
+  BoundedRecoveryEvidence,
+  ExecutionAttemptOperationKind,
+  ProviderAllocationRef,
+  WorkerAllocationLifetime,
+} from '@makaio/contracts';
 import { canonicalStringify } from '@makaio/utils';
 import type {
   ProcessBoundProvisionerLossProof,
@@ -53,6 +58,27 @@ export const EXECUTION_ATTEMPT_SETTLEMENT_KINDS = ['outcome', 'abandoned', 'infr
  * `null` when the attempt has not yet settled.
  */
 export type ExecutionAttemptSettlementKind = (typeof EXECUTION_ATTEMPT_SETTLEMENT_KINDS)[number] | null;
+
+/**
+ * Constant array of every state the attempt's operation start gate can hold.
+ *
+ * Declared as an array for the same reason the status vocabulary is: a stored
+ * value outside it is corruption, and a realization narrows what it read
+ * against this list rather than against a literal of its own.
+ */
+export const ATTEMPT_OPERATION_START_GATES = ['open', 'closed'] as const;
+
+/**
+ * State of the single durable ordering point an attempt admits operations
+ * through.
+ *
+ * - `open`: the attempt may still admit operations, subject to every other
+ *   guard.
+ * - `closed`: the attempt will never admit another operation. Closing is
+ *   one-way and happens exactly where the attempt stops being a place work may
+ *   begin — when a newer attempt supersedes it, and when it settles.
+ */
+export type AttemptOperationStartGate = (typeof ATTEMPT_OPERATION_START_GATES)[number];
 
 // ─────────────────────────────────────────────────────────────
 // Value Equality
@@ -315,12 +341,132 @@ export class DuplicateExecutionAttemptError extends Error {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * The runtime and operation control state of one attempt.
+ *
+ * Ten facts that together decide who may act on an attempt's runtime endpoint
+ * and whether an operation may start. They live *on* the attempt rather than in
+ * a record beside it: every guard that reads them is also a guard the write has
+ * to repeat, and a single-row compare-and-set is what keeps that expressible.
+ *
+ * The three fences are independent and each answers a different question:
+ * {@link runtimeGeneration} says which runtime incarnation is current,
+ * {@link operationStartGate} says whether the attempt still starts work at all,
+ * and {@link activeOperationId} says whether it is already busy.
+ *
+ * It is also the shape {@link ExecutionAttemptRepository.getAttemptControlState}
+ * reports, so a process that lost its own memory of an attempt can read back
+ * exactly what a fresh decision would be made against.
+ */
+export interface AttemptControlState {
+  /**
+   * Monotonic fence over runtime incarnations, `0` before any registered.
+   *
+   * Allocated by {@link ExecutionAttemptRepository.registerRuntime} and never
+   * proposed by a caller: a runtime only ever echoes the generation it was
+   * given. Anything presented against an older generation is
+   * `stale-generation`.
+   */
+  readonly runtimeGeneration: number;
+  /**
+   * Runtime incarnation currently registered, or `null` before any was.
+   *
+   * The registration idempotency key. A report naming the stored incarnation
+   * is a replay and is answered `duplicate`; a different one is a new
+   * incarnation and takes the next generation.
+   */
+  readonly runtimeIncarnationId: string | null;
+  /**
+   * ISO-8601 instant at which readiness was accepted for the current
+   * generation, or `null` while it has not been.
+   *
+   * Written by {@link ExecutionAttemptRepository.markRuntimeReady} and cleared
+   * by every {@link ExecutionAttemptRepository.registerRuntime} that allocates
+   * a new generation: readiness is a property of one incarnation, so it can
+   * never outlive the incarnation that proved it.
+   */
+  readonly runtimeReadyAt: string | null;
+  /**
+   * Whether the attempt still admits operations.
+   *
+   * `open` from creation. Closed by {@link ExecutionAttemptRepository.createAttempt}
+   * on the attempt it supersedes, and by every terminal settlement on the
+   * attempt it settles. Closing is one-way.
+   */
+  readonly operationStartGate: AttemptOperationStartGate;
+  /**
+   * Operation currently occupying the attempt, or `null` when it is idle.
+   *
+   * The at-most-one guard: an attempt runs one operation at a time. Cleared by
+   * {@link ExecutionAttemptRepository.completeOperation} together with
+   * {@link activeOperationKind}, {@link activeOperationKey},
+   * {@link activeOperationGeneration}, and {@link activeOperationAdmittedAt} —
+   * one write, because a half-cleared
+   * operation would be neither active nor absent.
+   *
+   * A terminal settlement deliberately leaves it in place, so a completion that
+   * arrives after the attempt settled reads `resolved` rather than
+   * `not-active`.
+   */
+  readonly activeOperationId: string | null;
+  /**
+   * Kind of the active operation, or `null` when the attempt is idle.
+   *
+   * Kept because the bounded runtime probe and a durable owner's run are not
+   * interchangeable: the probe is admitted while readiness is still unproven
+   * and is never announced to anyone but its own runtime.
+   */
+  readonly activeOperationKind: ExecutionAttemptOperationKind | null;
+  /**
+   * Idempotency key the active operation was admitted under, or `null` when the
+   * attempt is idle.
+   *
+   * A second admission presenting this key is the same admission retried, and
+   * is answered `duplicate` with the operation identifier the first one
+   * received.
+   */
+  readonly activeOperationKey: string | null;
+  /**
+   * Runtime generation the active operation is fenced against, or `null` when
+   * the attempt is idle.
+   *
+   * A completion reported against an older generation belongs to a runtime that
+   * has since been superseded and is refused as `stale-generation`.
+   */
+  readonly activeOperationGeneration: number | null;
+  /**
+   * ISO-8601 instant at which the active operation was admitted, or `null`
+   * when the attempt is idle.
+   *
+   * Recorded so a replayed admission announces the instant the authority
+   * admitted the operation, not the instant of the replay. Cleared together
+   * with the other active-operation members.
+   */
+  readonly activeOperationAdmittedAt: string | null;
+  /**
+   * Operation identifier of the most recent completion, or `null` before any.
+   *
+   * What makes a replayed completion answerable: the active operation is gone
+   * by then, so without it the replay would be indistinguishable from a
+   * completion for an operation that never existed.
+   */
+  readonly lastCompletedOperationId: string | null;
+}
+
+/**
  * Durable record for one execution attempt.
  *
  * Produced by the injected {@link ExecutionAttemptRepository} and consumed by
  * the Authority service. All fields are JSON-safe and contain no secrets.
+ *
+ * The {@link AttemptControlState} members are part of the record because they
+ * are columns on the attempt, not a separate aggregate — and they are required,
+ * unlike {@link claimable} and {@link settlementKind}. Every attempt holds all
+ * ten from {@link ExecutionAttemptRepository.createAttempt} onwards, so a
+ * record that omits one describes an attempt that cannot exist. Requiring them
+ * is what makes that omission a type error at the place the record is built,
+ * rather than a default silently resolved at each place it is read.
  */
-export interface ExecutionAttemptRecord {
+export interface ExecutionAttemptRecord extends AttemptControlState {
   /** Authority-created attempt identifier. */
   readonly executionAttemptId: string;
   /** Owner identifier of the aggregate this attempt belongs to. */
@@ -639,6 +785,82 @@ export interface AllocationRefEvolution {
   readonly nextRef: ProviderAllocationRef;
 }
 
+/**
+ * Input for registering a runtime incarnation as an attempt's endpoint.
+ *
+ * `executionId` is the active-attempt fence, not merely an ownership check: a
+ * superseded attempt must never acquire a fresh runtime endpoint, because
+ * nothing would ever address it again.
+ *
+ * No generation is supplied. The repository allocates it, exactly as
+ * {@link ExecutionAttemptRepository.beginProvisioning} mints the first claim,
+ * so a runtime can never propose a fence for itself.
+ */
+export interface RegisterRuntimeInput {
+  /** Attempt whose runtime endpoint is being registered. */
+  readonly executionAttemptId: string;
+  /** Owner identifier the attempt must belong to, and be active for. */
+  readonly executionId: ExecutionOwnerId;
+  /** Identifier of this concrete runtime incarnation, unique per boot. */
+  readonly runtimeIncarnationId: string;
+}
+
+/**
+ * Input for admitting one operation through an attempt's start gate.
+ *
+ * `admissionKey` is the caller's idempotency key and the only thing that makes
+ * a retry answerable: the repository mints the operation identifier, so a
+ * caller that lost the reply has no other way to ask which operation it got.
+ */
+export interface AdmitOperationInput {
+  /** Attempt the operation would run under. */
+  readonly executionAttemptId: string;
+  /** Owner identifier the attempt must belong to, and be active for. */
+  readonly executionId: ExecutionOwnerId;
+  /** Kind of operation being admitted. */
+  readonly operationKind: ExecutionAttemptOperationKind;
+  /** Caller-chosen idempotency key for this admission. */
+  readonly admissionKey: string;
+  /** Runtime generation the caller fences the admission against. */
+  readonly runtimeGeneration: number;
+}
+
+/**
+ * Input for completing the operation an attempt currently runs.
+ *
+ * Carries no `executionId`: completion frees a slot the attempt already
+ * occupies, and a superseded attempt owes that release just as much as an
+ * active one does. Refusing it would strand the operation forever.
+ */
+export interface CompleteOperationInput {
+  /** Attempt whose active operation is completing. */
+  readonly executionAttemptId: string;
+  /** Operation the caller believes it is completing. */
+  readonly operationId: string;
+  /** Runtime generation the completion is fenced against. */
+  readonly runtimeGeneration: number;
+}
+
+/**
+ * Input for recording that a registered runtime proved itself ready.
+ *
+ * Carries `executionId`, unlike {@link CompleteOperationInput}: completion
+ * releases a slot the attempt already occupies, but readiness asserts that the
+ * attempt's endpoint is current, and an attempt superseded between the probe's
+ * completion and this write no longer has a current endpoint. The generation
+ * fence alone cannot see that — a superseded attempt keeps its generation.
+ */
+export interface MarkRuntimeReadyInput {
+  /** Attempt whose runtime proved ready. */
+  readonly executionAttemptId: string;
+  /** Owner identifier the attempt must belong to, and be active for. */
+  readonly executionId: ExecutionOwnerId;
+  /** Generation the readiness belongs to. */
+  readonly runtimeGeneration: number;
+  /** ISO-8601 instant at which readiness was observed. */
+  readonly readyAt: string;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Repository Decisions
 // ─────────────────────────────────────────────────────────────
@@ -865,6 +1087,183 @@ export type ExecutionAttemptOutcomeDecision<TOutcome> =
   | { readonly kind: 'fenced' };
 
 // ─────────────────────────────────────────────────────────────
+// Runtime and operation control decisions
+//
+// `registerRuntime` and `admitOperation` evaluate every refusal below in one
+// fixed order:
+//
+//   not-found -> resolved -> fenced -> not-allocated
+//     -> operation-active -> gate-closed -> not-ready -> stale-generation
+//
+// It is fixed rather than left to each realization because the answers are not
+// interchangeable: they tell a caller different things to do next, and two
+// stores reporting different ones for the same durable state would make the
+// caller's behaviour depend on which store it was configured with. The order
+// runs from statements about whether the attempt is a place work may happen at
+// all, through statements about what is happening there now, to statements
+// about the caller's own view being out of date.
+//
+// One consequence is worth naming: a settled attempt that still carries a
+// leftover active operation answers `resolved`, never `operation-active`. The
+// operation is deliberately left in place by every terminal settlement, so
+// without the fixed order a late caller would be told to wait for an operation
+// nothing will ever complete.
+//
+// The idempotent replay answers sit inside that order rather than beside it.
+// `duplicate` is decided once the attempt itself has been judged reachable —
+// after `not-allocated`, before `operation-active` — because a replay has to be
+// answerable while the very operation the first call started is still running.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Durable decision for registering a runtime incarnation as an attempt's
+ * endpoint.
+ *
+ * - `registered`: the incarnation now owns the attempt's runtime endpoint at
+ *   `runtimeGeneration`, and everything it later presents must carry that
+ *   generation. Readiness starts unproven.
+ * - `duplicate`: the attempt already holds exactly this incarnation. The
+ *   report is a replay, so the stored generation is reported unchanged
+ *   together with the readiness that generation has — `runtimeReadyAt` is
+ *   `null` when readiness was not proven yet, and an instant when it was,
+ *   which is what lets a caller tell "register again" from "already ready"
+ *   without a second read.
+ * - `not-found`: no such attempt, or it does not belong to the named owner.
+ * - `resolved`: the attempt has settled, so it will never run anything again.
+ * - `fenced`: the attempt is no longer the active attempt for its owner.
+ * - `not-allocated`: no allocation is recorded, or the recorded one is durably
+ *   confirmed terminated and only awaits its settlement, so there is no
+ *   infrastructure a runtime could be the endpoint of.
+ * - `operation-active`: a workload operation is running against the current
+ *   generation. Registering would fence it mid-flight, so the reported
+ *   operation must complete first. A `runtime-probe` left active is not in the
+ *   way: the probe is the authority's own proof of an endpoint, and one that
+ *   was never completed belongs to a handshake that died. Registration
+ *   reclaims it in the same write that allocates the new generation, so a
+ *   crashed handshake cannot block the attempt's next incarnation.
+ */
+export type RuntimeRegistrationDecision =
+  | { readonly kind: 'registered'; readonly runtimeGeneration: number }
+  | { readonly kind: 'duplicate'; readonly runtimeGeneration: number; readonly runtimeReadyAt: string | null }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'resolved' }
+  | { readonly kind: 'fenced' }
+  | { readonly kind: 'not-allocated' }
+  | { readonly kind: 'operation-active'; readonly operationId: string };
+
+/**
+ * Durable decision for admitting one operation through an attempt's start gate.
+ *
+ * - `admitted`: the operation now occupies the attempt, under the reported
+ *   identifier and fenced against the reported generation.
+ * - `duplicate`: an operation admitted under the same `admissionKey` is already
+ *   the active one. The retry receives that operation's identifier and the
+ *   generation it was admitted under rather than a second admission.
+ * - `not-found`: no such attempt, or it does not belong to the named owner.
+ * - `resolved`: the attempt has settled.
+ * - `fenced`: the attempt is no longer the active attempt for its owner.
+ * - `not-allocated`: no allocation is recorded, or the recorded one is durably
+ *   confirmed terminated and only awaits its settlement, so there is nothing
+ *   to run on.
+ * - `operation-active`: a different operation already occupies the attempt.
+ * - `gate-closed`: the attempt was superseded or settled, so it will never
+ *   admit another operation. Distinct from `fenced` and `resolved` because the
+ *   gate is the durable fact, and the two of them are how it came to be closed.
+ * - `not-ready`: readiness has not been proven for the current generation.
+ *   Every kind but `runtime-probe` waits for it — the probe is precisely what
+ *   proves readiness, so it cannot require it.
+ * - `stale-generation`: the caller fenced against a generation the attempt has
+ *   moved past. The current generation is reported so the caller can re-fence
+ *   rather than re-read.
+ */
+export type OperationAdmissionDecision =
+  | {
+      readonly kind: 'admitted';
+      readonly operationId: string;
+      readonly runtimeGeneration: number;
+      /** ISO-8601 instant the admission was recorded at. */
+      readonly admittedAt: string;
+    }
+  | {
+      readonly kind: 'duplicate';
+      readonly operationId: string;
+      readonly runtimeGeneration: number;
+      /** ISO-8601 instant the first pass recorded the admission at. */
+      readonly admittedAt: string;
+    }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'resolved' }
+  | { readonly kind: 'fenced' }
+  | { readonly kind: 'not-allocated' }
+  | { readonly kind: 'operation-active'; readonly operationId: string }
+  | { readonly kind: 'gate-closed' }
+  | { readonly kind: 'not-ready' }
+  | { readonly kind: 'stale-generation'; readonly runtimeGeneration: number };
+
+/**
+ * Durable decision for completing the operation an attempt currently runs.
+ *
+ * - `completed`: the operation was the active one and the attempt is idle
+ *   again.
+ * - `duplicate`: this operation was already completed. A replay, answered from
+ *   {@link AttemptControlState.lastCompletedOperationId} rather than from an
+ *   active operation that is by then gone.
+ * - `mismatch`: a different operation occupies the attempt. The active one is
+ *   reported, because the caller's next move depends on which it is.
+ * - `not-active`: no operation occupies the attempt and this one is not the
+ *   last completed one, so the caller is completing something that never ran.
+ * - `stale-generation`: the completion is fenced against an older generation
+ *   than the operation it names, so it comes from a superseded runtime.
+ * - `resolved`: the attempt has settled. Reported ahead of `not-active`
+ *   because a terminal settlement leaves the active operation in place
+ *   precisely so a late completion learns why nobody is waiting for it.
+ * - `not-found`: no such attempt.
+ */
+export type OperationCompletionDecision =
+  | { readonly kind: 'completed' }
+  | { readonly kind: 'duplicate' }
+  | { readonly kind: 'mismatch'; readonly activeOperationId: string }
+  | { readonly kind: 'not-active' }
+  | { readonly kind: 'stale-generation' }
+  | { readonly kind: 'resolved' }
+  | { readonly kind: 'not-found' };
+
+/**
+ * Durable decision for recording that a registered runtime proved itself ready.
+ *
+ * Evaluated in this order, in both realizations:
+ * `not-found → resolved → fenced → not-allocated → stale-generation → duplicate → operation-active`.
+ *
+ * - `ready`: readiness is now durable for the fenced generation, at the
+ *   reported instant.
+ * - `duplicate`: readiness was already recorded for this generation. The
+ *   instant reported is the stored one, not the caller's, so two callers
+ *   converge on one answer.
+ * - `operation-active`: an operation occupies the attempt. Readiness is a
+ *   statement about an idle runtime, and recording it under a running
+ *   operation would claim a proof nothing performed.
+ * - `stale-generation`: the caller fenced against a generation the attempt has
+ *   moved past, so the readiness it proved belongs to a runtime that is gone.
+ * - `not-allocated`: no allocation is recorded, or the recorded one is durably
+ *   confirmed terminated and only awaits its settlement. A probe completed on
+ *   a dead allocation proves nothing that can be announced.
+ * - `fenced`: the attempt is no longer the active attempt for its owner. Its
+ *   generation may still match, but a superseded attempt has no current
+ *   endpoint to declare ready.
+ * - `resolved`: the attempt has settled.
+ * - `not-found`: no such attempt for the given execution.
+ */
+export type RuntimeReadinessDecision =
+  | { readonly kind: 'ready'; readonly acceptedAt: string }
+  | { readonly kind: 'duplicate'; readonly acceptedAt: string }
+  | { readonly kind: 'operation-active'; readonly operationId: string }
+  | { readonly kind: 'stale-generation' }
+  | { readonly kind: 'not-allocated' }
+  | { readonly kind: 'fenced' }
+  | { readonly kind: 'resolved' }
+  | { readonly kind: 'not-found' };
+
+// ─────────────────────────────────────────────────────────────
 // Injected Port
 // ─────────────────────────────────────────────────────────────
 
@@ -915,6 +1314,32 @@ export type ExecutionAttemptOutcomeDecision<TOutcome> =
  *    Every provider-side mutation requires the current generation and token.
  *    {@link commitOutcome} deliberately requires neither, so a worker can
  *    always deliver its canonical answer.
+ *
+ * 3. **An attempt starts work through one gate, and the gate closes for
+ *    good.** {@link AttemptControlState.operationStartGate} is the single
+ *    durable ordering point between "this attempt may still run something" and
+ *    "it never will again". It opens at {@link createAttempt} and closes
+ *    exactly twice over an attempt's life, both times inside the transaction
+ *    that made the closing true: on the attempt a newer {@link createAttempt}
+ *    supersedes, and on the attempt a terminal settlement settles. Closing it
+ *    anywhere else, or reopening it, would let work begin on an attempt whose
+ *    answer is already fixed.
+ *
+ *    The gate orders admission only. It never gates {@link commitOutcome}: a
+ *    settled attempt closes its gate and *keeps* its active operation, so a
+ *    worker's canonical answer and a late completion both still find the state
+ *    that explains them.
+ *
+ *    The runtime fence beside it is monotonic in the same one-way sense.
+ *    {@link registerRuntime} allocates each generation, refuses while an
+ *    operation is active, and clears readiness when it advances — so a
+ *    generation always names one incarnation, and readiness always names one
+ *    generation.
+ *
+ *    Every refusal these transitions report is evaluated in one fixed order,
+ *    stated with {@link RuntimeRegistrationDecision} and
+ *    {@link OperationAdmissionDecision}. A realization that reorders it is
+ *    non-conforming.
  *
  * An operation stays remediable after its attempt stops being the active
  * attempt for its execution. Claim-fenced discovery, absence, cleanup, and
@@ -1000,6 +1425,17 @@ export interface ExecutionAttemptRepository<TOutcome> {
    * Called by the Authority before dispatch. The Authority owns
    * `executionAttemptId` generation; the repository only persists. The new
    * attempt atomically becomes the active attempt for its execution.
+   *
+   * The new attempt starts with its {@link AttemptControlState} at rest:
+   * generation `0`, no incarnation, no readiness, no active operation, and
+   * {@link AttemptControlState.operationStartGate} `open`.
+   *
+   * **The attempt it supersedes has its start gate closed in this same
+   * transaction**, alongside the active pointer moving. A superseded attempt
+   * whose gate stayed open could admit an operation between the pointer move
+   * and any later cleanup, which is work begun on an attempt nobody addresses
+   * any more. The pointer and the gate therefore become true together or not
+   * at all.
    *
    * `executionAttemptId` is unique for all time. Creating an attempt whose
    * identifier already exists is a caller bug and is rejected — never
@@ -1186,6 +1622,93 @@ export interface ExecutionAttemptRepository<TOutcome> {
    * @returns The durable termination decision.
    */
   recordAllocationTerminated(input: RecordAllocationTerminatedInput): Promise<AllocationTerminationDecision>;
+
+  /**
+   * Register a runtime incarnation as the attempt's endpoint.
+   *
+   * The repository allocates the generation — the caller supplies only the
+   * incarnation identifier, which is both what it is registering and the
+   * idempotency key for having registered it. A registration that succeeds
+   * advances the generation by exactly one and clears
+   * {@link AttemptControlState.runtimeReadyAt}, because the readiness the
+   * previous incarnation proved says nothing about this one.
+   *
+   * It refuses while an operation is active. Advancing the generation there
+   * would fence a running operation's own completion, so the reported
+   * operation has to finish first — and this is why a replay by the incarnation
+   * that is already registered is answered `duplicate` ahead of that refusal:
+   * the operation in the way is frequently the very probe that registration
+   * started.
+   *
+   * The refusal order is the fixed one; see {@link RuntimeRegistrationDecision}.
+   * @param input - Attempt identity, owning execution, and the runtime incarnation.
+   * @returns The durable registration decision.
+   */
+  registerRuntime(input: RegisterRuntimeInput): Promise<RuntimeRegistrationDecision>;
+
+  /**
+   * Admit one operation through the attempt's start gate.
+   *
+   * At most one operation occupies an attempt at a time, and the repository
+   * mints its identifier. `admissionKey` is what makes a retry answerable: a
+   * second admission presenting the key the active operation was admitted
+   * under receives that operation's identifier rather than a second slot.
+   *
+   * Every kind requires proven readiness except `runtime-probe`, which is
+   * admitted while {@link AttemptControlState.runtimeReadyAt} is still `null` —
+   * the probe is the bounded no-op that *proves* the endpoint, so requiring
+   * readiness of it would make readiness unreachable.
+   *
+   * The refusal order is the fixed one; see {@link OperationAdmissionDecision}.
+   * @param input - Attempt identity, owning execution, kind, idempotency key, and fence.
+   * @returns The durable admission decision.
+   */
+  admitOperation(input: AdmitOperationInput): Promise<OperationAdmissionDecision>;
+
+  /**
+   * Release the attempt's active operation.
+   *
+   * Clears the four active-operation members in one write and records the
+   * completed identifier, so a replay is answered `duplicate` rather than
+   * mistaken for a completion of something that never ran.
+   *
+   * Deliberately unfenced by the active-attempt pointer: a superseded attempt
+   * owes the release exactly as much as an active one, and refusing it would
+   * leave the operation occupying the attempt for good.
+   * @param input - Attempt identity, the operation being completed, and its fence.
+   * @returns The durable completion decision.
+   */
+  completeOperation(input: CompleteOperationInput): Promise<OperationCompletionDecision>;
+
+  /**
+   * Record that the registered runtime proved itself ready.
+   *
+   * Written only for the generation the caller fences against, so a proof that
+   * a superseded incarnation produced can never mark the current one ready, and
+   * only while the attempt is still the active attempt for its owner, so a
+   * proof that completed before the attempt was superseded is refused `fenced`
+   * rather than announced for an endpoint nobody will address. Recording is
+   * idempotent: a second call for the same generation reports the instant
+   * already stored, never the caller's own.
+   * @param input - Attempt identity, the generation the proof belongs to, and when it was observed.
+   * @returns The durable readiness decision.
+   */
+  markRuntimeReady(input: MarkRuntimeReadyInput): Promise<RuntimeReadinessDecision>;
+
+  /**
+   * Read an attempt's runtime and operation control state.
+   *
+   * The recovery read of {@link AttemptControlState}: a process that lost its
+   * own memory of an attempt — a restart, a second controller — asks what the
+   * durable state is instead of inferring it. Unfenced and regardless of
+   * status, exactly like
+   * {@link ExecutionAttemptRecoveryOperations.getAttemptWithAllocation}, because
+   * the state of a superseded or settled attempt is precisely what a recovering
+   * process needs to see.
+   * @param executionAttemptId - Attempt whose control state to read.
+   * @returns The control state, or `null` when no such attempt exists.
+   */
+  getAttemptControlState(executionAttemptId: string): Promise<AttemptControlState | null>;
 
   /**
    * Retrieve the active attempt for a given execution.

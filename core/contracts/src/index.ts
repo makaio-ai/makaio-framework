@@ -1217,6 +1217,34 @@ export type {
   WorkflowArtifactBinding,
 } from './workflow/index.js';
 export {
+  ExecutionAttemptAnnouncedOperationKindSchema,
+  ExecutionAttemptNamespace,
+  ExecutionAttemptOperationDeliverySchema,
+  ExecutionAttemptOperationKindSchema,
+  ExecutionAttemptOperationReceiptSchema,
+  ExecutionAttemptRuntimeRegisterRefusalReasonSchema,
+  ExecutionAttemptSchemas,
+  ExecutionAttemptSubjects,
+} from './execution-attempt/index.js';
+export type {
+  ExecutionAttemptAnnouncedOperationKind,
+  ExecutionAttemptOperationAdmitDecision,
+  ExecutionAttemptOperationAdmitRefusalReason,
+  ExecutionAttemptOperationAdmitRequest,
+  ExecutionAttemptOperationAdmitResponse,
+  ExecutionAttemptOperationAdmittedEvent,
+  ExecutionAttemptOperationDelivery,
+  ExecutionAttemptOperationDeliveryRefusalReason,
+  ExecutionAttemptOperationKind,
+  ExecutionAttemptOperationReceipt,
+  ExecutionAttemptOperationReceiptCode,
+  ExecutionAttemptRuntimeReadyEvent,
+  ExecutionAttemptRuntimeRegisterDecision,
+  ExecutionAttemptRuntimeRegisterRefusalReason,
+  ExecutionAttemptRuntimeRegisterRequest,
+  ExecutionAttemptRuntimeRegisterResponse,
+} from './execution-attempt/index.js';
+export {
   WORKER_BOOTSTRAP_IDENTITY_ID,
   WorkerDispatchRequestSchema,
   WorkerDispatchResponseSchema,

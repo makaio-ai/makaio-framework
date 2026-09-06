@@ -6,6 +6,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
+  ExecutionAttemptSubjects,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
   WorkerSubjects,
@@ -26,6 +27,7 @@ import {
   type HeadlessWorkerMaterializer,
   type HeadlessWorkerBootstrap,
 } from '../headless-workflow-worker.js';
+import { createAttemptAuthorityHarness, type AttemptAuthorityHarness } from './attempt-authority-harness.js';
 
 // ─────────────────────────────────────────────────────────────
 // Provider composition descriptor
@@ -207,11 +209,6 @@ function createEmptyAdapterRepository() {
 /** Tracked lifecycle events for assertion. */
 interface LifecycleCapture {
   kernelReadyEvents: Array<{ machineId: string }>;
-  attemptReadyEvents: Array<{
-    executionAttemptId: string;
-    executionId: string;
-    adapters: string[];
-  }>;
   outcomeSubmissions: Array<{
     executionAttemptId: string;
     executionId: string;
@@ -226,6 +223,8 @@ interface AuthoritySide {
   bus: IMakaioBus;
   port: number;
   capture: LifecycleCapture;
+  /** Authority-side ExecutionAttempt gates, attempt identity, and gate captures. */
+  attempt: AttemptAuthorityHarness;
   /** Run context the authority will return. */
   runContext: WorkflowRunContext;
   /** Override the outcome decision returned by the authority. */
@@ -246,11 +245,13 @@ async function createAuthoritySide(
   const authority = createBusInstance();
   authority.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
   const offStorage = registerMemorySessionStorage(authority);
+  const attempt = await createAttemptAuthorityHarness(authority, executionId);
 
   const server = createServer();
   const port = await listenOnLoopback(server);
   const serverTransport = new BusServerTransportProvider({
     httpServer: server,
+    auth: attempt.serverAuth,
   });
   await serverTransport.connect(authority, 'headless-test-authority');
 
@@ -261,16 +262,16 @@ async function createAuthoritySide(
     port,
     capture: {
       kernelReadyEvents: [],
-      attemptReadyEvents: [],
       outcomeSubmissions: [],
     },
+    attempt,
     runContext,
     outcomeDecision: 'accepted',
     cleanup: async () => {
       offGetRunContext();
-      offAttemptReady();
       offOutcomeSubmit();
       offKernelReady();
+      await attempt.cleanup();
       offStorage();
       await serverTransport.disconnect();
       await closeHttpServer(server);
@@ -285,15 +286,6 @@ async function createAuthoritySide(
     },
     { filter: { executionId } },
   );
-
-  // Capture attempt-ready events
-  const offAttemptReady = authority.on(WorkerSubjects.control['attempt-ready'], (ctx) => {
-    state.capture.attemptReadyEvents.push({
-      executionAttemptId: ctx.payload.executionAttemptId,
-      executionId: ctx.payload.executionId,
-      adapters: [...ctx.payload.adapters],
-    });
-  });
 
   // Handle outcome submission
   const offOutcomeSubmit = authority.on(WorkerSubjects.control.outcome.submit, (ctx) => {
@@ -315,14 +307,18 @@ async function createAuthoritySide(
 
 /**
  * Create a WS bus connector for integration tests.
- * @param port - Authority WS server port.
+ *
+ * Every worker socket authenticates as the attempt peer the Authority-side
+ * gates fence on: an unauthenticated connection cannot register a runtime.
+ * @param authoritySide - Authority-side harness owning the port and the attempt identity.
  * @returns Bus connector function that creates a WS client transport.
  */
-function createTestBusConnector(port: number): HeadlessWorkflowWorkerDeps['connectBus'] {
+function createTestBusConnector(authoritySide: AuthoritySide): HeadlessWorkflowWorkerDeps['connectBus'] {
   return async (bus, _credentials, _signal) => {
     const transport = new WebSocketClientTransport({
-      url: `ws://127.0.0.1:${port}/bus`,
+      url: `ws://127.0.0.1:${authoritySide.port}/bus`,
       autoReconnect: false,
+      auth: authoritySide.attempt.createClientAuth(),
     });
     bus.registerTransport(transport);
     await bus.connect();
@@ -335,7 +331,6 @@ function createTestBusConnector(port: number): HeadlessWorkflowWorkerDeps['conne
  * @param composition - Provider composition descriptor.
  * @param cwd - Temporary workspace root.
  * @param executionId - Execution identifier.
- * @param executionAttemptId - Attempt identifier.
  * @param phaseLog - Mutable array to record phase ordering.
  * @returns HeadlessWorkflowWorkerDeps for test use.
  */
@@ -344,7 +339,6 @@ function createCompositionDeps(
   composition: ProviderComposition,
   cwd: string,
   executionId: string,
-  executionAttemptId: string,
   phaseLog: string[],
 ): HeadlessWorkflowWorkerDeps {
   const materialize = composition.createMaterialize(cwd);
@@ -352,12 +346,12 @@ function createCompositionDeps(
 
   return {
     executionId,
-    executionAttemptId,
+    executionAttemptId: authoritySide.attempt.executionAttemptId,
     bootstrap: async (signal) => {
       phaseLog.push('bootstrap');
       return bootstrapFn(signal);
     },
-    connectBus: createTestBusConnector(authoritySide.port),
+    connectBus: createTestBusConnector(authoritySide),
     materialize: async (runContext, signal) => {
       phaseLog.push('materialize');
       return materialize(runContext, signal);
@@ -405,42 +399,42 @@ describe('portable provider-neutral harness', () => {
   // ─── Parameterized lifecycle tests ────────────────────────
 
   describe.each(compositions)('composition: $name', (composition) => {
-    it('runs identical lifecycle: context pull -> contribution activation -> attempt-ready -> execute -> outcome ACK -> cleanup', async () => {
+    it('runs identical lifecycle: register -> admit -> context pull -> contribution activation -> execute -> outcome ACK -> cleanup', async () => {
       const executionId = `exec-${composition.name}`;
-      const executionAttemptId = `attempt-${composition.name}`;
       const spec = composition.makeSpec();
       const authority = await createAuthoritySide(executionId, spec);
       authoritySide = authority;
+      const executionAttemptId = authority.attempt.executionAttemptId;
 
       const phaseLog: string[] = [];
       const readyOrder: string[] = [];
       const abortController = new AbortController();
 
-      // Track kernel-ready and attempt-ready ordering on the authority bus
+      // Track runtime-ready and kernel-ready ordering on the authority bus
       const offKernelReady = authority.bus.on(KernelSubjects.ready, () => {
         readyOrder.push('kernel-ready');
       });
-      const offAttemptReady = authority.bus.on(WorkerSubjects.control['attempt-ready'], () => {
-        readyOrder.push('attempt-ready');
+      const offRuntimeReady = authority.bus.on(ExecutionAttemptSubjects.runtime.ready, () => {
+        readyOrder.push('runtime-ready');
       });
 
-      const deps = createCompositionDeps(authority, composition, cwd, executionId, executionAttemptId, phaseLog);
+      const deps = createCompositionDeps(authority, composition, cwd, executionId, phaseLog);
 
       const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
       offKernelReady();
-      offAttemptReady();
+      offRuntimeReady();
 
       // Verify phase ordering is identical across all compositions
       expect(phaseLog).toEqual(['bootstrap', 'materialize', 'loadContributions', 'execute', 'postCommit']);
 
-      // Verify exactly 1 attempt-ready with correct IDs
-      await vi.waitFor(() => {
-        expect(authority.capture.attemptReadyEvents).toHaveLength(1);
-      });
-      expect(authority.capture.attemptReadyEvents[0]).toMatchObject({
+      // Verify exactly 1 runtime readiness and 1 workflow-run admission
+      expect(authority.attempt.runtimeReadyEvents).toHaveLength(1);
+      expect(authority.attempt.runtimeReadyEvents[0]).toMatchObject({ executionAttemptId });
+      expect(authority.attempt.operationAdmittedEvents).toHaveLength(1);
+      expect(authority.attempt.operationAdmittedEvents[0]).toMatchObject({
         executionAttemptId,
-        executionId,
+        operationKind: 'workflow-run',
       });
 
       // Verify exactly 1 outcome with status 'completed'
@@ -455,17 +449,16 @@ describe('portable provider-neutral harness', () => {
       expect(workerResult.decision).toBe('accepted');
       expect(workerResult.result.status).toBe('completed');
 
-      // Verify kernel ready fires before attempt ready
+      // Registration precedes composition, which is what emits kernel readiness
       await vi.waitFor(() => {
         expect(readyOrder).toContain('kernel-ready');
-        expect(readyOrder).toContain('attempt-ready');
+        expect(readyOrder).toContain('runtime-ready');
       });
-      expect(readyOrder.indexOf('kernel-ready')).toBeLessThan(readyOrder.indexOf('attempt-ready'));
+      expect(readyOrder.indexOf('runtime-ready')).toBeLessThan(readyOrder.indexOf('kernel-ready'));
     }, 20_000);
 
     it('handles cancellation during materialization identically', async () => {
       const executionId = `exec-cancel-${composition.name}`;
-      const executionAttemptId = `attempt-cancel-${composition.name}`;
       const spec = composition.makeSpec();
       const authority = await createAuthoritySide(executionId, spec);
       authoritySide = authority;
@@ -475,13 +468,13 @@ describe('portable provider-neutral harness', () => {
 
       const deps: HeadlessWorkflowWorkerDeps = {
         executionId,
-        executionAttemptId,
+        executionAttemptId: authority.attempt.executionAttemptId,
         bootstrap: async (signal) => {
           phaseLog.push('bootstrap');
           const bootstrapFn = composition.createBootstrap(authority.port);
           return bootstrapFn(signal);
         },
-        connectBus: createTestBusConnector(authority.port),
+        connectBus: createTestBusConnector(authority),
         materialize: async (_runContext, signal) => {
           phaseLog.push('materialize');
           // Cancel during materialization
@@ -518,8 +511,8 @@ describe('portable provider-neutral harness', () => {
       // Cooperative cancellation produces a cancelled result
       expect(workerResult.result.status).toBe('cancelled');
 
-      // No attempt-ready should have been emitted
-      expect(authority.capture.attemptReadyEvents).toHaveLength(0);
+      // Materialization runs after registration, so readiness stands
+      expect(authority.attempt.runtimeReadyEvents).toHaveLength(1);
       // Cancelled outcome IS submitted
       expect(authority.capture.outcomeSubmissions).toHaveLength(1);
       expect(authority.capture.outcomeSubmissions[0]!.result.status).toBe('cancelled');

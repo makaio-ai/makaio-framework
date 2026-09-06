@@ -12,11 +12,6 @@ describe('worker namespace', () => {
     expect(WorkerSubjects.dispatch.subject).toBe('dispatch');
   });
 
-  it('registers control.attempt-ready under worker', () => {
-    expect(WorkerSubjects.control['attempt-ready'].$meta.namespace).toBe('worker');
-    expect(WorkerSubjects.control['attempt-ready'].subject).toBe('control.attempt-ready');
-  });
-
   it('registers control.outcome.submit under worker', () => {
     expect(WorkerSubjects.control.outcome.submit.$meta.namespace).toBe('worker');
     expect(WorkerSubjects.control.outcome.submit.subject).toBe('control.outcome.submit');
@@ -28,7 +23,6 @@ describe('worker namespace', () => {
       executionId: 'wfx-1',
       environment: 'piscina',
       poolId: 'pool-1',
-      adapters: ['claude-code'],
       metadata: { source: 'test' },
     });
 
@@ -36,7 +30,6 @@ describe('worker namespace', () => {
       executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
-      adapters: ['claude-code'],
       metadata: { source: 'test' },
     });
     expect('poolId' in parsed).toBe(false);
@@ -53,18 +46,20 @@ describe('worker namespace', () => {
     expect('nodeId' in parsed).toBe(false);
   });
 
-  it('parses control attempt-ready payloads', () => {
-    const parsed = WorkerSchemas['control.attempt-ready'].parse({
+  it('keeps adapter composition out of lifecycle.ready payloads', () => {
+    const parsed = WorkerSchemas['lifecycle.ready'].parse({
       executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
+      environment: 'piscina',
       adapters: ['claude-code'],
     });
 
     expect(parsed).toStrictEqual({
       executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
-      adapters: ['claude-code'],
+      environment: 'piscina',
     });
+    expect('adapters' in parsed).toBe(false);
   });
 
   describe('lifecycle.paused', () => {

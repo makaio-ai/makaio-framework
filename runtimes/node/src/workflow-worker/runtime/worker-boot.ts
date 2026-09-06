@@ -31,13 +31,18 @@ export interface WorkerRuntimeHandle {
  * provided.
  *
  * If `busAuth.kind === 'hmac'`, the HMAC secret is passed to the
- * transport for challenge/response authentication.
+ * transport for challenge/response authentication. An `identityId` turns that
+ * handshake identity-bound, so the server resolves a trusted peer context for
+ * the socket instead of authenticating it against the process-global secret.
+ * Attempt-owned workers claim their `executionAttemptId` here, because the
+ * Authority's attempt gates take their caller identity from that peer.
  * @param config - Bus connection configuration from the workflow worker config.
  * @returns A handle with the bus instance and a close method.
  */
 export async function bootWorkerBus(config: {
   readonly busUrl?: string;
   readonly busAuth: WorkflowWorkerBusAuth;
+  readonly identityId?: string;
 }): Promise<WorkerRuntimeBusHandle> {
   const bus = createBusInstance();
   bus.registerNamespaces(FrameworkContractNamespaces);
@@ -52,7 +57,13 @@ export async function bootWorkerBus(config: {
     };
   }
 
-  const auth = config.busAuth.kind === 'hmac' ? new HmacAuth({ secret: config.busAuth.secret }) : undefined;
+  const auth =
+    config.busAuth.kind === 'hmac'
+      ? new HmacAuth({
+          secret: config.busAuth.secret,
+          ...(config.identityId !== undefined && { identityId: config.identityId }),
+        })
+      : undefined;
 
   const transport = new WebSocketClientTransport({
     url: config.busUrl,
