@@ -68,16 +68,18 @@ describe('built-in authentication failure categories', () => {
   ] as const)('closes a real E2E %s-client refusal with 1008 and returns a typed client rejection', async (serverLookup) => {
     const pair = await createPair({ serverLookup });
     const { wss, port } = await createTestServer();
-    const closed = new Promise<number>((resolve) => {
-      wss.once('connection', (socket) => {
-        socket.once('close', resolve);
-      });
-    });
     const server = new ServerTransport({ websocket: wss, auth: pair.server });
     cleanups.push(() => server.disconnect());
     await server.connect();
+    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    // Observe the server's close code at the client, not the client's disposal code at the server.
+    const closed = new Promise<number>((resolve, reject) => {
+      socket.once('close', resolve);
+      socket.once('error', reject);
+    });
     const client = new WebSocketClientTransport({
       url: `ws://127.0.0.1:${port}`,
+      createWebSocket: () => socket,
       auth: pair.client,
       autoReconnect: false,
       heartbeat: false,
