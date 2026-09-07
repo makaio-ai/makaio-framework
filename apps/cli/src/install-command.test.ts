@@ -16,13 +16,10 @@ const installMockState = vi.hoisted(() => ({
   manifestRestores: 0,
 }));
 
-vi.mock('@makaio/runtime-node', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@makaio/runtime-node')>();
-  return {
-    ...actual,
-    readFrameworkVersion: async () => '0.1.0',
-  };
-});
+// These tests require a framework version, not runtime startup dependencies.
+vi.mock('@makaio/runtime-node', () => ({
+  readFrameworkVersion: async () => '0.1.0',
+}));
 
 vi.mock('@makaio/services-package-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@makaio/services-package-manager')>();

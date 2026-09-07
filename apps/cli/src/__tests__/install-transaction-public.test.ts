@@ -4,15 +4,23 @@
  * Verifies that the narrow public subpath exports only the transaction-level
  * helpers and types, not CLI command registration functions.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+beforeEach(() => {
+  // Fail on module evaluation, not merely on accessing a runtime export.
+  vi.doMock('@makaio/runtime-node', () => {
+    throw new Error('The transaction entrypoint must not evaluate the runtime root.');
+  });
+});
 
 afterEach(() => {
+  vi.doUnmock('@makaio/runtime-node');
   vi.doUnmock('@makaio/utils/project-manifest');
   vi.resetModules();
 });
 
 describe('@makaio/cli/install-transaction subpath export', () => {
-  it('exports transaction helpers only, not command registration', async () => {
+  it('exports transaction helpers without loading the runtime root or command registration', async () => {
     const mod = await import('@makaio/cli/install-transaction');
 
     expect(typeof mod.installExtensionSources).toBe('function');

@@ -15,7 +15,7 @@
  */
 
 import * as path from 'node:path';
-import { readFrameworkVersion, resolveMakaioHome } from '@makaio/runtime-node';
+import { resolveMakaioHome } from '@makaio/runtime-node/makaio-config';
 import type { InstallSource } from '@makaio/services-package-manager';
 import {
   compareProjectManifestExtensions,
@@ -258,6 +258,8 @@ async function installNpmSources(
 ): Promise<readonly DirectNpmInstallResolution[]> {
   if (npmSources.length === 0) return [];
 
+  // Keep runtime boot dependencies outside entrypoint loading and non-npm transactions.
+  const { readFrameworkVersion } = await import('@makaio/runtime-node');
   const frameworkVersion = await readFrameworkVersion();
   await yarn.ensureFrameworkDependency({ versionRange: `^${frameworkVersion}` });
   const resolver = new packageManager.DependencyResolver(
