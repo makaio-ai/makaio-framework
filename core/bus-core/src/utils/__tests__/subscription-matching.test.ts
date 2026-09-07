@@ -171,24 +171,14 @@ describe('matchesSubscription', () => {
     });
   });
 
-  describe('Performance characteristics', () => {
-    it('should use O(1) string operations (prefix check)', () => {
-      // Test that implementation uses simple string operations
-      // Not a full performance test, but validates approach
-      const subject = 'adapter:claudeCode:sdk.thinking';
-      const pattern = 'adapter.*';
-
-      // This should be a simple startsWith check
-      const start = performance.now();
-      for (let i = 0; i < 10000; i++) {
-        matchesSubscription(subject, pattern);
-      }
-      const duration = performance.now() - start;
-
-      // 10k operations should complete in under 50ms (very generous threshold)
-      // On modern hardware this should be <5ms
-      expect(duration).toBeLessThan(50);
-    });
+  // Assert result stability; shared-runner wall time cannot establish algorithmic complexity.
+  it('preserves wildcard boundaries across repeated calls', () => {
+    for (let i = 0; i < 10; i++) {
+      expect(matchesSubscription('adapter.log', 'adapter.*')).toBe(true);
+      expect(matchesSubscription('adapter:claudeCode:sdk.thinking', 'adapter.*')).toBe(false);
+      expect(matchesSubscription('adapter:claudeCode:sdk.thinking', 'adapter:*')).toBe(true);
+      expect(matchesSubscription('adapter.log', 'adapter:*')).toBe(false);
+    }
   });
 });
 
