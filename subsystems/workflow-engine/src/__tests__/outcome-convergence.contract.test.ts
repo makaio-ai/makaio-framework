@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { submitAttemptOutcome, type OutcomeConvergence, type OutcomeConvergenceInput } from '../outcome-convergence.js';
-import { createInMemoryAttemptRepository, type InMemoryAttemptRepository } from '../testing/index.js';
+import {
+  createInMemoryAttemptRepository,
+  makeTestInstruction,
+  type InMemoryAttemptRepository,
+} from '../testing/index.js';
 // A non-workflow outcome, so the suite proves the boundary is shape-agnostic.
 // Any host that reuses the generic substrate can run this suite against its
 // own outcome type by swapping the codec and the convergence fake.
@@ -70,12 +74,12 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
   beforeEach(() => {
     repository = createInMemoryAttemptRepository(counterCodec);
-    authority = new ExecutionAttemptAuthority(repository);
+    authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     convergence = createConvergenceFake<CounterOutcome>();
   });
 
   it('commits before converging and settles the waiter only after convergence resolves', async () => {
-    const attempt = await authority.createAttempt(EXECUTION_ID);
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = authority.waitForOutcome(attempt.executionAttemptId);
     expect(waiter).toBeDefined();
     // The durable fact, read the way a store is read: the committed text.
@@ -104,7 +108,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
   });
 
   it('runs pre-commit validation before the durable commit and commits nothing when it throws', async () => {
-    const attempt = await authority.createAttempt(EXECUTION_ID);
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const validation = { validate: vi.fn(async () => Promise.reject(new Error('owner rejected'))) };
 
     await expect(
@@ -120,7 +124,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
   });
 
   it('leaves the outcome committed and the waiter pending when convergence throws', async () => {
-    const attempt = await authority.createAttempt(EXECUTION_ID);
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<CounterOutcome>;
     convergence.failNext = new Error('owner state unavailable');
 
@@ -147,9 +151,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
   // waiter receive exactly the object `commitOutcome` reported.
   it('re-converges an identical retry as duplicate with the committed outcome and then settles the waiter', async () => {
     const boxedRepository = createInMemoryAttemptRepository(boxedCounterCodec);
-    const boxedAuthority = new ExecutionAttemptAuthority(boxedRepository);
+    const boxedAuthority = new ExecutionAttemptAuthority(boxedRepository, { bootstrapTimeoutMs: 60_000 });
     const boxedConvergence = createConvergenceFake<BoxedCounterOutcome>();
-    const attempt = await boxedAuthority.createAttempt(EXECUTION_ID);
+    const attempt = await boxedAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = boxedAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<BoxedCounterOutcome>;
     boxedConvergence.failNext = new Error('first convergence failed');
     await submitAttemptOutcome(
@@ -186,7 +190,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
   // own convergence had already moved would strand the waiter it is trying to
   // settle. An input-only validator lets the documented recovery path work.
   it('re-runs an input-only validation on the retry of a committed outcome and settles the waiter', async () => {
-    const attempt = await authority.createAttempt(EXECUTION_ID);
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<CounterOutcome>;
     // Owner state the convergence moves forward before it fails, exactly the
     // shape of state a validator must not consult.
@@ -224,9 +228,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
   // caller's object again.
   it('commits the rendering it validated even when the submitted object changes during validation', async () => {
     const boxedRepository = createInMemoryAttemptRepository(boxedCounterCodec);
-    const boxedAuthority = new ExecutionAttemptAuthority(boxedRepository);
+    const boxedAuthority = new ExecutionAttemptAuthority(boxedRepository, { bootstrapTimeoutMs: 60_000 });
     const boxedConvergence = createConvergenceFake<BoxedCounterOutcome>();
-    const attempt = await boxedAuthority.createAttempt(EXECUTION_ID);
+    const attempt = await boxedAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = boxedAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<BoxedCounterOutcome>;
     // Declared mutable here and only here: the boundary's outcome type is
     // `readonly`, and this case is about a caller that ignores that.
@@ -257,7 +261,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
   });
 
   it('returns conflict without converging when a different outcome was already committed', async () => {
-    const attempt = await authority.createAttempt(EXECUTION_ID);
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<CounterOutcome>;
     await submitAttemptOutcome(
       { authority, convergence },
@@ -275,10 +279,10 @@ describe('submitAttemptOutcome (generic contract)', () => {
   });
 
   it('returns fenced without converging and observes the waiter already rejected by commitOutcome', async () => {
-    const first = await authority.createAttempt(EXECUTION_ID);
+    const first = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const firstWaiter = authority.waitForOutcome(first.executionAttemptId) as Promise<CounterOutcome>;
     void firstWaiter.catch(() => undefined);
-    await authority.createAttempt(EXECUTION_ID);
+    await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const settleOutcome = vi.spyOn(authority, 'settleOutcome');
 
     const decision = await submitAttemptOutcome(
@@ -300,8 +304,8 @@ describe('submitAttemptOutcome (generic contract)', () => {
   // exists to reject become the immutable committed answer.
   it('validates the canonical outcome the attempt will hold, not the submitted copy', async () => {
     const normalizing = createInMemoryAttemptRepository(roundingCounterCodec);
-    const normalizingAuthority = new ExecutionAttemptAuthority(normalizing);
-    const attempt = await normalizingAuthority.createAttempt(EXECUTION_ID);
+    const normalizingAuthority = new ExecutionAttemptAuthority(normalizing, { bootstrapTimeoutMs: 60_000 });
+    const attempt = await normalizingAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const validation = { validate: vi.fn(async () => undefined) };
 
     const decision = await submitAttemptOutcome(
@@ -325,9 +329,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
   // stored text rather than carried along as one shared object.
   it('reports an accepted outcome decoded from the stored text, not the object validation mutated', async () => {
     const urlRepository = createInMemoryAttemptRepository(urlOutcomeCodec);
-    const urlAuthority = new ExecutionAttemptAuthority(urlRepository);
+    const urlAuthority = new ExecutionAttemptAuthority(urlRepository, { bootstrapTimeoutMs: 60_000 });
     const urlConvergence = createConvergenceFake<URL>();
-    const attempt = await urlAuthority.createAttempt(EXECUTION_ID);
+    const attempt = await urlAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = urlAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<URL>;
     const validated: URL[] = [];
     const validation = {
@@ -356,9 +360,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
   it('settles the waiter from the durable text even when convergence mutates the committed outcome', async () => {
     const urlRepository = createInMemoryAttemptRepository(urlOutcomeCodec);
-    const urlAuthority = new ExecutionAttemptAuthority(urlRepository);
+    const urlAuthority = new ExecutionAttemptAuthority(urlRepository, { bootstrapTimeoutMs: 60_000 });
     const urlConvergence = createConvergenceFake<URL>();
-    const attempt = await urlAuthority.createAttempt(EXECUTION_ID);
+    const attempt = await urlAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = urlAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<URL>;
     const converged: URL[] = [];
     urlConvergence.converge = async (input) => {
@@ -392,9 +396,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
   // retry's own rendering.
   it('settles a duplicate waiter from the committed text, not from the retry rendering', async () => {
     const orderRepository = createInMemoryAttemptRepository(memberOrderCodec);
-    const orderAuthority = new ExecutionAttemptAuthority(orderRepository);
+    const orderAuthority = new ExecutionAttemptAuthority(orderRepository, { bootstrapTimeoutMs: 60_000 });
     const orderConvergence = createConvergenceFake<MemberOrderOutcome>();
-    const attempt = await orderAuthority.createAttempt(EXECUTION_ID);
+    const attempt = await orderAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const waiter = orderAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<MemberOrderOutcome>;
     // The first submission commits, then convergence fails, so the worker
     // retries — the documented recovery path, and the only way a `duplicate`
@@ -421,7 +425,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
   });
 
   it('rejects an outcome the codec refuses before any durable decision', async () => {
-    const attempt = await authority.createAttempt(EXECUTION_ID);
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
 
     await expect(
       submitAttemptOutcome(

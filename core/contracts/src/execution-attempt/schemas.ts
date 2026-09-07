@@ -1,5 +1,12 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
+import { OutcomeAckDecisionSchema } from '../capabilities/worker/types.js';
+import {
+  ExecutionAttemptInstructionSchema,
+  ExecutionAttemptOutcomeSchema,
+  ExecutionAttemptPreparationResultSchema,
+  ExecutionAttemptWorkspaceBindingSchema,
+} from './instruction.js';
 
 /**
  * Kind discriminator for an operation admitted against an ExecutionAttempt.
@@ -10,8 +17,15 @@ import type { SchemaRecord } from '@makaio/core';
  * - `runtime-probe` — the bounded no-op that proves the runtime endpoint accepts
  *   a fenced instruction; never projected to the pool.
  * - `workflow-run` — the durable owner's workflow execution.
+ * - `workspace-preparation` — prepare the instruction's optional working area.
+ * - `workload-invocation` — load and execute the selected workload adapter.
  */
-export const ExecutionAttemptOperationKindSchema = z.enum(['runtime-probe', 'workflow-run']);
+export const ExecutionAttemptOperationKindSchema = z.enum([
+  'runtime-probe',
+  'workflow-run',
+  'workspace-preparation',
+  'workload-invocation',
+]);
 
 /** Kind of an operation admitted against an ExecutionAttempt. */
 export type ExecutionAttemptOperationKind = z.infer<typeof ExecutionAttemptOperationKindSchema>;
@@ -84,16 +98,17 @@ export const ExecutionAttemptOperationReceiptSchema = z
   .strict();
 
 /**
- * ExecutionAttempt runtime-registration and operation-admission bus schemas.
+ * ExecutionAttempt registration, instruction, operation and outcome bus schemas.
  *
  * All keys map to `execution-attempt.<key>` subjects on the bus. The namespace is
- * static: five subjects, no per-attempt namespace factory. Per-attempt addressing
+ * static, with no per-attempt namespace factory. Per-attempt addressing
  * is done with `bus.withFilter({ executionAttemptId })` on the payload (and, for
  * deliveries, the addressed `runtimeIncarnationId`), not by minting a namespace
  * per attempt.
  *
  * Subjects by category:
- * - `runtime.register`, `operation.admit` — authority RPC gates. Exactly one
+ * - `runtime.register`, `instruction.get`, `operation.admit`, `operation.report`,
+ *   `outcome.submit` — authority RPC gates. Exactly one
  *   handler site outside tests, which refuses on peer mismatch.
  * - `runtime.ready`, `operation.admitted`, `operation.deliver` — per-attempt
  *   subjects. Every interested component installs its own listener scoped to its
@@ -130,7 +145,54 @@ const registeredDecision = <TDecision extends 'ready' | 'duplicate'>(decision: T
     })
     .strict();
 
+/** Non-secret terminal refusals at the pre-registration start barrier. */
+export const ExecutionAttemptBootstrapStartRefusalReasonSchema = z.enum([
+  'not-found',
+  'resolved',
+  'fenced',
+  'allocation-terminated',
+  'gate-closed',
+  'bootstrap-expired',
+]);
+
+/** Request to enter runtime registration for the authenticated attempt. */
+export const ExecutionAttemptBootstrapAwaitStartRequestSchema = z
+  .object({ executionAttemptId: z.string().min(1) })
+  .strict();
+
+/** Start permission is neither runtime readiness nor operation admission. */
+export const ExecutionAttemptBootstrapAwaitStartResponseSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('permitted') }).strict(),
+  z.object({ status: z.literal('pending') }).strict(),
+  z.object({ status: z.literal('refused'), reason: ExecutionAttemptBootstrapStartRefusalReasonSchema }).strict(),
+]);
+
+/** Attempt-authenticated request for start permission. */
+export type ExecutionAttemptBootstrapAwaitStartRequest = z.infer<
+  typeof ExecutionAttemptBootstrapAwaitStartRequestSchema
+>;
+/** Bounded start-barrier reply without credentials or runtime fences. */
+export type ExecutionAttemptBootstrapAwaitStartResponse = z.infer<
+  typeof ExecutionAttemptBootstrapAwaitStartResponseSchema
+>;
+/** Non-secret reason the attempt may no longer bootstrap. */
+export type ExecutionAttemptBootstrapStartRefusalReason = z.infer<
+  typeof ExecutionAttemptBootstrapStartRefusalReasonSchema
+>;
+
 export const ExecutionAttemptSchemas = {
+  /**
+   * An authenticated attempt waits for its allocation to become durably available.
+   * The authority rechecks owner, settlement, fencing, allocation and deadline.
+   * A pending reply renews the bounded wait; permission only allows registration.
+   *
+   * Subject: `execution-attempt.bootstrap.awaitStart`
+   * Type: Request (RPC)
+   */
+  'bootstrap.awaitStart': {
+    request: ExecutionAttemptBootstrapAwaitStartRequestSchema,
+    response: ExecutionAttemptBootstrapAwaitStartResponseSchema,
+  },
   /**
    * The Worker Runtime reports that its incarnation is alive and asks to be
    * registered as the endpoint of its ExecutionAttempt.
@@ -238,6 +300,9 @@ export const ExecutionAttemptSchemas = {
             'gate-closed',
             'not-ready',
             'stale-generation',
+            'preparation-required',
+            'preparation-not-required',
+            'preparation-already-completed',
           ])
           .optional(),
       })
@@ -292,6 +357,96 @@ export const ExecutionAttemptSchemas = {
   'operation.deliver': {
     request: ExecutionAttemptOperationDeliverySchema,
     response: ExecutionAttemptOperationReceiptSchema,
+  },
+
+  /**
+   * Read only the frozen assignment bound to the authenticated Attempt.
+   * Subject: `execution-attempt.instruction.get`
+   * Type: Request (RPC) — Worker Runtime → Authority
+   */
+  'instruction.get': {
+    request: z
+      .object({ executionAttemptId: z.string().min(1), runtimeGeneration: z.number().int().positive() })
+      .strict(),
+    response: z.discriminatedUnion('decision', [
+      z.object({ decision: z.literal('found'), instruction: ExecutionAttemptInstructionSchema }).strict(),
+      z
+        .object({
+          decision: z.literal('refused'),
+          refusalReason: z.enum(['not-found', 'resolved', 'fenced', 'not-ready', 'stale-generation']),
+        })
+        .strict(),
+    ]),
+  },
+
+  /**
+   * Accept successful Preparation and complete its operation atomically.
+   * Terminal failures use outcome.submit; this is not a progress/logging sink.
+   * Subject: `execution-attempt.operation.report`
+   * Type: Request (RPC) — Worker Runtime → Authority
+   */
+  'operation.report': {
+    request: z
+      .object({
+        executionAttemptId: z.string().min(1),
+        runtimeGeneration: z.number().int().positive(),
+        operationId: z.string().min(1),
+        result: ExecutionAttemptPreparationResultSchema,
+      })
+      .strict(),
+    response: z.discriminatedUnion('decision', [
+      z.object({ decision: z.literal('accepted'), binding: ExecutionAttemptWorkspaceBindingSchema }).strict(),
+      z.object({ decision: z.literal('duplicate'), binding: ExecutionAttemptWorkspaceBindingSchema }).strict(),
+      z
+        .object({
+          decision: z.literal('refused'),
+          refusalReason: z.enum([
+            'not-found',
+            'resolved',
+            'fenced',
+            'not-allocated',
+            'stale-generation',
+            'no-active-operation',
+            'operation-mismatch',
+            'preparation-not-required',
+            'binding-mismatch',
+            'conflict',
+          ]),
+        })
+        .strict(),
+    ]),
+  },
+
+  /**
+   * Commit a canonical terminal result and converge its owner before acknowledging.
+   * Startup failures and completed cooperative cancellation may precede Invocation
+   * or have no active operation. Other outcomes identify their admitted operation.
+   * Subject: `execution-attempt.outcome.submit`
+   * Type: Request (RPC) — Worker Runtime → Authority
+   */
+  'outcome.submit': {
+    request: z
+      .object({
+        executionAttemptId: z.string().min(1),
+        runtimeGeneration: z.number().int().positive(),
+        operationId: z.string().min(1).optional(),
+        outcome: ExecutionAttemptOutcomeSchema,
+      })
+      .strict()
+      .superRefine((request, ctx) => {
+        if (
+          !request.operationId &&
+          request.outcome.kind !== 'cancelled' &&
+          !(request.outcome.kind === 'technical-failure' && request.outcome.stage === 'startup')
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['operationId'],
+            message: 'An admitted operation is required for this outcome',
+          });
+        }
+      }),
+    response: z.object({ decision: OutcomeAckDecisionSchema }).strict(),
   },
 } as const satisfies SchemaRecord;
 
@@ -349,4 +504,29 @@ export type ExecutionAttemptOperationReceiptCode = ExecutionAttemptOperationRece
 /** Refusal vocabulary of `execution-attempt.operation.deliver`. */
 export type ExecutionAttemptOperationDeliveryRefusalReason = NonNullable<
   ExecutionAttemptOperationReceipt['refusalReason']
+>;
+
+/** Runtime request for its immutable instruction. */
+export type ExecutionAttemptInstructionGetRequest = z.infer<
+  (typeof ExecutionAttemptSchemas)['instruction.get']['request']
+>;
+/** Authority response containing the immutable instruction or a refusal. */
+export type ExecutionAttemptInstructionGetResponse = z.infer<
+  (typeof ExecutionAttemptSchemas)['instruction.get']['response']
+>;
+/** Runtime's semantic Preparation-success report. */
+export type ExecutionAttemptOperationReportRequest = z.infer<
+  (typeof ExecutionAttemptSchemas)['operation.report']['request']
+>;
+/** Authority's replay-safe Preparation acceptance. */
+export type ExecutionAttemptOperationReportResponse = z.infer<
+  (typeof ExecutionAttemptSchemas)['operation.report']['response']
+>;
+/** Runtime's terminal result submission. */
+export type ExecutionAttemptOutcomeSubmitRequest = z.infer<
+  (typeof ExecutionAttemptSchemas)['outcome.submit']['request']
+>;
+/** Durable outcome and owner-convergence acknowledgement. */
+export type ExecutionAttemptOutcomeSubmitResponse = z.infer<
+  (typeof ExecutionAttemptSchemas)['outcome.submit']['response']
 >;

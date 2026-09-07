@@ -59,6 +59,7 @@ function makeProvisionRequest(
     workerConfig: overrides?.workerConfig ?? makeWorkerConfig({ busUrl: TEST_BUS_URL }),
     workerManifest: overrides?.workerManifest ?? { contributionRefs: [] },
     provisioningStartedAt: '2026-07-27T10:00:00.000Z',
+    bootstrapDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
   };
 }
 
@@ -473,7 +474,10 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     const { handle } = await provider.provision(request, new AbortController().signal);
 
-    expect(capturedAttempt).toEqual({ executionAttemptId: 'attempt-identity' });
+    expect(capturedAttempt).toEqual({
+      executionAttemptId: 'attempt-identity',
+      bootstrapDeadlineAt: request.bootstrapDeadlineAt,
+    });
     expect(capturedConfig?.busUrl).toBe(TEST_BUS_URL);
     // The registered identity is keyed by the attempt, which is what makes the
     // thread an authenticated attempt peer at the Authority's gates.

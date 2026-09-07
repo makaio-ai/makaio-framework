@@ -1,10 +1,12 @@
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { WebSocketClientTransport, HmacAuth } from '@makaio/bus-transport-websocket';
+import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces, type WorkflowWorkerBusAuth } from '@makaio/contracts';
 import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import type { Toolset } from '@makaio/tools-core';
 import type { WorkerRuntimeContributions } from './worker-contributions.js';
+import { createWorkerBusAuth } from '../worker-bus-auth.js';
+import type { BootstrapRuntimeConnection } from '../bootstrap-start-client.js';
 
 /**
  * Handle returned by {@link bootWorkerBus} representing an active
@@ -24,11 +26,11 @@ export interface WorkerRuntimeHandle {
 }
 
 /**
- * Boot an isolated bus instance for a workflow worker.
+ * Acquire an isolated bus connection handle before asynchronous bootstrap begins.
  *
  * Creates a fresh bus, registers framework contract namespaces, and
- * optionally connects a WebSocket client transport when `busUrl` is
- * provided.
+ * optionally installs a WebSocket client transport when `busUrl` is
+ * provided. The caller owns cleanup before invoking `connect`.
  *
  * If `busAuth.kind === 'hmac'`, the HMAC secret is passed to the
  * transport for challenge/response authentication. An `identityId` turns that
@@ -37,13 +39,13 @@ export interface WorkerRuntimeHandle {
  * Attempt-owned workers claim their `executionAttemptId` here, because the
  * Authority's attempt gates take their caller identity from that peer.
  * @param config - Bus connection configuration from the workflow worker config.
- * @returns A handle with the bus instance and a close method.
+ * @returns A handle with the bus instance, connect and close methods.
  */
-export async function bootWorkerBus(config: {
+export function createWorkerBus(config: {
   readonly busUrl?: string;
   readonly busAuth: WorkflowWorkerBusAuth;
   readonly identityId?: string;
-}): Promise<WorkerRuntimeBusHandle> {
+}): BootstrapRuntimeConnection {
   const bus = createBusInstance();
   bus.registerNamespaces(FrameworkContractNamespaces);
   bus.registerNamespaces(FrameworkStorageNamespaces);
@@ -51,19 +53,15 @@ export async function bootWorkerBus(config: {
   if (!config.busUrl) {
     return {
       bus,
-      close() {
-        // No transport to disconnect; nothing to do.
-      },
+      connect: async (signal) => signal.throwIfAborted(),
+      close: () => bus.disconnect(),
     };
   }
 
-  const auth =
-    config.busAuth.kind === 'hmac'
-      ? new HmacAuth({
-          secret: config.busAuth.secret,
-          ...(config.identityId !== undefined && { identityId: config.identityId }),
-        })
-      : undefined;
+  const auth = createWorkerBusAuth(
+    config.busAuth.kind === 'hmac' ? config.busAuth.secret : undefined,
+    config.identityId,
+  );
 
   const transport = new WebSocketClientTransport({
     url: config.busUrl,
@@ -72,14 +70,48 @@ export async function bootWorkerBus(config: {
   });
 
   bus.registerTransport(transport);
-  await bus.connect();
-
   return {
     bus,
+    async connect(signal) {
+      try {
+        signal.throwIfAborted();
+        const onAbort = (): void => bus.disconnect();
+        signal.addEventListener('abort', onAbort, { once: true });
+        try {
+          await bus.connect();
+        } finally {
+          signal.removeEventListener('abort', onAbort);
+        }
+        signal.throwIfAborted();
+      } catch (error) {
+        bus.disconnect();
+        throw error;
+      }
+    },
     async close() {
       await bus.disconnect();
     },
   };
+}
+
+/**
+ * Acquire and connect an unbound worker bus without an Attempt bootstrap budget.
+ * @param config - Bus location and optional authenticated identity.
+ * @param signal - Caller cancellation.
+ * @returns The connected worker bus and its cleanup handle.
+ */
+export async function bootWorkerBus(
+  config: Parameters<typeof createWorkerBus>[0],
+  signal: AbortSignal = new AbortController().signal,
+): Promise<WorkerRuntimeBusHandle> {
+  const handle = createWorkerBus(config);
+  try {
+    await handle.connect(signal);
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
 }
 
 /**

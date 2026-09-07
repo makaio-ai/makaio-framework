@@ -3,16 +3,53 @@ import {
   evaluateAttemptReachability,
   evaluateOperationAdmission,
   evaluateOperationCompletion,
+  evaluatePreparationReport,
   evaluateRuntimeReadiness,
   evaluateRuntimeRegistration,
   type AdmitOperationInput,
   type AttemptControlState,
+  type AttemptExecutionState,
   type AttemptReachability,
+  type ReportOperationInput,
 } from '../execution-attempt-repository.js';
 
 const STORED_AT = '2026-09-06T12:00:00.000Z';
 const FALLBACK_AT = '2026-09-06T13:00:00.000Z';
 const IDS = { executionId: 'owner', executionAttemptId: 'attempt' };
+const EXECUTION: AttemptExecutionState = {
+  instruction: {
+    id: 'instruction',
+    revision: '1',
+    workload: { kind: 'test', version: '1', input: {} },
+    preservation: { required: [] },
+  },
+  preparationReceipts: [],
+};
+const WORKSPACE_EXECUTION: AttemptExecutionState = {
+  ...EXECUTION,
+  instruction: {
+    ...EXECUTION.instruction,
+    workspace: {
+      provisioning: 'create',
+      custody: 'disposable',
+      sourceRoots: [{ id: 'sources', path: 'sources' }],
+      setup: [],
+    },
+  },
+};
+const REPORT: ReportOperationInput = {
+  ...IDS,
+  runtimeGeneration: 7,
+  operationId: 'preparation',
+  result: {
+    kind: 'workspace-prepared',
+    binding: { workspaceRoot: '/workspace', sourceRoots: [{ id: 'sources', path: '/workspace/sources' }] },
+  },
+};
+const PREPARED_EXECUTION: AttemptExecutionState = {
+  ...WORKSPACE_EXECUTION,
+  preparationReceipts: [{ operationId: REPORT.operationId, runtimeGeneration: 7, result: REPORT.result }],
+};
 const CONTROL: AttemptControlState = Object.freeze({
   runtimeGeneration: 7,
   runtimeIncarnationId: 'incarnation',
@@ -79,7 +116,9 @@ describe('runtime registration decisions', () => {
 describe('operation admission decisions', () => {
   it('replays stored operation generation and time before gate, readiness, and generation refusals', () => {
     const control: AttemptControlState = Object.freeze({ ...BUSY, operationStartGate: 'closed', runtimeReadyAt: null });
-    expect(evaluateOperationAdmission(control, { ...ADMISSION, runtimeGeneration: 99 }, FALLBACK_AT)).toEqual({
+    expect(
+      evaluateOperationAdmission(control, { ...ADMISSION, runtimeGeneration: 99 }, FALLBACK_AT, EXECUTION),
+    ).toEqual({
       kind: 'duplicate',
       operationId: 'operation',
       runtimeGeneration: 5,
@@ -94,7 +133,7 @@ describe('operation admission decisions', () => {
       activeOperationGeneration: null,
       activeOperationAdmittedAt: null,
     });
-    expect(evaluateOperationAdmission(control, ADMISSION, FALLBACK_AT)).toEqual({
+    expect(evaluateOperationAdmission(control, ADMISSION, FALLBACK_AT, EXECUTION)).toEqual({
       kind: 'duplicate',
       operationId: 'operation',
       runtimeGeneration: 7,
@@ -108,6 +147,7 @@ describe('operation admission decisions', () => {
         Object.freeze({ ...BUSY, operationStartGate: 'closed', runtimeReadyAt: null }),
         { ...ADMISSION, admissionKey: 'other', runtimeGeneration: 99 },
         FALLBACK_AT,
+        EXECUTION,
       ),
     ).toEqual({ kind: 'operation-active', operationId: 'operation' });
   });
@@ -119,12 +159,13 @@ describe('operation admission decisions', () => {
         Object.freeze({ ...CONTROL, operationStartGate: 'closed', runtimeReadyAt: null }),
         stale,
         FALLBACK_AT,
+        EXECUTION,
       ),
     ).toEqual({ kind: 'gate-closed' });
-    expect(evaluateOperationAdmission(Object.freeze({ ...CONTROL, runtimeReadyAt: null }), stale, FALLBACK_AT)).toEqual(
-      { kind: 'not-ready' },
-    );
-    expect(evaluateOperationAdmission(CONTROL, stale, FALLBACK_AT)).toEqual({
+    expect(
+      evaluateOperationAdmission(Object.freeze({ ...CONTROL, runtimeReadyAt: null }), stale, FALLBACK_AT, EXECUTION),
+    ).toEqual({ kind: 'not-ready' });
+    expect(evaluateOperationAdmission(CONTROL, stale, FALLBACK_AT, EXECUTION)).toEqual({
       kind: 'stale-generation',
       runtimeGeneration: 7,
     });
@@ -133,12 +174,50 @@ describe('operation admission decisions', () => {
   it('permits a probe without readiness but still fences its generation', () => {
     const control = Object.freeze({ ...CONTROL, runtimeReadyAt: null });
     const probe: AdmitOperationInput = Object.freeze({ ...ADMISSION, operationKind: 'runtime-probe' });
-    expect(evaluateOperationAdmission(control, probe, FALLBACK_AT)).toBeNull();
-    expect(evaluateOperationAdmission(control, { ...probe, runtimeGeneration: 99 }, FALLBACK_AT)).toEqual({
+    expect(evaluateOperationAdmission(control, probe, FALLBACK_AT, EXECUTION)).toBeNull();
+    expect(evaluateOperationAdmission(control, { ...probe, runtimeGeneration: 99 }, FALLBACK_AT, EXECUTION)).toEqual({
       kind: 'stale-generation',
       runtimeGeneration: 7,
     });
-    expect(evaluateOperationAdmission(CONTROL, ADMISSION, FALLBACK_AT)).toBeNull();
+    expect(evaluateOperationAdmission(CONTROL, ADMISSION, FALLBACK_AT, EXECUTION)).toBeNull();
+  });
+
+  it('requires current Preparation for both generic Invocation and the retained workflow operation', () => {
+    for (const operationKind of ['workload-invocation', 'workflow-run'] as const) {
+      const input = { ...ADMISSION, operationKind };
+      expect(evaluateOperationAdmission(CONTROL, input, FALLBACK_AT, WORKSPACE_EXECUTION)).toEqual({
+        kind: 'preparation-required',
+      });
+      expect(evaluateOperationAdmission(CONTROL, input, FALLBACK_AT, PREPARED_EXECUTION)).toBeNull();
+      expect(
+        evaluateOperationAdmission(
+          { ...CONTROL, runtimeGeneration: 8 },
+          { ...input, runtimeGeneration: 8 },
+          FALLBACK_AT,
+          PREPARED_EXECUTION,
+        ),
+      ).toEqual({ kind: 'preparation-required' });
+      expect(evaluateOperationAdmission(CONTROL, input, FALLBACK_AT, EXECUTION)).toBeNull();
+    }
+  });
+
+  it('refuses unnecessary or repeated Preparation but permits preparation of a replacement runtime', () => {
+    const input = { ...ADMISSION, operationKind: 'workspace-preparation' as const, admissionKey: 'fresh-key' };
+    expect(evaluateOperationAdmission(CONTROL, input, FALLBACK_AT, EXECUTION)).toEqual({
+      kind: 'preparation-not-required',
+    });
+    expect(evaluateOperationAdmission(CONTROL, input, FALLBACK_AT, WORKSPACE_EXECUTION)).toBeNull();
+    expect(evaluateOperationAdmission(CONTROL, input, FALLBACK_AT, PREPARED_EXECUTION)).toEqual({
+      kind: 'preparation-already-completed',
+    });
+    expect(
+      evaluateOperationAdmission(
+        { ...CONTROL, runtimeGeneration: 8 },
+        { ...input, runtimeGeneration: 8 },
+        FALLBACK_AT,
+        PREPARED_EXECUTION,
+      ),
+    ).toBeNull();
   });
 });
 
@@ -173,6 +252,91 @@ describe('operation completion decisions', () => {
     });
     expect(evaluateOperationCompletion(BUSY, input)).toBeNull();
     expect(BUSY.activeOperationId).toBe('operation');
+  });
+
+  it('keeps Preparation and Invocation active until their semantic result is accepted', () => {
+    for (const activeOperationKind of ['workspace-preparation', 'workload-invocation'] as const) {
+      expect(evaluateOperationCompletion({ ...BUSY, activeOperationKind }, input)).toEqual({ kind: 'result-required' });
+    }
+    expect(evaluateOperationCompletion({ ...BUSY, activeOperationKind: 'runtime-probe' }, input)).toBeNull();
+  });
+});
+
+describe('Preparation report decisions', () => {
+  const reachable: AttemptReachability = { matchesExecution: true, settled: false, active: true, allocated: true };
+  const preparing: AttemptControlState = {
+    ...CONTROL,
+    activeOperationId: 'preparation',
+    activeOperationKind: 'workspace-preparation',
+    activeOperationKey: 'prepare',
+    activeOperationGeneration: 7,
+    activeOperationAdmittedAt: STORED_AT,
+  };
+
+  it('accepts only the matching active Preparation and requested source-root identities', () => {
+    expect(evaluatePreparationReport(reachable, preparing, WORKSPACE_EXECUTION, REPORT)).toBeNull();
+    expect(evaluatePreparationReport(reachable, CONTROL, WORKSPACE_EXECUTION, REPORT)).toEqual({
+      kind: 'no-active-operation',
+    });
+    expect(
+      evaluatePreparationReport(
+        reachable,
+        { ...preparing, activeOperationKind: 'workload-invocation' },
+        WORKSPACE_EXECUTION,
+        REPORT,
+      ),
+    ).toEqual({ kind: 'operation-mismatch' });
+    expect(
+      evaluatePreparationReport(reachable, { ...preparing, runtimeGeneration: 8 }, WORKSPACE_EXECUTION, REPORT),
+    ).toEqual({ kind: 'stale-generation' });
+    expect(evaluatePreparationReport(reachable, preparing, EXECUTION, REPORT)).toEqual({
+      kind: 'preparation-not-required',
+    });
+    expect(
+      evaluatePreparationReport(reachable, preparing, WORKSPACE_EXECUTION, {
+        ...REPORT,
+        result: { kind: 'workspace-prepared', binding: { workspaceRoot: '/workspace', sourceRoots: [] } },
+      }),
+    ).toEqual({ kind: 'binding-mismatch' });
+  });
+
+  it('acknowledges historical semantic replay without reinstalling an obsolete binding', () => {
+    const historical = { ...reachable, settled: true, active: false, allocated: false };
+    const replacement = { ...CONTROL, runtimeGeneration: 99, activeOperationId: 'later' };
+    const reordered: ReportOperationInput = {
+      ...REPORT,
+      result: {
+        binding: { sourceRoots: [{ path: '/workspace/sources', id: 'sources' }], workspaceRoot: '/workspace' },
+        kind: 'workspace-prepared',
+      },
+    };
+    expect(evaluatePreparationReport(historical, replacement, PREPARED_EXECUTION, reordered)).toEqual({
+      kind: 'duplicate',
+      binding: REPORT.result.binding,
+    });
+    expect(replacement.runtimeGeneration).toBe(99);
+    expect(PREPARED_EXECUTION.preparationReceipts).toHaveLength(1);
+    expect(
+      evaluatePreparationReport({ ...historical, matchesExecution: false }, replacement, PREPARED_EXECUTION, REPORT),
+    ).toEqual({ kind: 'not-found' });
+  });
+
+  it('preserves the original result on conflicting replay and fences an unaccepted late report', () => {
+    expect(
+      evaluatePreparationReport(reachable, CONTROL, PREPARED_EXECUTION, {
+        ...REPORT,
+        result: { ...REPORT.result, binding: { ...REPORT.result.binding, workspaceRoot: '/other' } },
+      }),
+    ).toEqual({ kind: 'conflict' });
+    expect(
+      evaluatePreparationReport(reachable, CONTROL, PREPARED_EXECUTION, { ...REPORT, runtimeGeneration: 8 }),
+    ).toEqual({ kind: 'conflict' });
+    expect(evaluatePreparationReport({ ...reachable, active: false }, preparing, WORKSPACE_EXECUTION, REPORT)).toEqual({
+      kind: 'fenced',
+    });
+    expect(evaluatePreparationReport({ ...reachable, settled: true }, preparing, WORKSPACE_EXECUTION, REPORT)).toEqual({
+      kind: 'resolved',
+    });
   });
 });
 

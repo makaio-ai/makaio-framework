@@ -73,8 +73,13 @@ export interface RotateWorkflowExecutionBusSecretParams {
 /** Static execution subjects derived from their canonical definitions. */
 const STATIC_EXECUTION_SUBJECTS = [
   ExecutionAttemptSubjects.runtime.register,
+  ExecutionAttemptSubjects.bootstrap.awaitStart,
+  ExecutionAttemptSubjects.instruction.get,
   ExecutionAttemptSubjects.operation.admit,
+  ExecutionAttemptSubjects.operation.report,
   ExecutionAttemptSubjects.operation.deliver,
+  ExecutionAttemptSubjects.outcome.submit,
+  WorkerSubjects.runtime.inputs.get,
   WorkerSubjects.control.outcome.submit,
   WorkflowSubjects.getRunContext,
   AdapterSubsystemSubjects.listAdapters,

@@ -1,17 +1,21 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { makeTestInstruction } from '../testing/attempt-fixtures.js';
 import { sql } from 'drizzle-orm';
 import {
   RECOVERY_EVIDENCE_LIMITS,
   type ExecutionAttemptOperationKind,
+  type ExecutionAttemptInstruction,
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import { createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
+import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import type {
   BeginProvisioningInput,
   ExecutionAttemptRecord,
   ExecutionAttemptRepository,
   OutcomeCodec,
 } from '../index.js';
+import { RuntimeOutcomeFenceMismatchError, type ReportOperationInput } from '../execution-attempt-repository.js';
 import { DuplicateExecutionAttemptError } from '../index.js';
 import {
   counterCodec,
@@ -50,6 +54,8 @@ import type { ProviderOperationClaim } from '../provider-operation.js';
 interface RealizationHarness<TOutcome> {
   /** Repository exposing the full port surface. */
   readonly repository: Required<ExecutionAttemptRepository<TOutcome>>;
+  /** Independent controller sharing the same durable state. */
+  readonly peer: Required<ExecutionAttemptRepository<TOutcome>>;
   /**
    * Write an attempt's committed outcome text behind the port's back.
    *
@@ -60,8 +66,13 @@ interface RealizationHarness<TOutcome> {
    * @param text - Durable text to store.
    */
   readonly writeStoredOutcomeText: (executionAttemptId: string, text: string) => Promise<void>;
+  /**
+   * Seed the legacy absence of a bootstrap deadline without changing other facts.
+   * @param executionAttemptId - Attempt whose deadline to clear.
+   */
+  readonly clearStoredBootstrapDeadline: (executionAttemptId: string) => Promise<void>;
   /** Release whatever the realization holds open. */
-  readonly dispose: () => void;
+  readonly dispose: () => void | Promise<void>;
 }
 
 /**
@@ -86,8 +97,14 @@ const REALIZATIONS: ReadonlyArray<readonly [string, RealizationFactory]> = [
       const repository = createInMemoryAttemptRepository(codec);
       return {
         repository,
+        peer: createInMemoryAttemptRepository(codec, repository),
         writeStoredOutcomeText: async (executionAttemptId, text) => {
           repository.committedOutcomes.set(executionAttemptId, text);
+        },
+        clearStoredBootstrapDeadline: async (executionAttemptId) => {
+          const attempt = repository.attempts.get(executionAttemptId);
+          if (!attempt) throw new Error('Missing test attempt');
+          repository.attempts.set(executionAttemptId, { ...attempt, bootstrapDeadlineAt: null });
         },
         dispose: () => {},
       };
@@ -97,15 +114,24 @@ const REALIZATIONS: ReadonlyArray<readonly [string, RealizationFactory]> = [
     'sqlite',
     async (codec) => {
       const context: TestDbContext = await createTempDb('execution-attempt-parity');
+      const secondary = await createDatabaseClient({ url: `file:${context.dbPath}` });
       return {
         repository: await createSqliteAttemptRepository(context.db, codec),
+        peer: await createSqliteAttemptRepository(secondary.db, codec),
         writeStoredOutcomeText: async (executionAttemptId, text) => {
           await context.exec(
             sql`UPDATE test_execution_attempt SET workflow_result = ${text}
               WHERE execution_attempt_id = ${executionAttemptId}`,
           );
         },
-        dispose: context.cleanup,
+        clearStoredBootstrapDeadline: async (executionAttemptId) => {
+          await context.exec(sql`UPDATE test_execution_attempt SET bootstrap_deadline_at = NULL
+            WHERE execution_attempt_id = ${executionAttemptId}`);
+        },
+        dispose: async () => {
+          await secondary.close();
+          context.cleanup();
+        },
       };
     },
   ],
@@ -167,7 +193,7 @@ async function startAttempt(
   ids: { readonly executionId: string; readonly executionAttemptId: string },
   overrides: Partial<BeginProvisioningInput> = {},
 ): Promise<ProviderOperationClaim> {
-  await repository.createAttempt(ids);
+  await repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
   const grantor: ProvisioningClaimGrantor = repository;
   const decision = await grantor.beginProvisioning(
     makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId, overrides),
@@ -178,6 +204,38 @@ async function startAttempt(
 
 /** Runtime incarnation the control-state cases register unless they need a second one. */
 const RUNTIME_INCARNATION_ID = 'runtime-incarnation-1';
+
+/**
+ * Create a ready scratch attempt with a required Preparation operation.
+ * @param repository - Real repository under test.
+ * @returns Successful report input for its admitted Preparation.
+ */
+async function preparationAttempt(
+  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+): Promise<ReportOperationInput> {
+  const ids = nextIds();
+  await repository.createAttempt({
+    bootstrapTimeoutMs: 60_000,
+    ...ids,
+    instruction: makeTestInstruction({
+      workspace: { provisioning: 'create', custody: 'disposable', sourceRoots: [], setup: [] },
+    }),
+  });
+  const provisioning = await repository.beginProvisioning(
+    makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId),
+  );
+  if (provisioning.kind !== 'started') throw new Error('Expected provisioning');
+  await repository.recordAllocation({ claim: provisioning.claim, allocationRef: makeTestAllocationRef() });
+  const runtimeGeneration = await registerTestRuntime(repository, ids);
+  await proveTestReadiness(repository, ids, runtimeGeneration);
+  const operationId = await admitTestOperation(repository, ids, runtimeGeneration, 'workspace-preparation', 'prepare');
+  return {
+    ...ids,
+    operationId,
+    runtimeGeneration,
+    result: { kind: 'workspace-prepared', binding: { workspaceRoot: '/scratch/first', sourceRoots: [] } },
+  };
+}
 
 /**
  * Create an attempt, win its provisioning claim, and record an allocation.
@@ -278,8 +336,364 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
     harness = await createHarness(workflowRunResultOutcomeCodec);
   });
 
-  afterAll(() => {
-    harness.dispose();
+  afterAll(async () => {
+    await harness.dispose();
+  });
+
+  it('captures creation and bootstrap deadline from exactly one clock observation', async () => {
+    const ids = nextIds();
+    const instant = Date.parse('2026-09-07T10:00:00.000Z');
+    const clock = vi
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(instant)
+      .mockReturnValue(instant + 1_000);
+    let record: ExecutionAttemptRecord;
+    try {
+      record = await harness.repository.createAttempt({
+        ...ids,
+        instruction: makeTestInstruction(),
+        bootstrapTimeoutMs: 12_345,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+    expect(record.createdAt).toBe('2026-09-07T10:00:00.000Z');
+    expect(record.bootstrapDeadlineAt).toBe('2026-09-07T10:00:12.345Z');
+    expect(await harness.peer.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toEqual(record);
+  });
+
+  it.each([
+    0,
+    -1,
+    0.5,
+    NaN,
+    Infinity,
+    -Infinity,
+    Number.MAX_SAFE_INTEGER,
+    8_640_000_000_000_000,
+  ])('rejects invalid or overflowing bootstrap budget %s before moving the active pointer', async (bootstrapTimeoutMs) => {
+    const original = nextIds();
+    const record = await harness.repository.createAttempt({
+      ...original,
+      instruction: makeTestInstruction(),
+      bootstrapTimeoutMs: 60_000,
+    });
+    const invalid = { executionId: original.executionId, executionAttemptId: nextIds().executionAttemptId };
+    await expect(
+      harness.peer.createAttempt({ ...invalid, instruction: makeTestInstruction(), bootstrapTimeoutMs }),
+    ).rejects.toThrow(RangeError);
+    expect(await harness.repository.getActiveAttempt(original.executionId, original.executionAttemptId)).toEqual(
+      record,
+    );
+    expect(await harness.repository.readBootstrapStartState(invalid)).toBeNull();
+    expect(await harness.peer.readBootstrapStartState(original)).toMatchObject({
+      active: true,
+      operationStartGate: 'open',
+    });
+  });
+
+  it('reads coherent bootstrap facts through provisioning, allocation, termination and settlement', async () => {
+    const ids = nextIds();
+    expect(await harness.repository.readBootstrapStartState(ids)).toBeNull();
+    const claim = await startAttempt(harness.repository, ids);
+    const pending = await harness.peer.readBootstrapStartState(ids);
+    expect(pending).toEqual({
+      settled: false,
+      active: true,
+      allocated: false,
+      allocationTerminated: false,
+      operationStartGate: 'open',
+      bootstrapDeadlineAt: expect.any(String),
+    });
+    expect(await harness.peer.readBootstrapStartState({ ...ids, executionId: 'wrong-owner' })).toBeNull();
+    await harness.repository.recordAllocation({ claim, allocationRef: makeTestAllocationRef() });
+    expect(await harness.peer.readBootstrapStartState(ids)).toEqual({ ...pending, allocated: true });
+    await harness.repository.recordAllocationTerminated({ claim, evidence: makeEvidence() });
+    expect(await harness.peer.readBootstrapStartState(ids)).toEqual({
+      ...pending,
+      allocated: true,
+      allocationTerminated: true,
+    });
+    await harness.repository.recordInfrastructureFailure({ claim, executionId: ids.executionId });
+    expect(await harness.peer.readBootstrapStartState(ids)).toEqual({
+      ...pending,
+      allocated: true,
+      allocationTerminated: true,
+      settled: true,
+      operationStartGate: 'closed',
+    });
+  });
+
+  it('reports supersession without hiding the historical allocation or changing its deadline', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.repository, ids);
+    const previous = await harness.peer.readBootstrapStartState(ids);
+    const replacement = { executionId: ids.executionId, executionAttemptId: nextIds().executionAttemptId };
+    await harness.repository.createAttempt({
+      ...replacement,
+      instruction: makeTestInstruction(),
+      bootstrapTimeoutMs: 1,
+    });
+    expect(await harness.peer.readBootstrapStartState(ids)).toEqual({
+      ...previous,
+      active: false,
+      operationStartGate: 'closed',
+    });
+    expect(await harness.peer.readBootstrapStartState(replacement)).toMatchObject({
+      active: true,
+      allocated: false,
+      operationStartGate: 'open',
+    });
+  });
+
+  it.each([
+    'pending',
+    'allocated',
+    'settled',
+  ] as const)('keeps legacy %s attempts readable without extending bootstrap', async (status) => {
+    const ids = nextIds();
+    if (status === 'pending') {
+      await harness.repository.createAttempt({
+        ...ids,
+        instruction: makeTestInstruction(),
+        bootstrapTimeoutMs: 60_000,
+      });
+    } else {
+      await allocateAttempt(harness.repository, ids);
+    }
+    if (status === 'settled') {
+      await harness.repository.commitOutcome({
+        ...ids,
+        result: harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'completed')),
+      });
+    }
+    await harness.clearStoredBootstrapDeadline(ids.executionAttemptId);
+    expect(await harness.peer.readBootstrapStartState(ids)).toMatchObject({
+      bootstrapDeadlineAt: null,
+      settled: status === 'settled',
+      allocated: status !== 'pending',
+    });
+    expect(await harness.peer.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
+      bootstrapDeadlineAt: null,
+      status,
+    });
+    expect(await harness.peer.getInstruction(ids)).toEqual(makeTestInstruction());
+    if (status === 'allocated') {
+      expect(
+        (await harness.peer.recovery.getRecoverableAttempts(ids.executionId)).find(
+          (attempt) => attempt.executionAttemptId === ids.executionAttemptId,
+        ),
+      ).toMatchObject({ bootstrapDeadlineAt: null });
+    }
+  });
+
+  it('checks runtime generation at commit without rejecting historical canonical duplicates', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const result = harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'failed'));
+    const staleSubmission = { ...ids, result, runtimeFence: { runtimeGeneration, operationId: null } };
+    // Validation may have finished on one controller before a second controller
+    // replaces the runtime. Only the commit's own durable read decides.
+    const replacementGeneration = await registerTestRuntime(harness.peer, ids, 'replacement-before-commit');
+    await expect(harness.repository.commitOutcome(staleSubmission)).rejects.toThrow(RuntimeOutcomeFenceMismatchError);
+    expect(await harness.peer.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
+      settlementKind: null,
+      runtimeGeneration: replacementGeneration,
+    });
+    expect(
+      await harness.peer.commitOutcome({
+        ...ids,
+        result,
+        runtimeFence: { runtimeGeneration: replacementGeneration, operationId: null },
+      }),
+    ).toMatchObject({ kind: 'accepted' });
+    expect(await harness.repository.commitOutcome(staleSubmission)).toMatchObject({ kind: 'duplicate' });
+    expect(
+      await harness.repository.commitOutcome({
+        ...staleSubmission,
+        result: harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'completed')),
+      }),
+    ).toEqual({ kind: 'conflict' });
+  });
+
+  it('checks the active operation atomically before a new runtime outcome is committed', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    const result = harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId, 'completed'));
+    const operationId = await admitTestOperation(harness.peer, ids, runtimeGeneration, 'workload-invocation', 'invoke');
+    for (const staleOperationId of [null, 'another-operation']) {
+      await expect(
+        harness.repository.commitOutcome({
+          ...ids,
+          result,
+          runtimeFence: { runtimeGeneration, operationId: staleOperationId },
+        }),
+      ).rejects.toThrow(RuntimeOutcomeFenceMismatchError);
+    }
+    expect(await harness.peer.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
+      settlementKind: null,
+      activeOperationId: operationId,
+    });
+    expect(
+      await harness.repository.commitOutcome({ ...ids, result, runtimeFence: { runtimeGeneration, operationId } }),
+    ).toMatchObject({ kind: 'accepted' });
+  });
+
+  it('preserves superseded-attempt precedence over a stale runtime fence', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    await harness.peer.createAttempt({
+      bootstrapTimeoutMs: 60_000,
+      ...ids,
+      executionAttemptId: `${ids.executionAttemptId}-replacement`,
+      instruction: makeTestInstruction(),
+    });
+    expect(
+      await harness.repository.commitOutcome({
+        ...ids,
+        result: harness.repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId)),
+        runtimeFence: { runtimeGeneration: runtimeGeneration + 1, operationId: null },
+      }),
+    ).toEqual({ kind: 'fenced' });
+  });
+
+  it('snapshots its instruction without retaining or freezing owner input', async () => {
+    const ids = nextIds();
+    const instruction = makeTestInstruction({ workload: { kind: 'test', version: '1', input: { value: 'original' } } });
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction });
+    instruction.workload.input = { value: 'changed' };
+    expect(await harness.repository.getInstruction(ids)).toMatchObject({ workload: { input: { value: 'original' } } });
+    const stored = await harness.repository.getInstruction(ids);
+    expect(Object.isFrozen(stored?.workload.input)).toBe(true);
+    expect(await harness.repository.getInstruction({ ...ids, executionId: 'other-owner' })).toBeNull();
+    expect(await harness.repository.getInstruction({ ...ids, executionAttemptId: 'missing' })).toBeNull();
+    const invalid = { ...instruction, revision: '' } satisfies ExecutionAttemptInstruction;
+    await expect(
+      harness.repository.createAttempt({
+        bootstrapTimeoutMs: 60_000,
+        executionId: ids.executionId,
+        executionAttemptId: `${ids.executionAttemptId}-invalid`,
+        instruction: invalid,
+      }),
+    ).rejects.toThrow();
+    expect(await harness.repository.getActiveAttempt(ids.executionId, ids.executionAttemptId)).not.toBeNull();
+  });
+
+  it('admits a workspace-less invocation without inventing a preparation result', async () => {
+    const ids = nextIds();
+    const runtimeGeneration = await readyAttempt(harness.repository, ids);
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        runtimeGeneration,
+        operationKind: 'workspace-preparation',
+        admissionKey: 'unneeded',
+      }),
+    ).toEqual({ kind: 'preparation-not-required' });
+    expect(
+      await harness.repository.admitOperation({
+        ...ids,
+        runtimeGeneration,
+        operationKind: 'workload-invocation',
+        admissionKey: 'invoke',
+      }),
+    ).toMatchObject({ kind: 'admitted' });
+  });
+
+  it('requires a preparation result and replays its receipt after invocation and settlement', async () => {
+    const repository = harness.repository;
+    const report = await preparationAttempt(repository);
+    expect(await repository.completeOperation(report)).toEqual({ kind: 'result-required' });
+    expect(await repository.reportOperation(report)).toEqual({ kind: 'accepted', binding: report.result.binding });
+    const record = await repository.getActiveAttempt(report.executionId, report.executionAttemptId);
+    expect(record).toMatchObject({
+      activeOperationId: null,
+      lastCompletedOperationId: report.operationId,
+      preparationReceipts: [
+        { operationId: report.operationId, runtimeGeneration: report.runtimeGeneration, result: report.result },
+      ],
+    });
+    expect(
+      await repository.admitOperation({
+        ...report,
+        operationKind: 'workspace-preparation',
+        admissionKey: 'prepare-again',
+      }),
+    ).toEqual({ kind: 'preparation-already-completed' });
+    const invocation = await repository.admitOperation({
+      ...report,
+      operationKind: 'workload-invocation',
+      admissionKey: 'invoke',
+    });
+    expect(invocation.kind).toBe('admitted');
+    expect(await repository.reportOperation(report)).toEqual({ kind: 'duplicate', binding: report.result.binding });
+    if (invocation.kind !== 'admitted') throw new Error('Expected Invocation');
+    expect(await repository.completeOperation({ ...report, operationId: invocation.operationId })).toEqual({
+      kind: 'result-required',
+    });
+    await repository.commitOutcome({
+      ...report,
+      result: repository.canonicalizeOutcome(makeTestWorkflowResult(report.executionId, 'completed')),
+    });
+    expect(await repository.reportOperation(report)).toEqual({ kind: 'duplicate', binding: report.result.binding });
+    expect((await repository.getActiveAttempt(report.executionId, report.executionAttemptId))?.activeOperationId).toBe(
+      invocation.operationId,
+    );
+  });
+
+  it('acknowledges historical receipts without preparing the replacement runtime', async () => {
+    const repository = harness.repository;
+    const report = await preparationAttempt(repository);
+    await repository.reportOperation(report);
+    const runtimeGeneration = await registerTestRuntime(repository, report, 'replacement');
+    await proveTestReadiness(repository, report, runtimeGeneration);
+    expect(await repository.reportOperation(report)).toEqual({ kind: 'duplicate', binding: report.result.binding });
+    expect(
+      await repository.reportOperation({
+        ...report,
+        result: { ...report.result, binding: { workspaceRoot: '/changed', sourceRoots: [] } },
+      }),
+    ).toEqual({ kind: 'conflict' });
+    expect(await repository.reportOperation({ ...report, operationId: 'unaccepted-old-operation' })).toEqual({
+      kind: 'stale-generation',
+    });
+    expect(
+      await repository.admitOperation({
+        ...report,
+        runtimeGeneration,
+        operationKind: 'workload-invocation',
+        admissionKey: 'invoke-replacement',
+      }),
+    ).toEqual({ kind: 'preparation-required' });
+    const operationId = await admitTestOperation(
+      repository,
+      report,
+      runtimeGeneration,
+      'workspace-preparation',
+      'prepare-replacement',
+    );
+    const replacementReport = {
+      ...report,
+      runtimeGeneration,
+      operationId,
+      result: { ...report.result, binding: { workspaceRoot: '/scratch/replacement', sourceRoots: [] } },
+    };
+    expect(await repository.reportOperation(replacementReport)).toEqual({
+      kind: 'accepted',
+      binding: replacementReport.result.binding,
+    });
+    expect(await repository.reportOperation(report)).toEqual({ kind: 'duplicate', binding: report.result.binding });
+    expect(
+      (await repository.getActiveAttempt(report.executionId, report.executionAttemptId))?.preparationReceipts,
+    ).toHaveLength(2);
+    expect(
+      await repository.admitOperation({
+        ...report,
+        runtimeGeneration,
+        operationKind: 'workload-invocation',
+        admissionKey: 'invoke-replacement',
+      }),
+    ).toMatchObject({ kind: 'admitted' });
   });
 
   it('rejects a reused attempt identifier without touching the existing attempt', async () => {
@@ -292,8 +706,12 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
 
     // The port names the error, so a caller can tell a reused identifier from
     // a storage fault without matching on whichever text its store produced.
-    await expect(harness.repository.createAttempt(ids)).rejects.toThrow(DuplicateExecutionAttemptError);
-    await expect(harness.repository.createAttempt(ids)).rejects.toMatchObject({
+    await expect(
+      harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() }),
+    ).rejects.toThrow(DuplicateExecutionAttemptError);
+    await expect(
+      harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() }),
+    ).rejects.toMatchObject({
       executionAttemptId: ids.executionAttemptId,
     });
 
@@ -314,7 +732,11 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
     await harness.repository.recordAllocation({ claim: unrelatedClaim, allocationRef: makeTestAllocationRef() });
 
     const replacement = { executionId: first.executionId, executionAttemptId: `${first.executionAttemptId}-next` };
-    await harness.repository.createAttempt(replacement);
+    await harness.repository.createAttempt({
+      bootstrapTimeoutMs: 60_000,
+      ...replacement,
+      instruction: makeTestInstruction(),
+    });
 
     expect(await harness.repository.recovery.getAttemptWithAllocation(first.executionAttemptId)).toMatchObject({
       status: 'allocated',
@@ -880,7 +1302,11 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
     const runtimeGeneration = await readyAttempt(harness.repository, first);
     const replacement = { executionId: first.executionId, executionAttemptId: `${first.executionAttemptId}-next` };
 
-    await harness.repository.createAttempt(replacement);
+    await harness.repository.createAttempt({
+      bootstrapTimeoutMs: 60_000,
+      ...replacement,
+      instruction: makeTestInstruction(),
+    });
 
     expect(await harness.repository.getAttemptControlState(first.executionAttemptId)).toMatchObject({
       operationStartGate: 'closed',
@@ -905,7 +1331,7 @@ describe.each(REALIZATIONS)('execution attempt port parity (%s)', (_realization,
 
   it('closes the start gate of the pending attempt it abandons', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
 
     expect(await harness.repository.abandonPendingAttempt(ids.executionAttemptId, ids.executionId)).toEqual({
       kind: 'abandoned',
@@ -1300,13 +1726,17 @@ function defineOutcomeParity<TOutcome>(
       harness = await createHarness(variant.codec);
     });
 
-    afterAll(() => {
-      harness.dispose();
+    afterAll(async () => {
+      await harness.dispose();
     });
 
     it('commits an outcome, reports the stored one on replay, and conflicts on a different one', async () => {
       const ids = nextIds();
-      await harness.repository.createAttempt(ids);
+      await harness.repository.createAttempt({
+        bootstrapTimeoutMs: 60_000,
+        ...ids,
+        instruction: makeTestInstruction(),
+      });
       const result = variant.makeOutcome(ids.executionId, 0);
 
       const storedText = harness.repository.canonicalizeOutcome(result).text;
@@ -1360,13 +1790,13 @@ describe.each(
     harness = await createHarness(roundingCounterCodec);
   });
 
-  afterAll(() => {
-    harness.dispose();
+  afterAll(async () => {
+    await harness.dispose();
   });
 
   it('commits, replays, and conflicts on the truncated counter the codec persists', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
 
     // The column holds `1`, so `1` is what the attempt committed — a
     // realization reporting the submitted `1.2` would report an outcome no
@@ -1419,13 +1849,13 @@ describe.each(
     harness = await createHarness(generationCounterCodec);
   });
 
-  afterAll(() => {
-    harness.dispose();
+  afterAll(async () => {
+    await harness.dispose();
   });
 
   it('replays an identical submission as duplicate against the text it stored', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const submitted: GenerationCounterOutcome = { counter: 0, generation: 0 };
 
     // The determinism the port leans on: rendering one outcome twice yields
@@ -1486,13 +1916,13 @@ describe.each(
     harness = await createHarness(urlOutcomeCodec);
   });
 
-  afterAll(() => {
-    harness.dispose();
+  afterAll(async () => {
+    await harness.dispose();
   });
 
   it('commits and replays an outcome structuredClone would refuse', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     // Proof the type is outside `structuredClone`: the assertion below would
     // pass vacuously if a URL were cloneable after all.
     expect(() => structuredClone(new URL('https://outcome.test/a'))).toThrow();
@@ -1532,7 +1962,7 @@ describe.each(
   // one shared instance would report the mutation back to the next reader.
   it('reports a committed outcome no earlier reader can have mutated', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
 
     const accepted = await harness.repository.commitOutcome({
       ...ids,
@@ -1561,7 +1991,7 @@ describe.each(
   // owner a value no later read of the attempt ever produces.
   it('reports an accepted outcome decoded from the stored text, not the rendering the caller held', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const rendering = harness.repository.canonicalizeOutcome(new URL('https://outcome.test/a'));
     // Exactly what a pre-commit validation is handed, mutated exactly where a
     // validator could mutate it. The assertion proves the mutation took, so
@@ -1617,13 +2047,13 @@ describe.each(
     harness = await createHarness(bytesOutcomeCodec);
   });
 
-  afterAll(() => {
-    harness.dispose();
+  afterAll(async () => {
+    await harness.dispose();
   });
 
   it('commits and replays an outcome Object.freeze would refuse', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     // Proof the type is outside `Object.freeze`: the assertions below would
     // pass vacuously if a populated typed array were freezable after all.
     expect(() => Object.freeze(Uint8Array.from([1, 2, 3]))).toThrow();
@@ -1673,13 +2103,13 @@ describe.each(
     harness = await createHarness(counterCodec);
   });
 
-  afterAll(() => {
-    harness.dispose();
+  afterAll(async () => {
+    await harness.dispose();
   });
 
   it('throws instead of reporting conflict when the stored outcome does not parse', async () => {
     const ids = nextIds();
-    await harness.repository.createAttempt(ids);
+    await harness.repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     // Valid JSON the codec refuses, so the failure is the codec's and not
     // `JSON.parse` choking on a truncated write.
     await harness.writeStoredOutcomeText(ids.executionAttemptId, '"not-a-number"');
@@ -1689,6 +2119,65 @@ describe.each(
     await expect(
       harness.repository.commitOutcome({ ...ids, result: harness.repository.canonicalizeOutcome(5) }),
     ).rejects.toThrow('CounterOutcome requires a numeric counter');
+  });
+});
+
+describe('in-memory execution attempt seed contract', () => {
+  it('admits and accepts Preparation when optional settlementKind is omitted', async () => {
+    const ids = nextIds();
+    const attempt: ExecutionAttemptRecord = {
+      ...INITIAL_ATTEMPT_CONTROL_STATE,
+      ...ids,
+      instruction: makeTestInstruction({
+        workspace: { provisioning: 'create', custody: 'disposable', sourceRoots: [], setup: [] },
+      }),
+      preparationReceipts: [],
+      status: 'allocated',
+      allocationRef: makeTestAllocationRef(),
+      createdAt: new Date().toISOString(),
+      bootstrapDeadlineAt: null,
+      providerId: TEST_PROVIDER_ID,
+      allocationLifetime: 'provider-managed',
+      provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
+    };
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec, {
+      attempts: new Map([[ids.executionAttemptId, attempt]]),
+      activeAttempts: new Map([[ids.executionId, ids.executionAttemptId]]),
+    });
+    const runtimeGeneration = await registerTestRuntime(repository, ids);
+    await proveTestReadiness(repository, ids, runtimeGeneration);
+    const operationId = await admitTestOperation(
+      repository,
+      ids,
+      runtimeGeneration,
+      'workspace-preparation',
+      'prepare',
+    );
+    const report: ReportOperationInput = {
+      ...ids,
+      operationId,
+      runtimeGeneration,
+      result: { kind: 'workspace-prepared', binding: { workspaceRoot: '/scratch/seeded', sourceRoots: [] } },
+    };
+
+    expect(repository.attempts.get(ids.executionAttemptId)).not.toHaveProperty('settlementKind');
+    expect(await repository.reportOperation(report)).toEqual({ kind: 'accepted', binding: report.result.binding });
+    expect(repository.attempts.get(ids.executionAttemptId)?.preparationReceipts).toEqual([
+      { operationId, runtimeGeneration, result: report.result },
+    ]);
+  });
+
+  it('still rejects an unreported Preparation result after outcome settlement', async () => {
+    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
+    const report = await preparationAttempt(repository);
+    await repository.commitOutcome({
+      ...report,
+      result: repository.canonicalizeOutcome(makeTestWorkflowResult(report.executionId, 'failed')),
+    });
+
+    expect(repository.attempts.get(report.executionAttemptId)?.settlementKind).toBe('outcome');
+    expect(await repository.reportOperation(report)).toEqual({ kind: 'resolved' });
+    expect(repository.attempts.get(report.executionAttemptId)?.preparationReceipts).toEqual([]);
   });
 });
 
@@ -1727,9 +2216,12 @@ describe('execution attempt port parity (inconsistent durable state)', () => {
         ...INITIAL_ATTEMPT_CONTROL_STATE,
         executionAttemptId,
         executionId: 'tie-exec',
+        instruction: makeTestInstruction(),
+        preparationReceipts: [],
         status: 'allocated',
         allocationRef: makeTestAllocationRef(),
         createdAt,
+        bootstrapDeadlineAt: null,
         providerId: TEST_PROVIDER_ID,
         allocationLifetime: 'provider-managed',
         provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
@@ -1750,9 +2242,12 @@ describe('execution attempt port parity (inconsistent durable state)', () => {
       ...INITIAL_ATTEMPT_CONTROL_STATE,
       executionAttemptId: 'partial-attempt',
       executionId: 'partial-exec',
+      instruction: makeTestInstruction(),
+      preparationReceipts: [],
       status: 'allocated',
       allocationRef: makeTestAllocationRef(),
       createdAt: new Date().toISOString(),
+      bootstrapDeadlineAt: null,
       providerId: null,
       allocationLifetime: null,
       provisionerIncarnationId: null,

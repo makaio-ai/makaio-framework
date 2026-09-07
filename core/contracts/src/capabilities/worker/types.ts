@@ -515,13 +515,13 @@ export type NormalizedWorkerRequirements = z.output<typeof WorkerRequirementsSch
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Request handed to a Worker provider after pool dispatch has selected it.
+ * Attempt context shared by initial provisioning and allocation recovery.
  *
  * The Authority creates `executionAttemptId` before dispatch. Providers and
  * pools never generate it. Pool identity and resource allocation details live
  * in the host-owned dispatch layer above this contract.
  */
-export interface WorkerProvisionRequest {
+export interface WorkerProviderContext {
   /** Unique workflow execution identifier. */
   readonly executionId: string;
   /** Authority-created attempt identifier for this dispatch. */
@@ -551,6 +551,12 @@ export interface WorkerProvisionRequest {
   readonly provisioningStartedAt: string;
   /** Opaque metadata forwarded from the dispatch caller. */
   readonly metadata?: z.infer<typeof JsonObjectContractSchema>;
+}
+
+/** Initial provisioning requires a bootstrap deadline; recovering existing compute does not. */
+export interface WorkerProvisionRequest extends WorkerProviderContext {
+  /** Immutable creation-time bootstrap deadline, never recomputed by a provider. */
+  readonly bootstrapDeadlineAt: string;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -851,11 +857,11 @@ export interface IWorkerRecoveryCapability {
    * less — an ambiguous match, an unbounded listing, or a partial scan —
    * resolves as `unknown`. Provider API and transport failures reject, and
    * cancellation is rethrown.
-   * @param request - Original provision request identifying the attempt to search for.
+   * @param request - Durable attempt context identifying the allocation to search for.
    * @param signal - AbortSignal for cooperative cancellation of the discovery operation.
    * @returns Discovered allocation, proven absence, or retained uncertainty.
    */
-  discoverProvisioning(request: WorkerProvisionRequest, signal: AbortSignal): Promise<ProvisioningDiscovery>;
+  discoverProvisioning(request: WorkerProviderContext, signal: AbortSignal): Promise<ProvisioningDiscovery>;
 
   /**
    * Re-attach to an existing allocation for the same attempt.
@@ -868,13 +874,13 @@ export interface IWorkerRecoveryCapability {
    * returned handle controls the same allocation that was originally
    * provisioned.
    * @param allocationRef - Validated allocation reference from a prior provision.
-   * @param request - Original provision request (for provider-side correlation).
+   * @param request - Durable attempt context for provider-side correlation.
    * @param signal - AbortSignal for cooperative cancellation of the attach operation.
    * @returns Fresh infrastructure handle for the existing allocation.
    */
   attach(
     allocationRef: ProviderAllocationRef,
-    request: WorkerProvisionRequest,
+    request: WorkerProviderContext,
     signal: AbortSignal,
   ): Promise<WorkerHandle>;
 
@@ -886,13 +892,13 @@ export interface IWorkerRecoveryCapability {
    * success or failure. The returned {@link AllocationInspection} includes
    * the allocation state and optional non-secret provider evidence.
    * @param allocationRef - Validated allocation reference to inspect.
-   * @param request - Freshly resolved provision request for the same attempt.
+   * @param request - Freshly resolved provider context for the same attempt.
    * @param signal - AbortSignal for cooperative cancellation of the inspect operation.
    * @returns Infrastructure state and optional evidence for the allocation.
    */
   inspect(
     allocationRef: ProviderAllocationRef,
-    request: WorkerProvisionRequest,
+    request: WorkerProviderContext,
     signal: AbortSignal,
   ): Promise<AllocationInspection>;
 
@@ -903,12 +909,12 @@ export interface IWorkerRecoveryCapability {
    * succeeds without error. Providers must not throw when asked to terminate
    * a resource that no longer exists.
    * @param allocationRef - Validated allocation reference to terminate.
-   * @param request - Freshly resolved provision request for the same attempt.
+   * @param request - Freshly resolved provider context for the same attempt.
    * @param signal - AbortSignal for cooperative cancellation of the terminate operation.
    */
   terminateAllocation(
     allocationRef: ProviderAllocationRef,
-    request: WorkerProvisionRequest,
+    request: WorkerProviderContext,
     signal: AbortSignal,
   ): Promise<void>;
 }

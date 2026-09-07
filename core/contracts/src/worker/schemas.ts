@@ -3,11 +3,71 @@ import type { SchemaRecord } from '@makaio/core';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
 import { WorkerRequirementsSchema } from '../capabilities/worker/index.js';
 import { OutcomeAckDecisionSchema, ProviderAllocationRefSchema } from '../capabilities/worker/types.js';
+import { WorkerRuntimeInputsSchema } from './runtime-inputs.js';
+import { AuthEnvironmentVariableNameSchema } from '../auth/definitions.js';
+import { ExecutionAttemptBootstrapStartRefusalReasonSchema } from '../execution-attempt/schemas.js';
 import {
   WorkflowRunResultSchema,
   WorkflowWorkerConfigSchema,
   WorkerContributionManifestSchema,
 } from '../workflow/index.js';
+
+const StandardBootstrapDeadlineAtSchema = z.iso.datetime({ offset: true });
+
+/**
+ * A representable bootstrap instant, including every canonical Date.toISOString
+ * value a creation-time budget can produce. Offset and second-precision ISO
+ * inputs remain valid; extended years use the producer's exact canonical form.
+ */
+export const WorkerBootstrapDeadlineAtSchema = z.string().refine((value) => {
+  const instant = Date.parse(value);
+  return (
+    Number.isFinite(instant) &&
+    (StandardBootstrapDeadlineAtSchema.safeParse(value).success || new Date(instant).toISOString() === value)
+  );
+}, 'Expected a representable ISO bootstrap deadline');
+
+/** Credentials consumed by a bus connector, independent of the claim decision. */
+export const WorkerBootstrapCredentialsSchema = z
+  .object({
+    /** WebSocket URL of the authenticated bus endpoint. */
+    busUrl: z.string().min(1),
+    /** Attempt-scoped HMAC secret. */
+    busAuthSecret: z.string().min(1),
+  })
+  .strict();
+
+/** Private payload returned only after a bootstrap claim is granted. */
+export const WorkerBootstrapGrantedClaimResponseSchema = z
+  .object({
+    status: z.literal('granted'),
+    credentials: WorkerBootstrapCredentialsSchema,
+    /** Resolved private environment, never exposed by pending or refused replies. */
+    runtimeEnv: z.record(AuthEnvironmentVariableNameSchema, z.string()),
+  })
+  .strict();
+
+/** Non-secret refusals shared with start authorization plus remote claim eligibility. */
+export const WorkerBootstrapClaimRefusalReasonSchema = z.enum([
+  ...ExecutionAttemptBootstrapStartRefusalReasonSchema.options,
+  'provider-mismatch',
+  'claim-expired',
+  'not-claimable',
+]);
+
+/** Bounded remote credential exchange; only a grant carries private material. */
+export const WorkerBootstrapClaimResponseSchema = z.discriminatedUnion('status', [
+  WorkerBootstrapGrantedClaimResponseSchema,
+  z.object({ status: z.literal('pending') }).strict(),
+  z.object({ status: z.literal('refused'), reason: WorkerBootstrapClaimRefusalReasonSchema }).strict(),
+]);
+
+/** Credentials for the authenticated attempt connection. */
+export type WorkerBootstrapCredentials = z.infer<typeof WorkerBootstrapCredentialsSchema>;
+/** Granted bootstrap claim with credentials and private Runtime environment. */
+export type WorkerBootstrapGrantedClaimResponse = z.infer<typeof WorkerBootstrapGrantedClaimResponseSchema>;
+/** Non-secret remote claim refusal. */
+export type WorkerBootstrapClaimRefusalReason = z.infer<typeof WorkerBootstrapClaimRefusalReasonSchema>;
 
 /**
  * Base fields present on every Worker lifecycle event.
@@ -87,6 +147,7 @@ export const WorkerDispatchResponseSchema = z
  * Control subjects:
  * - `control.outcome.submit` — worker submits an execution outcome for durable ACK
  * - `control.bootstrap.claim`— worker claims execution-scoped bus credentials
+ * - `runtime.inputs.get` — authenticated runtime pulls its selected realization inputs
  */
 export const WorkerSchemas = {
   /**
@@ -98,6 +159,21 @@ export const WorkerSchemas = {
   dispatch: {
     request: WorkerDispatchRequestSchema,
     response: WorkerDispatchResponseSchema,
+  },
+
+  /**
+   * Read the non-secret Runtime inputs selected for the authenticated Attempt.
+   *
+   * The host derives the execution owner from the existing authenticated peer and
+   * resolves the Attempt's binding. A missing binding returns null, never current
+   * defaults. Credentials remain on the existing bootstrap path.
+   *
+   * Subject: `worker.runtime.inputs.get`
+   * Type: Request (RPC) — Worker Runtime → host
+   */
+  'runtime.inputs.get': {
+    request: z.object({ executionAttemptId: z.string().min(1) }).strict(),
+    response: z.object({ runtimeInputs: WorkerRuntimeInputsSchema.nullable() }).strict(),
   },
 
   /**
@@ -158,17 +234,7 @@ export const WorkerSchemas = {
         executionAttemptId: z.string().min(1),
       })
       .strict(),
-    response: z
-      .object({
-        /** WebSocket URL of the bus server the Worker Runtime should connect to. */
-        busUrl: z.string().min(1),
-        /**
-         * Execution-scoped HMAC secret for authenticating subsequent bus
-         * messages.
-         */
-        busAuthSecret: z.string().min(1),
-      })
-      .strict(),
+    response: WorkerBootstrapClaimResponseSchema,
   },
 
   /**
@@ -259,5 +325,11 @@ export const WorkerSchemas = {
 /** Bootstrap coordinates presented by a remote worker. */
 export type WorkerBootstrapClaimRequest = z.infer<(typeof WorkerSchemas)['control.bootstrap.claim']['request']>;
 
-/** Execution-scoped credentials issued after a successful bootstrap claim. */
+/** Granted private material, a renewable pending reply, or a non-secret refusal. */
 export type WorkerBootstrapClaimResponse = z.infer<(typeof WorkerSchemas)['control.bootstrap.claim']['response']>;
+
+/** Authenticated runtime query for its Attempt's selected realization inputs. */
+export type WorkerRuntimeInputsGetRequest = z.infer<(typeof WorkerSchemas)['runtime.inputs.get']['request']>;
+
+/** Bound Runtime inputs, or null when this Attempt has no selected binding. */
+export type WorkerRuntimeInputsGetResponse = z.infer<(typeof WorkerSchemas)['runtime.inputs.get']['response']>;

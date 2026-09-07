@@ -29,6 +29,8 @@ export interface BuildWorkflowRunContextParams {
   readonly artifactRef?: WorkflowRunContext['artifactRef'];
   /** Suspension strategy selected by the caller for this execution. */
   readonly suspensionStrategy?: SuspensionStrategy;
+  /** Terminal owner selected by execution dispatch before the context is persisted. */
+  readonly terminalAuthority?: WorkflowRunContext['terminalAuthority'];
   /**
    * Portable materialization specification for path-backed workflows.
    *
@@ -72,6 +74,7 @@ export function buildWorkflowRunContext(
     env: executorConfig.platformDefaults.env ?? {},
     createdAt: Date.now(),
     suspensionStrategy: params.suspensionStrategy ?? 'wait-in-process',
+    ...(params.terminalAuthority !== undefined ? { terminalAuthority: params.terminalAuthority } : {}),
     ...(params.materializationSpec !== undefined ? { materializationSpec: params.materializationSpec } : {}),
   });
 }

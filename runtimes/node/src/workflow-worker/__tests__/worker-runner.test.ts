@@ -4,15 +4,31 @@ import type {
   WorkerContributionManifest,
   WorkerDispatch,
   WorkflowRunResult,
+  WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
-import { WorkerRunner } from '../worker-runner.js';
+import { WorkflowRunContextSchema } from '@makaio/contracts';
 import {
-  createInMemoryAttemptRepository,
-  makeBeginProvisioningInput,
-  workflowRunResultOutcomeCodec,
-} from '@makaio/subsystem-workflow-engine/testing';
-import { makeWorkerConfig } from './fixtures.js';
+  ExecutionAttemptAuthority,
+  parseWorkflowAttemptInstruction,
+  workflowAttemptOutcomeCodec,
+  type WorkflowAttemptOutcome,
+} from '@makaio/subsystem-workflow-engine';
+import { WorkerRunner } from '../worker-runner.js';
+import { createInMemoryAttemptRepository, makeBeginProvisioningInput } from '@makaio/subsystem-workflow-engine/testing';
+import { makeWorkerConfig as makeBaseWorkerConfig } from './fixtures.js';
+
+function makeWorkerConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWorkerConfig {
+  const config = makeBaseWorkerConfig(overrides);
+  if (config.source.kind === 'definition' && config.definition === undefined) {
+    config.definition = {
+      id: config.workflowId,
+      name: 'Test workflow',
+      root: { id: 'root', type: 'sequence', nodes: [] },
+      scope: { type: 'global' },
+    };
+  }
+  return config;
+}
 
 const TEST_ALLOCATION_REF: ProviderAllocationRef = {
   version: 1,
@@ -20,11 +36,132 @@ const TEST_ALLOCATION_REF: ProviderAllocationRef = {
   providerData: {},
 };
 
-function createTestAuthority(): ExecutionAttemptAuthority<WorkflowRunResult> {
-  return new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
+function createTestAuthority(): ExecutionAttemptAuthority<WorkflowAttemptOutcome> {
+  return new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
+    bootstrapTimeoutMs: 120_000,
+  });
 }
 
 describe('WorkerRunner', () => {
+  it.each([
+    false,
+    true,
+  ])('prevents Attempt creation around a cancelled custom reader (pre-aborted: %s)', async (preAborted) => {
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 120_000 });
+    const dispatch = vi.fn();
+    const config = makeWorkerConfig({ source: { kind: 'path', path: 'workflow.ts' } });
+    const runContext = WorkflowRunContextSchema.parse({
+      ...config,
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'source',
+        rootDigest: 'revision-1',
+        sourcePath: 'workflow.ts',
+      },
+      createdAt: 1,
+    });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const readRunContext = vi.fn(async (_executionId: string, signal: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      entered.resolve();
+      await release.promise;
+      return runContext;
+    });
+    const runner = new WorkerRunner({ authority, dispatch, readRunContext });
+    if (preAborted) controller.abort(new Error('owner-read-cancelled'));
+    const result = runner.run(config, controller.signal);
+    const rejected = expect(result).rejects.toThrow('owner-read-cancelled');
+    if (!preAborted) {
+      await entered.promise;
+      controller.abort(new Error('owner-read-cancelled'));
+    }
+    release.resolve();
+    await rejected;
+    expect(readRunContext).toHaveBeenCalledTimes(preAborted ? 0 : 1);
+    expect(repository.attempts.size).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a path-backed dispatch before creating an Attempt when portable owner input is absent', async () => {
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 120_000 });
+    const dispatch = vi.fn();
+    const runner = new WorkerRunner({ authority, dispatch });
+    await expect(
+      runner.run(
+        makeWorkerConfig({ source: { kind: 'path', path: '/host/workflow.ts' } }),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('portable run context');
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(repository.attempts.size).toBe(0);
+  });
+
+  it('freezes portable owner input before dispatch and projects technical failure only after convergence', async () => {
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 120_000 });
+    let committedOutcome: WorkflowAttemptOutcome | undefined;
+    const config = makeWorkerConfig({ source: { kind: 'path', path: '/host/workflow.ts' } });
+    const runContext = WorkflowRunContextSchema.parse({
+      ...config,
+      source: { kind: 'path', path: 'workflow.ts' },
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'source',
+        rootDigest: 'revision-1',
+        sourcePath: 'workflow.ts',
+      },
+      inputs: { question: 'original' },
+      createdAt: 1,
+    });
+    const runner = new WorkerRunner({
+      authority,
+      readRunContext: async () => {
+        expect(repository.attempts.size).toBe(0);
+        return runContext;
+      },
+      dispatch: async (request) => {
+        runContext.inputs = { question: 'changed after creation' };
+        const instruction = await authority.getInstruction({
+          executionId: config.executionId,
+          executionAttemptId: request.executionAttemptId,
+        });
+        expect(parseWorkflowAttemptInstruction(instruction!)).toMatchObject({
+          source: { kind: 'path', path: 'workflow.ts' },
+          inputs: { question: 'original' },
+        });
+        expect(instruction!.workspace).toBeUndefined();
+        const outcome: WorkflowAttemptOutcome = {
+          kind: 'technical-failure',
+          stage: 'startup',
+          message: 'adapter unavailable',
+        };
+        const decision = await authority.commitOutcome(
+          request.executionAttemptId,
+          config.executionId,
+          authority.canonicalizeOutcome(outcome),
+        );
+        if (decision.kind === 'accepted' || decision.kind === 'duplicate') committedOutcome = decision.outcome;
+        // Host convergence precedes settling the waiter; the runner only projects the already-settled result.
+        authority.settleOutcome(request.executionAttemptId, decision);
+        return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
+      },
+    });
+    await expect(runner.run(config, new AbortController().signal)).resolves.toEqual({
+      state: 'authority-committed',
+      result: {
+        executionId: config.executionId,
+        workflowId: config.workflowId,
+        status: 'failed',
+        error: 'startup: adapter unavailable',
+      },
+    });
+    expect(committedOutcome).toEqual({ kind: 'technical-failure', stage: 'startup', message: 'adapter unavailable' });
+  });
+
   it('creates an attempt before dispatch and returns authority-committed', async () => {
     const authority = createTestAuthority();
     let capturedAttemptId: string | undefined;
@@ -206,8 +343,11 @@ describe('WorkerRunner', () => {
 
   it('abandons the durable pending attempt when dispatch rejects', async () => {
     const abandonPendingAttempt = vi.fn().mockResolvedValue({ kind: 'abandoned' as const });
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority<WorkflowRunResult>({ ...repository, abandonPendingAttempt });
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority<WorkflowAttemptOutcome>(
+      { ...repository, abandonPendingAttempt },
+      { bootstrapTimeoutMs: 120_000 },
+    );
     const runner = new WorkerRunner({
       dispatch: vi.fn().mockRejectedValue(new Error('dispatch failed')),
       authority,
@@ -340,8 +480,11 @@ describe('WorkerRunner', () => {
 
   it('waits for the Authority outcome after cancellation instead of inferring infrastructure failure', async () => {
     const recordInfrastructureFailure = vi.fn().mockResolvedValue({ kind: 'recorded' as const });
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority<WorkflowRunResult>({ ...repository, recordInfrastructureFailure });
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority<WorkflowAttemptOutcome>(
+      { ...repository, recordInfrastructureFailure },
+      { bootstrapTimeoutMs: 120_000 },
+    );
     let dispatchStarted!: () => void;
     const dispatchStartedPromise = new Promise<void>((resolve) => {
       dispatchStarted = resolve;

@@ -1,6 +1,11 @@
 import type {
   BoundedRecoveryEvidence,
+  ExecutionAttemptInstruction,
   ExecutionAttemptOperationKind,
+  ExecutionAttemptOperationReportRequest,
+  ExecutionAttemptOperationReportResponse,
+  ExecutionAttemptPreparationResult,
+  ExecutionAttemptWorkspaceBinding,
   ProviderAllocationRef,
   WorkerAllocationLifetime,
 } from '@makaio/contracts';
@@ -18,6 +23,7 @@ export {
   evaluateRuntimeRegistration,
   evaluateOperationAdmission,
   evaluateOperationCompletion,
+  evaluatePreparationReport,
   evaluateRuntimeReadiness,
 } from './execution-attempt-decisions.js';
 export type { AttemptReachability, AttemptReachabilityDecision } from './execution-attempt-decisions.js';
@@ -88,6 +94,30 @@ export const ATTEMPT_OPERATION_START_GATES = ['open', 'closed'] as const;
  *   begin — when a newer attempt supersedes it, and when it settles.
  */
 export type AttemptOperationStartGate = (typeof ATTEMPT_OPERATION_START_GATES)[number];
+
+/** Coherent durable facts required before an attempt may enter runtime registration. */
+export interface BootstrapStartState {
+  /** A terminal outcome or infrastructure settlement has been recorded. */
+  readonly settled: boolean;
+  /** The owner's active pointer still names this attempt, independently of settlement. */
+  readonly active: boolean;
+  /** An allocation reference is recorded, independently of its termination. */
+  readonly allocated: boolean;
+  /** Provider-operation state durably confirms allocation termination. */
+  readonly allocationTerminated: boolean;
+  /** One-way durable gate controlling whether new work may start. */
+  readonly operationStartGate: AttemptOperationStartGate;
+  /** Immutable ISO deadline, or null for legacy attempts that cannot newly bootstrap. */
+  readonly bootstrapDeadlineAt: string | null;
+}
+
+/** Trusted owner and attempt identity for the narrow bootstrap observation. */
+export interface ReadBootstrapStartStateInput {
+  /** Authenticated durable owner of the attempt. */
+  readonly executionId: ExecutionOwnerId;
+  /** Attempt whose durable start facts are observed. */
+  readonly executionAttemptId: string;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Value Equality
@@ -475,7 +505,7 @@ export interface AttemptControlState {
  * is what makes that omission a type error at the place the record is built,
  * rather than a default silently resolved at each place it is read.
  */
-export interface ExecutionAttemptRecord extends AttemptControlState {
+export interface ExecutionAttemptRecord extends AttemptControlState, AttemptExecutionState {
   /** Authority-created attempt identifier. */
   readonly executionAttemptId: string;
   /** Owner identifier of the aggregate this attempt belongs to. */
@@ -486,6 +516,8 @@ export interface ExecutionAttemptRecord extends AttemptControlState {
   readonly allocationRef: ProviderAllocationRef | null;
   /** ISO-8601 timestamp when the attempt was created. */
   readonly createdAt: string;
+  /** Immutable creation-time bootstrap deadline; null only for legacy records. */
+  readonly bootstrapDeadlineAt: string | null;
   /**
    * Provider bound to this attempt, or `null` before provisioning began.
    *
@@ -588,7 +620,51 @@ export interface ExecutionAttemptCreate {
   readonly executionAttemptId: string;
   /** Owner identifier the attempt belongs to. */
   readonly executionId: ExecutionOwnerId;
+  /** Portable assignment snapshotted before this attempt becomes dispatchable. */
+  readonly instruction: ExecutionAttemptInstruction;
+  /** Explicit positive safe-integer bootstrap budget in milliseconds, frozen at creation. */
+  readonly bootstrapTimeoutMs: number;
 }
+
+/** Durable acceptance of one successful Preparation operation. */
+export interface PreparationReceipt {
+  /** Identity of the completed Preparation operation. */
+  readonly operationId: string;
+  /** Runtime realization to which the binding belongs. */
+  readonly runtimeGeneration: number;
+  /** Original semantic result, retained for replay comparison and diagnostics. */
+  readonly result: ExecutionAttemptPreparationResult;
+}
+
+/** Immutable assignment and accepted Preparation facts read with control state. */
+export interface AttemptExecutionState {
+  /** The attempt's original assignment, never the owner's latest configuration. */
+  readonly instruction: ExecutionAttemptInstruction;
+  /** Accepted historical results; only the current generation permits Invocation. */
+  readonly preparationReceipts: readonly PreparationReceipt[];
+}
+
+/** Owner-scoped query for the immutable assignment of one attempt. */
+export interface GetInstructionInput {
+  /** Owning aggregate, supplied by the authenticated host boundary. */
+  readonly executionId: ExecutionOwnerId;
+  /** Attempt whose stored assignment is requested. */
+  readonly executionAttemptId: string;
+}
+
+/** Successful Preparation report plus its trusted owner identity. */
+export type ReportOperationInput = ExecutionAttemptOperationReportRequest & {
+  /** Owning aggregate, supplied by the authenticated host boundary. */
+  readonly executionId: ExecutionOwnerId;
+};
+
+/** Semantic acceptance or refusal of a Preparation result. */
+export type OperationReportDecision =
+  | { readonly kind: 'accepted'; readonly binding: ExecutionAttemptWorkspaceBinding }
+  | { readonly kind: 'duplicate'; readonly binding: ExecutionAttemptWorkspaceBinding }
+  | {
+      readonly kind: Extract<ExecutionAttemptOperationReportResponse, { decision: 'refused' }>['refusalReason'];
+    };
 
 /**
  * Input for claiming the provisioning phase of an attempt.
@@ -638,6 +714,43 @@ export interface ExecutionAttemptOutcomeCommit<TOutcome> {
    * submission once and never reads its own object again.
    */
   readonly result: DurableOutcome<TOutcome>;
+  /** Runtime correlation checked atomically for a fresh commit; owner-only paths may omit it. */
+  readonly runtimeFence?: RuntimeOutcomeFence;
+}
+
+/** Runtime and operation expected to remain current when an outcome becomes durable. */
+export interface RuntimeOutcomeFence {
+  /** Registered runtime generation that produced the result. */
+  readonly runtimeGeneration: number;
+  /** Admitted operation, or null for a startup failure before any operation. */
+  readonly operationId: string | null;
+}
+
+/** A runtime result lost its execution slot before commit; the attempt remains available to its current runtime. */
+export class RuntimeOutcomeFenceMismatchError extends Error {
+  public constructor() {
+    super('Runtime outcome no longer matches the current generation and operation');
+    this.name = 'RuntimeOutcomeFenceMismatchError';
+  }
+}
+
+/**
+ * Require a fresh runtime outcome to belong to the coherently read execution slot.
+ * Repositories call this after canonical replay/settlement decisions and repeat its
+ * predicates in the committing write. A mismatch must not settle the attempt's waiter.
+ * @param control - Current runtime and operation facts.
+ * @param fence - Expected runtime slot, absent for owner-only outcome submission.
+ * @throws RuntimeOutcomeFenceMismatchError when the originating runtime slot changed.
+ */
+export function assertRuntimeOutcomeFence(control: AttemptControlState, fence: RuntimeOutcomeFence | undefined): void {
+  if (fence === undefined) return;
+  if (
+    control.runtimeGeneration !== fence.runtimeGeneration ||
+    control.activeOperationId !== fence.operationId ||
+    (fence.operationId !== null && control.activeOperationGeneration !== fence.runtimeGeneration)
+  ) {
+    throw new RuntimeOutcomeFenceMismatchError();
+  }
 }
 
 /** Input for extending the lease of a currently held provider operation. */
@@ -1184,6 +1297,11 @@ export type RuntimeRegistrationDecision =
  * - `stale-generation`: the caller fenced against a generation the attempt has
  *   moved past. The current generation is reported so the caller can re-fence
  *   rather than re-read.
+ * - `preparation-required`: Invocation requires a Workspace but no Preparation
+ *   receipt belongs to the current runtime generation.
+ * - `preparation-not-required`: the assignment does not request a Workspace.
+ * - `preparation-already-completed`: Preparation succeeded for this generation;
+ *   a fresh admission key must not run setup again.
  */
 export type OperationAdmissionDecision =
   | {
@@ -1207,6 +1325,9 @@ export type OperationAdmissionDecision =
   | { readonly kind: 'operation-active'; readonly operationId: string }
   | { readonly kind: 'gate-closed' }
   | { readonly kind: 'not-ready' }
+  | { readonly kind: 'preparation-required' }
+  | { readonly kind: 'preparation-not-required' }
+  | { readonly kind: 'preparation-already-completed' }
   | { readonly kind: 'stale-generation'; readonly runtimeGeneration: number };
 
 /**
@@ -1217,6 +1338,8 @@ export type OperationAdmissionDecision =
  * - `duplicate`: this operation was already completed. A replay, answered from
  *   {@link AttemptControlState.lastCompletedOperationId} rather than from an
  *   active operation that is by then gone.
+ * - `result-required`: Preparation must submit its semantic report, and generic
+ *   Invocation must submit its terminal outcome, instead of merely freeing the slot.
  * - `mismatch`: a different operation occupies the attempt. The active one is
  *   reported, because the caller's next move depends on which it is.
  * - `not-active`: no operation occupies the attempt and this one is not the
@@ -1231,6 +1354,7 @@ export type OperationAdmissionDecision =
 export type OperationCompletionDecision =
   | { readonly kind: 'completed' }
   | { readonly kind: 'duplicate' }
+  | { readonly kind: 'result-required' }
   | { readonly kind: 'mismatch'; readonly activeOperationId: string }
   | { readonly kind: 'not-active' }
   | { readonly kind: 'stale-generation' }
@@ -1437,6 +1561,12 @@ export interface ExecutionAttemptRepository<TOutcome> {
    * Called by the Authority before dispatch. The Authority owns
    * `executionAttemptId` generation; the repository only persists. The new
    * attempt atomically becomes the active attempt for its execution.
+   * The instruction is validated and snapshotted before any write. It remains
+   * immutable for the attempt's lifetime; no owner-context lookup may replace it.
+   * The explicit bootstrap budget must be a positive safe integer whose sum with
+   * the single creation instant is a representable Date. Validate it before any
+   * mutation, and persist createdAt and bootstrapDeadlineAt from that same instant.
+   * Later host policy changes never extend an existing attempt's deadline.
    *
    * The new attempt starts with its {@link AttemptControlState} at rest:
    * generation `0`, no incarnation, no readiness, no active operation, and
@@ -1464,11 +1594,41 @@ export interface ExecutionAttemptRepository<TOutcome> {
    * writers — but a realization that lets the driver's own error escape would
    * make the same caller bug indistinguishable from a storage fault, and
    * distinguishable only by message text between one realization and another.
-   * @param input - Attempt identity to persist.
+   * @param input - Attempt identity and immutable assignment to persist.
    * @returns The created attempt record.
    * @throws A {@link DuplicateExecutionAttemptError} when an attempt with the same `executionAttemptId` already exists.
    */
   createAttempt(input: ExecutionAttemptCreate): Promise<ExecutionAttemptRecord>;
+
+  /**
+   * Read owner matching, settlement, active pointer, allocation, terminal provider
+   * state, start gate and immutable deadline in one coherent observation. This is
+   * a required bootstrap port, not a recovery capability. It must not decode the
+   * instruction, Preparation receipts or outcome to answer the narrow lookup.
+   * Legacy records without a deadline remain readable with a null deadline; only
+   * fresh bootstrap is refused, never unrelated reads or already-running work.
+   * @param input - Trusted owner and attempt identity.
+   * @returns The coherent state, or null for a missing attempt or mismatched owner.
+   */
+  readBootstrapStartState(input: ReadBootstrapStartStateInput): Promise<BootstrapStartState | null>;
+
+  /**
+   * Read the frozen instruction of an owner-matching attempt, including historical attempts.
+   * The returned snapshot must not allow mutation of the persisted assignment.
+   * @param input - Attempt and owner identity.
+   * @returns The original assignment, or null when the attempt does not belong to the owner.
+   */
+  getInstruction(input: GetInstructionInput): Promise<ExecutionAttemptInstruction | null>;
+
+  /**
+   * Accept Preparation and release its active slot in one durable transition.
+   * Historical identical reports return their original binding without restoring readiness.
+   * Conflicting reports preserve the first accepted result. Neither success nor replay
+   * settles the attempt; terminal failures use the canonical outcome boundary.
+   * @param input - Successful Preparation report and trusted owner identity.
+   * @returns Durable acceptance, historical duplicate, or refusal.
+   */
+  reportOperation(input: ReportOperationInput): Promise<OperationReportDecision>;
 
   /**
    * Claim the durable provisioning phase immediately before a provider call.
@@ -1809,7 +1969,12 @@ export interface ExecutionAttemptRepository<TOutcome> {
    *    {@link recordProvisionerIncarnationLost}. That transition won the
    *    terminal CAS, so a late outcome may neither overwrite its
    *    `settlementKind` nor reopen the attempt.
-   * 4. `accepted` — the outcome becomes canonical, the attempt settles as
+   * 4. When supplied, `runtimeFence` must still match the current runtime
+   *    generation and operation (including its generation). A mismatch throws
+   *    {@link RuntimeOutcomeFenceMismatchError} without changing the attempt.
+   *    Checking this in the same write prevents owner decoding/validation awaits
+   *    from committing a startup failure against a replacement runtime.
+   * 5. `accepted` — the outcome becomes canonical, the attempt settles as
    *    `outcome`, and its operation closes.
    *
    * The submission arrives already rendered, as the {@link DurableOutcome} the

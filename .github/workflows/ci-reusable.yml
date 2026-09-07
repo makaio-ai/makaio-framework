@@ -307,7 +307,8 @@ jobs:
     needs: cache
     if: needs.cache.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Include toolchain setup and the platform shard's additional Bun suite.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

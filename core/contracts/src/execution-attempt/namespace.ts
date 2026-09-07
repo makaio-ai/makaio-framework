@@ -4,7 +4,7 @@ import { ExecutionAttemptSchemas } from './schemas.js';
 /**
  * ExecutionAttempt bus namespace definition.
  *
- * One static namespace carrying all five ExecutionAttempt subjects. There is no
+ * One static namespace carrying ExecutionAttempt subjects. There is no
  * per-attempt namespace factory: attempt scoping is a payload filter
  * (`bus.withFilter({ executionAttemptId })`), not a namespace dimension.
  *
@@ -18,9 +18,7 @@ export const ExecutionAttemptNamespace = createBusNamespace('execution-attempt',
  *
  * Use these tokens in `bus.on()`, `bus.emit()`, and `bus.request()` calls instead
  * of raw subject strings to get schema validation and type inference. Dotted
- * schema keys nest, so the five subjects are reached as
- * `runtime.register`, `runtime.ready`, `operation.admit`, `operation.admitted`,
- * and `operation.deliver`.
+ * schema keys nest under `bootstrap`, `runtime`, `operation`, `instruction`, and `outcome`.
  * @example
  * ```typescript
  * bus.on(ExecutionAttemptSubjects.runtime.ready, (ctx) => {

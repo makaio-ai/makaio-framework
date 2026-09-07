@@ -1,21 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
+import { WorkerNamespace, WorkerSubjects, WorkflowRunContextSchema } from '@makaio/contracts';
 import type { ProviderAllocationRef, WorkerRequirements, WorkflowRunResult } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { hasWorkerDispatchRequirements, createWorkerDispatchRunner } from '../worker-dispatch-runner.js';
 import { launchDefinitionExecutionTask } from '../workflow-definition-dispatch.js';
 import type { StartExecutionDeps } from '../workflow-execution-start.js';
 import type { DefinitionRunnerTaskParams } from '../workflow-runner-tasks.js';
-import {
-  beginTestProvisioning,
-  createInMemoryAttemptRepository,
-  workflowRunResultOutcomeCodec,
-} from '../testing/index.js';
+import { beginTestProvisioning, createInMemoryAttemptRepository } from '../testing/index.js';
+import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
+import { parseWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
+import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 
 function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerDispatchRunner>>['run']>[0] {
   return {
     source: { kind: 'definition', workflowId: 'workflow-1' },
+    definition: {
+      id: 'workflow-1',
+      name: 'Test workflow',
+      root: { id: 'root', type: 'sequence', nodes: [] },
+      scope: { type: 'global' },
+    },
     executionId: 'wfx-1',
     workflowId: 'workflow-1',
     triggerPayload: {},
@@ -88,9 +93,112 @@ describe('hasWorkerDispatchRequirements', () => {
 });
 
 describe('createWorkerDispatchRunner', () => {
+  it('cancels a pending owner-context bus read without creating an Attempt or dispatching', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkerNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const offRead = bus.on(WorkflowStorageSubjects.getRunContext, async (ctx) => {
+      entered.resolve();
+      await release.promise;
+      ctx.setResult({ runContext: null });
+    });
+    const dispatch = vi.fn();
+    const offDispatch = bus.on(WorkerSubjects.dispatch, dispatch);
+    const runner = createWorkerDispatchRunner({ bus, authority, requirements: { customCapabilities: ['test'] } });
+    const controller = new AbortController();
+    try {
+      const result = runner!.run(
+        { ...makeWorkerConfig(), source: { kind: 'path', path: '/host/workflow.ts' } },
+        controller.signal,
+      );
+      const rejected = expect(result).rejects.toThrow('owner-read-cancelled');
+      await entered.promise;
+      controller.abort(new Error('owner-read-cancelled'));
+      // The bus rejects before its storage handler is released.
+      await rejected;
+      expect(repository.attempts.size).toBe(0);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      offRead();
+      offDispatch();
+    }
+  });
+
+  it('freezes portable path input before dispatch without persisting host credentials or creating a Workspace', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkerNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
+    const config = {
+      ...makeWorkerConfig(),
+      source: { kind: 'path' as const, path: '/host/workflows/test.ts' },
+      busAuth: { kind: 'hmac' as const, secret: 'test-only-secret' },
+      env: { PRIVATE_TOKEN: 'test-only-token' },
+    };
+    const runContext = WorkflowRunContextSchema.parse({
+      ...config,
+      source: { kind: 'path', path: 'workflows/test.ts' },
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'source',
+        rootDigest: 'revision-1',
+        sourcePath: 'workflows/test.ts',
+      },
+      inputs: { revision: 'original' },
+      createdAt: 1,
+    });
+    const offRead = bus.on(WorkflowStorageSubjects.getRunContext, (ctx) => {
+      expect(repository.attempts.size).toBe(0);
+      ctx.setResult({ runContext });
+    });
+    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
+      runContext.inputs = { revision: 'changed after creation' };
+      const instruction = await authority.getInstruction({
+        executionId: config.executionId,
+        executionAttemptId: ctx.payload.executionAttemptId,
+      });
+      expect(instruction).not.toBeNull();
+      expect(parseWorkflowAttemptInstruction(instruction!)).toMatchObject({
+        source: { kind: 'path', path: 'workflows/test.ts' },
+        inputs: { revision: 'original' },
+      });
+      expect(instruction!.workspace).toBeUndefined();
+      expect(JSON.stringify(instruction)).not.toContain('/host/');
+      expect(JSON.stringify(instruction)).not.toContain('test-only-');
+      const decision = await authority.commitOutcome(
+        ctx.payload.executionAttemptId,
+        config.executionId,
+        authority.canonicalizeOutcome({
+          executionId: config.executionId,
+          workflowId: config.workflowId,
+          status: 'completed',
+        }),
+      );
+      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
+    });
+    try {
+      const runner = createWorkerDispatchRunner({ bus, authority, requirements: { recoverableAllocation: true } });
+      await expect(runner!.run(config, new AbortController().signal)).resolves.toMatchObject({
+        state: 'authority-committed',
+      });
+    } finally {
+      offRead();
+      offDispatch();
+    }
+  });
+
   it('returns undefined when no capability constraint exists', () => {
     const bus = createBusInstance();
-    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
+    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
+      bootstrapTimeoutMs: 60_000,
+    });
     const runner = createWorkerDispatchRunner({
       bus,
       requirements: undefined,
@@ -101,7 +209,9 @@ describe('createWorkerDispatchRunner', () => {
 
   it('returns undefined when customCapabilities are empty', () => {
     const bus = createBusInstance();
-    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
+    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
+      bootstrapTimeoutMs: 60_000,
+    });
     const runner = createWorkerDispatchRunner({
       bus,
       requirements: { customCapabilities: [] },
@@ -113,8 +223,8 @@ describe('createWorkerDispatchRunner', () => {
   it('abandons the durable pending attempt and removes its waiter when dispatch has no handler', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     const runner = createWorkerDispatchRunner({
       bus,
       requirements: { customCapabilities: ['workflow.remote'] },
@@ -135,8 +245,8 @@ describe('createWorkerDispatchRunner', () => {
   it('rejects the runner without terminalizing durable state when dispatch rejects its local waiter', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     const localFailure = new Error('provider cleanup requires recovery');
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       await beginTestProvisioning(authority, ctx.payload.executionAttemptId, ctx.payload.config.executionId);
@@ -170,8 +280,8 @@ describe('createWorkerDispatchRunner', () => {
   it('awaits the canonical outcome when allocation persists before the dispatch acknowledgement rejects', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       const claim = await beginTestProvisioning(
         authority,
@@ -222,10 +332,10 @@ describe('createWorkerDispatchRunner', () => {
   it('cleans up the waiter when pending abandonment itself rejects', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
     const abandonError = new Error('attempt storage unavailable');
     vi.spyOn(repository, 'abandonPendingAttempt').mockRejectedValue(abandonError);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     let executionAttemptId: string | undefined;
     const offDispatch = bus.on(WorkerSubjects.dispatch, (ctx) => {
       executionAttemptId = ctx.payload.executionAttemptId;
@@ -259,8 +369,8 @@ describe('createWorkerDispatchRunner', () => {
   it('does not abandon an attempt when the outcome fails after dispatch acknowledgement', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     const offDispatch = bus.on(WorkerSubjects.dispatch, (ctx) => {
       ctx.setResult({
         executionAttemptId: ctx.payload.executionAttemptId,
@@ -294,8 +404,8 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     let capturedAttemptId: string | undefined;
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
@@ -333,16 +443,18 @@ describe('createWorkerDispatchRunner', () => {
     }
   });
 
-  it('forwards dispatch metadata in the bus request', async () => {
+  it('preserves owner metadata and forwards per-dispatch resume input and contributions', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     let capturedMetadata: Record<string, unknown> | undefined;
+    let capturedManifest: unknown;
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       capturedMetadata = ctx.payload.metadata;
+      capturedManifest = ctx.payload.manifest;
       const result: WorkflowRunResult = {
         executionId: ctx.payload.config.executionId,
         workflowId: ctx.payload.config.workflowId,
@@ -361,13 +473,21 @@ describe('createWorkerDispatchRunner', () => {
       const runner = createWorkerDispatchRunner({
         bus,
         requirements: { customCapabilities: ['workflow.remote'] },
-        dispatchMetadata: { poolId: 'pool-1', resume: true },
+        dispatchMetadata: { poolId: 'pool-1', resume: false },
         authority,
       });
 
-      await runner!.run(makeWorkerConfig(), new AbortController().signal);
+      await runner!.run(
+        makeWorkerConfig(),
+        new AbortController().signal,
+        { contributionRefs: [] },
+        {
+          dispatchMetadata: { resume: true },
+        },
+      );
 
       expect(capturedMetadata).toEqual({ poolId: 'pool-1', resume: true });
+      expect(capturedManifest).toEqual({ contributionRefs: [] });
     } finally {
       offDispatch();
     }
@@ -377,8 +497,8 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     let capturedRequirements: Record<string, unknown> | undefined;
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
@@ -417,8 +537,8 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     let capturedRequirements: Record<string, unknown> | undefined;
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
@@ -459,8 +579,8 @@ describe('createWorkerDispatchRunner', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     let capturedRequirements: Record<string, unknown> | undefined;
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
@@ -508,8 +628,8 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     let dispatchCalled = false;
     let capturedRequirements: Record<string, unknown> | undefined;
@@ -598,8 +718,8 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
   it('falls through to in-process runner when definition has no requirements', async () => {
     const bus = createBusInstance();
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     const fallbackRunner = vi.fn().mockResolvedValue(undefined);
     const executionTasks = new Map<string, Promise<void>>();

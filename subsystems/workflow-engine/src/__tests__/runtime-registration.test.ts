@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { makeTestInstruction } from '../testing/attempt-fixtures.js';
 import {
   ExecutionAttemptSubjects,
   type ExecutionAttemptOperationDelivery,
@@ -391,7 +392,7 @@ describe('runtime registration handler', () => {
 
   it('answers an attempt that owns no allocation with not-allocated', async () => {
     const executionId = 'exec-unallocated';
-    const { executionAttemptId } = await harness.authority.createAttempt(executionId);
+    const { executionAttemptId } = await harness.authority.createAttempt(executionId, makeTestInstruction());
     installGate();
     installProbeResponder({ receipt: 'completed' });
 

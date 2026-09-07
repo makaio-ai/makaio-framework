@@ -4,6 +4,7 @@ import {
   WorkerNamespace,
   WorkerSubjects,
   createWorkflowFinalizerNamespace,
+  WorkflowWorkerConfigSchema,
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
@@ -16,11 +17,9 @@ import {
   type WorkflowExecutorTestSetup,
 } from './workflow-executor.test-setup.js';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
-import {
-  createInMemoryAttemptRepository,
-  type InMemoryAttemptRepository,
-  workflowRunResultOutcomeCodec,
-} from '../testing/index.js';
+import { createInMemoryAttemptRepository, type InMemoryAttemptRepository } from '../testing/index.js';
+import { buildWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
+import { workflowAttemptOutcomeCodec, type WorkflowAttemptOutcome } from '../workflow-attempt-outcome.js';
 
 describe('authority runner result acceptance', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
@@ -205,13 +204,13 @@ describe('authority runner result acceptance', () => {
 
 describe('outcome submission handler', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
-  let repository: InMemoryAttemptRepository<WorkflowRunResult>;
-  let authority: ExecutionAttemptAuthority<WorkflowRunResult>;
+  let repository: InMemoryAttemptRepository<WorkflowAttemptOutcome>;
+  let authority: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
   let handlerCleanup: () => void;
 
   beforeEach(async () => {
-    repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    authority = new ExecutionAttemptAuthority(repository);
+    repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     setup = await setupWorkflowExecutorTest();
     MakaioBus.registerNamespace(WorkerNamespace);
     handlerCleanup = registerOutcomeSubmissionHandler(MakaioBus, {
@@ -219,6 +218,10 @@ describe('outcome submission handler', () => {
       authority,
       acceptTerminalResult: (executionId, result) =>
         setup!.workflowExecutor.acceptAuthorityRunnerResult(executionId, result),
+      acceptTechnicalFailure: (executionId, failure) =>
+        setup!.workflowExecutor.acceptAuthorityTechnicalFailure(executionId, failure),
+      acceptCancellation: (executionId, cancellation) =>
+        setup!.workflowExecutor.acceptAuthorityCancellation(executionId, cancellation),
     });
   });
 
@@ -227,6 +230,18 @@ describe('outcome submission handler', () => {
     if (setup) await teardownWorkflowExecutorTest(setup);
     setup = undefined;
   });
+
+  async function makeOwnerInstruction(executionId: string) {
+    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    if (runContext === null) throw new Error('Expected the test execution to have a portable owner context');
+    return buildWorkflowAttemptInstruction({
+      id: `instruction-${executionId}`,
+      revision: '1',
+      config: WorkflowWorkerConfigSchema.parse({ ...runContext, definition: runContext.definitionSnapshot }),
+      runContext,
+      preservation: { required: [] },
+    });
+  }
 
   async function seedExecution(executionId: string) {
     const workflow = createWorkflowDefinition({
@@ -258,7 +273,7 @@ describe('outcome submission handler', () => {
   it('accepts a terminal completed outcome and ACKs after workflow convergence', async () => {
     const executionId = 'outcome-completed';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
     const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
@@ -275,7 +290,7 @@ describe('outcome submission handler', () => {
   it('accepts a terminal failed outcome and ACKs', async () => {
     const executionId = 'outcome-failed';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'failed', error: 'crash' };
 
     const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
@@ -292,7 +307,7 @@ describe('outcome submission handler', () => {
   it('returns duplicate for an identical replay and still converges', async () => {
     const executionId = 'outcome-duplicate';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
     await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
@@ -311,7 +326,7 @@ describe('outcome submission handler', () => {
   it('returns conflict for a different outcome on the same attempt', async () => {
     const executionId = 'outcome-conflict';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
 
     await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
@@ -329,11 +344,11 @@ describe('outcome submission handler', () => {
   it('returns fenced when the attempt is no longer active', async () => {
     const executionId = 'outcome-fenced';
     const workflow = await seedExecution(executionId);
-    const attempt1 = await authority.createAttempt(executionId);
+    const attempt1 = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     // Capture the first attempt's waiter so its fenced rejection doesn't leak.
     const waiter1 = authority.waitForOutcome(attempt1.executionAttemptId);
     // Create a second attempt that supersedes the first.
-    await authority.createAttempt(executionId);
+    await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
     const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
@@ -349,7 +364,7 @@ describe('outcome submission handler', () => {
   it('handles paused outcome through durable suspension', async () => {
     const executionId = 'outcome-paused';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = {
       executionId,
       workflowId: workflow.id,
@@ -372,7 +387,7 @@ describe('outcome submission handler', () => {
   it('resumes a paused execution on a second attempt and fences the paused attempt', async () => {
     const executionId = 'outcome-paused-resumed';
     const workflow = await seedExecution(executionId);
-    const paused = await authority.createAttempt(executionId);
+    const paused = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const pausedResult: WorkflowRunResult = {
       executionId,
       workflowId: workflow.id,
@@ -394,7 +409,7 @@ describe('outcome submission handler', () => {
     await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
       execution: { ...execution, status: 'running' },
     });
-    const resumed = await authority.createAttempt(executionId);
+    const resumed = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const resumedWaiter = authority.waitForOutcome(resumed.executionAttemptId);
     const terminal: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
@@ -431,7 +446,7 @@ describe('outcome submission handler', () => {
   ])('rejects a $status outcome for another workflow before committing or publishing it', async (outcome) => {
     const executionId = `outcome-wrong-workflow-${outcome.status}`;
     await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const events: string[] = [];
     const offCompleted = MakaioBus.on(WorkflowSubjects.execution.completed, () => {
       events.push('completed');
@@ -447,7 +462,7 @@ describe('outcome submission handler', () => {
           executionId,
           result: { executionId, workflowId: 'workflow-wrong', ...outcome },
         }),
-      ).rejects.toThrow('Outcome workflow identity mismatch');
+      ).rejects.toThrow('Workflow result identity does not match the frozen instruction');
 
       expect(repository.committedOutcomes.has(attempt.executionAttemptId)).toBe(false);
       expect(events).toEqual([]);
@@ -460,7 +475,7 @@ describe('outcome submission handler', () => {
   it('retries after fault between attempt commit and workflow commit and receives duplicate', async () => {
     const executionId = 'outcome-fault-retry';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
     // Commit the outcome directly through the authority (simulates partial commit).
@@ -482,7 +497,7 @@ describe('outcome submission handler', () => {
   it('retries paused outcome after fault and receives duplicate with converged state', async () => {
     const executionId = 'outcome-paused-fault-retry';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = {
       executionId,
       workflowId: workflow.id,
@@ -515,7 +530,7 @@ describe('outcome submission handler', () => {
     const attackerId = 'outcome-attacker-terminal';
     await seedExecution(victimId);
     await seedExecution(attackerId);
-    const attempt = await authority.createAttempt(attackerId);
+    const attempt = await authority.createAttempt(attackerId, await makeOwnerInstruction(attackerId));
 
     // Bypass Zod superRefine so the mismatched result.executionId reaches
     // the handler — mirrors production where schema validation is skipped.
@@ -551,7 +566,7 @@ describe('outcome submission handler', () => {
     const attackerId = 'outcome-attacker-paused';
     await seedExecution(victimId);
     await seedExecution(attackerId);
-    const attempt = await authority.createAttempt(attackerId);
+    const attempt = await authority.createAttempt(attackerId, await makeOwnerInstruction(attackerId));
 
     const savedEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
@@ -587,7 +602,7 @@ describe('outcome submission handler', () => {
   it('waiter stays pending when convergence fails after accepted commit', async () => {
     const executionId = 'outcome-convergence-fail';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const waiter = authority.waitForOutcome(attempt.executionAttemptId);
     const result: WorkflowRunResult = {
       executionId,
@@ -623,7 +638,7 @@ describe('outcome submission handler', () => {
   it('convergence failure on first submit, retry converges via duplicate and settles waiter', async () => {
     const executionId = 'outcome-fault-converge-retry';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const waiter = authority.waitForOutcome(attempt.executionAttemptId);
     const result: WorkflowRunResult = {
       executionId,
@@ -681,7 +696,7 @@ describe('outcome submission handler', () => {
   it('waiter resolves only after convergence succeeds for duplicate retry', async () => {
     const executionId = 'outcome-waiter-dup-converge';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const result: WorkflowRunResult = {
       executionId,
       workflowId: workflow.id,
@@ -722,7 +737,7 @@ describe('outcome submission handler', () => {
   it('rejects when remote peer executionId does not match payload executionId', async () => {
     const executionId = 'remote-peer-mismatch-exec';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
 
     // Use a high-priority handler that re-registers a handler with simulated
     // remote peer context. The re-registration approach ensures the handler
@@ -780,7 +795,7 @@ describe('outcome submission handler', () => {
   it('rejects when remote peer attemptId does not match payload attemptId', async () => {
     const executionId = 'remote-peer-mismatch-attempt';
     const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
 
     const off = MakaioBus.on(
       WorkerSubjects.control.outcome.submit,
@@ -822,7 +837,7 @@ describe('outcome submission handler', () => {
     const victimId = 'remote-peer-victim';
     await seedExecution(executionId);
     await seedExecution(victimId);
-    const attempt = await authority.createAttempt(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
 
     // Bypass Zod superRefine that catches result.executionId !== payload.executionId
     // in dev mode. In production this check is skipped, so the handler must enforce it.

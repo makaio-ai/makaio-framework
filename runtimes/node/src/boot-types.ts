@@ -11,10 +11,10 @@ import type {
   WorkerContributionManifest,
   WorkerDispatch,
   WorkerRequirements,
-  WorkflowRunResult,
 } from '@makaio/contracts';
 import type {
   ExecutionAttemptRepository,
+  WorkflowAttemptOutcome,
   WorkflowMaterializationSpecResolver,
 } from '@makaio/subsystem-workflow-engine';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
@@ -443,7 +443,9 @@ export interface CoreBootOptions {
    * without attempt tracking. Worker mode fails fast at boot when this
    * is not provided.
    */
-  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowRunResult>;
+  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
+  /** Required when constructing an attempt Authority: creation-time bootstrap budget in milliseconds. */
+  readonly executionAttemptBootstrapTimeoutMs?: number;
 
   /**
    * Runtime data home for config, database, machine identity, and installed

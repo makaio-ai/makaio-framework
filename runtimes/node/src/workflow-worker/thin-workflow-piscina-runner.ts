@@ -8,6 +8,7 @@ import type {
 import { isWorkflowWorkerReadyMessage, type WorkflowWorkerReadyMessage } from './worker-ready-message.js';
 import { PiscinaPoolRunner } from './runtime/piscina-pool-runner.js';
 import { materializeLocalDirectory } from './local-directory-materializer.js';
+import { dispatchWithBootstrapHandoff, type PiscinaBootstrapBinding } from './piscina-bootstrap-handoff.js';
 
 /** Fields every worker-thread task carries, whatever gate it runs behind. */
 interface ThinWorkflowPiscinaTaskBase {
@@ -38,7 +39,7 @@ interface ThinWorkflowPiscinaRunnerTask extends ThinWorkflowPiscinaTaskBase {
  * anything, and its `config.busAuth` is the attempt-scoped secret the
  * provisioning provider minted for that identity.
  */
-interface ThinWorkflowPiscinaAttemptTask extends ThinWorkflowPiscinaTaskBase {
+interface ThinWorkflowPiscinaAttemptTask extends ThinWorkflowPiscinaTaskBase, PiscinaBootstrapBinding {
   /** Discriminator selecting the attempt-bound arm of the worker entrypoint. */
   readonly kind: 'attempt-bound';
   /** Authority-created attempt this thread registers its runtime for. */
@@ -52,13 +53,15 @@ type ThinWorkflowPiscinaTask = ThinWorkflowPiscinaRunnerTask | ThinWorkflowPisci
 export interface ThinWorkflowPiscinaAttemptBinding {
   /** Authority-created attempt the dispatched thread registers against. */
   readonly executionAttemptId: string;
+  /** Persisted absolute deadline of this Attempt. */
+  readonly bootstrapDeadlineAt: string;
 }
 
 /** Result and readiness promises for one workflow worker dispatch. */
 export interface ThinWorkflowPiscinaRunWithReadiness {
   /** Terminal workflow result returned by the worker. */
   readonly result: Promise<WorkflowRunResult>;
-  /** Resolves when the worker bus is connected and cancellation routing is subscribed. */
+  /** Resolves after the Authority accepts this Runtime and admits its workflow run. */
   readonly ready: Promise<WorkflowWorkerReadyMessage>;
 }
 
@@ -149,8 +152,23 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
     });
 
     const resolvedManifest = manifest ?? this.manifest;
-    const result = this.materializeTask(config, resolvedManifest, signal).then((task) =>
-      pool.run({ ...task, kind: 'attempt-bound', executionAttemptId: attempt.executionAttemptId }, signal),
+    const result = dispatchWithBootstrapHandoff(
+      attempt.bootstrapDeadlineAt,
+      signal,
+      async (bootstrapPort, taskSignal) => {
+        const task = await this.materializeTask(config, resolvedManifest, taskSignal);
+        return pool.run(
+          {
+            ...task,
+            kind: 'attempt-bound',
+            executionAttemptId: attempt.executionAttemptId,
+            bootstrapDeadlineAt: attempt.bootstrapDeadlineAt,
+            bootstrapPort,
+          },
+          taskSignal,
+          [bootstrapPort],
+        );
+      },
     );
     void result.then(
       () => {

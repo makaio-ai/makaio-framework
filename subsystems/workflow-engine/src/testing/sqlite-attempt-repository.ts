@@ -10,7 +10,7 @@
  * @packageDocumentation
  */
 import { sql, type SQL } from 'drizzle-orm';
-import type { ProviderAllocationRef } from '@makaio/contracts';
+import type { ExecutionAttemptInstruction, ProviderAllocationRef } from '@makaio/contracts';
 import {
   BoundedRecoveryEvidenceSchema,
   ExecutionAttemptOperationKindSchema,
@@ -39,6 +39,8 @@ import {
   evaluateOperationAdmission,
   evaluateOperationCompletion,
   evaluateRuntimeReadiness,
+  evaluatePreparationReport,
+  assertRuntimeOutcomeFence,
   sameAllocationRef,
   sameDurableOutcome,
 } from '../execution-attempt-repository.js';
@@ -55,11 +57,16 @@ import type {
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptCreate,
+  BootstrapStartState,
+  ReadBootstrapStartStateInput,
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
+  GetInstructionInput,
+  ReportOperationInput,
+  OperationReportDecision,
   ExecutionAttemptSettlementKind,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
@@ -93,8 +100,12 @@ import type {
 } from '../provider-operation.js';
 import {
   INITIAL_ATTEMPT_CONTROL_STATE,
+  createAttemptTiming,
   instantOf,
   normalizeInstant,
+  parseInstruction,
+  parsePreparationResult,
+  parsePreparationReceipts,
   parseAllocationLifetime,
   parseAllocationRef,
   parseAllocationRefEvolution,
@@ -118,6 +129,8 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS test_execution_attempt (
      execution_attempt_id TEXT PRIMARY KEY,
      execution_id TEXT NOT NULL,
+     instruction TEXT NOT NULL,
+     preparation_receipts TEXT NOT NULL DEFAULT '[]',
      status TEXT NOT NULL,
      provider_id TEXT,
      allocation_lifetime TEXT,
@@ -128,6 +141,7 @@ const SCHEMA_STATEMENTS = [
      claimable INTEGER NOT NULL DEFAULT 0,
      claim_expires_at TEXT,
      created_at TEXT NOT NULL,
+     bootstrap_deadline_at TEXT,
      runtime_generation INTEGER NOT NULL DEFAULT 0,
      runtime_incarnation_id TEXT,
      runtime_ready_at TEXT,
@@ -165,6 +179,8 @@ const SCHEMA_STATEMENTS = [
 interface AttemptRow extends Record<string, unknown> {
   readonly execution_attempt_id: string;
   readonly execution_id: string;
+  readonly instruction: string;
+  readonly preparation_receipts: string;
   readonly status: string;
   readonly provider_id: string | null;
   readonly allocation_lifetime: string | null;
@@ -175,6 +191,7 @@ interface AttemptRow extends Record<string, unknown> {
   readonly claimable: number;
   readonly claim_expires_at: string | null;
   readonly created_at: string;
+  readonly bootstrap_deadline_at: string | null;
   readonly runtime_generation: number;
   readonly runtime_incarnation_id: string | null;
   readonly runtime_ready_at: string | null;
@@ -275,11 +292,14 @@ function toAttemptRecord(row: AttemptRow): ExecutionAttemptRecord {
     ...decodeAttemptControlState(row),
     executionAttemptId: row.execution_attempt_id,
     executionId: row.execution_id,
+    instruction: parseInstruction(JSON.parse(row.instruction)),
+    preparationReceipts: parsePreparationReceipts(JSON.parse(row.preparation_receipts)),
     status: parseMember(EXECUTION_ATTEMPT_STATUSES, row.status, 'status'),
     allocationRef: parseJsonColumn<ProviderAllocationRef>(row.allocation_ref, (value) =>
       ProviderAllocationRefSchema.parse(value),
     ),
     createdAt: row.created_at,
+    bootstrapDeadlineAt: row.bootstrap_deadline_at,
     providerId: row.provider_id,
     allocationLifetime:
       row.allocation_lifetime === null ? null : WorkerAllocationLifetimeSchema.parse(row.allocation_lifetime),
@@ -618,6 +638,12 @@ export async function createSqliteAttemptRepository<TOutcome>(
   await withSchemaGate(gateKey, async () => {
     for (const statement of SCHEMA_STATEMENTS) {
       await executor.run(sql.raw(statement));
+    }
+    // Reference databases created before the start barrier retain their rows.
+    // A missing deadline becomes null, never a newly granted bootstrap budget.
+    const columns = await executor.all<{ name: string }>(sql.raw('PRAGMA table_info(test_execution_attempt)'));
+    if (!columns.some((column) => column.name === 'bootstrap_deadline_at')) {
+      await executor.run(sql.raw('ALTER TABLE test_execution_attempt ADD COLUMN bootstrap_deadline_at TEXT'));
     }
   });
 
@@ -1020,8 +1046,9 @@ export async function createSqliteAttemptRepository<TOutcome>(
 
   return {
     async createAttempt(input: ExecutionAttemptCreate): Promise<ExecutionAttemptRecord> {
+      const instruction = parseInstruction(input.instruction);
+      const { createdAt, bootstrapDeadlineAt } = createAttemptTiming(input.bootstrapTimeoutMs);
       return transact(async (session) => {
-        const createdAt = new Date().toISOString();
         // The primary key is what rejects a reused attempt identifier. The
         // port makes that a caller bug precisely so no implementation has to
         // choose between overwriting a possibly settled attempt and silently
@@ -1031,8 +1058,8 @@ export async function createSqliteAttemptRepository<TOutcome>(
         try {
           await session.run(
             sql`INSERT INTO test_execution_attempt
-                (execution_attempt_id, execution_id, status, claimable, created_at)
-              VALUES (${input.executionAttemptId}, ${input.executionId}, ${'pending'}, ${0}, ${createdAt})`,
+                (execution_attempt_id, execution_id, instruction, status, claimable, created_at, bootstrap_deadline_at)
+              VALUES (${input.executionAttemptId}, ${input.executionId}, ${JSON.stringify(instruction)}, ${'pending'}, ${0}, ${createdAt}, ${bootstrapDeadlineAt})`,
           );
         } catch (error) {
           if (!isSqliteUniqueViolationError(error)) throw error;
@@ -1074,15 +1101,37 @@ export async function createSqliteAttemptRepository<TOutcome>(
           ...INITIAL_ATTEMPT_CONTROL_STATE,
           executionAttemptId: input.executionAttemptId,
           executionId: input.executionId,
+          instruction,
+          preparationReceipts: Object.freeze([]),
           status: 'pending',
           allocationRef: null,
           createdAt,
+          bootstrapDeadlineAt,
           providerId: null,
           allocationLifetime: null,
           provisionerIncarnationId: null,
           settlementKind: null,
           claimable: false,
           claimExpiresAt: null,
+        };
+      });
+    },
+
+    async readBootstrapStartState(input: ReadBootstrapStartStateInput): Promise<BootstrapStartState | null> {
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, input.executionAttemptId);
+        if (row === undefined || row.execution_id !== input.executionId) return null;
+        return {
+          settled: row.settlement_kind !== null,
+          active: (await readActiveAttemptId(session, input.executionId)) === input.executionAttemptId,
+          allocated: row.allocation_ref !== null,
+          allocationTerminated: await allocationTerminated(session, input.executionAttemptId),
+          operationStartGate: parseMember(
+            ATTEMPT_OPERATION_START_GATES,
+            row.operation_start_gate,
+            'operation_start_gate',
+          ),
+          bootstrapDeadlineAt: row.bootstrap_deadline_at,
         };
       });
     },
@@ -1465,7 +1514,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
             const unreachable = await runtimeReachability(session, attemptRow);
             if (unreachable !== null) return unreachable;
             const control = decodeAttemptControlState(attemptRow);
-            const refusal = evaluateOperationAdmission(control, input, admittedAt);
+            const refusal = evaluateOperationAdmission(control, input, admittedAt, toAttemptRecord(attemptRow));
             if (refusal !== null) return refusal;
 
             // The null-guard compare-and-set: `active_operation_id IS NULL` in
@@ -1484,6 +1533,8 @@ export async function createSqliteAttemptRepository<TOutcome>(
                       AND active_operation_id IS NULL
                       AND operation_start_gate = ${'open'}
                       AND runtime_generation = ${input.runtimeGeneration}
+                      AND instruction = ${attemptRow.instruction}
+                      AND preparation_receipts = ${attemptRow.preparation_receipts}
                       AND settlement_kind IS NULL
                       AND allocation_ref IS NOT NULL
                       AND NOT ${operationOwesTerminalConvergence(input.executionAttemptId)}
@@ -1492,6 +1543,71 @@ export async function createSqliteAttemptRepository<TOutcome>(
               );
           },
           { kind: 'admitted', operationId, runtimeGeneration: input.runtimeGeneration, admittedAt },
+        ),
+      );
+    },
+
+    async getInstruction(input: GetInstructionInput): Promise<ExecutionAttemptInstruction | null> {
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, input.executionAttemptId);
+        return row?.execution_id === input.executionId ? parseInstruction(JSON.parse(row.instruction)) : null;
+      });
+    },
+
+    async reportOperation(input: ReportOperationInput): Promise<OperationReportDecision> {
+      const result = parsePreparationResult(input.result);
+      return transact((session) =>
+        decideByWrite<OperationReportDecision>(
+          async () => {
+            const row = await readAttemptRow(session, input.executionAttemptId);
+            if (row === undefined || row.execution_id !== input.executionId) return { kind: 'not-found' };
+            const attempt = toAttemptRecord(row);
+            const refusal = evaluatePreparationReport(
+              {
+                matchesExecution: true,
+                settled: row.settlement_kind !== null,
+                active: (await readActiveAttemptId(session, input.executionId)) === input.executionAttemptId,
+                allocated:
+                  row.allocation_ref !== null && !(await allocationTerminated(session, input.executionAttemptId)),
+              },
+              attempt,
+              attempt,
+              { ...input, result },
+            );
+            if (refusal !== null) return refusal;
+            const preparationReceipts = parsePreparationReceipts([
+              ...attempt.preparationReceipts,
+              {
+                operationId: input.operationId,
+                runtimeGeneration: input.runtimeGeneration,
+                result,
+              },
+            ]);
+            // Persist the receipt and free the slot in one guarded write. A retry
+            // reads the receipt even after another operation or runtime takes over.
+            return () =>
+              session.run(sql`UPDATE test_execution_attempt
+                SET preparation_receipts = ${JSON.stringify(preparationReceipts)},
+                    active_operation_id = NULL,
+                    active_operation_kind = NULL,
+                    active_operation_key = NULL,
+                    active_operation_generation = NULL,
+                    active_operation_admitted_at = NULL,
+                    last_completed_operation_id = ${input.operationId}
+                WHERE execution_attempt_id = ${input.executionAttemptId}
+                  AND execution_id = ${input.executionId}
+                  AND settlement_kind IS NULL
+                  AND runtime_generation = ${input.runtimeGeneration}
+                  AND active_operation_id = ${input.operationId}
+                  AND active_operation_kind = ${'workspace-preparation'}
+                  AND active_operation_generation = ${input.runtimeGeneration}
+                  AND instruction = ${row.instruction}
+                  AND preparation_receipts = ${row.preparation_receipts}
+                  AND allocation_ref IS NOT NULL
+                  AND NOT ${operationOwesTerminalConvergence(input.executionAttemptId)}
+                  AND ${isActiveAttemptRow()}`);
+          },
+          { kind: 'accepted', binding: result.binding },
         ),
       );
     },
@@ -1524,6 +1640,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
                     WHERE execution_attempt_id = ${input.executionAttemptId}
                       AND settlement_kind IS NULL
                       AND active_operation_id = ${input.operationId}
+                      AND active_operation_kind IN (${'runtime-probe'}, ${'workflow-run'})
                       AND active_operation_generation = ${input.runtimeGeneration}`,
               );
           },
@@ -1597,6 +1714,18 @@ export async function createSqliteAttemptRepository<TOutcome>(
       // as, rendered once by `canonicalizeOutcome` and carried here. Nothing
       // is serialized again, so the column holds what the owner validated.
       const submission = input.result;
+      const fence = input.runtimeFence;
+      const runtimeGuard =
+        fence === undefined
+          ? sql`1 = 1`
+          : sql`
+        runtime_generation = ${fence.runtimeGeneration}
+        AND ${
+          fence.operationId === null
+            ? sql`active_operation_id IS NULL`
+            : sql`active_operation_id = ${fence.operationId}
+                AND active_operation_generation = ${fence.runtimeGeneration}`
+        }`;
       return transact((session) =>
         decideByWrite<ExecutionAttemptOutcomeDecision<TOutcome>>(
           async () => {
@@ -1642,12 +1771,15 @@ export async function createSqliteAttemptRepository<TOutcome>(
             // the loser of a terminal race never rewrites the winner's answer.
             if (attemptRow.settlement_kind !== null) return { kind: 'conflict' };
 
+            if (fence !== undefined) assertRuntimeOutcomeFence(decodeAttemptControlState(attemptRow), fence);
+
             return async () => {
               const committed = await session.run(
                 sql`UPDATE test_execution_attempt SET workflow_result = ${submission.text}
                   WHERE execution_attempt_id = ${input.executionAttemptId}
                     AND workflow_result IS NULL
                     AND settlement_kind IS NULL
+                    AND ${runtimeGuard}
                     AND ${isActiveAttemptRow()}`,
               );
               if (committed.rowsAffected === 0) return committed;

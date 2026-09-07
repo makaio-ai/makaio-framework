@@ -2,12 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { WorkerNamespace } from '@makaio/contracts';
 import type { ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
-import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
+import { ExecutionAttemptAuthority, workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
 import { WorkerRunner } from '../worker-runner.js';
-import {
-  createInMemoryAttemptRepository,
-  workflowRunResultOutcomeCodec,
-} from '@makaio/subsystem-workflow-engine/testing';
+import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
 import { makeWorkerConfig } from './fixtures.js';
 
 const TEST_ALLOCATION_REF: ProviderAllocationRef = {
@@ -21,8 +18,8 @@ describe('WorkerRunner integration', () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
 
-    const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 120_000 });
 
     let dispatchStarted!: () => void;
     const dispatchStartedPromise = new Promise<void>((resolve) => {
@@ -66,7 +63,17 @@ describe('WorkerRunner integration', () => {
 
     const controller = new AbortController();
 
-    const resultPromise = runner.run(makeWorkerConfig(), controller.signal);
+    const resultPromise = runner.run(
+      makeWorkerConfig({
+        definition: {
+          id: 'workflow-1',
+          name: 'Test workflow',
+          root: { id: 'root', type: 'sequence', nodes: [] },
+          scope: { type: 'global' },
+        },
+      }),
+      controller.signal,
+    );
     await dispatchStartedPromise;
     controller.abort();
 

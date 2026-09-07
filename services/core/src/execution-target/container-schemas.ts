@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WorkerBootstrapDeadlineAtSchema } from '@makaio/contracts';
 import {
   AdapterAuthConstantSchema,
   AuthEnvironmentVariableNameSchema,
@@ -293,6 +294,8 @@ export const ContainerLocalWorkflowSpawnRequestSchema = ContainerLocalSpawnReque
   executionId: z.string(),
   /** Authority-created attempt identifier for this workflow dispatch. */
   executionAttemptId: z.string(),
+  /** Immutable bootstrap deadline from the attempt's durable record. */
+  bootstrapDeadlineAt: WorkerBootstrapDeadlineAtSchema,
 }).strict();
 export type ContainerLocalWorkflowSpawnRequest = z.infer<typeof ContainerLocalWorkflowSpawnRequestSchema>;
 

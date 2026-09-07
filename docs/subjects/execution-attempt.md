@@ -22,13 +22,60 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `bootstrap.awaitStart` | [`execution-attempt.bootstrap.awaitStart`](#execution-attempt.bootstrap.awaitStart) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
+| `instruction.get` | [`execution-attempt.instruction.get`](#execution-attempt.instruction.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `operation.admit` | [`execution-attempt.operation.admit`](#execution-attempt.operation.admit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `operation.admitted` | [`execution-attempt.operation.admitted`](#execution-attempt.operation.admitted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `operation.deliver` | [`execution-attempt.operation.deliver`](#execution-attempt.operation.deliver) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
+| `operation.report` | [`execution-attempt.operation.report`](#execution-attempt.operation.report) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
+| `outcome.submit` | [`execution-attempt.outcome.submit`](#execution-attempt.outcome.submit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `runtime.ready` | [`execution-attempt.runtime.ready`](#execution-attempt.runtime.ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `runtime.register` | [`execution-attempt.runtime.register`](#execution-attempt.runtime.register) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 
 ## Subject Details
+
+### <a id="execution-attempt.bootstrap.awaitStart"></a>`execution-attempt.bootstrap.awaitStart` (rpc)
+
+An authenticated attempt waits for its allocation to become durably available.
+The authority rechecks owner, settlement, fencing, allocation and deadline.
+A pending reply renews the bounded wait; permission only allows registration.
+
+Subject: `execution-attempt.bootstrap.awaitStart`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `executionAttemptId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `reason` | `"resolved" \| "not-found" \| "fenced" \| "allocation-terminated" \| "gate-closed" \| "bootstrap-expired" \| undefined` | no |
+| `status` | `"permitted" \| "pending" \| "refused"` | yes |
+
+### <a id="execution-attempt.instruction.get"></a>`execution-attempt.instruction.get` (rpc)
+
+Read only the frozen assignment bound to the authenticated Attempt.
+Subject: `execution-attempt.instruction.get`
+Type: Request (RPC) — Worker Runtime → Authority
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `executionAttemptId` | `string` | yes |
+| `runtimeGeneration` | `number` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `decision` | `"found" \| "refused"` | yes |
+| `instruction` | `{ id: string; revision: string; workload: { kind: string; version: string; input: JsonValue; }; preservation: { required: ("source-state" \| "diagnostics" \| "workspace-state" \| "live-state")[]; }; workspace?: { provisioning: "create" \| "bind"; custody: "external" \| "disposable"; sourceRoots: { id: string; path: string; source?: { kind: string; input: JsonValue; } \| undefined; }[]; setup: { command: string; args: string[]; env: Record<string, string>; timeoutMs: number; }[]; } \| undefined; } \| undefined` | no |
+| `refusalReason` | `"resolved" \| "not-found" \| "fenced" \| "not-ready" \| "stale-generation" \| undefined` | no |
 
 ### <a id="execution-attempt.operation.admit"></a>`execution-attempt.operation.admit` (rpc)
 
@@ -51,16 +98,16 @@ Type: Request (RPC) — command → decision
 |-------|------|----------|
 | `admissionKey` | `string` | yes |
 | `executionAttemptId` | `string` | yes |
-| `operationKind` | `"runtime-probe" \| "workflow-run"` | yes |
+| `operationKind` | `"runtime-probe" \| "workflow-run" \| "workspace-preparation" \| "workload-invocation"` | yes |
 | `runtimeGeneration` | `number` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `decision` | `"duplicate" \| "refused" \| "admitted"` | yes |
+| `decision` | `"refused" \| "duplicate" \| "admitted"` | yes |
 | `operationId` | `string \| undefined` | no |
-| `refusalReason` | `"resolved" \| "not-found" \| "fenced" \| "not-allocated" \| "operation-active" \| "gate-closed" \| "not-ready" \| "stale-generation" \| undefined` | no |
+| `refusalReason` | `"resolved" \| "not-found" \| "fenced" \| "gate-closed" \| "not-allocated" \| "operation-active" \| "not-ready" \| "stale-generation" \| "preparation-required" \| "preparation-not-required" \| "preparation-already-completed" \| undefined` | no |
 
 ### <a id="execution-attempt.operation.admitted"></a>`execution-attempt.operation.admitted` (event)
 
@@ -80,7 +127,7 @@ Type: Event
 | `admittedAt` | `string` | yes |
 | `executionAttemptId` | `string` | yes |
 | `operationId` | `string` | yes |
-| `operationKind` | `"workflow-run"` | yes |
+| `operationKind` | `"workflow-run" \| "workspace-preparation" \| "workload-invocation"` | yes |
 | `runtimeGeneration` | `number` | yes |
 
 ### <a id="execution-attempt.operation.deliver"></a>`execution-attempt.operation.deliver` (rpc)
@@ -108,7 +155,7 @@ Type: Request (RPC) — delivery → receipt
 |-------|------|----------|
 | `executionAttemptId` | `string` | yes |
 | `operationId` | `string` | yes |
-| `operationKind` | `"runtime-probe" \| "workflow-run"` | yes |
+| `operationKind` | `"runtime-probe" \| "workflow-run" \| "workspace-preparation" \| "workload-invocation"` | yes |
 | `runtimeGeneration` | `number` | yes |
 | `runtimeIncarnationId` | `string` | yes |
 
@@ -116,8 +163,55 @@ Type: Request (RPC) — delivery → receipt
 
 | Field | Type | Required |
 |-------|------|----------|
-| `receipt` | `"completed" \| "duplicate" \| "refused"` | yes |
+| `receipt` | `"completed" \| "refused" \| "duplicate"` | yes |
 | `refusalReason` | `"stale-generation" \| "unknown-kind" \| undefined` | no |
+
+### <a id="execution-attempt.operation.report"></a>`execution-attempt.operation.report` (rpc)
+
+Accept successful Preparation and complete its operation atomically.
+Terminal failures use outcome.submit; this is not a progress/logging sink.
+Subject: `execution-attempt.operation.report`
+Type: Request (RPC) — Worker Runtime → Authority
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `executionAttemptId` | `string` | yes |
+| `operationId` | `string` | yes |
+| `result` | `{ kind: "workspace-prepared"; binding: { workspaceRoot: string; sourceRoots: { id: string; path: string; }[]; }; }` | yes |
+| `runtimeGeneration` | `number` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `binding` | `{ workspaceRoot: string; sourceRoots: { id: string; path: string; }[]; } \| undefined` | no |
+| `decision` | `"accepted" \| "duplicate" \| "refused"` | yes |
+| `refusalReason` | `"resolved" \| "not-found" \| "fenced" \| "not-allocated" \| "stale-generation" \| "preparation-not-required" \| "no-active-operation" \| "operation-mismatch" \| "binding-mismatch" \| "conflict" \| undefined` | no |
+
+### <a id="execution-attempt.outcome.submit"></a>`execution-attempt.outcome.submit` (rpc)
+
+Commit a canonical terminal result and converge its owner before acknowledging.
+Startup failures and completed cooperative cancellation may precede Invocation
+or have no active operation. Other outcomes identify their admitted operation.
+Subject: `execution-attempt.outcome.submit`
+Type: Request (RPC) — Worker Runtime → Authority
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `executionAttemptId` | `string` | yes |
+| `operationId` | `string \| undefined` | no |
+| `outcome` | `{ kind: "technical-failure"; stage: "workspace-preparation" \| "workload-invocation" \| "startup"; message: string; } \| { kind: "workload-result"; result: JsonValue; } \| { kind: "cancelled"; reason?: string \| undefined; }` | yes |
+| `runtimeGeneration` | `number` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `decision` | `"accepted" \| "fenced" \| "duplicate" \| "conflict"` | yes |
 
 ### <a id="execution-attempt.runtime.ready"></a>`execution-attempt.runtime.ready` (event)
 

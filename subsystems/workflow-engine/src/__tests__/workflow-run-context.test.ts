@@ -33,6 +33,32 @@ describe('WorkflowRunContext storage round-trip', () => {
     dbContext.cleanup();
   });
 
+  it.each([
+    'authority',
+    'worker',
+    undefined,
+  ] as const)('persists only the terminal ownership selected by its caller: %s', async (terminalAuthority) => {
+    const runContext = buildWorkflowRunContext(
+      {
+        executionId: 'owner-selection',
+        workflowId: 'workflow-owner-selection',
+        coordinatorSessionId: 'coordinator',
+        source: { kind: 'source', filename: 'workflow.ts', source: 'export default workflow;' },
+        inputs: {},
+        config: {},
+        scope: { type: 'global' },
+        triggerPayload: {},
+        ...(terminalAuthority !== undefined ? { terminalAuthority } : {}),
+      },
+      DEFAULT_EXECUTOR_CONFIG,
+    );
+    await persistRunContext(runContext);
+    const { runContext: stored } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      executionId: runContext.executionId,
+    });
+    expect(stored?.terminalAuthority).toBe(terminalAuthority);
+  });
+
   it('builds run contexts with the caller supplied suspension strategy', () => {
     const runContext = buildWorkflowRunContext(
       {

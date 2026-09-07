@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { WorkerBootstrapDeadlineAtSchema } from '@makaio/contracts';
 import {
   ContainerAdapterAuthEnvelopeSchema,
   ContainerBootstrapConfigSchema,
@@ -6,6 +7,7 @@ import {
   ContainerIsolatedExecutionTargetSchema,
   ContainerIsolatedSpawnRequestSchema,
   ContainerLocalSpawnRequestSchema,
+  ContainerLocalWorkflowSpawnRequestSchema,
   type ContainerIsolatedSpawnRequest,
   type ContainerLocalSpawnRequest,
   type SpawnRequest,
@@ -175,6 +177,7 @@ describe('ContainerBootstrapConfigSchema', () => {
   });
 
   it('requires container-local workflow identities to be complete', () => {
+    expect(ContainerLocalWorkflowSpawnRequestSchema.shape.bootstrapDeadlineAt).toBe(WorkerBootstrapDeadlineAtSchema);
     const descriptor = {
       mode: 'container-local' as const,
       sessionId: 'session-1',
@@ -195,8 +198,26 @@ describe('ContainerBootstrapConfigSchema', () => {
         ...descriptor,
         executionId: 'execution-1',
         executionAttemptId: 'attempt-1',
+        bootstrapDeadlineAt: '2026-09-07T12:00:00.000Z',
       }).success,
     ).toBe(true);
+
+    for (const bootstrapDeadlineAt of [undefined, '', 'tomorrow']) {
+      expect(
+        ContainerLocalSpawnRequestSchema.safeParse({
+          ...descriptor,
+          executionId: 'execution-1',
+          executionAttemptId: 'attempt-1',
+          bootstrapDeadlineAt,
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      ContainerLocalSpawnRequestSchema.safeParse({
+        ...descriptor,
+        bootstrapDeadlineAt: '2026-09-07T12:00:00.000Z',
+      }).success,
+    ).toBe(false);
 
     expectTypeOf<
       Pick<Extract<ContainerLocalSpawnRequest, { executionId: string }>, 'executionId' | 'executionAttemptId'>

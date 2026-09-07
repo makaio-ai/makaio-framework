@@ -9,12 +9,15 @@ import {
 import type { BaseMessageContext } from '@makaio/core';
 import { resolveExecutionAttemptPeer, type ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
+import { submitAttemptOutcome, type OutcomeConvergence, type OutcomeConvergenceInput } from './outcome-convergence.js';
+import { registerExecutionAttemptHandlers, type ExecutionAttemptHandlersDeps } from './execution-attempt-handlers.js';
 import {
-  submitAttemptOutcome,
-  type OutcomeConvergence,
-  type OutcomeConvergenceInput,
-  type OutcomePreCommitValidation,
-} from './outcome-convergence.js';
+  decodeWorkflowAttemptOutcome,
+  type WorkflowAttemptCancellation,
+  type WorkflowAttemptOutcome,
+  type WorkflowAttemptTechnicalFailure,
+} from './workflow-attempt-outcome.js';
+import { isAcceptedRunnerResultStatus } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
 
@@ -62,7 +65,7 @@ export interface OutcomeSubmissionDeps {
   /** Message bus for storage and lifecycle requests. */
   readonly bus: IMakaioBus;
   /** Execution attempt Authority service. */
-  readonly authority: ExecutionAttemptAuthority<WorkflowRunResult>;
+  readonly authority: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
   /**
    * Accept a terminal runner result through the executor's idempotent
    * workflow-state convergence path.
@@ -74,39 +77,27 @@ export interface OutcomeSubmissionDeps {
     executionId: string,
     result: WorkflowRunResult,
   ) => Promise<{ accepted: boolean; status: WorkflowExecution['status'] }>;
-}
-
-/**
- * Verify that a worker outcome is correlated with the immutable durable
- * execution identity before the Authority records it.
- *
- * This validation intentionally performs only reads: a mismatched result must
- * never become an immutable attempt outcome, because a corrected retry would
- * then be rejected as a conflicting outcome.
- * @param bus - Authority-local workflow bus.
- * @param executionId - Trusted execution identity derived from the peer.
- * @param result - Parsed worker result to validate.
- */
-async function validateOutcomeExecutionIdentity(
-  bus: IMakaioBus,
-  executionId: string,
-  result: WorkflowRunResult,
-): Promise<void> {
-  const [{ execution }, { runContext }] = await Promise.all([
-    bus.request(WorkflowStorageSubjects.getExecution, { executionId }),
-    bus.request(WorkflowStorageSubjects.getRunContext, { executionId }),
-  ]);
-  if (!execution) throw new Error(`Outcome execution not found: ${executionId}`);
-  if (execution.id !== executionId || execution.workflowId !== result.workflowId) {
-    throw new Error(`Outcome workflow identity mismatch for execution '${executionId}'`);
-  }
-  if (!runContext) throw new Error(`Outcome run context not found: ${executionId}`);
-  if (runContext.executionId !== executionId || runContext.workflowId !== result.workflowId) {
-    throw new Error(`Outcome run context identity mismatch for execution '${executionId}'`);
-  }
-  if (runContext.terminalAuthority === 'worker') {
-    throw new Error(`Outcome submission requires authority terminal ownership for execution '${executionId}'`);
-  }
+  /**
+   * Fail the owner execution after a technical outcome has already committed.
+   * This must use the owner's idempotent finalizer, not resubmit a made-up workflow result.
+   * @param executionId - Durable workflow execution that owns the Attempt.
+   * @param failure - Canonical technical failure retained in Attempt storage.
+   * @returns The durable owner status after acceptance.
+   */
+  readonly acceptTechnicalFailure: (
+    executionId: string,
+    failure: WorkflowAttemptTechnicalFailure,
+  ) => Promise<{ accepted: boolean; status: WorkflowExecution['status'] }>;
+  /**
+   * Finalize the owner only after the Runtime's confirmed stop has committed.
+   * @param executionId - Durable workflow execution that owns the Attempt.
+   * @param cancellation - Canonical cancellation retained in Attempt storage.
+   * @returns The durable owner status after acceptance.
+   */
+  readonly acceptCancellation: (
+    executionId: string,
+    cancellation: WorkflowAttemptCancellation,
+  ) => Promise<{ accepted: boolean; status: WorkflowExecution['status'] }>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -158,47 +149,73 @@ async function convergePausedState(bus: IMakaioBus, executionId: string, result:
  * Workflow-engine realization of the generic convergence port.
  *
  * Dispatches on the committed outcome: a `paused` result parks the execution
- * through durable suspension, every other result goes through the executor's
- * idempotent terminal acceptance. Both branches read the canonical committed
- * copy the port hands over, never the submitter's copy.
+ * through durable suspension, workflow results use terminal acceptance, and
+ * runtime failures and cancellations use their owner finalizers. All branches
+ * read the canonical committed copy the port hands over, never the submitter's copy.
  */
-class WorkflowOutcomeConvergence implements OutcomeConvergence<WorkflowRunResult> {
+class WorkflowOutcomeConvergence implements OutcomeConvergence<WorkflowAttemptOutcome> {
   public constructor(
     private readonly bus: IMakaioBus,
     private readonly acceptTerminalResult: OutcomeSubmissionDeps['acceptTerminalResult'],
+    private readonly acceptTechnicalFailure: OutcomeSubmissionDeps['acceptTechnicalFailure'],
+    private readonly acceptCancellation: OutcomeSubmissionDeps['acceptCancellation'],
   ) {}
 
   /**
    * Converge workflow state with a committed outcome.
    * @param input - Attempt identity and the committed workflow result.
    */
-  public async converge(input: OutcomeConvergenceInput<WorkflowRunResult>): Promise<void> {
+  public async converge(input: OutcomeConvergenceInput<WorkflowAttemptOutcome>): Promise<void> {
+    // Canonical outcomes are schema-decoded: workflow results reject `kind`;
+    // only runtime failure and cancellation outcomes carry it.
+    if ('kind' in input.outcome) {
+      if (input.outcome.kind === 'cancelled') {
+        const accepted = await this.acceptCancellation(input.executionId, input.outcome);
+        if (!accepted.accepted || accepted.status !== 'cancelled') {
+          throw new Error(`Cancellation did not converge workflow execution '${input.executionId}'`);
+        }
+        return;
+      }
+      const accepted = await this.acceptTechnicalFailure(input.executionId, input.outcome);
+      if (!accepted.accepted || (accepted.status !== 'failed' && accepted.status !== 'cancelled')) {
+        throw new Error(`Technical failure did not converge workflow execution '${input.executionId}'`);
+      }
+      return;
+    }
     if (input.outcome.status === 'paused') {
       await convergePausedState(this.bus, input.executionId, input.outcome);
       return;
     }
-    await this.acceptTerminalResult(input.executionId, input.outcome);
+    const accepted = await this.acceptTerminalResult(input.executionId, input.outcome);
+    if (!accepted.accepted || !isAcceptedRunnerResultStatus(accepted.status, input.outcome.status)) {
+      throw new Error(`Workflow result did not converge execution '${input.executionId}'`);
+    }
   }
 }
 
 /**
- * Workflow-engine realization of the pre-commit validation port.
+ * Compose one workflow-owner decoder and convergence port for both ingress paths.
  *
- * Wraps {@link validateOutcomeExecutionIdentity}: reads only, so a rejected
- * outcome never becomes an immutable attempt outcome.
+ * Identity validation reads the frozen instruction, never a mutable run-context
+ * row. Canonical outcomes are committed before an owner finalizer runs.
+ * @param bus - Authority-local workflow bus used for pause convergence.
+ * @param deps - Shared Authority and idempotent owner finalizers.
+ * @returns Generic Attempt handler dependencies for this workflow owner.
  */
-class WorkflowOutcomeValidation implements OutcomePreCommitValidation<WorkflowRunResult> {
-  public constructor(private readonly bus: IMakaioBus) {}
-
-  /**
-   * Validate a workflow result against the durable execution identity.
-   * @param executionId - Trusted execution identity derived from the peer.
-   * @param outcome - Parsed worker result to validate.
-   * @returns Resolves when the result is correlated with the durable identity.
-   */
-  public validate(executionId: string, outcome: WorkflowRunResult): Promise<void> {
-    return validateOutcomeExecutionIdentity(this.bus, executionId, outcome);
-  }
+export function createWorkflowOutcomeSubmissionDeps(
+  bus: IMakaioBus,
+  deps: OutcomeSubmissionDeps,
+): ExecutionAttemptHandlersDeps<WorkflowAttemptOutcome> {
+  return {
+    authority: deps.authority,
+    decodeOutcome: decodeWorkflowAttemptOutcome,
+    convergence: new WorkflowOutcomeConvergence(
+      bus,
+      deps.acceptTerminalResult,
+      deps.acceptTechnicalFailure,
+      deps.acceptCancellation,
+    ),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -206,7 +223,10 @@ class WorkflowOutcomeValidation implements OutcomePreCommitValidation<WorkflowRu
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Register the `worker.control.outcome.submit` bus handler.
+ * Register generic Attempt ingress and the workflow-only runner outcome endpoint.
+ *
+ * The workflow-only endpoint still serves the existing Piscina runner. Both
+ * paths share the same instruction-bound decoder and canonical convergence.
  *
  * The handler:
  * 1. Derives attempt identity from the authenticated peer context.
@@ -223,9 +243,9 @@ class WorkflowOutcomeValidation implements OutcomePreCommitValidation<WorkflowRu
  * @returns Cleanup function for handler deregistration.
  */
 export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeSubmissionDeps): () => void {
-  const convergence = new WorkflowOutcomeConvergence(bus, deps.acceptTerminalResult);
-  const validation = new WorkflowOutcomeValidation(bus);
-  return bus.on(WorkerSubjects.control.outcome.submit, async (ctx) => {
+  const submission = createWorkflowOutcomeSubmissionDeps(bus, deps);
+  const cleanupGeneric = registerExecutionAttemptHandlers(bus, submission);
+  const cleanupWorkflow = bus.on(WorkerSubjects.control.outcome.submit, async (ctx) => {
     const identity = resolveAttemptIdentity(ctx, ctx.payload);
     if (identity === null) {
       throw new Error('Outcome submission requires an authenticated ' + 'workflow-execution-attempt peer');
@@ -270,24 +290,31 @@ export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeS
     // may skip schema validation in production, so this parse also
     // serves as a defense-in-depth structural check.
     const typedResult = WorkflowRunResultSchema.parse(result);
+    const instruction = await deps.authority.getInstruction(identity);
+    if (instruction === null) throw new Error('No instruction belongs to this workflow Attempt');
+    const outcome = await submission.decodeOutcome({
+      instruction,
+      outcome: { kind: 'workload-result', result: typedResult },
+    });
 
     // Validate, commit, converge (accepted/duplicate only), settle: the
     // generic owner boundary owns that order. A throwing convergence leaves
     // the outcome durably committed and the waiter pending, so the worker's
     // retry yields `duplicate` and converges again; the error propagates so
     // the RPC errors and the worker retries.
-    const decision = await submitAttemptOutcome(
-      { authority: deps.authority, convergence, validation },
-      {
-        executionId: identity.executionId,
-        executionAttemptId: identity.executionAttemptId,
-        outcome: typedResult,
-      },
-    );
+    const decision = await submitAttemptOutcome(submission, {
+      executionId: identity.executionId,
+      executionAttemptId: identity.executionAttemptId,
+      outcome,
+    });
 
     // ACK only after durable commit and convergence both succeeded.
     ctx.setResult({ decision: decisionToAck(decision) });
   });
+  return () => {
+    cleanupWorkflow();
+    cleanupGeneric();
+  };
 }
 
 /**

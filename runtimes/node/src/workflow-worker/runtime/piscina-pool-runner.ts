@@ -1,4 +1,5 @@
 import Piscina from 'piscina';
+import type { TransferListItem } from 'node:worker_threads';
 
 /**
  * Shared Piscina pool configuration for isolated workflow execution.
@@ -44,10 +45,11 @@ export class PiscinaPoolRunner<TTask, TResult> {
    * subscribe to bus cancellation subjects for cooperative in-task shutdown.
    * @param task - Serializable task payload for the worker entrypoint.
    * @param signal - Abort signal forwarded to Piscina task cancellation.
+   * @param transferList - Task-owned transferable resources passed to the worker.
    * @returns Result returned by the worker entrypoint.
    */
-  public async run(task: TTask, signal: AbortSignal): Promise<TResult> {
-    return this.pool.run(task, { signal }) as Promise<TResult>;
+  public async run(task: TTask, signal: AbortSignal, transferList?: TransferListItem[]): Promise<TResult> {
+    return this.pool.run(task, { signal, transferList }) as Promise<TResult>;
   }
 
   /**

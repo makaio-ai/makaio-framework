@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { createBusInstance, waitForSubscriptionPropagation, type IMakaioBus } from '@makaio/bus-core';
-import { resolveMakaioHome } from '../makaio-config.js';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
-  createWorkflowCancelSubject,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
-  WorkflowSubjects,
+  WorkflowRunResultSchema,
+  type ExecutionAttemptOutcome,
   type OutcomeAckDecision,
-  type WorkerBootstrapClaimResponse,
+  type WorkerBootstrapCredentials,
   type WorkerRuntimeContext,
   type WorkflowRunContext,
   type WorkflowRunResult,
@@ -15,17 +14,12 @@ import {
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import type { Toolset } from '@makaio/tools-core';
 import type { PrepareAdapterRuntimeInput } from '../compose-adapter-runtime.js';
-import {
-  createIsolatedWorkflowRuntime,
-  type IsolatedWorkflowRuntime,
-  type IsolatedWorkflowRuntimeContext,
-} from './isolated-workflow-runtime.js';
-import { submitOutcomeWithAck, type OutcomeSubmitRetryConfig } from './outcome-submission.js';
-import {
-  installOperationDeliveryEndpoint,
-  registerAndAdmitWorkflowRun,
-  type OperationDeliveryEndpoint,
-} from './runtime-registration-client.js';
+import type { OutcomeSubmitRetryConfig } from './outcome-submission.js';
+import { runWorkloadInvocation } from './workload-invocation.js';
+import { createWorkflowWorkloadAdapter } from './workflow-workload-adapter.js';
+import { registerWorkerRuntime } from './runtime-registration-client.js';
+import { bootstrapWorkerRuntime, type BootstrapRuntimeConnection } from './bootstrap-start-client.js';
+import { withWorkerBootstrapDeadline } from './worker-bootstrap-exchange.js';
 
 // ─────────────────────────────────────────────────────────────
 // Dependency types
@@ -37,7 +31,7 @@ import {
  * The harness receives these credentials after a successful bootstrap claim
  * and uses them to establish the authenticated bus connection.
  */
-export type HeadlessWorkerBootstrapCredentials = WorkerBootstrapClaimResponse;
+export type HeadlessWorkerBootstrapCredentials = WorkerBootstrapCredentials;
 
 /**
  * Bootstrap the worker by claiming execution-scoped bus credentials.
@@ -66,21 +60,18 @@ export type HeadlessWorkerBusConnector = (
 ) => Promise<void>;
 
 /**
- * Result of materializing a portable run context into worker-local paths.
+ * Workflow executable and contribution paths acquired inside Invocation.
  *
- * The optional {@link cleanup} callback is invoked by the harness in its
- * finally teardown (best-effort, idempotent-safe) after runtime shutdown.
- * Implementations that acquire temporary resources (snapshot dirs, file
- * handles) should provide a cleanup callback to release them.
+ * This legacy name does not declare a project Workspace. Cleanup is permitted
+ * only after an acknowledged workload result without preservation obligations. A root
+ * shared with the prepared project Workspace has that Workspace's cleanup owner.
  */
 export interface MaterializedWorkspace {
   /** Materialized worker-local runtime context with absolute paths. */
   readonly context: WorkerRuntimeContext;
   /**
-   * Optional cleanup callback invoked during harness teardown.
-   *
-   * Must be idempotent — the harness may call it multiple times or
-   * after partial initialization. Rejections are swallowed.
+   * Optional idempotent executable-root cleanup, after acknowledged execution.
+   * Never called for technical failure, cancellation, unacknowledged outcomes or roots overlapping a project Workspace.
    */
   readonly cleanup?: () => Promise<void>;
 }
@@ -91,7 +82,7 @@ export interface MaterializedWorkspace {
  * The implementation resolves workspace snapshots or local directories,
  * verifies contribution integrity, and returns a {@link MaterializedWorkspace}
  * with absolute worker-local paths and an optional cleanup callback.
- * @param runContext - Persisted portable run context from the Authority.
+ * @param runContext - Local DTO reconstructed from frozen input and selected Runtime inputs.
  * @param signal - Cancellation signal.
  * @returns Materialized workspace with runtime context and optional cleanup.
  */
@@ -119,7 +110,7 @@ export type HeadlessWorkerContributionLoader = (
  * The implementation loads the workflow from the run context and drives it
  * through the orchestrator. The returned result is immutable.
  * @param bus - Connected worker-local bus.
- * @param runContext - Persisted portable run context.
+ * @param runContext - Local DTO reconstructed from frozen input and selected Runtime inputs.
  * @param runtimeContext - Materialized worker-local runtime context.
  * @param signal - Effective cancellation signal (combines caller + bus cancel).
  * @returns Immutable terminal workflow run result.
@@ -157,11 +148,19 @@ export interface HeadlessWorkflowWorkerDeps {
   readonly executionId: string;
   /** Authority-created attempt identifier. */
   readonly executionAttemptId: string;
+  /** Immutable absolute deadline created with the Attempt, shared by every bootstrap phase. */
+  readonly bootstrapDeadlineAt: string;
+  /** Explicit host-delivered workflow environment; never inferred from ambient process state. */
+  readonly workflowEnv: Readonly<Record<string, string>>;
+  /** Private setup-process environment, supplied separately from workflowEnv and never persisted. */
+  readonly setupEnv?: Readonly<NodeJS.ProcessEnv>;
   /** Claim execution-scoped bus credentials. */
   readonly bootstrap: HeadlessWorkerBootstrap;
   /** Establish the authenticated bus connection. */
   readonly connectBus: HeadlessWorkerBusConnector;
-  /** Materialize the portable spec into worker-local context. */
+  /** Explicit project Workspace path; required only by an instruction requesting one. */
+  readonly workspaceRoot?: string;
+  /** Materialize executable and contribution paths inside admitted Invocation. */
   readonly materialize: HeadlessWorkerMaterializer;
   /** Load contribution packages from materialized entrypoints. */
   readonly loadContributions: HeadlessWorkerContributionLoader;
@@ -188,386 +187,116 @@ export interface HeadlessWorkflowWorkerDeps {
 /**
  * Terminal result of a headless worker execution.
  *
- * Contains the immutable workflow result and the Authority's durable ACK
- * decision so callers can distinguish first-time acceptance from replay.
+ * Preserves technical failure, cancellation and actual workflow results, together with
+ * the Authority's durable acknowledgement.
  */
 export interface HeadlessWorkflowWorkerResult {
-  /** Immutable terminal workflow run result. */
-  readonly result: WorkflowRunResult;
+  /** Canonical technical failure, cancellation or the workflow's actual returned result. */
+  readonly outcome: ExecutionAttemptOutcome;
   /** Durable ACK decision from the Authority. */
   readonly decision: OutcomeAckDecision;
 }
 
-/** A propagated workflow-cancellation subscription and its cleanup callback. */
-interface WorkflowCancellationSubscription {
-  /** Signal that aborts when the workflow cancellation event arrives. */
-  readonly signal: AbortSignal;
-  /** Removes the bus subscription. */
-  readonly cleanup: () => void;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
-
 /**
- * Build a cancelled {@link WorkflowRunResult} for cooperative cancellation.
- * @param executionId - Workflow execution identifier.
- * @param workflowId - Workflow definition identifier.
- * @returns Immutable cancelled result.
+ * Observe only a genuine workflow result after canonical acknowledgement.
+ * @param deps - Worker dependencies with an optional observer.
+ * @param result - Canonically acknowledged Invocation outcome.
  */
-function buildCancelledResult(executionId: string, workflowId: string): WorkflowRunResult {
-  return {
-    executionId,
-    workflowId,
-    status: 'cancelled',
-    reason: 'Execution cancelled',
-  };
-}
-
-/**
- * Subscribe to a workflow cancellation subject and wait for the subscription
- * to be visible to the Authority before continuing the lifecycle.
- * @param bus - Connected bus on which to listen for cancellation.
- * @param cancelSubject - Execution-specific cancellation subject.
- * @param priorSignal - Earlier lifecycle cancellation signal to carry forward.
- * @returns Propagated cancellation subscription.
- */
-async function subscribeToWorkflowCancellation(
-  bus: IMakaioBus,
-  cancelSubject: string,
-  priorSignal?: AbortSignal,
-): Promise<WorkflowCancellationSubscription> {
-  const controller = new AbortController();
-  const cleanup = bus.on(createWorkflowCancelSubject(cancelSubject), () => {
-    controller.abort();
-  });
-  const abortFromPriorSignal = () => {
-    controller.abort();
-  };
-  priorSignal?.addEventListener('abort', abortFromPriorSignal, { once: true });
-  if (priorSignal?.aborted) {
-    controller.abort();
-  }
-  await waitForSubscriptionPropagation(cleanup);
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      priorSignal?.removeEventListener('abort', abortFromPriorSignal);
-      cleanup();
-    },
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-// Harness implementation
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Build the {@link IsolatedWorkflowRuntimeContext} from the materialized
- * worker runtime context, supplying the host-level fields the isolated
- * runtime requires for adapter and extension activation.
- * @param runtimeCtx - Materialized worker-local runtime context.
- * @param machineId - Stable machine identity for this worker.
- * @returns Host context for the isolated runtime compositor.
- */
-function buildIsolatedContext(runtimeCtx: WorkerRuntimeContext, machineId: string): IsolatedWorkflowRuntimeContext {
-  // homedir and makaioHome are worker-machine-local paths, not the
-  // materialized workspace root. The workspace is where the workflow source
-  // and contributions live; makaioHome is where this machine's Makaio data
-  // (npm packages, config, DB) lives — resolved from MAKAIO_HOME or ~/.makaio.
-  const makaioHome = resolveMakaioHome();
-  return {
-    cwd: runtimeCtx.workspaceRoot,
-    platform: runtimeCtx.platform,
-    homedir: makaioHome,
-    makaioHome,
-    username: 'workflow-worker',
-    machineId,
-  };
-}
-
-/**
- * Compose the runtime after its workspace and contributions are available.
- * @param deps - Injected worker dependencies.
- * @param credentials - Claimed authenticated bus credentials.
- * @param runtimeContext - Materialized worker-local runtime context.
- * @param contributedPackages - Contributions to activate in the runtime.
- * @param signal - Effective pre-composition cancellation signal.
- * @param machineId - Stable worker machine identity.
- * @returns Connected isolated runtime.
- */
-async function composeWorkflowRuntime(
+async function observeCommittedWorkflow(
   deps: HeadlessWorkflowWorkerDeps,
-  credentials: HeadlessWorkerBootstrapCredentials,
-  runtimeContext: WorkerRuntimeContext,
-  contributedPackages: readonly KernelMakaioExtension[],
-  signal: AbortSignal,
-  machineId: string,
-): Promise<IsolatedWorkflowRuntime> {
-  return await createIsolatedWorkflowRuntime({
-    connectAuthority: async (bus) => {
-      await deps.connectBus(bus, credentials, signal);
-    },
-    contributedPackages: [...contributedPackages],
-    configRepository: deps.configRepository,
-    context: buildIsolatedContext(runtimeContext, machineId),
-    toolsets: [...deps.toolsets],
-    ...(deps.prepareAuthRuntime !== undefined && { prepareAuthRuntime: deps.prepareAuthRuntime }),
-  });
-}
-
-/**
- * Submit a cooperative-cancellation outcome through the currently connected bus.
- * @param deps - Injected worker dependencies.
- * @param bus - Connected pre-composition or runtime bus.
- * @param workflowId - Workflow definition identifier.
- * @returns Terminal cancelled result and durable ACK decision.
- */
-async function deliverCancelledOutcome(
-  deps: HeadlessWorkflowWorkerDeps,
-  bus: IMakaioBus,
-  workflowId: string,
-): Promise<HeadlessWorkflowWorkerResult> {
-  const { executionId, executionAttemptId } = deps;
-  const result = buildCancelledResult(executionId, workflowId);
-  const decision = await submitOutcomeWithAck(
-    bus,
-    { executionAttemptId, executionId, result },
-    { retry: deps.outcomeRetry, reconnect: () => bus.reconnect() },
-  );
-  return { result, decision };
-}
-
-/**
- * Execute the workflow and deliver its outcome for durable ACK.
- *
- * Captures execution errors as a `failed` result and invokes the optional
- * post-commit observer after the Authority acknowledges the outcome.
- * @param deps - Injected harness dependencies.
- * @param runtime - Composed isolated runtime.
- * @param runContext - Persisted portable run context.
- * @param runtimeContext - Materialized worker-local runtime context.
- * @param signal - Effective cancellation signal.
- * @returns Terminal result and durable ACK decision.
- */
-async function executeAndDeliver(
-  deps: HeadlessWorkflowWorkerDeps,
-  runtime: IsolatedWorkflowRuntime,
-  runContext: WorkflowRunContext,
-  runtimeContext: WorkerRuntimeContext,
-  signal: AbortSignal,
-): Promise<HeadlessWorkflowWorkerResult> {
-  const { executionId, executionAttemptId } = deps;
-
-  let result: WorkflowRunResult;
+  result: HeadlessWorkflowWorkerResult,
+): Promise<void> {
+  if (result.outcome.kind !== 'workload-result' || deps.onPostCommit === undefined) return;
   try {
-    result = await deps.execute(runtime.bus, runContext, runtimeContext, signal);
-  } catch (executionError) {
-    // Cooperative cancellation: when the effective signal is aborted and the
-    // error is an AbortError, produce a 'cancelled' result rather than a
-    // generic 'failed' result. This aligns with the WorkflowRunResult
-    // discriminated union and lets the Authority distinguish intentional
-    // cancellation from unexpected failures.
-    if (signal.aborted && executionError instanceof DOMException && executionError.name === 'AbortError') {
-      result = buildCancelledResult(executionId, runContext.workflowId);
-    } else {
-      result = {
-        executionId,
-        workflowId: runContext.workflowId,
-        status: 'failed',
-        error: executionError instanceof Error ? executionError.message : String(executionError),
-      };
-    }
-  }
-
-  const decision = await submitOutcomeWithAck(
-    runtime.bus,
-    {
-      executionAttemptId,
-      executionId,
-      result,
-    },
-    {
-      retry: deps.outcomeRetry,
-      reconnect: () => runtime.bus.reconnect(),
-    },
-  );
-
-  if (deps.onPostCommit !== undefined) {
-    try {
-      await deps.onPostCommit(result, decision);
-    } catch {
-      // Post-commit observation is best-effort.
-    }
-  }
-
-  return { result, decision };
-}
-
-/**
- * Materialize, compose, and execute a workflow after the Authority supplies its
- * portable run context.
- * @param deps - Injected worker dependencies.
- * @param credentials - Claimed authenticated bus credentials.
- * @param preBus - Connected bus used before runtime composition.
- * @param runContext - Persisted portable run context.
- * @param signal - Cancellation signal from the process/caller.
- * @param machineId - Stable worker machine identity.
- * @param incarnation - This runtime's identity and accepted generation, for the runtime-bus endpoint.
- * @param releasePreDeliveryEndpoint - Removes the pre-composition delivery endpoint; idempotent.
- * @returns Terminal result and durable ACK decision.
- */
-async function runWorkflowLifecycle(
-  deps: HeadlessWorkflowWorkerDeps,
-  credentials: HeadlessWorkerBootstrapCredentials,
-  preBus: IMakaioBus,
-  runContext: WorkflowRunContext,
-  signal: AbortSignal,
-  machineId: string,
-  incarnation: { readonly runtimeIncarnationId: string; readonly runtimeGeneration: number },
-  releasePreDeliveryEndpoint: () => void,
-): Promise<HeadlessWorkflowWorkerResult> {
-  const preCancellation = await subscribeToWorkflowCancellation(preBus, runContext.cancelSubject);
-  const earlyEffectiveSignal = AbortSignal.any([signal, preCancellation.signal]);
-  let lifecycleSignal = earlyEffectiveSignal;
-  let runtime: IsolatedWorkflowRuntime | undefined;
-  let runtimeCancellation: WorkflowCancellationSubscription | undefined;
-  let runtimeDeliveryEndpoint: OperationDeliveryEndpoint | undefined;
-  let materializedCleanup: (() => Promise<void>) | undefined;
-
-  try {
-    earlyEffectiveSignal.throwIfAborted();
-    const materialized = await deps.materialize(runContext, earlyEffectiveSignal);
-    const runtimeContext = materialized.context;
-    materializedCleanup = materialized.cleanup;
-
-    earlyEffectiveSignal.throwIfAborted();
-    const contributedPackages = await deps.loadContributions(runtimeContext, earlyEffectiveSignal);
-    earlyEffectiveSignal.throwIfAborted();
-    runtime = await composeWorkflowRuntime(
-      deps,
-      credentials,
-      runtimeContext,
-      contributedPackages,
-      earlyEffectiveSignal,
-      machineId,
-    );
-
-    runtimeCancellation = await subscribeToWorkflowCancellation(
-      runtime.bus,
-      runContext.cancelSubject,
-      preCancellation.signal,
-    );
-    // The delivery endpoint moves with the cancel subscription: it is reachable
-    // on the runtime bus before the pre-composition socket goes away, so the
-    // attempt never stops answering `execution-attempt.operation.deliver`.
-    runtimeDeliveryEndpoint = await installOperationDeliveryEndpoint(
-      runtime.bus,
-      { executionAttemptId: deps.executionAttemptId, ...incarnation },
-      {},
-    );
-    preCancellation.cleanup();
-    releasePreDeliveryEndpoint();
-    preBus.disconnect();
-
-    const effectiveSignal = AbortSignal.any([signal, runtimeCancellation.signal]);
-    lifecycleSignal = effectiveSignal;
-    effectiveSignal.throwIfAborted();
-    return await executeAndDeliver(deps, runtime, runContext, runtimeContext, effectiveSignal);
-  } catch (phaseError) {
-    const isCooperativeCancellation =
-      lifecycleSignal.aborted && phaseError instanceof DOMException && phaseError.name === 'AbortError';
-    if (!isCooperativeCancellation) {
-      throw phaseError;
-    }
-    return await deliverCancelledOutcome(deps, runtime?.bus ?? preBus, runContext.workflowId);
-  } finally {
-    preCancellation.cleanup();
-    runtimeCancellation?.cleanup();
-    runtimeDeliveryEndpoint?.cleanup();
-    if (runtime !== undefined) {
-      await runtime.shutdown().catch(() => undefined);
-    }
-    if (materializedCleanup !== undefined) {
-      await materializedCleanup().catch(() => undefined);
-    }
+    const workflowResult = WorkflowRunResultSchema.parse(result.outcome.result);
+    await deps.onPostCommit(workflowResult, result.decision);
+  } catch {
+    // Observation is best-effort, including callbacks that throw before returning a promise.
   }
 }
 
 /**
- * Run a single workflow execution through the portable headless worker harness.
+ * Register one Runtime, then run optional Workspace Preparation and Invocation.
  *
- * The runtime proves itself to the Authority before it asks for work: the
- * delivery endpoint is installed first, `execution-attempt.runtime.register`
- * returns only after the Authority made readiness durable, and the whole legacy
- * run then passes the attempt's start gate as one admitted `workflow-run`
- * operation. Kernel readiness is emitted later, by
- * `createIsolatedWorkflowRuntime` during composition.
- * @param deps - Injected provider and product dependencies.
- * @param signal - Cancellation signal from the process/caller.
- * @returns Terminal result and durable ACK decision.
- * @throws {@link OutcomeDeliveryError} When the Authority rejects the outcome.
- * @throws {@link RuntimeRegistrationRefusedError} When the Authority refuses this runtime.
- * @throws {@link OperationAdmissionRefusedError} When the Authority refuses the run.
- * @throws When bootstrap, connection, materialization, or runtime composition fails.
+ * The authenticated control bus stays connected through the canonical outcome
+ * acknowledgement. Workflow code acquisition and runtime composition happen
+ * only inside the installed workflow adapter's admitted Invocation.
+ * @param deps - Provider and installed workflow adapter dependencies.
+ * @param signal - Cancellation signal from the process or caller.
+ * @returns Canonical outcome and durable acknowledgement.
  */
 export async function runHeadlessWorkflowWorker(
   deps: HeadlessWorkflowWorkerDeps,
   signal: AbortSignal,
 ): Promise<HeadlessWorkflowWorkerResult> {
   signal.throwIfAborted();
-  // One incarnation per invocation: it identifies this concrete runtime process
-  // to the Authority and keys both the registration and the run's admission.
+  const workflowEnv = { ...deps.workflowEnv };
   const runtimeIncarnationId = randomUUID();
-  const credentials = await deps.bootstrap(signal);
-  signal.throwIfAborted();
-
-  const preBus = createBusInstance();
-  preBus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
-  let preDeliveryEndpoint: OperationDeliveryEndpoint | undefined;
-  const releasePreDeliveryEndpoint = (): void => {
-    const endpoint = preDeliveryEndpoint;
-    preDeliveryEndpoint = undefined;
-    endpoint?.cleanup();
-  };
+  const credentials = await withWorkerBootstrapDeadline(deps.bootstrapDeadlineAt, signal, (bootstrapSignal) =>
+    deps.bootstrap(bootstrapSignal),
+  );
+  const { connection, endpoint } = await bootstrapWorkerRuntime({
+    executionAttemptId: deps.executionAttemptId,
+    runtimeIncarnationId,
+    bootstrapDeadlineAt: deps.bootstrapDeadlineAt,
+    signal,
+    createConnection: () => createHeadlessConnection(deps, credentials),
+  });
+  const preBus = connection.bus;
+  const workflow = createWorkflowWorkloadAdapter({ ...deps, workflowEnv }, credentials, preBus);
+  let result: HeadlessWorkflowWorkerResult | undefined;
   try {
-    await deps.connectBus(preBus, credentials, signal);
-    // Before registration, not after: the Authority delivers its bounded probe
-    // inside the register request, and an unsubscribed runtime fails its own
-    // registration with `probe-failed`.
-    preDeliveryEndpoint = await installOperationDeliveryEndpoint(
-      preBus,
-      { executionAttemptId: deps.executionAttemptId, runtimeIncarnationId },
-      {},
-    );
-    const { runtimeGeneration } = await registerAndAdmitWorkflowRun(preBus, {
+    const runtimeGeneration = await registerWorkerRuntime(preBus, {
       executionAttemptId: deps.executionAttemptId,
       runtimeIncarnationId,
-      endpoint: preDeliveryEndpoint,
       signal,
     });
-    const runContext = await preBus.request(
-      WorkflowSubjects.getRunContext,
-      { executionId: deps.executionId },
-      { signal },
-    );
-    return await runWorkflowLifecycle(
-      deps,
-      credentials,
-      preBus,
-      runContext,
+    endpoint.bindGeneration(runtimeGeneration);
+    result = await runWorkloadInvocation(preBus, {
+      executionAttemptId: deps.executionAttemptId,
+      runtimeGeneration,
+      workspaceRoot: deps.workspaceRoot,
+      setupEnv: deps.setupEnv,
+      adapters: [workflow.adapter],
       signal,
-      `headless-worker-${deps.executionAttemptId}`,
-      { runtimeIncarnationId, runtimeGeneration },
-      releasePreDeliveryEndpoint,
-    );
+      retry: deps.outcomeRetry,
+      reconnect: () => preBus.reconnect(),
+    });
+    await observeCommittedWorkflow(deps, result);
+    return result;
   } finally {
-    releasePreDeliveryEndpoint();
     try {
-      preBus.disconnect();
-    } catch {
-      // The runtime handoff may already have disconnected this temporary bus.
+      await workflow.releaseExecutable(result);
+    } finally {
+      endpoint.cleanup();
+      await connection.close();
     }
   }
+}
+
+/**
+ * Acquire cleanup ownership before a provider starts asynchronous connection work.
+ * @param deps - Provider connector and workload dependencies.
+ * @param credentials - Attempt-scoped credentials, without private environment data.
+ * @returns A fresh connection whose late failure cannot retain a transport.
+ */
+function createHeadlessConnection(
+  deps: HeadlessWorkflowWorkerDeps,
+  credentials: HeadlessWorkerBootstrapCredentials,
+): BootstrapRuntimeConnection {
+  const bus = createBusInstance();
+  bus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
+  return {
+    bus,
+    async connect(signal) {
+      try {
+        await deps.connectBus(bus, credentials, signal);
+        signal.throwIfAborted();
+      } catch (error) {
+        bus.disconnect();
+        throw error;
+      }
+    },
+    close: () => bus.disconnect(),
+  };
 }

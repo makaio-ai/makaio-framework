@@ -5,12 +5,10 @@ import {
   type ExecutionLink,
   type IWorkflowRunner,
   type JsonValue,
-  type WorkflowArtifactRef,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowExecutionScope,
   type WorkflowRunContext,
-  type WorkflowRunResult,
   type WorkflowTriggerMode,
   type WorkflowWorkerSource,
   WorkflowError,
@@ -30,8 +28,9 @@ import {
   buildFileExecutionTask,
   type RunnerTaskDeps,
 } from './workflow-runner-tasks.js';
-import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
+import { launchDefinitionExecutionTask, selectDefinitionExecutionDispatch } from './workflow-definition-dispatch.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
+import type { WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
 
 /**
  * Dependencies injected into the execution start helpers.
@@ -68,6 +67,7 @@ export interface StartExecutionDeps {
     triggerMode?: WorkflowRunContext['triggerMode'];
     artifactRef?: WorkflowRunContext['artifactRef'];
     suspensionStrategy?: WorkflowRunContext['suspensionStrategy'];
+    terminalAuthority?: WorkflowRunContext['terminalAuthority'];
     materializationSpec?: WorkflowRunContext['materializationSpec'];
   }): WorkflowRunContext;
   /**
@@ -94,7 +94,7 @@ export interface StartExecutionDeps {
    * attempts before dispatch and wait for committed outcomes. When absent,
    * Worker dispatch is unavailable.
    */
-  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>;
+  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
   /** Host seams that resolve immutable workspace references for path starts. */
   materializationSpecResolvers: ReadonlySet<WorkflowMaterializationSpecResolver>;
 }
@@ -127,20 +127,17 @@ export async function persistLoadedExecutionStart(
  * Emit the execution-started lifecycle event without letting observer failures
  * prevent an already-persisted execution from running.
  * @param bus - Message bus
- * @param payload - Execution lifecycle payload
+ * @param execution - Already-persisted execution whose launch is being announced.
  */
-async function emitExecutionStarted(
-  bus: IMakaioBus,
-  payload: {
-    executionId: string;
-    workflowId: string;
-    coordinatorSessionId: string;
-    startedAt: number;
-    artifactRef?: WorkflowArtifactRef;
-  },
-): Promise<void> {
+async function emitExecutionStarted(bus: IMakaioBus, execution: WorkflowExecution): Promise<void> {
   try {
-    await bus.emit(WorkflowSubjects.execution.started, payload);
+    await bus.emit(WorkflowSubjects.execution.started, {
+      executionId: execution.id,
+      workflowId: execution.workflowId,
+      coordinatorSessionId: execution.coordinatorSessionId,
+      startedAt: execution.startedAt,
+      ...(execution.artifactRef !== undefined ? { artifactRef: execution.artifactRef } : {}),
+    });
   } catch (error) {
     console.error('[WorkflowExecutor] execution.started listener failed:', error);
   }
@@ -263,17 +260,17 @@ function shouldSendDefinitionToRunner(
 
 /**
  * Ensure source-backed executions can be dispatched by a runner before storage is mutated.
- * @param deps - Shared executor state and callbacks.
+ * @param runner - Execution mechanism already selected for this launch.
  * @param source - Resolved execution source.
  * @param workflowId - Logical workflow ID for the pending execution.
  * @throws When a path/source execution would otherwise fall back to the in-process scheduler.
  */
 function assertRunnerBackedSourceDispatchAvailable(
-  deps: StartExecutionDeps,
+  runner: IWorkflowRunner | undefined,
   source: WorkflowWorkerSource,
   workflowId: string,
 ): void {
-  if (source.kind === 'definition' || deps.workflowRunner !== undefined) {
+  if (source.kind === 'definition' || runner !== undefined) {
     return;
   }
   throw new WorkflowError(
@@ -508,7 +505,8 @@ export async function startResolvedDefinitionExecution(
   // that exact immutable definition for every definition launch, including
   // path-backed runners, so remote finalization never trusts worker input.
   const definitionSnapshot = options.definitionSnapshot ?? workflow;
-  assertRunnerBackedSourceDispatchAvailable(deps, executionSource, workflowId);
+  const dispatch = selectDefinitionExecutionDispatch(deps, { workflow });
+  assertRunnerBackedSourceDispatchAvailable(dispatch.runner, executionSource, workflowId);
   const { source: durableSource, materializationSpec } = await resolveDurablePathSource(
     deps,
     { executionId, workflowId, source: executionSource, workspaceRoot },
@@ -535,6 +533,7 @@ export async function startResolvedDefinitionExecution(
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
       triggerMode: 'immediate',
+      terminalAuthority: dispatch.runner?.terminalAuthority,
       ...(artifactRef !== undefined ? { artifactRef } : {}),
       ...(materializationSpec !== undefined ? { materializationSpec } : {}),
     });
@@ -552,29 +551,26 @@ export async function startResolvedDefinitionExecution(
     const initialState = executionSource.kind === 'definition' ? getValidatedInitialWorkflowState(workflow) : undefined;
     await persistExecutionStart(bus, execution, runContext, initialState, options.executionLinks?.(executionId));
 
-    const startedAt = execution.startedAt;
-    const startedEventTask = emitExecutionStarted(bus, {
-      executionId,
-      workflowId,
-      coordinatorSessionId,
-      startedAt,
-      ...(artifactRef !== undefined ? { artifactRef } : {}),
-    });
-    const executionTask = launchDefinitionExecutionTask(deps, {
-      executionId,
-      workflowId,
-      workflow,
-      ...(shouldSendDefinitionToRunner(executionSource, options.definitionSnapshot) ? { definitionSnapshot } : {}),
-      source: executionSource,
-      coordinatorSessionId,
-      sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
-      boundInputs,
-      boundConfig,
-      scope: resolvedScope,
-      ...(artifactRef !== undefined ? { artifactRef } : {}),
-      suspensionStrategy: runContext.suspensionStrategy,
-      ...(materializationSpec !== undefined ? { materializationSpec } : {}),
-    });
+    const startedEventTask = emitExecutionStarted(bus, execution);
+    const executionTask = launchDefinitionExecutionTask(
+      deps,
+      {
+        executionId,
+        workflowId,
+        workflow,
+        ...(shouldSendDefinitionToRunner(executionSource, options.definitionSnapshot) ? { definitionSnapshot } : {}),
+        source: executionSource,
+        coordinatorSessionId,
+        sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
+        boundInputs,
+        boundConfig,
+        scope: resolvedScope,
+        ...(artifactRef !== undefined ? { artifactRef } : {}),
+        suspensionStrategy: runContext.suspensionStrategy,
+        ...(materializationSpec !== undefined ? { materializationSpec } : {}),
+      },
+      dispatch,
+    );
 
     launched = true;
     return dispatchAndAwait(executionTasks, executionId, executionTask, startedEventTask);
@@ -748,6 +744,7 @@ export async function startFileExecution(
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
       triggerMode,
+      terminalAuthority: workflowRunner.terminalAuthority,
       ...(artifactRef !== undefined ? { artifactRef } : {}),
       materializationSpec,
     });
@@ -755,13 +752,7 @@ export async function startFileExecution(
 
     seedFileExecution(activeExecutions, execution, filePath, resolvedScope, runContext);
 
-    const startedEventTask = emitExecutionStarted(bus, {
-      executionId,
-      workflowId,
-      coordinatorSessionId,
-      startedAt: execution.startedAt,
-      ...(artifactRef !== undefined ? { artifactRef } : {}),
-    });
+    const startedEventTask = emitExecutionStarted(bus, execution);
     const executionTask = buildFileExecutionTask(deps.buildRunnerTaskDeps(workflowRunner), {
       executionId,
       workflowId,

@@ -312,10 +312,16 @@ async function handleRunnerCompletion(deps: RunnerTaskDeps, completion: Workflow
     const { execution } = await deps.buildFinalizerDeps().bus.request(WorkflowStorageSubjects.getExecution, {
       executionId: result.executionId,
     });
+    // A technical stop failure still projects a failed diagnostic after public
+    // cancellation. Accept it only when this runner was actually told to stop.
+    const cancelledWithFailure =
+      execution?.status === 'cancelled' &&
+      result.status === 'failed' &&
+      deps.workflowAbortControllers.get(result.executionId)?.signal.aborted === true;
     if (
       !execution ||
       execution.workflowId !== result.workflowId ||
-      !isAcceptedRunnerResultStatus(execution.status, result.status)
+      (!isAcceptedRunnerResultStatus(execution.status, result.status) && !cancelledWithFailure)
     ) {
       throw new Error(`Authority-committed runner result was not durably converged for '${result.executionId}'`);
     }
@@ -550,7 +556,8 @@ export function buildDefinitionRunnerParamsFromRunContext(
     scope: runContext.scope,
     ...(runContext.materializationSpec !== undefined ? { materializationSpec: runContext.materializationSpec } : {}),
     suspensionStrategy: runContext.suspensionStrategy,
-    terminalAuthority: runContext.terminalAuthority ?? 'authority',
+    // Omission uses the original worker-completion protocol, not Authority ownership.
+    terminalAuthority: runContext.terminalAuthority ?? 'worker',
     ...(dispatchMetadata !== undefined ? { dispatchMetadata } : {}),
   };
 }

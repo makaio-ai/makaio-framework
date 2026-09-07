@@ -1,12 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import {
-  WorkerSubjects,
-  type IWorkflowRunner,
-  type WorkerRequirements,
-  type WorkflowRunResult,
-} from '@makaio/contracts';
+import { randomUUID } from 'node:crypto';
+import { WorkerSubjects, type IWorkflowRunner, type WorkerRequirements } from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
+import { buildWorkflowAttemptInstruction } from './workflow-attempt-instruction.js';
+import { toCommittedWorkflowRunnerResult, type WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
+import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 /**
  * Check whether requirements declare Worker-backed dispatch.
@@ -41,7 +40,7 @@ export interface WorkerDispatchRunnerOptions {
    * Execution attempt Authority for creating attempts before dispatch
    * and waiting for committed outcomes.
    */
-  readonly authority: ExecutionAttemptAuthority<WorkflowRunResult>;
+  readonly authority: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
 }
 
 /**
@@ -65,25 +64,44 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
   const { bus, requirements, dispatchMetadata, authority } = options;
   if (!hasWorkerDispatchRequirements(requirements)) return undefined;
   return {
-    run: async (config, signal) => {
+    terminalAuthority: 'authority',
+    run: async (config, signal, manifest, runOptions) => {
+      signal.throwIfAborted();
+      const runContext =
+        config.source.kind === 'path'
+          ? (await bus.request(WorkflowStorageSubjects.getRunContext, { executionId: config.executionId }, { signal }))
+              .runContext
+          : undefined;
+      signal.throwIfAborted();
+      const instruction = buildWorkflowAttemptInstruction({
+        id: randomUUID(),
+        revision: '1',
+        config,
+        ...(runContext != null ? { runContext } : {}),
+        preservation: { required: [] },
+      });
       // The runner contract owes a completion wrapper; the generic dispatch
       // path yields the committed outcome itself.
       const result = await runAuthorityDispatchedAttempt({
         authority,
         executionId: config.executionId,
+        instruction,
         dispatch: (executionAttemptId) =>
           bus.request(
             WorkerSubjects.dispatch,
             {
               executionAttemptId,
-              config,
+              config: { ...config, terminalAuthority: 'authority' },
               requirements,
-              ...(dispatchMetadata !== undefined ? { metadata: dispatchMetadata } : {}),
+              ...(manifest !== undefined ? { manifest } : {}),
+              ...(dispatchMetadata !== undefined || runOptions?.dispatchMetadata !== undefined
+                ? { metadata: { ...dispatchMetadata, ...runOptions?.dispatchMetadata } }
+                : {}),
             },
             { signal },
           ),
       });
-      return { state: 'authority-committed', result };
+      return { state: 'authority-committed', result: toCommittedWorkflowRunnerResult(result, config) };
     },
   };
 }

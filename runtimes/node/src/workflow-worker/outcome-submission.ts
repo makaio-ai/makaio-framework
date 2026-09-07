@@ -1,5 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { WorkerSubjects, type OutcomeAckDecision, type WorkflowRunResult } from '@makaio/contracts';
+import {
+  ExecutionAttemptSubjects,
+  WorkerSubjects,
+  type ExecutionAttemptOutcome,
+  type OutcomeAckDecision,
+  type WorkflowRunResult,
+} from '@makaio/contracts';
 
 // ─────────────────────────────────────────────────────────────
 // Configuration
@@ -60,6 +66,18 @@ export interface OutcomeSubmitPayload {
   readonly result: WorkflowRunResult;
 }
 
+/** Payload for the generic terminal Attempt outcome ingress. */
+export interface AttemptOutcomeSubmitPayload {
+  /** Authority-created Attempt identity. */
+  readonly executionAttemptId: string;
+  /** Runtime generation accepted during registration. */
+  readonly runtimeGeneration: number;
+  /** Admitted operation for non-startup outcomes. */
+  readonly operationId?: string;
+  /** Technical failure or opaque workload result. */
+  readonly outcome: ExecutionAttemptOutcome;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Outcome delivery error
 // ─────────────────────────────────────────────────────────────
@@ -102,13 +120,35 @@ export class OutcomeDeliveryError extends Error {
   }
 }
 
-/**
- * Build the stable error reported when the overall delivery budget expires.
- * @param result - The immutable workflow result that could not be delivered.
- * @returns Deadline-expiry delivery error.
- */
-function createDeadlineExceededError(result: WorkflowRunResult): OutcomeDeliveryError {
-  return new OutcomeDeliveryError('deadline-exceeded', result, 'deadline-exceeded');
+/** Error from delivery through the generic Attempt outcome ingress. */
+export class AttemptOutcomeDeliveryError extends Error {
+  /**
+   * @param decision - Authority rejection decision or deadline marker.
+   * @param payload - Immutable Attempt outcome that could not be acknowledged.
+   * @param reason - Stable delivery failure classification.
+   */
+  public constructor(
+    public readonly decision: OutcomeAckDecision | 'deadline-exceeded',
+    public readonly payload: AttemptOutcomeSubmitPayload,
+    public readonly reason: OutcomeDeliveryFailureReason = 'authority-rejected',
+  ) {
+    super(
+      `Attempt outcome delivery ${reason === 'deadline-exceeded' ? 'deadline exceeded' : 'rejected by Authority'} ` +
+        `(decision=${decision}, executionAttemptId=${payload.executionAttemptId}, outcome=${payload.outcome.kind})`,
+    );
+    this.name = 'AttemptOutcomeDeliveryError';
+  }
+}
+
+/** Deadline failure for a non-terminal Authority request retried by the Runtime. */
+export class AuthorityRequestDeliveryError extends Error {
+  /**
+   * @param reason - Stable reason the request could not complete.
+   */
+  public constructor(public readonly reason: 'deadline-exceeded' = 'deadline-exceeded') {
+    super('Authority request delivery deadline exceeded');
+    this.name = 'AuthorityRequestDeliveryError';
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -125,6 +165,12 @@ function createDeadlineExceededError(result: WorkflowRunResult): OutcomeDelivery
  * will naturally fail again if the transport is still down.
  */
 export type OutcomeReconnect = () => Promise<void>;
+
+/** Common retry options for either legacy workflow or generic Attempt outcome delivery. */
+export interface OutcomeSubmitOptions {
+  readonly retry?: OutcomeSubmitRetryConfig;
+  readonly reconnect?: OutcomeReconnect;
+}
 
 /**
  * Resolved retry configuration with all defaults applied.
@@ -214,6 +260,94 @@ async function waitAndReconnect(
 }
 
 /**
+ * Run one Authority request through the common bounded retry loop.
+ *
+ * Both public submission functions differ only in their wire payload and
+ * rejection error. Keeping this loop shared ensures a retry never gains a
+ * second delivery policy merely because the outcome became generic.
+ * @param request - One bounded bus request using the remaining deadline.
+ * @param createDeadlineError - Builds the caller-specific deadline failure.
+ * @param options - Retry and reconnect behavior.
+ * @param isTerminalError - Identifies a received, non-retryable failure.
+ * @returns The first response that completes before the deadline.
+ */
+async function retryAuthorityRequest<TResponse>(
+  request: (timeout: number) => Promise<TResponse>,
+  createDeadlineError: () => Error,
+  options: OutcomeSubmitOptions | undefined,
+  isTerminalError: (error: unknown) => boolean,
+): Promise<TResponse> {
+  const config = resolveRetryConfig(options?.retry);
+  const reconnect = options?.reconnect;
+  const deadline = Date.now() + config.deadlineMs;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw createDeadlineError();
+    if (attempt > 0) {
+      const canRetry = await waitAndReconnect(attempt, config, deadline, reconnect);
+      if (!canRetry) throw createDeadlineError();
+    }
+    try {
+      const requestTimeout = deadline - Date.now();
+      if (requestTimeout <= 0) throw createDeadlineError();
+      return await request(requestTimeout);
+    } catch (error) {
+      if (isTerminalError(error)) throw error;
+      lastError = error;
+      if (Date.now() >= deadline) throw createDeadlineError();
+    }
+  }
+  throw lastError ?? createDeadlineError();
+}
+
+/**
+ * Retry a bounded Runtime-to-Authority request after transport failure.
+ *
+ * The request payload must be replay-safe. It does not turn an Authority
+ * refusal into a retry: callers receive and interpret ordinary responses.
+ * @param request - Authority request using the remaining deadline.
+ * @param options - Retry and reconnect behavior.
+ * @returns The first received Authority response.
+ */
+export async function requestAuthorityWithRetry<TResponse>(
+  request: (timeout: number) => Promise<TResponse>,
+  options?: OutcomeSubmitOptions,
+): Promise<TResponse> {
+  return await retryAuthorityRequest(
+    request,
+    () => new AuthorityRequestDeliveryError(),
+    options,
+    () => false,
+  );
+}
+
+/**
+ * Submit an outcome through the common retry loop and reject non-ACK decisions.
+ * @param request - Bounded terminal-outcome request.
+ * @param createError - Builds the outcome-specific terminal delivery error.
+ * @param options - Retry and reconnect behavior.
+ * @returns Durable acknowledgement decision.
+ */
+async function submitWithAck(
+  request: (timeout: number) => Promise<OutcomeAckDecision>,
+  createError: (decision: OutcomeAckDecision | 'deadline-exceeded', reason?: OutcomeDeliveryFailureReason) => Error,
+  options: OutcomeSubmitOptions | undefined,
+): Promise<OutcomeAckDecision> {
+  return await retryAuthorityRequest(
+    async (timeout) => {
+      const decision = await request(timeout);
+      if (DELIVERED_DECISIONS.has(decision)) return decision;
+      throw createError(decision);
+    },
+    () => createError('deadline-exceeded', 'deadline-exceeded'),
+    options,
+    (error) => error instanceof OutcomeDeliveryError || error instanceof AttemptOutcomeDeliveryError,
+  );
+}
+
+/**
  * Submit a workflow outcome for durable acknowledgement with
  * decision-aware, reconnect-capable retry.
  *
@@ -240,58 +374,51 @@ async function waitAndReconnect(
 export async function submitOutcomeWithAck(
   bus: IMakaioBus,
   payload: OutcomeSubmitPayload,
-  options?: {
-    readonly retry?: OutcomeSubmitRetryConfig;
-    readonly reconnect?: OutcomeReconnect;
-  },
+  options?: OutcomeSubmitOptions,
 ): Promise<OutcomeAckDecision> {
-  const config = resolveRetryConfig(options?.retry);
-  const reconnect = options?.reconnect;
-  const deadline = Date.now() + config.deadlineMs;
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      throw createDeadlineExceededError(payload.result);
-    }
-
-    if (attempt > 0) {
-      const canRetry = await waitAndReconnect(attempt, config, deadline, reconnect);
-      if (!canRetry) {
-        throw createDeadlineExceededError(payload.result);
-      }
-    }
-
-    try {
-      const requestTimeout = deadline - Date.now();
-      if (requestTimeout <= 0) {
-        throw createDeadlineExceededError(payload.result);
-      }
-      const { decision } = await bus.request(
+  return await submitWithAck(
+    async (timeout) => {
+      const response = await bus.request(
         WorkerSubjects.control.outcome.submit,
         {
           executionAttemptId: payload.executionAttemptId,
           executionId: payload.executionId,
           result: payload.result,
         },
-        { timeout: requestTimeout },
+        { timeout },
       );
-      if (DELIVERED_DECISIONS.has(decision)) {
-        return decision;
-      }
-      // Non-transient infrastructure rejection — no retry.
-      throw new OutcomeDeliveryError(decision, payload.result);
-    } catch (error) {
-      if (error instanceof OutcomeDeliveryError) {
-        throw error;
-      }
-      lastError = error;
-      if (Date.now() >= deadline) {
-        throw createDeadlineExceededError(payload.result);
-      }
-    }
-  }
+      return response.decision;
+    },
+    (decision, reason) =>
+      reason === undefined
+        ? new OutcomeDeliveryError(decision, payload.result)
+        : new OutcomeDeliveryError(decision, payload.result, reason),
+    options,
+  );
+}
 
-  throw lastError ?? createDeadlineExceededError(payload.result);
+/**
+ * Submit a generic Attempt terminal outcome with the same bounded retry policy
+ * as legacy workflow results.
+ * @param bus - Runtime bus authenticated as the Attempt peer.
+ * @param payload - Fenced Attempt result and optional admitted operation.
+ * @param options - Retry and reconnect behavior.
+ * @returns Durable Authority acknowledgement.
+ */
+export async function submitAttemptOutcomeWithAck(
+  bus: IMakaioBus,
+  payload: AttemptOutcomeSubmitPayload,
+  options?: OutcomeSubmitOptions,
+): Promise<OutcomeAckDecision> {
+  return await submitWithAck(
+    async (timeout) => {
+      const response = await bus.request(ExecutionAttemptSubjects.outcome.submit, payload, { timeout });
+      return response.decision;
+    },
+    (decision, reason) =>
+      reason === undefined
+        ? new AttemptOutcomeDeliveryError(decision, payload)
+        : new AttemptOutcomeDeliveryError(decision, payload, reason),
+    options,
+  );
 }

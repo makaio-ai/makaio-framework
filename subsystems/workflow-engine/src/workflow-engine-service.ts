@@ -1,10 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IWorkflowRunner, WorkflowRunResult } from '@makaio/contracts';
+import type { IWorkflowRunner } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
 import { WorkflowTriggerReconciler } from './workflow-trigger-reconciler.js';
 import { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { ExecutionAttemptRepository } from './execution-attempt-repository.js';
+import type { WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
 import type { ExecutorConfig, WorkflowMaterializationSpecResolver, WorkflowWorkspaceRootResolver } from './types.js';
 import { WorkflowExecutor } from './workflow-executor.js';
 
@@ -36,7 +37,9 @@ export interface WorkflowEngineServiceOptions {
    * When omitted, the workflow engine operates without attempt tracking
    * (framework-only, in-process, and Piscina modes).
    */
-  executionAttemptRepository?: ExecutionAttemptRepository<WorkflowRunResult>;
+  executionAttemptRepository?: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
+  /** Explicit creation-time bootstrap budget, required only when constructing an Authority. */
+  executionAttemptBootstrapTimeoutMs?: number;
   /**
    * Pre-built execution attempt Authority.
    *
@@ -48,7 +51,7 @@ export interface WorkflowEngineServiceOptions {
    * construction. When both are provided, the pre-built Authority is used
    * and the repository is ignored.
    */
-  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>;
+  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
   /** Host-owned resolvers that create portable specs for path-backed starts. */
   workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
   /**
@@ -75,7 +78,7 @@ export interface WorkflowEngineServiceOptions {
 export class WorkflowEngineService extends BaseService {
   private readonly workflowExecutor: WorkflowExecutor;
   private readonly triggerReconcilerInstance: WorkflowTriggerReconciler;
-  private readonly attemptAuthority: ExecutionAttemptAuthority<WorkflowRunResult> | undefined;
+  private readonly attemptAuthority: ExecutionAttemptAuthority<WorkflowAttemptOutcome> | undefined;
   private readonly workspaceRootResolvers = new Set<WorkflowWorkspaceRootResolver>();
 
   /**
@@ -84,11 +87,15 @@ export class WorkflowEngineService extends BaseService {
    */
   public constructor(bus: IMakaioBus, options?: WorkflowEngineServiceOptions) {
     super(bus);
-    this.attemptAuthority =
-      options?.executionAttemptAuthority ??
-      (options?.executionAttemptRepository
-        ? new ExecutionAttemptAuthority(options.executionAttemptRepository)
-        : undefined);
+    let authority = options?.executionAttemptAuthority;
+    if (!authority && options?.executionAttemptRepository) {
+      const bootstrapTimeoutMs = options.executionAttemptBootstrapTimeoutMs;
+      if (bootstrapTimeoutMs === undefined) {
+        throw new Error('An ExecutionAttemptRepository requires executionAttemptBootstrapTimeoutMs');
+      }
+      authority = new ExecutionAttemptAuthority(options.executionAttemptRepository, { bootstrapTimeoutMs });
+    }
+    this.attemptAuthority = authority;
     this.workflowExecutor = new WorkflowExecutor(
       bus,
       options?.executorConfig,
@@ -113,12 +120,11 @@ export class WorkflowEngineService extends BaseService {
   /**
    * Execution attempt Authority owned by this package service.
    *
-   * Present only when an {@link ExecutionAttemptRepository} was injected at
-   * construction time (Worker dispatch mode). Returns `undefined` for
-   * framework-only, in-process, and Piscina modes.
+   * Present when the host supplies a prebuilt Authority or a repository with
+   * an explicit bootstrap budget, independently of runner mode.
    * @returns Authority instance, or `undefined` when no repository is injected.
    */
-  public get executionAttemptAuthority(): ExecutionAttemptAuthority<WorkflowRunResult> | undefined {
+  public get executionAttemptAuthority(): ExecutionAttemptAuthority<WorkflowAttemptOutcome> | undefined {
     return this.attemptAuthority;
   }
 

@@ -24,6 +24,7 @@ import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsyste
 import { ClientStorageSubjects, ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import {
   ExecutionAttemptAuthority,
+  workflowAttemptOutcomeCodec,
   registerOperationAdmissionHandler,
   registerRuntimeRegistrationHandler,
   WorkflowExecutor,
@@ -42,7 +43,6 @@ import { WorkerRunner } from '../worker-runner.js';
 import {
   createInMemoryAttemptRepository,
   driveTestAttemptToAllocated,
-  workflowRunResultOutcomeCodec,
 } from '@makaio/subsystem-workflow-engine/testing';
 import {
   createDeterministicAdapterContribution,
@@ -155,7 +155,9 @@ describe('authority Worker finalization integration', () => {
         readyEvents.push(ctx.payload);
       }),
     );
-    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
+    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
+      bootstrapTimeoutMs: 120_000,
+    });
     // The Authority-side ExecutionAttempt gates the dispatched runtime speaks to.
     cleanups.push(
       registerRuntimeRegistrationHandler(MakaioBus, { bus: MakaioBus, authority }),
@@ -168,6 +170,8 @@ describe('authority Worker finalization integration', () => {
     });
     const runner = new WorkerRunner({
       authority,
+      readRunContext: async (executionId, signal) =>
+        (await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId }, { signal })).runContext,
       manifest: { contributionRefs: [] },
       dispatch: async (request, signal) => {
         attemptExecutionIds.set(request.executionAttemptId, request.config.executionId);

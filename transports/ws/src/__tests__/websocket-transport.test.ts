@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { ConnectionLostError } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { createWebSocketTransport } from '../index.js';
 import { ServerTransport } from '../server-transport.js';
@@ -153,7 +154,7 @@ describe('Client mode behavior', () => {
         messageId: 'evt-fail',
       };
 
-      await expect(transport.send(eventMessage)).rejects.toThrow('WebSocketClientTransport: not connected');
+      await expect(transport.send(eventMessage)).rejects.toBeInstanceOf(ConnectionLostError);
     } finally {
       await transport.disconnect();
     }

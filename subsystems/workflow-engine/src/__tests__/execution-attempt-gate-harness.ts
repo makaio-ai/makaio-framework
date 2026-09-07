@@ -121,7 +121,7 @@ export interface AttemptGateHarness {
  */
 export function createAttemptGateHarness(): AttemptGateHarness {
   const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-  const authority = new ExecutionAttemptAuthority(repository);
+  const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
   const bus = createBusInstance({ context: createBusContext() });
   bus.registerNamespace(ExecutionAttemptNamespace);
   const transport = new AttemptGateTransport();

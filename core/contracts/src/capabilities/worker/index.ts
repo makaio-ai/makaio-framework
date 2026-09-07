@@ -52,6 +52,7 @@ export type {
   WorkerMaterializationSpec,
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
+  WorkerProviderContext,
   WorkerRequirements,
 } from './types.js';
 export { ProviderAllocationRefError, createAllocationRefCodec } from './allocation-ref-codec.js';

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   IWorkflowRunner,
   WorkerContributionManifest,
@@ -5,11 +6,15 @@ import type {
   WorkerRequirements,
   WorkflowRunnerCompletion,
   WorkflowRunnerRunOptions,
-  WorkflowRunResult,
+  WorkflowRunContext,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import type { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
-import { runAuthorityDispatchedAttempt } from '@makaio/subsystem-workflow-engine';
+import type { ExecutionAttemptAuthority, WorkflowAttemptOutcome } from '@makaio/subsystem-workflow-engine';
+import {
+  buildWorkflowAttemptInstruction,
+  runAuthorityDispatchedAttempt,
+  toCommittedWorkflowRunnerResult,
+} from '@makaio/subsystem-workflow-engine';
 
 /**
  * Construction options for {@link WorkerRunner}.
@@ -29,7 +34,15 @@ export interface WorkerRunnerOptions {
    * Required for authority-committed completions. When absent, the runner
    * cannot create attempts or wait for durable outcomes.
    */
-  readonly authority: ExecutionAttemptAuthority<WorkflowRunResult>;
+  readonly authority: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
+  /**
+   * Read portable owner input before creating a path-backed Attempt.
+   * Self-contained source and definition configs need no storage lookup.
+   * @param executionId - Workflow execution whose executable source is being frozen.
+   * @param signal - Cancellation signal for the owner-context read.
+   * @returns The portable owner context, or null when none was persisted.
+   */
+  readonly readRunContext?: (executionId: string, signal: AbortSignal) => Promise<WorkflowRunContext | null>;
   /**
    * Extension contribution manifest forwarded to dispatched workers.
    *
@@ -59,6 +72,9 @@ export interface WorkerRunnerOptions {
  * before dispatch and waits for the committed outcome after dispatch returns.
  */
 export class WorkerRunner implements IWorkflowRunner {
+  /** The Attempt owner commits and converges results before runner completion. */
+  public readonly terminalAuthority = 'authority';
+
   /**
    * @param options - Dispatch seam, authority, optional manifest, and optional requirements.
    */
@@ -98,12 +114,25 @@ export class WorkerRunner implements IWorkflowRunner {
     const resolvedManifest = manifest ?? this.options.manifest;
     const resolvedRequirements = this.options.requirements;
     const dispatchMetadata = options?.dispatchMetadata;
+    signal.throwIfAborted();
+    const runContext =
+      config.source.kind === 'path' ? await this.options.readRunContext?.(config.executionId, signal) : undefined;
+    // A custom reader may finish after cancellation without observing its signal.
+    signal.throwIfAborted();
+    const instruction = buildWorkflowAttemptInstruction({
+      id: randomUUID(),
+      revision: '1',
+      config,
+      ...(runContext != null ? { runContext } : {}),
+      preservation: { required: [] },
+    });
 
     // The runner contract owes a completion wrapper; the generic dispatch
     // path yields the committed outcome itself.
     const result = await runAuthorityDispatchedAttempt({
       authority: this.options.authority,
       executionId: config.executionId,
+      instruction,
       dispatch: (executionAttemptId) =>
         this.options.dispatch(
           {
@@ -116,6 +145,6 @@ export class WorkerRunner implements IWorkflowRunner {
           signal,
         ),
     });
-    return { state: 'authority-committed', result };
+    return { state: 'authority-committed', result: toCommittedWorkflowRunnerResult(result, config) };
   }
 }

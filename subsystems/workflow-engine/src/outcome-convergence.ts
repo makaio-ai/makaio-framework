@@ -1,5 +1,5 @@
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
-import type { ExecutionOwnerId } from './execution-attempt-repository.js';
+import type { ExecutionOwnerId, RuntimeOutcomeFence } from './execution-attempt-repository.js';
 
 export type { ExecutionOwnerId };
 
@@ -123,6 +123,8 @@ export interface AttemptOutcomeSubmission<TOutcome> {
   readonly executionAttemptId: string;
   /** Outcome the worker submitted. */
   readonly outcome: TOutcome;
+  /** Originating runtime slot, checked atomically at commit after owner validation. */
+  readonly runtimeFence?: RuntimeOutcomeFence;
 }
 
 /**
@@ -170,6 +172,7 @@ export async function submitAttemptOutcome<TOutcome>(
   // second serialization and no mutation of the caller's object during the
   // awaits below can make the durable answer differ from the validated one.
   const durable = deps.authority.canonicalizeOutcome(input.outcome);
+  const runtimeFence = input.runtimeFence === undefined ? undefined : { ...input.runtimeFence };
 
   // Ahead of the commit, on every attempt including a retry of one that
   // already committed: an outcome the owner rejects must never become durable,
@@ -177,7 +180,12 @@ export async function submitAttemptOutcome<TOutcome>(
   // rather than the order being relaxed for retries.
   await deps.validation?.validate(input.executionId, durable.outcome);
 
-  const decision = await deps.authority.commitOutcome(input.executionAttemptId, input.executionId, durable);
+  const decision = await deps.authority.commitOutcome(
+    input.executionAttemptId,
+    input.executionId,
+    durable,
+    runtimeFence,
+  );
 
   if (decision.kind === 'accepted' || decision.kind === 'duplicate') {
     await deps.convergence.converge({

@@ -64,7 +64,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `bootstrapConfig` | `{ busAuthSecret?: string \| undefined; gitToken?: string \| undefined; runtimeEnv?: Record<string, string> \| undefined; sessionRuntime?: Readonly<{ machineId: string; packageNames: readonly string[]; }> \| undefined; adapterAuth?: Readonly<{ selector: Readonly<{ sessionId: string; adapterName: string; providerConfigId: string; definitionId: string; runtime: Readonly<{ machineId: string; packageNames: readonly string[]; }>; auth: Readonly<{ mode: "none" \| "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; }>; }>; scrubEnvVars: readonly string[]; processEnv: Readonly<Record<string, string>>; connectorDeliveries: readonly Readonly<{ target: string; values: Readonly<Record<string, string \| number \| boolean \| null>>; }>[]; }> \| undefined; }` | yes |
-| `descriptor` | `{ sessionId: string; adapter: string; mode: "container-local"; repoPath: string; baseBranch: string; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; } \| { sessionId: string; adapter: string; mode: "container-local"; repoPath: string; baseBranch: string; executionId: string; executionAttemptId: string; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; } \| { sessionId: string; adapter: string; mode: "container-isolated"; repoUrl: string; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; branch?: string \| undefined; }` | yes |
+| `descriptor` | `{ sessionId: string; adapter: string; mode: "container-local"; repoPath: string; baseBranch: string; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; } \| { sessionId: string; adapter: string; mode: "container-local"; repoPath: string; baseBranch: string; executionId: string; executionAttemptId: string; bootstrapDeadlineAt: string; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; } \| { sessionId: string; adapter: string; mode: "container-isolated"; repoUrl: string; runtime?: "full" \| "simple" \| undefined; image?: string \| undefined; branch?: string \| undefined; }` | yes |
 
 **Response:**
 
@@ -116,6 +116,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `adapter` | `string` | yes |
 | `baseBranch` | `string \| undefined` | no |
+| `bootstrapDeadlineAt` | `string \| undefined` | no |
 | `branch` | `string \| undefined` | no |
 | `executionAttemptId` | `string \| undefined` | no |
 | `executionId` | `string \| undefined` | no |

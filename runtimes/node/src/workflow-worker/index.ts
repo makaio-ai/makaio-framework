@@ -2,6 +2,14 @@
 // implied self-contained Worker execution isolation that this path does not provide.
 export { ThinWorkflowPiscinaRunner } from './thin-workflow-piscina-runner.js';
 export { resolveWorkflowWorkerEntry } from './worker-entry-resolver.js';
+export { createWorkerBusAuth } from './worker-bus-auth.js';
+export {
+  runWorkerBootstrapExchange,
+  withWorkerBootstrapDeadline,
+  BootstrapDeadlineExceededError,
+  type BootstrapExchangeResult,
+  type WorkerBootstrapExchangeOptions,
+} from './worker-bootstrap-exchange.js';
 export { createNodeWorkflowRunner, createNodeWorkflowRunnerPackageOptions } from './node-workflow-runner-factory.js';
 export type {
   IWorkflowRunner,
@@ -42,13 +50,25 @@ export {
   type HeadlessWorkflowWorkerResult,
 } from './headless-workflow-worker.js';
 export {
+  AuthorityRequestDeliveryError,
+  AttemptOutcomeDeliveryError,
   OutcomeDeliveryError,
   submitOutcomeWithAck,
+  submitAttemptOutcomeWithAck,
   DELIVERED_DECISIONS,
   type OutcomeSubmitRetryConfig,
   type OutcomeSubmitPayload,
+  type AttemptOutcomeSubmitPayload,
   type OutcomeReconnect,
 } from './outcome-submission.js';
+export {
+  runWorkloadInvocation,
+  type InstalledWorkloadAdapter,
+  type RunWorkloadInvocationOptions,
+  type WorkloadInvocationPreparation,
+  type WorkloadControlBinding,
+  type WorkloadInvocationResult,
+} from './workload-invocation.js';
 export { loadWorkflowFromConfig } from './workflow-loader.js';
 export { loadWorkflowModule, loadWorkflowModules } from './workflow-file-loader.js';
 export {
@@ -70,7 +90,6 @@ export {
   registerWorkerRuntime,
   admitWorkflowRunOperation,
   registerAndAdmitWorkflowRun,
-  ALLOCATION_VISIBILITY_DEADLINE_MS,
   RuntimeRegistrationRefusedError,
   OperationAdmissionRefusedError,
   type DeliverableOperationKind,
@@ -83,3 +102,10 @@ export {
   type RegisterAndAdmitWorkflowRunOptions,
   type AdmittedWorkflowRun,
 } from './runtime-registration-client.js';
+export {
+  bootstrapWorkerRuntime,
+  BootstrapStartRefusedError,
+  type BootstrapRuntimeConnection,
+  type BootstrapWorkerRuntimeOptions,
+  type StartedWorkerRuntime,
+} from './bootstrap-start-client.js';
