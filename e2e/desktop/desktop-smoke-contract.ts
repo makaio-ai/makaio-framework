@@ -219,7 +219,7 @@ export async function runMakaioDevDesktopSmoke(options: MakaioDevDesktopSmokeOpt
     // success-path drift guard runs. Attribute such failures from the
     // captured host output so the drift diagnostic survives the error path.
     try {
-      const uiReadyPromise = waitForUiReady(bus, expectedUiSurface, WINDOW_TIMEOUT_MS);
+      const uiReadyPromise = waitForUiReady(bus, expectedUiSurface, startedHost, WINDOW_TIMEOUT_MS);
 
       const bootPayload = await waitForBoot(bus, STARTUP_TIMEOUT_MS);
       expect(Number.isFinite(bootPayload.totalDurationMs)).toBe(true);
