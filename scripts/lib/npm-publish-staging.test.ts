@@ -94,6 +94,10 @@ describe('createStagedPackageJson', () => {
       types: './dist/workflow-engine/testing/sqlite.d.mts',
       default: './dist/workflow-engine/testing/sqlite.mjs',
     });
+    expect(exports['./workflow-engine/testing/conformance']).toEqual({
+      types: './dist/workflow-engine/testing/conformance.d.mts',
+      default: './dist/workflow-engine/testing/conformance.mjs',
+    });
     expect(exports['./contracts/native-session-supervisor']).toEqual(
       sourceExports['./contracts/native-session-supervisor'],
     );

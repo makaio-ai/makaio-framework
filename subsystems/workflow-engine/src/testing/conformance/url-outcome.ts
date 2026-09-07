@@ -8,7 +8,7 @@
  * rejects a conforming owner outcome before the codec is ever consulted.
  * @packageDocumentation
  */
-import type { OutcomeCodec } from '../execution-attempt-repository.js';
+import type { OutcomeCodec } from '../../execution-attempt-repository.js';
 
 /**
  * Read a URL out of either form the port presents to {@link urlOutcomeCodec}.

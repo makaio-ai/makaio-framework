@@ -16,9 +16,9 @@ import {
   roundingCounterCodec,
   type BoxedCounterOutcome,
   type CounterOutcome,
-} from './counter-outcome.js';
+} from '../testing/conformance/counter-outcome.js';
 import { memberOrderCodec, type MemberOrderOutcome } from './member-order-outcome.js';
-import { urlOutcomeCodec } from './url-outcome.js';
+import { urlOutcomeCodec } from '../testing/conformance/url-outcome.js';
 
 const EXECUTION_ID = 'owner-1';
 

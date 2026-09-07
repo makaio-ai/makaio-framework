@@ -11,6 +11,7 @@ export default defineConfig({
     './src/execution-attempt-repository.ts',
     './src/provider-operation.ts',
     './src/testing/index.ts',
+    './src/testing/conformance.ts',
     './src/testing/sqlite.ts',
   ],
 });

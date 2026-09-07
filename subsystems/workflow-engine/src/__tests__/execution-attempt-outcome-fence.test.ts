@@ -4,7 +4,7 @@ import { RuntimeOutcomeFenceMismatchError, type RuntimeOutcomeFence } from '../e
 import { submitAttemptOutcome } from '../outcome-convergence.js';
 import { allocateTestAttempt } from '../testing/attempt-fixtures.js';
 import { createInMemoryAttemptRepository } from '../testing/in-memory-attempt-repository.js';
-import { counterCodec } from './counter-outcome.js';
+import { counterCodec } from '../testing/conformance/counter-outcome.js';
 
 /**
  * Build a real allocated attempt with a registered, ready runtime.

@@ -201,6 +201,8 @@ async function readyAttempt(
 }
 
 describe('execution attempt repository contract (transactional SQLite)', () => {
+  // Cross-store behavior is canonical in the portable conformance suite; this
+  // SQLite suite retains representation and transaction-specific checks.
   beforeAll(async () => {
     context = await createTempDb('execution-attempt-contract');
     const secondary = await createDatabaseClient({ url: `file:${context.dbPath}` });
@@ -402,33 +404,6 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     expect(operation.obligation).toBe('provisioning-resolution');
   });
 
-  it('invokes the provider at most once per attempt across both controllers', async () => {
-    const ids = nextIds();
-    await harness.alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
-    const input = makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId);
-    let provisionCalls = 0;
-
-    /**
-     * Call the provider only when the durable decision authorizes it.
-     * @param repository - Controller attempting the provider call.
-     * @returns Whether this controller was authorized to call the provider.
-     */
-    const dispatch = async (repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>): Promise<boolean> => {
-      const decision = await repository.beginProvisioning(input);
-      if (decision.kind !== 'started') return false;
-      provisionCalls += 1;
-      return true;
-    };
-
-    const authorized = await Promise.all([dispatch(harness.alpha), dispatch(harness.beta)]);
-    // Every later begin, from either controller, is refused for good.
-    const replays = [await dispatch(harness.alpha), await dispatch(harness.beta), await dispatch(harness.alpha)];
-
-    expect(authorized.filter(Boolean)).toHaveLength(1);
-    expect(replays).toEqual([false, false, false]);
-    expect(provisionCalls).toBe(1);
-  });
-
   it('fences a superseded allocated attempt without changing its claim expiry', async () => {
     const first = nextIds();
     const claim = await startAttempt(harness.alpha, first);
@@ -504,30 +479,6 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     expect(
       await harness.alpha.recordProviderOperationUncertainty({ claim: renewal.claim, evidence: makeEvidence() }),
     ).toEqual({ kind: 'recorded' });
-  });
-
-  it('refuses takeover while the lease is held and grants it once expired', async () => {
-    const ids = nextIds();
-    const claim = await startAttempt(harness.alpha, ids);
-
-    const early = await harness.beta.takeOverProviderOperation({
-      executionAttemptId: ids.executionAttemptId,
-      ownerId: 'controller-incarnation-2',
-      observedAt: leaseAt(0),
-      leaseExpiresAt: leaseAt(60_000),
-    });
-    const late = await harness.beta.takeOverProviderOperation({
-      executionAttemptId: ids.executionAttemptId,
-      ownerId: 'controller-incarnation-2',
-      observedAt: leaseAt(120_000),
-      leaseExpiresAt: leaseAt(180_000),
-    });
-
-    expect(early.kind).toBe('stale');
-    expect(late.kind).toBe('claimed');
-    if (late.kind !== 'claimed') return;
-    expect(late.claim.generation).toBe(claim.generation + 1);
-    expect(late.claim.token).not.toBe(claim.token);
   });
 
   it('rejects every provider-side write from a superseded token', async () => {
@@ -1036,31 +987,6 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     });
   });
 
-  it('rejects an allocation reference evolution that lost the race', async () => {
-    const ids = nextIds();
-    const claim = await startAttempt(harness.alpha, ids);
-    const initial = makeTestAllocationRef(TEST_PROVIDER_ID, { machineId: 'machine-8' });
-    await harness.alpha.recordAllocation({ claim, allocationRef: initial });
-    const correlated = makeTestAllocationRef(TEST_PROVIDER_ID, { machineId: 'machine-8', jobId: 'job-1' });
-
-    const evolved = await harness.alpha.recovery.evolveAllocationRef({
-      claim,
-      executionId: ids.executionId,
-      currentRef: initial,
-      nextRef: correlated,
-    });
-    // The second correlator still believes the original reference is stored.
-    const lost = await harness.beta.recovery.evolveAllocationRef({
-      claim,
-      executionId: ids.executionId,
-      currentRef: initial,
-      nextRef: makeTestAllocationRef(TEST_PROVIDER_ID, { machineId: 'machine-8', jobId: 'job-2' }),
-    });
-
-    expect(evolved).toEqual({ kind: 'evolved' });
-    expect(lost).toEqual({ kind: 'stale', storedRef: correlated });
-  });
-
   it('lets exactly one of two racing evolutions win the compare-and-set', async () => {
     const ids = nextIds();
     const claim = await startAttempt(harness.alpha, ids);
@@ -1132,23 +1058,6 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     expect(stored.settlement_kind).toBe('infrastructure-failure');
     expect(stored.allocation_ref).not.toBeNull();
     expect(stored.provider_id).toBe(TEST_PROVIDER_ID);
-  });
-
-  it('abandons a pending attempt exactly once and refuses it after provisioning began', async () => {
-    const pending = nextIds();
-    await harness.alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...pending, instruction: makeTestInstruction() });
-
-    const abandonments = await Promise.all([
-      harness.alpha.abandonPendingAttempt(pending.executionAttemptId, pending.executionId),
-      harness.beta.abandonPendingAttempt(pending.executionAttemptId, pending.executionId),
-    ]);
-
-    const provisioning = nextIds();
-    await startAttempt(harness.alpha, provisioning);
-    const refused = await harness.beta.abandonPendingAttempt(provisioning.executionAttemptId, provisioning.executionId);
-
-    expect(abandonments.map((decision) => decision.kind).sort()).toEqual(['abandoned', 'already-abandoned']);
-    expect(refused).toEqual({ kind: 'provisioning' });
   });
 
   // ───────────────────────────────────────────────────────────

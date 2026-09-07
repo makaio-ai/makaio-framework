@@ -9,7 +9,7 @@
  * before any durable decision is reached.
  * @packageDocumentation
  */
-import type { OutcomeCodec } from '../execution-attempt-repository.js';
+import type { OutcomeCodec } from '../../execution-attempt-repository.js';
 
 /**
  * Read bytes out of either form the port presents to {@link bytesOutcomeCodec}.
