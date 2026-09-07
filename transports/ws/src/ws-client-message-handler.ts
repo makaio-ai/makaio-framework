@@ -29,6 +29,8 @@ import type { TransportReceiveContext } from '@makaio/core';
  * mutates them directly but may call their methods.
  */
 export interface InboundMessageHandlerDeps {
+  /** Whether this frame still belongs to the current socket session (including its close drain). */
+  isCurrentSession(): boolean;
   /**
    * Transport name used in debug log prefixes.
    */
@@ -172,9 +174,11 @@ async function processCorrelationFrame(
   }
 
   let decoded = await codec.decode(message);
+  if (!deps.isCurrentSession()) return null;
 
   if (messageTransform) {
     decoded = await messageTransform(decoded);
+    if (!deps.isCurrentSession()) return null;
   }
 
   if (decoded.type === 'heartbeat') {
@@ -236,7 +240,7 @@ export async function handleInboundMessage(data: string | Buffer, deps: InboundM
     return;
   }
 
-  if (decoded === null) {
+  if (decoded === null || !deps.isCurrentSession()) {
     // Fully handled as control/correlation frame — nothing more to do.
     return;
   }

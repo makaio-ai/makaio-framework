@@ -13,7 +13,8 @@
 import type { WebSocketLike, TransportAuth, ClientTransportCodec } from './types.js';
 import type { BusMessage, BusReceiveHandler, CorrelationTracker } from '@makaio/bus-core';
 import { ConnectionLostError } from '@makaio/bus-core';
-import { sendEncoded, waitForSocketOpen } from './transport-helpers.js';
+import { disposeSocket, extractSocketErrorMessage, sendEncoded, waitForSocketOpen } from './transport-helpers.js';
+import { connectionClosedError, WebSocketConnectionError } from './connection-error.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { backoffMs, sleep, type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 import { handleInboundMessage } from './ws-client-message-handler.js';
@@ -50,7 +51,7 @@ export interface ConnectionDeps {
   readonly wsFactory: (url: string) => WebSocketLike | Promise<WebSocketLike>;
   /** Target WebSocket server URL. */
   readonly url: string;
-  /** Bound in milliseconds for a single attempt's socket-open wait. */
+  /** Bound in milliseconds for socket creation, opening, authentication and replay. */
   readonly connectTimeoutMs: number;
   /**
    * Resolved heartbeat watchdog timing, or `false` when the liveness
@@ -79,8 +80,8 @@ export interface ConnectionDeps {
 
   /** Resolve the current session's ready promise and clear the resolver. */
   resolveReady(): void;
-  /** Create a new ready promise for the upcoming session and notify the registry. */
-  resetReadyPromise(): void;
+  /** Create and advertise a new ready promise; return its session-bound resolver. */
+  resetReadyPromise(): () => void;
   /** Resolve a pending dynamic subscription acknowledgement. */
   resolveSubscriptionAck(ackId: string): void;
   /** Reject all pending dynamic subscription acknowledgements for a closed session. */
@@ -119,10 +120,11 @@ export interface ConnectionDeps {
  * before the close event still gets a chance to decode and resolve its
  * correlation rather than being overtaken by the rejection.
  * @param deps - Connection lifecycle dependencies
+ * @param ws - Socket whose buffered responses are being drained.
  */
-async function drainAndRejectPendingCorrelations(deps: ConnectionDeps): Promise<void> {
+async function drainAndRejectPendingCorrelations(deps: ConnectionDeps, ws: WebSocketLike): Promise<void> {
   await Promise.allSettled(deps.inFlightMessages);
-  deps.correlations.rejectAll(new ConnectionLostError(deps.name));
+  if (deps.getSocket() === ws) deps.correlations.rejectAll(new ConnectionLostError(deps.name));
 }
 
 /**
@@ -133,7 +135,9 @@ async function drainAndRejectPendingCorrelations(deps: ConnectionDeps): Promise<
  */
 function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
   const listener = (event: { data: string | Buffer }): void => {
+    if (deps.getSocket() !== ws) return;
     const p = handleInboundMessage(event.data, {
+      isCurrentSession: () => deps.getSocket() === ws,
       name: deps.name,
       debug: deps.debug,
       auth: deps.auth,
@@ -148,7 +152,7 @@ function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
         deps.resolveSubscriptionAck(ackId);
       },
       sendSubscriptionAck: async (ackId) => {
-        if (ws.readyState !== 1) return;
+        if (deps.getSocket() !== ws || ws.readyState !== 1) return;
         await sendEncoded({ type: 'subscription-ack', ackId }, deps.codec, ws);
       },
     }).finally(() => {
@@ -167,6 +171,7 @@ function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
  * @param deps - Connection deps (provides listener references)
  */
 export function removeSocketListeners(ws: WebSocketLike, deps: ConnectionDeps): void {
+  if (deps.getSocket() !== ws) return;
   const msgListener = deps.getMessageListener();
   if (msgListener !== null) {
     ws.removeEventListener('message', msgListener);
@@ -184,6 +189,35 @@ export function removeSocketListeners(ws: WebSocketLike, deps: ConnectionDeps): 
 // ---------------------------------------------------------------------------
 
 /**
+ * Release a failed socket without allowing cleanup faults to hide its failure.
+ * @param socket - Failed socket whose attempt listeners are already detached.
+ * @param deps - Transport state from which socket ownership must be revoked.
+ * @param failure - Original connection failure to preserve.
+ * @returns Original failure, or an aggregate containing actual cleanup failures.
+ */
+function disposeFailedSocket(socket: WebSocketLike, deps: ConnectionDeps, failure: unknown): unknown {
+  const failures: unknown[] = [failure];
+  if (deps.getSocket() === socket) {
+    removeSocketListeners(socket, deps);
+    deps.setSocket(null);
+    deps.setAuthComplete(false);
+    try {
+      deps.auth?.cleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  try {
+    disposeSocket(socket);
+  } catch (error) {
+    failures.push(error);
+  }
+  return failures.length === 1
+    ? failure
+    : new AggregateError(failures, 'WebSocket connection failed and cleanup was incomplete', { cause: failure });
+}
+
+/**
  * Perform a single connect attempt: create socket, wait for open, authenticate,
  * replay subscriptions.
  *
@@ -191,106 +225,147 @@ export function removeSocketListeners(ws: WebSocketLike, deps: ConnectionDeps): 
  * previous socket, and notifies the transport on success. Throws on failure
  * so the reconnect loop can back off and retry.
  * @param deps - Connection lifecycle dependencies
+ * @param signal - Cancellation owned by the transport's connection lifecycle.
  */
-export async function connectOnce(deps: ConnectionDeps): Promise<void> {
-  // Drain any in-flight handleInboundMessage calls from the previous session
-  // before rejecting correlations. A response frame may have arrived just before
-  // the socket closed; awaiting the drain gives codec.decode a chance to finish
-  // so the correlation resolves correctly rather than being rejected.
-  // Then reject any remaining (unresolved) correlations from the previous session —
-  // their responses were truly lost when the old socket closed.
-  if (deps.inFlightMessages.size > 0) {
-    await drainAndRejectPendingCorrelations(deps);
-  } else {
-    deps.correlations.rejectAll(new ConnectionLostError(deps.name));
+export async function connectOnce(deps: ConnectionDeps, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  const attempt = new AbortController();
+  const onAbort = (): void =>
+    attempt.abort(new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'WebSocket connection cancelled'));
+  signal.addEventListener('abort', onAbort);
+  const timer = setTimeout(
+    () =>
+      attempt.abort(
+        new WebSocketConnectionError(
+          'WS_CONNECTION_TIMEOUT',
+          `WebSocket connection timed out after ${deps.connectTimeoutMs}ms`,
+        ),
+      ),
+    deps.connectTimeoutMs,
+  );
+  let ws: WebSocketLike | null = null;
+  let finishReady: () => void = () => {};
+  const removeAttemptListeners = (): void => {
+    ws?.removeEventListener('close', onClose);
+    ws?.removeEventListener('error', onError);
+  };
+  const onClose = (event: unknown): void => attempt.abort(connectionClosedError(event));
+  const onError = (event: Event): void =>
+    attempt.abort(
+      new WebSocketConnectionError(
+        'WS_CONNECTION_UNAVAILABLE',
+        `WebSocket connection failed — ${extractSocketErrorMessage(event)}`,
+        { cause: event },
+      ),
+    );
+  const dispose = (failure: unknown): unknown => {
+    // Readiness belongs to this attempt even before its factory yields a socket.
+    // Its captured resolver must not settle a replacement session's promise.
+    finishReady();
+    if (ws === null) return failure;
+    const socket = ws;
+    removeAttemptListeners();
+    ws = null;
+    return disposeFailedSocket(socket, deps, failure);
+  };
+  let rejectCancellation: () => void = () => {};
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    rejectCancellation = () => {
+      // Revoke ownership synchronously, but cleanup faults must still settle
+      // cancellation rather than escape this event listener or hide its cause.
+      reject(dispose(attempt.signal.reason));
+    };
+    attempt.signal.addEventListener('abort', rejectCancellation);
+  });
+  try {
+    const connect = acquireAndEstablishSocket(
+      deps,
+      attempt.signal,
+      () => {
+        finishReady = deps.resetReadyPromise();
+      },
+      (socket) => {
+        ws = socket;
+        deps.setSocket(socket);
+        deps.setAuthComplete(false);
+        socket.addEventListener('close', onClose);
+        socket.addEventListener('error', onError);
+        attachMessageListener(socket, deps);
+      },
+    );
+    await Promise.race([connect, cancelled]);
+  } catch (error) {
+    throw dispose(error);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+    attempt.signal.removeEventListener('abort', rejectCancellation);
+    removeAttemptListeners();
   }
+}
 
-  // Clear the in-flight set for the new socket session. All previous promises
-  // are already settled (the drain above awaited them), so clearing is safe.
+/**
+ * Drain the previous session, acquire a socket and establish the new session.
+ * @param deps - Transport dependencies.
+ * @param signal - Owning attempt's deadline and cancellation signal.
+ * @param beginReady - Create the readiness session and retain its failure resolver.
+ * @param adopt - Transfer the acquired socket into this attempt's ownership.
+ */
+async function acquireAndEstablishSocket(
+  deps: ConnectionDeps,
+  signal: AbortSignal,
+  beginReady: () => void,
+  adopt: (socket: WebSocketLike) => void,
+): Promise<void> {
+  // Buffered responses still get their chance to resolve before correlation
+  // rejection. An interrupted drain must never reject a newer session's work.
+  if (deps.inFlightMessages.size > 0) await Promise.allSettled(deps.inFlightMessages);
+  signal.throwIfAborted();
+  deps.correlations.rejectAll(new ConnectionLostError(deps.name));
   deps.inFlightMessages.clear();
-
-  // Resolve any stale ready promise from the previous session to avoid hanging awaiters.
   deps.resolveReady();
   deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: reconnecting before subscription ack'));
-  // Create a fresh ready promise and notify the registry.
-  deps.resetReadyPromise();
-
-  // Remove listeners from the previous socket before creating the new one.
-  const prevSocket = deps.getSocket();
-  if (prevSocket !== null) {
-    removeSocketListeners(prevSocket, deps);
+  beginReady();
+  signal.throwIfAborted();
+  const previous = deps.getSocket();
+  if (previous !== null) removeSocketListeners(previous, deps);
+  const socket = await deps.wsFactory(deps.url);
+  if (signal.aborted) {
+    disposeSocket(socket);
+    signal.throwIfAborted();
   }
+  adopt(socket);
+  await establishSocket(socket, deps, signal);
+}
 
-  const ws = await deps.wsFactory(deps.url);
-  deps.setSocket(ws);
-  deps.setAuthComplete(false);
-
-  try {
-    // Attach message listener before waiting for open so auth frames arriving
-    // during the WebSocket handshake are captured immediately.
-    attachMessageListener(ws, deps);
-
-    await waitForSocketOpen(ws, deps.connectTimeoutMs);
-
-    if (deps.auth) {
-      await deps.auth.authenticateClient((message: unknown) => {
-        if (ws.readyState !== 1) {
-          throw new Error('WebSocketClientTransport: cannot send auth message — socket not open');
-        }
-        ws.send(JSON.stringify(message));
-      });
-    }
-
-    deps.setAuthComplete(true);
-
-    if (deps.debug) {
-      console.info(`[WebSocketClientTransport:${deps.name}] Connected to ${deps.url}`);
-    }
-
-    // Replay subscriptions — no-op on initial connect; restores routing state on reconnect.
-    if (deps.localSubscriptions.size > 0) {
-      const resubMessage = buildSubscribeMessage(deps.localSubscriptions);
-      await sendEncoded(resubMessage, deps.codec, ws);
-
-      if (deps.debug) {
-        console.info(
-          `[WebSocketClientTransport:${deps.name}] Replayed ${deps.localSubscriptions.size} subscription(s)`,
-        );
-      }
-    }
-
-    // Arm the heartbeat watchdog AFTER subscription replay so that every
-    // async gap (codec encode, socket write) has settled before the watchdog
-    // can fire. This guarantees the caller's close-listener (no-reconnect or
-    // reconnect-loop) is installed before the earliest possible watchdog
-    // termination, preserving the lifecycle-ordering contract.
-    if (deps.heartbeat !== false) {
-      startHeartbeatWatchdog(ws, deps.heartbeat, deps);
-    }
-
-    // Notify after auth + subscription replay so that reconnect handlers
-    // can assume server-side subscription state is fully restored.
-    deps.notifyConnected();
-  } catch (error) {
-    // Clean up the failed socket — do not leave it dangling.
-    const ownsFailedSocket = deps.getSocket() === ws;
-    if (ownsFailedSocket) {
-      deps.auth?.cleanup();
-    }
-    removeSocketListeners(ws, deps);
-    if (ownsFailedSocket) {
-      deps.setSocket(null);
-    }
-    deps.setAuthComplete(false);
-    if (ownsFailedSocket && (ws.readyState === 0 || ws.readyState === 1)) {
-      // Closing a still-CONNECTING socket aborts the handshake, which emits a
-      // late `error` event on the discarded socket; observe it so it cannot
-      // surface as an unhandled error.
-      ws.addEventListener('error', () => {});
-      ws.close();
-    }
-    throw error;
+/**
+ * Complete the acquired socket's bounded open/auth/replay phases.
+ * @param socket - Socket owned by this connection attempt.
+ * @param deps - Transport dependencies.
+ * @param signal - Owning attempt's cancellation and deadline signal.
+ */
+async function establishSocket(socket: WebSocketLike, deps: ConnectionDeps, signal: AbortSignal): Promise<void> {
+  await waitForSocketOpen(socket, undefined, signal);
+  signal.throwIfAborted();
+  if (deps.auth) {
+    await deps.auth.authenticateClient((message: unknown) => {
+      signal.throwIfAborted();
+      if (socket.readyState !== 1) throw connectionClosedError();
+      socket.send(JSON.stringify(message));
+    });
+    signal.throwIfAborted();
   }
+  deps.setAuthComplete(true);
+  if (deps.localSubscriptions.size > 0) {
+    const payload = await deps.codec.encode(buildSubscribeMessage(deps.localSubscriptions));
+    signal.throwIfAborted();
+    socket.send(payload);
+  }
+  // Arm only after replay: no async gap may allow the watchdog to terminate
+  // before the caller installs the established-connection close listener.
+  if (deps.heartbeat !== false) startHeartbeatWatchdog(socket, deps.heartbeat, deps);
+  if (deps.debug) console.info(`[WebSocketClientTransport:${deps.name}] Connected to ${deps.url}`);
+  deps.notifyConnected();
 }
 
 // ---------------------------------------------------------------------------
@@ -359,13 +434,14 @@ export async function runReconnectLoop(
 
       if (signal.aborted) break;
 
-      if (hadConnection) {
+      if (hadConnection && ws !== null) {
         // Drain any in-flight handleInboundMessage calls then reject remaining
         // correlations — their responses were on the old socket and will never
         // arrive. Draining first ensures responses that arrived just before the
         // close still resolve. This must happen before the backoff sleep so
         // callers get a prompt, honest error.
-        await drainAndRejectPendingCorrelations(deps);
+        await drainAndRejectPendingCorrelations(deps, ws);
+        if (signal.aborted) break;
         if (deps.debug) {
           console.info(
             `[WebSocketClientTransport:${deps.name}] ${new Date().toISOString()} Connection lost, starting reconnect loop (maxMs=${config.maxMs})`,
@@ -390,13 +466,16 @@ export async function runReconnectLoop(
         if (signal.aborted) break;
 
         try {
-          await connectOnce(deps);
+          await connectOnce(deps, signal);
+          if (signal.aborted) break;
           attempt = 0;
 
           const newWs = deps.getSocket();
           if (newWs !== null) {
             const closeListener = async (): Promise<void> => {
-              await drainAndRejectPendingCorrelations(deps);
+              await Promise.allSettled(deps.inFlightMessages);
+              if (signal.aborted || deps.getSocket() !== newWs) return;
+              deps.correlations.rejectAll(new ConnectionLostError(deps.name));
               deps.auth?.cleanup();
               deps.setAuthComplete(false);
               if (deps.debug) {
@@ -450,14 +529,18 @@ export function installNoReconnectCloseListener(
   clearReconnectAbort: () => void,
 ): void {
   const onClose = async (): Promise<void> => {
+    if (deps.getSocket() !== ws) return;
     removeSocketListeners(ws, deps);
     deps.auth?.cleanup();
     deps.setAuthComplete(false);
-    deps.setSocket(null);
     clearReconnectAbort();
     deps.resolveReady();
     deps.notifyDisconnected();
-    await drainAndRejectPendingCorrelations(deps);
+    // Keep the closed socket's identity during decode drain. A buffered reply
+    // still belongs to this session, but must not affect a replacement session.
+    await drainAndRejectPendingCorrelations(deps, ws);
+    if (deps.getSocket() !== ws) return;
+    deps.setSocket(null);
     deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: disconnected before subscription ack'));
   };
   deps.setCloseListener(onClose);

@@ -35,13 +35,12 @@ import {
   type ConnectionDeps,
 } from './ws-client-connection.js';
 import { addSubscription, removeSubscription, type SubscriptionAckHandle } from './ws-client-subscriptions.js';
+import { disposeSocket } from './transport-helpers.js';
+import { WebSocketConnectionError } from './connection-error.js';
 
 // Re-export public types so that consumers and index.ts can import them
 // from this module's path without needing to know the sub-module layout.
-export type {
-  WebSocketClientTransportHeartbeatOptions,
-  WebSocketClientTransportOptions,
-} from './ws-client-options.js';
+export type { WebSocketClientTransportHeartbeatOptions, WebSocketClientTransportOptions } from './ws-client-options.js';
 export type { WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 
 /**
@@ -85,13 +84,13 @@ export class WebSocketClientTransport implements BusTransport {
   private messageListener: ((event: { data: string | Buffer }) => void) | null = null;
   private closeListener: ((event: unknown) => void) | null = null;
 
-  /** AbortController for the active reconnect loop; `null` when not connected. */
+  /** Owns initial connection and its reconnect loop; `null` when disconnected. */
   private reconnectAbort: AbortController | null = null;
 
   /**
    * In-flight `handleInboundMessage` promises for the current socket session.
    *
-   * Reset to a new `Set` at the start of each connection attempt so that the
+   * Drained and cleared at the start of each connection attempt so that the
    * drain-before-rejectAll logic in `drainAndRejectPendingCorrelations` only
    * waits on the promises belonging to the active session.
    */
@@ -160,10 +159,14 @@ export class WebSocketClientTransport implements BusTransport {
     this.reconnectAbort = abort;
 
     try {
-      await connectOnce(this.connectionDeps());
+      await connectOnce(this.connectionDeps(), abort.signal);
     } catch (error) {
-      this.reconnectAbort = null;
+      if (this.reconnectAbort === abort) this.reconnectAbort = null;
       throw error;
+    }
+
+    if (abort.signal.aborted || this.reconnectAbort !== abort) {
+      throw new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'WebSocket connection cancelled');
     }
 
     if (this.autoReconnectConfig !== false) {
@@ -180,8 +183,13 @@ export class WebSocketClientTransport implements BusTransport {
    */
   public async disconnect(): Promise<void> {
     const abort = this.reconnectAbort;
+    const socketBeforeAbort = this.socket;
     this.reconnectAbort = null;
-    abort?.abort();
+    abort?.abort(new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'WebSocket connection cancelled'));
+    // An in-flight attempt releases its owned auth synchronously on abort.
+    const cleanupAuth = socketBeforeAbort === null || this.socket === socketBeforeAbort;
+    this.reconnectLoopRunning = false;
+    this.backoffWakeAbort = null;
 
     this.readyResolve?.();
     this.readyResolve = null;
@@ -191,9 +199,7 @@ export class WebSocketClientTransport implements BusTransport {
       const ws = this.socket;
       this.socket = null;
       this.authComplete = false;
-      if (ws.readyState === 0 || ws.readyState === 1) {
-        ws.close();
-      }
+      disposeSocket(ws);
     }
 
     this.correlations.cleanup();
@@ -202,7 +208,7 @@ export class WebSocketClientTransport implements BusTransport {
     // keys. The client transport owns the strategy lifecycle, so every
     // explicit disconnect must release that state before the instance can be
     // reused for a later connection.
-    this.auth?.cleanup();
+    if (cleanupAuth) this.auth?.cleanup();
     this.handlers.clear();
 
     if (this.debug) {
@@ -322,8 +328,8 @@ export class WebSocketClientTransport implements BusTransport {
         // Loop mid-attempt. If the attempt hangs waiting for the socket to
         // open, closing the socket settles `waitForSocketOpen` so the loop
         // fails the attempt, backs off, and retries — the escape hatch for a
-        // never-settling upgrade. Attempts past the open-wait (auth, replay)
-        // are already bounded by the auth strategy timeouts.
+        // never-settling upgrade. Every phase is also bounded by the shared
+        // connectTimeoutMs attempt budget.
         const socket = this.socket;
         if (socket !== null && socket.readyState === 0) {
           socket.close();
@@ -337,11 +343,7 @@ export class WebSocketClientTransport implements BusTransport {
       return;
     }
     try {
-      await connectOnce(this.connectionDeps());
-      if (this.socket !== null) {
-        this.reconnectAbort = new AbortController();
-        this.wireNoReconnectClose(this.socket);
-      }
+      if (this.reconnectAbort === null) await this.connect();
     } catch {
       // Suppress: transport was already disconnected; don't double-emit disconnected.
     }
@@ -358,10 +360,10 @@ export class WebSocketClientTransport implements BusTransport {
       this.autoReconnectConfig as Required<WebSocketClientTransportReconnectOptions>,
       this.connectionDeps(),
       (ctrl) => {
-        this.backoffWakeAbort = ctrl;
+        if (!signal.aborted) this.backoffWakeAbort = ctrl;
       },
       (running) => {
-        this.reconnectLoopRunning = running;
+        if (this.reconnectAbort?.signal === signal) this.reconnectLoopRunning = running;
       },
     );
   }
@@ -478,10 +480,22 @@ export class WebSocketClientTransport implements BusTransport {
         this.readyResolve = null;
       },
       resetReadyPromise: () => {
+        let resolveOwnReady!: () => void;
         this.ready = new Promise<void>((resolve) => {
           this.readyResolve = resolve;
+          resolveOwnReady = resolve;
         });
-        this.onNewReadySession?.(this.ready);
+        const finishOwnReady = (): void => {
+          resolveOwnReady();
+          if (this.readyResolve === resolveOwnReady) this.readyResolve = null;
+        };
+        try {
+          this.onNewReadySession?.(this.ready);
+        } catch (error) {
+          finishOwnReady();
+          throw error;
+        }
+        return finishOwnReady;
       },
       resolveSubscriptionAck: (ackId) => {
         this.resolveSubscriptionAck(ackId);
@@ -490,8 +504,9 @@ export class WebSocketClientTransport implements BusTransport {
         this.rejectPendingSubscriptionAcks(error);
       },
       notifyConnected: () => {
+        const socket = this.socket;
         this.onConnectedCallback?.();
-        this.onConnected?.();
+        if (socket !== null && this.socket === socket && this.isReady()) this.onConnected?.();
       },
       notifyDisconnected: () => {
         this.onDisconnectedCallback?.();
@@ -504,15 +519,15 @@ export class WebSocketClientTransport implements BusTransport {
   /**
    * Default `ws`-package WebSocket factory (dynamic import avoids bundling in browsers).
    *
-   * Passes `connectTimeoutMs` as the `ws` handshake timeout so the protocol
-   * layer enforces the same bound as `waitForSocketOpen` (defense in depth —
-   * the `ws` default is no handshake timeout at all).
+   * The connection lifecycle owns the single timeout budget, including this
+   * import and socket creation. A second protocol timer would race its typed
+   * outcome and give callers an unstable failure category.
    * @param url - WebSocket server URL
    * @returns Promise resolving to a `WebSocketLike` instance
    */
   private readonly defaultWsFactory = async (url: string): Promise<WebSocketLike> => {
     const wsModule = await import('ws');
-    return new wsModule.WebSocket(url, { handshakeTimeout: this.connectTimeoutMs }) as WebSocketLike;
+    return new wsModule.WebSocket(url) as WebSocketLike;
   };
 
   /**

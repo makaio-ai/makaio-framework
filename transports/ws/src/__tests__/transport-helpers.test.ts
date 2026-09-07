@@ -42,13 +42,13 @@ describe('waitForSocketOpen', () => {
   it('rejects immediately when socket is CLOSED', async () => {
     const ws = new MockWebSocket();
     ws.readyState = 3; // CLOSED
-    await expect(waitForSocketOpen(ws)).rejects.toThrow('WebSocket closed before opening');
+    await expect(waitForSocketOpen(ws)).rejects.toMatchObject({ code: 'WS_CONNECTION_UNAVAILABLE' });
   });
 
   it('rejects immediately when socket is CLOSING', async () => {
     const ws = new MockWebSocket();
     ws.readyState = 2; // CLOSING
-    await expect(waitForSocketOpen(ws)).rejects.toThrow('WebSocket closed before opening');
+    await expect(waitForSocketOpen(ws)).rejects.toMatchObject({ code: 'WS_CONNECTION_UNAVAILABLE' });
   });
 
   it('resolves when open event fires', async () => {
@@ -86,7 +86,7 @@ describe('waitForSocketOpen', () => {
     ws.readyState = 0;
     const promise = waitForSocketOpen(ws);
     ws.emit('close', new Event('close'));
-    await expect(promise).rejects.toThrow('WebSocket closed before opening');
+    await expect(promise).rejects.toMatchObject({ code: 'WS_CONNECTION_UNAVAILABLE' });
   });
 
   it('rejects after timeoutMs when the socket never leaves CONNECTING', { timeout: 1000 }, async () => {

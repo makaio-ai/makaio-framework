@@ -54,6 +54,8 @@ import { assertWebSocketTransportOptions } from './types.js';
 // Export types
 export type { WebSocketCloseEvent, WebSocketLike, WebSocketServerLike, TransportAuth } from './types.js';
 export { createWebSocketCloseEvent } from './types.js';
+export { WebSocketConnectionError } from './connection-error.js';
+export type { WebSocketConnectionErrorCode } from './connection-error.js';
 
 // Export client/server-specific options and types
 export type { ClientTransportCodec } from './types.js';

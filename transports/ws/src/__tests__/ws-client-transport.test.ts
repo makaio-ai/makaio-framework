@@ -515,12 +515,13 @@ describe('WebSocketClientTransport — auth lifecycle', () => {
     const { transport } = makeTransport({ auth });
 
     const connectPromise = transport.connect();
+    const rejected = expect(connectPromise).rejects.toMatchObject({ code: 'WS_CONNECTION_UNAVAILABLE' });
     await waitForCondition(() => rejectAuth !== undefined, 1000, 'authenticateClient was not called before disconnect');
 
     await transport.disconnect();
 
     expect(auth.cleanup).toHaveBeenCalledTimes(1);
-    await expect(connectPromise).rejects.toThrow('auth cleanup');
+    await rejected;
   });
 });
 

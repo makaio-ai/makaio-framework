@@ -20,6 +20,7 @@ import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry } from './client-registry.js';
 import { createInboundMessageHandler, invokeSubscriptionUpdates } from './server-message-handler.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
+import { WebSocketConnectionError } from './connection-error.js';
 
 const DEFAULT_CLIENT_BROADCAST_TIMEOUT_MS = 5_000;
 const MAX_CLIENT_BROADCAST_TIMEOUT_MS = 60_000;
@@ -73,8 +74,8 @@ export interface ClientSetupDeps {
  * When authentication is configured, `addAuthenticating` is called **before**
  * the message listener is attached so that every inbound frame — including the
  * very first one — passes through the auth gate in the message handler.
- * If authentication fails the socket is closed with code 1008, which triggers
- * the `close` listener and cleans up all resources.
+ * Explicit authentication/policy refusals close with 1008; interruptions and
+ * unclassified setup errors close with 1011. The close listener releases resources.
  * @param socket - The newly accepted client WebSocket
  * @param deps - Shared server transport dependencies
  */
@@ -164,10 +165,15 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
     }
   } catch (error) {
     if (debug) {
-      console.error('[ServerTransport] Client authentication failed:', error);
+      console.error('[ServerTransport] Client connection setup failed:', error);
     }
-    // Close socket — this will trigger closeListener which cleans up all resources.
-    socket.close(1008, 'Authentication failed');
+    if (socket.readyState >= 2) return;
+    // A timeout or unknown crypto/custom-auth failure is not evidence of a
+    // policy refusal. Reserve 1008 for an explicitly classified rejection.
+    const refused =
+      error instanceof WebSocketConnectionError &&
+      (error.code === 'WS_AUTHENTICATION_REJECTED' || error.code === 'WS_POLICY_REJECTED');
+    socket.close(refused ? 1008 : 1011, refused ? 'Authentication failed' : 'Connection setup failed');
   }
 }
 
