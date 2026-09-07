@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { BusAbortError, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
   ExecutionAttemptNamespace,
@@ -516,6 +516,8 @@ describe('generic workload invocation', () => {
   it.each([
     undefined,
     new Error('Instruction read cancelled'),
+    'Instruction read cancelled',
+    { source: 'instruction-read-cancellation' },
   ])('converges cancellation when the caller aborts the delayed instruction request with %s', async (reason) => {
     const controller = new AbortController();
     const harness = await createHarness(instruction(), { instructionReadDelayMs: 50 });
@@ -537,9 +539,11 @@ describe('generic workload invocation', () => {
   });
 
   it.each([
-    'Control binding cancelled',
-    new Error('Control binding cancelled'),
-  ])('converges cancellation before admission when control binding throws the signal reason %s', async (reason) => {
+    { reason: 'Control binding cancelled', wrapper: 'none' },
+    { reason: new Error('Control binding cancelled'), wrapper: 'none' },
+    { reason: 'Control binding cancelled', wrapper: 'matching' },
+    { reason: 'Control binding cancelled', wrapper: 'foreign' },
+  ])('classifies control-binding cancellation with $wrapper wrapper', async ({ reason, wrapper }) => {
     const controller = new AbortController();
     const harness = await createHarness(instruction());
     cleanups.push(harness.cleanup);
@@ -554,6 +558,8 @@ describe('generic workload invocation', () => {
           version: '1',
           bindControl: async ({ signal }) => {
             controller.abort(reason);
+            if (wrapper !== 'none')
+              throw new BusAbortError(wrapper === 'matching' ? reason : 'Foreign control failure');
             signal?.throwIfAborted();
             throw new Error('Control binding must throw its cancellation reason');
           },
@@ -565,7 +571,11 @@ describe('generic workload invocation', () => {
       retry: { baseDelayMs: 1, maxDelayMs: 1, deadlineMs: 5_000 },
     });
 
-    expect(result).toEqual({ outcome: { kind: 'cancelled' }, decision: 'accepted' });
+    const expected: ExecutionAttemptOutcome =
+      wrapper === 'foreign'
+        ? { kind: 'technical-failure', stage: 'startup', message: 'Foreign control failure' }
+        : { kind: 'cancelled' };
+    expect(result).toEqual({ outcome: expected, decision: 'accepted' });
     await expect(outcome).resolves.toEqual(result.outcome);
     await expect(harness.authority.getAttemptControlState(harness.executionAttemptId)).resolves.toMatchObject({
       activeOperationId: null,
@@ -944,14 +954,19 @@ describe('generic workload invocation', () => {
   });
 
   it.each([
-    { phase: 'prepare', customReason: true, unrelated: false },
-    { phase: 'setup', customReason: true, unrelated: false },
-    { phase: 'setup', customReason: false, unrelated: false },
-    { phase: 'setup', customReason: true, unrelated: true },
-  ] as const)('classifies thrown $phase cancellation (custom: $customReason, unrelated: $unrelated)', async ({
+    { phase: 'prepare', customReason: true, unrelated: false, wrapper: 'none' },
+    { phase: 'setup', customReason: true, unrelated: false, wrapper: 'none' },
+    { phase: 'setup', customReason: false, unrelated: false, wrapper: 'none' },
+    { phase: 'setup', customReason: true, unrelated: true, wrapper: 'none' },
+    { phase: 'prepare', customReason: true, unrelated: false, wrapper: 'matching' },
+    { phase: 'prepare', customReason: true, unrelated: true, wrapper: 'foreign' },
+    { phase: 'setup', customReason: true, unrelated: false, wrapper: 'matching' },
+    { phase: 'setup', customReason: true, unrelated: true, wrapper: 'foreign' },
+  ] as const)('classifies thrown $phase cancellation (custom: $customReason, unrelated: $unrelated, wrapper: $wrapper)', async ({
     phase,
     customReason,
     unrelated,
+    wrapper,
   }) => {
     const root = await mkdtemp(join(tmpdir(), 'throwing-preparation-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
@@ -967,6 +982,9 @@ describe('generic workload invocation', () => {
     const settled = harness.authority.waitForOutcome(harness.executionAttemptId);
     const stop = () => {
       control.abort(customReason ? { source: 'custom-preparation-stop' } : undefined);
+      if (wrapper !== 'none') {
+        throw new BusAbortError(wrapper === 'matching' ? control.signal.reason : 'Independent setup storage failure');
+      }
       if (unrelated) throw new Error('Independent setup storage failure');
       control.signal.throwIfAborted();
     };
@@ -1151,6 +1169,22 @@ describe('generic workload invocation', () => {
       expectedOutcome: { kind: 'cancelled' },
     },
     {
+      name: 'matching Bus cancellation',
+      reason: 'Invocation cancelled',
+      failure: new BusAbortError('Invocation cancelled'),
+      expectedOutcome: { kind: 'cancelled' },
+    },
+    {
+      name: 'foreign Bus cancellation after abort',
+      reason: 'Invocation cancelled',
+      failure: new BusAbortError('Foreign operation cancelled'),
+      expectedOutcome: {
+        kind: 'technical-failure',
+        stage: 'workload-invocation',
+        message: 'Foreign operation cancelled',
+      },
+    },
+    {
       name: 'unrelated shutdown failure after abort',
       reason: new Error('Invocation cancelled'),
       failure: new Error('Runtime shutdown failed'),
@@ -1170,6 +1204,7 @@ describe('generic workload invocation', () => {
     );
     cleanups.push(harness.cleanup);
 
+    const settled = harness.authority.waitForOutcome(harness.executionAttemptId);
     const result = await runWorkloadInvocation(harness.bus, {
       executionAttemptId: harness.executionAttemptId,
       runtimeGeneration: 1,
@@ -1192,6 +1227,7 @@ describe('generic workload invocation', () => {
     });
 
     expect(result).toEqual({ outcome: expectedOutcome, decision: 'accepted' });
+    await expect(settled).resolves.toEqual(expectedOutcome);
     await expect(writeFile(join(workspaceRoot, 'retained-after-abort'), 'yes')).resolves.toBeUndefined();
   });
 });

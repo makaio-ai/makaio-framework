@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import { BusAbortError, isRequestCancellation, type IMakaioBus } from '@makaio/bus-core';
 import {
   ExecutionAttemptSchemas,
   ExecutionAttemptSubjects,
@@ -199,6 +199,8 @@ function unboundControl(signal: AbortSignal | undefined): WorkloadControlBinding
  * @returns Whether the exception represents cooperative cancellation.
  */
 function isCooperativeCancellation(error: unknown, signal: AbortSignal | undefined): boolean {
+  // Bus wrappers retain provenance; the local DOM convention must not accept a foreign cause.
+  if (error instanceof BusAbortError) return isRequestCancellation(error, signal);
   // Custom reasons thrown by throwIfAborted retain their identity. An aborted
   // signal alone must not hide an unrelated invocation or shutdown failure.
   return (
@@ -458,7 +460,7 @@ export async function runWorkloadInvocation(
   try {
     instruction = await getInstruction(bus, options.executionAttemptId, options.runtimeGeneration, options.signal);
   } catch (error) {
-    if (isCooperativeCancellation(error, options.signal)) {
+    if (isRequestCancellation(error, options.signal)) {
       return await acknowledgeOutcome(bus, options, undefined, { kind: 'cancelled' }, undefined, undefined);
     }
     throw error;
