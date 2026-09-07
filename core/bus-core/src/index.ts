@@ -73,6 +73,8 @@ export { parseBusUrl } from './utils/url-config.js';
 export type { BusUrlConfig } from './utils/url-config.js';
 
 export {
+  BusAbortError,
+  isRequestCancellation,
   BusError,
   ChannelAuthError,
   ChannelClosedError,

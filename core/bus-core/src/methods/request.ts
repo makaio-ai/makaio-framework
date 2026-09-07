@@ -1,5 +1,5 @@
 import type { RequestOptions, MakaioBusContext, WithReceiveContext } from '../types/index.js';
-import { NoHandlerError, TimeoutError } from '../errors/index.js';
+import { isRequestCancellation, NoHandlerError, TimeoutError } from '../errors/index.js';
 import type { OptionalResult, SubjectDefinition } from '@makaio/core';
 import { nanoid } from 'nanoid';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
@@ -138,7 +138,7 @@ export async function request<
     // timeout === 0 disables automatic timeout but still honours AbortSignal.
     outcome = await awaitWithTimeoutAndSignal(dispatchPromise, timeout, signal);
   } catch (error) {
-    if (error instanceof pTimeoutError) {
+    if (error instanceof pTimeoutError && !isRequestCancellation(error, signal)) {
       throw new TimeoutError(subjectKey, timeout);
     }
     throw error;
@@ -158,7 +158,8 @@ export async function request<
  * Execute a request, returning a discriminated union instead of throwing for missing handlers.
  *
  * Use this when the handler is optional (e.g., optional services like storage).
- * Only NoHandlerError is caught - other errors (timeout, validation, handler errors) propagate.
+ * Only missing-handler failures are caught; caller cancellation reasons (even a
+ * NoHandlerError), timeouts, validation and handler errors propagate.
  * @param context - Makaio bus context
  * @param subjectDefinition - Concrete request subject (wildcards not allowed)
  * @param payload - Request payload
@@ -180,7 +181,7 @@ export async function requestOptional<
     const data = await request<T, Request, Response>(context, subjectDefinition, payload, options);
     return { handled: true, data };
   } catch (e) {
-    if (e instanceof NoHandlerError) {
+    if (e instanceof NoHandlerError && !isRequestCancellation(e, options?.signal)) {
       return { handled: false };
     }
     throw e;

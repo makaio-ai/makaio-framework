@@ -10,7 +10,7 @@ import { resolveEffectiveTransports } from './resolve-effective-transports.js';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
 import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
 import { TimeoutError as pTimeoutError } from 'p-timeout';
-import { TimeoutError } from '../errors/index.js';
+import { isRequestCancellation, TimeoutError } from '../errors/index.js';
 import { awaitWithTimeoutAndSignal } from './request/await-with-timeout-and-signal.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
 import {
@@ -317,7 +317,7 @@ export async function broadcast<
   try {
     await awaitWithTimeoutAndSignal(Promise.all([...localPromises, ...transportPromises]), timeout, signal);
   } catch (error) {
-    if (error instanceof pTimeoutError) {
+    if (error instanceof pTimeoutError && !isRequestCancellation(error, signal)) {
       throw new TimeoutError(subjectKey, timeout);
     }
     throw error;
