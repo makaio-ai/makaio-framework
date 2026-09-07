@@ -99,8 +99,16 @@ describe('bounded setup commands', () => {
   });
 
   it('stops a real child with a delayed write before cancellation returns', async () => {
+    const startedAt = performance.now();
     const diagnostics: {
       groupPids: number[];
+      killCalls: Array<{
+        pid: number;
+        signal: string;
+        elapsedMs: number;
+        success: boolean;
+        errorCode: string | undefined;
+      }>;
       ps: Array<{
         durationMs: number;
         errorCode: string | undefined;
@@ -108,7 +116,7 @@ describe('bounded setup commands', () => {
         targetRows: Array<{ pgid: string; stat: string | undefined }>;
         rejectedRows: Array<{ pgid: string; stat: string | undefined }>;
       }>;
-    } = { groupPids: [], ps: [] };
+    } = { groupPids: [], killCalls: [], ps: [] };
     const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
     childProcessMocks.execFile.mockImplementation((file, args, options, callback) => {
       const startedAt = Date.now();
@@ -141,8 +149,30 @@ describe('bounded setup commands', () => {
     });
     const kill = process.kill.bind(process);
     const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
-      if (typeof pid === 'number' && pid < 0) diagnostics.groupPids.push(-pid);
-      return kill(pid, signal);
+      if (!(typeof pid === 'number' && pid < 0)) return kill(pid, signal);
+      const groupPid = -pid;
+      const signalName = signal === 0 ? '0' : String(signal ?? 'default');
+      diagnostics.groupPids.push(groupPid);
+      try {
+        const result = kill(pid, signal);
+        diagnostics.killCalls.push({
+          pid: groupPid,
+          signal: signalName,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          success: true,
+          errorCode: undefined,
+        });
+        return result;
+      } catch (error) {
+        diagnostics.killCalls.push({
+          pid: groupPid,
+          signal: signalName,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          success: false,
+          errorCode: (error as NodeJS.ErrnoException).code,
+        });
+        throw error;
+      }
     });
     const abort = new AbortController();
     const childProgram =

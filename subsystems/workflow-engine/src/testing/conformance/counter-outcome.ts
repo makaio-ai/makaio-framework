@@ -9,7 +9,7 @@
  * would report `{ counter: n }` where the port owes `n`.
  * @packageDocumentation
  */
-import type { OutcomeCodec } from '../execution-attempt-repository.js';
+import type { OutcomeCodec } from '../../execution-attempt-repository.js';
 
 /** Owner outcome used wherever a suite needs a non-workflow outcome type. */
 export type CounterOutcome = number;

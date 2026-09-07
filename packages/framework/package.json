@@ -581,6 +581,10 @@
       "types": "./dist/workflow-engine/testing/sqlite.d.mts",
       "default": "./dist/workflow-engine/testing/sqlite.mjs"
     },
+    "./workflow-engine/testing/conformance": {
+      "types": "./dist/workflow-engine/testing/conformance.d.mts",
+      "default": "./dist/workflow-engine/testing/conformance.mjs"
+    },
     "./workflow-engine/package": {
       "types": "./dist/workflow-engine/package.d.mts",
       "default": "./dist/workflow-engine/package.mjs"
