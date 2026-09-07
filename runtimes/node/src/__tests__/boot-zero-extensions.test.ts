@@ -305,7 +305,9 @@ async function filesystemDescriptorFixture(
   };
 }
 
-describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
+// These integration cases perform real identity/config/SQLite initialization
+// and runtime shutdown; the unit-test default is not a boot-plus-shutdown SLO.
+describe('bootMakaioRuntimeCore with zero discovered extensions', { timeout: 30_000 }, () => {
   let tempHome: string;
   let runtime: MakaioRuntime | undefined;
   let originalSkipExtensions: string | undefined;

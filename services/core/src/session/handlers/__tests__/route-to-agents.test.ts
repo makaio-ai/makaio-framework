@@ -186,17 +186,14 @@ describe('routeToAgents', () => {
     });
 
     it('continues processing other agents even if one is slow', async () => {
-      const completionTimes: Array<{ agentId: string; time: number }> = [];
-      const startTime = Date.now();
+      const slowAgentGate = Promise.withResolvers<void>();
+      const startedAgentIds: string[] = [];
+      const completedAgentIds: string[] = [];
 
       const unsub = MakaioBus.on(AgentSubjects.sendMessage, async (context) => {
-        // agent-1 is slow, others are fast
-        const delay = context.payload.agentId === 'agent-1' ? 50 : 5;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        completionTimes.push({
-          agentId: context.payload.agentId,
-          time: Date.now() - startTime,
-        });
+        startedAgentIds.push(context.payload.agentId);
+        if (context.payload.agentId === 'agent-1') await slowAgentGate.promise;
+        completedAgentIds.push(context.payload.agentId);
         context.setResult({ messageId: context.payload.messageId ?? 'generated-id' });
       });
       trackUnsubscribe(unsub);
@@ -211,7 +208,7 @@ describe('routeToAgents', () => {
       });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents({
+      const routing = routeToAgents({
         bus: MakaioBus,
         session,
         agents,
@@ -222,12 +219,17 @@ describe('routeToAgents', () => {
         onTurnComplete,
       });
 
-      // Fast agent should complete well before slow agent
-      const fastAgent = completionTimes.find((c) => c.agentId === 'agent-2');
-      const slowAgent = completionTimes.find((c) => c.agentId === 'agent-1');
-      expect(fastAgent).toBeDefined();
-      expect(slowAgent).toBeDefined();
-      expect(fastAgent!.time).toBeLessThan(slowAgent!.time);
+      try {
+        // Prove progress while the first handler is blocked, independent of clock resolution.
+        await vi.waitFor(() => {
+          expect(new Set(startedAgentIds)).toEqual(new Set(['agent-1', 'agent-2']));
+          expect(completedAgentIds).toEqual(['agent-2']);
+        });
+      } finally {
+        slowAgentGate.resolve();
+        await routing;
+      }
+      expect(completedAgentIds).toEqual(['agent-2', 'agent-1']);
     });
   });
 

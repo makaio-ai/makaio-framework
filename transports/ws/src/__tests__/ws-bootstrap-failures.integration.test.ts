@@ -66,10 +66,14 @@ describe('WebSocket bootstrap failures with real HMAC authentication', () => {
 
   it('classifies a real wrong-secret rejection as authentication rejection', async () => {
     const { client, server, onConnected } = await createAuthenticatedPair('wrong-secret');
+    const startedAt = performance.now();
     const failure = await client.connect().catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(WebSocketConnectionError);
-    expect(failure).toMatchObject({ code: 'WS_AUTHENTICATION_REJECTED' });
+    const code = failure instanceof WebSocketConnectionError ? failure.code : undefined;
+    expect(code, `Authentication code ${code} after ${Math.round(performance.now() - startedAt)}ms`).toBe(
+      'WS_AUTHENTICATION_REJECTED',
+    );
     expect(client.isReady()).toBe(false);
     expect(server.getConnectionCount()).toBe(0);
     expect(onConnected).not.toHaveBeenCalled();
