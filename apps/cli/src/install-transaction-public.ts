@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import { resolveMakaioHome } from '@makaio/runtime-node';
+import { resolveMakaioHome } from '@makaio/runtime-node/makaio-config';
 import { findProjectManifestPath, readProjectManifest } from '@makaio/utils/project-manifest';
 
 import {

@@ -43,6 +43,14 @@ vi.mock('@makaio/runtime-node', async (importOriginal) => {
   };
 });
 
+vi.mock('@makaio/runtime-node/makaio-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@makaio/runtime-node/makaio-config')>();
+  return {
+    ...actual,
+    resolveMakaioHome: () => packageManagerMockState.makaioHome,
+  };
+});
+
 vi.mock('@makaio/services-package-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@makaio/services-package-manager')>();
   const fs = await import('node:fs/promises');
