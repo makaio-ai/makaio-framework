@@ -8,6 +8,27 @@ import { runSetupCommand } from '../setup-command.js';
 
 const childProcessMocks = vi.hoisted(() => ({ execFile: vi.fn() }));
 
+const PROCESS_STATUS_ARGS = ['-A', '-o', 'pid=,ppid=,pgid=,uid=,stat='] as const;
+const PROCESS_STATUS_TIMEOUT_MS = 1_000;
+
+interface ChildIdentity {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly uid: number;
+}
+
+interface ProcessGroupWitness {
+  readonly groupPid: number;
+  readonly rows: readonly {
+    readonly pid: number;
+    readonly ppid: number;
+    readonly pgid: number;
+    readonly uid: number;
+    readonly stat: string;
+  }[];
+  readonly errorCode?: string;
+}
+
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   execFile: childProcessMocks.execFile,
@@ -34,6 +55,44 @@ afterEach(async () => {
  */
 function command(source: string, timeoutMs = 5_000) {
   return { workspaceRoot, recipe: { command: process.execPath, args: ['-e', source], env: {}, timeoutMs } };
+}
+
+/**
+ * Capture a group witness after a failed signal without delaying that signal.
+ * @param execFile - Unmocked child-process launcher for this test-only observation.
+ * @param groupPid - Process-group identifier to select.
+ * @returns A bounded snapshot after the actual signal call has returned.
+ */
+function witnessProcessGroupAfterSignalError(
+  execFile: typeof import('node:child_process').execFile,
+  groupPid: number,
+): Promise<ProcessGroupWitness> {
+  return new Promise((resolve) => {
+    try {
+      execFile('ps', PROCESS_STATUS_ARGS, { encoding: 'utf8', timeout: PROCESS_STATUS_TIMEOUT_MS }, (error, stdout) => {
+        if (error !== null) {
+          resolve({ groupPid, rows: [], errorCode: (error as NodeJS.ErrnoException).code ?? 'PS_FAILED' });
+          return;
+        }
+        const rows = String(stdout)
+          .split('\n')
+          .map((line) => line.trim().split(/\s+/))
+          .flatMap(([pid, ppid, pgid, uid, stat, extra]) =>
+            extra !== undefined ||
+            !/^\d+$/.test(pid ?? '') ||
+            !/^\d+$/.test(ppid ?? '') ||
+            !/^\d+$/.test(pgid ?? '') ||
+            !/^\d+$/.test(uid ?? '') ||
+            stat === undefined
+              ? []
+              : [{ pid: Number(pid), ppid: Number(ppid), pgid: Number(pgid), uid: Number(uid), stat }],
+          );
+        resolve({ groupPid, rows: rows.filter((row) => row.pgid === groupPid).slice(0, 5) });
+      });
+    } catch (error) {
+      resolve({ groupPid, rows: [], errorCode: (error as NodeJS.ErrnoException).code ?? 'PS_FAILED' });
+    }
+  });
 }
 
 /**
@@ -116,6 +175,8 @@ describe('bounded setup commands', () => {
         targetRows: Array<{ pgid: string; stat: string | undefined }>;
         rejectedRows: Array<{ pgid: string; stat: string | undefined }>;
       }>;
+      childIdentity?: ChildIdentity;
+      afterKillError?: ProcessGroupWitness;
     } = { groupPids: [], killCalls: [], ps: [] };
     const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
     childProcessMocks.execFile.mockImplementation((file, args, options, callback) => {
@@ -148,6 +209,7 @@ describe('bounded setup commands', () => {
       });
     });
     const kill = process.kill.bind(process);
+    let postKillErrorWitness: Promise<ProcessGroupWitness> | undefined;
     const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
       if (!(typeof pid === 'number' && pid < 0)) return kill(pid, signal);
       const groupPid = -pid;
@@ -164,31 +226,51 @@ describe('bounded setup commands', () => {
         });
         return result;
       } catch (error) {
+        const errorCode = (error as NodeJS.ErrnoException).code;
         diagnostics.killCalls.push({
           pid: groupPid,
           signal: signalName,
           elapsedMs: Math.round(performance.now() - startedAt),
           success: false,
-          errorCode: (error as NodeJS.ErrnoException).code,
+          errorCode,
         });
+        if (signalName === 'SIGKILL' && errorCode === 'EPERM' && postKillErrorWitness === undefined) {
+          postKillErrorWitness = witnessProcessGroupAfterSignalError(actual.execFile, groupPid);
+        }
         throw error;
       }
     });
     const abort = new AbortController();
     const childProgram =
-      "require('fs').writeFileSync('child-ready',String(process.pid));setTimeout(()=>require('fs').writeFileSync('too-late','bad'),500)";
+      "require('fs').writeFileSync('child-ready',[process.pid,process.ppid,process.getuid()].join(':'));setTimeout(()=>require('fs').writeFileSync('too-late','bad'),500)";
     const parentProgram = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childProgram)}],{stdio:'ignore'});setInterval(()=>{},100)`;
     try {
       const running = runSetupCommand({ ...command(parentProgram), signal: abort.signal });
-      let childPid = 0;
+      let childIdentity: ChildIdentity | undefined;
       await expect
         .poll(async () => {
-          childPid = Number(await fs.readFile(path.join(workspaceRoot, 'child-ready'), 'utf8'));
-          return childPid > 0;
+          const [pid, ppid, uid, extra] = (await fs.readFile(path.join(workspaceRoot, 'child-ready'), 'utf8'))
+            .trim()
+            .split(':');
+          if (
+            extra !== undefined ||
+            !/^\d+$/.test(pid ?? '') ||
+            !/^\d+$/.test(ppid ?? '') ||
+            !/^\d+$/.test(uid ?? '')
+          ) {
+            return false;
+          }
+          childIdentity = { pid: Number(pid), ppid: Number(ppid), uid: Number(uid) };
+          return true;
         })
         .toBe(true);
+      if (childIdentity === undefined) throw new Error('child did not report its identity');
+      diagnostics.childIdentity = childIdentity;
       abort.abort();
       const result = await running;
+      if (postKillErrorWitness !== undefined) {
+        diagnostics.afterKillError = await postKillErrorWitness;
+      }
       expect(result, JSON.stringify(diagnostics)).toMatchObject({ status: 'cancelled' });
       // A dead child can remain a zombie until its adopting parent reaps it.
       // Verify absence of live work, not absence of a still-allocated PID.
@@ -196,7 +278,7 @@ describe('bounded setup commands', () => {
       const childState = processes
         .split('\n')
         .map((line) => line.trim().split(/\s+/))
-        .find(([pid]) => Number(pid) === childPid)?.[1];
+        .find(([pid]) => Number(pid) === childIdentity?.pid)?.[1];
       expect(childState === undefined || childState.startsWith('Z')).toBe(true);
       await delay(600);
       await expect(fs.stat(path.join(workspaceRoot, 'too-late'))).rejects.toMatchObject({ code: 'ENOENT' });

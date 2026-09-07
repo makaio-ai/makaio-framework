@@ -59,9 +59,15 @@ function sendSignalToChild(child: ChildProcess, sig: NodeJS.Signals, label: stri
   });
 }
 
-/**
- * A handle to a spawned process discovered via `MAKAIO_PORT`.
- */
+/** Terminal process facts retained even when a consumer begins waiting after exit. */
+export interface SpawnedProcessExit {
+  /** Process exit code, or null when terminated by a signal. */
+  readonly code: number | null;
+  /** Terminating signal, or null when the process returned an exit code. */
+  readonly signal: NodeJS.Signals | null;
+}
+
+/** A handle to a spawned process discovered via `MAKAIO_PORT`. */
 export interface SpawnedProcess {
   /** The TCP port the bus server bound to (read from stdout). */
   port: number;
@@ -82,6 +88,11 @@ export interface SpawnedProcess {
    * @returns Captured output at the time the matcher is observed.
    */
   waitForOutput(matcher: string | RegExp, timeoutMs: number): Promise<string>;
+  /**
+   * Observe the process exit without sending a signal or rejecting on a nonzero exit.
+   * @returns The same promise on every call, retaining the exit code and signal.
+   */
+  waitForExit(): Promise<SpawnedProcessExit>;
   /**
    * Send a signal to the process and wait for it to exit.
    *
@@ -246,6 +257,7 @@ function parsePortAnnouncement(stdout: string, label: string): number | undefine
  * @param port - Discovered bus port.
  * @param label - Process label used in signal warnings.
  * @param outputCapture - Output capture attached to the child process.
+ * @param exitPromise - Exit observation installed immediately after spawn.
  * @returns Public process handle used by E2E tests.
  */
 function createSpawnedProcessHandle(
@@ -253,6 +265,7 @@ function createSpawnedProcessHandle(
   port: number,
   label: string,
   outputCapture: OutputCapture,
+  exitPromise: Promise<SpawnedProcessExit>,
 ): SpawnedProcess {
   const pid = child.pid;
   if (pid === undefined) {
@@ -267,6 +280,7 @@ function createSpawnedProcessHandle(
     pid,
     getOutput: outputCapture.get,
     waitForOutput: outputCapture.waitFor,
+    waitForExit: () => exitPromise,
     sendSignal,
     kill,
   };
@@ -297,12 +311,14 @@ function killAndRejectChild(child: ChildProcess, reject: (error: Error) => void,
  * @param child - Spawned child process.
  * @param options - Spawn options containing timeout and label.
  * @param outputCapture - Output capture attached to the child process.
+ * @param exitPromise - Exit observation installed immediately after spawn.
  * @returns Process handle with the discovered port.
  */
 function waitForDiscoveredPort(
   child: ChildProcess,
   options: Pick<SpawnAndDiscoverPortOptions, 'timeoutMs' | 'label'>,
   outputCapture: OutputCapture,
+  exitPromise: Promise<SpawnedProcessExit>,
 ): Promise<SpawnedProcess> {
   const { timeoutMs, label } = options;
 
@@ -341,7 +357,7 @@ function waitForDiscoveredPort(
         if (port === undefined) return;
         settled = true;
         clearTimeout(timer);
-        resolve(createSpawnedProcessHandle(child, port, label, outputCapture));
+        resolve(createSpawnedProcessHandle(child, port, label, outputCapture, exitPromise));
       } catch (error) {
         killAndRejectChild(child, reject, error instanceof Error ? error.message : String(error));
       }
@@ -379,6 +395,9 @@ export function spawnAndDiscoverPort(options: SpawnAndDiscoverPortOptions): Prom
     ...spawnOptions,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const exitPromise = new Promise<SpawnedProcessExit>((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
 
-  return waitForDiscoveredPort(child, { timeoutMs, label }, outputCapture);
+  return waitForDiscoveredPort(child, { timeoutMs, label }, outputCapture, exitPromise);
 }

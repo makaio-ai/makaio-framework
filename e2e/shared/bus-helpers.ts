@@ -16,6 +16,7 @@ import type { WebSocketClientTransportOptions } from '@makaio/bus-transport-webs
 import { BootSubjects, KernelSubjects } from '@makaio/kernel';
 import { UiSubjects, type UiReadyEvent } from '@makaio/ui-kernel';
 import type { ContextForSubjectDefinition, ExtractSubjectResponse, SubjectDefinition } from '@makaio/core';
+import type { SpawnedProcess } from './spawn-helpers.js';
 
 /**
  * Options for {@link connectTestBus}.
@@ -235,14 +236,36 @@ export async function waitForRuntimeReady(bus: IMakaioBus, timeoutMs = 30_000): 
  * window is expected to finish loading.
  * @param bus - Connected bus instance
  * @param surface - Renderer surface expected to emit `ui.ready`
+ * @param host - Host whose exit ends the pending renderer wait
  * @param timeoutMs - Maximum wait time in milliseconds
  * @returns UI ready payload emitted by the renderer
  */
-export async function waitForUiReady(
+export function waitForUiReady(
   bus: IMakaioBus,
   surface: UiReadyEvent['surface'],
+  host: Pick<SpawnedProcess, 'waitForExit'>,
   timeoutMs = 30_000,
 ): Promise<UiReadyPayload> {
-  const ctx = await bus.once(UiSubjects.ready, { filter: { surface }, timeoutMs });
-  return ctx.payload;
+  const wait = (async () => {
+    const abort = new AbortController();
+    try {
+      const uiReady = bus
+        .once(UiSubjects.ready, { filter: { surface }, timeoutMs, signal: abort.signal })
+        .then((ctx) => ({ kind: 'ready' as const, payload: ctx.payload }));
+      const hostExit = host.waitForExit().then((exit) => ({ kind: 'exit' as const, exit }));
+      const result = await Promise.race([uiReady, hostExit]);
+      if (result.kind === 'exit') {
+        throw new Error(
+          `[waitForUiReady] Host exited before ui.ready for ${surface} (code=${String(result.exit.code)}, signal=${String(result.exit.signal)})`,
+        );
+      }
+      return result.payload;
+    } finally {
+      abort.abort();
+    }
+  })();
+  // Smoke tests subscribe early but await UI readiness after other boot assertions.
+  // Observe this original promise now without changing what its later consumer receives.
+  void wait.catch(() => undefined);
+  return wait;
 }
