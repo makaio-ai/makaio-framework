@@ -13,6 +13,15 @@ import type {
   ProviderOperationOwnershipRecord,
 } from './provider-operation.js';
 
+export {
+  evaluateAttemptReachability,
+  evaluateRuntimeRegistration,
+  evaluateOperationAdmission,
+  evaluateOperationCompletion,
+  evaluateRuntimeReadiness,
+} from './execution-attempt-decisions.js';
+export type { AttemptReachability, AttemptReachabilityDecision } from './execution-attempt-decisions.js';
+
 // ─────────────────────────────────────────────────────────────
 // Attempt Lifecycle States
 // ─────────────────────────────────────────────────────────────
@@ -1270,9 +1279,12 @@ export type RuntimeReadinessDecision =
 /**
  * Passive injected port for durable execution attempt persistence.
  *
- * The consuming host application owns the concrete implementation and all
- * durable decisions. The Authority service calls through this port but never
- * owns the underlying tables or storage.
+ * The port owns decision semantics, including refusal and replay precedence;
+ * the consuming host owns their atomic realization. The shared pure runtime
+ * evaluators report non-write decisions or null to attempt a guarded write.
+ * They never replace transactional reads, conditional writes, affected-row
+ * checks, or re-evaluation after contention. The Authority service calls
+ * through this port but never owns the underlying tables or storage.
  *
  * The port owns two related records per attempt: canonical attempt state, and
  * the fenced provider operation that tracks who may act on the attempt's

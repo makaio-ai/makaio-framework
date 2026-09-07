@@ -34,6 +34,11 @@ import {
   EXECUTION_ATTEMPT_STATUSES,
   decodeDurableOutcome,
   durableOutcome,
+  evaluateAttemptReachability,
+  evaluateRuntimeRegistration,
+  evaluateOperationAdmission,
+  evaluateOperationCompletion,
+  evaluateRuntimeReadiness,
   sameAllocationRef,
   sameDurableOutcome,
 } from '../execution-attempt-repository.js';
@@ -44,6 +49,7 @@ import type {
   AllocationRefEvolutionDecision,
   AllocationTerminationDecision,
   AttemptControlState,
+  AttemptReachabilityDecision,
   BeginProvisioningInput,
   CompleteOperationInput,
   DiscoveredAllocationDecision,
@@ -240,7 +246,7 @@ function parseJsonColumn<TValue>(json: string | null, parse: (value: unknown) =>
  * @param row - Row read from `test_execution_attempt`.
  * @returns The ten control facts the port defines.
  */
-function toControlState(row: AttemptRow): AttemptControlState {
+function decodeAttemptControlState(row: AttemptRow): AttemptControlState {
   return {
     runtimeGeneration: row.runtime_generation,
     runtimeIncarnationId: row.runtime_incarnation_id,
@@ -266,7 +272,7 @@ function toControlState(row: AttemptRow): AttemptControlState {
  */
 function toAttemptRecord(row: AttemptRow): ExecutionAttemptRecord {
   return {
-    ...toControlState(row),
+    ...decodeAttemptControlState(row),
     executionAttemptId: row.execution_attempt_id,
     executionId: row.execution_id,
     status: parseMember(EXECUTION_ATTEMPT_STATUSES, row.status, 'status'),
@@ -733,6 +739,29 @@ export async function createSqliteAttemptRepository<TOutcome>(
       sql`SELECT execution_attempt_id FROM test_active_execution_attempt WHERE execution_id = ${executionId}`,
     );
     return rows[0]?.execution_attempt_id ?? null;
+  };
+
+  /**
+   * Read common runtime reachability before decoding any control columns.
+   * Reads remain staged: settlement skips the owner lookup and fencing skips
+   * the allocation lookup. The caller's transaction owns their consistency.
+   * @param session - Session inside the current transaction.
+   * @param row - Existing attempt already matched to the requested owner.
+   * @returns The first common refusal, or null to decode and evaluate control.
+   */
+  const runtimeReachability = async (
+    session: RawSqlSession,
+    row: AttemptRow,
+  ): Promise<AttemptReachabilityDecision | null> => {
+    const settled = row.settlement_kind !== null;
+    const active = !settled && (await readActiveAttemptId(session, row.execution_id)) === row.execution_attempt_id;
+    return evaluateAttemptReachability({
+      matchesExecution: true,
+      settled,
+      active,
+      allocated:
+        active && row.allocation_ref !== null && !(await allocationTerminated(session, row.execution_attempt_id)),
+    });
   };
 
   /**
@@ -1376,38 +1405,17 @@ export async function createSqliteAttemptRepository<TOutcome>(
           async () => {
             const attemptRow = await readAttemptRow(session, input.executionAttemptId);
             if (attemptRow === undefined || attemptRow.execution_id !== input.executionId) return { kind: 'not-found' };
-            if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
-            const activeAttemptId = await readActiveAttemptId(session, input.executionId);
-            if (activeAttemptId !== input.executionAttemptId) return { kind: 'fenced' };
-            if (attemptRow.allocation_ref === null || (await allocationTerminated(session, input.executionAttemptId))) {
-              return { kind: 'not-allocated' };
-            }
-            const control = toControlState(attemptRow);
-            // The replay answer precedes the busy refusal on purpose: the
-            // operation in the way is frequently the very probe this
-            // registration started, and a runtime retrying its report must not
-            // be told to wait for itself.
-            if (control.runtimeIncarnationId === input.runtimeIncarnationId) {
-              return {
-                kind: 'duplicate',
-                runtimeGeneration: control.runtimeGeneration,
-                runtimeReadyAt: control.runtimeReadyAt,
-              };
-            }
-            // A workload operation in the way is refused; a probe in the way
-            // is reclaimed. The probe is the authority's own proof of an
-            // endpoint, so one left active belongs to a handshake that died
-            // before completing it, and it must not block the incarnation that
-            // replaces the dead one.
-            if (control.activeOperationId !== null && control.activeOperationKind !== 'runtime-probe') {
-              return { kind: 'operation-active', operationId: control.activeOperationId };
-            }
+            const unreachable = await runtimeReachability(session, attemptRow);
+            if (unreachable !== null) return unreachable;
+            const control = decodeAttemptControlState(attemptRow);
+            const refusal = evaluateRuntimeRegistration(control, input);
+            if (refusal !== null) return refusal;
 
             allocatedGeneration = control.runtimeGeneration + 1;
             // The monotonic-counter compare-and-set: pinning the generation the
             // read saw is what makes two racing registrations advance it once.
             // Readiness is cleared with it — it belonged to the incarnation
-            // this one replaces — and so is an orphaned probe, all four
+            // this one replaces — and so is an orphaned probe, all five
             // members in the one statement. The predicate admits only an idle
             // slot or a probe, never a workload operation.
             return () =>
@@ -1454,30 +1462,11 @@ export async function createSqliteAttemptRepository<TOutcome>(
           async () => {
             const attemptRow = await readAttemptRow(session, input.executionAttemptId);
             if (attemptRow === undefined || attemptRow.execution_id !== input.executionId) return { kind: 'not-found' };
-            if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
-            const activeAttemptId = await readActiveAttemptId(session, input.executionId);
-            if (activeAttemptId !== input.executionAttemptId) return { kind: 'fenced' };
-            if (attemptRow.allocation_ref === null || (await allocationTerminated(session, input.executionAttemptId))) {
-              return { kind: 'not-allocated' };
-            }
-            const control = toControlState(attemptRow);
-            if (control.activeOperationId !== null) {
-              // One occupied slot, two readings of it: the caller's own
-              // admission retried, or somebody else's operation in the way.
-              return control.activeOperationKey === input.admissionKey
-                ? {
-                    kind: 'duplicate',
-                    operationId: control.activeOperationId,
-                    runtimeGeneration: control.activeOperationGeneration ?? control.runtimeGeneration,
-                    admittedAt: control.activeOperationAdmittedAt ?? admittedAt,
-                  }
-                : { kind: 'operation-active', operationId: control.activeOperationId };
-            }
-            if (control.operationStartGate === 'closed') return { kind: 'gate-closed' };
-            if (requiresReadiness && control.runtimeReadyAt === null) return { kind: 'not-ready' };
-            if (control.runtimeGeneration !== input.runtimeGeneration) {
-              return { kind: 'stale-generation', runtimeGeneration: control.runtimeGeneration };
-            }
+            const unreachable = await runtimeReachability(session, attemptRow);
+            if (unreachable !== null) return unreachable;
+            const control = decodeAttemptControlState(attemptRow);
+            const refusal = evaluateOperationAdmission(control, input, admittedAt);
+            if (refusal !== null) return refusal;
 
             // The null-guard compare-and-set: `active_operation_id IS NULL` in
             // the predicate is what admits exactly one of two racing callers,
@@ -1517,17 +1506,11 @@ export async function createSqliteAttemptRepository<TOutcome>(
             // late completion learns that the attempt resolved rather than that
             // its operation was never active.
             if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
-            const control = toControlState(attemptRow);
-            // The replay is answered from the last completion, because by then
-            // the active operation this call names is gone.
-            if (control.lastCompletedOperationId === input.operationId) return { kind: 'duplicate' };
-            if (control.activeOperationId === null) return { kind: 'not-active' };
-            if (control.activeOperationId !== input.operationId) {
-              return { kind: 'mismatch', activeOperationId: control.activeOperationId };
-            }
-            if (control.activeOperationGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+            const control = decodeAttemptControlState(attemptRow);
+            const refusal = evaluateOperationCompletion(control, input);
+            if (refusal !== null) return refusal;
 
-            // One statement clears all four members: a half-released operation
+            // One statement clears all five members: a half-released operation
             // would be neither active nor absent.
             return () =>
               session.run(
@@ -1556,27 +1539,11 @@ export async function createSqliteAttemptRepository<TOutcome>(
           async () => {
             const attemptRow = await readAttemptRow(session, input.executionAttemptId);
             if (attemptRow === undefined || attemptRow.execution_id !== input.executionId) return { kind: 'not-found' };
-            if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
-            // A superseded attempt keeps its generation, so the generation fence
-            // below cannot see that the endpoint it proved is no longer current.
-            const activeAttemptId = await readActiveAttemptId(session, input.executionId);
-            if (activeAttemptId !== input.executionAttemptId) return { kind: 'fenced' };
-            // A probe can complete on an allocation whose termination became
-            // durable while it was in flight; readiness recorded then would
-            // announce a dead endpoint, so the guard registration and admission
-            // apply holds here, in the read and in the write.
-            if (attemptRow.allocation_ref === null || (await allocationTerminated(session, input.executionAttemptId))) {
-              return { kind: 'not-allocated' };
-            }
-            const control = toControlState(attemptRow);
-            // Readiness is stored per generation and cleared whenever one is
-            // allocated, so a stored instant always belongs to the current
-            // incarnation and a stale fence can never replay onto it.
-            if (control.runtimeGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
-            if (control.runtimeReadyAt !== null) return { kind: 'duplicate', acceptedAt: control.runtimeReadyAt };
-            if (control.activeOperationId !== null) {
-              return { kind: 'operation-active', operationId: control.activeOperationId };
-            }
+            const unreachable = await runtimeReachability(session, attemptRow);
+            if (unreachable !== null) return unreachable;
+            const control = decodeAttemptControlState(attemptRow);
+            const refusal = evaluateRuntimeReadiness(control, input);
+            if (refusal !== null) return refusal;
 
             return () =>
               session.run(
@@ -1600,7 +1567,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
     async getAttemptControlState(executionAttemptId: string): Promise<AttemptControlState | null> {
       return transact(async (session) => {
         const row = await readAttemptRow(session, executionAttemptId);
-        return row === undefined ? null : toControlState(row);
+        return row === undefined ? null : decodeAttemptControlState(row);
       });
     },
 
