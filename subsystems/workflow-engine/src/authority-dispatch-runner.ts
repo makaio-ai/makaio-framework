@@ -1,3 +1,4 @@
+import type { ExecutionAttemptInstruction } from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { ExecutionOwnerId, PendingAttemptAbandonmentDecision } from './execution-attempt-repository.js';
 
@@ -10,6 +11,8 @@ export interface AuthorityDispatchRunnerOptions<TOutcome> {
   readonly authority: ExecutionAttemptAuthority<TOutcome>;
   /** Owner identifier of the aggregate that owns the attempt. */
   readonly executionId: ExecutionOwnerId;
+  /** Complete non-secret assignment frozen before this Attempt can be dispatched. */
+  readonly instruction: ExecutionAttemptInstruction;
   /** Dispatch operation whose successful return acknowledges acceptance. */
   readonly dispatch: (executionAttemptId: string) => Promise<unknown>;
 }
@@ -20,14 +23,14 @@ export interface AuthorityDispatchRunnerOptions<TOutcome> {
  * A rejected dispatch operation is not proof that no provider received the
  * request. The pending-abandonment CAS distinguishes a confirmed pre-allocation
  * failure from a lost acknowledgement after provisioning, allocation, or settlement.
- * @param options - Authority, owner identity, and dispatch operation.
+ * @param options - Authority, owner identity, immutable instruction, and dispatch operation.
  * @returns The Authority-committed outcome.
  */
 export async function runAuthorityDispatchedAttempt<TOutcome>(
   options: AuthorityDispatchRunnerOptions<TOutcome>,
 ): Promise<TOutcome> {
-  const { authority, executionId, dispatch } = options;
-  const attempt = await authority.createAttempt(executionId);
+  const { authority, executionId, instruction, dispatch } = options;
+  const attempt = await authority.createAttempt(executionId, instruction);
   const outcomePromise = authority.waitForOutcome(attempt.executionAttemptId);
   if (outcomePromise === undefined) {
     throw new Error(

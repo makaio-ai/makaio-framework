@@ -132,13 +132,16 @@ async function answerDelivery(
  * @param bus - Connected runtime bus the endpoint is installed on.
  * @param identity - Attempt and incarnation this runtime is; the delivery filter.
  * @param handlers - Handlers for the operation kinds this runtime can execute.
+ * @param signal - Optional cancellation while the endpoint becomes visible.
  * @returns The installed endpoint: a generation binder and its cleanup.
  */
 export async function installOperationDeliveryEndpoint(
   bus: IMakaioBus,
   identity: OperationDeliveryEndpointIdentity,
   handlers: OperationDeliveryHandlers,
+  signal?: AbortSignal,
 ): Promise<OperationDeliveryEndpoint> {
+  signal?.throwIfAborted();
   const { executionAttemptId, runtimeIncarnationId } = identity;
   let acceptedGeneration = identity.runtimeGeneration;
   // Trust boundary: this filter is applied by the bus in this process only.
@@ -156,8 +159,7 @@ export async function installOperationDeliveryEndpoint(
     .on(ExecutionAttemptSubjects.operation.deliver, async (ctx) => {
       ctx.setResult(await answerDelivery(ctx.payload, handlers, acceptedGeneration));
     });
-  await waitForSubscriptionPropagation(off);
-  return {
+  const endpoint: OperationDeliveryEndpoint = {
     bindGeneration(runtimeGeneration: number): void {
       acceptedGeneration = runtimeGeneration;
     },
@@ -167,6 +169,18 @@ export async function installOperationDeliveryEndpoint(
       cleanup?.();
     },
   };
+  const onAbort = (): void => endpoint.cleanup();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    await waitForSubscriptionPropagation(off);
+    signal?.throwIfAborted();
+    return endpoint;
+  } catch (error) {
+    endpoint.cleanup();
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -256,24 +270,6 @@ function parseGateResponse<TSchema extends z.ZodType>(
   );
 }
 
-/**
- * How long a registration keeps retrying a `not-allocated` refusal.
- *
- * The allocation-visibility window: a provider that runs its runtime in
- * process starts it inside `provision()`, and the pool records the returned
- * allocation only afterwards. Until that record is durable the authority
- * answers `not-allocated`, which is a fact about timing, not about this
- * runtime. Same value and same reasoning as `BOOTSTRAP_CONNECT_TIMEOUT_MS` in
- * the container entrypoint's bootstrap claim, which retries the equivalent
- * `attempt-pending` rejection. The window exists because no provider has an
- * activation step the pool drives after the record is durable; until such a
- * barrier exists, the retry is the runtime's only way to wait for the record.
- */
-export const ALLOCATION_VISIBILITY_DEADLINE_MS = 10_000;
-
-/** Pause between two registration attempts inside the allocation-visibility window. */
-const ALLOCATION_VISIBILITY_RETRY_INTERVAL_MS = 50;
-
 /** Parameters for registering this runtime incarnation with the authority. */
 export interface RegisterWorkerRuntimeOptions {
   /** Authority-created attempt identifier this runtime claims. */
@@ -282,13 +278,6 @@ export interface RegisterWorkerRuntimeOptions {
   readonly runtimeIncarnationId: string;
   /** Cancellation signal for the registration request. */
   readonly signal?: AbortSignal;
-  /**
-   * How long to keep retrying a `not-allocated` refusal, in milliseconds.
-   *
-   * Defaults to {@link ALLOCATION_VISIBILITY_DEADLINE_MS}. Exists so a test can
-   * pin the deadline without waiting ten seconds for it.
-   */
-  readonly allocationVisibilityDeadlineMs?: number;
 }
 
 /**
@@ -298,9 +287,8 @@ export interface RegisterWorkerRuntimeOptions {
  * it allocates the generation, admits and delivers the bounded probe to the
  * endpoint installed by {@link installOperationDeliveryEndpoint}, persists the
  * completion, and publishes `execution-attempt.runtime.ready`. The reply is
- * the complete answer; the only refusal retried here is `not-allocated`, and
- * only inside the allocation-visibility window described at
- * {@link ALLOCATION_VISIBILITY_DEADLINE_MS}.
+ * the complete answer. Allocation visibility is awaited by the separate
+ * bootstrap start barrier; registration itself never retries a refusal.
  *
  * A `duplicate` decision is readiness: the authority answers it only for an
  * incarnation that already holds a readiness instant, and it carries the same
@@ -312,45 +300,21 @@ export interface RegisterWorkerRuntimeOptions {
  */
 export async function registerWorkerRuntime(bus: IMakaioBus, options: RegisterWorkerRuntimeOptions): Promise<number> {
   const { executionAttemptId, runtimeIncarnationId, signal } = options;
-  const deadline = Date.now() + (options.allocationVisibilityDeadlineMs ?? ALLOCATION_VISIBILITY_DEADLINE_MS);
-  for (;;) {
-    signal?.throwIfAborted();
-    const response = parseGateResponse(
+  signal?.throwIfAborted();
+  const response = parseGateResponse(
+    ExecutionAttemptSubjects.runtime.register,
+    ExecutionAttemptSchemas['runtime.register'].response,
+    await bus.request(
       ExecutionAttemptSubjects.runtime.register,
-      ExecutionAttemptSchemas['runtime.register'].response,
-      await bus.request(
-        ExecutionAttemptSubjects.runtime.register,
-        { executionAttemptId, runtimeIncarnationId },
-        { signal },
-      ),
-      executionAttemptId,
-    );
-    if (response.decision !== 'refused') return response.runtimeGeneration;
-    if (response.refusalReason !== 'not-allocated' || Date.now() >= deadline) {
-      throw new RuntimeRegistrationRefusedError(executionAttemptId, response.refusalReason);
-    }
-    await waitForRetry(ALLOCATION_VISIBILITY_RETRY_INTERVAL_MS, signal);
+      { executionAttemptId, runtimeIncarnationId },
+      { signal },
+    ),
+    executionAttemptId,
+  );
+  if (response.decision === 'refused') {
+    throw new RuntimeRegistrationRefusedError(executionAttemptId, response.refusalReason);
   }
-}
-
-/**
- * Wait one retry interval, or less when the signal aborts first.
- * @param intervalMs - Interval to wait.
- * @param signal - Cancellation signal that ends the wait early.
- * @throws When the signal aborts.
- */
-function waitForRetry(intervalMs: number, signal: AbortSignal | undefined): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(signal?.reason instanceof Error ? signal.reason : new Error('Registration retry aborted'));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, intervalMs);
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
+  return response.runtimeGeneration;
 }
 
 /** Parameters for admitting this runtime's workflow run through the start gate. */

@@ -5,7 +5,7 @@ import {
   type ExecutionAttemptOperationKind,
 } from '@makaio/contracts';
 import { registerOperationAdmissionHandler } from '../operation-admission.js';
-import { makeTestWorkflowResult } from '../testing/index.js';
+import { makeTestInstruction, makeTestWorkflowResult } from '../testing/index.js';
 import {
   allocateAttempt,
   attemptPeer,
@@ -222,7 +222,7 @@ describe('operation admission handler', () => {
        * @returns The attempt identifier and an arbitrary fence.
        */
       seed: async (executionId: string) => {
-        const { executionAttemptId } = await harness.authority.createAttempt(executionId);
+        const { executionAttemptId } = await harness.authority.createAttempt(executionId, makeTestInstruction());
         return { attemptId: executionAttemptId, runtimeGeneration: 1 };
       },
     },

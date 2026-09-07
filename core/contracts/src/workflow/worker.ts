@@ -409,6 +409,14 @@ export type WorkflowRunnerCompletion =
  */
 export interface IWorkflowRunner {
   /**
+   * Completion ownership known before the owner persists and starts a run.
+   * Authority runners return an authority-committed completion; worker runners
+   * leave finalization to the invoking executor. Omission retains the worker
+   * completion protocol. This declaration does not select a compute provider.
+   */
+  readonly terminalAuthority?: 'authority' | 'worker';
+
+  /**
    * Execute a complete workflow in an isolated worker.
    *
    * When `manifest` is supplied it takes precedence over any manifest baked

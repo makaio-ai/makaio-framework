@@ -200,6 +200,7 @@ export type {
   WorkerMaterializationSpec,
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
+  WorkerProviderContext,
   WorkerRequirements,
 } from './worker/index.js';
 export {

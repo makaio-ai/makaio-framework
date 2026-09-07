@@ -497,6 +497,7 @@ export type {
   WorkerMaterializationSpec,
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
+  WorkerProviderContext,
   WorkerRequirements,
 } from './capabilities/index.js';
 export { CapabilitySubjects } from './capability/index.js';
@@ -1218,6 +1219,16 @@ export type {
 } from './workflow/index.js';
 export {
   ExecutionAttemptAnnouncedOperationKindSchema,
+  ExecutionAttemptBootstrapAwaitStartRequestSchema,
+  ExecutionAttemptBootstrapAwaitStartResponseSchema,
+  ExecutionAttemptBootstrapStartRefusalReasonSchema,
+  ExecutionAttemptInstructionSchema,
+  ExecutionAttemptOutcomeSchema,
+  ExecutionAttemptPreparationResultSchema,
+  ExecutionAttemptWorkspaceBindingSchema,
+  ExecutionPreservationRequirementsSchema,
+  WorkspaceRequirementSchema,
+  WorkspaceSetupCommandSchema,
   ExecutionAttemptNamespace,
   ExecutionAttemptOperationDeliverySchema,
   ExecutionAttemptOperationKindSchema,
@@ -1228,6 +1239,22 @@ export {
 } from './execution-attempt/index.js';
 export type {
   ExecutionAttemptAnnouncedOperationKind,
+  ExecutionAttemptBootstrapAwaitStartRequest,
+  ExecutionAttemptBootstrapAwaitStartResponse,
+  ExecutionAttemptBootstrapStartRefusalReason,
+  ExecutionAttemptInstruction,
+  ExecutionAttemptInstructionGetRequest,
+  ExecutionAttemptInstructionGetResponse,
+  ExecutionAttemptOperationReportRequest,
+  ExecutionAttemptOperationReportResponse,
+  ExecutionAttemptOutcome,
+  ExecutionAttemptOutcomeSubmitRequest,
+  ExecutionAttemptOutcomeSubmitResponse,
+  ExecutionAttemptPreparationResult,
+  ExecutionAttemptWorkspaceBinding,
+  ExecutionPreservationRequirements,
+  WorkspaceRequirement,
+  WorkspaceSetupCommand,
   ExecutionAttemptOperationAdmitDecision,
   ExecutionAttemptOperationAdmitRefusalReason,
   ExecutionAttemptOperationAdmitRequest,
@@ -1246,14 +1273,30 @@ export type {
 } from './execution-attempt/index.js';
 export {
   WORKER_BOOTSTRAP_IDENTITY_ID,
+  WorkerBootstrapCredentialsSchema,
+  WorkerBootstrapDeadlineAtSchema,
+  WorkerBootstrapGrantedClaimResponseSchema,
+  WorkerBootstrapClaimRefusalReasonSchema,
+  WorkerBootstrapClaimResponseSchema,
   WorkerDispatchRequestSchema,
   WorkerDispatchResponseSchema,
   WorkerNamespace,
   WorkerSchemas,
   WorkerSubjects,
+  WorkerRuntimeInputsSchema,
   SuspensionStrategySchema,
 } from './worker/index.js';
-export type { SuspensionStrategy, WorkerBootstrapClaimRequest, WorkerBootstrapClaimResponse } from './worker/index.js';
+export type {
+  SuspensionStrategy,
+  WorkerBootstrapClaimRequest,
+  WorkerBootstrapCredentials,
+  WorkerBootstrapGrantedClaimResponse,
+  WorkerBootstrapClaimRefusalReason,
+  WorkerBootstrapClaimResponse,
+  WorkerRuntimeInputs,
+  WorkerRuntimeInputsGetRequest,
+  WorkerRuntimeInputsGetResponse,
+} from './worker/index.js';
 export {
   BrowserEntrypointSchema,
   CliManifestSchema,

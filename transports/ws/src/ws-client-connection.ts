@@ -62,8 +62,10 @@ export interface ConnectionDeps {
 
   /** Read the current active socket. */
   getSocket(): WebSocketLike | null;
-  /** Replace the active socket (use `null` to clear). */
-  setSocket(ws: WebSocketLike | null): void;
+  /** Replace the active socket (use `null` to release after drain or failed connection). */
+  setSocket(ws: WebSocketLike | null, failure?: Error): void;
+  /** Read the current session's immutable outcome, including after its socket was released. */
+  getSessionFailure(): Error | undefined;
 
   /** Set the auth-complete flag. */
   setAuthComplete(value: boolean): void;
@@ -113,7 +115,7 @@ export interface ConnectionDeps {
 
 /**
  * Drain pending in-flight `handleInboundMessage` promises, then reject all
- * pending correlations with a `ConnectionLostError`.
+ * pending correlations with the close failure, normally a `ConnectionLostError`.
  *
  * Must be awaited at every socket-close site before calling
  * `correlations.rejectAll`. This ensures that a response frame arriving just
@@ -124,7 +126,9 @@ export interface ConnectionDeps {
  */
 async function drainAndRejectPendingCorrelations(deps: ConnectionDeps, ws: WebSocketLike): Promise<void> {
   await Promise.allSettled(deps.inFlightMessages);
-  if (deps.getSocket() === ws) deps.correlations.rejectAll(new ConnectionLostError(deps.name));
+  if (deps.getSocket() === ws) {
+    deps.correlations.rejectAll(deps.getSessionFailure() ?? new ConnectionLostError(deps.name));
+  }
 }
 
 /**
@@ -199,7 +203,10 @@ function disposeFailedSocket(socket: WebSocketLike, deps: ConnectionDeps, failur
   const failures: unknown[] = [failure];
   if (deps.getSocket() === socket) {
     removeSocketListeners(socket, deps);
-    deps.setSocket(null);
+    deps.setSocket(
+      null,
+      failure instanceof Error ? failure : new Error('WebSocket connection failed', { cause: failure }),
+    );
     deps.setAuthComplete(false);
     try {
       deps.auth?.cleanup();
@@ -321,13 +328,13 @@ async function acquireAndEstablishSocket(
   // rejection. An interrupted drain must never reject a newer session's work.
   if (deps.inFlightMessages.size > 0) await Promise.allSettled(deps.inFlightMessages);
   signal.throwIfAborted();
-  deps.correlations.rejectAll(new ConnectionLostError(deps.name));
+  const previous = deps.getSocket();
+  deps.correlations.rejectAll(deps.getSessionFailure() ?? new ConnectionLostError(deps.name));
   deps.inFlightMessages.clear();
   deps.resolveReady();
   deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: reconnecting before subscription ack'));
   beginReady();
   signal.throwIfAborted();
-  const previous = deps.getSocket();
   if (previous !== null) removeSocketListeners(previous, deps);
   const socket = await deps.wsFactory(deps.url);
   if (signal.aborted) {
@@ -475,7 +482,7 @@ export async function runReconnectLoop(
             const closeListener = async (): Promise<void> => {
               await Promise.allSettled(deps.inFlightMessages);
               if (signal.aborted || deps.getSocket() !== newWs) return;
-              deps.correlations.rejectAll(new ConnectionLostError(deps.name));
+              deps.correlations.rejectAll(deps.getSessionFailure() ?? new ConnectionLostError(deps.name));
               deps.auth?.cleanup();
               deps.setAuthComplete(false);
               if (deps.debug) {

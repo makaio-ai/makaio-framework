@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
@@ -12,8 +13,8 @@ import {
   FrameworkStorageNamespaces,
   WorkerSubjects,
   WorkflowRunResultSchema,
-  WorkflowSubjects,
-  type OutcomeAckDecision,
+  type ExecutionAttemptOutcome,
+  type WorkspaceRequirement,
   type WorkerRuntimeContext,
   type WorkflowRunContext,
   type WorkflowRunResult,
@@ -23,13 +24,17 @@ import { registerMemorySessionStorage } from '../../../../../services/core/src/s
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { runHeadlessWorkflowWorker, type HeadlessWorkflowWorkerDeps } from '../headless-workflow-worker.js';
-import { OutcomeDeliveryError } from '../outcome-submission.js';
+import { AttemptOutcomeDeliveryError } from '../outcome-submission.js';
 import {
   computeContributionPackageDigest,
   computeDirectoryDigest,
   materializeLocalDirectory,
 } from '../local-directory-materializer.js';
-import { createAttemptAuthorityHarness, type AttemptAuthorityHarness } from './attempt-authority-harness.js';
+import {
+  createAttemptAuthorityHarness,
+  freezeWorkflowInstruction,
+  type AttemptAuthorityHarness,
+} from './attempt-authority-harness.js';
 
 // ─────────────────────────────────────────────────────────────
 // Test infrastructure
@@ -63,6 +68,16 @@ function makeRunContext(executionId: string): WorkflowRunContext {
   };
 }
 
+/**
+ * Assert that a returned outcome really contains a workflow-produced result.
+ * @param outcome - Generic terminal outcome.
+ * @returns Validated workflow result, rejecting technical failures.
+ */
+function workflowResult(outcome: ExecutionAttemptOutcome): WorkflowRunResult {
+  expect(outcome.kind).toBe('workload-result');
+  return WorkflowRunResultSchema.parse(outcome.kind === 'workload-result' ? outcome.result : undefined);
+}
+
 /** Build the read-only empty adapter repository required by the runtime seam. */
 function createEmptyAdapterRepository() {
   return {
@@ -93,7 +108,7 @@ interface LifecycleCapture {
   outcomeSubmissions: Array<{
     executionAttemptId: string;
     executionId: string;
-    result: WorkflowRunResult;
+    outcome: ExecutionAttemptOutcome;
   }>;
 }
 
@@ -101,7 +116,7 @@ interface LifecycleCapture {
  * Authority-side test harness.
  *
  * Sets up a real bus with WS server and registers handlers for the harness
- * lifecycle subjects: getRunContext, outcome.submit, and kernel.ready. The
+ * lifecycle subjects: frozen instruction retrieval, generic outcome.submit, and kernel.ready. The
  * ExecutionAttempt gates the worker registers and admits against come from
  * {@link createAttemptAuthorityHarness}, which also owns the attempt identity
  * this side authenticates.
@@ -112,40 +127,76 @@ interface AuthoritySide {
   capture: LifecycleCapture;
   /** Authority-side ExecutionAttempt gates, attempt identity, and gate captures. */
   attempt: AttemptAuthorityHarness;
-  /** Run context the authority will return. */
-  runContext: WorkflowRunContext;
-  /** Override the outcome decision returned by the authority. */
-  outcomeDecision: OutcomeAckDecision;
+  /** Insert a different durable outcome to exercise the real conflict decision. */
+  conflictingPriorOutcome: boolean;
   /** Count of transient failures to inject before the real decision. */
   outcomeTransientFailures: number;
+  /** Remaining failures after canonical commitment but before owner convergence. */
+  convergenceTransientFailures: number;
   /** Optional hook invoked for every received outcome submission. */
   onOutcomeSubmit?: (callCount: number) => void;
-  /** Optional gate that keeps the run-context request pending. */
-  runContextGate?: Promise<void>;
-  /** Optional hook invoked when the run-context request reaches the Authority. */
-  onRunContextRequest?: () => void;
+  /** Optional gate that keeps the runtime-input request pending. */
+  runtimeInputsGate?: Promise<void>;
+  /** Optional hook invoked when the runtime-input request reaches the Authority. */
+  onRuntimeInputsRequest?: () => void;
   cleanup: () => Promise<void>;
 }
 
 /**
  * Create a full authority-side test harness.
  * @param executionId - Execution identifier.
+ * @param workspace - Optional project working-area requirement, separate from executable files.
+ * @param runContext - Owner snapshot frozen before Attempt creation.
  * @returns Authority harness with bus, WS server, and lifecycle capture.
  */
-async function createAuthoritySide(executionId: string): Promise<AuthoritySide> {
+async function createAuthoritySide(
+  executionId: string,
+  workspace?: WorkspaceRequirement,
+  runContext = makeRunContext(executionId),
+): Promise<AuthoritySide> {
   const authority = createBusInstance();
   authority.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
   const offStorage = registerMemorySessionStorage(authority);
-  const attempt = await createAttemptAuthorityHarness(authority, executionId);
+  let state!: AuthoritySide;
+  let outcomeCallCount = 0;
+  const attempt = await createAttemptAuthorityHarness(authority, executionId, {
+    instruction: freezeWorkflowInstruction(runContext, workspace),
+    beforeCommit: async (_outcome, report) => {
+      state.capture.outcomeSubmissions.push({
+        executionAttemptId: state.attempt.executionAttemptId,
+        executionId,
+        outcome: report,
+      });
+      outcomeCallCount++;
+      state.onOutcomeSubmit?.(outcomeCallCount);
+      if (outcomeCallCount <= state.outcomeTransientFailures) throw new Error('Transient outcome submission failure');
+      if (state.conflictingPriorOutcome) {
+        const prior = {
+          kind: 'technical-failure' as const,
+          stage: 'workload-invocation' as const,
+          message: 'Previously committed different outcome',
+        };
+        await state.attempt.authority.commitOutcome(
+          state.attempt.executionAttemptId,
+          executionId,
+          state.attempt.authority.canonicalizeOutcome(prior),
+        );
+      }
+    },
+    beforeConverge: async () => {
+      if (state.convergenceTransientFailures > 0) {
+        state.convergenceTransientFailures--;
+        throw new Error('Transient owner convergence failure after commit');
+      }
+    },
+  });
 
   const server = createServer();
   const port = await listenOnLoopback(server);
   const serverTransport = new BusServerTransportProvider({ httpServer: server, auth: attempt.serverAuth });
   await serverTransport.connect(authority, 'headless-test-authority');
 
-  const runContext = makeRunContext(executionId);
-
-  const state: AuthoritySide = {
+  state = {
     bus: authority,
     port,
     capture: {
@@ -153,12 +204,11 @@ async function createAuthoritySide(executionId: string): Promise<AuthoritySide> 
       outcomeSubmissions: [],
     },
     attempt,
-    runContext,
-    outcomeDecision: 'accepted',
+    conflictingPriorOutcome: false,
     outcomeTransientFailures: 0,
+    convergenceTransientFailures: 0,
     cleanup: async () => {
       offGetRunContext();
-      offOutcomeSubmit();
       offKernelReady();
       await attempt.cleanup();
       offStorage();
@@ -167,32 +217,20 @@ async function createAuthoritySide(executionId: string): Promise<AuthoritySide> 
     },
   };
 
-  // Register getRunContext handler
-  const offGetRunContext = authority.on(
-    WorkflowSubjects.getRunContext,
-    async (ctx) => {
-      state.onRunContextRequest?.();
-      await state.runContextGate;
-      ctx.setResult(state.runContext);
-    },
-    { filter: { executionId } },
-  );
-
-  // Handle outcome submission with configurable decision and transient failures
-  let outcomeCallCount = 0;
-  const offOutcomeSubmit = authority.on(WorkerSubjects.control.outcome.submit, (ctx) => {
-    state.capture.outcomeSubmissions.push({
-      executionAttemptId: ctx.payload.executionAttemptId,
-      executionId: ctx.payload.executionId,
-      result: WorkflowRunResultSchema.parse(ctx.payload.result),
-    });
-    outcomeCallCount++;
-    state.onOutcomeSubmit?.(outcomeCallCount);
-    if (outcomeCallCount <= state.outcomeTransientFailures) {
-      throw new Error('Transient outcome submission failure');
-    }
-    ctx.setResult({ decision: state.outcomeDecision });
+  // Selected realization inputs are frozen separately; this is not the instruction lookup.
+  const runtimeInputs = structuredClone({
+    workerManifest: runContext.workerManifest,
+    suspensionStrategy: runContext.suspensionStrategy,
   });
+  const offGetRunContext = authority.on(
+    WorkerSubjects.runtime.inputs.get,
+    async (ctx) => {
+      state.onRuntimeInputsRequest?.();
+      await state.runtimeInputsGate;
+      ctx.setResult({ runtimeInputs });
+    },
+    { filter: { executionAttemptId: attempt.executionAttemptId } },
+  );
 
   // Capture kernel ready events
   const offKernelReady = authority.on(KernelSubjects.ready, (ctx) => {
@@ -208,24 +246,15 @@ async function createAuthoritySide(executionId: string): Promise<AuthoritySide> 
  * Every worker socket authenticates as the attempt peer the Authority-side
  * gates fence on: an unauthenticated connection cannot register a runtime.
  * @param authoritySide - Authority-side harness owning the port and the attempt identity.
- * @param onSubscriptionStart - Optional hook invoked before a subscription is propagated.
  * @returns Bus connector function that creates a WS client transport.
  */
-function createTestBusConnector(
-  authoritySide: AuthoritySide,
-  onSubscriptionStart?: (subject: string) => Promise<void>,
-): HeadlessWorkflowWorkerDeps['connectBus'] {
+function createTestBusConnector(authoritySide: AuthoritySide): HeadlessWorkflowWorkerDeps['connectBus'] {
   return async (bus, _credentials, _signal) => {
     const transport = new WebSocketClientTransport({
       url: `ws://127.0.0.1:${authoritySide.port}/bus`,
       autoReconnect: false,
       auth: authoritySide.attempt.createClientAuth(),
     });
-    const subscribe = transport.subscribe.bind(transport);
-    transport.subscribe = async (subject, filter, priorities, deliveryClass) => {
-      await onSubscriptionStart?.(subject);
-      await subscribe(subject, filter, priorities, deliveryClass);
-    };
     bus.registerTransport(transport);
     await bus.connect();
   };
@@ -241,6 +270,9 @@ function createTestDeps(
   authoritySide: AuthoritySide,
   options?: {
     cwd?: string;
+    workspaceRoot?: string;
+    workflowEnv?: Readonly<Record<string, string>>;
+    setupEnv?: HeadlessWorkflowWorkerDeps['setupEnv'];
     executionId?: string;
     execute?: HeadlessWorkflowWorkerDeps['execute'];
     materialize?: HeadlessWorkflowWorkerDeps['materialize'];
@@ -267,6 +299,9 @@ function createTestDeps(
   return {
     executionId,
     executionAttemptId,
+    bootstrapDeadlineAt: authoritySide.attempt.bootstrapDeadlineAt,
+    workflowEnv: options?.workflowEnv ?? {},
+    setupEnv: options?.setupEnv,
     bootstrap:
       options?.bootstrap ??
       (async () => ({
@@ -274,6 +309,7 @@ function createTestDeps(
         busAuthSecret: 'test-secret',
       })),
     connectBus: createTestBusConnector(authoritySide),
+    ...(options?.workspaceRoot === undefined ? {} : { workspaceRoot: options.workspaceRoot }),
     materialize: options?.materialize ?? (async () => ({ context: defaultRuntimeContext })),
     loadContributions: options?.loadContributions ?? (async () => []),
     execute:
@@ -309,6 +345,123 @@ describe('runHeadlessWorkflowWorker integration', () => {
     await rm(cwd, { recursive: true, force: true });
   });
 
+  it('executes its frozen instruction without inventing a project Workspace', async () => {
+    const executionId = 'exec-frozen-no-workspace';
+    const selected = { ...makeRunContext(executionId), inputs: { chosen: 'original' } };
+    authoritySide = await createAuthoritySide(executionId, undefined, selected);
+    selected.inputs = { chosen: 'changed later' };
+    const deps = createTestDeps(authoritySide, {
+      cwd,
+      executionId,
+      execute: async (_bus, runContext) => {
+        expect(runContext.inputs).toEqual({ chosen: 'original' });
+        return { executionId, workflowId: runContext.workflowId, status: 'completed' };
+      },
+    });
+    const result = await runHeadlessWorkflowWorker(deps, new AbortController().signal);
+    expect(workflowResult(result.outcome).status).toBe('completed');
+    expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+      'workload-invocation',
+    ]);
+  });
+
+  it('snapshots explicit workflow environment for materialization and execution without importing ambient values', async () => {
+    const executionId = 'exec-explicit-workflow-env';
+    authoritySide = await createAuthoritySide(executionId);
+    const workflowEnv = { WORKFLOW_ENV_PROOF: 'host-configured' };
+    const received: Array<Record<string, string>> = [];
+    vi.stubEnv('WORKFLOW_AMBIENT_ONLY', 'must-not-enter-the-explicit-map');
+    const baseDeps = createTestDeps(authoritySide, {
+      cwd,
+      executionId,
+      workflowEnv,
+      materialize: async (runContext) => {
+        received.push(runContext.env);
+        await writeFile(join(cwd, 'environment-proof'), runContext.env['WORKFLOW_ENV_PROOF'] ?? 'missing');
+        return {
+          context: {
+            workspaceRoot: cwd,
+            sourcePath: join(cwd, 'workflow.ts'),
+            contributionEntrypoints: [],
+            platform: 'linux',
+            arch: 'x64',
+          },
+        };
+      },
+      execute: async (_bus, runContext) => {
+        received.push(runContext.env);
+        expect(await readFile(join(cwd, 'environment-proof'), 'utf8')).toBe('host-configured');
+        return { executionId, workflowId: runContext.workflowId, status: 'completed' };
+      },
+    });
+    const deps: HeadlessWorkflowWorkerDeps = {
+      ...baseDeps,
+      connectBus: async (...args) => {
+        workflowEnv.WORKFLOW_ENV_PROOF = 'changed-after-adapter-creation';
+        await baseDeps.connectBus(...args);
+      },
+    };
+    try {
+      const result = await runHeadlessWorkflowWorker(deps, new AbortController().signal);
+      expect(workflowResult(result.outcome).status).toBe('completed');
+      expect(received).toEqual([{ WORKFLOW_ENV_PROOF: 'host-configured' }, { WORKFLOW_ENV_PROOF: 'host-configured' }]);
+      expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('prepares an optional scratch Workspace before acquiring and invoking workflow code', async () => {
+    const executionId = 'exec-project-workspace';
+    const workspaceRoot = join(cwd, 'project');
+    const sentinel = 'headless-private-setup-value';
+    expect(process.env.MAKAIO_HEADLESS_SETUP_SENTINEL).toBeUndefined();
+    expect(process.env.MAKAIO_WORKFLOW_ONLY_SENTINEL).toBeUndefined();
+    authoritySide = await createAuthoritySide(executionId, {
+      provisioning: 'create',
+      custody: 'disposable',
+      sourceRoots: [],
+      setup: [
+        {
+          command: process.execPath,
+          args: [
+            '-e',
+            "require('fs').writeFileSync('ready',JSON.stringify({setup:process.env.MAKAIO_HEADLESS_SETUP_SENTINEL,workflowOnly:process.env.MAKAIO_WORKFLOW_ONLY_SENTINEL??null}))",
+          ],
+          env: {},
+          timeoutMs: 5_000,
+        },
+      ],
+    });
+    const deps = createTestDeps(authoritySide, {
+      cwd,
+      workspaceRoot,
+      executionId,
+      setupEnv: { MAKAIO_HEADLESS_SETUP_SENTINEL: sentinel },
+      workflowEnv: { MAKAIO_WORKFLOW_ONLY_SENTINEL: 'workflow-only-value' },
+      execute: async (_bus, runContext, runtimeContext) => {
+        expect(runtimeContext.workspaceRoot).toBe(await realpath(workspaceRoot));
+        expect(runtimeContext.sourcePath).toBe(join(cwd, 'workflow.ts'));
+        expect(JSON.parse(await readFile(join(runtimeContext.workspaceRoot, 'ready'), 'utf8'))).toEqual({
+          setup: sentinel,
+          workflowOnly: null,
+        });
+        expect(runContext.env).toEqual({ MAKAIO_WORKFLOW_ONLY_SENTINEL: 'workflow-only-value' });
+        return { executionId, workflowId: runContext.workflowId, status: 'completed' };
+      },
+    });
+    const result = await runHeadlessWorkflowWorker(deps, new AbortController().signal);
+    expect(workflowResult(result.outcome).status).toBe('completed');
+    expect(JSON.stringify(authoritySide.capture.outcomeSubmissions)).not.toContain(sentinel);
+    expect(process.env.MAKAIO_HEADLESS_SETUP_SENTINEL).toBeUndefined();
+    expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+      'workspace-preparation',
+      'workload-invocation',
+    ]);
+    await expect(stat(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await stat(cwd)).isDirectory()).toBe(true);
+  });
+
   it('runs the full lifecycle: bootstrap -> connect -> register -> admit -> pull -> materialize -> compose -> execute -> ACK -> cleanup', async () => {
     const executionId = 'exec-full-lifecycle';
     authoritySide = await createAuthoritySide(executionId);
@@ -316,13 +469,13 @@ describe('runHeadlessWorkflowWorker integration', () => {
 
     const phaseLog: string[] = [];
     const abortController = new AbortController();
-    // Readiness and admission are owed *before* the run context is handed out,
+    // Readiness and admission precede acquisition of selected Runtime inputs,
     // so both are counted at the instant the pull reaches the Authority.
-    let readyAtRunContextPull = -1;
-    let admittedAtRunContextPull = -1;
-    authoritySide.onRunContextRequest = () => {
-      readyAtRunContextPull = authoritySide.attempt.runtimeReadyEvents.length;
-      admittedAtRunContextPull = authoritySide.attempt.operationAdmittedEvents.length;
+    let readyAtRuntimeInputsPull = -1;
+    let admittedAtRuntimeInputsPull = -1;
+    authoritySide.onRuntimeInputsRequest = () => {
+      readyAtRuntimeInputsPull = authoritySide.attempt.runtimeReadyEvents.length;
+      admittedAtRuntimeInputsPull = authoritySide.attempt.operationAdmittedEvents.length;
     };
 
     const deps = createTestDeps(authoritySide, {
@@ -370,22 +523,22 @@ describe('runHeadlessWorkflowWorker integration', () => {
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
     // Verify result
-    expect(workerResult.result.status).toBe('completed');
+    expect(workflowResult(workerResult.outcome).status).toBe('completed');
     expect(workerResult.decision).toBe('accepted');
 
     // Verify phase ordering
     expect(phaseLog).toEqual(['bootstrap', 'materialize', 'loadContributions', 'execute', 'postCommit']);
 
     // The Authority published readiness and admitted the run, both before the
-    // worker was allowed to pull its run context.
-    expect(readyAtRunContextPull).toBe(1);
-    expect(admittedAtRunContextPull).toBe(1);
+    // worker was allowed to pull its selected runtime inputs.
+    expect(readyAtRuntimeInputsPull).toBe(1);
+    expect(admittedAtRuntimeInputsPull).toBe(1);
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
     expect(authoritySide.attempt.runtimeReadyEvents[0]).toMatchObject({ executionAttemptId });
     expect(authoritySide.attempt.operationAdmittedEvents).toHaveLength(1);
     expect(authoritySide.attempt.operationAdmittedEvents[0]).toMatchObject({
       executionAttemptId,
-      operationKind: 'workflow-run',
+      operationKind: 'workload-invocation',
     });
 
     // Verify outcome was submitted
@@ -393,7 +546,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     expect(authoritySide.capture.outcomeSubmissions[0]).toMatchObject({
       executionAttemptId,
       executionId,
-      result: { status: 'completed' },
+      outcome: { kind: 'workload-result', result: { status: 'completed' } },
     });
   }, 20_000);
 
@@ -485,7 +638,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     expect(activatedPackages).not.toContain('interactive-only-package');
   }, 20_000);
 
-  it('captures execution error as failed result and submits it', async () => {
+  it('commits an unexpected adapter exception as a technical failure and converges the owner', async () => {
     const executionId = 'exec-execution-error';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -500,18 +653,17 @@ describe('runHeadlessWorkflowWorker integration', () => {
 
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
-    expect(workerResult.result.status).toBe('failed');
-    expect(workerResult.result).toMatchObject({
-      executionId,
-      workflowId: 'test-workflow',
-      status: 'failed',
-      error: 'Workflow step exploded',
+    expect(workerResult.outcome).toMatchObject({
+      kind: 'technical-failure',
+      stage: 'workload-invocation',
+      message: 'Workflow step exploded',
     });
     expect(workerResult.decision).toBe('accepted');
 
     // The failed result was submitted
     expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
-    expect(authoritySide.capture.outcomeSubmissions[0]!.result.status).toBe('failed');
+    expect(authoritySide.capture.outcomeSubmissions[0]!.outcome).toEqual(workerResult.outcome);
+    expect(authoritySide.attempt.convergedOutcomes).toEqual([workerResult.outcome]);
   }, 20_000);
 
   it('retries outcome submission on transient failures', async () => {
@@ -532,10 +684,10 @@ describe('runHeadlessWorkflowWorker integration', () => {
     expect(authoritySide.capture.outcomeSubmissions).toHaveLength(3);
   }, 30_000);
 
-  it('throws OutcomeDeliveryError on conflict decision', async () => {
+  it('throws AttemptOutcomeDeliveryError on a real conflicting durable outcome', async () => {
     const executionId = 'exec-conflict';
     authoritySide = await createAuthoritySide(executionId);
-    authoritySide.outcomeDecision = 'conflict';
+    authoritySide.conflictingPriorOutcome = true;
 
     const abortController = new AbortController();
     const deps = createTestDeps(authoritySide, {
@@ -543,13 +695,13 @@ describe('runHeadlessWorkflowWorker integration', () => {
       executionId,
     });
 
-    await expect(runHeadlessWorkflowWorker(deps, abortController.signal)).rejects.toThrow(OutcomeDeliveryError);
+    await expect(runHeadlessWorkflowWorker(deps, abortController.signal)).rejects.toThrow(AttemptOutcomeDeliveryError);
   }, 20_000);
 
-  it('accepts duplicate as successful delivery', async () => {
+  it('recovers a lost convergence acknowledgement without executing the workload twice', async () => {
     const executionId = 'exec-duplicate';
     authoritySide = await createAuthoritySide(executionId);
-    authoritySide.outcomeDecision = 'duplicate';
+    authoritySide.convergenceTransientFailures = 1;
 
     const abortController = new AbortController();
     const deps = createTestDeps(authoritySide, {
@@ -560,10 +712,91 @@ describe('runHeadlessWorkflowWorker integration', () => {
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
     expect(workerResult.decision).toBe('duplicate');
-    expect(workerResult.result.status).toBe('completed');
+    expect(workflowResult(workerResult.outcome).status).toBe('completed');
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(2);
+    expect(authoritySide.attempt.operationAdmittedEvents).toHaveLength(1);
+    expect(authoritySide.attempt.convergedOutcomes).toHaveLength(1);
   }, 20_000);
 
   // ─── Cancellation tests ─────────────────────────────────────
+
+  it('binds the frozen cancel subject before setup, stops its process and commits cancellation without invoking workflow code', async () => {
+    const executionId = 'exec-cancel-setup';
+    const workspaceRoot = join(cwd, 'project');
+    const cancelSubject = 'workflow.custom-preparation-control.cancel';
+    authoritySide = await createAuthoritySide(
+      executionId,
+      {
+        provisioning: 'create',
+        custody: 'disposable',
+        sourceRoots: [],
+        setup: [
+          {
+            command: process.execPath,
+            args: [
+              '-e',
+              "require('fs').writeFileSync('setup-ready',String(process.pid));setTimeout(()=>require('fs').writeFileSync('too-late','must-not-happen'),1500);setInterval(()=>{},100)",
+            ],
+            env: {},
+            timeoutMs: 10_000,
+          },
+        ],
+      },
+      { ...makeRunContext(executionId), cancelSubject },
+    );
+    const onPostCommit = vi.fn(async () => {});
+    const base = createTestDeps(authoritySide, { cwd, workspaceRoot, executionId, onPostCommit });
+    const materialize = vi.fn(base.materialize);
+    const execute = vi.fn(base.execute);
+    const worker = runHeadlessWorkflowWorker({ ...base, materialize, execute }, new AbortController().signal);
+    let setupPid = 0;
+    await vi.waitFor(
+      async () => {
+        setupPid = Number(await readFile(join(workspaceRoot, 'setup-ready'), 'utf8'));
+        expect(setupPid).toBeGreaterThan(0);
+      },
+      { interval: 10, timeout: 5_000 },
+    );
+
+    await authoritySide.bus.emit(createWorkflowCancelSubject(cancelSubject), { executionId });
+    const result = await worker;
+
+    expect(result).toMatchObject({ outcome: { kind: 'cancelled' }, decision: 'accepted' });
+    expect(authoritySide.attempt.convergedOutcomes).toEqual([result.outcome]);
+    expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+      'workspace-preparation',
+    ]);
+    expect(materialize).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(onPostCommit).not.toHaveBeenCalled();
+    expect(() => process.kill(setupPid, 0)).toThrow();
+    expect((await stat(workspaceRoot)).isDirectory()).toBe(true);
+    await delay(1_600);
+    await expect(stat(join(workspaceRoot, 'too-late'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 20_000);
+
+  it('preserves a cancellation result actually returned by the workflow as a workload result', async () => {
+    const executionId = 'exec-workflow-returned-cancelled';
+    authoritySide = await createAuthoritySide(executionId);
+    const onPostCommit = vi.fn(async () => {});
+    const result = await runHeadlessWorkflowWorker(
+      createTestDeps(authoritySide, {
+        cwd,
+        executionId,
+        onPostCommit,
+        execute: async () => ({
+          executionId,
+          workflowId: 'test-workflow',
+          status: 'cancelled',
+          reason: 'Workflow chose to stop',
+        }),
+      }),
+      new AbortController().signal,
+    );
+    expect(workflowResult(result.outcome)).toMatchObject({ status: 'cancelled', reason: 'Workflow chose to stop' });
+    expect(onPostCommit).toHaveBeenCalledTimes(1);
+    expect(authoritySide.attempt.convergedOutcomes).toEqual([workflowResult(result.outcome)]);
+  }, 20_000);
 
   it('throws on cancellation during bootstrap', async () => {
     const executionId = 'exec-cancel-bootstrap';
@@ -586,19 +819,19 @@ describe('runHeadlessWorkflowWorker integration', () => {
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(0);
   }, 20_000);
 
-  it('aborts a blocked run-context pull without outcome traffic', async () => {
+  it('settles canonical cancellation during a blocked selected-runtime-input pull', async () => {
     const executionId = 'exec-cancel-context-pull';
     authoritySide = await createAuthoritySide(executionId);
 
-    let releaseRunContext!: () => void;
-    authoritySide.runContextGate = new Promise<void>((resolve) => {
-      releaseRunContext = resolve;
+    let releaseRuntimeInputs!: () => void;
+    authoritySide.runtimeInputsGate = new Promise<void>((resolve) => {
+      releaseRuntimeInputs = resolve;
     });
-    let markRunContextRequested!: () => void;
-    const runContextRequested = new Promise<void>((resolve) => {
-      markRunContextRequested = resolve;
+    let markRuntimeInputsRequested!: () => void;
+    const runtimeInputsRequested = new Promise<void>((resolve) => {
+      markRuntimeInputsRequested = resolve;
     });
-    authoritySide.onRunContextRequest = markRunContextRequested;
+    authoritySide.onRuntimeInputsRequest = markRuntimeInputsRequested;
 
     const abortController = new AbortController();
     const worker = runHeadlessWorkflowWorker(
@@ -606,20 +839,21 @@ describe('runHeadlessWorkflowWorker integration', () => {
       abortController.signal,
     );
 
-    await runContextRequested;
+    await runtimeInputsRequested;
     abortController.abort();
-    await expect(worker).rejects.toMatchObject({ name: 'AbortError' });
-    releaseRunContext();
+    const result = await worker;
+    expect(result.outcome).toMatchObject({ kind: 'cancelled' });
+    releaseRuntimeInputs();
 
     // The pull is reached only after registration and admission succeeded.
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
     expect(authoritySide.attempt.operationAdmittedEvents).toHaveLength(1);
-    expect(authoritySide.attempt.operationAdmittedEvents[0]).toMatchObject({ operationKind: 'workflow-run' });
+    expect(authoritySide.attempt.operationAdmittedEvents[0]).toMatchObject({ operationKind: 'workload-invocation' });
     expect(authoritySide.capture.kernelReadyEvents).toHaveLength(0);
-    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(0);
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
   }, 20_000);
 
-  it('cancellation during materialization produces a cancelled result', async () => {
+  it('cancellation during materialization produces canonical cancellation', async () => {
     const executionId = 'exec-cancel-materialize';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -643,7 +877,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     });
 
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
-    expect(workerResult.result.status).toBe('cancelled');
+    expect(workerResult.outcome).toMatchObject({ kind: 'cancelled' });
 
     // Materialization runs after registration, so readiness stands.
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
@@ -663,11 +897,16 @@ describe('runHeadlessWorkflowWorker integration', () => {
       },
     });
 
-    await expect(runHeadlessWorkflowWorker(deps, abortController.signal)).rejects.toBe(materializeError);
+    const result = await runHeadlessWorkflowWorker(deps, abortController.signal);
+    expect(result.outcome).toMatchObject({
+      kind: 'technical-failure',
+      stage: 'workload-invocation',
+      message: materializeError.message,
+    });
 
-    // Readiness was already published; the failure yields no outcome.
+    // Acquisition is admitted Invocation; its failure commits without inventing a workflow result.
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
-    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(0);
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
   }, 20_000);
 
   it('cleans up deterministically when already-aborted signal is passed', async () => {
@@ -689,7 +928,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     expect(authoritySide.capture.outcomeSubmissions).toHaveLength(0);
   }, 20_000);
 
-  it('post-commit observation failures are swallowed', async () => {
+  it('asynchronous post-commit observation failures are swallowed', async () => {
     const executionId = 'exec-postcommit-error';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -705,8 +944,33 @@ describe('runHeadlessWorkflowWorker integration', () => {
     // Should not throw despite postCommit failure
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
-    expect(workerResult.result.status).toBe('completed');
+    expect(workflowResult(workerResult.outcome).status).toBe('completed');
     expect(workerResult.decision).toBe('accepted');
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
+  }, 20_000);
+
+  it('synchronous post-commit observation failure preserves the original canonical result and ACK', async () => {
+    const executionId = 'exec-postcommit-sync-error';
+    authoritySide = await createAuthoritySide(executionId);
+    const observed: string[] = [];
+    const deps = createTestDeps(authoritySide, {
+      cwd,
+      executionId,
+      onPostCommit: (result, decision) => {
+        observed.push(result.status, decision);
+        throw new Error('Artifact observer threw before returning a promise');
+      },
+    });
+    const workerResult = await runHeadlessWorkflowWorker(deps, new AbortController().signal);
+    expect(observed).toEqual(['completed', 'accepted']);
+    expect(workflowResult(workerResult.outcome)).toEqual({
+      executionId,
+      workflowId: 'test-workflow',
+      status: 'completed',
+    });
+    expect(workerResult.decision).toBe('accepted');
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
+    expect(authoritySide.attempt.convergedOutcomes).toEqual([workflowResult(workerResult.outcome)]);
   }, 20_000);
 
   it('shuts down deterministically when authority connection fails during runtime composition', async () => {
@@ -733,16 +997,15 @@ describe('runHeadlessWorkflowWorker integration', () => {
       },
     };
 
-    await expect(runHeadlessWorkflowWorker(failingDeps, abortController.signal)).rejects.toThrow(
-      'Authority reconnection failed',
-    );
+    const result = await runHeadlessWorkflowWorker(failingDeps, abortController.signal);
+    expect(result.outcome).toMatchObject({ kind: 'technical-failure', message: 'Authority reconnection failed' });
 
     // Composition follows registration and admission, so readiness stands.
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
-    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(0);
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
   }, 20_000);
 
-  it('cancellation during execution produces a cancelled result with ACK', async () => {
+  it('cooperative cancellation during execution produces canonical cancellation with ACK', async () => {
     const executionId = 'exec-cancel-during-exec';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -762,11 +1025,11 @@ describe('runHeadlessWorkflowWorker integration', () => {
       },
     });
 
-    // The execution error is caught — cooperative cancellation produces a
-    // 'cancelled' result (not 'failed'), which is then submitted for ACK.
+    // Cooperative AbortError produces confirmed cancellation, not a fabricated
+    // workflow result or infrastructure failure, and still requires an ACK.
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
-    expect(workerResult.result.status).toBe('cancelled');
+    expect(workerResult.outcome).toMatchObject({ kind: 'cancelled' });
     expect(workerResult.decision).toBe('accepted');
   }, 20_000);
 
@@ -833,13 +1096,13 @@ describe('runHeadlessWorkflowWorker integration', () => {
 
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
-    // Readiness was published before the run context was pulled.
+    // Readiness was published before the runtime inputs were pulled.
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
     // Outcome should be cancelled
-    expect(workerResult.result.status).toBe('cancelled');
+    expect(workerResult.outcome).toMatchObject({ kind: 'cancelled' });
   }, 20_000);
 
-  it('carries cancellation from the pre-composition bus while runtime subscription propagation is pending', async () => {
+  it('carries cancellation on the retained control bus while runtime composition is connecting', async () => {
     const executionId = 'exec-cancel-handoff-propagation';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -876,16 +1139,11 @@ describe('runHeadlessWorkflowWorker integration', () => {
       ...baseDeps,
       connectBus: async (bus, credentials, signal) => {
         runtimeConnectionCount++;
-        const onSubscriptionStart =
-          runtimeConnectionCount === 2
-            ? async (subject: string) => {
-                if (subject === cancelSubject) {
-                  cancellationPropagationPending = true;
-                  await cancellationPropagation;
-                }
-              }
-            : undefined;
-        await createTestBusConnector(authoritySide, onSubscriptionStart)(bus, credentials, signal);
+        if (runtimeConnectionCount === 2) {
+          cancellationPropagationPending = true;
+          await cancellationPropagation;
+        }
+        await createTestBusConnector(authoritySide)(bus, credentials, signal);
       },
     };
 
@@ -899,11 +1157,11 @@ describe('runHeadlessWorkflowWorker integration', () => {
     releaseCancellationPropagation();
 
     const workerResult = await worker;
-    expect(workerResult.result.status).toBe('cancelled');
+    expect(workerResult.outcome).toMatchObject({ kind: 'cancelled' });
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
   }, 20_000);
 
-  it('abort after runtime composition produces a cancelled result', async () => {
+  it('abort after runtime composition produces canonical cancellation', async () => {
     const executionId = 'exec-abort-pre-ready';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -934,10 +1192,10 @@ describe('runHeadlessWorkflowWorker integration', () => {
 
     // Readiness was published once, long before composition.
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
-    expect(workerResult.result.status).toBe('cancelled');
+    expect(workerResult.outcome).toMatchObject({ kind: 'cancelled' });
   }, 20_000);
 
-  it('cancellation during loadContributions produces a cancelled result', async () => {
+  it('cancellation during loadContributions produces canonical cancellation', async () => {
     const executionId = 'exec-cancel-contributions';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -954,7 +1212,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
-    expect(workerResult.result.status).toBe('cancelled');
+    expect(workerResult.outcome).toMatchObject({ kind: 'cancelled' });
   }, 20_000);
 
   it('contribution load failure fails the run after readiness', async () => {
@@ -970,15 +1228,15 @@ describe('runHeadlessWorkflowWorker integration', () => {
       },
     });
 
-    await expect(runHeadlessWorkflowWorker(deps, abortController.signal)).rejects.toThrow('Package import failed');
+    const result = await runHeadlessWorkflowWorker(deps, abortController.signal);
+    expect(result.outcome).toMatchObject({ kind: 'technical-failure', message: 'Package import failed' });
 
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
-    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(0);
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
   }, 20_000);
 
   it('rejects a tampered transitive contribution module', async () => {
     const executionId = 'exec-contribution-helper-tamper';
-    authoritySide = await createAuthoritySide(executionId);
     const packageRoot = join(cwd, 'node_modules', '@acme', 'tools');
     const entrypoint = join(packageRoot, 'dist', 'server.mjs');
     const helper = join(packageRoot, 'dist', 'helper.mjs');
@@ -996,10 +1254,11 @@ describe('runHeadlessWorkflowWorker integration', () => {
       entrypoint: 'dist/server.mjs',
       integrity,
     };
-    authoritySide.runContext = {
-      ...authoritySide.runContext,
+    const runContext = {
+      ...makeRunContext(executionId),
       workerManifest: { contributionRefs: [ref] },
     };
+    authoritySide = await createAuthoritySide(executionId, undefined, runContext);
 
     const deps = createTestDeps(authoritySide, {
       cwd,
@@ -1018,12 +1277,11 @@ describe('runHeadlessWorkflowWorker integration', () => {
       }),
     });
 
-    await expect(runHeadlessWorkflowWorker(deps, new AbortController().signal)).rejects.toMatchObject({
-      code: 'contribution-integrity-mismatch',
-    });
+    const result = await runHeadlessWorkflowWorker(deps, new AbortController().signal);
+    expect(result.outcome).toMatchObject({ kind: 'technical-failure', stage: 'workload-invocation' });
     expect(authoritySide.attempt.runtimeReadyEvents).toHaveLength(1);
     expect(authoritySide.capture.kernelReadyEvents).toHaveLength(0);
-    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(0);
+    expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
   }, 20_000);
 
   // ─── Finding 5: MaterializedWorkspace cleanup contract ─────────
@@ -1094,7 +1352,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
     expect(workerResult).toMatchObject({
-      result: { status: 'completed' },
+      outcome: { kind: 'workload-result', result: { status: 'completed' } },
       decision: 'accepted',
     });
     expect(authoritySide.capture.outcomeSubmissions).toHaveLength(2);
@@ -1158,7 +1416,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     expect(authoritySide.capture.outcomeSubmissions).toHaveLength(1);
   }, 20_000);
 
-  it('calls materializer cleanup on failure after materialization succeeded', async () => {
+  it('retains executable files after a technical failure despite its durable acknowledgement', async () => {
     const executionId = 'exec-cleanup-failure';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -1184,14 +1442,15 @@ describe('runHeadlessWorkflowWorker integration', () => {
       },
     });
 
-    await expect(runHeadlessWorkflowWorker(deps, abortController.signal)).rejects.toThrow('Load failed');
+    const result = await runHeadlessWorkflowWorker(deps, abortController.signal);
+    expect(result.outcome).toMatchObject({ kind: 'technical-failure', message: 'Load failed' });
 
-    expect(cleanupCalled).toBe(true);
+    expect(cleanupCalled).toBe(false);
   }, 20_000);
 
   // ─── Finding 6: Teardown must not mask primary failures ────────
 
-  it('execution failure + failing shutdown still rejects with the execution error', async () => {
+  it('returns the primary composition failure through the generic outcome path', async () => {
     const executionId = 'exec-teardown-mask';
     authoritySide = await createAuthoritySide(executionId);
 
@@ -1217,8 +1476,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
       },
     };
 
-    await expect(runHeadlessWorkflowWorker(deps, abortController.signal)).rejects.toThrow(
-      'Primary composition failure',
-    );
+    const result = await runHeadlessWorkflowWorker(deps, abortController.signal);
+    expect(result.outcome).toMatchObject({ kind: 'technical-failure', message: 'Primary composition failure' });
   }, 20_000);
 });

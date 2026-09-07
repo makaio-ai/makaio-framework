@@ -25,11 +25,8 @@ import {
   type WorkerDispatch,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { ExecutionAttemptAuthority } from '@makaio/subsystem-workflow-engine';
-import {
-  createInMemoryAttemptRepository,
-  workflowRunResultOutcomeCodec,
-} from '@makaio/subsystem-workflow-engine/testing';
+import { ExecutionAttemptAuthority, workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
+import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -186,6 +183,12 @@ function setupArtifactViewBuilderCoordinator(extension: KernelMakaioExtension): 
 function makeWorkerConfig(): WorkflowWorkerConfig {
   return {
     source: { kind: 'definition', workflowId: 'workflow-1' },
+    definition: {
+      id: 'workflow-1',
+      name: 'Test workflow',
+      root: { id: 'root', type: 'sequence', nodes: [] },
+      scope: { type: 'global' },
+    },
     executionId: 'wfx-1',
     workflowId: 'workflow-1',
     triggerPayload: {},
@@ -846,7 +849,9 @@ describe('owner-anchored automation cron scheduler host policy', () => {
 
 describe('workflow-level runner boot composition', () => {
   // These tests verify runner wiring, not repository behavior.
-  const stubAuthority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowRunResultOutcomeCodec));
+  const stubAuthority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
+    bootstrapTimeoutMs: 60_000,
+  });
 
   it('returns undefined when no runner is configured', () => {
     const runner = createNodeWorkflowRunner({

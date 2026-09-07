@@ -257,8 +257,12 @@ describe('workflow execution bus access', () => {
       expect(allowed).not.toBeNull();
       // Verify static subjects are present.
       expect(allowed!.has('execution-attempt.runtime.register')).toBe(true);
+      expect(allowed!.has('execution-attempt.instruction.get')).toBe(true);
       expect(allowed!.has('execution-attempt.operation.admit')).toBe(true);
+      expect(allowed!.has('execution-attempt.operation.report')).toBe(true);
       expect(allowed!.has('execution-attempt.operation.deliver')).toBe(true);
+      expect(allowed!.has('execution-attempt.outcome.submit')).toBe(true);
+      expect(allowed!.has('worker.runtime.inputs.get')).toBe(true);
       expect(allowed!.has('worker.control.outcome.submit')).toBe(true);
       expect(allowed!.has('workflow.getRunContext')).toBe(true);
       expect(allowed!.has('storage:workflow.getExecution')).toBe(true);
@@ -320,6 +324,34 @@ describe('workflow execution bus access', () => {
   // ── buildExecutionAttemptAllowedSubjects ────────────────────
 
   describe('buildExecutionAttemptAllowedSubjects', () => {
+    it('grants only the exact Worker and Attempt protocol subjects, without authority events or wildcards', () => {
+      const subjects = buildExecutionAttemptAllowedSubjects('exec-protocol');
+      expect(
+        subjects.filter((subject) => subject.startsWith('execution-attempt.') || subject.startsWith('worker.')),
+      ).toStrictEqual([
+        'execution-attempt.runtime.register',
+        'execution-attempt.bootstrap.awaitStart',
+        'execution-attempt.instruction.get',
+        'execution-attempt.operation.admit',
+        'execution-attempt.operation.report',
+        'execution-attempt.operation.deliver',
+        'execution-attempt.outcome.submit',
+        'worker.runtime.inputs.get',
+        'worker.control.outcome.submit',
+      ]);
+      expect(subjects.some((subject) => subject.includes('*'))).toBe(false);
+      for (const subject of [
+        'execution-attempt.runtime.ready',
+        'execution-attempt.operation.admitted',
+        'execution-attempt.invocation.ready',
+        'worker.dispatch',
+        'worker.control.bootstrap.claim',
+        'worker.lifecycle.ready',
+      ]) {
+        expect(subjects).not.toContain(subject);
+      }
+    });
+
     it('returns correct subjects including dynamic cancel subject', () => {
       const executionId = 'exec-build-test';
       const subjects = buildExecutionAttemptAllowedSubjects(executionId);

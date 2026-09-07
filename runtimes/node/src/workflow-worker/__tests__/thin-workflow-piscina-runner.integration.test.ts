@@ -3,19 +3,21 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { WorkerContributionManifest, WorkflowRunResult } from '@makaio/contracts';
+import type { WorkerContributionManifest } from '@makaio/contracts';
 import { PROVIDER_ALLOCATION_REF_VERSION, WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
 import type {
   BeginProvisioningInput,
   ExecutionAttemptRepository,
   ProviderOperationClaim,
+  WorkflowAttemptOutcome,
 } from '@makaio/subsystem-workflow-engine';
+import { workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
 import {
   beginTestProvisioning,
   leaseAt,
   makeProcessLossProof,
+  makeTestInstruction,
   TEST_PROVISIONER_INCARNATION_ID,
-  workflowRunResultOutcomeCodec,
 } from '@makaio/subsystem-workflow-engine/testing';
 import { createSqliteAttemptRepository } from '@makaio/subsystem-workflow-engine/testing/sqlite';
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
@@ -66,6 +68,10 @@ async function createEchoWorkerEntry(): Promise<string> {
       "import { parentPort } from 'node:worker_threads';",
       'export default async function run(task) {',
       "  if (task.kind === 'attempt-bound') {",
+      '    const acknowledged = new Promise((resolve) => task.bootstrapPort.once("message", resolve));',
+      '    task.bootstrapPort.postMessage("takeover");',
+      '    if (await acknowledged !== "acknowledged") throw new Error("Invalid handoff");',
+      '    task.bootstrapPort.close();',
       '    parentPort?.postMessage({',
       `      type: '${WORKFLOW_WORKER_READY_MESSAGE_TYPE}',`,
       '      executionId: task.config.executionId,',
@@ -202,7 +208,7 @@ function createProviderService(workerEntry: string, id: string): ProviderService
  * @returns The claim the successful begin issued.
  */
 async function beginProcessBoundProvisioning(
-  repository: Required<ExecutionAttemptRepository<WorkflowRunResult>>,
+  repository: Required<ExecutionAttemptRepository<WorkflowAttemptOutcome>>,
   executionAttemptId: string,
   executionId: string,
   overrides: Omit<Partial<BeginProvisioningInput>, 'allocationLifetime'> = {},
@@ -300,6 +306,7 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
         {
           executionId: 'wfx-1',
           executionAttemptId: 'attempt-integration',
+          bootstrapDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
           environment: 'piscina',
           // The bus URL is supplied per provision, not defaulted in the shared
           // fixture: the same fixture drives the attempt-free runner path,
@@ -367,12 +374,12 @@ const FOREIGN_PROVISIONER_INCARNATION_ID = 'provisioner-incarnation-elsewhere';
  */
 describe('process-bound allocation lifetime', () => {
   const store = createRestartableTempDb('piscina-process-bound');
-  let repositoryA: Required<ExecutionAttemptRepository<WorkflowRunResult>>;
-  let repositoryB: Required<ExecutionAttemptRepository<WorkflowRunResult>>;
+  let repositoryA: Required<ExecutionAttemptRepository<WorkflowAttemptOutcome>>;
+  let repositoryB: Required<ExecutionAttemptRepository<WorkflowAttemptOutcome>>;
 
   beforeAll(async () => {
-    repositoryA = await createSqliteAttemptRepository(await store.connect(), workflowRunResultOutcomeCodec);
-    repositoryB = await createSqliteAttemptRepository(await store.connect(), workflowRunResultOutcomeCodec);
+    repositoryA = await createSqliteAttemptRepository(await store.connect(), workflowAttemptOutcomeCodec);
+    repositoryB = await createSqliteAttemptRepository(await store.connect(), workflowAttemptOutcomeCodec);
   });
 
   afterEach(removeTempDir);
@@ -400,7 +407,12 @@ describe('process-bound allocation lifetime', () => {
   it('converges only on a loss proof naming the exact provisioner incarnation', async () => {
     const executionId = 'wfx-exact-incarnation-proof';
     const executionAttemptId = 'attempt-exact-incarnation-proof';
-    await repositoryA.createAttempt({ executionAttemptId, executionId });
+    await repositoryA.createAttempt({
+      executionAttemptId,
+      executionId,
+      instruction: makeTestInstruction(),
+      bootstrapTimeoutMs: 120_000,
+    });
     const claim = await beginProcessBoundProvisioning(repositoryA, executionAttemptId, executionId, {
       provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
     });
@@ -433,7 +445,12 @@ describe('process-bound allocation lifetime', () => {
     const expiredLeaseAttemptId = 'attempt-retained-debt-expired-lease';
 
     // (a) A proof about a different process says nothing about this one.
-    await repositoryA.createAttempt({ executionAttemptId: mismatchAttemptId, executionId });
+    await repositoryA.createAttempt({
+      executionAttemptId: mismatchAttemptId,
+      bootstrapTimeoutMs: 120_000,
+      executionId,
+      instruction: makeTestInstruction(),
+    });
     const mismatchClaim = await beginProcessBoundProvisioning(repositoryA, mismatchAttemptId, executionId, {
       provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
     });
@@ -455,7 +472,12 @@ describe('process-bound allocation lifetime', () => {
     // (b) An expired lease is the same claim: it is not proof either. It says
     // the previous holder stopped renewing, which is a statement about a
     // controller, not about whether the allocation survived.
-    await repositoryA.createAttempt({ executionAttemptId: expiredLeaseAttemptId, executionId: leaseExecutionId });
+    await repositoryA.createAttempt({
+      executionAttemptId: expiredLeaseAttemptId,
+      bootstrapTimeoutMs: 120_000,
+      executionId: leaseExecutionId,
+      instruction: makeTestInstruction(),
+    });
     const firstClaim = await beginProcessBoundProvisioning(repositoryA, expiredLeaseAttemptId, leaseExecutionId, {
       provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
       leaseExpiresAt: leaseAt(-60_000),
@@ -502,7 +524,13 @@ describe('process-bound allocation lifetime', () => {
     let second: ProviderServiceInstance | undefined;
 
     try {
-      await repositoryA.createAttempt({ executionAttemptId, executionId });
+      const record = await repositoryA.createAttempt({
+        executionAttemptId,
+        executionId,
+        instruction: makeTestInstruction(),
+        bootstrapTimeoutMs: 120_000,
+      });
+      if (record.bootstrapDeadlineAt === null) throw new Error('Fixture Attempt requires a bootstrap deadline');
       const claim = await beginProcessBoundProvisioning(repositoryA, executionAttemptId, executionId, {
         providerId: first.provider.id,
         provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
@@ -512,6 +540,7 @@ describe('process-bound allocation lifetime', () => {
         {
           executionId,
           executionAttemptId,
+          bootstrapDeadlineAt: record.bootstrapDeadlineAt,
           environment: 'piscina',
           workerConfig: makeWorkerConfig({ executionId, busUrl: PROVISION_BUS_URL }),
           workerManifest: { contributionRefs: [] },

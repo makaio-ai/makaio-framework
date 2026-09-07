@@ -408,16 +408,18 @@ async function cancelExecutionDurably(
   executionId: string,
   reason?: string,
 ): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
-  const active = deps.activeExecutions.get(executionId);
-
-  if (!active || active.execution.status !== 'running') {
+  const { execution } = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+  if (execution?.status !== 'running') {
     return cancelPausedExecution(deps, executionId, reason);
   }
 
-  const { execution } = active;
+  // Durable ownership survives executor restart and may precede loading the
+  // executable. A live registry entry is neither required nor authoritative.
   execution.status = 'cancelled';
   execution.reason = reason;
   execution.completedAt = Date.now();
+  const active = deps.activeExecutions.get(executionId);
+  if (active !== undefined) Object.assign(active.execution, execution);
 
   try {
     for (const [key, controller] of deps.shellAbortControllers) {

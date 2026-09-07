@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { makeTestInstruction } from '../testing/attempt-fixtures.js';
 import { sql, StringChunk, type SQL } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
@@ -10,7 +11,7 @@ import {
   type RawSqlSession,
 } from '@makaio/storage-drizzle';
 import { createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
-import type { WorkflowRunResult } from '@makaio/contracts';
+import type { WorkflowRunResult, ExecutionAttemptPreparationResult } from '@makaio/contracts';
 import type { ExecutionAttemptRepository, ProviderOperationClaim } from '../index.js';
 import { createSqliteAttemptRepository } from '../testing/sqlite.js';
 import {
@@ -55,6 +56,8 @@ interface RawOperationRow extends Record<string, unknown> {
 /** A raw `test_execution_attempt` row, read outside the port. */
 interface RawAttemptRow extends Record<string, unknown> {
   readonly execution_attempt_id: string;
+  readonly instruction: string;
+  readonly preparation_receipts: string;
   readonly claimable: number;
   readonly claim_expires_at: string | null;
   readonly settlement_kind: string | null;
@@ -147,7 +150,7 @@ async function startAttempt(
   ids: { readonly executionId: string; readonly executionAttemptId: string },
   overrides: Partial<BeginProvisioningInput> = {},
 ): Promise<ProviderOperationClaim> {
-  await repository.createAttempt(ids);
+  await repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
   const decision = await repository.beginProvisioning(
     makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId, overrides),
   );
@@ -216,14 +219,175 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     context?.cleanup();
   });
 
+  it('retains the creation-time deadline across allocation and a reopened connection', async () => {
+    const ids = nextIds();
+    const record = await harness.alpha.createAttempt({
+      ...ids,
+      instruction: makeTestInstruction(),
+      bootstrapTimeoutMs: 7_321,
+    });
+    const provisioning = await harness.alpha.beginProvisioning(
+      makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId),
+    );
+    if (provisioning.kind !== 'started') throw new Error('Expected provisioning');
+    await harness.alpha.recordAllocation({ claim: provisioning.claim, allocationRef: makeTestAllocationRef() });
+    if (!context) throw new Error('Missing database context');
+    const reopened = await createDatabaseClient({ url: `file:${context.dbPath}` });
+    try {
+      const repository = await createSqliteAttemptRepository(reopened.db, workflowRunResultOutcomeCodec);
+      expect(await repository.readBootstrapStartState(ids)).toMatchObject({
+        allocated: true,
+        bootstrapDeadlineAt: record.bootstrapDeadlineAt,
+      });
+      expect(await repository.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
+        createdAt: record.createdAt,
+        bootstrapDeadlineAt: record.bootstrapDeadlineAt,
+      });
+      expect(
+        (await repository.recovery.getRecoverableAttempts(ids.executionId)).find(
+          (attempt) => attempt.executionAttemptId === ids.executionAttemptId,
+        ),
+      ).toMatchObject({ bootstrapDeadlineAt: record.bootstrapDeadlineAt });
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  it('reads bootstrap facts without decoding instruction, Preparation receipts or allocation payload', async () => {
+    const ids = nextIds();
+    await allocateAttempt(harness.alpha, ids);
+    const original = await readRawAttempt(ids.executionAttemptId);
+    await getRawSqlExecutor(harness.db).run(sql`UPDATE test_execution_attempt
+      SET instruction = ${'invalid json'}, preparation_receipts = ${'invalid json'}, allocation_ref = ${'invalid json'}
+      WHERE execution_attempt_id = ${ids.executionAttemptId}`);
+    try {
+      expect(await harness.beta.readBootstrapStartState(ids)).toMatchObject({
+        active: true,
+        allocated: true,
+        settled: false,
+      });
+      expect(await harness.beta.readBootstrapStartState({ ...ids, executionId: 'foreign-owner' })).toBeNull();
+    } finally {
+      await getRawSqlExecutor(harness.db).run(sql`UPDATE test_execution_attempt
+        SET instruction = ${original.instruction}, preparation_receipts = ${original.preparation_receipts}, allocation_ref = ${original.allocation_ref}
+        WHERE execution_attempt_id = ${ids.executionAttemptId}`);
+    }
+  });
+
+  it('opens a reference schema without the deadline column without resetting its existing attempts', async () => {
+    const legacy = await createTempDb('bootstrap-legacy-schema');
+    try {
+      const repository = await createSqliteAttemptRepository(legacy.db, workflowRunResultOutcomeCodec);
+      const pending = nextIds();
+      const allocated = nextIds();
+      const settled = nextIds();
+      await repository.createAttempt({ ...pending, instruction: makeTestInstruction(), bootstrapTimeoutMs: 60_000 });
+      await allocateAttempt(repository, allocated);
+      await allocateAttempt(repository, settled);
+      await repository.commitOutcome({
+        ...settled,
+        result: repository.canonicalizeOutcome(makeTestWorkflowResult(settled.executionId, 'completed')),
+      });
+      // Simulate the previous reference schema while preserving every other column and row.
+      await legacy.exec(sql.raw('ALTER TABLE test_execution_attempt DROP COLUMN bootstrap_deadline_at'));
+      const reopened = await createSqliteAttemptRepository(legacy.db, workflowRunResultOutcomeCodec);
+      for (const [ids, status] of [
+        [pending, 'pending'],
+        [allocated, 'allocated'],
+        [settled, 'settled'],
+      ] as const) {
+        expect(await reopened.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
+          status,
+          bootstrapDeadlineAt: null,
+        });
+        expect(await reopened.readBootstrapStartState(ids)).toMatchObject({
+          bootstrapDeadlineAt: null,
+          settled: status === 'settled',
+        });
+        expect(await reopened.getInstruction(ids)).toEqual(makeTestInstruction());
+      }
+      expect(await reopened.recovery.getRecoverableAttempts(allocated.executionId)).toEqual([
+        expect.objectContaining({ ...allocated, bootstrapDeadlineAt: null }),
+      ]);
+    } finally {
+      legacy.cleanup();
+    }
+  });
+
   // ───────────────────────────────────────────────────────────
   // Invariant 1 and 2: `started` is the sole authorization,
   // and exactly one controller can ever obtain it.
   // ───────────────────────────────────────────────────────────
 
+  it('accepts Preparation once across connections and exposes receipt plus free slot together', async () => {
+    const ids = nextIds();
+    const instruction = makeTestInstruction({
+      workspace: {
+        provisioning: 'create',
+        custody: 'disposable',
+        sourceRoots: [],
+        setup: [],
+      },
+    });
+    await harness.alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction });
+    expect(await harness.beta.getInstruction(ids)).toEqual(instruction);
+    const provisioning = await harness.alpha.beginProvisioning(
+      makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId),
+    );
+    if (provisioning.kind !== 'started') throw new Error('Expected provisioning');
+    await harness.alpha.recordAllocation({ claim: provisioning.claim, allocationRef: makeTestAllocationRef() });
+    const runtime = await harness.alpha.registerRuntime({ ...ids, runtimeIncarnationId: 'preparation-runtime' });
+    if (runtime.kind !== 'registered') throw new Error('Expected registration');
+    const runtimeGeneration = runtime.runtimeGeneration;
+    await harness.alpha.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() });
+    expect(
+      await harness.beta.admitOperation({
+        ...ids,
+        runtimeGeneration,
+        operationKind: 'workload-invocation',
+        admissionKey: 'early-invocation',
+      }),
+    ).toEqual({ kind: 'preparation-required' });
+    const operation = await harness.alpha.admitOperation({
+      ...ids,
+      runtimeGeneration,
+      operationKind: 'workspace-preparation',
+      admissionKey: 'prepare',
+    });
+    if (operation.kind !== 'admitted') throw new Error('Expected Preparation admission');
+    const result: ExecutionAttemptPreparationResult = {
+      kind: 'workspace-prepared',
+      binding: { workspaceRoot: '/scratch/durable', sourceRoots: [] },
+    };
+    const report = { ...ids, runtimeGeneration, operationId: operation.operationId, result };
+    const decisions = await Promise.all([harness.alpha.reportOperation(report), harness.beta.reportOperation(report)]);
+    expect(decisions.map((decision) => decision.kind).sort()).toEqual(['accepted', 'duplicate']);
+    const row = await readRawAttempt(ids.executionAttemptId);
+    expect(JSON.parse(row.preparation_receipts)).toEqual([
+      { operationId: report.operationId, runtimeGeneration, result },
+    ]);
+    expect(row.active_operation_id).toBeNull();
+    expect(row.last_completed_operation_id).toBe(report.operationId);
+    expect(
+      await harness.beta.admitOperation({
+        ...ids,
+        runtimeGeneration,
+        operationKind: 'workload-invocation',
+        admissionKey: 'invoke',
+      }),
+    ).toMatchObject({ kind: 'admitted' });
+    expect(await harness.alpha.reportOperation(report)).toEqual({ kind: 'duplicate', binding: result.binding });
+    expect(
+      await harness.beta.reportOperation({
+        ...report,
+        result: { ...result, binding: { workspaceRoot: '/wrong', sourceRoots: [] } },
+      }),
+    ).toEqual({ kind: 'conflict' });
+  });
+
   it('grants the provisioning claim to exactly one racing controller', async () => {
     const ids = nextIds();
-    await harness.alpha.createAttempt(ids);
+    await harness.alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const input = makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId);
 
     const decisions = await Promise.all([
@@ -240,7 +404,7 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
 
   it('invokes the provider at most once per attempt across both controllers', async () => {
     const ids = nextIds();
-    await harness.alpha.createAttempt(ids);
+    await harness.alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const input = makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId);
     let provisionCalls = 0;
 
@@ -277,7 +441,11 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     );
 
     const replacement = { executionId: first.executionId, executionAttemptId: `${first.executionAttemptId}-next` };
-    await harness.beta.createAttempt(replacement);
+    await harness.beta.createAttempt({
+      bootstrapTimeoutMs: 60_000,
+      ...replacement,
+      instruction: makeTestInstruction(),
+    });
 
     expect(await readActivePointer(first.executionId)).toBe(replacement.executionAttemptId);
     expect(await harness.alpha.recovery.getAttemptWithAllocation(first.executionAttemptId)).toMatchObject({
@@ -652,7 +820,7 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
 
   it('returns the canonical result for an exact replay and conflicts on a different one', async () => {
     const ids = nextIds();
-    await harness.alpha.createAttempt(ids);
+    await harness.alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const result = makeTestWorkflowResult(ids.executionId, 'completed');
 
     const accepted = await harness.alpha.commitOutcome({ ...ids, result: harness.alpha.canonicalizeOutcome(result) });
@@ -703,7 +871,7 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     const claim = await startAttempt(harness.alpha, first);
     // A retry supersedes the first attempt through the other controller.
     const second = { executionId: first.executionId, executionAttemptId: `${first.executionAttemptId}-retry` };
-    await harness.beta.createAttempt(second);
+    await harness.beta.createAttempt({ bootstrapTimeoutMs: 60_000, ...second, instruction: makeTestInstruction() });
 
     const discovered = makeTestAllocationRef(TEST_PROVIDER_ID, { machineId: 'discovered-1' });
     const discovery = await harness.beta.recovery.recordDiscoveredAllocation({ claim, allocationRef: discovered });
@@ -954,7 +1122,9 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     await harness.alpha.recordAllocationTerminated({ claim, evidence: makeEvidence() });
     await harness.alpha.recordInfrastructureFailure({ claim, executionId: ids.executionId });
 
-    await expect(harness.beta.createAttempt(ids)).rejects.toThrow();
+    await expect(
+      harness.beta.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() }),
+    ).rejects.toThrow();
 
     // The settled attempt keeps everything a fresh `pending` record would
     // have discarded.
@@ -966,7 +1136,7 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
 
   it('abandons a pending attempt exactly once and refuses it after provisioning began', async () => {
     const pending = nextIds();
-    await harness.alpha.createAttempt(pending);
+    await harness.alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...pending, instruction: makeTestInstruction() });
 
     const abandonments = await Promise.all([
       harness.alpha.abandonPendingAttempt(pending.executionAttemptId, pending.executionId),
@@ -1211,7 +1381,7 @@ describe('execution attempt repository contract (without write-lock isolation)',
     const beta = await createSqliteAttemptRepository(handleOver(shared), workflowRunResultOutcomeCodec);
 
     const ids = { executionId: 'unisolated-exec', executionAttemptId: 'unisolated-attempt' };
-    await alpha.createAttempt(ids);
+    await alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const begun = await alpha.beginProvisioning(makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId));
     if (begun.kind !== 'started') throw new Error(`Expected provisioning to start, got '${begun.kind}'`);
     const initial = makeTestAllocationRef(TEST_PROVIDER_ID, { machineId: 'unisolated' });
@@ -1250,7 +1420,7 @@ describe('execution attempt repository contract (without write-lock isolation)',
     const beta = await createSqliteAttemptRepository(handleOver(shared), workflowRunResultOutcomeCodec);
 
     const ids = { executionId: 'unisolated-admit-exec', executionAttemptId: 'unisolated-admit-attempt' };
-    await alpha.createAttempt(ids);
+    await alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const begun = await alpha.beginProvisioning(makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId));
     if (begun.kind !== 'started') throw new Error(`Expected provisioning to start, got '${begun.kind}'`);
     await alpha.recordAllocation({ claim: begun.claim, allocationRef: makeTestAllocationRef() });
@@ -1300,10 +1470,20 @@ describe('execution attempt repository contract (failed rollback)', () => {
     );
 
     await expect(
-      repository.createAttempt({ executionId: 'busy-exec', executionAttemptId: 'busy-attempt' }),
+      repository.createAttempt({
+        bootstrapTimeoutMs: 60_000,
+        executionId: 'busy-exec',
+        executionAttemptId: 'busy-attempt',
+        instruction: makeTestInstruction(),
+      }),
     ).rejects.toThrow('the driver refused to commit');
     await expect(
-      repository.createAttempt({ executionId: 'next-exec', executionAttemptId: 'next-attempt' }),
+      repository.createAttempt({
+        bootstrapTimeoutMs: 60_000,
+        executionId: 'next-exec',
+        executionAttemptId: 'next-attempt',
+        instruction: makeTestInstruction(),
+      }),
     ).resolves.toMatchObject({ executionAttemptId: 'next-attempt' });
   });
 
@@ -1325,12 +1505,16 @@ describe('execution attempt repository contract (failed rollback)', () => {
       workflowRunResultOutcomeCodec,
     );
     const ids = { executionId: 'rollback-exec', executionAttemptId: 'rollback-attempt' };
-    await repository.createAttempt(ids);
+    await repository.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
 
     // The reused identifier makes the insert fail inside the transaction, and
     // the rollback that should undo it fails too.
     refuseRollback = true;
-    const failedTransition = repository.createAttempt(ids);
+    const failedTransition = repository.createAttempt({
+      bootstrapTimeoutMs: 60_000,
+      ...ids,
+      instruction: makeTestInstruction(),
+    });
     const queuedRead = repository.recovery.getAttemptWithAllocation(ids.executionAttemptId);
     await expect(failedTransition).rejects.toThrow('Transaction rollback failed');
 
@@ -1351,7 +1535,7 @@ describe('execution attempt repository contract (one unbranded handle)', () => {
     const alpha = await createSqliteAttemptRepository(db, workflowRunResultOutcomeCodec);
     const beta = await createSqliteAttemptRepository(db, workflowRunResultOutcomeCodec);
     const ids = { executionId: 'unbranded-exec', executionAttemptId: 'unbranded-attempt' };
-    await alpha.createAttempt(ids);
+    await alpha.createAttempt({ bootstrapTimeoutMs: 60_000, ...ids, instruction: makeTestInstruction() });
     const input = makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId);
 
     const decisions = await Promise.all([alpha.beginProvisioning(input), beta.beginProvisioning(input)]);

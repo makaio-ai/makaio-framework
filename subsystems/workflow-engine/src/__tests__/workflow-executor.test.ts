@@ -136,6 +136,7 @@ async function seedPausedExecutionAndGate(
   options: {
     readonly materializationSpec?: NonNullable<WorkflowRunContext['materializationSpec']>;
     readonly seedResumeFrame?: boolean;
+    readonly terminalAuthority?: WorkflowRunContext['terminalAuthority'];
   } = {},
 ): Promise<WorkflowGateInstance> {
   const execution = createWorkflowExecution({
@@ -167,6 +168,7 @@ async function seedPausedExecutionAndGate(
     env: {},
     createdAt: Date.now(),
     suspensionStrategy: 'exit-and-redispatch',
+    ...(options.terminalAuthority !== undefined ? { terminalAuthority: options.terminalAuthority } : {}),
     ...(options.materializationSpec !== undefined ? { materializationSpec: options.materializationSpec } : {}),
   };
   await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
@@ -482,7 +484,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
     expect(cancelResult).toEqual({ cancelled: false });
   });
 
-  it('accepts a paused gate response and dispatches resume through the stored run context', async () => {
+  it.each([
+    undefined,
+    'worker',
+    'authority',
+  ] as const)('resumes through the stored %s completion owner', async (terminalAuthority) => {
     const workflowId = `wf-resume-${Math.random().toString(36).slice(2)}`;
     const executionId = `wfx-resume-${Math.random().toString(36).slice(2)}`;
     const gateId = 'gate-approve';
@@ -496,19 +502,34 @@ describe('WorkflowExecutor — paused gate integration', () => {
     };
     const runnerCalls: WorkflowWorkerConfig[] = [];
     const stubRunner: IWorkflowRunner = {
-      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+      ...(terminalAuthority !== undefined ? { terminalAuthority } : {}),
+      run: vi.fn(async (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         runnerCalls.push(config);
-        return Promise.resolve({
-          state: 'uncommitted',
-          result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
-        });
+        const result: WorkflowRunResult = {
+          executionId: config.executionId,
+          workflowId: config.workflowId,
+          status: 'completed',
+        };
+        if (terminalAuthority === 'authority') {
+          if (!setup) throw new Error('Missing executor setup');
+          await setup.workflowExecutor.acceptAuthorityRunnerResult(config.executionId, result);
+          return { state: 'authority-committed', result };
+        }
+        return { state: 'uncommitted', result };
       }),
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
 
     // Seed storage with a paused execution and a waiting gate.
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {}, { materializationSpec });
+    await seedPausedExecutionAndGate(
+      workflowId,
+      executionId,
+      gateId,
+      frameId,
+      {},
+      { materializationSpec, terminalAuthority },
+    );
 
     // Send a gate.respond through the bus — the executor's low-priority fallback
     // handler should accept it.
@@ -536,7 +557,64 @@ describe('WorkflowExecutor — paused gate integration', () => {
       executionId,
       source: { kind: 'path', path: materializationSpec.sourcePath },
       materializationSpec,
+      terminalAuthority: terminalAuthority ?? 'worker',
     });
+    await expect
+      .poll(
+        async () => (await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status,
+      )
+      .toBe('completed');
+  });
+
+  it.each([
+    { owner: undefined, runner: 'authority' },
+    { owner: 'worker', runner: 'authority' },
+    { owner: 'authority', runner: undefined },
+    { owner: 'authority', runner: 'worker' },
+  ] as const)('rejects resume owner $owner with runner $runner before running', async ({ owner, runner }) => {
+    const workflowId = 'wf-resume-owner-mismatch';
+    const executionId = 'exec-resume-owner-mismatch';
+    const gateId = 'gate-owner-mismatch';
+    const frameId = 'frame-owner-mismatch';
+    const run = vi.fn<IWorkflowRunner['run']>();
+    setup = await setupWorkflowExecutorTest({ workflowRunner: { terminalAuthority: runner, run } });
+    const observedStatuses: string[] = [];
+    const off = MakaioBus.on(
+      WorkflowStorageSubjects.setExecution,
+      (ctx) => {
+        observedStatuses.push(ctx.payload.execution.status);
+      },
+      { priority: 100 },
+    );
+    try {
+      await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {}, { terminalAuthority: owner });
+      // Prove the observer runs before the storage responder short-circuits dispatch.
+      expect(observedStatuses).toEqual(['paused']);
+      observedStatuses.length = 0;
+      await expect(
+        MakaioBus.request(WorkflowSubjects.gate.respond, {
+          executionId,
+          gateId,
+          frameId,
+          action: 'approve',
+          resumeData: {},
+        }),
+      ).rejects.toThrow('incompatible with the persisted terminal authority');
+      expect(run).not.toHaveBeenCalled();
+      expect(observedStatuses).not.toContain('running');
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+        executionId,
+        nodeId: gateId,
+        frameId,
+      });
+      const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+      expect(execution?.status).toBe('paused');
+      expect(gate?.status).toBe('waiting');
+      expect(runContext?.terminalAuthority).toBe(owner);
+    } finally {
+      off();
+    }
   });
 
   it('accepts only one concurrent paused gate response for the same frame', async () => {

@@ -6,23 +6,27 @@ import {
   createWorkflowCancelSubject,
   type WorkerContributionManifest,
   type WorkflowRunResult,
+  type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
 import { loadWorkflowFromConfig } from './workflow-loader.js';
 import { createWorkflowWorkerReadyMessage } from './worker-ready-message.js';
 import {
   bootWorkerBus,
+  createWorkerBus,
   bootWorkerRuntime,
   type WorkerRuntimeBusHandle,
   type WorkerRuntimeHandle,
 } from './runtime/worker-boot.js';
 import { loadWorkerRuntimeContributions } from './runtime/worker-contributions.js';
-import {
-  installOperationDeliveryEndpoint,
-  registerAndAdmitWorkflowRun,
-  type OperationDeliveryEndpoint,
-} from './runtime-registration-client.js';
+import { registerAndAdmitWorkflowRun, type OperationDeliveryEndpoint } from './runtime-registration-client.js';
 import { resolveAwaitTriggerConfig } from './await-trigger.js';
+import { acceptPiscinaBootstrapHandoff, type PiscinaBootstrapBinding } from './piscina-bootstrap-handoff.js';
+import {
+  bootstrapWorkerRuntime,
+  type BootstrapRuntimeConnection,
+  type StartedWorkerRuntime,
+} from './bootstrap-start-client.js';
 
 // ─────────────────────────────────────────────────────────────
 // Module overview
@@ -94,10 +98,15 @@ export interface AttemptBoundWorkerParams extends WorkflowWorkerRunParamsBase {
   readonly kind: 'attempt-bound';
   /** Authority-created attempt this runtime registers itself as the endpoint of. */
   readonly executionAttemptId: string;
+  /** Persisted absolute bootstrap deadline, unchanged across reconnects. */
+  readonly bootstrapDeadlineAt: string;
 }
 
-/** Parameters accepted by the Piscina worker entrypoint. */
+/** Parameters accepted by the direct runtime entrypoint. */
 export type WorkflowWorkerRunParams = UnboundWorkerParams | AttemptBoundWorkerParams;
+
+/** Piscina-owned attempt tasks require a host budget handoff before runtime boot. */
+type PiscinaWorkerRunParams = UnboundWorkerParams | (AttemptBoundWorkerParams & PiscinaBootstrapBinding);
 
 // ─────────────────────────────────────────────────────────────
 // Worker lifecycle
@@ -147,27 +156,12 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
 
   let handle: WorkerRuntimeBusHandle | undefined;
   let runtime: WorkerRuntimeHandle | undefined;
-  let cancelCleanup: (() => void) | undefined;
   let deliveryEndpoint: OperationDeliveryEndpoint | undefined;
 
   try {
     // Step 2: Boot bus. The attempt-bound arm authenticates as the attempt
     // itself, because the Authority's registration and admission gates take
     // their caller identity from the authenticated transport peer.
-    handle = await bootWorkerBus({
-      busUrl: config.busUrl,
-      busAuth: config.busAuth,
-      ...(params.kind === 'attempt-bound' ? { identityId: params.executionAttemptId } : {}),
-    });
-
-    // Step 3: Subscribe to the workflow-level cancel subject so the main
-    // process can abort this worker cooperatively via the bus when it handles
-    // WorkflowSubjects.cancel for this execution.
-    cancelCleanup = handle.bus.on(createWorkflowCancelSubject(config.cancelSubject), () => {
-      abortController.abort();
-    });
-    await waitForSubscriptionPropagation(cancelCleanup);
-
     if (params.contributionEntrypoints.length !== params.manifest.contributionRefs.length) {
       throw new Error('Worker contribution materialization does not match the declared contribution identity set.');
     }
@@ -178,14 +172,9 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
       // One incarnation per invocation: it identifies this concrete thread to
       // the Authority and keys both the registration and the run's admission.
       const runtimeIncarnationId = randomUUID();
-      // Before registration, not after: the Authority delivers its bounded
-      // probe inside the register request, and an unsubscribed runtime fails
-      // its own registration with `probe-failed`.
-      deliveryEndpoint = await installOperationDeliveryEndpoint(
-        handle.bus,
-        { executionAttemptId: params.executionAttemptId, runtimeIncarnationId },
-        {},
-      );
+      const started = await bootstrapAttemptWorker(params, config, runtimeIncarnationId, abortController);
+      handle = started.connection;
+      deliveryEndpoint = started.endpoint;
       await registerAndAdmitWorkflowRun(handle.bus, {
         executionAttemptId: params.executionAttemptId,
         runtimeIncarnationId,
@@ -198,6 +187,8 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
       parentPort?.postMessage(
         createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, params.executionAttemptId),
       );
+    } else {
+      handle = await bootUnboundWorkerConnection(config, abortController);
     }
 
     // Step 4: Import only the entrypoints verified by materialization. Import
@@ -226,7 +217,6 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
       signal: abortController.signal,
     });
   } finally {
-    cancelCleanup?.();
     deliveryEndpoint?.cleanup();
     signal.removeEventListener('abort', abortFromParent);
     try {
@@ -241,9 +231,99 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
   }
 }
 
+/**
+ * Acquire a fresh Attempt session and its start permission without loading code.
+ * @param params - Attempt binding and original deadline.
+ * @param config - Validated connection and cancellation routing data.
+ * @param runtimeIncarnationId - Incarnation that will subsequently register.
+ * @param controller - Work lifecycle cancellation.
+ * @returns The permitted session and its endpoint.
+ */
+function bootstrapAttemptWorker(
+  params: AttemptBoundWorkerParams,
+  config: WorkflowWorkerConfig,
+  runtimeIncarnationId: string,
+  controller: AbortController,
+): Promise<StartedWorkerRuntime> {
+  return bootstrapWorkerRuntime({
+    executionAttemptId: params.executionAttemptId,
+    runtimeIncarnationId,
+    bootstrapDeadlineAt: params.bootstrapDeadlineAt,
+    signal: controller.signal,
+    createConnection: () =>
+      createCancellableWorkerConnection(
+        createWorkerBus({ busUrl: config.busUrl, busAuth: config.busAuth, identityId: params.executionAttemptId }),
+        config.cancelSubject,
+        controller,
+      ),
+  });
+}
+
+/**
+ * Connect an unbound worker without manufacturing an Attempt or bootstrap budget.
+ * @param config - Validated bus configuration.
+ * @param controller - Work lifecycle cancellation.
+ * @returns Connected bus with cancellation-subscription cleanup ownership.
+ */
+async function bootUnboundWorkerConnection(
+  config: WorkflowWorkerConfig,
+  controller: AbortController,
+): Promise<BootstrapRuntimeConnection> {
+  const connected = await bootWorkerBus({ busUrl: config.busUrl, busAuth: config.busAuth }, controller.signal);
+  const connection = createCancellableWorkerConnection(
+    { ...connected, connect: async (signal) => signal.throwIfAborted() },
+    config.cancelSubject,
+    controller,
+  );
+  try {
+    await connection.connect(controller.signal);
+    return connection;
+  } catch (error) {
+    await connection.close();
+    throw error;
+  }
+}
+
+/**
+ * Keep cancellation subscription ownership with each disposable bus session.
+ * @param connection - Synchronously acquired bus connection handle.
+ * @param cancelSubject - Workflow-specific cancellation routing key.
+ * @param controller - Work lifecycle cancellation, independent of the bootstrap lease.
+ * @returns Connection wrapper retaining cancellation routing until close.
+ */
+function createCancellableWorkerConnection(
+  connection: BootstrapRuntimeConnection,
+  cancelSubject: string,
+  controller: AbortController,
+): BootstrapRuntimeConnection {
+  let unsubscribe: (() => void) | undefined;
+  return {
+    bus: connection.bus,
+    async connect(signal) {
+      await connection.connect(signal);
+      signal.throwIfAborted();
+      unsubscribe = connection.bus.on(createWorkflowCancelSubject(cancelSubject), () => controller.abort());
+      await waitForSubscriptionPropagation(unsubscribe);
+      signal.throwIfAborted();
+    },
+    async close() {
+      unsubscribe?.();
+      unsubscribe = undefined;
+      await connection.close();
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // Piscina entrypoint
 // ─────────────────────────────────────────────────────────────
 
-// Piscina targets the default export of the worker entrypoint.
-export default runWorkflowInWorker;
+/**
+ * Receive host bootstrap ownership before entering the ordinary worker lifecycle.
+ * @param params - Piscina task, including a required handoff port for bound attempts.
+ * @returns The terminal workflow result.
+ */
+export default async function runPiscinaWorkflow(params: PiscinaWorkerRunParams): Promise<WorkflowRunResult> {
+  if (params.kind === 'attempt-bound') await acceptPiscinaBootstrapHandoff(params, params.signal);
+  return runWorkflowInWorker(params);
+}

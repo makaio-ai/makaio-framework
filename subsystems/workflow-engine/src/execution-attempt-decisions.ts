@@ -1,11 +1,15 @@
+import { canonicalStringify } from '@makaio/utils';
 import type {
   AdmitOperationInput,
   AttemptControlState,
+  AttemptExecutionState,
   CompleteOperationInput,
   MarkRuntimeReadyInput,
   OperationAdmissionDecision,
   OperationCompletionDecision,
+  OperationReportDecision,
   RegisterRuntimeInput,
+  ReportOperationInput,
   RuntimeReadinessDecision,
   RuntimeRegistrationDecision,
 } from './execution-attempt-repository.js';
@@ -67,17 +71,19 @@ export function evaluateRuntimeRegistration(
 }
 
 /**
- * Evaluate admission after reachability: replay, busy, gate, readiness, then generation.
+ * Evaluate admission after reachability: replay, busy, gate, readiness, generation, then Preparation.
  * Probe operations are admitted before readiness because they establish that proof.
  * @param control - Current decoded control state, not modified by this function.
  * @param input - Operation admission being considered.
  * @param fallbackAdmittedAt - Realization-supplied instant for a duplicate missing its stored instant.
+ * @param execution - Frozen assignment and Preparation receipts read with the control state.
  * @returns A non-write decision, or null to attempt the realization's guarded admission.
  */
 export function evaluateOperationAdmission(
   control: AttemptControlState,
   input: AdmitOperationInput,
   fallbackAdmittedAt: string,
+  execution: AttemptExecutionState,
 ): Exclude<OperationAdmissionDecision, { readonly kind: 'admitted' }> | null {
   if (control.activeOperationId !== null) {
     return control.activeOperationKey === input.admissionKey
@@ -94,6 +100,61 @@ export function evaluateOperationAdmission(
   if (control.runtimeGeneration !== input.runtimeGeneration) {
     return { kind: 'stale-generation', runtimeGeneration: control.runtimeGeneration };
   }
+  const requiresPreparation = execution.instruction.workspace !== undefined;
+  const prepared = execution.preparationReceipts.some(
+    (receipt) => receipt.runtimeGeneration === control.runtimeGeneration,
+  );
+  if (input.operationKind === 'workspace-preparation') {
+    if (!requiresPreparation) return { kind: 'preparation-not-required' };
+    if (prepared) return { kind: 'preparation-already-completed' };
+  }
+  // The retained workflow adapter operation cannot bypass generic Preparation.
+  if (
+    (input.operationKind === 'workload-invocation' || input.operationKind === 'workflow-run') &&
+    requiresPreparation &&
+    !prepared
+  ) {
+    return { kind: 'preparation-required' };
+  }
+  return null;
+}
+
+/**
+ * Evaluate successful Preparation, retaining historical replay before current-runtime fences.
+ * A null decision permits only a guarded write that saves the receipt and frees the slot together.
+ * @param reachability - Coherent owner, allocation and lifecycle facts.
+ * @param control - Current operation and runtime state.
+ * @param execution - Frozen instruction and retained Preparation history.
+ * @param input - Owner-scoped successful Preparation report.
+ * @returns A historical duplicate or refusal, or null to atomically accept the result.
+ */
+export function evaluatePreparationReport(
+  reachability: AttemptReachability,
+  control: AttemptControlState,
+  execution: AttemptExecutionState,
+  input: ReportOperationInput,
+): Exclude<OperationReportDecision, { readonly kind: 'accepted' }> | null {
+  if (!reachability.matchesExecution) return { kind: 'not-found' };
+  const previous = execution.preparationReceipts.find((receipt) => receipt.operationId === input.operationId);
+  if (previous !== undefined) {
+    return previous.runtimeGeneration === input.runtimeGeneration &&
+      canonicalStringify(previous.result) === canonicalStringify(input.result)
+      ? { kind: 'duplicate', binding: previous.result.binding }
+      : { kind: 'conflict' };
+  }
+  const unreachable = evaluateAttemptReachability(reachability);
+  if (unreachable !== null) return unreachable;
+  if (control.runtimeGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+  if (control.activeOperationId === null) return { kind: 'no-active-operation' };
+  if (control.activeOperationId !== input.operationId || control.activeOperationKind !== 'workspace-preparation') {
+    return { kind: 'operation-mismatch' };
+  }
+  if (control.activeOperationGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+  const workspace = execution.instruction.workspace;
+  if (workspace === undefined) return { kind: 'preparation-not-required' };
+  const requestedIds = workspace.sourceRoots.map((root) => root.id).sort();
+  const reportedIds = input.result.binding.sourceRoots.map((root) => root.id).sort();
+  if (canonicalStringify(requestedIds) !== canonicalStringify(reportedIds)) return { kind: 'binding-mismatch' };
   return null;
 }
 
@@ -114,6 +175,12 @@ export function evaluateOperationCompletion(
     return { kind: 'mismatch', activeOperationId: control.activeOperationId };
   }
   if (control.activeOperationGeneration !== input.runtimeGeneration) return { kind: 'stale-generation' };
+  if (
+    control.activeOperationKind === 'workspace-preparation' ||
+    control.activeOperationKind === 'workload-invocation'
+  ) {
+    return { kind: 'result-required' };
+  }
   return null;
 }
 

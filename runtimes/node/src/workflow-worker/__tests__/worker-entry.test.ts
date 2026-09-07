@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createBusInstance, type BusMessage, type BusTransport } from '@makaio/bus-core';
 import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
+import { ExecutionAttemptNamespace, ExecutionAttemptSubjects } from '@makaio/contracts';
 import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 
 // ---------------------------------------------------------------------------
@@ -8,6 +9,7 @@ import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 // ---------------------------------------------------------------------------
 
 const mockBootWorkerBus = vi.fn();
+const mockCreateWorkerBus = vi.fn();
 const mockBootWorkerRuntime = vi.fn();
 const mockLoadWorkflowModule = vi.fn();
 const mockRunWorkflowOrchestrator = vi.fn();
@@ -24,6 +26,7 @@ vi.mock('node:worker_threads', () => ({
 
 vi.mock('../runtime/worker-boot.js', () => ({
   bootWorkerBus: mockBootWorkerBus,
+  createWorkerBus: mockCreateWorkerBus,
   bootWorkerRuntime: mockBootWorkerRuntime,
 }));
 
@@ -97,7 +100,13 @@ function makeLoadedWorkflow() {
 function makeBusHandle() {
   const unsubscribe = vi.fn();
   return {
-    bus: { on: vi.fn().mockReturnValue(unsubscribe), off: vi.fn(), emit: vi.fn() },
+    bus: {
+      on: vi.fn().mockReturnValue(unsubscribe),
+      off: vi.fn(),
+      emit: vi.fn(),
+      request: vi.fn().mockResolvedValue({ status: 'permitted' }),
+    },
+    connect: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -122,12 +131,17 @@ function makePropagationControlledBusHandle() {
     isReady: () => true,
   };
   const bus = createBusInstance();
+  bus.registerNamespace(ExecutionAttemptNamespace);
+  const offStart = bus.on(ExecutionAttemptSubjects.bootstrap.awaitStart, (ctx) => {
+    ctx.setResult({ status: 'permitted' });
+  });
   const registration = bus.registerTransport(transport);
   const close = vi.fn(async () => {
+    offStart();
     registration.unregister();
     await transport.disconnect();
   });
-  return { busHandle: { bus, close }, resolveSubscribe, transport };
+  return { busHandle: { bus, close, connect: async () => {} }, resolveSubscribe, transport };
 }
 
 /**
@@ -220,7 +234,7 @@ describe('runWorkflowInWorker', () => {
       status: 'completed' as const,
     };
 
-    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
+    mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
@@ -229,6 +243,7 @@ describe('runWorkflowInWorker', () => {
     const runPromise = runWorkflowInWorker({
       kind: 'attempt-bound',
       executionAttemptId: TEST_ATTEMPT_ID,
+      bootstrapDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
       config,
       manifest: { contributionRefs: [] },
       contributionEntrypoints: [],
@@ -253,7 +268,7 @@ describe('runWorkflowInWorker', () => {
 
   it('registers and admits before it loads any contribution', async () => {
     const busHandle = makeBusHandle();
-    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
+    mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
@@ -265,6 +280,7 @@ describe('runWorkflowInWorker', () => {
     await runWorkflowInWorker({
       kind: 'attempt-bound',
       executionAttemptId: TEST_ATTEMPT_ID,
+      bootstrapDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
       config: makeConfig(),
       manifest: { contributionRefs: [] },
       contributionEntrypoints: [],
@@ -273,12 +289,24 @@ describe('runWorkflowInWorker', () => {
     // The delivery endpoint exists before registration, because the Authority
     // delivers its bounded probe inside the register request.
     const endpointOrder = mockInstallOperationDeliveryEndpoint.mock.invocationCallOrder[0];
+    const startOrder = busHandle.bus.request.mock.invocationCallOrder[0];
     const registerOrder = mockRegisterAndAdmitWorkflowRun.mock.invocationCallOrder[0];
     const contributionOrder = mockLoadWorkerRuntimeContributions.mock.invocationCallOrder[0];
-    if (endpointOrder === undefined || registerOrder === undefined || contributionOrder === undefined) {
+    if (
+      endpointOrder === undefined ||
+      startOrder === undefined ||
+      registerOrder === undefined ||
+      contributionOrder === undefined
+    ) {
       throw new Error('Missing invocation order for the attempt registration assertion');
     }
-    expect(endpointOrder).toBeLessThan(registerOrder);
+    expect(endpointOrder).toBeLessThan(startOrder);
+    expect(startOrder).toBeLessThan(registerOrder);
+    expect(busHandle.bus.request).toHaveBeenCalledWith(
+      ExecutionAttemptSubjects.bootstrap.awaitStart,
+      { executionAttemptId: TEST_ATTEMPT_ID },
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: expect.any(Number) }),
+    );
     // Readiness must not depend on what the runtime later composes.
     expect(registerOrder).toBeLessThan(contributionOrder);
 
@@ -288,8 +316,16 @@ describe('runWorkflowInWorker', () => {
       executionAttemptId: string;
       runtimeIncarnationId: string;
     };
-    expect(endpointIdentity).toEqual({ executionAttemptId: TEST_ATTEMPT_ID, runtimeIncarnationId: expect.any(String) });
-    expect(mockInstallOperationDeliveryEndpoint).toHaveBeenCalledWith(busHandle.bus, endpointIdentity, {});
+    expect(endpointIdentity).toMatchObject({
+      executionAttemptId: TEST_ATTEMPT_ID,
+      runtimeIncarnationId: expect.any(String),
+    });
+    expect(mockInstallOperationDeliveryEndpoint).toHaveBeenCalledWith(
+      busHandle.bus,
+      endpointIdentity,
+      {},
+      expect.any(AbortSignal),
+    );
     expect(mockRegisterAndAdmitWorkflowRun).toHaveBeenCalledWith(
       busHandle.bus,
       expect.objectContaining({
@@ -302,7 +338,7 @@ describe('runWorkflowInWorker', () => {
     expect(mockEndpointCleanup).toHaveBeenCalledTimes(1);
     // The thread claims the attempt on its socket: the Authority's gates read
     // the caller identity off the authenticated transport peer.
-    expect(mockBootWorkerBus).toHaveBeenCalledWith(expect.objectContaining({ identityId: TEST_ATTEMPT_ID }));
+    expect(mockCreateWorkerBus).toHaveBeenCalledWith(expect.objectContaining({ identityId: TEST_ATTEMPT_ID }));
   });
 
   it('neither registers nor reports readiness for a run no attempt owns', async () => {
@@ -327,7 +363,10 @@ describe('runWorkflowInWorker', () => {
     expect(mockInstallOperationDeliveryEndpoint).not.toHaveBeenCalled();
     expect(mockRegisterAndAdmitWorkflowRun).not.toHaveBeenCalled();
     expect(mockParentPortPostMessage).not.toHaveBeenCalled();
-    expect(mockBootWorkerBus).toHaveBeenCalledWith(expect.not.objectContaining({ identityId: expect.anything() }));
+    expect(mockBootWorkerBus).toHaveBeenCalledWith(
+      expect.not.objectContaining({ identityId: expect.anything() }),
+      expect.any(AbortSignal),
+    );
   });
 
   it('closes runtime and bus in the finally block on success', async () => {
@@ -434,6 +473,7 @@ describe('runWorkflowInWorker', () => {
 
     expect(mockBootWorkerBus).toHaveBeenCalledWith(
       expect.objectContaining({ busUrl: 'ws://localhost:9999', busAuth: { kind: 'hmac', secret: 'test-secret' } }),
+      expect.any(AbortSignal),
     );
   });
 

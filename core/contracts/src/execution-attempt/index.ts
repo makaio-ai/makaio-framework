@@ -1,4 +1,7 @@
 export {
+  ExecutionAttemptBootstrapAwaitStartRequestSchema,
+  ExecutionAttemptBootstrapAwaitStartResponseSchema,
+  ExecutionAttemptBootstrapStartRefusalReasonSchema,
   ExecutionAttemptAnnouncedOperationKindSchema,
   ExecutionAttemptOperationDeliverySchema,
   ExecutionAttemptOperationKindSchema,
@@ -7,7 +10,12 @@ export {
   ExecutionAttemptSchemas,
 } from './schemas.js';
 export type {
+  ExecutionAttemptBootstrapAwaitStartRequest,
+  ExecutionAttemptBootstrapAwaitStartResponse,
+  ExecutionAttemptBootstrapStartRefusalReason,
   ExecutionAttemptAnnouncedOperationKind,
+  ExecutionAttemptInstructionGetRequest,
+  ExecutionAttemptInstructionGetResponse,
   ExecutionAttemptOperationAdmitDecision,
   ExecutionAttemptOperationAdmitRefusalReason,
   ExecutionAttemptOperationAdmitRequest,
@@ -18,6 +26,10 @@ export type {
   ExecutionAttemptOperationKind,
   ExecutionAttemptOperationReceipt,
   ExecutionAttemptOperationReceiptCode,
+  ExecutionAttemptOperationReportRequest,
+  ExecutionAttemptOperationReportResponse,
+  ExecutionAttemptOutcomeSubmitRequest,
+  ExecutionAttemptOutcomeSubmitResponse,
   ExecutionAttemptRuntimeReadyEvent,
   ExecutionAttemptRuntimeRegisterDecision,
   ExecutionAttemptRuntimeRegisterRefusalReason,
@@ -25,3 +37,21 @@ export type {
   ExecutionAttemptRuntimeRegisterResponse,
 } from './schemas.js';
 export { ExecutionAttemptNamespace, ExecutionAttemptSubjects } from './namespace.js';
+export {
+  ExecutionAttemptInstructionSchema,
+  ExecutionAttemptOutcomeSchema,
+  ExecutionAttemptPreparationResultSchema,
+  ExecutionAttemptWorkspaceBindingSchema,
+  ExecutionPreservationRequirementsSchema,
+  WorkspaceRequirementSchema,
+  WorkspaceSetupCommandSchema,
+} from './instruction.js';
+export type {
+  ExecutionAttemptInstruction,
+  ExecutionAttemptOutcome,
+  ExecutionAttemptPreparationResult,
+  ExecutionAttemptWorkspaceBinding,
+  ExecutionPreservationRequirements,
+  WorkspaceRequirement,
+  WorkspaceSetupCommand,
+} from './instruction.js';

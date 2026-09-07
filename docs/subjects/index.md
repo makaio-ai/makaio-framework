@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 105 |
-| Subjects | 994 (400 events, 594 RPCs) |
+| Subjects | 999 (400 events, 599 RPCs) |
 | framework | 101 |
 | extension | 4 |
 | kind: bus | 74 |
@@ -61,7 +61,7 @@ next: false
 | [`code-execution`](./code-execution.md) | bus | 1 | 0E / 1R |
 | [`config`](./config.md) | bus | 2 | 0E / 2R |
 | [`credential`](./credential.md) | bus | 12 | 0E / 12R |
-| [`execution-attempt`](./execution-attempt.md) | bus | 5 | 2E / 3R |
+| [`execution-attempt`](./execution-attempt.md) | bus | 9 | 2E / 7R |
 | [`facet`](./facet.md) | bus | 3 | 1E / 2R |
 | [`gitHook`](./githook.md) | bus | 3 | 2E / 1R |
 | [`harness`](./harness.md) | bus | 10 | 3E / 7R |
@@ -96,7 +96,7 @@ next: false
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`worker`](./worker.md) | bus | 11 | 8E / 3R |
+| [`worker`](./worker.md) | bus | 12 | 8E / 4R |
 | [`workflow`](./workflow.md) | bus | 58 | 26E / 32R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 

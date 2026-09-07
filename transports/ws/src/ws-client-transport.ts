@@ -6,7 +6,7 @@
  */
 
 import type { WebSocketLike, TransportAuth, ClientTransportCodec } from './types.js';
-import { CorrelationTracker, trackMessageCorrelation } from '@makaio/bus-core';
+import { ConnectionLostError, CorrelationTracker } from '@makaio/bus-core';
 import { type SubscriptionEntry } from './subscribe-message.js';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -37,6 +37,8 @@ import {
 import { addSubscription, removeSubscription, type SubscriptionAckHandle } from './ws-client-subscriptions.js';
 import { disposeSocket } from './transport-helpers.js';
 import { WebSocketConnectionError } from './connection-error.js';
+import { ClientSocketSession } from './ws-client-socket-session.js';
+import { sendClientMessage } from './ws-client-send.js';
 
 // Re-export public types so that consumers and index.ts can import them
 // from this module's path without needing to know the sub-module layout.
@@ -72,7 +74,7 @@ export class WebSocketClientTransport implements BusTransport {
   private readonly onConnectedCallback: (() => void) | undefined;
   private readonly onDisconnectedCallback: (() => void) | undefined;
 
-  private socket: WebSocketLike | null = null;
+  private session: ClientSocketSession | null = null;
   private authComplete = false;
 
   private readonly correlations = new CorrelationTracker();
@@ -121,6 +123,14 @@ export class WebSocketClientTransport implements BusTransport {
 
   /** Set by the transport registry; called when the connection drops unexpectedly. */
   public onDisconnected: (() => void) | undefined = undefined;
+
+  /**
+   * Current socket remains owned during buffered reply drain, even after termination.
+   * @returns The retained socket, or null after its release.
+   */
+  private get socket(): WebSocketLike | null {
+    return this.session?.socket ?? null;
+  }
 
   /**
    * Create a new `WebSocketClientTransport`.
@@ -197,12 +207,12 @@ export class WebSocketClientTransport implements BusTransport {
     if (this.socket !== null) {
       removeSocketListeners(this.socket, this.connectionDeps());
       const ws = this.socket;
-      this.socket = null;
+      this.session?.release();
       this.authComplete = false;
       disposeSocket(ws);
     }
 
-    this.correlations.cleanup();
+    this.correlations.rejectAll(this.session?.failure ?? new ConnectionLostError(this.name));
     this.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: disconnected before subscription ack'));
     // Auth strategies own pending handshakes, timers, and derived session
     // keys. The client transport owns the strategy lifecycle, so every
@@ -232,14 +242,17 @@ export class WebSocketClientTransport implements BusTransport {
         ? Array<{ nodeId: string; payload: unknown }>
         : boolean
   > {
-    if (this.socket === null || this.socket.readyState !== 1) {
-      throw new Error('WebSocketClientTransport: not connected');
-    }
-
-    const payload = await this.codec.encode(message);
-    this.socket.send(payload);
-
-    return trackMessageCorrelation(message, this.correlations, timeout ?? DEFAULT_REQUEST_TIMEOUT_MS);
+    return sendClientMessage(
+      {
+        session: this.session,
+        currentSession: () => this.session,
+        name: this.name,
+        codec: this.codec,
+        correlations: this.correlations,
+      },
+      message,
+      timeout ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /**
@@ -461,9 +474,11 @@ export class WebSocketClientTransport implements BusTransport {
       connectTimeoutMs: this.connectTimeoutMs,
       heartbeat: this.heartbeatConfig,
       getSocket: () => this.socket,
-      setSocket: (ws) => {
-        this.socket = ws;
+      setSocket: (ws, failure) => {
+        this.session?.release(failure);
+        if (ws !== null) this.session = new ClientSocketSession(ws, this.name);
       },
+      getSessionFailure: () => this.session?.failure,
       setAuthComplete: (value) => {
         this.authComplete = value;
       },

@@ -11,13 +11,13 @@ import {
   FrameworkStorageNamespaces,
   WorkerSubjects,
   WorkflowRunResultSchema,
-  WorkflowSubjects,
-  type OutcomeAckDecision,
+  type ExecutionAttemptOutcome,
   type WorkerMaterializationSpec,
   type WorkflowRunContext,
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import { KernelSubjects } from '@makaio/kernel';
+import { parseWorkflowAttemptInstruction } from '@makaio/subsystem-workflow-engine';
 import { registerMemorySessionStorage } from '../../../../../services/core/src/session/storage/memory-handler.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
@@ -27,7 +27,11 @@ import {
   type HeadlessWorkerMaterializer,
   type HeadlessWorkerBootstrap,
 } from '../headless-workflow-worker.js';
-import { createAttemptAuthorityHarness, type AttemptAuthorityHarness } from './attempt-authority-harness.js';
+import {
+  createAttemptAuthorityHarness,
+  freezeWorkflowInstruction,
+  type AttemptAuthorityHarness,
+} from './attempt-authority-harness.js';
 
 // ─────────────────────────────────────────────────────────────
 // Provider composition descriptor
@@ -87,6 +91,7 @@ const compositions: readonly ProviderComposition[] = [
     createBootstrap: (port) => async () => ({
       busUrl: `ws://127.0.0.1:${port}/bus`,
       busAuthSecret: 'piscina-test-secret',
+      runtimeEnv: {},
     }),
   },
   {
@@ -112,6 +117,7 @@ const compositions: readonly ProviderComposition[] = [
     createBootstrap: (port) => async () => ({
       busUrl: `ws://127.0.0.1:${port}/bus`,
       busAuthSecret: 'github-test-secret',
+      runtimeEnv: {},
     }),
   },
   {
@@ -137,6 +143,7 @@ const compositions: readonly ProviderComposition[] = [
     createBootstrap: (port) => async () => ({
       busUrl: `ws://127.0.0.1:${port}/bus`,
       busAuthSecret: 'fly-test-secret',
+      runtimeEnv: {},
     }),
   },
 ];
@@ -180,6 +187,16 @@ function makeRunContext(executionId: string, materializationSpec?: WorkerMateria
 }
 
 /**
+ * Read only an actual workflow-produced result from a generic outcome.
+ * @param outcome - Canonical terminal report.
+ * @returns Validated workflow result.
+ */
+function workflowResult(outcome: ExecutionAttemptOutcome): WorkflowRunResult {
+  expect(outcome.kind).toBe('workload-result');
+  return WorkflowRunResultSchema.parse(outcome.kind === 'workload-result' ? outcome.result : undefined);
+}
+
+/**
  * Build a read-only empty adapter repository required by the runtime seam.
  * @returns Adapter repository stub that throws on write operations.
  */
@@ -212,7 +229,7 @@ interface LifecycleCapture {
   outcomeSubmissions: Array<{
     executionAttemptId: string;
     executionId: string;
-    result: WorkflowRunResult;
+    outcome: ExecutionAttemptOutcome;
   }>;
 }
 
@@ -225,10 +242,6 @@ interface AuthoritySide {
   capture: LifecycleCapture;
   /** Authority-side ExecutionAttempt gates, attempt identity, and gate captures. */
   attempt: AttemptAuthorityHarness;
-  /** Run context the authority will return. */
-  runContext: WorkflowRunContext;
-  /** Override the outcome decision returned by the authority. */
-  outcomeDecision: OutcomeAckDecision;
   cleanup: () => Promise<void>;
 }
 
@@ -245,7 +258,18 @@ async function createAuthoritySide(
   const authority = createBusInstance();
   authority.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
   const offStorage = registerMemorySessionStorage(authority);
-  const attempt = await createAttemptAuthorityHarness(authority, executionId);
+  const runContext = makeRunContext(executionId, materializationSpec);
+  let state!: AuthoritySide;
+  const attempt = await createAttemptAuthorityHarness(authority, executionId, {
+    instruction: freezeWorkflowInstruction(runContext),
+    beforeCommit: async (_outcome, report) => {
+      state.capture.outcomeSubmissions.push({
+        executionAttemptId: state.attempt.executionAttemptId,
+        executionId,
+        outcome: report,
+      });
+    },
+  });
 
   const server = createServer();
   const port = await listenOnLoopback(server);
@@ -255,9 +279,7 @@ async function createAuthoritySide(
   });
   await serverTransport.connect(authority, 'headless-test-authority');
 
-  const runContext = makeRunContext(executionId, materializationSpec);
-
-  const state: AuthoritySide = {
+  state = {
     bus: authority,
     port,
     capture: {
@@ -265,11 +287,8 @@ async function createAuthoritySide(
       outcomeSubmissions: [],
     },
     attempt,
-    runContext,
-    outcomeDecision: 'accepted',
     cleanup: async () => {
       offGetRunContext();
-      offOutcomeSubmit();
       offKernelReady();
       await attempt.cleanup();
       offStorage();
@@ -278,24 +297,18 @@ async function createAuthoritySide(
     },
   };
 
-  // Register getRunContext handler
-  const offGetRunContext = authority.on(
-    WorkflowSubjects.getRunContext,
-    (ctx) => {
-      ctx.setResult(state.runContext);
-    },
-    { filter: { executionId } },
-  );
-
-  // Handle outcome submission
-  const offOutcomeSubmit = authority.on(WorkerSubjects.control.outcome.submit, (ctx) => {
-    state.capture.outcomeSubmissions.push({
-      executionAttemptId: ctx.payload.executionAttemptId,
-      executionId: ctx.payload.executionId,
-      result: WorkflowRunResultSchema.parse(ctx.payload.result),
-    });
-    ctx.setResult({ decision: state.outcomeDecision });
+  // Host-selected realization inputs are frozen separately from the immutable instruction.
+  const runtimeInputs = structuredClone({
+    workerManifest: runContext.workerManifest,
+    suspensionStrategy: runContext.suspensionStrategy,
   });
+  const offGetRunContext = authority.on(
+    WorkerSubjects.runtime.inputs.get,
+    (ctx) => {
+      ctx.setResult({ runtimeInputs });
+    },
+    { filter: { executionAttemptId: attempt.executionAttemptId } },
+  );
 
   // Capture kernel ready events
   const offKernelReady = authority.on(KernelSubjects.ready, (ctx) => {
@@ -347,6 +360,8 @@ function createCompositionDeps(
   return {
     executionId,
     executionAttemptId: authoritySide.attempt.executionAttemptId,
+    bootstrapDeadlineAt: authoritySide.attempt.bootstrapDeadlineAt,
+    workflowEnv: {},
     bootstrap: async (signal) => {
       phaseLog.push('bootstrap');
       return bootstrapFn(signal);
@@ -428,13 +443,13 @@ describe('portable provider-neutral harness', () => {
       // Verify phase ordering is identical across all compositions
       expect(phaseLog).toEqual(['bootstrap', 'materialize', 'loadContributions', 'execute', 'postCommit']);
 
-      // Verify exactly 1 runtime readiness and 1 workflow-run admission
+      // Verify exactly one runtime readiness and one generic Invocation admission.
       expect(authority.attempt.runtimeReadyEvents).toHaveLength(1);
       expect(authority.attempt.runtimeReadyEvents[0]).toMatchObject({ executionAttemptId });
       expect(authority.attempt.operationAdmittedEvents).toHaveLength(1);
       expect(authority.attempt.operationAdmittedEvents[0]).toMatchObject({
         executionAttemptId,
-        operationKind: 'workflow-run',
+        operationKind: 'workload-invocation',
       });
 
       // Verify exactly 1 outcome with status 'completed'
@@ -442,12 +457,12 @@ describe('portable provider-neutral harness', () => {
       expect(authority.capture.outcomeSubmissions[0]).toMatchObject({
         executionAttemptId,
         executionId,
-        result: { status: 'completed' },
+        outcome: { kind: 'workload-result', result: { status: 'completed' } },
       });
 
       // Verify worker result
       expect(workerResult.decision).toBe('accepted');
-      expect(workerResult.result.status).toBe('completed');
+      expect(workflowResult(workerResult.outcome).status).toBe('completed');
 
       // Registration precedes composition, which is what emits kernel readiness
       await vi.waitFor(() => {
@@ -469,6 +484,8 @@ describe('portable provider-neutral harness', () => {
       const deps: HeadlessWorkflowWorkerDeps = {
         executionId,
         executionAttemptId: authority.attempt.executionAttemptId,
+        bootstrapDeadlineAt: authority.attempt.bootstrapDeadlineAt,
+        workflowEnv: {},
         bootstrap: async (signal) => {
           phaseLog.push('bootstrap');
           const bootstrapFn = composition.createBootstrap(authority.port);
@@ -508,14 +525,15 @@ describe('portable provider-neutral harness', () => {
 
       const workerResult = await runHeadlessWorkflowWorker(deps, abortController.signal);
 
-      // Cooperative cancellation produces a cancelled result
-      expect(workerResult.result.status).toBe('cancelled');
+      // Cooperative cancellation produces a canonical cancellation, not a workflow result
+      expect(workerResult.outcome).toMatchObject({ kind: 'cancelled' });
 
       // Materialization runs after registration, so readiness stands
       expect(authority.attempt.runtimeReadyEvents).toHaveLength(1);
       // Cancelled outcome IS submitted
       expect(authority.capture.outcomeSubmissions).toHaveLength(1);
-      expect(authority.capture.outcomeSubmissions[0]!.result.status).toBe('cancelled');
+      expect(authority.capture.outcomeSubmissions[0]!.outcome).toMatchObject({ kind: 'cancelled' });
+      expect(authority.attempt.convergedOutcomes).toEqual([workerResult.outcome]);
 
       // Cleanup is deterministic: phases stop at materialize
       expect(phaseLog).toContain('bootstrap');
@@ -529,7 +547,7 @@ describe('portable provider-neutral harness', () => {
 
   describe('durable record portability', () => {
     /**
-     * Patterns that must NOT appear in a serialized durable run context.
+     * Patterns that must NOT appear in the serialized frozen instruction.
      *
      * These cover absolute paths, Authority-local state, host platform
      * leaks, secret material references, and package installation paths.
@@ -545,11 +563,16 @@ describe('portable provider-neutral harness', () => {
       'process.env',
     ] as const;
 
-    it('durable run context contains no absolute Authority path, makaioHome, worktree, host platform, package installation path, or secret', () => {
+    it('frozen instruction excludes local paths, runtime composition and credentials', () => {
       for (const composition of compositions) {
         const spec = composition.makeSpec();
         const runContext = makeRunContext(`exec-portability-${composition.name}`, spec);
-        const serialized = JSON.stringify(runContext);
+        runContext.env = { INJECTED_TOKEN: 'fixture-secret-not-for-durable-input' };
+        const instruction = freezeWorkflowInstruction(runContext);
+        const serialized = JSON.stringify(instruction);
+        expect(serialized).not.toContain('fixture-secret-not-for-durable-input');
+        expect(serialized).not.toContain('workerManifest');
+        expect(serialized).not.toContain('suspensionStrategy');
 
         // No absolute paths (Unix or Windows)
         expect(serialized).not.toMatch(/":\/[^"]/);
@@ -561,7 +584,7 @@ describe('portable provider-neutral harness', () => {
         }
 
         // materializationSpec is present and has the expected kind
-        const actualSpec = runContext.materializationSpec;
+        const actualSpec = parseWorkflowAttemptInstruction(instruction).materializationSpec;
         expect(actualSpec).toBeDefined();
         if (actualSpec === undefined) throw new Error('materializationSpec missing');
         expect(actualSpec.kind).toBe(spec.kind);

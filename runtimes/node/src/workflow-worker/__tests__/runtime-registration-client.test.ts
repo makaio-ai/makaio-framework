@@ -127,6 +127,35 @@ async function installBoundEndpoint(
 // ─────────────────────────────────────────────────────────────
 
 describe('installOperationDeliveryEndpoint', () => {
+  it('does not install an endpoint after bootstrap cancellation', async () => {
+    const bus = createRuntimeBus();
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+    await expect(
+      installOperationDeliveryEndpoint(
+        bus,
+        { executionAttemptId: 'attempt-a', runtimeIncarnationId: INCARNATION },
+        {},
+        controller.signal,
+      ),
+    ).rejects.toThrow('cancelled');
+    expect(bus.getContext().requestHandlers.get('execution-attempt.operation.deliver') ?? []).toHaveLength(0);
+  });
+
+  it('removes an installed endpoint if cancellation arrives before installation transfers ownership', async () => {
+    const bus = createRuntimeBus();
+    const controller = new AbortController();
+    const installing = installOperationDeliveryEndpoint(
+      bus,
+      { executionAttemptId: 'attempt-a', runtimeIncarnationId: INCARNATION },
+      {},
+      controller.signal,
+    );
+    controller.abort(new Error('cancelled'));
+    await expect(installing).rejects.toThrow('cancelled');
+    expect(bus.getContext().requestHandlers.get('execution-attempt.operation.deliver') ?? []).toHaveLength(0);
+  });
+
   it('answers the bounded runtime probe with a completed receipt before it knows its generation', async () => {
     const bus = createRuntimeBus();
     // Installed before registration, exactly as a runtime does: no generation
@@ -355,7 +384,7 @@ describe('registerWorkerRuntime', () => {
     ).rejects.toMatchObject({ refusalReason: 'fenced' });
   });
 
-  it('retries a not-allocated refusal inside the allocation-visibility window', async () => {
+  it('does not retry not-allocated; allocation visibility belongs to the bootstrap barrier', async () => {
     const bus = createRuntimeBus();
     // The pool records the allocation a moment after the runtime started; the
     // first report lands before that record and the second after it.
@@ -365,16 +394,16 @@ describe('registerWorkerRuntime', () => {
       { decision: 'ready', runtimeGeneration: 1 },
     );
 
-    const generation = await registerWorkerRuntime(bus, {
-      executionAttemptId: 'attempt-a',
-      runtimeIncarnationId: 'inc-1',
-    });
-
-    expect(generation).toBe(1);
-    expect(requests).toHaveLength(2);
+    await expect(
+      registerWorkerRuntime(bus, {
+        executionAttemptId: 'attempt-a',
+        runtimeIncarnationId: 'inc-1',
+      }),
+    ).rejects.toMatchObject({ refusalReason: 'not-allocated' });
+    expect(requests).toHaveLength(1);
   });
 
-  it('gives up on not-allocated once the allocation-visibility window closed', async () => {
+  it('immediately reports a missing allocation', async () => {
     const bus = createRuntimeBus();
     const requests = respondToRegister(bus, {
       decision: 'refused',
@@ -386,10 +415,9 @@ describe('registerWorkerRuntime', () => {
       registerWorkerRuntime(bus, {
         executionAttemptId: 'attempt-a',
         runtimeIncarnationId: 'inc-1',
-        allocationVisibilityDeadlineMs: 120,
       }),
     ).rejects.toMatchObject({ refusalReason: 'not-allocated' });
-    expect(requests.length).toBeGreaterThan(1);
+    expect(requests).toHaveLength(1);
   });
 
   it('does not retry any other refusal', async () => {
@@ -406,16 +434,16 @@ describe('registerWorkerRuntime', () => {
     expect(requests).toHaveLength(1);
   });
 
-  it('stops retrying when the signal aborts', async () => {
+  it('does not send registration when the signal is already aborted', async () => {
     const bus = createRuntimeBus();
     respondToRegister(bus, { decision: 'refused', runtimeGeneration: 0, refusalReason: 'not-allocated' });
     const controller = new AbortController();
+    controller.abort(new Error('worker stopped'));
     const registration = registerWorkerRuntime(bus, {
       executionAttemptId: 'attempt-a',
       runtimeIncarnationId: 'inc-1',
       signal: controller.signal,
     });
-    controller.abort(new Error('worker stopped'));
 
     await expect(registration).rejects.toThrow('worker stopped');
   });

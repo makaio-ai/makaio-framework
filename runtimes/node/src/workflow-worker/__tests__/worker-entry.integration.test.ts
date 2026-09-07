@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createBusContext, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
+  ExecutionAttemptSubjects,
   WorkflowSubjects,
   createWorkflowCancelSubject,
   type WorkflowExecution,
@@ -16,7 +17,8 @@ import { HmacAuth, resolveHmacIdentityPeer, resolveHmacIdentitySecret } from '@m
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { mintWorkflowExecutionBusSecret } from '../../workflow-execution-bus-access.js';
-import { runWorkflowInWorker } from '../worker-entry.js';
+import runPiscinaWorkflow, { runWorkflowInWorker } from '../worker-entry.js';
+import { dispatchWithBootstrapHandoff } from '../piscina-bootstrap-handoff.js';
 import { createAttemptAuthorityHarness, type AttemptAuthorityHarness } from './attempt-authority-harness.js';
 
 /**
@@ -218,6 +220,51 @@ function makeGateConfig(busUrl: string): WorkflowWorkerConfig {
 }
 
 describe('runWorkflowInWorker integration', () => {
+  it('hands off before real Authority permission and completes invocation after the original deadline', async () => {
+    const executionId = 'exec-handoff-attempt';
+    const host = await startHostWorkflowBus(executionId);
+    const identity = mintWorkflowExecutionBusSecret({
+      executionAttemptId: host.attempt.executionAttemptId,
+      executionId,
+    });
+    // Operation admission is after actual awaitStart permission. Advancing the
+    // wall clock here proves neither handoff scope survives into invocation.
+    const off = host.bus.on(ExecutionAttemptSubjects.operation.admitted, () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.parse(host.attempt.bootstrapDeadlineAt) + 1);
+    });
+    try {
+      const result = await dispatchWithBootstrapHandoff(
+        host.attempt.bootstrapDeadlineAt,
+        new AbortController().signal,
+        (bootstrapPort, signal) =>
+          runPiscinaWorkflow({
+            kind: 'attempt-bound',
+            executionAttemptId: host.attempt.executionAttemptId,
+            bootstrapDeadlineAt: host.attempt.bootstrapDeadlineAt,
+            bootstrapPort,
+            signal,
+            config: {
+              ...makeDefinitionConfig(host.busUrl),
+              executionId,
+              cancelSubject: `workflow.${executionId}.cancel`,
+              busAuth: { kind: 'hmac', secret: identity.secret },
+              terminalAuthority: 'authority',
+            },
+            manifest: { contributionRefs: [] },
+            contributionEntrypoints: [],
+          }),
+      );
+      expect(host.attempt.runtimeReadyEvents).toHaveLength(1);
+      expect(host.attempt.operationAdmittedEvents).toHaveLength(1);
+      expect(result).toMatchObject({ executionId, status: 'completed' });
+    } finally {
+      vi.restoreAllMocks();
+      off();
+      identity.cleanup();
+      await host.close();
+    }
+  });
+
   it('runs a definition-sourced workflow through the real worker lifecycle and host bus storage', async () => {
     const host = await startHostWorkflowBus('exec-entry-integration');
 
@@ -357,6 +404,7 @@ describe('runWorkflowInWorker integration', () => {
       const result = await runWorkflowInWorker({
         kind: 'attempt-bound',
         executionAttemptId,
+        bootstrapDeadlineAt: host.attempt.bootstrapDeadlineAt,
         config: {
           ...makeDefinitionConfig(host.busUrl),
           executionId,

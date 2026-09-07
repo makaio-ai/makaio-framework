@@ -37,6 +37,7 @@ export {
   makeEvidence,
   makeProcessLossProof,
   makeTestAllocationRef,
+  makeTestInstruction,
   makeTestWorkflowResult,
   TEST_OWNER_ID,
   TEST_PROVIDER_ID,

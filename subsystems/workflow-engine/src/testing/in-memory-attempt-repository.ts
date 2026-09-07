@@ -1,4 +1,4 @@
-import { BoundedRecoveryEvidenceSchema } from '@makaio/contracts';
+import { BoundedRecoveryEvidenceSchema, type ExecutionAttemptInstruction } from '@makaio/contracts';
 import {
   DuplicateExecutionAttemptError,
   decodeDurableOutcome,
@@ -8,6 +8,8 @@ import {
   evaluateOperationAdmission,
   evaluateOperationCompletion,
   evaluateRuntimeReadiness,
+  evaluatePreparationReport,
+  assertRuntimeOutcomeFence,
   sameAllocationRef,
   sameDurableOutcome,
 } from '../execution-attempt-repository.js';
@@ -24,11 +26,16 @@ import type {
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptCreate,
+  BootstrapStartState,
+  ReadBootstrapStartStateInput,
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
+  GetInstructionInput,
+  ReportOperationInput,
+  OperationReportDecision,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
   MarkRuntimeReadyInput,
@@ -60,9 +67,13 @@ import type {
 } from '../provider-operation.js';
 import {
   INITIAL_ATTEMPT_CONTROL_STATE,
+  createAttemptTiming,
   compareRecoveryOrder,
   instantOf,
   normalizeInstant,
+  parseInstruction,
+  parsePreparationResult,
+  parsePreparationReceipts,
   parseAllocationLifetime,
   parseAllocationRef,
   parseAllocationRefEvolution,
@@ -369,6 +380,8 @@ export function createInMemoryAttemptRepository<TOutcome>(
 
   const repository: Omit<ExecutionAttemptRepository<TOutcome>, 'recovery'> = {
     async createAttempt(input: ExecutionAttemptCreate): Promise<ExecutionAttemptRecord> {
+      const instruction = parseInstruction(input.instruction);
+      const timing = createAttemptTiming(input.bootstrapTimeoutMs);
       // A reused identifier would resurrect a possibly settled attempt with a
       // fresh pending record, orphan its operation, and leave any committed
       // outcome behind. The port makes it a caller bug so no realization ever
@@ -379,9 +392,11 @@ export function createInMemoryAttemptRepository<TOutcome>(
       const record: ExecutionAttemptRecord = {
         executionAttemptId: input.executionAttemptId,
         executionId: input.executionId,
+        instruction,
+        preparationReceipts: Object.freeze([]),
         status: 'pending',
         allocationRef: null,
-        createdAt: new Date().toISOString(),
+        ...timing,
         providerId: null,
         allocationLifetime: null,
         provisionerIncarnationId: null,
@@ -406,6 +421,19 @@ export function createInMemoryAttemptRepository<TOutcome>(
       attempts.set(input.executionAttemptId, record);
       activeAttempts.set(input.executionId, input.executionAttemptId);
       return record;
+    },
+
+    async readBootstrapStartState(input: ReadBootstrapStartStateInput): Promise<BootstrapStartState | null> {
+      const attempt = attempts.get(input.executionAttemptId);
+      if (!attempt || attempt.executionId !== input.executionId) return null;
+      return {
+        settled: attempt.settlementKind != null,
+        active: activeAttempts.get(input.executionId) === input.executionAttemptId,
+        allocated: attempt.allocationRef !== null,
+        allocationTerminated: allocationTerminated(input.executionAttemptId),
+        operationStartGate: attempt.operationStartGate,
+        bootstrapDeadlineAt: attempt.bootstrapDeadlineAt ?? null,
+      };
     },
 
     async beginProvisioning(input: BeginProvisioningInput): Promise<ProvisioningClaimDecision> {
@@ -638,7 +666,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
         attempt.activeOperationAdmittedAt === null
           ? normalizeInstant(new Date().toISOString())
           : '';
-      const refusal = evaluateOperationAdmission(attempt, input, fallbackAdmittedAt);
+      const refusal = evaluateOperationAdmission(attempt, input, fallbackAdmittedAt, attempt);
       if (refusal !== null) return refusal;
 
       const operationId = crypto.randomUUID();
@@ -652,6 +680,48 @@ export function createInMemoryAttemptRepository<TOutcome>(
         activeOperationAdmittedAt: admittedAt,
       });
       return { kind: 'admitted', operationId, runtimeGeneration: attempt.runtimeGeneration, admittedAt };
+    },
+
+    async getInstruction(input: GetInstructionInput): Promise<ExecutionAttemptInstruction | null> {
+      const attempt = attempts.get(input.executionAttemptId);
+      return attempt?.executionId === input.executionId ? attempt.instruction : null;
+    },
+
+    async reportOperation(input: ReportOperationInput): Promise<OperationReportDecision> {
+      const result = parsePreparationResult(input.result);
+      const attempt = attempts.get(input.executionAttemptId);
+      if (attempt === undefined || attempt.executionId !== input.executionId) return { kind: 'not-found' };
+      const refusal = evaluatePreparationReport(
+        {
+          matchesExecution: true,
+          settled: attempt.settlementKind != null,
+          active: activeAttempts.get(input.executionId) === input.executionAttemptId,
+          allocated: attempt.allocationRef !== null && !allocationTerminated(input.executionAttemptId),
+        },
+        attempt,
+        attempt,
+        { ...input, result },
+      );
+      if (refusal !== null) return refusal;
+      const preparationReceipts = parsePreparationReceipts([
+        ...attempt.preparationReceipts,
+        {
+          operationId: input.operationId,
+          runtimeGeneration: input.runtimeGeneration,
+          result,
+        },
+      ]);
+      attempts.set(input.executionAttemptId, {
+        ...attempt,
+        preparationReceipts,
+        activeOperationId: null,
+        activeOperationKind: null,
+        activeOperationKey: null,
+        activeOperationGeneration: null,
+        activeOperationAdmittedAt: null,
+        lastCompletedOperationId: input.operationId,
+      });
+      return { kind: 'accepted', binding: result.binding };
     },
 
     async completeOperation(input: CompleteOperationInput): Promise<OperationCompletionDecision> {
@@ -751,6 +821,8 @@ export function createInMemoryAttemptRepository<TOutcome>(
       // transition won the CAS. It keeps its settlement kind: the loser of a
       // terminal race never rewrites the winner's answer.
       if (attempt.settlementKind != null) return { kind: 'conflict' };
+
+      assertRuntimeOutcomeFence(attempt, input.runtimeFence);
 
       // What this realization keeps is the codec text and nothing else, the
       // column a durable realization holds. Keeping the submitter's copy

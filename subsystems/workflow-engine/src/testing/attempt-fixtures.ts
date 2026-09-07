@@ -1,4 +1,9 @@
-import type { BoundedRecoveryEvidence, ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts';
+import type {
+  BoundedRecoveryEvidence,
+  ExecutionAttemptInstruction,
+  ProviderAllocationRef,
+  WorkflowRunResult,
+} from '@makaio/contracts';
 import { PROVIDER_ALLOCATION_REF_VERSION, WorkflowRunResultSchema } from '@makaio/contracts';
 import type {
   AllocationRecordingDecision,
@@ -19,6 +24,21 @@ export const TEST_PROVISIONER_INCARNATION_ID = 'provisioner-incarnation-1';
 
 /** Provider identifier bound by the default begin-provisioning fixture. */
 export const TEST_PROVIDER_ID = 'test-provider';
+
+/**
+ * Build an explicit test assignment without workspace or preservation obligations.
+ * @param overrides - Instruction fields specific to the scenario under test.
+ * @returns A complete owner-supplied test instruction.
+ */
+export function makeTestInstruction(overrides: Partial<ExecutionAttemptInstruction> = {}): ExecutionAttemptInstruction {
+  return {
+    id: 'test-instruction',
+    revision: '1',
+    workload: { kind: 'test-workload', version: '1', input: {} },
+    preservation: { required: [] },
+    ...overrides,
+  };
+}
 
 /**
  * The single operation every provisioning-claim holder needs.
@@ -181,9 +201,13 @@ export interface AttemptAllocationDriver extends ProvisioningClaimGrantor {
   /**
    * Persist a new attempt for its owner.
    * @param executionId - Owner identifier the attempt belongs to.
+   * @param instruction - Frozen assignment supplied explicitly by the test owner.
    * @returns The persisted attempt record.
    */
-  createAttempt(executionId: ExecutionOwnerId): Promise<ExecutionAttemptRecord>;
+  createAttempt(
+    executionId: ExecutionOwnerId,
+    instruction: ExecutionAttemptInstruction,
+  ): Promise<ExecutionAttemptRecord>;
   /**
    * Record the allocation the provider returned for the claimed attempt.
    * @param input - The claim and the allocation reference to record.
@@ -227,7 +251,7 @@ export async function allocateTestAttempt(
   driver: AttemptAllocationDriver,
   executionId: ExecutionOwnerId,
 ): Promise<string> {
-  const { executionAttemptId } = await driver.createAttempt(executionId);
+  const { executionAttemptId } = await driver.createAttempt(executionId, makeTestInstruction());
   await driveTestAttemptToAllocated(driver, executionAttemptId, executionId);
   return executionAttemptId;
 }

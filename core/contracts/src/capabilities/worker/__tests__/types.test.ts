@@ -46,6 +46,7 @@ import type {
   WorkerHandle,
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
+  WorkerProviderContext,
   WorkerRequirements,
 } from '../index.js';
 
@@ -129,6 +130,7 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
       workerConfig: {} as WorkerProvisionRequest['workerConfig'],
       workerManifest: { contributionRefs: [] },
       provisioningStartedAt: '2026-07-23T10:00:00Z',
+      bootstrapDeadlineAt: '2026-07-23T10:01:00Z',
     };
 
     expect(request.executionAttemptId).toBe('attempt-1');
@@ -144,6 +146,14 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
     // own allocation, so the field carries no `undefined` for a caller to
     // substitute one into.
     expectTypeOf<WorkerProvisionRequest['provisioningStartedAt']>().toEqualTypeOf<string>();
+  });
+
+  it('requires a deadline only when creating compute, not when recovering an allocation', () => {
+    expectTypeOf<WorkerProvisionRequest>().toMatchTypeOf<WorkerProviderContext>();
+    expectTypeOf<WorkerProviderContext>().not.toHaveProperty('bootstrapDeadlineAt');
+    expectTypeOf<WorkerProviderContext>().not.toMatchTypeOf<WorkerProvisionRequest>();
+    expectTypeOf<Omit<WorkerProvisionRequest, 'bootstrapDeadlineAt'>>().toEqualTypeOf<WorkerProviderContext>();
+    expectTypeOf<WorkerProvisionRequest['bootstrapDeadlineAt']>().toEqualTypeOf<string>();
   });
 });
 
@@ -233,6 +243,7 @@ describe('IWorkerProvider provision contract', () => {
         workerConfig: {} as WorkerProvisionRequest['workerConfig'],
         workerManifest: { contributionRefs: [] },
         provisioningStartedAt: '2026-07-23T10:00:00Z',
+        bootstrapDeadlineAt: '2026-07-23T10:01:00Z',
       },
       AbortSignal.timeout(5000),
     );
@@ -1014,9 +1025,9 @@ describe('IWorkerRecoveryCapability', () => {
     >().not.toMatchTypeOf<IWorkerRecoveryCapability>();
   });
 
-  it('discoverProvisioning takes the provision request and a signal', () => {
+  it('discoverProvisioning takes provider context without a bootstrap deadline and a signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['discoverProvisioning']>().parameters.toEqualTypeOf<
-      [WorkerProvisionRequest, AbortSignal]
+      [WorkerProviderContext, AbortSignal]
     >();
   });
 
@@ -1040,19 +1051,19 @@ describe('IWorkerRecoveryCapability', () => {
 
   it('attach takes allocationRef, request, and signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['attach']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerProvisionRequest, AbortSignal]
+      [ProviderAllocationRef, WorkerProviderContext, AbortSignal]
     >();
   });
 
   it('inspect takes allocationRef, request, and signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['inspect']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerProvisionRequest, AbortSignal]
+      [ProviderAllocationRef, WorkerProviderContext, AbortSignal]
     >();
   });
 
   it('terminateAllocation takes ref, request, and signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['terminateAllocation']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerProvisionRequest, AbortSignal]
+      [ProviderAllocationRef, WorkerProviderContext, AbortSignal]
     >();
   });
 

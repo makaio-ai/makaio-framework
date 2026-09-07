@@ -415,7 +415,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
         { ...workerConfig, busAuth: { kind: 'hmac', secret: busIdentity.secret } },
         controller.signal,
         request.workerManifest,
-        { executionAttemptId },
+        { executionAttemptId, bootstrapDeadlineAt: request.bootstrapDeadlineAt },
       );
       // Readiness is the Authority's own published fact now, so nothing is
       // emitted here. What the provider owns is how the thread ends. Admitted:

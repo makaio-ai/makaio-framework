@@ -1,3 +1,5 @@
+import type { ExecutionAttemptInstruction, ExecutionAttemptBootstrapAwaitStartResponse } from '@makaio/contracts';
+import { awaitBootstrapStart, type BootstrapStartAuthority, type BootstrapStartOptions } from './bootstrap-start.js';
 import type {
   AdmitOperationInput,
   AllocationRecordingDecision,
@@ -14,16 +16,19 @@ import type {
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   ExecutionOwnerId,
+  GetInstructionInput,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
   MarkRuntimeReadyInput,
   OperationAdmissionDecision,
   OperationCompletionDecision,
+  OperationReportDecision,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
   ProvisioningAbsenceDecision,
   ProvisioningClaimDecision,
   RecordAllocationInput,
+  ReadBootstrapStartStateInput,
   RecordAllocationTerminatedInput,
   RecordInfrastructureFailureInput,
   RecordProviderOperationUncertaintyInput,
@@ -31,8 +36,10 @@ import type {
   RecordProvisioningAbsentInput,
   RecoverableAttemptRecord,
   RegisterRuntimeInput,
+  ReportOperationInput,
   RenewProviderOperationClaimInput,
   RuntimeReadinessDecision,
+  RuntimeOutcomeFence,
   RuntimeRegistrationDecision,
   TakeOverProviderOperationInput,
 } from './execution-attempt-repository.js';
@@ -96,8 +103,9 @@ type OutcomeWaiter<TOutcome> = Deferred<TOutcome, Error>;
  * are lost on crash; the host recovery coordinator owns recovery decisions.
  * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export class ExecutionAttemptAuthority<TOutcome> {
+export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthority {
   private readonly repository: ExecutionAttemptRepository<TOutcome>;
+  private readonly bootstrapTimeoutMs: number;
 
   /**
    * In-process waiters keyed by `executionAttemptId`.
@@ -110,9 +118,30 @@ export class ExecutionAttemptAuthority<TOutcome> {
 
   /**
    * @param repository - Injected durable attempt persistence port.
+   * @param options - Explicit host-owned bootstrap budget frozen when each attempt is created.
    */
-  public constructor(repository: ExecutionAttemptRepository<TOutcome>) {
+  public constructor(
+    repository: ExecutionAttemptRepository<TOutcome>,
+    options: { readonly bootstrapTimeoutMs: number },
+  ) {
+    if (!Number.isSafeInteger(options?.bootstrapTimeoutMs) || options.bootstrapTimeoutMs <= 0) {
+      throw new Error('ExecutionAttemptAuthority requires an explicit positive safe-integer bootstrapTimeoutMs');
+    }
     this.repository = repository;
+    this.bootstrapTimeoutMs = options.bootstrapTimeoutMs;
+  }
+
+  /**
+   * Wait for durable allocation without registering or admitting a Runtime.
+   * @param identity - Trusted owner and attempt identity.
+   * @param options - Request cancellation and absolute deadline.
+   * @returns A bounded, renewable start decision.
+   */
+  public awaitBootstrapStart(
+    identity: ReadBootstrapStartStateInput,
+    options: BootstrapStartOptions,
+  ): Promise<ExecutionAttemptBootstrapAwaitStartResponse> {
+    return awaitBootstrapStart(this.repository, identity, options);
   }
 
   /**
@@ -121,13 +150,19 @@ export class ExecutionAttemptAuthority<TOutcome> {
    * Persists the attempt through the repository and installs an in-process
    * waiter for the committed outcome. Must be called before dispatch.
    * @param executionId - Owner identifier the attempt belongs to.
+   * @param instruction - Portable immutable assignment to snapshot before dispatch.
    * @returns The persisted attempt record.
    */
-  public async createAttempt(executionId: ExecutionOwnerId): Promise<ExecutionAttemptRecord> {
+  public async createAttempt(
+    executionId: ExecutionOwnerId,
+    instruction: ExecutionAttemptInstruction,
+  ): Promise<ExecutionAttemptRecord> {
     const executionAttemptId = crypto.randomUUID();
     const record = await this.repository.createAttempt({
       executionAttemptId,
       executionId,
+      instruction,
+      bootstrapTimeoutMs: this.bootstrapTimeoutMs,
     });
 
     // Install the in-process waiter before returning so that waitForOutcome
@@ -135,6 +170,24 @@ export class ExecutionAttemptAuthority<TOutcome> {
     this.installWaiter(executionAttemptId);
 
     return record;
+  }
+
+  /**
+   * Read this attempt's frozen assignment through the owner-scoped repository port.
+   * @param input - Attempt and trusted owner identity.
+   * @returns The stored assignment, or null for an owner mismatch or missing attempt.
+   */
+  public async getInstruction(input: GetInstructionInput): Promise<ExecutionAttemptInstruction | null> {
+    return this.repository.getInstruction(input);
+  }
+
+  /**
+   * Accept successful Preparation without settling the attempt's outcome waiter.
+   * @param input - Preparation result, operation correlation and trusted owner identity.
+   * @returns The repository's durable acceptance, replay or refusal.
+   */
+  public async reportOperation(input: ReportOperationInput): Promise<OperationReportDecision> {
+    return this.repository.reportOperation(input);
   }
 
   /**
@@ -409,17 +462,20 @@ export class ExecutionAttemptAuthority<TOutcome> {
    * @param executionAttemptId - The attempt submitting the outcome.
    * @param executionId - Owner identifier the attempt belongs to.
    * @param result - The rendering to commit, from {@link canonicalizeOutcome}.
+   * @param runtimeFence - Runtime slot that must remain current for a fresh commit.
    * @returns The durable decision with the canonical outcome when applicable.
    */
   public async commitOutcome(
     executionAttemptId: string,
     executionId: ExecutionOwnerId,
     result: DurableOutcome<TOutcome>,
+    runtimeFence?: RuntimeOutcomeFence,
   ): Promise<ExecutionAttemptOutcomeDecision<TOutcome>> {
     const decision = await this.repository.commitOutcome({
       executionAttemptId,
       executionId,
       result,
+      ...(runtimeFence === undefined ? {} : { runtimeFence }),
     });
 
     // Conflict and fenced decisions have no convergence step —

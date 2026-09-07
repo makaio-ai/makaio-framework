@@ -490,6 +490,7 @@ export async function bootMakaioRuntimeCore(
       makaioHome,
       bus,
       executionAttemptRepository: options.executionAttemptRepository,
+      executionAttemptBootstrapTimeoutMs: options.executionAttemptBootstrapTimeoutMs,
       workflowMaterializationSpecResolvers: options.workflowMaterializationSpecResolvers,
     });
 

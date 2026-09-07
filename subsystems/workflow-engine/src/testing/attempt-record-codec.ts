@@ -17,13 +17,25 @@
  * from there.
  * @packageDocumentation
  */
-import type { ProviderAllocationRef, WorkerAllocationLifetime } from '@makaio/contracts';
-import { ProviderAllocationRefSchema, WorkerAllocationLifetimeSchema } from '@makaio/contracts';
+import { z } from 'zod';
+import type {
+  ExecutionAttemptInstruction,
+  ExecutionAttemptPreparationResult,
+  ProviderAllocationRef,
+  WorkerAllocationLifetime,
+} from '@makaio/contracts';
+import {
+  ExecutionAttemptInstructionSchema,
+  ExecutionAttemptPreparationResultSchema,
+  ProviderAllocationRefSchema,
+  WorkerAllocationLifetimeSchema,
+} from '@makaio/contracts';
 import type {
   AllocationRefEvolution,
   AttemptControlState,
   ExecutionAttemptRecord,
   RecoverableAttemptRecord,
+  PreparationReceipt,
 } from '../execution-attempt-repository.js';
 
 /**
@@ -55,6 +67,30 @@ export function instantOf(timestamp: string): number {
  */
 export function normalizeInstant(timestamp: string): string {
   return new Date(instantOf(timestamp)).toISOString();
+}
+
+/**
+ * Freeze creation time and bootstrap deadline from one clock observation.
+ * @param bootstrapTimeoutMs - Explicit host-selected positive safe-integer budget.
+ * @returns Canonical creation and deadline timestamps, validated before any write.
+ * @throws When the budget or resulting deadline is not representable.
+ */
+export function createAttemptTiming(bootstrapTimeoutMs: number): {
+  readonly createdAt: string;
+  readonly bootstrapDeadlineAt: string;
+} {
+  if (!Number.isSafeInteger(bootstrapTimeoutMs) || bootstrapTimeoutMs <= 0) {
+    throw new RangeError('bootstrapTimeoutMs must be a positive safe integer');
+  }
+  const createdAtMs = Date.now();
+  const deadlineMs = createdAtMs + bootstrapTimeoutMs;
+  if (!Number.isSafeInteger(deadlineMs) || !Number.isFinite(new Date(deadlineMs).getTime())) {
+    throw new RangeError('bootstrapTimeoutMs produces an unrepresentable bootstrap deadline');
+  }
+  return {
+    createdAt: new Date(createdAtMs).toISOString(),
+    bootstrapDeadlineAt: new Date(deadlineMs).toISOString(),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -112,10 +148,47 @@ function freezeDeep(value: unknown): void {
  * @throws When the value violates its contract schema.
  * @typeParam TValue - Value type the column stores.
  */
-function snapshot<TValue>(value: TValue, parse: (candidate: unknown) => TValue): TValue {
+function snapshot<TValue>(value: unknown, parse: (candidate: unknown) => TValue): TValue {
   const parsed = parse(structuredClone(value));
   freezeDeep(parsed);
   return parsed;
+}
+
+/**
+ * Own an immutable assignment before an attempt becomes dispatchable.
+ * @param instruction - Owner-supplied portable assignment.
+ * @returns A validated, recursively frozen copy.
+ */
+export function parseInstruction(instruction: ExecutionAttemptInstruction): ExecutionAttemptInstruction {
+  return snapshot(instruction, (candidate) => ExecutionAttemptInstructionSchema.parse(candidate));
+}
+
+/**
+ * Own the semantic result before evaluating or storing a Preparation report.
+ * @param result - Runtime-supplied successful Preparation result.
+ * @returns A validated, recursively frozen copy.
+ */
+export function parsePreparationResult(result: ExecutionAttemptPreparationResult): ExecutionAttemptPreparationResult {
+  return snapshot(result, (candidate) => ExecutionAttemptPreparationResultSchema.parse(candidate));
+}
+
+const preparationReceiptsSchema = z.array(
+  z
+    .object({
+      operationId: z.string().min(1),
+      runtimeGeneration: z.number().int().positive(),
+      result: ExecutionAttemptPreparationResultSchema,
+    })
+    .strict(),
+);
+
+/**
+ * Decode retained receipt history without exposing mutable storage-owned values.
+ * @param receipts - Receipt history being stored or read from durable JSON.
+ * @returns Validated, recursively frozen receipt history.
+ */
+export function parsePreparationReceipts(receipts: unknown): readonly PreparationReceipt[] {
+  return snapshot(receipts, (candidate) => preparationReceiptsSchema.parse(candidate));
 }
 
 /**

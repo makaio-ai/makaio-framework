@@ -43,7 +43,7 @@ import {
 } from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
 import { rerunExecution } from './workflow-execution-rerun.js';
-import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
+import { launchDefinitionExecutionTask, selectDefinitionExecutionDispatch } from './workflow-definition-dispatch.js';
 import { RuntimeContext, resolveEphemeralPlatformFields } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
 import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
@@ -62,10 +62,17 @@ import {
 } from './workflow-resume-state.js';
 import { registerAuthorityStateBootstrapHandler } from './authority-state-bootstrap.js';
 import { registerOutcomeSubmissionHandler } from './workflow-outcome-submission.js';
-import { registerRuntimeRegistrationHandler } from './runtime-registration.js';
-import { registerOperationAdmissionHandler } from './operation-admission.js';
+import { registerRuntimeLifecycleHandlers } from './runtime-lifecycle-handlers.js';
+import { registerBootstrapStartHandler } from './bootstrap-start-handler.js';
 import { registerDelegateResultFinalizationGateway } from './delegate-result-finalization-gateway.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
+import type {
+  WorkflowAttemptOutcome,
+  WorkflowAttemptTechnicalFailure,
+  WorkflowAttemptCancellation,
+} from './workflow-attempt-outcome.js';
+import { acceptWorkflowTechnicalFailure } from './workflow-technical-failure.js';
+import { acceptWorkflowCancellation } from './workflow-cancellation-outcome.js';
 
 /**
  * Core workflow executor service.
@@ -82,6 +89,7 @@ export class WorkflowExecutor extends BaseService {
   public static readonly storage = { drizzle: registerDrizzleWorkflowStorage } as const;
 
   private readonly config: ExecutorConfig;
+  private stopBootstrapWaits?: () => void;
   private readonly activeExecutions = new Map<string, ActiveExecution>();
   private readonly executionTasks = new Map<string, Promise<void>>();
   private readonly shellAbortControllers = new Map<string, AbortController>();
@@ -97,8 +105,6 @@ export class WorkflowExecutor extends BaseService {
   private readonly durableLifecycleTransitions = new Map<string, Promise<void>>();
   private readonly lifecyclePublications = new Map<string, Promise<void>>();
   private readonly publishingLifecycleExecutions = new Set<string>();
-  private readonly workflowRunner?: IWorkflowRunner;
-  private readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>;
   private readonly materializationSpecResolvers = new Set<WorkflowMaterializationSpecResolver>();
 
   /**
@@ -111,13 +117,11 @@ export class WorkflowExecutor extends BaseService {
   public constructor(
     bus: IMakaioBus,
     config?: Partial<ExecutorConfig>,
-    workflowRunner?: IWorkflowRunner,
-    executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowRunResult>,
+    private readonly workflowRunner?: IWorkflowRunner,
+    private readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>,
   ) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
-    this.workflowRunner = workflowRunner;
-    this.executionAttemptAuthority = executionAttemptAuthority;
     this.gateTimeoutScheduler = new WorkflowGateTimeoutScheduler(bus, (executionId) =>
       this.resumePausedExecution(executionId),
     );
@@ -240,6 +244,26 @@ export class WorkflowExecutor extends BaseService {
     return { accepted: true, status: settled.execution.status };
   }
 
+  /**
+   * Fail the workflow owner after a technical Attempt outcome has been committed.
+   * Startup and Preparation failures can precede loading the workflow definition,
+   * so this path uses the durable owner context, not a fabricated runner result.
+   * @param executionId - Durable authority-owned execution identity.
+   * @param failure - Canonical technical failure retained in Attempt storage.
+   * @returns The durable status after idempotent failure convergence.
+   */
+  public readonly acceptAuthorityTechnicalFailure = (executionId: string, failure: WorkflowAttemptTechnicalFailure) =>
+    acceptWorkflowTechnicalFailure(this.buildFinalizerDeps(), executionId, failure);
+
+  /**
+   * Cancel the workflow owner after its technical Attempt cancellation is committed.
+   * @param executionId - Durable authority-owned execution identity.
+   * @param cancellation - Canonical cancellation retained in Attempt storage.
+   * @returns The durable status after idempotent cancellation convergence.
+   */
+  public readonly acceptAuthorityCancellation = (executionId: string, cancellation: WorkflowAttemptCancellation) =>
+    acceptWorkflowCancellation(this.buildFinalizerDeps(), executionId, cancellation);
+
   private async resolveAuthorityRunnerReplay(
     execution: WorkflowExecution,
     result: WorkflowRunResult,
@@ -303,26 +327,21 @@ export class WorkflowExecutor extends BaseService {
     );
     this.addCleanup(registerDelegateResultFinalizationGateway(this.bus));
     if (this.executionAttemptAuthority !== undefined) {
+      this.stopBootstrapWaits = registerBootstrapStartHandler(this.bus, this.executionAttemptAuthority);
+      this.addCleanup(this.stopBootstrapWaits);
       this.addCleanup(
         registerOutcomeSubmissionHandler(this.bus, {
           bus: this.bus,
           authority: this.executionAttemptAuthority,
           acceptTerminalResult: (executionId, result) => this.acceptAuthorityRunnerResult(executionId, result),
+          acceptTechnicalFailure: this.acceptAuthorityTechnicalFailure,
+          acceptCancellation: this.acceptAuthorityCancellation,
         }),
       );
-      this.addCleanup(
-        registerRuntimeRegistrationHandler(this.bus, { bus: this.bus, authority: this.executionAttemptAuthority }),
-      );
-      this.addCleanup(
-        registerOperationAdmissionHandler(this.bus, { bus: this.bus, authority: this.executionAttemptAuthority }),
-      );
+      registerRuntimeLifecycleHandlers(this.bus, this.executionAttemptAuthority, (cleanup) => this.addCleanup(cleanup));
     }
-    for (const cleanup of registerWorkflowStorageDelegationHandlers(this.bus)) {
-      this.addCleanup(cleanup);
-    }
-    for (const cleanup of registerWorkflowStateHandlers(this.bus)) {
-      this.addCleanup(cleanup);
-    }
+    registerWorkflowStorageDelegationHandlers(this.bus).forEach((cleanup) => this.addCleanup(cleanup));
+    registerWorkflowStateHandlers(this.bus).forEach((cleanup) => this.addCleanup(cleanup));
     await this.rehydratePausedGateTimeouts();
   }
 
@@ -331,6 +350,8 @@ export class WorkflowExecutor extends BaseService {
    * Called by `destroy()` before handler unsubscription.
    */
   protected async onDestroy(): Promise<void> {
+    // BaseService runs addCleanup after onDestroy: stop bootstrap waits before draining work.
+    this.stopBootstrapWaits?.();
     const finalizerDeps = this.buildFinalizerDeps();
     // 1. Cancel all active executions (aborts controllers, schedules hard-kill timers).
     await Promise.allSettled(
@@ -791,11 +812,12 @@ export class WorkflowExecutor extends BaseService {
     if (execution === null) {
       throw new Error(`[WorkflowExecutor] Execution not found for paused execution: ${executionId}`);
     }
-    if (execution.status !== 'paused') {
-      return false;
-    }
+    if (execution.status !== 'paused') return false;
 
     await assertDurableResumeFramesPresent(this.bus, runContext);
+
+    const params = buildDefinitionRunnerParamsFromRunContext(runContext, definition, { resume: true });
+    const dispatch = selectDefinitionExecutionDispatch(this.buildStartDeps(), params);
 
     await this.bus.request(WorkflowStorageSubjects.setExecution, {
       execution: { ...execution, status: 'running' },
@@ -809,8 +831,7 @@ export class WorkflowExecutor extends BaseService {
       runtimeLoopGates: new Map(),
     });
 
-    const params = buildDefinitionRunnerParamsFromRunContext(runContext, definition, { resume: true });
-    const executionTask = launchDefinitionExecutionTask(this.buildStartDeps(), params);
+    const executionTask = launchDefinitionExecutionTask(this.buildStartDeps(), params, dispatch);
     const trackedExecutionTask = executionTask.finally(() => {
       this.resumeDispatches.delete(executionId);
     });

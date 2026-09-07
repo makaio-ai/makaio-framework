@@ -8,6 +8,7 @@ import {
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { toCommittedWorkflowRunnerResult } from '../workflow-attempt-outcome.js';
 import { type ActiveExecution } from '../types.js';
 import {
   buildDefinitionRunnerParamsFromRunContext,
@@ -48,10 +49,13 @@ describe('buildDefinitionRunnerParamsFromRunContext', () => {
       provider: 'github-actions',
       resume: true,
     });
-    expect(params.terminalAuthority).toBe('authority');
+    expect(params.terminalAuthority).toBe('worker');
   });
 
-  it('preserves explicit terminal ownership from durable run context', () => {
+  it.each([
+    'worker',
+    'authority',
+  ] as const)('preserves explicit %s terminal ownership from durable run context', (terminalAuthority) => {
     const workflow = createWorkflowDefinition({ id: 'wf-terminal-authority' });
     const runContext = WorkflowRunContextSchema.parse({
       executionId: 'exec-terminal-authority',
@@ -65,12 +69,12 @@ describe('buildDefinitionRunnerParamsFromRunContext', () => {
       cancelSubject: 'workflow.exec-terminal-authority.cancel',
       env: {},
       createdAt: Date.now(),
-      terminalAuthority: 'worker',
+      terminalAuthority,
     });
 
     const params = buildDefinitionRunnerParamsFromRunContext(runContext, workflow, { resume: true });
 
-    expect(params.terminalAuthority).toBe('worker');
+    expect(params.terminalAuthority).toBe(terminalAuthority);
   });
 
   it('preserves the durable materialization spec for a path-backed resume', () => {
@@ -245,7 +249,21 @@ describe('authority-committed runner results', () => {
     setup = undefined;
   });
 
-  it('does not release a running execution when a faulty runner claims authority convergence', async () => {
+  it.each([
+    { scenario: 'refuses uncommitted completion', cancel: false, abort: false, finalizerCalls: 2 },
+    {
+      scenario: 'accepts a failed stop diagnostic after public cancellation',
+      cancel: true,
+      abort: true,
+      finalizerCalls: 1,
+    },
+    {
+      scenario: 'refuses cancelled/failed compatibility without runner abort',
+      cancel: true,
+      abort: false,
+      finalizerCalls: 2,
+    },
+  ])('$scenario', async ({ cancel, abort, finalizerCalls }) => {
     const workflow = createWorkflowDefinition({ id: 'wf-faulty-authority-commit' });
     const execution = createWorkflowExecution({ id: 'exec-faulty-authority-commit', workflowId: workflow.id });
     const runContext = WorkflowRunContextSchema.parse({
@@ -276,26 +294,50 @@ describe('authority-committed runner results', () => {
         },
       ],
     ]);
+    const workflowAbortControllers = new Map<string, AbortController>();
     const workerRunner: IWorkflowRunner = {
-      run: async (config): Promise<WorkflowRunnerCompletion> => ({
-        state: 'authority-committed',
-        result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
-      }),
+      run: async (config): Promise<WorkflowRunnerCompletion> => {
+        if (cancel) {
+          // Public cancellation owns durable state; the task's existing signal
+          // separately records whether this runner was asked to stop.
+          expect(
+            await MakaioBus.request(WorkflowSubjects.cancel, {
+              executionId: execution.id,
+              reason: 'Operator stopped work',
+            }),
+          ).toMatchObject({ cancelled: true });
+          if (abort) workflowAbortControllers.get(execution.id)?.abort('Operator stopped work');
+          const result = toCommittedWorkflowRunnerResult(
+            { kind: 'technical-failure', stage: 'workload-invocation', message: 'Process group did not stop' },
+            config,
+          );
+          expect(result).toMatchObject({ status: 'failed', error: 'workload-invocation: Process group did not stop' });
+          return { state: 'authority-committed', result };
+        }
+        return {
+          state: 'authority-committed',
+          result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
+        };
+      },
     };
+    let observedFinalizerCalls = 0;
     const deps: RunnerTaskDeps = {
       workflowRunner: workerRunner,
-      workflowAbortControllers: new Map(),
+      workflowAbortControllers,
       executionTasks: new Map(),
       activeExecutions,
-      buildFinalizerDeps: () => ({
-        bus: MakaioBus,
-        activeExecutions,
-        shellAbortControllers: new Map(),
-        activeRunnerSteps: new Map(),
-        durableLifecycleTransitions: new Map(),
-        lifecyclePublications: new Map(),
-        publishingLifecycleExecutions: new Set(),
-      }),
+      buildFinalizerDeps: () => {
+        observedFinalizerCalls += 1;
+        return {
+          bus: MakaioBus,
+          activeExecutions,
+          shellAbortControllers: new Map(),
+          activeRunnerSteps: new Map(),
+          durableLifecycleTransitions: new Map(),
+          lifecyclePublications: new Map(),
+          publishingLifecycleExecutions: new Set(),
+        };
+      },
       config: {
         stepTimeoutMs: 10_000,
         stepCooldownMs: 0,
@@ -320,6 +362,13 @@ describe('authority-committed runner results', () => {
 
     await expect(
       MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id }),
-    ).resolves.toEqual(expect.objectContaining({ execution: expect.objectContaining({ status: 'failed' }) }));
+    ).resolves.toEqual(
+      expect.objectContaining({ execution: expect.objectContaining({ status: cancel ? 'cancelled' : 'failed' }) }),
+    );
+    // One access verifies committed state. A second access means verification
+    // rejected the result and invoked the fallback finalizer instead.
+    expect(observedFinalizerCalls).toBe(finalizerCalls);
+    expect(activeExecutions.has(execution.id)).toBe(false);
+    expect(workflowAbortControllers.has(execution.id)).toBe(false);
   });
 });

@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ConnectionLostError } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { MockWebSocket } from './test-helpers.js';
 import { waitForCondition } from './test-utils.js';
@@ -135,7 +136,7 @@ describe('WebSocketClientTransport — onDisconnected', () => {
 // ---------------------------------------------------------------------------
 
 describe('WebSocketClientTransport — send guard', () => {
-  it('throws "not connected" when called before connect()', async () => {
+  it('rejects with typed connection loss when called before connect()', async () => {
     const { transport } = makeTransport({});
 
     await expect(
@@ -146,7 +147,7 @@ describe('WebSocketClientTransport — send guard', () => {
         messageId: 'msg-1',
         payload: {},
       }),
-    ).rejects.toThrow('WebSocketClientTransport: not connected');
+    ).rejects.toBeInstanceOf(ConnectionLostError);
   });
 });
 

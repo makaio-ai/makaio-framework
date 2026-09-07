@@ -33,6 +33,7 @@ next: false
 | `lifecycle.provisioning` | [`worker.lifecycle.provisioning`](#worker.lifecycle.provisioning) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `lifecycle.ready` | [`worker.lifecycle.ready`](#worker.lifecycle.ready) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `lifecycle.terminated` | [`worker.lifecycle.terminated`](#worker.lifecycle.terminated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `runtime.inputs.get` | [`worker.runtime.inputs.get`](#worker.runtime.inputs.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 
 ## Subject Details
 
@@ -59,8 +60,10 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `busAuthSecret` | `string` | yes |
-| `busUrl` | `string` | yes |
+| `credentials` | `{ busUrl: string; busAuthSecret: string; } \| undefined` | no |
+| `reason` | `"resolved" \| "not-found" \| "fenced" \| "allocation-terminated" \| "gate-closed" \| "bootstrap-expired" \| "provider-mismatch" \| "claim-expired" \| "not-claimable" \| undefined` | no |
+| `runtimeEnv` | `Record<string, string> \| undefined` | no |
+| `status` | `"granted" \| "pending" \| "refused"` | yes |
 
 ### <a id="worker.control.outcome.submit"></a>`worker.control.outcome.submit` (rpc)
 
@@ -85,7 +88,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `decision` | `"accepted" \| "duplicate" \| "fenced" \| "conflict"` | yes |
+| `decision` | `"accepted" \| "fenced" \| "duplicate" \| "conflict"` | yes |
 
 ### <a id="worker.dispatch"></a>`worker.dispatch` (rpc)
 
@@ -235,6 +238,29 @@ Type: Event
 | `executionId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 | `reason` | `string \| undefined` | no |
+
+### <a id="worker.runtime.inputs.get"></a>`worker.runtime.inputs.get` (rpc)
+
+Read the non-secret Runtime inputs selected for the authenticated Attempt.
+
+The host derives the execution owner from the existing authenticated peer and
+resolves the Attempt's binding. A missing binding returns null, never current
+defaults. Credentials remain on the existing bootstrap path.
+
+Subject: `worker.runtime.inputs.get`
+Type: Request (RPC) — Worker Runtime → host
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `executionAttemptId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `runtimeInputs` | `{ workerManifest: { contributionRefs: { packageName: string; version: string; entrypoint: string; integrity: string; }[]; }; suspensionStrategy: "wait-in-process" \| "exit-and-redispatch" \| "exit-and-resume"; } \| null` | yes |
 
 ---
 

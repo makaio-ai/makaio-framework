@@ -26,12 +26,40 @@ export type {
 } from './types.js';
 export type { WorkflowSuccessFinalizer } from './workflow-execution-finalizer.js';
 export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
+export { resolveExecutionAttemptPeer } from './execution-bound-access.js';
+export type { ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
+export { registerExecutionAttemptHandlers } from './execution-attempt-handlers.js';
+export type { AttemptOutcomeDecodingInput, ExecutionAttemptHandlersDeps } from './execution-attempt-handlers.js';
+export {
+  WORKFLOW_WORKLOAD_KIND,
+  WORKFLOW_WORKLOAD_VERSION,
+  WorkflowInvocationInputSchema,
+  buildWorkflowAttemptInstruction,
+  parseWorkflowAttemptInstruction,
+} from './workflow-attempt-instruction.js';
+export type {
+  BuildWorkflowAttemptInstructionOptions,
+  WorkflowInvocationInput,
+} from './workflow-attempt-instruction.js';
+export {
+  WorkflowAttemptOutcomeSchema,
+  workflowAttemptOutcomeCodec,
+  decodeWorkflowAttemptOutcome,
+  toCommittedWorkflowRunnerResult,
+} from './workflow-attempt-outcome.js';
+export type {
+  WorkflowAttemptOutcome,
+  WorkflowAttemptTechnicalFailure,
+  WorkflowAttemptCancellation,
+  CommittedWorkflowOutcomeIdentity,
+} from './workflow-attempt-outcome.js';
 export {
   registerRuntimeRegistrationHandler,
   RUNTIME_PROBE_DELIVERY_TIMEOUT_MS,
 } from './runtime-registration.js';
 export type { RuntimeRegistrationDeps } from './runtime-registration.js';
 export { registerOperationAdmissionHandler } from './operation-admission.js';
+export { registerBootstrapStartHandler } from './bootstrap-start-handler.js';
 export type { OperationAdmissionDeps } from './operation-admission.js';
 export { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 export type { AuthorityDispatchRunnerOptions } from './authority-dispatch-runner.js';
@@ -46,6 +74,8 @@ export type {
 export {
   ATTEMPT_OPERATION_START_GATES,
   DuplicateExecutionAttemptError,
+  RuntimeOutcomeFenceMismatchError,
+  assertRuntimeOutcomeFence,
   EXECUTION_ATTEMPT_STATUSES,
   EXECUTION_ATTEMPT_SETTLEMENT_KINDS,
   decodeDurableOutcome,
@@ -63,6 +93,8 @@ export type {
   AttemptReachabilityDecision,
   AdmitOperationInput,
   AttemptControlState,
+  BootstrapStartState,
+  ReadBootstrapStartStateInput,
   AttemptOperationStartGate,
   CompleteOperationInput,
   DurableOutcome,
@@ -73,6 +105,7 @@ export type {
   OutcomeCodec,
   RegisterRuntimeInput,
   RuntimeReadinessDecision,
+  RuntimeOutcomeFence,
   RuntimeRegistrationDecision,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
@@ -131,3 +164,4 @@ export {
   workflowExecutionStateEventsDual,
 } from './storage/schema.js';
 export { initializeWorkflowState, getWorkflowState, patchWorkflowState } from './storage/state-handler.js';
+export type { BootstrapStartAuthority, BootstrapStartOptions } from './bootstrap-start.js';
