@@ -110,7 +110,7 @@ jobs:
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         if: github.event_name == 'pull_request' || inputs.base_sha != ''
         with:
           ref: ${{ inputs.source_sha || github.sha }}
@@ -162,7 +162,7 @@ jobs:
             echo "Documentation-only PR; skipping CI."
           fi
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         if: github.event_name != 'pull_request' && inputs.base_sha == '' && steps.changes.outputs.docs_only != 'true'
         with:
           persist-credentials: false
@@ -170,7 +170,7 @@ jobs:
       - name: Restore Yarn cache
         if: steps.changes.outputs.docs_only != 'true'
         id: yarn-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -183,14 +183,14 @@ jobs:
       - name: Restore node_modules + toolchain
         if: steps.changes.outputs.docs_only != 'true'
         id: nm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             **/node_modules
             /tmp/.cache/corepack
           key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
         with:
           node-version: 24
@@ -209,7 +209,7 @@ jobs:
 
       - name: Save Yarn cache
         if: steps.changes.outputs.docs_only != 'true' && steps.yarn-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -218,7 +218,7 @@ jobs:
 
       - name: Save node_modules + toolchain
         if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             **/node_modules
@@ -233,13 +233,13 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           persist-credentials: false
 
       - name: Restore Yarn cache
         id: yarn-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -248,14 +248,14 @@ jobs:
 
       - name: Restore node_modules + toolchain
         id: nm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             **/node_modules
             /tmp/.cache/corepack
           key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:
           node-version: 24
 
@@ -272,7 +272,7 @@ jobs:
 
       - name: Restore ESLint cache
         id: eslint-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: .eslintcache
           key: eslint-cache-${{ runner.os }}-${{ hashFiles('yarn.lock', 'eslint.config.mjs') }}-${{ github.sha }}
@@ -297,7 +297,7 @@ jobs:
 
       - name: Save ESLint cache
         if: always() && steps.eslint-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: .eslintcache
           key: eslint-cache-${{ runner.os }}-${{ hashFiles('yarn.lock', 'eslint.config.mjs') }}-${{ github.sha }}
@@ -315,13 +315,13 @@ jobs:
         shard: ${{ fromJson(inputs.test_shards) }}
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           persist-credentials: false
 
       - name: Restore Yarn cache
         id: yarn-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -330,14 +330,14 @@ jobs:
 
       - name: Restore node_modules + toolchain
         id: nm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             **/node_modules
             /tmp/.cache/corepack
           key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:
           node-version: 24
 
@@ -387,13 +387,13 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           persist-credentials: false
 
       - name: Restore Yarn cache
         id: yarn-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -402,14 +402,14 @@ jobs:
 
       - name: Restore node_modules + toolchain
         id: nm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             **/node_modules
             /tmp/.cache/corepack
           key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:
           node-version: 24
 
@@ -450,13 +450,13 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           persist-credentials: false
 
       - name: Restore Yarn cache
         id: yarn-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -465,14 +465,14 @@ jobs:
 
       - name: Restore node_modules + toolchain
         id: nm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             **/node_modules
             /tmp/.cache/corepack
           key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:
           node-version: 24
 
@@ -501,13 +501,13 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           persist-credentials: false
 
       - name: Restore Yarn cache
         id: yarn-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             .yarn/cache
@@ -516,14 +516,14 @@ jobs:
 
       - name: Restore node_modules + toolchain
         id: nm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             **/node_modules
             /tmp/.cache/corepack
           key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:
           node-version: 24
 
@@ -536,7 +536,7 @@ jobs:
           YARN_ENABLE_HARDENED_MODE: '0'
         run: yarn install --immutable
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
         with:
           python-version: '3.12'
 
