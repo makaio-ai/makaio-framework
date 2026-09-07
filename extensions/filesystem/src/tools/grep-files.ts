@@ -79,26 +79,30 @@ export async function searchFile(
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   const nonBlocking = fsConstants.O_NONBLOCK ?? 0;
   const fileHandle = await fs.open(targetPath, fsConstants.O_RDONLY | noFollow | nonBlocking);
-  const stream = fileHandle.createReadStream({ encoding: 'utf-8', autoClose: false });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
 
   try {
     const stat = await fileHandle.stat();
     if (!stat.isFile()) throw new Error(`Path is not a regular file: ${targetPath}`);
 
-    for await (const line of rl) {
-      lineNum++;
-      if (regex.test(line)) {
-        if (matches.length >= budget) {
-          hasMore = true;
-          break;
+    const stream = fileHandle.createReadStream({ encoding: 'utf-8', autoClose: false });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+    // Readline starts consuming immediately; attach its iterator before yielding.
+    try {
+      for await (const line of rl) {
+        lineNum++;
+        if (regex.test(line)) {
+          if (matches.length >= budget) {
+            hasMore = true;
+            break;
+          }
+          matches.push({ file: filePath, line: lineNum, text: line });
         }
-        matches.push({ file: filePath, line: lineNum, text: line });
       }
+    } finally {
+      rl.close();
+      stream.destroy();
     }
   } finally {
-    rl.close();
-    stream.destroy();
     await fileHandle.close();
   }
 
