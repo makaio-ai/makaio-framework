@@ -1,5 +1,5 @@
 /**
- * `@makaio/subsystem-workflow-engine/testing`
+ * `@makaio/framework/workflow-engine/testing`
  *
  * Test-only realizations of the durable execution attempt port, plus the
  * fixtures that drive them.

@@ -1,5 +1,5 @@
 /**
- * `@makaio/subsystem-workflow-engine/testing/sqlite`
+ * `@makaio/framework/workflow-engine/testing/sqlite`
  *
  * The transactional SQLite realization of the durable execution attempt port.
  *

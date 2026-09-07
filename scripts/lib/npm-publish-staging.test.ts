@@ -78,6 +78,7 @@ describe('createStagedPackageJson', () => {
     const staged = createStagedPackageJson(frameworkManifest, '1.0.0-dev-1780000000000', {
       '@makaio/framework': '1.0.0-dev-1780000000000',
     });
+    // package.json is runtime JSON; keep the export map open and assert exact public entries below.
     const exports = staged.exports as Record<string, unknown>;
     const sourceExports = frameworkManifest.exports as Record<string, unknown>;
 
@@ -85,6 +86,14 @@ describe('createStagedPackageJson', () => {
     expect(staged.engines).toEqual({ node: '>=22.15.0' });
     expect(exports['./bus']).toEqual(sourceExports['./bus']);
     expect(exports['./workflow-engine']).toEqual(sourceExports['./workflow-engine']);
+    expect(exports['./workflow-engine/testing']).toEqual({
+      types: './dist/workflow-engine/testing/index.d.mts',
+      default: './dist/workflow-engine/testing/index.mjs',
+    });
+    expect(exports['./workflow-engine/testing/sqlite']).toEqual({
+      types: './dist/workflow-engine/testing/sqlite.d.mts',
+      default: './dist/workflow-engine/testing/sqlite.mjs',
+    });
     expect(exports['./contracts/native-session-supervisor']).toEqual(
       sourceExports['./contracts/native-session-supervisor'],
     );
