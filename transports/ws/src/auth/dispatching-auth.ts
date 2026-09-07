@@ -8,6 +8,7 @@
 
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
+import { WebSocketConnectionError } from '../connection-error.js';
 
 /**
  * Options for creating a dispatching auth strategy.
@@ -219,7 +220,8 @@ export class DispatchingAuth implements TransportAuth {
       if (pending) {
         this.pendingServerAuth.delete(socket);
         pending.reject(
-          new Error(
+          new WebSocketConnectionError(
+            'WS_POLICY_REJECTED',
             `DispatchingAuth: unrecognised auth message type "${this.peekType(message)}" — no matching strategy`,
           ),
         );

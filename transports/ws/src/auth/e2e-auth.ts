@@ -8,6 +8,7 @@
 import type { TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
+import { WebSocketConnectionError } from '../connection-error.js';
 import {
   generateAndSignEphemeralKey,
   verifyEphemeralKeySignature,
@@ -57,6 +58,39 @@ interface SessionData {
 }
 
 /**
+ * Validate the wire representation before peer data reaches crypto helpers.
+ * @param publicKey - Base64url-encoded SPKI data from the peer.
+ * @param signature - Hex-encoded P-256 ECDSA signature from the peer.
+ * @returns Whether both fields have the representation produced by this protocol.
+ */
+function hasValidKeyMaterial(publicKey: unknown, signature: unknown): boolean {
+  return (
+    typeof publicKey === 'string' &&
+    /^[A-Za-z0-9_-]+$/.test(publicKey) &&
+    publicKey.length % 4 !== 1 &&
+    typeof signature === 'string' &&
+    /^[0-9a-f]{128}$/i.test(signature)
+  );
+}
+
+/**
+ * Validate the responder's key material and HKDF salt as one protocol payload.
+ * @param response - Untrusted fields from a key-exchange response.
+ * @returns Whether the response has the representation produced by this protocol.
+ */
+function hasValidKeyExchangeResponse(response: {
+  ephemeralPublicKey: unknown;
+  signature: unknown;
+  salt: unknown;
+}): boolean {
+  return (
+    hasValidKeyMaterial(response.ephemeralPublicKey, response.signature) &&
+    typeof response.salt === 'string' &&
+    /^[0-9a-f]{32}$/i.test(response.salt)
+  );
+}
+
+/**
  * E2E authenticated encryption implementation.
  */
 export class E2EAuth implements TransportAuth {
@@ -96,26 +130,37 @@ export class E2EAuth implements TransportAuth {
    * @param send - Function to send auth messages to the server
    */
   public async authenticateClient(send: (message: unknown) => void): Promise<void> {
+    // Missing local configuration is not an authentication verdict from a peer.
     if (!this.peerId) {
       throw new Error('E2E authentication failed: peerId is required for client authentication');
     }
 
-    const { ephemeralKeyPair, ephemeralPublicKey, signature } = await generateAndSignEphemeralKey(
-      this.signingKeyPair.privateKey,
-      this.identityId,
-    );
-    this.clientEphemeralKeyPair = ephemeralKeyPair;
-
+    // The existing pending exchange owns the entire handshake, including crypto
+    // and key lookup. Cleanup invalidates it; stale continuations cannot publish
+    // a session or clear a replacement handshake's state.
+    const responsePromise = this.waitForKeyExchangeResponse();
+    const owner = this.pendingKeyExchange!;
+    const resultPromise = this.waitForAuthResult();
+    void responsePromise.catch(() => undefined);
+    void resultPromise.catch(() => undefined);
     try {
-      const responsePromise = this.waitForKeyExchangeResponse();
-      const resultPromise = this.waitForAuthResult();
+      const { ephemeralKeyPair, ephemeralPublicKey, signature } = await generateAndSignEphemeralKey(
+        this.signingKeyPair.privateKey,
+        this.identityId,
+      );
+      this.assertClientOwner(owner);
+      this.clientEphemeralKeyPair = ephemeralKeyPair;
 
       send({ type: 'e2e-key-exchange', deviceId: this.identityId, ephemeralPublicKey, signature });
+      this.assertClientOwner(owner);
 
       const response = await responsePromise;
+      this.assertClientOwner(owner);
 
       const serverPublicKey = await this.getPeerSigningKey(this.peerId);
-      if (!serverPublicKey) throw new Error('E2E authentication failed: Unknown server');
+      this.assertClientOwner(owner);
+      if (!serverPublicKey)
+        throw new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'E2E authentication failed: Unknown server');
 
       const isValid = await verifyEphemeralKeySignature(
         serverPublicKey,
@@ -123,7 +168,12 @@ export class E2EAuth implements TransportAuth {
         response.signature,
         this.peerId,
       );
-      if (!isValid) throw new Error('E2E authentication failed: Invalid server signature');
+      this.assertClientOwner(owner);
+      if (!isValid)
+        throw new WebSocketConnectionError(
+          'WS_AUTHENTICATION_REJECTED',
+          'E2E authentication failed: Invalid server signature',
+        );
 
       const sessionKey = await deriveE2ESessionKey(
         ephemeralKeyPair.privateKey,
@@ -131,25 +181,29 @@ export class E2EAuth implements TransportAuth {
         response.salt,
         'makaio-e2e-session-v1',
       );
-
-      this.clientSession = { sessionKey, peerId: this.peerId };
+      this.assertClientOwner(owner);
 
       const result = await resultPromise;
-      if (!result.success) throw new Error(`E2E authentication failed: ${result.error ?? 'Unknown error'}`);
+      this.assertClientOwner(owner);
+      if (!result.success)
+        throw new WebSocketConnectionError(
+          'WS_AUTHENTICATION_REJECTED',
+          `E2E authentication failed: ${result.error ?? 'Unknown error'}`,
+        );
+      this.clientSession = { sessionKey, peerId: this.peerId };
     } catch (error) {
-      // Clear pending promises to prevent lingering timeouts
-      if (this.pendingKeyExchange) {
-        clearTimeout(this.pendingKeyExchange.timeoutHandle);
-        this.pendingKeyExchange = undefined;
+      if (this.pendingKeyExchange === owner) {
+        this.clientSession = undefined;
+        this.clientEphemeralKeyPair = undefined;
       }
-      if (this.pendingResult) {
-        clearTimeout(this.pendingResult.timeoutHandle);
+      throw error;
+    } finally {
+      clearTimeout(owner.timeoutHandle);
+      if (this.pendingKeyExchange === owner) {
+        this.pendingKeyExchange = undefined;
+        if (this.pendingResult) clearTimeout(this.pendingResult.timeoutHandle);
         this.pendingResult = undefined;
       }
-      // Clear client auth state so getSessionKey() won't return a key after failed auth
-      this.clientSession = undefined;
-      this.clientEphemeralKeyPair = undefined;
-      throw error;
     }
   }
 
@@ -159,13 +213,19 @@ export class E2EAuth implements TransportAuth {
    * @param send - Function to send auth messages to the client
    */
   public async authenticateServer(socket: WebSocketLike, send: (message: unknown) => void): Promise<void> {
+    const exchangePromise = this.waitForClientKeyExchange(socket);
+    const owner = this.serverPendingKeyExchange.get(socket)!;
     try {
-      const clientKeyExchange = await this.waitForClientKeyExchange(socket);
+      const clientKeyExchange = await exchangePromise;
+      this.assertServerOwner(socket, owner);
 
       const devicePublicKey = await this.getPeerSigningKey(clientKeyExchange.deviceId);
+      this.assertServerOwner(socket, owner);
       if (!devicePublicKey) {
-        send({ type: 'e2e-auth-result', success: false, error: 'Unknown device' });
-        throw new Error(`E2E authentication failed: Unknown device ${clientKeyExchange.deviceId}`);
+        throw new WebSocketConnectionError(
+          'WS_AUTHENTICATION_REJECTED',
+          `E2E authentication failed: Unknown device ${clientKeyExchange.deviceId}`,
+        );
       }
 
       const isValid = await verifyEphemeralKeySignature(
@@ -174,19 +234,24 @@ export class E2EAuth implements TransportAuth {
         clientKeyExchange.signature,
         clientKeyExchange.deviceId,
       );
+      this.assertServerOwner(socket, owner);
       if (!isValid) {
-        send({ type: 'e2e-auth-result', success: false, error: 'Invalid signature' });
-        throw new Error('E2E authentication failed: Invalid client signature');
+        throw new WebSocketConnectionError(
+          'WS_AUTHENTICATION_REJECTED',
+          'E2E authentication failed: Invalid client signature',
+        );
       }
 
       const { ephemeralKeyPair, ephemeralPublicKey, signature } = await generateAndSignEphemeralKey(
         this.signingKeyPair.privateKey,
         this.identityId,
       );
+      this.assertServerOwner(socket, owner);
       const salt = generateSaltHex();
       this.serverEphemeralKeyPairs.set(socket, ephemeralKeyPair);
 
       send({ type: 'e2e-key-exchange-response', ephemeralPublicKey, signature, salt });
+      this.assertServerOwner(socket, owner);
 
       const sessionKey = await deriveE2ESessionKey(
         ephemeralKeyPair.privateKey,
@@ -194,20 +259,57 @@ export class E2EAuth implements TransportAuth {
         salt,
         'makaio-e2e-session-v1',
       );
+      this.assertServerOwner(socket, owner);
 
       this.serverSessions.set(socket, { sessionKey, peerId: clientKeyExchange.deviceId });
       send({ type: 'e2e-auth-result', success: true });
+      this.assertServerOwner(socket, owner);
     } catch (error) {
-      this.serverPendingKeyExchange.delete(socket);
-      this.serverEphemeralKeyPairs.delete(socket);
-      send({
-        type: 'e2e-auth-result',
-        success: false,
-        error: error instanceof Error ? error.message : 'Authentication failed',
-      });
+      if (this.serverPendingKeyExchange.get(socket) === owner) {
+        this.serverEphemeralKeyPairs.delete(socket);
+        this.serverSessions.delete(socket);
+        // Only a genuine credential refusal produces a negative auth frame.
+        // Timer/lookup/crypto failures retain their own category, never rejection.
+        try {
+          if (error instanceof WebSocketConnectionError && error.code === 'WS_AUTHENTICATION_REJECTED') {
+            send({
+              type: 'e2e-auth-result',
+              success: false,
+              error: error.message,
+            });
+          }
+        } catch {
+          // A closed socket cannot mask the original authentication failure.
+        }
+      }
       throw error;
     } finally {
-      this.serverPendingKeyExchange.delete(socket);
+      clearTimeout(owner.timeoutHandle);
+      if (this.serverPendingKeyExchange.get(socket) === owner) this.serverPendingKeyExchange.delete(socket);
+    }
+  }
+
+  /**
+   * Reject a client continuation whose handshake was cleaned up or replaced.
+   * @param owner - Pending exchange that owns the handshake.
+   */
+  private assertClientOwner(owner: NonNullable<E2EAuth['pendingKeyExchange']>): void {
+    if (this.pendingKeyExchange !== owner) {
+      throw new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Connection closed during E2E authentication');
+    }
+  }
+
+  /**
+   * Reject server work that outlived its socket handshake.
+   * @param socket - Authenticating socket.
+   * @param owner - Pending exchange that owns this socket handshake.
+   */
+  private assertServerOwner(
+    socket: WebSocketLike,
+    owner: PendingAuth<{ deviceId: string; ephemeralPublicKey: string; signature: string }>,
+  ): void {
+    if (this.serverPendingKeyExchange.get(socket) !== owner) {
+      throw new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Connection closed during E2E authentication');
     }
   }
 
@@ -227,25 +329,41 @@ export class E2EAuth implements TransportAuth {
     if (msg.type === 'e2e-key-exchange-response') {
       if (this.pendingKeyExchange) {
         clearTimeout(this.pendingKeyExchange.timeoutHandle);
+        // A typed message cast does not validate peer JSON. Refuse malformed
+        // protocol data here; crypto/provider exceptions retain their own meaning.
+        if (!hasValidKeyExchangeResponse(msg)) {
+          this.pendingKeyExchange.reject(
+            new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Malformed E2E key exchange response'),
+          );
+          return true;
+        }
         this.pendingKeyExchange.resolve({
           ephemeralPublicKey: msg.ephemeralPublicKey,
           signature: msg.signature,
           salt: msg.salt,
         });
-        this.pendingKeyExchange = undefined;
       }
       return true;
     }
 
     if (msg.type === 'e2e-auth-result') {
+      // Only an actual boolean is a peer verdict; malformed JSON must neither
+      // approve authentication via truthiness nor fabricate an explicit refusal.
+      if (typeof msg.success !== 'boolean') return true;
+      // A diagnostic object must not throw during coercion and strand the exchange.
+      const errorMessage = typeof msg.error === 'string' ? msg.error : undefined;
       if (!msg.success && this.pendingKeyExchange) {
         clearTimeout(this.pendingKeyExchange.timeoutHandle);
-        this.pendingKeyExchange.reject(new Error(`E2E authentication failed: ${msg.error ?? 'Unknown error'}`));
-        this.pendingKeyExchange = undefined;
+        this.pendingKeyExchange.reject(
+          new WebSocketConnectionError(
+            'WS_AUTHENTICATION_REJECTED',
+            `E2E authentication failed: ${errorMessage ?? 'Unknown error'}`,
+          ),
+        );
       }
       if (this.pendingResult) {
         clearTimeout(this.pendingResult.timeoutHandle);
-        this.pendingResult.resolve({ success: msg.success, error: msg.error });
+        this.pendingResult.resolve({ success: msg.success, error: errorMessage });
         this.pendingResult = undefined;
       }
       return true;
@@ -255,6 +373,10 @@ export class E2EAuth implements TransportAuth {
       const pendingEntry = this.serverPendingKeyExchange.get(socket);
       if (pendingEntry) {
         clearTimeout(pendingEntry.timeoutHandle);
+        if (typeof msg.deviceId !== 'string' || !hasValidKeyMaterial(msg.ephemeralPublicKey, msg.signature)) {
+          pendingEntry.reject(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Malformed E2E key exchange'));
+          return true;
+        }
         pendingEntry.resolve({
           deviceId: msg.deviceId,
           ephemeralPublicKey: msg.ephemeralPublicKey,
@@ -274,8 +396,7 @@ export class E2EAuth implements TransportAuth {
   }> {
     return new Promise<{ ephemeralPublicKey: string; signature: string; salt: string }>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
-        this.pendingKeyExchange = undefined;
-        reject(new Error('E2E key exchange timeout'));
+        reject(new WebSocketConnectionError('WS_HANDSHAKE_TIMEOUT', 'E2E key exchange timeout'));
       }, this.timeout);
 
       this.pendingKeyExchange = { resolve, reject, timeoutHandle };
@@ -286,7 +407,7 @@ export class E2EAuth implements TransportAuth {
     return new Promise<{ success: boolean; error?: string }>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pendingResult = undefined;
-        reject(new Error('E2E authentication result timeout'));
+        reject(new WebSocketConnectionError('WS_HANDSHAKE_TIMEOUT', 'E2E authentication result timeout'));
       }, this.timeout);
 
       this.pendingResult = { resolve, reject, timeoutHandle };
@@ -300,8 +421,7 @@ export class E2EAuth implements TransportAuth {
   }> {
     return new Promise<{ deviceId: string; ephemeralPublicKey: string; signature: string }>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
-        this.serverPendingKeyExchange.delete(socket);
-        reject(new Error('E2E key exchange timeout'));
+        reject(new WebSocketConnectionError('WS_HANDSHAKE_TIMEOUT', 'E2E key exchange timeout'));
       }, this.timeout);
 
       const pending: PendingAuth<{ deviceId: string; ephemeralPublicKey: string; signature: string }> = {
@@ -361,6 +481,9 @@ export class E2EAuth implements TransportAuth {
     const pendingEntry = this.serverPendingKeyExchange.get(socket);
     if (pendingEntry) {
       clearTimeout(pendingEntry.timeoutHandle);
+      pendingEntry.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Connection closed during E2E authentication'),
+      );
       this.serverPendingKeyExchange.delete(socket);
     }
 
@@ -374,10 +497,16 @@ export class E2EAuth implements TransportAuth {
   public cleanup(): void {
     if (this.pendingKeyExchange) {
       clearTimeout(this.pendingKeyExchange.timeoutHandle);
+      this.pendingKeyExchange.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Connection closed during E2E authentication'),
+      );
       this.pendingKeyExchange = undefined;
     }
     if (this.pendingResult) {
       clearTimeout(this.pendingResult.timeoutHandle);
+      this.pendingResult.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Connection closed during E2E authentication'),
+      );
       this.pendingResult = undefined;
     }
     this.clientSession = undefined;
@@ -385,6 +514,9 @@ export class E2EAuth implements TransportAuth {
 
     for (const entry of this.serverPendingKeyExchange.values()) {
       clearTimeout(entry.timeoutHandle);
+      entry.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Connection closed during E2E authentication'),
+      );
     }
     this.serverPendingKeyExchange.clear();
     this.serverSessions.clear();

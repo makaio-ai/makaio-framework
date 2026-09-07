@@ -14,6 +14,7 @@ import {
   verify,
   encodeText,
 } from '../crypto/index.js';
+import { WebSocketConnectionError } from '../connection-error.js';
 
 /**
  * Convert hex string to Uint8Array.
@@ -123,7 +124,17 @@ export async function deriveE2ESessionKey(
   info: string,
 ): Promise<CryptoKey> {
   // Import peer's ephemeral public key
-  const peerPublicKey = await importPublicKey(peerEphemeralPublicKey);
+  let peerPublicKey: CryptoKey;
+  try {
+    peerPublicKey = await importPublicKey(peerEphemeralPublicKey);
+  } catch (error) {
+    // DataError at this exact import boundary means the supplied peer SPKI is
+    // invalid. Do not recategorize key-store, deriveBits or HKDF failures.
+    if (error instanceof DOMException && error.name === 'DataError') {
+      throw new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Invalid E2E peer public key', { cause: error });
+    }
+    throw error;
+  }
 
   // Derive shared secret via ECDH
   const sharedSecret = await deriveSharedSecret(myEphemeralPrivateKey, peerPublicKey);

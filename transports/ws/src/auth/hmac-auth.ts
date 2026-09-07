@@ -12,6 +12,7 @@
 import type { TransportPeerContext, TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
+import { WebSocketConnectionError } from '../connection-error.js';
 
 /**
  * Authentication message types.
@@ -196,16 +197,17 @@ export class HmacAuth implements TransportAuth {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
-    const globalExpectedSignature = await this.computeHmac(nonce);
-
-    // Send challenge
-    const challenge: AuthMessage = { type: 'auth-challenge', nonce };
-    send(challenge);
-
-    // Wait for response via handleAuthMessage (with per-socket tracking)
-    let authResultSent = false;
+    // Install the per-socket owner before sending or awaiting anything. It stays
+    // registered through crypto so cleanupSocket also fences that async phase.
+    const response = this.waitForAuthResponseWithIdentity(socket);
+    const owner = this.serverPendingResponses.get(socket)!;
+    void response.catch(() => undefined);
+    // Only a verified refusal emits auth-result:false. Timeout, disconnect or
+    // crypto failure must not masquerade as rejected credentials on the peer.
     try {
-      const { signature, identityId } = await this.waitForAuthResponseWithIdentity(socket);
+      send({ type: 'auth-challenge', nonce } satisfies AuthMessage);
+      const { signature, identityId } = await response;
+      this.assertServerOwner(socket, owner);
 
       let expectedSignature: string;
       if (this.resolveSecret && identityId !== undefined) {
@@ -217,10 +219,13 @@ export class HmacAuth implements TransportAuth {
             success: false,
             error: 'Unknown identity',
           });
-          authResultSent = true;
-          throw new Error(`HMAC authentication failed: Unknown identity '${identityId}'`);
+          throw new WebSocketConnectionError(
+            'WS_AUTHENTICATION_REJECTED',
+            `HMAC authentication failed: Unknown identity '${identityId}'`,
+          );
         }
         expectedSignature = await this.computeHmacWithSecret(nonce, identitySecret);
+        this.assertServerOwner(socket, owner);
         if (this.constantTimeEqual(signature, expectedSignature)) {
           // Persist the authenticated identity for getReceiveContext().
           this.serverAuthenticatedPeers.set(socket, identityId);
@@ -230,7 +235,8 @@ export class HmacAuth implements TransportAuth {
         }
       } else {
         // Global-secret mode: use the global shared secret.
-        expectedSignature = globalExpectedSignature;
+        expectedSignature = await this.computeHmac(nonce);
+        this.assertServerOwner(socket, owner);
       }
 
       // Verify signature using constant-time comparison to prevent timing attacks.
@@ -240,31 +246,25 @@ export class HmacAuth implements TransportAuth {
           success: false,
           error: 'Invalid signature',
         });
-        authResultSent = true;
-        throw new Error('HMAC authentication failed: Invalid signature');
+        throw new WebSocketConnectionError(
+          'WS_AUTHENTICATION_REJECTED',
+          'HMAC authentication failed: Invalid signature',
+        );
       }
 
-      // Success
+      // Admission requires a delivered positive verdict. Unlike a refusal,
+      // failure to send success must fail the handshake, not authorize the socket.
+      try {
+        send({ type: 'auth-result', success: true } satisfies AuthMessage);
+        this.assertServerOwner(socket, owner);
+      } catch (error) {
+        if (this.serverPendingResponses.get(socket) === owner) this.cleanupSocket(socket);
+        throw error;
+      }
       this.serverAuthenticatedSockets.add(socket);
-      this.sendAuthResultBestEffort(send, { type: 'auth-result', success: true });
-      authResultSent = true;
-    } catch (error) {
-      const wasPending = this.serverPendingResponses.has(socket);
-      // Clean up the pending entry
-      this.serverPendingResponses.delete(socket);
-
-      // Send failure only when this socket is still pending and no result has been sent yet.
-      if (!authResultSent && wasPending) {
-        this.sendAuthResultBestEffort(send, {
-          type: 'auth-result',
-          success: false,
-          error: error instanceof Error ? error.message : 'Authentication failed',
-        });
-      }
-      throw error;
     } finally {
-      // Ensure cleanup happens even on success
-      this.serverPendingResponses.delete(socket);
+      clearTimeout(owner.timeoutHandle);
+      if (this.serverPendingResponses.get(socket) === owner) this.serverPendingResponses.delete(socket);
     }
   }
 
@@ -281,29 +281,64 @@ export class HmacAuth implements TransportAuth {
    */
   public async authenticateClient(send: (message: unknown) => void): Promise<void> {
     this.clientAuthComplete = false;
+    const challenge = this.waitForAuthChallenge();
+    // Keep the same pending object through crypto/result awaits, even after
+    // the challenge resolved; cleanup can then invalidate every continuation.
+    const owner = this.pendingChallenge!;
+    try {
+      const nonce = await challenge;
+      this.assertClientOwner(owner);
 
-    // Wait for challenge via handleAuthMessage
-    const nonce = await this.waitForAuthChallenge();
+      // Compute signature
+      const signature = await this.computeHmac(nonce);
+      this.assertClientOwner(owner);
 
-    // Compute signature
-    const signature = await this.computeHmac(nonce);
+      // Send response — include identityId when operating in identity-bound mode.
+      const response: AuthMessage = {
+        type: 'auth-response',
+        signature,
+        ...(this.identityId !== undefined && { identityId: this.identityId }),
+      };
+      send(response);
+      this.assertClientOwner(owner);
 
-    // Send response — include identityId when operating in identity-bound mode.
-    const response: AuthMessage = {
-      type: 'auth-response',
-      signature,
-      ...(this.identityId !== undefined && { identityId: this.identityId }),
-    };
-    send(response);
+      // Wait for result via handleAuthMessage
+      const result = await this.waitForAuthResult();
+      this.assertClientOwner(owner);
 
-    // Wait for result via handleAuthMessage
-    const result = await this.waitForAuthResult();
+      if (!result.success) {
+        throw new WebSocketConnectionError(
+          'WS_AUTHENTICATION_REJECTED',
+          `HMAC authentication failed: ${result.error ?? 'Unknown error'}`,
+        );
+      }
 
-    if (!result.success) {
-      throw new Error(`HMAC authentication failed: ${result.error ?? 'Unknown error'}`);
+      this.clientAuthComplete = true;
+    } finally {
+      clearTimeout(owner.timeoutHandle);
+      if (this.pendingChallenge === owner) this.pendingChallenge = undefined;
     }
+  }
 
-    this.clientAuthComplete = true;
+  /**
+   * Fence a client continuation whose handshake was cleaned up or replaced.
+   * @param owner - Pending challenge retained for the entire handshake.
+   */
+  private assertClientOwner(owner: PendingAuth<string>): void {
+    if (this.pendingChallenge !== owner) {
+      throw new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Socket disconnected during HMAC authentication');
+    }
+  }
+
+  /**
+   * Fence server crypto completion after socket cleanup.
+   * @param socket - Authenticating socket.
+   * @param owner - Pending response retained until authentication finishes.
+   */
+  private assertServerOwner(socket: WebSocketLike, owner: PendingAuth<AuthResponsePayload>): void {
+    if (this.serverPendingResponses.get(socket) !== owner) {
+      throw new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Socket disconnected during HMAC authentication');
+    }
   }
 
   /**
@@ -339,7 +374,6 @@ export class HmacAuth implements TransportAuth {
       if (this.pendingChallenge) {
         clearTimeout(this.pendingChallenge.timeoutHandle);
         this.pendingChallenge.resolve(msg.nonce);
-        this.pendingChallenge = undefined;
       } else {
         this.queuedChallengeNonce = msg.nonce;
       }
@@ -355,7 +389,8 @@ export class HmacAuth implements TransportAuth {
       if (this.clientAuthComplete) {
         return true;
       }
-      const result = { success: msg.success, error: msg.error };
+      // Diagnostics are untrusted JSON too; only strings may enter error messages.
+      const result = { success: msg.success, error: typeof msg.error === 'string' ? msg.error : undefined };
       if (this.pendingResult) {
         clearTimeout(this.pendingResult.timeoutHandle);
         this.pendingResult.resolve(result);
@@ -373,6 +408,10 @@ export class HmacAuth implements TransportAuth {
         const pendingEntry = this.serverPendingResponses.get(socket);
         if (pendingEntry) {
           clearTimeout(pendingEntry.timeoutHandle);
+          if (msg.identityId !== undefined && typeof msg.identityId !== 'string') {
+            pendingEntry.reject(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Malformed HMAC identity'));
+            return true;
+          }
           pendingEntry.resolve({ signature: msg.signature, identityId: msg.identityId });
           // Note: Map entry will be cleaned up in authenticateServer
         }
@@ -392,19 +431,17 @@ export class HmacAuth implements TransportAuth {
    * @throws Error if timeout
    */
   private async waitForAuthChallenge(): Promise<string> {
-    if (this.queuedChallengeNonce !== undefined) {
-      const nonce = this.queuedChallengeNonce;
-      this.queuedChallengeNonce = undefined;
-      return nonce;
-    }
-
     return new Promise<string>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
-        this.pendingChallenge = undefined;
-        reject(new Error('Authentication challenge timeout'));
+        reject(new WebSocketConnectionError('WS_HANDSHAKE_TIMEOUT', 'Authentication challenge timeout'));
       }, this.challengeTimeout);
 
       this.pendingChallenge = { resolve, reject, timeoutHandle };
+      if (this.queuedChallengeNonce !== undefined) {
+        clearTimeout(timeoutHandle);
+        resolve(this.queuedChallengeNonce);
+        this.queuedChallengeNonce = undefined;
+      }
     });
   }
 
@@ -419,7 +456,7 @@ export class HmacAuth implements TransportAuth {
   private async waitForAuthResponseWithIdentity(socket: WebSocketLike): Promise<AuthResponsePayload> {
     return new Promise<AuthResponsePayload>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
-        reject(new Error('Authentication response timeout'));
+        reject(new WebSocketConnectionError('WS_HANDSHAKE_TIMEOUT', 'Authentication response timeout'));
       }, this.challengeTimeout);
 
       const pending: PendingAuth<AuthResponsePayload> = { resolve, reject, timeoutHandle };
@@ -444,7 +481,7 @@ export class HmacAuth implements TransportAuth {
     return new Promise<{ success: boolean; error?: string }>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pendingResult = undefined;
-        reject(new Error('Authentication result timeout'));
+        reject(new WebSocketConnectionError('WS_HANDSHAKE_TIMEOUT', 'Authentication result timeout'));
       }, this.challengeTimeout);
 
       this.pendingResult = { resolve, reject, timeoutHandle };
@@ -565,12 +602,14 @@ export class HmacAuth implements TransportAuth {
    * characters match, enabling timing-based secret recovery. This method decodes
    * both signatures to byte arrays and uses a constant-time XOR accumulator so
    * every comparison takes the same wall-clock time regardless of the match point.
-   * @param a - First hex signature
+   * @param a - Untrusted signature received from the peer
    * @param b - Second hex signature
    * @returns True when both signatures are identical
    */
-  private constantTimeEqual(a: string, b: string): boolean {
-    if (a.length !== b.length) {
+  private constantTimeEqual(a: unknown, b: string): boolean {
+    // Peer JSON is not made trustworthy by the AuthMessage cast. Malformed
+    // signatures follow the same typed refusal path as incorrect signatures.
+    if (typeof a !== 'string' || a.length !== b.length || !/^[0-9a-f]+$/i.test(a)) {
       return false;
     }
     const aBytes = new Uint8Array(a.length / 2);
@@ -587,7 +626,7 @@ export class HmacAuth implements TransportAuth {
   }
 
   /**
-   * Send auth result messages without masking the original auth error.
+   * Send negative auth results without masking the original auth error.
    *
    * Disconnect races can make `send` throw after auth already failed; callers
    * should still observe the original failure reason.
@@ -614,7 +653,9 @@ export class HmacAuth implements TransportAuth {
     if (pendingEntry) {
       clearTimeout(pendingEntry.timeoutHandle);
       this.serverPendingResponses.delete(socket);
-      pendingEntry.reject(new Error('Socket disconnected during HMAC authentication'));
+      pendingEntry.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Socket disconnected during HMAC authentication'),
+      );
     }
     this.serverAuthenticatedPeers.delete(socket);
     this.serverAuthenticatedSecrets.delete(socket);
@@ -630,10 +671,16 @@ export class HmacAuth implements TransportAuth {
     // Client-side cleanup
     if (this.pendingChallenge) {
       clearTimeout(this.pendingChallenge.timeoutHandle);
+      this.pendingChallenge.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Socket disconnected during HMAC authentication'),
+      );
       this.pendingChallenge = undefined;
     }
     if (this.pendingResult) {
       clearTimeout(this.pendingResult.timeoutHandle);
+      this.pendingResult.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Socket disconnected during HMAC authentication'),
+      );
       this.pendingResult = undefined;
     }
     this.queuedChallengeNonce = undefined;
@@ -643,6 +690,9 @@ export class HmacAuth implements TransportAuth {
     // Server-side cleanup: clear all pending responses
     for (const entry of this.serverPendingResponses.values()) {
       clearTimeout(entry.timeoutHandle);
+      entry.reject(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Socket disconnected during HMAC authentication'),
+      );
     }
     this.serverPendingResponses.clear();
     this.serverAuthenticatedPeers.clear();

@@ -204,7 +204,7 @@ describe('Client mode behavior', () => {
 
       // connectOnce calls wsFactory, which returns the closed caller-owned
       // socket, so waitForSocketOpen rejects immediately.
-      await expect(transport.connect()).rejects.toThrow('WebSocket closed before opening');
+      await expect(transport.connect()).rejects.toMatchObject({ code: 'WS_CONNECTION_UNAVAILABLE' });
     } finally {
       await transport.disconnect();
     }
@@ -220,10 +220,10 @@ describe('Client mode behavior', () => {
 
       ws.close();
 
-      await expect(pendingConnect).rejects.toThrow('WebSocket closed before opening');
+      await expect(pendingConnect).rejects.toMatchObject({ code: 'WS_CONNECTION_UNAVAILABLE' });
       // After the failed connect, reconnectAbort is cleared so connect() can
       // be called again. The socket is still closed so it rejects again.
-      await expect(transport.connect()).rejects.toThrow('WebSocket closed before opening');
+      await expect(transport.connect()).rejects.toMatchObject({ code: 'WS_CONNECTION_UNAVAILABLE' });
     } finally {
       await transport.disconnect();
     }

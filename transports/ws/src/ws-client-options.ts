@@ -106,16 +106,15 @@ export interface WebSocketClientTransportOptions {
   heartbeat?: WebSocketClientTransportHeartbeatOptions | false;
 
   /**
-   * Maximum time in milliseconds a single connect attempt may wait for the
-   * socket to open before the attempt is failed and the socket discarded.
+   * Maximum time in milliseconds for one complete connection attempt:
+   * asynchronous socket creation, opening, authentication and subscription replay.
    *
    * Bounds the WebSocket upgrade so a server (or intermediary) that accepts
    * the TCP connection but never answers cannot wedge the reconnect loop.
-   * Also passed as `handshakeTimeout` to the default `ws` factory.
-   *
-   * This bound starts after `createWebSocket` resolves with a socket instance.
-   * Custom async factories that may block before returning a socket should
-   * enforce their own factory-level timeout.
+   * The budget starts before `createWebSocket` is called. If a cancelled factory
+   * resolves later, its socket is closed without becoming the active connection.
+   * This does not include waiting for the peer's subscribe-sync-complete frame;
+   * callers requiring a total bootstrap-readiness budget must also bound `ready`.
    * @defaultValue 30000
    */
   connectTimeoutMs?: number;
@@ -160,7 +159,7 @@ export interface WebSocketClientTransportOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Default bound for a single connect attempt's socket-open wait.
+ * Default bound for a complete connection attempt.
  *
  * Applied when {@link WebSocketClientTransportOptions.connectTimeoutMs} is
  * not supplied.
