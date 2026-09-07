@@ -4,7 +4,7 @@
  * Manages pending requests with timeout handling and automatic cleanup.
  */
 
-import { TimeoutError } from '../errors/index.js';
+import { TimeoutError, toAbortError } from '../errors/index.js';
 
 /**
  * Pending request metadata.
@@ -53,8 +53,6 @@ interface PendingRequest {
 export class CorrelationTracker {
   private pending: Map<string, PendingRequest>;
 
-  private static readonly DEFAULT_ABORT_MESSAGE = 'Request aborted';
-
   /**
    * Create a new correlation tracker.
    */
@@ -77,7 +75,7 @@ export class CorrelationTracker {
   public track(correlationId: string, timeout: number, signal?: AbortSignal): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
-        reject(this.getAbortError(signal));
+        reject(toAbortError(signal.reason));
         return;
       }
 
@@ -108,7 +106,7 @@ export class CorrelationTracker {
 
       if (signal) {
         const onAbort = (): void => {
-          this.reject(correlationId, this.getAbortError(signal));
+          this.reject(correlationId, toAbortError(signal.reason));
         };
         signal.addEventListener('abort', onAbort, { once: true });
 
@@ -123,30 +121,9 @@ export class CorrelationTracker {
 
       // Handle abort that races between initial check, map insertion, and listener setup.
       if (signal?.aborted) {
-        this.reject(correlationId, this.getAbortError(signal));
+        this.reject(correlationId, toAbortError(signal.reason));
       }
     });
-  }
-
-  /**
-   * Convert AbortSignal reasons into Error instances while preserving reason detail.
-   * @param signal - Abort signal associated with the pending request.
-   * @returns Normalized abort error preserving the original reason when available.
-   */
-  private getAbortError(signal: AbortSignal): Error {
-    const { reason } = signal;
-
-    if (reason instanceof Error) {
-      return reason;
-    }
-
-    if (reason === undefined) {
-      return new Error(CorrelationTracker.DEFAULT_ABORT_MESSAGE);
-    }
-
-    // AbortSignal.reason can be any value. Keep non-Error details in cause.
-    const message = typeof reason === 'string' ? reason : CorrelationTracker.DEFAULT_ABORT_MESSAGE;
-    return new Error(message, { cause: reason });
   }
 
   /**
@@ -195,7 +172,7 @@ export class CorrelationTracker {
    * @param error - Optional cancellation error
    */
   public cancel(correlationId: string, error?: Error): void {
-    this.reject(correlationId, error ?? new Error('Request aborted'));
+    this.reject(correlationId, error ?? toAbortError(undefined));
   }
 
   /**

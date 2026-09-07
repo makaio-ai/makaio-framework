@@ -1,4 +1,5 @@
 export { BusError } from './bus-error.js';
+export { BusAbortError, isRequestCancellation, toAbortError } from './bus-abort-error.js';
 export { ChannelAuthError } from './channel-auth-error.js';
 export { ChannelClosedError } from './channel-closed-error.js';
 export { ChannelOnlyError } from './channel-only-error.js';

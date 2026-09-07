@@ -102,7 +102,12 @@ export interface RequestOptions extends EmitOptions {
   /**
    * AbortSignal to cancel the request.
    *
-   * When aborted, the request will reject with an AbortError.
+   * Cancellation preserves recognized Error reasons by identity. Other reasons become a
+   * BusAbortError (DOMException named AbortError) with the exact original reason as cause.
+   * Error recognition across JavaScript realms is conservative; unrecognized reasons
+   * are retained as cause rather than relying on their name or message.
+   * Use isRequestCancellation(error, signal) to distinguish this cancellation from
+   * an independent failure. These semantics are the same with or without a timeout.
    * This allows callers to cancel long-running requests when they're
    * no longer needed (e.g., user typing invalidates previous autocomplete).
    * @example

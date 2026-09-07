@@ -5,8 +5,8 @@ import { getMatchingHandlerEntries, getMatchingRemoteEntries } from './getMatchi
 import { getFullSubjectForSubjectDefinition } from '../../utils/subject-transformation.js';
 import { isNoHandlerErrorForSubject } from '../../utils/transport.js';
 import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../../utils/transport-helpers.js';
-import { RequestError } from '../../errors/index.js';
-import { awaitWithTimeoutAndSignal, toAbortError } from './await-with-timeout-and-signal.js';
+import { isRequestCancellation, RequestError, toAbortError } from '../../errors/index.js';
+import { awaitWithTimeoutAndSignal } from './await-with-timeout-and-signal.js';
 
 /** Options for the recursive dispatch function. */
 export interface DispatchOptions extends WithReceiveContext {
@@ -274,6 +274,8 @@ async function executeLocalEntry(
           hasResult = true;
         }
       })();
+      // The owning handler can fail before the post-handler await observes downstream work.
+      void promise.catch(() => undefined);
       nextPromise = nextPromise ?? promise;
       return promise;
     },
@@ -304,6 +306,9 @@ async function executeLocalEntry(
       }
     }
   } catch (error) {
+    if (isRequestCancellation(error, options.signal)) {
+      throw toAbortError(error);
+    }
     if (error instanceof RequestError) {
       throw error; // Already wrapped — don't double-wrap.
     }
@@ -430,12 +435,16 @@ async function executeRemoteEntry(
     );
     return { handled: true, value: result };
   } catch (error) {
-    // Abort signal fired — cancel the in-flight transport request and rethrow immediately
-    // so the caller receives the abort error rather than a transport error.
-    if (signal?.aborted) {
-      transport.cancelRequest?.(options.correlationId, error instanceof Error ? error : toAbortError(signal.reason));
-      throw error instanceof Error ? error : toAbortError(signal.reason);
+    // Only this request's cancellation may be forwarded to the transport as cancellation.
+    // A concurrent independent failure must not be relabeled because the signal aborted.
+    if (isRequestCancellation(error, signal)) {
+      const abortError = toAbortError(error);
+      transport.cancelRequest?.(options.correlationId, abortError);
+      throw abortError;
     }
+
+    // Cancellation closes fallback admission without changing an independent error's provenance.
+    if (signal?.aborted) throw error;
 
     if (isNoHandlerErrorForSubject(error, fullSubjectKey)) {
       // Remote chain exhausted — continue to the next entry in our list.
