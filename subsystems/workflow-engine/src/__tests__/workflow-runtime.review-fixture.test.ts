@@ -38,7 +38,7 @@ function makeInitialRevision(data: ReviewArtifactData): ArtifactRevision<ReviewA
     kind: 'code-review',
     id: 'artifact-review-1',
     revision: fakeRevision(0),
-    schemaVersion: '1',
+    schemaVersion: 1,
     scope: { level: 'global' },
     data,
     relations: [],
@@ -123,7 +123,7 @@ function makeArtifactBindingState(
 ): ArtifactBindingState {
   return {
     current: makeInitialRevision(initialData) as ArtifactRevision,
-    schemaVersion: '1',
+    schemaVersion: 1,
     statusPath: 'status',
     zodSchema: undefined,
   };
@@ -459,7 +459,7 @@ describe('review workflow fixture — artifact data shape', () => {
         status: 'draft',
         findings: { spec: [], quality: [], testCoverage: [] },
       }) as ArtifactRevision,
-      schemaVersion: '1',
+      schemaVersion: 1,
       statusPath: undefined,
       zodSchema: undefined,
     };
@@ -813,14 +813,14 @@ describe('review workflow fixture — functional updateArtifact', () => {
         kind: 'note',
         id: 'artifact-overlap-1',
         revision: fakeRevision(0),
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'global' },
         data: { messages: [] },
         relations: [],
         actor: { kind: 'workflow-execution', id: 'exec-overlap-test' },
         timestamp: Date.now(),
       },
-      schemaVersion: '1',
+      schemaVersion: 1,
       statusPath: undefined,
       zodSchema: undefined,
     };

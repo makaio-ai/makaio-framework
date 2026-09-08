@@ -1,258 +1,106 @@
 import { z } from 'zod';
-import type { ArtifactContextSelector } from './context-selectors.js';
-import type { ArtifactKindRegistration, ArtifactRevision, ArtifactScope } from './schemas.js';
-import type { ArtifactProjectionPolicy } from '../materialization/schemas.js';
+import type { ArtifactRevision } from './schemas.js';
+import { ArtifactKindRegistrationSchema, type ArtifactKindRegistration } from './kind-registration.js';
 import type { ArtifactLifecycleHookDefinition } from './lifecycle-hooks.js';
 import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
+import { assertSupportedKindSerialization, readArtifactTitle } from './kind-paths.js';
 
 /**
- * Definition of an artifact kind with live Zod schemas for compile-time
- * type narrowing.
- *
- * The `dataSchema` and `scopeSchema` are retained as live Zod objects so
- * that kind owners can use them for runtime validation. The `toRegistration`
- * method serialises the definition to a bus-transportable
- * {@link ArtifactKindRegistration} record.
- * @typeParam TData - Kind-specific `data` payload shape.
- * @typeParam TScope - Kind-specific scope shape (defaults to the open
- *   framework {@link ArtifactScope}).
+ * Authoring contract with a live data schema. Scope remains a shared revision envelope.
+ * @typeParam TData - Kind-specific data payload.
  */
-export interface ArtifactKindDefinition<TData extends Record<string, unknown>, TScope extends ArtifactScope> {
-  /** Kind discriminator string registered with the artifact service. */
-  readonly kind: string;
-  /** Human-readable kind description for schema discovery and agent guidance. */
-  readonly description: string;
-  /** Schema version string (semver or opaque) for this kind definition. */
-  readonly schemaVersion: string;
-  /** Live Zod schema for the kind-specific `data` payload. */
+export interface ArtifactKindDefinition<
+  TData extends Record<string, unknown>,
+  TKind extends string = string,
+  TVersion extends number = number,
+> extends Omit<ArtifactKindRegistration, 'dataSchema' | 'kind' | 'schemaVersion'> {
+  /** Stable kind identifier, retained as a literal for inferred definitions. */
+  readonly kind: TKind;
+  /** Current schema generation, retained as a literal for inferred definitions. */
+  readonly schemaVersion: TVersion;
+  /** Live schema validating the complete data payload and its human-readable title. */
   readonly dataSchema: z.ZodType<TData>;
-  /** Optional live Zod schema for the kind-specific scope shape. */
-  readonly scopeSchema?: z.ZodType<TScope>;
-  /**
-   * JSON Pointer path(s) used to discriminate between concurrent
-   * revisions of this kind within the same scope.
-   */
-  readonly discriminator?: string | readonly string[];
-  /** Conflict resolution strategy for this kind. */
-  readonly conflictPolicy: ArtifactKindRegistration['conflictPolicy'];
-  /** Optional status field configuration for lifecycle tracking. */
-  readonly status?: ArtifactKindRegistration['status'];
-  /** Optional live Zod schema for kind-specific observation extensions. */
-  readonly observationSchema?: z.ZodType;
-  /** Optional lifecycle hints for retention and decay. */
-  readonly lifecycle?: ArtifactKindRegistration['lifecycle'];
-  /** JSON Pointer paths to `data` fields that receive a secondary index. */
-  readonly indexedFields?: readonly string[];
-  /** JSON Pointer paths to `data` fields included in full-text search. */
-  readonly searchableFields?: readonly string[];
-  /**
-   * Optional projection policy controlling how this artifact kind surfaces on
-   * external providers. When absent, materialization adapters apply their own
-   * defaults.
-   */
-  readonly projection?: ArtifactProjectionPolicy;
-  /** Optional default context selectors for artifact context resolution. */
-  readonly defaultContext?: ArtifactContextSelector;
-  /**
-   * Optional live-only lifecycle hooks owned by this kind definition.
-   *
-   * Hooks carry function references and are intentionally excluded from
-   * `toRegistration()`. They are never serialized or transmitted over the bus.
-   */
+  /** Function-valued lifecycle hooks, never serialized into kind registrations. */
   readonly hooks?: ArtifactLifecycleHookDefinition;
-  /**
-   * Phantom field for compile-time `data` type extraction.
-   * Never assigned at runtime.
-   */
+  /** Phantom data type for typed artifact consumers; not assigned at runtime. */
   readonly __data?: TData;
-  /**
-   * Phantom field for compile-time `scope` type extraction.
-   * Never assigned at runtime.
-   */
-  readonly __scope?: TScope;
-  /** Produces a serializable registration record suitable for bus transport. */
+  /** Produce an independent, validated bus registration. */
   readonly toRegistration: () => ArtifactKindRegistration;
 }
 
-/**
- * Any artifact kind definition regardless of its data or scope type
- * parameters.
- *
- * Use this type when storing heterogeneous kind definitions in a registry
- * or when the specific data/scope types are not needed.
- */
-export type AnyArtifactKindDefinition = ArtifactKindDefinition<Record<string, unknown>, ArtifactScope>;
+/** Kind definition for heterogeneous registries. */
+export type AnyArtifactKindDefinition = ArtifactKindDefinition<Record<string, unknown>>;
+
+/** Extract the data payload. @typeParam T - Kind definition. */
+export type ArtifactDataOf<T extends AnyArtifactKindDefinition> =
+  T extends ArtifactKindDefinition<infer TData> ? TData : never;
+
+/** Narrow a revision's payload while retaining its shared numeric schema version. @typeParam T - Kind definition. */
+export type ArtifactOf<T extends AnyArtifactKindDefinition> = ArtifactRevision<ArtifactDataOf<T>> & {
+  kind: T['kind'];
+  schemaVersion: T['schemaVersion'];
+};
+
+/** Authoring options with live schema and optional local hooks. @typeParam TData - Data payload. */
+type DefineArtifactKindOptions<
+  TData extends Record<string, unknown>,
+  TKind extends string,
+  TVersion extends number,
+> = Omit<ArtifactKindDefinition<TData, TKind, TVersion>, 'toRegistration' | '__data'>;
 
 /**
- * Extracts the `data` type from a kind definition.
- * @typeParam T - An {@link ArtifactKindDefinition} whose `data` type to extract.
- * @example
- * ```ts
- * const planDef = defineArtifactKind({
- *   kind: 'plan',
- *   description: 'Project plan with approval status.',
- *   dataSchema: PlanDataSchema,
- *   ...
- * });
- * type PlanData = ArtifactDataOf<typeof planDef>;
- * // PlanData = { status: 'draft' | 'approved'; topic: string }
- * ```
- */
-export type ArtifactDataOf<T extends ArtifactKindDefinition<Record<string, unknown>, ArtifactScope>> =
-  T extends ArtifactKindDefinition<infer TData, ArtifactScope> ? TData : never;
-
-/**
- * Narrows an {@link ArtifactRevision} to the `data` and `scope` types of a
- * kind definition.
+ * Define a kind and validate its declarative metadata before registration.
  *
- * The resulting type combines the generic revision shape with the
- * kind-specific `data` payload and the kind-specific `scope` shape.
- * @typeParam T - An {@link ArtifactKindDefinition} to narrow against.
- * @example
- * ```ts
- * const planDef = defineArtifactKind({
- *   kind: 'plan',
- *   description: 'Project plan with approval status.',
- *   dataSchema: PlanDataSchema,
- *   ...
- * });
- * type PlanArtifact = ArtifactOf<typeof planDef>;
- * // PlanArtifact = ArtifactRevision<PlanData> & { kind: 'plan'; scope: ProjectScope }
- * ```
+ * Raw input first passes the serialized canonical payload schema, preventing live
+ * object schemas from silently stripping undeclared fields. The original input
+ * then passes through the live Zod schema so dynamic defaults and refinements
+ * retain their authoring semantics, followed by title validation. Serialized registrations
+ * retain titlePath so hosts can enforce the same invariant via readArtifactTitle.
+ * Hooks remain live-only; each registration call returns an independent snapshot.
+ * @param options - Current kind contract, live schema and optional lifecycle hooks.
+ * @returns A validated kind definition with typed data and serializable metadata.
  */
-export type ArtifactOf<T extends ArtifactKindDefinition<Record<string, unknown>, ArtifactScope>> =
-  T extends ArtifactKindDefinition<infer TData, infer TScope>
-    ? ArtifactRevision<TData> & {
-        kind: T['kind'];
-        schemaVersion: T['schemaVersion'];
-        scope: TScope;
+export function defineArtifactKind<
+  TData extends Record<string, unknown>,
+  const TKind extends string = string,
+  const TVersion extends number = number,
+>(options: DefineArtifactKindOptions<TData, TKind, TVersion>): ArtifactKindDefinition<TData, TKind, TVersion> {
+  const { dataSchema, hooks, ...metadata } = options;
+  const serializedDataSchema = {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    ...zodSchemaToJsonRecord(dataSchema),
+  };
+  assertSupportedKindSerialization(serializedDataSchema);
+  const registration = ArtifactKindRegistrationSchema.parse({ ...metadata, dataSchema: serializedDataSchema });
+  if (registration.kind !== options.kind) {
+    throw new Error('Artifact kind identifiers must not contain surrounding whitespace');
+  }
+  const wireSchema = z.fromJSONSchema(registration.dataSchema);
+  const rawInputSchema = z.unknown().superRefine((input, ctx) => {
+    const result = wireSchema.safeParse(input);
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
       }
-    : never;
-
-/**
- * Options for {@link defineArtifactKind}.
- * @typeParam TData - Kind-specific `data` payload shape.
- * @typeParam TScope - Kind-specific scope shape.
- */
-interface DefineArtifactKindOptions<TData extends Record<string, unknown>, TScope extends ArtifactScope> {
-  /** Kind discriminator string. */
-  readonly kind: string;
-  /** Human-readable kind description for schema discovery and agent guidance. */
-  readonly description: string;
-  /** Schema version string. */
-  readonly schemaVersion: string;
-  /** Live Zod schema for the kind-specific `data` payload. */
-  readonly dataSchema: z.ZodType<TData>;
-  /** Optional live Zod schema for the kind-specific scope shape. */
-  readonly scopeSchema?: z.ZodType<TScope>;
-  /**
-   * JSON Pointer path(s) used to discriminate between concurrent
-   * revisions within the same scope.
-   */
-  readonly discriminator?: string | readonly string[];
-  /** Conflict resolution strategy for this kind. */
-  readonly conflictPolicy: ArtifactKindRegistration['conflictPolicy'];
-  /** Optional status field configuration. */
-  readonly status?: ArtifactKindRegistration['status'];
-  /** Optional live Zod schema for kind-specific observation extensions. */
-  readonly observationSchema?: z.ZodType;
-  /** Optional lifecycle hints for retention and decay. */
-  readonly lifecycle?: ArtifactKindRegistration['lifecycle'];
-  /** JSON Pointer paths to indexed fields within `data`. */
-  readonly indexedFields?: readonly string[];
-  /** JSON Pointer paths to searchable fields within `data`. */
-  readonly searchableFields?: readonly string[];
-  /**
-   * Optional projection policy controlling how this artifact kind surfaces on
-   * external providers.
-   */
-  readonly projection?: ArtifactProjectionPolicy;
-  /** Optional default context selectors for artifact context resolution. */
-  readonly defaultContext?: ArtifactContextSelector;
-  /**
-   * Optional live-only lifecycle hooks. Not included in `toRegistration()`.
-   *
-   * Hooks carry function references and are never serialized or transmitted
-   * over the bus.
-   */
-  readonly hooks?: ArtifactLifecycleHookDefinition;
-}
-
-/**
- * Creates an artifact kind definition with live Zod schemas and a
- * serializable registration.
- *
- * The returned definition retains the live `dataSchema` and `scopeSchema`
- * for compile-time type narrowing and runtime validation. Calling
- * `toRegistration()` serialises the definition into an
- * {@link ArtifactKindRegistration} record that can be transmitted over the
- * bus and stored by the artifact service.
- * @param options - Kind definition options including data schema, scope
- *   schema, and registration metadata.
- * @returns An {@link ArtifactKindDefinition} with live schemas and a
- *   `toRegistration` method.
- * @example
- * ```ts
- * export const implementationPlanKind = defineArtifactKind({
- *   kind: 'implementation-plan',
- *   description: 'Structured implementation plan for agent and human review.',
- *   schemaVersion: '1',
- *   dataSchema: z.object({ status: z.enum(['draft', 'approved']), topic: z.string() }),
- *   conflictPolicy: 'supersedes',
- *   status: { path: '/data/status', values: ['draft', 'approved'] },
- *   indexedFields: ['/data/status'],
- * });
- * ```
- */
-export function defineArtifactKind<TData extends Record<string, unknown>, TScope extends ArtifactScope = ArtifactScope>(
-  options: DefineArtifactKindOptions<TData, TScope>,
-): ArtifactKindDefinition<TData, TScope> {
+    }
+  });
+  const validatedSchema = rawInputSchema.pipe(dataSchema).superRefine((data, ctx) => {
+    try {
+      readArtifactTitle(data, registration.titlePath);
+    } catch (error) {
+      ctx.addIssue({
+        code: 'custom',
+        path: registration.titlePath.split('.'),
+        message: error instanceof Error ? error.message : 'Artifact title must be a nonblank string',
+      });
+    }
+  });
   return {
-    ...options,
-    toRegistration: (): ArtifactKindRegistration => ({
-      kind: options.kind,
-      description: options.description,
-      schemaVersion: options.schemaVersion,
-      dataSchema: zodSchemaToJsonRecord(options.dataSchema),
-      ...(options.scopeSchema ? { scopeSchema: zodSchemaToJsonRecord(options.scopeSchema) } : {}),
-      ...(options.observationSchema ? { observationSchema: zodSchemaToJsonRecord(options.observationSchema) } : {}),
-      ...(options.discriminator !== undefined
-        ? {
-            discriminator:
-              typeof options.discriminator === 'string' ? options.discriminator : Array.from(options.discriminator),
-          }
-        : {}),
-      conflictPolicy: options.conflictPolicy,
-      ...(options.status
-        ? {
-            status: {
-              ...options.status,
-              ...(options.status.values ? { values: [...options.status.values] } : {}),
-            },
-          }
-        : {}),
-      ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
-      ...(options.indexedFields ? { indexedFields: [...options.indexedFields] } : {}),
-      ...(options.searchableFields ? { searchableFields: [...options.searchableFields] } : {}),
-      ...(options.projection
-        ? {
-            projection: {
-              ...options.projection,
-              ...(options.projection.semanticEvents ? { semanticEvents: [...options.projection.semanticEvents] } : {}),
-              ...(options.projection.projectedFields
-                ? {
-                    projectedFields: options.projection.projectedFields.map((field) => ({ ...field })),
-                  }
-                : {}),
-              ...(options.projection.affordances
-                ? {
-                    affordances: options.projection.affordances.map((a) => structuredClone(a)),
-                  }
-                : {}),
-            },
-          }
-        : {}),
-      ...(options.defaultContext ? { defaultContext: structuredClone(options.defaultContext) } : {}),
-    }),
+    ...structuredClone(registration),
+    kind: options.kind,
+    schemaVersion: options.schemaVersion,
+    dataSchema: validatedSchema,
+    ...(hooks ? { hooks } : {}),
+    toRegistration: () => structuredClone(registration),
   };
 }

@@ -55,9 +55,10 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Minimal implementation-plan fixture for single-kind registration test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.enum(['draft', 'approved']) }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.enum(['draft', 'approved']) }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -86,16 +87,18 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Minimal implementation-plan fixture for multi-kind registration test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.enum(['draft', 'approved']) }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.enum(['draft', 'approved']) }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
           defineArtifactKind({
             kind: 'design-note',
             description: 'Minimal design-note fixture for multi-kind registration test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ content: z.string() }),
-            conflictPolicy: 'coexist',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), content: z.string() }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -132,9 +135,10 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'foo',
             description: 'Minimal foo fixture for filter-predicate test.',
-            schemaVersion: '1',
-            dataSchema: z.object({}),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1) }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -154,9 +158,10 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Minimal implementation-plan fixture for missing-registry error test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.string() }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.string() }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -182,9 +187,10 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Minimal implementation-plan fixture for processStopped deregister test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.string() }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.string() }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -216,16 +222,18 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Initial implementation-plan fixture for extension reactivation test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.literal('draft') }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.literal('draft') }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
           defineArtifactKind({
             kind: 'design-note',
             description: 'Design-note fixture removed during extension reactivation test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ content: z.string() }),
-            conflictPolicy: 'coexist',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), content: z.string() }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -237,9 +245,10 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Updated implementation-plan fixture for extension reactivation test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.literal('approved') }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.literal('approved') }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -248,8 +257,8 @@ describe('createArtifactKindContributionProcessor', () => {
     await processor.processActivated('planner', initialPkg, makeContext(bus, registry));
     await processor.processActivated('planner', updatedPkg, makeContext(bus, registry));
 
-    expect(registry.getKind('design-note', '1')).toBeUndefined();
-    expect(registry.getKind('implementation-plan', '1')?.dataSchema).toMatchObject({
+    expect(registry.getKind('design-note', 1)).toBeUndefined();
+    expect(registry.getKind('implementation-plan', 1)?.dataSchema).toMatchObject({
       properties: { status: { const: 'approved' } },
     });
 
@@ -271,9 +280,10 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Alpha implementation-plan fixture for shared-kind-key rebuild test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.literal('alpha') }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.literal('alpha') }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -287,9 +297,10 @@ describe('createArtifactKindContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Beta implementation-plan fixture for shared-kind-key rebuild test.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.literal('beta') }),
-            conflictPolicy: 'supersedes',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.literal('beta') }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
           }),
         ],
       },
@@ -298,13 +309,13 @@ describe('createArtifactKindContributionProcessor', () => {
     await processor.processActivated('alpha', alpha, makeContext(bus, registry));
     await processor.processActivated('beta', beta, makeContext(bus, registry));
 
-    expect(registry.getKind('implementation-plan', '1')?.dataSchema).toMatchObject({
+    expect(registry.getKind('implementation-plan', 1)?.dataSchema).toMatchObject({
       properties: { status: { const: 'beta' } },
     });
 
     await processor.processStopped?.('beta');
 
-    expect(registry.getKind('implementation-plan', '1')?.dataSchema).toMatchObject({
+    expect(registry.getKind('implementation-plan', 1)?.dataSchema).toMatchObject({
       properties: { status: { const: 'alpha' } },
     });
 

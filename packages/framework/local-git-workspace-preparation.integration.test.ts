@@ -5,13 +5,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { prepareInstalledPackageConsumer } from './installed-package-consumer.fixture.js';
+import {
+  prepareInstalledPackageConsumer,
+  runInstalledPackageSetupStage,
+} from './installed-package-consumer.fixture.js';
 import { HEADLESS_GIT_CONSUMER, TYPES_CONSUMER } from './local-git-workspace-preparation.fixture.js';
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const SETUP_TIMEOUT_MS = 270_000;
+const BUILD_TIMEOUT_MS = 270_000;
+const PACK_TIMEOUT_MS = 60_000;
+const INSTALL_TIMEOUT_MS = 120_000;
 const ASSERTION_TIMEOUT_MS = 60_000;
+// The build, pack, installation and runtime consumer execute sequentially.
+// Preserve each child's hard timeout without spending its allowance on an
+// earlier phase; the outer hook retains five seconds of cleanup headroom.
+const SETUP_OPERATIONS_TIMEOUT_MS = BUILD_TIMEOUT_MS + PACK_TIMEOUT_MS + INSTALL_TIMEOUT_MS + ASSERTION_TIMEOUT_MS;
+const SETUP_TIMEOUT_MS = SETUP_OPERATIONS_TIMEOUT_MS + 5_000;
 
 let temporaryRoot: string | undefined;
 let consumerRoot: string;
@@ -27,9 +37,9 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
     root,
     consumerName: 'headless-git-preparation-consumer',
     signal,
-    buildTimeoutMs: SETUP_TIMEOUT_MS,
-    packTimeoutMs: 60_000,
-    installTimeoutMs: 120_000,
+    buildTimeoutMs: BUILD_TIMEOUT_MS,
+    packTimeoutMs: PACK_TIMEOUT_MS,
+    installTimeoutMs: INSTALL_TIMEOUT_MS,
   });
   consumerRoot = installed.consumerRoot;
   await Promise.all([
@@ -49,12 +59,14 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
       }),
     ),
   ]);
-  await execFileAsync(process.execPath, ['consumer.mjs'], {
-    cwd: consumerRoot,
-    timeout: ASSERTION_TIMEOUT_MS,
-    signal,
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  await runInstalledPackageSetupStage('consumer', () =>
+    execFileAsync(process.execPath, ['consumer.mjs'], {
+      cwd: consumerRoot,
+      timeout: ASSERTION_TIMEOUT_MS,
+      signal,
+      maxBuffer: 10 * 1024 * 1024,
+    }),
+  );
   result = JSON.parse(await readFile(join(consumerRoot, 'result.json'), 'utf8'));
 }
 
@@ -62,7 +74,7 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
 describe.skipIf(process.platform === 'win32')('installed local Git Workspace Preparation contract', () => {
   beforeAll(async () => {
     temporaryRoot = await mkdtemp(join(tmpdir(), 'local-git-workspace-preparation-'));
-    await prepareConsumer(temporaryRoot, AbortSignal.timeout(SETUP_TIMEOUT_MS - 5_000));
+    await prepareConsumer(temporaryRoot, AbortSignal.timeout(SETUP_OPERATIONS_TIMEOUT_MS));
   }, SETUP_TIMEOUT_MS);
 
   afterAll(async () => {

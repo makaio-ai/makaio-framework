@@ -64,7 +64,7 @@ function makeArtifactRevision(
     kind: ref.kind,
     id: ref.id,
     revision,
-    schemaVersion: '1',
+    schemaVersion: 1,
     scope: { level: 'global' },
     data,
     relations: [],
@@ -101,7 +101,7 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
     const workflow = defineWorkflow('artifact-context-orchestrator')
       .artifact({
         kind: 'workflow-report',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'global' },
         create: '{ status: config.initialStatus, title: inputs.title }',
         statusPath: 'status',
@@ -209,7 +209,7 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
     const workflow = defineWorkflow('artifact-ref-start-priority')
       .artifact({
         kind: 'workflow-report',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'global' },
         resolve: '{ kind: "workflow-report", id: "definition-ref" }',
         create: '{ status: "new" }',

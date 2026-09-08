@@ -202,7 +202,7 @@ describe('workflow storage handlers', () => {
       ...createWorkflowDefinition(),
       artifact: {
         kind: 'workflow-report',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'global' },
         statusPath: 'status',
       },

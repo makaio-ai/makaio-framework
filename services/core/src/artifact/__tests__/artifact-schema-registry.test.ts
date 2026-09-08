@@ -4,23 +4,42 @@ import { ArtifactSubjects, type ArtifactKindRegistration, type RelationTypeRegis
 import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
 
 /**
+ * Add the shared readable-title requirement to a registry fixture schema.
+ * @param schema - Additional schema fields for a specific test.
+ * @returns A schema with a required title and the requested test properties.
+ */
+function titleSchema(schema: ArtifactKindRegistration['dataSchema'] = {}): ArtifactKindRegistration['dataSchema'] {
+  const properties = schema.properties;
+  return {
+    type: 'object',
+    ...schema,
+    properties: {
+      ...(properties !== null && typeof properties === 'object' && !Array.isArray(properties) ? properties : {}),
+      title: { type: 'string' },
+    },
+    required: [...new Set([...(Array.isArray(schema.required) ? schema.required : []), 'title'])],
+  };
+}
+
+/**
  * Builds a minimal {@link ArtifactKindRegistration} for use in tests.
  * @param kind - Kind discriminator string.
- * @param schemaVersion - Schema version string.
+ * @param schemaVersion - Positive schema version.
  * @param dataSchema - Optional JSON Schema for the kind's data payload.
  * @returns A minimal valid kind registration.
  */
 function makeKind(
   kind: string,
-  schemaVersion: string,
-  dataSchema: ArtifactKindRegistration['dataSchema'] = { type: 'object' },
+  schemaVersion: number,
+  dataSchema: ArtifactKindRegistration['dataSchema'] = titleSchema(),
 ): ArtifactKindRegistration {
   return {
     kind,
     description: `${kind} test kind`,
     schemaVersion,
-    dataSchema,
-    conflictPolicy: 'supersedes',
+    dataSchema: titleSchema(dataSchema),
+    category: 'knowledge' as const,
+    titlePath: 'title',
   };
 }
 
@@ -38,9 +57,63 @@ describe('ArtifactSchemaRegistry', () => {
     await registry.destroy();
   });
 
+  it('rejects legacy registration metadata at the bus boundary', async () => {
+    const registration = { ...makeKind('note', 1), conflictPolicy: 'coexist' };
+    await expect(bus.request(ArtifactSubjects.kind.register, registration)).rejects.toThrow();
+    expect(registry.getKind('note', 1)).toBeUndefined();
+  });
+
+  it('validates an entire owner replacement before removing its existing registrations', () => {
+    const owner = { source: 'extension' as const, ownerKey: 'test' };
+    const current = makeKind('note', 1);
+    registry.replaceKindRegistrationsForOwner(owner, [current]);
+    const invalid = { ...makeKind('other', 1), titlePath: 'absent' };
+    expect(() => registry.replaceKindRegistrationsForOwner(owner, [makeKind('new', 1), invalid])).toThrow();
+    expect(registry.getKind('note', 1)).toEqual(current);
+    expect(registry.getKind('new', 1)).toBeUndefined();
+  });
+
+  it.each([
+    undefined,
+    'http://json-schema.org/draft-07/schema#',
+    'https://json-schema.org/draft/2020-12/schema',
+  ])('accepts supported dialect %s through direct and batch registration', async (dialect) => {
+    const dataSchema = dialect === undefined ? titleSchema() : titleSchema({ $schema: dialect });
+    const direct = makeKind('direct', 1, dataSchema);
+    registry.registerKind(direct);
+    expect(registry.getKind('direct', 1)).toEqual(direct);
+    const batch = makeKind('batch', 1, dataSchema);
+    registry.replaceKindRegistrationsForOwner({ source: 'extension', ownerKey: 'dialects' }, [batch]);
+    expect(registry.getKind('batch', 1)).toEqual(batch);
+    const busKind = makeKind('bus', 1, dataSchema);
+    await bus.request(ArtifactSubjects.kind.register, busKind);
+    expect(registry.getKind('bus', 1)).toEqual(busKind);
+  });
+
+  it.each([
+    'https://json-schema.org/draft/2019-09/schema',
+    'https://example.org/schema',
+  ])('rejects unsupported dialect %s before any registry mutation', async (dialect) => {
+    const owner = { source: 'extension' as const, ownerKey: 'dialects' };
+    const current = makeKind('current', 1);
+    registry.registerKind(current, owner);
+    const invalid = makeKind('current', 1, titleSchema({ $schema: dialect }));
+    expect(() => registry.registerKind(invalid, owner)).toThrow(/Unsupported data schema dialect/);
+    expect(registry.getKind('current', 1)).toEqual(current);
+    expect(() => registry.replaceKindRegistrationsForOwner(owner, [makeKind('new', 1), invalid])).toThrow(
+      /Unsupported data schema dialect/,
+    );
+    expect(registry.getKind('current', 1)).toEqual(current);
+    expect(registry.getKind('new', 1)).toBeUndefined();
+    await expect(bus.request(ArtifactSubjects.kind.register, invalid)).rejects.toThrow(
+      /Unsupported data schema dialect/,
+    );
+    expect(registry.getKind('current', 1)).toEqual(current);
+  });
+
   describe('kind registration and listing', () => {
     it('emits kind.changed when a kind is registered', async () => {
-      const changed = new Promise<{ kind: string; schemaVersion: string }>((resolve) => {
+      const changed = new Promise<{ kind: string; schemaVersion: number }>((resolve) => {
         bus.on(ArtifactSubjects.kind.changed, (ctx) => {
           resolve(ctx.payload);
         });
@@ -48,24 +121,26 @@ describe('ArtifactSchemaRegistry', () => {
       const registration = {
         kind: 'note',
         description: 'Minimal note kind fixture for kind.changed event test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'coexist' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       };
 
       await bus.request(ArtifactSubjects.kind.register, registration);
 
-      await expect(changed).resolves.toEqual({ kind: 'note', schemaVersion: '1' });
+      await expect(changed).resolves.toEqual({ kind: 'note', schemaVersion: 1 });
     });
 
     it('registers a kind and returns it via kind.list', async () => {
       const planKind = {
         kind: 'implementation-plan',
         description: 'Minimal implementation-plan kind fixture for kind.list registration test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object', properties: { status: { type: 'string' } }, required: ['status'] },
-        conflictPolicy: 'supersedes' as const,
-        indexedFields: ['/data/status'],
+        schemaVersion: 1,
+        dataSchema: titleSchema({ properties: { status: { type: 'string' } }, required: ['status'] }),
+        category: 'knowledge' as const,
+        titlePath: 'title',
+        indexedFields: ['status'],
       };
 
       await bus.request(ArtifactSubjects.kind.register, planKind);
@@ -78,9 +153,10 @@ describe('ArtifactSchemaRegistry', () => {
       const registration = {
         kind: 'note',
         description: 'Minimal note kind fixture for registered flag test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'coexist' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       };
 
       const result = await bus.request(ArtifactSubjects.kind.register, registration);
@@ -91,9 +167,10 @@ describe('ArtifactSchemaRegistry', () => {
       const registration: ArtifactKindRegistration = {
         kind: 'note',
         description: 'Minimal note kind fixture for detached record mutation test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object', properties: { title: { type: 'string' } } },
-        conflictPolicy: 'coexist' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       };
 
       await bus.request(ArtifactSubjects.kind.register, registration);
@@ -101,26 +178,25 @@ describe('ArtifactSchemaRegistry', () => {
       registration.dataSchema = { type: 'number' };
       listed.kinds[0]!.dataSchema = { type: 'string' };
 
-      expect(registry.getKind('note', '1')?.dataSchema).toEqual({
-        type: 'object',
-        properties: { title: { type: 'string' } },
-      });
+      expect(registry.getKind('note', 1)?.dataSchema).toEqual(titleSchema());
     });
 
     it('replaces an existing kind for the same kind+schemaVersion pair', async () => {
       const v1 = {
         kind: 'implementation-plan',
         description: 'Minimal implementation-plan v1 fixture for replacement test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object', properties: { status: { type: 'string' } } },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema({ properties: { status: { type: 'string' } } }),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       };
       const v1Updated = {
         kind: 'implementation-plan',
         description: 'Minimal implementation-plan v1 updated fixture for replacement test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object', properties: { status: { type: 'string' }, priority: { type: 'number' } } },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema({ properties: { status: { type: 'string' }, priority: { type: 'number' } } }),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       };
 
       await bus.request(ArtifactSubjects.kind.register, v1);
@@ -135,16 +211,18 @@ describe('ArtifactSchemaRegistry', () => {
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
         description: 'Minimal plan v1 fixture for distinct-version pair test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       });
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
         description: 'Minimal plan v2 fixture for distinct-version pair test.',
-        schemaVersion: '2',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 2,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       });
 
       const listed = await bus.request(ArtifactSubjects.kind.list, {});
@@ -155,16 +233,18 @@ describe('ArtifactSchemaRegistry', () => {
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
         description: 'Minimal plan fixture for kind.list filter-by-kind test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       });
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'note',
         description: 'Minimal note fixture for kind.list filter-by-kind test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'coexist' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       });
 
       const listed = await bus.request(ArtifactSubjects.kind.list, { kind: 'plan' });
@@ -181,15 +261,16 @@ describe('ArtifactSchemaRegistry', () => {
       const planKind = {
         kind: 'plan',
         description: 'Minimal plan fixture for deregister-by-version test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       };
       await bus.request(ArtifactSubjects.kind.register, planKind);
 
-      registry.deregisterKind('plan', '1');
+      registry.deregisterKind('plan', 1);
 
-      expect(registry.getKind('plan', '1')).toBeUndefined();
+      expect(registry.getKind('plan', 1)).toBeUndefined();
       await expect(bus.request(ArtifactSubjects.kind.list, {})).resolves.toEqual({ kinds: [] });
     });
 
@@ -197,43 +278,44 @@ describe('ArtifactSchemaRegistry', () => {
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
         description: 'Minimal plan fixture for kind.changed on deregister test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       });
 
-      const changed = new Promise<{ kind: string; schemaVersion: string }>((resolve) => {
+      const changed = new Promise<{ kind: string; schemaVersion: number }>((resolve) => {
         bus.on(ArtifactSubjects.kind.changed, (ctx) => {
           resolve(ctx.payload);
         });
       });
-      registry.deregisterKind('plan', '1');
+      registry.deregisterKind('plan', 1);
 
-      await expect(changed).resolves.toEqual({ kind: 'plan', schemaVersion: '1' });
+      await expect(changed).resolves.toEqual({ kind: 'plan', schemaVersion: 1 });
     });
 
     it('keeps extension-owned kinds ahead of factory and target registrations, then resurfaces lower-priority owners', async () => {
-      const extensionKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'extension' } } });
-      const factoryKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'factory' } } });
-      const targetKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'target' } } });
+      const extensionKind = makeKind('plan', 1, { type: 'object', properties: { source: { const: 'extension' } } });
+      const factoryKind = makeKind('plan', 1, { type: 'object', properties: { source: { const: 'factory' } } });
+      const targetKind = makeKind('plan', 1, { type: 'object', properties: { source: { const: 'target' } } });
 
       registry.registerKind(targetKind, { source: 'target-repo', ownerKey: 'target:acme/factory:acme/app' });
       registry.registerKind(factoryKind, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
       registry.registerKind(extensionKind, { source: 'extension', ownerKey: 'extension:planner' });
 
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(extensionKind.dataSchema);
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(extensionKind.dataSchema);
 
-      registry.deregisterKind('plan', '1', { source: 'extension', ownerKey: 'extension:planner' });
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(factoryKind.dataSchema);
+      registry.deregisterKind('plan', 1, { source: 'extension', ownerKey: 'extension:planner' });
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(factoryKind.dataSchema);
 
-      registry.deregisterKind('plan', '1', { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(targetKind.dataSchema);
+      registry.deregisterKind('plan', 1, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(targetKind.dataSchema);
     });
 
     it('emits kind.changed only when the active winner changes', async () => {
-      const extensionKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'extension' } } });
-      const factoryKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'factory' } } });
-      const events: Array<{ kind: string; schemaVersion: string }> = [];
+      const extensionKind = makeKind('plan', 1, { type: 'object', properties: { source: { const: 'extension' } } });
+      const factoryKind = makeKind('plan', 1, { type: 'object', properties: { source: { const: 'factory' } } });
+      const events: Array<{ kind: string; schemaVersion: number }> = [];
       bus.on(ArtifactSubjects.kind.changed, (ctx) => {
         events.push(ctx.payload);
       });
@@ -241,26 +323,26 @@ describe('ArtifactSchemaRegistry', () => {
       registry.registerKind(extensionKind, { source: 'extension', ownerKey: 'extension:planner' });
       await vi.waitFor(
         () => {
-          expect(events).toEqual([{ kind: 'plan', schemaVersion: '1' }]);
+          expect(events).toEqual([{ kind: 'plan', schemaVersion: 1 }]);
         },
         { timeout: 5000 },
       );
 
       registry.registerKind(factoryKind, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
-      expect(events).toEqual([{ kind: 'plan', schemaVersion: '1' }]);
+      expect(events).toEqual([{ kind: 'plan', schemaVersion: 1 }]);
 
-      registry.deregisterKind('plan', '1', { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
-      expect(events).toEqual([{ kind: 'plan', schemaVersion: '1' }]);
+      registry.deregisterKind('plan', 1, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      expect(events).toEqual([{ kind: 'plan', schemaVersion: 1 }]);
 
       registry.registerKind(factoryKind, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
-      registry.deregisterKind('plan', '1', { source: 'extension', ownerKey: 'extension:planner' });
+      registry.deregisterKind('plan', 1, { source: 'extension', ownerKey: 'extension:planner' });
 
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(factoryKind.dataSchema);
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(factoryKind.dataSchema);
       await vi.waitFor(
         () => {
           expect(events).toEqual([
-            { kind: 'plan', schemaVersion: '1' },
-            { kind: 'plan', schemaVersion: '1' },
+            { kind: 'plan', schemaVersion: 1 },
+            { kind: 'plan', schemaVersion: 1 },
           ]);
         },
         { timeout: 5000 },
@@ -268,55 +350,55 @@ describe('ArtifactSchemaRegistry', () => {
     });
 
     it('uses LIFO ordering for same-tier extension contributors', () => {
-      const alphaKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'alpha' } } });
-      const betaKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'beta' } } });
+      const alphaKind = makeKind('plan', 1, { type: 'object', properties: { owner: { const: 'alpha' } } });
+      const betaKind = makeKind('plan', 1, { type: 'object', properties: { owner: { const: 'beta' } } });
 
       registry.registerKind(alphaKind, { source: 'extension', ownerKey: 'extension:alpha' });
       registry.registerKind(betaKind, { source: 'extension', ownerKey: 'extension:beta' });
 
       // Later registration wins for extensions (LIFO)
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(betaKind.dataSchema);
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(betaKind.dataSchema);
 
-      registry.deregisterKind('plan', '1', { source: 'extension', ownerKey: 'extension:beta' });
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(alphaKind.dataSchema);
+      registry.deregisterKind('plan', 1, { source: 'extension', ownerKey: 'extension:beta' });
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(alphaKind.dataSchema);
     });
 
     it('warns and keeps first winner for same-tier repo collision', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      const firstKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'first' } } });
-      const secondKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'second' } } });
+      const firstKind = makeKind('plan', 1, { type: 'object', properties: { owner: { const: 'first' } } });
+      const secondKind = makeKind('plan', 1, { type: 'object', properties: { owner: { const: 'second' } } });
 
       registry.registerKind(firstKind, { source: 'factory-repo', ownerKey: 'factory:acme/first' });
       registry.registerKind(secondKind, { source: 'factory-repo', ownerKey: 'factory:acme/second' });
 
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(firstKind.dataSchema);
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(firstKind.dataSchema);
       expect(warnSpy).toHaveBeenCalledOnce();
 
       warnSpy.mockRestore();
     });
 
     it('replaces all registrations for one owner without removing other owners', () => {
-      registry.registerKind(makeKind('plan', '1'), { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
-      registry.registerKind(makeKind('audit', '1'), {
+      registry.registerKind(makeKind('plan', 1), { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      registry.registerKind(makeKind('audit', 1), {
         source: 'target-repo',
         ownerKey: 'target:acme/factory:acme/app',
       });
 
       registry.replaceKindRegistrationsForOwner({ source: 'factory-repo', ownerKey: 'factory:acme/factory' }, [
-        makeKind('blueprint', '1'),
+        makeKind('blueprint', 1),
       ]);
 
-      expect(registry.getKind('plan', '1')).toBeUndefined();
-      expect(registry.getKind('blueprint', '1')).toBeDefined();
-      expect(registry.getKind('audit', '1')).toBeDefined();
+      expect(registry.getKind('plan', 1)).toBeUndefined();
+      expect(registry.getKind('blueprint', 1)).toBeDefined();
+      expect(registry.getKind('audit', 1)).toBeDefined();
     });
 
     it('keeps first same-tier repo winner during owner replacement', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const firstKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'first' } } });
-      const secondKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'second' } } });
-      const refreshedFirstKind = makeKind('plan', '1', {
+      const firstKind = makeKind('plan', 1, { type: 'object', properties: { owner: { const: 'first' } } });
+      const secondKind = makeKind('plan', 1, { type: 'object', properties: { owner: { const: 'second' } } });
+      const refreshedFirstKind = makeKind('plan', 1, {
         type: 'object',
         properties: { owner: { const: 'first' }, refreshed: { type: 'boolean' } },
       });
@@ -331,7 +413,7 @@ describe('ArtifactSchemaRegistry', () => {
         refreshedFirstKind,
       ]);
 
-      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(refreshedFirstKind.dataSchema);
+      expect(registry.getKind('plan', 1)?.dataSchema).toEqual(refreshedFirstKind.dataSchema);
       expect(warnSpy).toHaveBeenCalledOnce();
 
       warnSpy.mockRestore();
@@ -418,17 +500,18 @@ describe('ArtifactSchemaRegistry', () => {
       const planKind = {
         kind: 'plan',
         description: 'Minimal plan fixture for getKind direct API test.',
-        schemaVersion: '1',
-        dataSchema: { type: 'object' },
-        conflictPolicy: 'supersedes' as const,
+        schemaVersion: 1,
+        dataSchema: titleSchema(),
+        category: 'knowledge' as const,
+        titlePath: 'title',
       };
       await bus.request(ArtifactSubjects.kind.register, planKind);
 
-      expect(registry.getKind('plan', '1')).toEqual(planKind);
+      expect(registry.getKind('plan', 1)).toEqual(planKind);
     });
 
     it('getKind returns undefined for an unknown kind', () => {
-      expect(registry.getKind('unknown', '1')).toBeUndefined();
+      expect(registry.getKind('unknown', 1)).toBeUndefined();
     });
 
     it('getRelationType returns a core relation type', () => {
@@ -440,11 +523,11 @@ describe('ArtifactSchemaRegistry', () => {
     });
 
     it('clears kind and relation state on destroy', async () => {
-      registry.registerKind(makeKind('plan', '1'), { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      registry.registerKind(makeKind('plan', 1), { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
 
       await registry.destroy();
 
-      expect(registry.getKind('plan', '1')).toBeUndefined();
+      expect(registry.getKind('plan', 1)).toBeUndefined();
       expect(registry.getRelationType('supersedes')).toBeUndefined();
     });
   });

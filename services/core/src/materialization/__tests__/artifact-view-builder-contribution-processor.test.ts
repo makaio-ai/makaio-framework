@@ -79,29 +79,29 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       const registry = new ArtifactViewBuilderRegistry();
       const processor = createArtifactViewBuilderContributionProcessor();
 
-      const builder = makeBuilder('review-report', '1');
+      const builder = makeBuilder('review-report', 1);
       const pkg = makeExtension('github-ext', {
         createBuilders: () => [builder],
       });
 
       await processor.processActivated('github-ext', pkg, makeContext(registry));
 
-      expect(registry.getBuilder('review-report', '1')).toBeDefined();
-      expect(registry.getBuilder('review-report', '1')!.build).toBe(builder.build);
+      expect(registry.getBuilder('review-report', 1)).toBeDefined();
+      expect(registry.getBuilder('review-report', 1)!.build).toBe(builder.build);
     });
 
     it('handles async createBuilders', async () => {
       const registry = new ArtifactViewBuilderRegistry();
       const processor = createArtifactViewBuilderContributionProcessor();
 
-      const builder = makeBuilder('review-report', '1');
+      const builder = makeBuilder('review-report', 1);
       const pkg = makeExtension('github-ext', {
         createBuilders: async () => [builder],
       });
 
       await processor.processActivated('github-ext', pkg, makeContext(registry));
 
-      expect(registry.getBuilder('review-report', '1')).toBeDefined();
+      expect(registry.getBuilder('review-report', 1)).toBeDefined();
     });
 
     it('throws a hard composition error when the registry is missing', async () => {
@@ -123,22 +123,22 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       const registry = new ArtifactViewBuilderRegistry();
       const processor = createArtifactViewBuilderContributionProcessor();
 
-      const v1 = makeBuilder('review-report', '1', 1);
-      const v2 = makeBuilder('review-report', '1', 2);
+      const v1 = makeBuilder('review-report', 1, 1);
+      const v2 = makeBuilder('review-report', 1, 2);
 
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', { createBuilders: () => [v1] }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')!.version).toBe(1);
+      expect(registry.getBuilder('review-report', 1)!.version).toBe(1);
 
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', { createBuilders: () => [v2] }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')!.version).toBe(2);
+      expect(registry.getBuilder('review-report', 1)!.version).toBe(2);
     });
 
     it('replacement can change the set of contributed kinds', async () => {
@@ -148,23 +148,23 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1'), makeBuilder('implementation-plan', '1')],
+          createBuilders: () => [makeBuilder('review-report', 1), makeBuilder('implementation-plan', 1)],
         }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')).toBeDefined();
-      expect(registry.getBuilder('implementation-plan', '1')).toBeDefined();
+      expect(registry.getBuilder('review-report', 1)).toBeDefined();
+      expect(registry.getBuilder('implementation-plan', 1)).toBeDefined();
 
       // Reactivate with only one builder
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1', 2)],
+          createBuilders: () => [makeBuilder('review-report', 1, 2)],
         }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')!.version).toBe(2);
-      expect(registry.getBuilder('implementation-plan', '1')).toBeUndefined();
+      expect(registry.getBuilder('review-report', 1)!.version).toBe(2);
+      expect(registry.getBuilder('implementation-plan', 1)).toBeUndefined();
     });
   });
 
@@ -180,14 +180,14 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1')],
+          createBuilders: () => [makeBuilder('review-report', 1)],
         }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')).toBeDefined();
+      expect(registry.getBuilder('review-report', 1)).toBeDefined();
 
       await processor.processStopped!('github-ext');
-      expect(registry.getBuilder('review-report', '1')).toBeUndefined();
+      expect(registry.getBuilder('review-report', 1)).toBeUndefined();
     });
 
     it('is idempotent for unknown extensions', async () => {
@@ -202,14 +202,14 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1')],
+          createBuilders: () => [makeBuilder('review-report', 1)],
         }),
         makeContext(registry),
       );
 
       await processor.processStopped!('github-ext');
       await processor.processStopped!('github-ext');
-      expect(registry.getBuilder('review-report', '1')).toBeUndefined();
+      expect(registry.getBuilder('review-report', 1)).toBeUndefined();
     });
 
     it('does not affect builders from other extensions', async () => {
@@ -219,21 +219,21 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1')],
+          createBuilders: () => [makeBuilder('review-report', 1)],
         }),
         makeContext(registry),
       );
       await processor.processActivated(
         'jira-ext',
         makeExtension('jira-ext', {
-          createBuilders: () => [makeBuilder('implementation-plan', '1')],
+          createBuilders: () => [makeBuilder('implementation-plan', 1)],
         }),
         makeContext(registry),
       );
 
       await processor.processStopped!('github-ext');
-      expect(registry.getBuilder('review-report', '1')).toBeUndefined();
-      expect(registry.getBuilder('implementation-plan', '1')).toBeDefined();
+      expect(registry.getBuilder('review-report', 1)).toBeUndefined();
+      expect(registry.getBuilder('implementation-plan', 1)).toBeDefined();
     });
 
     it('frees keys for re-registration after stop', async () => {
@@ -243,7 +243,7 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1')],
+          createBuilders: () => [makeBuilder('review-report', 1)],
         }),
         makeContext(registry),
       );
@@ -253,11 +253,11 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'jira-ext',
         makeExtension('jira-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1', 2)],
+          createBuilders: () => [makeBuilder('review-report', 1, 2)],
         }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')!.version).toBe(2);
+      expect(registry.getBuilder('review-report', 1)!.version).toBe(2);
     });
   });
 
@@ -273,7 +273,7 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1')],
+          createBuilders: () => [makeBuilder('review-report', 1)],
         }),
         makeContext(registry),
       );
@@ -282,14 +282,14 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
         processor.processActivated(
           'jira-ext',
           makeExtension('jira-ext', {
-            createBuilders: () => [makeBuilder('review-report', '1')],
+            createBuilders: () => [makeBuilder('review-report', 1)],
           }),
           makeContext(registry),
         ),
-      ).rejects.toThrow(JSON.stringify(['review-report', '1']));
+      ).rejects.toThrow(JSON.stringify(['review-report', 1]));
 
       // The first extension's builder should be intact
-      expect(registry.getBuilder('review-report', '1')).toBeDefined();
+      expect(registry.getBuilder('review-report', 1)).toBeDefined();
     });
   });
 
@@ -305,13 +305,13 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'custom-ext',
         makeExtension('custom-ext', {
-          createBuilders: () => [makeBuilder('product-custom-widget', '2024.1', 3)],
+          createBuilders: () => [makeBuilder('product-custom-widget', 2024, 3)],
         }),
         makeContext(registry),
       );
 
-      expect(registry.getBuilder('product-custom-widget', '2024.1')).toBeDefined();
-      expect(registry.getBuilder('product-custom-widget', '2024.1')!.version).toBe(3);
+      expect(registry.getBuilder('product-custom-widget', 2024)).toBeDefined();
+      expect(registry.getBuilder('product-custom-widget', 2024)!.version).toBe(3);
     });
   });
 
@@ -328,25 +328,25 @@ describe('createArtifactViewBuilderContributionProcessor', () => {
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1', 1)],
+          createBuilders: () => [makeBuilder('review-report', 1, 1)],
         }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')!.version).toBe(1);
+      expect(registry.getBuilder('review-report', 1)!.version).toBe(1);
 
       // Replace
       await processor.processActivated(
         'github-ext',
         makeExtension('github-ext', {
-          createBuilders: () => [makeBuilder('review-report', '1', 2)],
+          createBuilders: () => [makeBuilder('review-report', 1, 2)],
         }),
         makeContext(registry),
       );
-      expect(registry.getBuilder('review-report', '1')!.version).toBe(2);
+      expect(registry.getBuilder('review-report', 1)!.version).toBe(2);
 
       // Deactivate
       await processor.processStopped!('github-ext');
-      expect(registry.getBuilder('review-report', '1')).toBeUndefined();
+      expect(registry.getBuilder('review-report', 1)).toBeUndefined();
     });
   });
 });

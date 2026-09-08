@@ -22,7 +22,7 @@ interface ActiveHookContribution {
  */
 function scopeHookToKindDefinition(
   kind: string,
-  schemaVersion: string,
+  schemaVersion: number,
   hook: ArtifactLifecycleHookRegistration<IMakaioBus>,
 ): ArtifactLifecycleHookRegistration<IMakaioBus> {
   return {

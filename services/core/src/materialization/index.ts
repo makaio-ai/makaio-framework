@@ -3,7 +3,7 @@ export {
   ArtifactViewBuilderRegistry,
 } from './artifact-view-builder-registry.js';
 export { createArtifactViewBuilderContributionProcessor } from './artifact-view-builder-contribution-processor.js';
-export { ArtifactViewService, isAffordancePermitted } from './artifact-view-service.js';
+export { ArtifactViewService } from './artifact-view-service.js';
 export { SurfaceBindingRegistry } from './surface-binding-registry.js';
 export { createSurfaceBindingContributionProcessor } from './surface-binding-contribution-processor.js';
 export { buildGenericArtifactView, GENERIC_ARTIFACT_VIEW_BUILDER_VERSION } from './generic-artifact-view-builder.js';

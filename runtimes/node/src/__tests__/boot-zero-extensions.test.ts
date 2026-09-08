@@ -469,9 +469,10 @@ export default [bootPackage, targetPackage];
           defineArtifactKind({
             kind: 'boot-note',
             description: 'Minimal boot-note fixture for boot-time artifact kind registration test.',
-            schemaVersion: '1',
+            schemaVersion: 1,
             dataSchema: z.object({ title: z.string() }),
-            conflictPolicy: 'coexist',
+            category: 'record',
+            titlePath: 'title',
           }),
         ],
       },
@@ -551,7 +552,7 @@ export default [bootPackage, targetPackage];
         kind: 'implementation-plan',
         id: 'artifact-1',
         revision: 'rev-1',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'global' },
         data: { status: 'draft' },
         relations: [],
@@ -756,7 +757,7 @@ export default {
         kind: 'test',
         id: 'test-1',
         revision: 'rev-1',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'p1' } },
         data: {},
         relations: [],
@@ -765,7 +766,6 @@ export default {
       },
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
     expect(hook).toHaveBeenCalledTimes(1);
   });

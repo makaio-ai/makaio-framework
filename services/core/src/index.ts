@@ -140,7 +140,6 @@ export {
   ArtifactLifecycleHookRejectedError,
   createArtifactLifecycleHookContributionProcessor,
   resolveArtifactContext,
-  type ArtifactContextKindRegistry,
   type ResolveArtifactContextOptions,
   type RunAfterInput,
   type RunBeforeInput,

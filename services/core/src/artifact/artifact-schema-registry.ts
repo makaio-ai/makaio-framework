@@ -1,5 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { ArtifactSubjects, type ArtifactKindRegistration, type RelationTypeRegistration } from '@makaio/contracts';
+import {
+  ArtifactSubjects,
+  ArtifactKindRegistrationSchema,
+  type ArtifactKindRegistration,
+  type RelationTypeRegistration,
+} from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 
 /**
@@ -102,10 +107,10 @@ function cloneRegistration<T>(value: T): T {
 /**
  * Composite key used to deduplicate kind registrations.
  * @param kind - Kind discriminator string.
- * @param schemaVersion - Schema version string.
+ * @param schemaVersion - Positive schema version.
  * @returns A stable composite key.
  */
-function kindKey(kind: string, schemaVersion: string): string {
+function kindKey(kind: string, schemaVersion: number): string {
   return `${kind}@${schemaVersion}`;
 }
 
@@ -303,6 +308,7 @@ export class ArtifactSchemaRegistry extends BaseService {
     registration: ArtifactKindRegistration,
     owner: ArtifactKindRegistrationOwner = EXTENSION_BUS_OWNER,
   ): void {
+    registration = ArtifactKindRegistrationSchema.parse(registration);
     const key = kindKey(registration.kind, registration.schemaVersion);
     const contributions = this.kindContributions.get(key) ?? new Map<string, OwnedArtifactKindContribution>();
     const id = ownerId(owner);
@@ -340,12 +346,12 @@ export class ArtifactSchemaRegistry extends BaseService {
    * automatically becomes active. Bus RPC callers without an explicit owner
    * are attributed to {@link EXTENSION_BUS_OWNER}.
    * @param kind - Kind discriminator string.
-   * @param schemaVersion - Schema version string.
+   * @param schemaVersion - Positive schema version.
    * @param owner - Owner identity. Defaults to the extension bus owner.
    */
   public deregisterKind(
     kind: string,
-    schemaVersion: string,
+    schemaVersion: number,
     owner: ArtifactKindRegistrationOwner = EXTENSION_BUS_OWNER,
   ): void {
     const key = kindKey(kind, schemaVersion);
@@ -370,6 +376,7 @@ export class ArtifactSchemaRegistry extends BaseService {
     owner: ArtifactKindRegistrationOwner,
     registrations: readonly ArtifactKindRegistration[],
   ): void {
+    const validated = registrations.map((registration) => ArtifactKindRegistrationSchema.parse(registration));
     const touched = new Set<string>();
     const id = ownerId(owner);
     const previousOrders = new Map<string, number>();
@@ -383,7 +390,7 @@ export class ArtifactSchemaRegistry extends BaseService {
       }
     }
 
-    for (const registration of registrations) {
+    for (const registration of validated) {
       const key = kindKey(registration.kind, registration.schemaVersion);
       const contributions = this.kindContributions.get(key) ?? new Map<string, OwnedArtifactKindContribution>();
       const preservedOrder = owner.source === 'extension' ? undefined : previousOrders.get(key);
@@ -435,10 +442,10 @@ export class ArtifactSchemaRegistry extends BaseService {
   /**
    * Look up a kind registration by kind string and schema version.
    * @param kind - Kind discriminator string.
-   * @param schemaVersion - Schema version string.
+   * @param schemaVersion - Positive schema version.
    * @returns The registration record, or `undefined` if not found.
    */
-  public getKind(kind: string, schemaVersion: string): ArtifactKindRegistration | undefined {
+  public getKind(kind: string, schemaVersion: number): ArtifactKindRegistration | undefined {
     const registration = this.kinds.get(kindKey(kind, schemaVersion));
     return registration ? cloneRegistration(registration) : undefined;
   }

@@ -7,4 +7,4 @@ export {
 export type { RunAfterInput, RunBeforeInput, RunBeforeResult } from './artifact-lifecycle-hook-registry.js';
 export { createArtifactLifecycleHookContributionProcessor } from './artifact-lifecycle-hook-contribution-processor.js';
 export { resolveArtifactContext } from './context-resolver.js';
-export type { ArtifactContextKindRegistry, ResolveArtifactContextOptions } from './context-resolver.js';
+export type { ResolveArtifactContextOptions } from './context-resolver.js';

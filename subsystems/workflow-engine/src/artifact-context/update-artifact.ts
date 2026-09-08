@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { ArtifactSubjects, WorkflowSubjects } from '@makaio/contracts';
+import { ArtifactSchemas, ArtifactSubjects, WorkflowSubjects } from '@makaio/contracts';
 import type { ArtifactContext, ArtifactPatch, ArtifactUpdater } from '@makaio/contracts';
 import { makeWorkflowActor, type ArtifactBindingState } from './artifact-binding.js';
 
@@ -115,8 +115,29 @@ function setSegmentsRecursive(
  * @returns A shallow-cloned object with the targeted field updated.
  */
 function setValueAtPath(data: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> {
-  const segments = path.startsWith('/') ? path.slice(1).split('/') : path.split('.');
+  const segments = toStatusPointer(path)
+    .slice(1)
+    .split('/')
+    .map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
   return setSegmentsRecursive(data, segments, value);
+}
+
+/**
+ * Normalize a binding's dot path or data-relative JSON Pointer.
+ * @param path - Explicit status path declared by the workflow binding.
+ * @returns Validated data-relative JSON Pointer used by both mutation and observation.
+ */
+function toStatusPointer(path: string): string {
+  if (!path.startsWith('/') && path.split('.').some((part) => part.length === 0)) {
+    throw new Error('Status path must contain nonempty dot-separated segments');
+  }
+  const pointer = path.startsWith('/')
+    ? path
+    : `/${path
+        .split('.')
+        .map((part) => part.replace(/~/g, '~0').replace(/\//g, '~1'))
+        .join('/')}`;
+  return ArtifactSchemas.revise.request.shape.statusPath.unwrap().parse(pointer);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -232,6 +253,7 @@ export function createArtifactContext<TData extends Record<string, unknown> = Re
 
   const updateArtifact = async (update: ArtifactPatch<TData> | ArtifactUpdater<TData>): Promise<string> => {
     return enqueueArtifactUpdate(bindingState, async () => {
+      const statusPath = bindingState.statusPath === undefined ? undefined : toStatusPointer(bindingState.statusPath);
       const current = bindingState.current;
       const { nextData, operationLabel, changedPaths } = await resolveUpdate(current.data as TData, update);
 
@@ -245,6 +267,7 @@ export function createArtifactContext<TData extends Record<string, unknown> = Re
 
       // Write new revision via the artifact bus.
       const reviseResponse = await bus.request(ArtifactSubjects.revise, {
+        ...(statusPath !== undefined && { statusPath }),
         previous: {
           refClass: 'artifact',
           kind: current.kind,

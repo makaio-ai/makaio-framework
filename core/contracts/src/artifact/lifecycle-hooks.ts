@@ -9,14 +9,13 @@ import type {
   ArtifactRevision,
   ArtifactScope,
 } from './schemas.js';
-import type { ArtifactProjectionPolicy } from '../materialization/schemas.js';
 
 /**
  * Semantic lifecycle event names used to describe what happened to an artifact
  * after a write operation completes.
  *
  * These are the observable outcomes of artifact mutations and are used by
- * after hooks and projection policies alike.
+ * after hooks and other explicit workflow consumers.
  */
 export type ArtifactLifecycleSemanticEvent = 'created' | 'revised' | 'status-changed' | 'observation-added';
 
@@ -46,7 +45,7 @@ export interface ArtifactDraft {
   /** Artifact kind discriminator. */
   readonly kind: string;
   /** Schema version used to interpret `data`. */
-  readonly schemaVersion: string;
+  readonly schemaVersion: number;
   /** Scope at which this artifact is relevant. */
   readonly scope: ArtifactScope;
   /** Kind-specific payload, not yet schema-validated. */
@@ -147,17 +146,10 @@ export interface AfterArtifactHookContext<TBus extends MakaioBusLike = MakaioBus
   readonly artifact: ArtifactRevision;
   /** Reference to the previous revision, if this is a revise or status-change. */
   readonly previous?: ArtifactRef;
-  /** The observation that was just appended, present only for `afterObservationAdded`. */
+  /** The observation appended by afterObservationAdded. */
   readonly observation?: ArtifactObservation;
-  /** Kind registration metadata, if the kind has been registered. */
+  /** Current registration metadata, when registered. */
   readonly kindRegistration?: ArtifactKindRegistration;
-  /**
-   * Effective projection policy for this artifact kind.
-   *
-   * Derived from the kind registration's projection field and the host's
-   * materialization defaults.
-   */
-  readonly projectionPolicy: ArtifactProjectionPolicy;
   /** Runtime bus for dispatching follow-up events or RPCs. */
   readonly bus: TBus;
   /**
@@ -196,7 +188,7 @@ export interface ArtifactHookFilter {
    */
   readonly kind?: string | '*';
   /** Schema version to match. When absent the hook runs for every version. */
-  readonly schemaVersion?: string;
+  readonly schemaVersion?: number;
 }
 
 /**

@@ -9,7 +9,7 @@ import {
 } from '../shared/json-value.js';
 import { AutomationTriggerKindSchema } from '../automation-trigger/schemas.js';
 import type { AutomationTriggerBinding } from '../automation-trigger/definition.js';
-import { ArtifactScopeSchema } from '../artifact/index.js';
+import { ArtifactScopeSchema, ArtifactSchemaVersionSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js';
 import { AIReasoningLevelSchema } from '../model/index.js';
@@ -157,7 +157,7 @@ export const WorkflowArtifactBindingSchema = z.object({
   /** Artifact kind string (e.g. `'implementation-plan'`). */
   kind: z.string().min(1),
   /** Schema version used by the artifact service to validate the `data` payload. */
-  schemaVersion: z.string().min(1),
+  schemaVersion: ArtifactSchemaVersionSchema,
   /** Scope at which the artifact is stored. */
   scope: ArtifactScopeSchema,
   /**
@@ -187,7 +187,7 @@ export const WorkflowArtifactWriteDeclarationSchema = z.object({
   /** Artifact kind string (e.g. `'station-output'`). */
   kind: z.string().min(1),
   /** Schema version validated by the artifact service. */
-  schemaVersion: z.string().min(1),
+  schemaVersion: ArtifactSchemaVersionSchema,
   /** Scope at which the artifact revision is written. */
   scope: ArtifactScopeSchema,
   /**

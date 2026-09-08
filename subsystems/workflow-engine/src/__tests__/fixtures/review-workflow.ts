@@ -139,7 +139,7 @@ export function buildReviewWorkflow(opts?: {
   })
     .artifact({
       kind: 'code-review',
-      schemaVersion: '1',
+      schemaVersion: 1,
       scope: { level: 'global' },
       schema: ReviewArtifactDataSchema,
       statusPath: 'status',

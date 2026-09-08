@@ -10,7 +10,6 @@ import type {
   ArtifactKindRegistration,
   ArtifactLifecycleHookRegistration,
   ArtifactObservation,
-  ArtifactProjectionPolicy,
   ArtifactRef,
   ArtifactRelationTarget,
   ArtifactRevision,
@@ -76,8 +75,6 @@ export interface RunAfterInput {
   readonly observation?: ArtifactObservation;
   /** Kind registration metadata if the kind has been registered. */
   readonly kindRegistration: ArtifactKindRegistration | undefined;
-  /** Effective projection policy for this artifact kind. */
-  readonly projectionPolicy: ArtifactProjectionPolicy;
   /**
    * Skip the default provider projection tier while preserving custom after hooks.
    *
@@ -461,7 +458,7 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
     semanticEvent: AfterArtifactHookContext['semanticEvent'],
     input: RunAfterInput,
   ): Promise<void> {
-    const { artifact, previous, observation, kindRegistration, projectionPolicy, skipDefaultProjection, meta } = input;
+    const { artifact, previous, observation, kindRegistration, skipDefaultProjection, meta } = input;
     const hooks = selectAfterHooks(this.allHooks(), event, artifact);
     const bus = this.bus;
 
@@ -483,7 +480,6 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
           : undefined,
         observation,
         kindRegistration,
-        projectionPolicy,
         bus,
         meta,
         preventDefault(): void {

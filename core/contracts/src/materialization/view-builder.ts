@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import type { ResolvedArtifactContextWire } from '../artifact/context-resolution.js';
 import type { ArtifactRelation, ArtifactRevision } from '../artifact/schemas.js';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
 import type { ArtifactViewLevel, ArtifactViewNavigation, ArtifactViewSection } from './view-model.js';
@@ -257,16 +256,6 @@ export interface ArtifactViewBuilderContext<K extends string = string> {
   readonly genericNavigation: ArtifactViewNavigation;
   /** Direct relations already present on the artifact revision. */
   readonly relations: readonly ArtifactRelation[];
-  /**
-   * The context graph resolved from the kind registration's declared
-   * `defaultContext` selector via `ArtifactSubjects.resolveContext`.
-   *
-   * Present only when the kind registration declares a `defaultContext`
-   * selector AND context resolution succeeded (the resolve-context RPC
-   * was handled). `undefined` when the registration declares no selector
-   * or no resolver handled the request.
-   */
-  readonly defaultContext: ResolvedArtifactContextWire | undefined;
 }
 
 /**
@@ -307,7 +296,7 @@ export interface ArtifactViewBuilder<K extends string = string> {
   /** Exact artifact kind this builder handles. */
   readonly kind: K;
   /** Exact schema version this builder handles. */
-  readonly schemaVersion: string;
+  readonly schemaVersion: number;
   /**
    * Positive monotonic version of this builder.
    *
