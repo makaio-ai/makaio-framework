@@ -18,6 +18,7 @@ export {
   ConfidenceLevelSchema,
   ConfidenceMetadataSchema,
   EvidenceRefSchema,
+  EntityRefSchema,
   LocalRefSchema,
   RelationTypeRegistrationSchema,
 } from './schemas.js';
@@ -41,6 +42,7 @@ export type {
   ConfidenceLevel,
   ConfidenceMetadata,
   EvidenceRef,
+  EntityRef,
   LocalRef,
   RelationTypeRegistration,
 } from './schemas.js';

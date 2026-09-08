@@ -293,15 +293,17 @@ function selectorMatches(
 ): selector is ArtifactContextRelationSelector {
   if (!selector) return false;
   if (!selector.kinds) return true;
-  return selector.kinds.includes(relationTargetKind(target));
+  const kind = relationTargetKind(target);
+  return kind !== undefined && selector.kinds.includes(kind);
 }
 
 /**
  * Resolve the kind discriminator used by selector kind filters.
  * @param target - Relation target to inspect.
- * @returns Kind string for selector matching.
+ * @returns Kind string, or undefined for a separately managed entity.
  */
-function relationTargetKind(target: ArtifactRelationTarget): string {
+function relationTargetKind(target: ArtifactRelationTarget): string | undefined {
+  if (target.refClass === 'entity') return undefined;
   return target.refClass === 'local' ? target.artifact.kind : target.kind;
 }
 
@@ -543,6 +545,9 @@ function refEntryKey(entry: ArtifactContextRefEntry): string {
  * @returns Stable target identity key.
  */
 function relationTargetKey(target: ArtifactRelationTarget): string {
+  if (target.refClass === 'entity') {
+    return JSON.stringify(['entity', target.entityType, target.id]);
+  }
   if (target.refClass === 'artifact') {
     return JSON.stringify(['artifact', target.kind, target.id, target.revision]);
   }
