@@ -127,6 +127,8 @@
     "@makaio/subsystem-git": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "croner": "^10.0.1",
     "drizzle-orm": "0.45.2",
     "zod": "4.4.3"

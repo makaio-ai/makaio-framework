@@ -6,6 +6,7 @@ import {
   type RelationTypeRegistration,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
+import { assertKindDataSchema } from './assert-kind-data-schema.js';
 
 /**
  * Core relation types registered with every artifact schema registry at
@@ -309,6 +310,7 @@ export class ArtifactSchemaRegistry extends BaseService {
     owner: ArtifactKindRegistrationOwner = EXTENSION_BUS_OWNER,
   ): void {
     registration = ArtifactKindRegistrationSchema.parse(registration);
+    assertKindDataSchema(registration);
     const key = kindKey(registration.kind, registration.schemaVersion);
     const contributions = this.kindContributions.get(key) ?? new Map<string, OwnedArtifactKindContribution>();
     const id = ownerId(owner);
@@ -377,6 +379,7 @@ export class ArtifactSchemaRegistry extends BaseService {
     registrations: readonly ArtifactKindRegistration[],
   ): void {
     const validated = registrations.map((registration) => ArtifactKindRegistrationSchema.parse(registration));
+    for (const registration of validated) assertKindDataSchema(registration);
     const touched = new Set<string>();
     const id = ownerId(owner);
     const previousOrders = new Map<string, number>();

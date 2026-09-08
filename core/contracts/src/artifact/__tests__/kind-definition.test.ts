@@ -766,6 +766,66 @@ describe('defineArtifactKind', () => {
     }
   });
 
+  it.each([
+    { name: 'direct', schema: { properties: { topic: { type: 'string' } }, required: ['topic'] } },
+    {
+      name: 'reference',
+      schema: {
+        $ref: '#/$defs/root',
+        $defs: { root: { properties: { topic: { type: 'string' } }, required: ['topic'] } },
+      },
+    },
+    {
+      name: 'conjunction',
+      schema: { allOf: [{ properties: { topic: { type: 'string' } } }, { required: ['topic'] }] },
+    },
+    {
+      name: 'variants',
+      schema: {
+        anyOf: [
+          { properties: { topic: { type: 'string' }, state: { const: 'draft' } }, required: ['topic', 'state'] },
+          { properties: { topic: { type: 'string' }, state: { const: 'ready' } }, required: ['topic', 'state'] },
+        ],
+      },
+    },
+  ])('uses the Artifact data object guarantee for an implicit $name root schema', ({ schema }) => {
+    const registration = defineArtifactKind(options).toRegistration();
+    const accepted = ArtifactKindRegistrationSchema.parse({
+      ...registration,
+      dataSchema: schema,
+      indexedFields: ['topic'],
+      searchableFields: ['topic'],
+      uniqueness: [{ by: [{ kind: 'data', path: 'topic' }] }],
+    });
+    expect(accepted.dataSchema).toEqual(schema);
+    const validate = new Ajv2020({ strict: false }).compile({ type: 'object', ...schema });
+    expect(validate({ topic: 'Plan', state: 'draft' })).toBe(true);
+    expect(validate({ state: 'draft' })).toBe(false);
+    expect(validate('scalar')).toBe(false);
+  });
+
+  it.each([
+    { name: 'direct', nested: { properties: { topic: { type: 'string' } }, required: ['topic'] } },
+    { name: 'reference', nested: { $ref: '#/$defs/nested' } },
+    {
+      name: 'conjunction',
+      nested: { allOf: [{ properties: { topic: { type: 'string' } } }, { required: ['topic'] }] },
+    },
+  ])('does not carry the root object guarantee into an implicit $name nested schema', ({ nested }) => {
+    const registration = defineArtifactKind(options).toRegistration();
+    const dataSchema = {
+      type: 'object',
+      properties: { metadata: nested },
+      required: ['metadata'],
+      $defs: { nested: { properties: { topic: { type: 'string' } }, required: ['topic'] } },
+    };
+    const validate = new Ajv2020({ strict: false }).compile(dataSchema);
+    expect(validate({ metadata: 'scalar' })).toBe(true);
+    expect(
+      ArtifactKindRegistrationSchema.safeParse({ ...registration, titlePath: 'metadata.topic', dataSchema }).success,
+    ).toBe(false);
+  });
+
   it('validates additive cardinalities and category-compatible uniqueness declarations', () => {
     const definition = defineArtifactKind({
       ...options,
