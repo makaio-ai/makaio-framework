@@ -15,7 +15,7 @@ import type { KernelMakaioExtension } from '@makaio/kernel';
 import type { Toolset } from '@makaio/tools-core';
 import type { PrepareAdapterRuntimeInput } from '../compose-adapter-runtime.js';
 import type { OutcomeSubmitRetryConfig } from './outcome-submission.js';
-import { runWorkloadInvocation } from './workload-invocation.js';
+import { runWorkloadInvocation, type WorkloadInvocationPreparation } from './workload-invocation.js';
 import { createWorkflowWorkloadAdapter } from './workflow-workload-adapter.js';
 import { registerWorkerRuntime } from './runtime-registration-client.js';
 import { bootstrapWorkerRuntime, type BootstrapRuntimeConnection } from './bootstrap-start-client.js';
@@ -160,6 +160,8 @@ export interface HeadlessWorkflowWorkerDeps {
   readonly connectBus: HeadlessWorkerBusConnector;
   /** Explicit project Workspace path; required only by an instruction requesting one. */
   readonly workspaceRoot?: string;
+  /** Optional local Workspace Preparation installed by the hosting provider. */
+  readonly preparation?: WorkloadInvocationPreparation;
   /** Materialize executable and contribution paths inside admitted Invocation. */
   readonly materialize: HeadlessWorkerMaterializer;
   /** Load contribution packages from materialized entrypoints. */
@@ -257,6 +259,7 @@ export async function runHeadlessWorkflowWorker(
       runtimeGeneration,
       workspaceRoot: deps.workspaceRoot,
       setupEnv: deps.setupEnv,
+      preparation: deps.preparation,
       adapters: [workflow.adapter],
       signal,
       retry: deps.outcomeRetry,

@@ -24,6 +24,7 @@ import { registerMemorySessionStorage } from '../../../../../services/core/src/s
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { runHeadlessWorkflowWorker, type HeadlessWorkflowWorkerDeps } from '../headless-workflow-worker.js';
+import { createLocalGitWorkspacePreparation } from '../local-git-workspace-preparation.js';
 import { AttemptOutcomeDeliveryError } from '../outcome-submission.js';
 import {
   computeContributionPackageDigest,
@@ -35,6 +36,8 @@ import {
   freezeWorkflowInstruction,
   type AttemptAuthorityHarness,
 } from './attempt-authority-harness.js';
+import { gitWorkspaceRequirement } from './git-workspace-requirement.fixture.js';
+import { createGitFixture } from '../../__tests__/git-test-fixtures.js';
 
 // ─────────────────────────────────────────────────────────────
 // Test infrastructure
@@ -271,6 +274,7 @@ function createTestDeps(
   options?: {
     cwd?: string;
     workspaceRoot?: string;
+    preparation?: HeadlessWorkflowWorkerDeps['preparation'];
     workflowEnv?: Readonly<Record<string, string>>;
     setupEnv?: HeadlessWorkflowWorkerDeps['setupEnv'];
     executionId?: string;
@@ -310,6 +314,7 @@ function createTestDeps(
       })),
     connectBus: createTestBusConnector(authoritySide),
     ...(options?.workspaceRoot === undefined ? {} : { workspaceRoot: options.workspaceRoot }),
+    ...(options?.preparation === undefined ? {} : { preparation: options.preparation }),
     materialize: options?.materialize ?? (async () => ({ context: defaultRuntimeContext })),
     loadContributions: options?.loadContributions ?? (async () => []),
     execute:
@@ -411,7 +416,9 @@ describe('runHeadlessWorkflowWorker integration', () => {
     }
   });
 
-  it('prepares an optional scratch Workspace before acquiring and invoking workflow code', async () => {
+  it.each(
+    process.platform === 'win32' ? ['default'] : ['default', 'public Git Preparation'],
+  )('prepares an optional scratch Workspace before acquiring and invoking workflow code (%s)', async (preparationKind) => {
     const executionId = 'exec-project-workspace';
     const workspaceRoot = join(cwd, 'project');
     const sentinel = 'headless-private-setup-value';
@@ -433,10 +440,16 @@ describe('runHeadlessWorkflowWorker integration', () => {
         },
       ],
     });
+    const resolveRepository = vi.fn(async () => join(cwd, 'unused-repository'));
+    const preparation =
+      preparationKind === 'public Git Preparation'
+        ? createLocalGitWorkspacePreparation({ resolveRepository, timeoutMs: 5_000 })
+        : undefined;
     const deps = createTestDeps(authoritySide, {
       cwd,
       workspaceRoot,
       executionId,
+      preparation,
       setupEnv: { MAKAIO_HEADLESS_SETUP_SENTINEL: sentinel },
       workflowEnv: { MAKAIO_WORKFLOW_ONLY_SENTINEL: 'workflow-only-value' },
       execute: async (_bus, runContext, runtimeContext) => {
@@ -452,6 +465,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
     });
     const result = await runHeadlessWorkflowWorker(deps, new AbortController().signal);
     expect(workflowResult(result.outcome).status).toBe('completed');
+    expect(resolveRepository).not.toHaveBeenCalled();
     expect(JSON.stringify(authoritySide.capture.outcomeSubmissions)).not.toContain(sentinel);
     expect(process.env.MAKAIO_HEADLESS_SETUP_SENTINEL).toBeUndefined();
     expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
@@ -461,6 +475,230 @@ describe('runHeadlessWorkflowWorker integration', () => {
     await expect(stat(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await stat(cwd)).isDirectory()).toBe(true);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'prepares an admitted Git Workspace before invoking against a separately materialized executable root',
+    async () => {
+      const executionId = 'exec-headless-git-workspace';
+      const { repository, revision } = await createGitFixture(cwd);
+      const workspaceRoot = join(cwd, 'project');
+      const executableRoot = join(cwd, 'executable');
+      await mkdir(executableRoot);
+      authoritySide = await createAuthoritySide(executionId, gitWorkspaceRequirement(revision));
+      const phases: string[] = [];
+      const offAdmitted = authoritySide.bus.on(ExecutionAttemptSubjects.operation.admitted, (ctx) => {
+        phases.push(`${ctx.payload.operationKind}-admitted`);
+      });
+      const resolveRepository = vi.fn(async () => {
+        phases.push('repository-resolved');
+        return repository;
+      });
+      const execute = vi.fn(async (_bus, runContext, runtimeContext) => {
+        phases.push('execute');
+        const preparedRoot = await realpath(workspaceRoot);
+        expect(runtimeContext.workspaceRoot).toBe(preparedRoot);
+        expect(runtimeContext.sourcePath).toBe(join(executableRoot, 'workflow.ts'));
+        expect(runtimeContext.workspaceRoot).not.toBe(executableRoot);
+        expect(await readFile(join(preparedRoot, 'source', 'content.txt'), 'utf8')).toBe('selected revision');
+        expect(await readFile(join(preparedRoot, 'ready.txt'), 'utf8')).toBe('selected revision prepared');
+        return { executionId, workflowId: runContext.workflowId, status: 'completed' as const };
+      });
+      const reportPreparedWorkspace = vi.spyOn(authoritySide.attempt.authority, 'reportOperation');
+
+      try {
+        const result = await runHeadlessWorkflowWorker(
+          createTestDeps(authoritySide, {
+            cwd,
+            executionId,
+            workspaceRoot,
+            preparation: createLocalGitWorkspacePreparation({ resolveRepository, timeoutMs: 5_000 }),
+            materialize: async () => ({
+              context: {
+                workspaceRoot: executableRoot,
+                sourcePath: join(executableRoot, 'workflow.ts'),
+                contributionEntrypoints: [],
+                platform: 'linux',
+                arch: 'x64',
+              },
+            }),
+            execute,
+          }),
+          new AbortController().signal,
+        );
+
+        expect(workflowResult(result.outcome).status).toBe('completed');
+        expect(result.decision).toBe('accepted');
+        expect(resolveRepository).toHaveBeenCalledOnce();
+        expect(phases).toEqual([
+          'workspace-preparation-admitted',
+          'repository-resolved',
+          'workload-invocation-admitted',
+          'execute',
+        ]);
+        expect(reportPreparedWorkspace).toHaveBeenCalledOnce();
+        expect(reportPreparedWorkspace.mock.invocationCallOrder[0]).toBeLessThan(execute.mock.invocationCallOrder[0]!);
+        expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+          'workspace-preparation',
+          'workload-invocation',
+        ]);
+        await expect(stat(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await readFile(join(repository, 'content.txt'), 'utf8')).toBe('later revision');
+      } finally {
+        offAdmitted();
+      }
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'does not resolve Git sources or admit Preparation for a workspace-less instruction',
+    async () => {
+      const executionId = 'exec-headless-no-workspace-preparation';
+      authoritySide = await createAuthoritySide(executionId);
+      const resolveRepository = vi.fn(async () => join(cwd, 'unexpected-repository'));
+      const result = await runHeadlessWorkflowWorker(
+        createTestDeps(authoritySide, {
+          cwd,
+          executionId,
+          preparation: createLocalGitWorkspacePreparation({ resolveRepository, timeoutMs: 5_000 }),
+        }),
+        new AbortController().signal,
+      );
+
+      expect(workflowResult(result.outcome).status).toBe('completed');
+      expect(resolveRepository).not.toHaveBeenCalled();
+      expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+        'workload-invocation',
+      ]);
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'settles a Git source access failure before Invocation without persisting private locators',
+    async () => {
+      const executionId = 'exec-headless-git-source-failure';
+      const workspaceRoot = join(cwd, 'project');
+      const privateLocator = join(cwd, 'private-repository');
+      authoritySide = await createAuthoritySide(executionId, gitWorkspaceRequirement('0'.repeat(40)));
+      const execute = vi.fn(async () => ({ executionId, workflowId: 'test-workflow', status: 'completed' as const }));
+      const result = await runHeadlessWorkflowWorker(
+        createTestDeps(authoritySide, {
+          cwd,
+          executionId,
+          workspaceRoot,
+          preparation: createLocalGitWorkspacePreparation({
+            resolveRepository: async () => {
+              throw new Error(`Cannot access ${privateLocator}`);
+            },
+            timeoutMs: 5_000,
+          }),
+          execute,
+        }),
+        new AbortController().signal,
+      );
+
+      expect(result).toMatchObject({
+        decision: 'accepted',
+        outcome: { kind: 'technical-failure', stage: 'workspace-preparation', message: 'Git source access failed' },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+        'workspace-preparation',
+      ]);
+      expect(JSON.stringify(authoritySide.capture.outcomeSubmissions)).not.toContain(privateLocator);
+      expect(JSON.stringify(authoritySide.capture.outcomeSubmissions)).not.toContain(workspaceRoot);
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'settles failed Git Workspace setup before Invocation and retains the diagnostic workspace',
+    async () => {
+      const executionId = 'exec-headless-git-setup-failure';
+      const { repository, revision } = await createGitFixture(cwd);
+      const workspaceRoot = join(cwd, 'project');
+      const workspace = {
+        ...gitWorkspaceRequirement(revision),
+        setup: [{ command: process.execPath, args: ['-e', 'process.exit(9)'], env: {}, timeoutMs: 5_000 }],
+      };
+      authoritySide = await createAuthoritySide(executionId, workspace);
+      const execute = vi.fn(async () => ({ executionId, workflowId: 'test-workflow', status: 'completed' as const }));
+      const result = await runHeadlessWorkflowWorker(
+        createTestDeps(authoritySide, {
+          cwd,
+          executionId,
+          workspaceRoot,
+          preparation: createLocalGitWorkspacePreparation({
+            resolveRepository: async () => repository,
+            timeoutMs: 5_000,
+          }),
+          execute,
+        }),
+        new AbortController().signal,
+      );
+
+      expect(result).toMatchObject({
+        decision: 'accepted',
+        outcome: { kind: 'technical-failure', stage: 'workspace-preparation', message: 'Workspace setup failed' },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      expect(await readFile(join(workspaceRoot, 'source', 'content.txt'), 'utf8')).toBe('selected revision');
+      expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+        'workspace-preparation',
+      ]);
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'forwards cooperative cancellation into an active Git repository resolver before Invocation',
+    async () => {
+      const executionId = 'exec-headless-git-resolver-cancel';
+      const workspaceRoot = join(cwd, 'project');
+      authoritySide = await createAuthoritySide(executionId, gitWorkspaceRequirement('0'.repeat(40)));
+      let markResolverStarted!: () => void;
+      const resolverStarted = new Promise<void>((resolve) => {
+        markResolverStarted = resolve;
+      });
+      const execute = vi.fn(async () => ({ executionId, workflowId: 'test-workflow', status: 'completed' as const }));
+      const abortController = new AbortController();
+      const worker = runHeadlessWorkflowWorker(
+        createTestDeps(authoritySide, {
+          cwd,
+          executionId,
+          workspaceRoot,
+          preparation: createLocalGitWorkspacePreparation({
+            resolveRepository: async (_repositoryId, signal) => {
+              markResolverStarted();
+              await new Promise<void>((_resolve, reject) => {
+                if (signal === undefined) {
+                  reject(new Error('Git resolver requires the worker cancellation signal'));
+                  return;
+                }
+                signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+              });
+              return join(cwd, 'unreachable');
+            },
+            timeoutMs: 5_000,
+          }),
+          execute,
+        }),
+        abortController.signal,
+      );
+
+      await resolverStarted;
+      abortController.abort(new Error('operator stopped the worker'));
+      const result = await worker;
+
+      expect(result).toMatchObject({ outcome: { kind: 'cancelled' }, decision: 'accepted' });
+      expect(execute).not.toHaveBeenCalled();
+      expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+        'workspace-preparation',
+      ]);
+    },
+    20_000,
+  );
 
   it('runs the full lifecycle: bootstrap -> connect -> register -> admit -> pull -> materialize -> compose -> execute -> ACK -> cleanup', async () => {
     const executionId = 'exec-full-lifecycle';
