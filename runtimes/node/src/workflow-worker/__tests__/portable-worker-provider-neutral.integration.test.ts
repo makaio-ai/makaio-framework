@@ -42,6 +42,7 @@ import {
   freezeWorkflowInstruction,
   type AttemptAuthorityHarness,
 } from './attempt-authority-harness.js';
+import { gitWorkspaceRequirement } from './git-workspace-requirement.fixture.js';
 
 // ─────────────────────────────────────────────────────────────
 // Provider composition descriptor
@@ -446,32 +447,6 @@ async function invokeWithGitSource(
     endpoint.cleanup();
     await bus.disconnect();
   }
-}
-
-/**
- * Select one Git source and a setup command that consumes its checked-out content.
- * @param revision - Owner-selected Git revision.
- * @returns Frozen requirement for the generic preparation path.
- */
-function gitWorkspaceRequirement(revision: string): WorkspaceRequirement {
-  return {
-    provisioning: 'create',
-    custody: 'disposable',
-    sourceRoots: [
-      { id: 'primary', path: 'source', source: { kind: 'git', input: { repositoryId: 'project', revision } } },
-    ],
-    setup: [
-      {
-        command: process.execPath,
-        args: [
-          '-e',
-          "const fs=require('fs');fs.writeFileSync('ready.txt',fs.readFileSync('source/content.txt','utf8')+' prepared')",
-        ],
-        env: {},
-        timeoutMs: 5_000,
-      },
-    ],
-  };
 }
 
 // ─────────────────────────────────────────────────────────────

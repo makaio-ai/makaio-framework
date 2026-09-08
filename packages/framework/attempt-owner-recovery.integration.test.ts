@@ -1,27 +1,21 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CONFORMANCE_CONSUMER, RECOVERY_CONSUMER, TYPES_CONSUMER } from './attempt-owner-recovery.fixture.js';
+import {
+  INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS,
+  prepareInstalledPackageConsumer,
+} from './installed-package-consumer.fixture.js';
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const SETUP_TIMEOUT_MS = 270_000;
 const ASSERTION_TIMEOUT_MS = 30_000;
 const CONFORMANCE_TIMEOUT_MS = 60_000;
-const INSTALL_ARGUMENTS = [
-  'install',
-  '--no-save',
-  '--no-package-lock',
-  '--no-audit',
-  '--no-fund',
-  '--prefer-offline',
-  '--ignore-scripts',
-  '--legacy-peer-deps',
-];
 
 let temporaryRoot: string | undefined;
 let consumerRoot: string;
@@ -34,33 +28,15 @@ let recovered: unknown;
  * @param signal - Deadline shared by setup's bounded child processes.
  */
 async function prepareConsumer(root: string, signal: AbortSignal): Promise<void> {
-  const buildRoot = join(root, 'package');
-  const packRoot = join(root, 'pack');
-  consumerRoot = join(root, 'consumer');
-  await Promise.all([mkdir(packRoot), mkdir(consumerRoot)]);
-  await execFileAsync('bun', ['build.ts'], {
-    cwd: import.meta.dirname,
-    env: {
-      ...process.env,
-      MAKAIO_FRAMEWORK_BUILD_PACKAGE_ROOT: buildRoot,
-      MAKAIO_FRAMEWORK_BUILD_SKIP_DTS: '0',
-      MAKAIO_FRAMEWORK_BUILD_TSGO_DTS: '0',
-    },
-    timeout: SETUP_TIMEOUT_MS,
+  const installed = await prepareInstalledPackageConsumer({
+    root,
+    consumerName: 'attempt-recovery-consumer',
     signal,
-    maxBuffer: 10 * 1024 * 1024,
+    buildTimeoutMs: SETUP_TIMEOUT_MS,
+    packTimeoutMs: 60_000,
+    installTimeoutMs: 120_000,
   });
-  const { stdout } = await execFileAsync('npm', ['pack', '--pack-destination', packRoot], {
-    cwd: buildRoot,
-    timeout: 60_000,
-    signal,
-  });
-  const tarball = join(packRoot, stdout.trim());
-  await writeFile(
-    join(consumerRoot, 'package.json'),
-    JSON.stringify({ name: 'attempt-recovery-consumer', private: true, type: 'module' }),
-  );
-  await execFileAsync('npm', [...INSTALL_ARGUMENTS, tarball], { cwd: consumerRoot, timeout: 120_000, signal });
+  consumerRoot = installed.consumerRoot;
   await writeFile(join(consumerRoot, 'recovery.mjs'), RECOVERY_CONSUMER);
   // Separate processes prove committed evidence survives a complete stop, not
   // merely replacement of an Authority while its old database handle survives.
@@ -80,11 +56,15 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
   );
   // Include both packages: npm's no-save install prunes extraneous packages
   // from an earlier invocation if they are not requested again.
-  await execFileAsync('npm', [...INSTALL_ARGUMENTS, tarball, `vitest@${vitestManifest.version}`], {
-    cwd: consumerRoot,
-    timeout: 120_000,
-    signal,
-  });
+  await execFileAsync(
+    'npm',
+    [...INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS, installed.tarball, `vitest@${vitestManifest.version}`],
+    {
+      cwd: consumerRoot,
+      timeout: 120_000,
+      signal,
+    },
+  );
 }
 
 beforeAll(async () => {

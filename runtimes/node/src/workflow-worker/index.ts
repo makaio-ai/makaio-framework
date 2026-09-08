@@ -69,6 +69,10 @@ export {
   type WorkloadControlBinding,
   type WorkloadInvocationResult,
 } from './workload-invocation.js';
+export {
+  createLocalGitWorkspacePreparation,
+  type LocalGitSourceOptions,
+} from './local-git-workspace-preparation.js';
 export { loadWorkflowFromConfig } from './workflow-loader.js';
 export { loadWorkflowModule, loadWorkflowModules } from './workflow-file-loader.js';
 export {
