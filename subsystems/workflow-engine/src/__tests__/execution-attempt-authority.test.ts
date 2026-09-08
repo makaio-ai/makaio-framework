@@ -4,16 +4,12 @@ import type { ProviderAllocationRef, WorkflowRunResult } from '@makaio/contracts
 import { PROVIDER_ALLOCATION_REF_VERSION } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
+import { buildDeferred } from '../runtime/deferred.js';
 import { WorkflowEngineService } from '../workflow-engine-service.js';
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
-import {
-  decodeDurableOutcome,
-  durableOutcome,
-  type ExecutionAttemptRepository,
-} from '../execution-attempt-repository.js';
+import type { ExecutionAttemptRepository } from '../execution-attempt-repository.js';
 import type { ProviderOperationClaim } from '../provider-operation.js';
 import {
-  INITIAL_ATTEMPT_CONTROL_STATE,
   TEST_OWNER_ID,
   TEST_PROVIDER_ID,
   TEST_PROVISIONER_INCARNATION_ID,
@@ -113,53 +109,8 @@ function makeCorrelatedAllocationRef(
  * @returns A repository without any recovery operation.
  */
 function createMinimalRepository(): ExecutionAttemptRepository<WorkflowRunResult> {
-  const claim: ProviderOperationClaim = {
-    executionAttemptId: 'attempt-1',
-    generation: 1,
-    ownerId: TEST_OWNER_ID,
-    token: 'token-1',
-    leaseExpiresAt: leaseAt(60_000),
-  };
-  return {
-    canonicalizeOutcome: (outcome) => durableOutcome(workflowRunResultOutcomeCodec, outcome),
-    decodeOutcome: (text) => decodeDurableOutcome(workflowRunResultOutcomeCodec, text),
-    createAttempt: async (input) => ({
-      ...INITIAL_ATTEMPT_CONTROL_STATE,
-      executionAttemptId: input.executionAttemptId,
-      executionId: input.executionId,
-      instruction: input.instruction,
-      preparationReceipts: [],
-      status: 'pending' as const,
-      allocationRef: null,
-      createdAt: new Date().toISOString(),
-      bootstrapDeadlineAt: null,
-      providerId: null,
-      allocationLifetime: null,
-      provisionerIncarnationId: null,
-    }),
-    beginProvisioning: async () => ({ kind: 'started' as const, claim }),
-    getProviderOperation: async () => null,
-    renewProviderOperationClaim: async () => ({ kind: 'not-found' as const }),
-    takeOverProviderOperation: async () => ({ kind: 'not-found' as const }),
-    handoffProviderOperation: async () => ({ kind: 'not-found' as const }),
-    recordProviderOperationUncertainty: async () => ({ kind: 'not-found' as const }),
-    recordAllocation: async () => ({ kind: 'recorded' as const }),
-    recordProvisioningAbsent: async () => ({ kind: 'recorded' as const }),
-    recordProvisionerIncarnationLost: async () => ({ kind: 'not-found' as const }),
-    recordAllocationTerminated: async () => ({ kind: 'recorded' as const }),
-    recordInfrastructureFailure: async () => ({ kind: 'not-found' as const }),
-    getActiveAttempt: async () => null,
-    readBootstrapStartState: async () => null,
-    getInstruction: async () => null,
-    reportOperation: async () => ({ kind: 'not-found' as const }),
-    commitOutcome: async () => ({ kind: 'fenced' as const }),
-    abandonPendingAttempt: async () => ({ kind: 'fenced' as const }),
-    registerRuntime: async () => ({ kind: 'not-found' as const }),
-    admitOperation: async () => ({ kind: 'not-found' as const }),
-    completeOperation: async () => ({ kind: 'not-found' as const }),
-    markRuntimeReady: async () => ({ kind: 'not-found' as const }),
-    getAttemptControlState: async () => null,
-  };
+  const { recovery: _recovery, ...repository } = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
+  return repository;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -231,6 +182,116 @@ describe('ExecutionAttemptAuthority', () => {
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
 
       expect(waiterPromise).toBeInstanceOf(Promise);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // Durable Owner Request Recovery
+  // ─────────────────────────────────────────────────────────
+
+  describe('owner request recovery', () => {
+    it('creates and replays durable association without a waiter or provider operation', async () => {
+      const input = { executionId: 'exec-1', requestKey: 'initial', instruction: makeTestInstruction() };
+      const created = await authority.ensureAttempt(input);
+      expect(created.kind).toBe('created');
+      if (created.kind === 'conflict') throw new Error('expected request acceptance');
+      const id = created.attempt.executionAttemptId;
+      expect(authority.waitForOutcome(id)).toBeUndefined();
+      expect(await authority.getProviderOperation(id)).toBeNull();
+
+      await expect(authority.ensureAttempt(input)).resolves.toEqual({ kind: 'replayed', attempt: created.attempt });
+      await expect(
+        authority.readAttemptSettlement({ executionId: input.executionId, executionAttemptId: id }),
+      ).resolves.toMatchObject({ kind: 'unsettled', isCurrentAttempt: true });
+      expect(authority.waitForOutcome(id)).toBeUndefined();
+      expect(repository.attempts.size).toBe(1);
+      expect(repository.operations.size).toBe(0);
+    });
+
+    it('preserves a legacy waiter through unrelated ensure and committed settlement reads', async () => {
+      const legacy = await authority.createAttempt('legacy-owner', makeTestInstruction());
+      const waiter = authority.waitForOutcome(legacy.executionAttemptId);
+      expect(waiter).toBeInstanceOf(Promise);
+      let resolved = false;
+      void waiter?.then(() => {
+        resolved = true;
+      });
+
+      await authority.ensureAttempt({
+        executionId: 'other-owner',
+        requestKey: 'initial',
+        instruction: makeTestInstruction(),
+      });
+      const result = makeCompletedResult('legacy-owner');
+      const committed = await authority.commitOutcome(
+        legacy.executionAttemptId,
+        'legacy-owner',
+        authority.canonicalizeOutcome(result),
+      );
+      expect(committed.kind).toBe('accepted');
+      await expect(
+        authority.readAttemptSettlement({
+          executionId: 'legacy-owner',
+          executionAttemptId: legacy.executionAttemptId,
+        }),
+      ).resolves.toMatchObject({ kind: 'outcome', result: { outcome: result } });
+      expect(authority.waitForOutcome(legacy.executionAttemptId)).toBe(waiter);
+      expect(resolved).toBe(false);
+
+      authority.settleOutcome(legacy.executionAttemptId, committed);
+      await expect(waiter).resolves.toEqual(result);
+    });
+
+    it('keeps owner recovery required even without provider-allocation recovery', async () => {
+      const minimalAuthority = new ExecutionAttemptAuthority(createMinimalRepository(), { bootstrapTimeoutMs: 60_000 });
+      expect(minimalAuthority.supportsRecovery).toBe(false);
+      const created = await minimalAuthority.ensureAttempt({
+        executionId: 'exec-1',
+        requestKey: 'initial',
+        instruction: makeTestInstruction(),
+      });
+      if (created.kind === 'conflict') throw new Error('expected request acceptance');
+      await expect(
+        minimalAuthority.readAttemptSettlement({
+          executionId: 'exec-1',
+          executionAttemptId: created.attempt.executionAttemptId,
+        }),
+      ).resolves.toMatchObject({ kind: 'unsettled' });
+      expect(minimalAuthority.waitForOutcome(created.attempt.executionAttemptId)).toBeUndefined();
+    });
+
+    it('snapshots owner input before an asynchronous repository consumes it', async () => {
+      const gate = buildDeferred<void>();
+      const delayed = new ExecutionAttemptAuthority(
+        {
+          ...repository,
+          ensureAttempt: async (input) => {
+            await gate.promise;
+            return repository.ensureAttempt(input);
+          },
+        },
+        { bootstrapTimeoutMs: 60_000 },
+      );
+      const workloadInput = { value: 'original' };
+      const input = {
+        executionId: 'exec-1',
+        requestKey: 'initial',
+        instruction: makeTestInstruction({ workload: { kind: 'test-workload', version: '1', input: workloadInput } }),
+      };
+      const acceptedInput = structuredClone(input);
+      const pending = delayed.ensureAttempt(input);
+      input.executionId = 'changed-owner';
+      input.requestKey = 'changed-key';
+      workloadInput.value = 'changed';
+      gate.resolve();
+      const created = await pending;
+      if (created.kind === 'conflict') throw new Error('expected request acceptance');
+      expect(created.attempt.executionId).toBe(acceptedInput.executionId);
+      expect(created.attempt.instruction).toEqual(acceptedInput.instruction);
+      await expect(delayed.ensureAttempt(acceptedInput)).resolves.toMatchObject({
+        kind: 'replayed',
+        attempt: { executionAttemptId: created.attempt.executionAttemptId },
+      });
     });
   });
 

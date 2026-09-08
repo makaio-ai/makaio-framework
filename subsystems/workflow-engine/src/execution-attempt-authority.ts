@@ -7,10 +7,13 @@ import type {
   AllocationRefEvolutionDecision,
   AllocationTerminationDecision,
   AttemptControlState,
+  AttemptSettlementRead,
   BeginProvisioningInput,
   CompleteOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
+  EnsureExecutionAttemptDecision,
+  EnsureExecutionAttemptInput,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
   ExecutionAttemptRecoveryOperations,
@@ -29,6 +32,7 @@ import type {
   ProvisioningClaimDecision,
   RecordAllocationInput,
   ReadBootstrapStartStateInput,
+  ReadAttemptSettlementInput,
   RecordAllocationTerminatedInput,
   RecordInfrastructureFailureInput,
   RecordProviderOperationUncertaintyInput,
@@ -43,6 +47,10 @@ import type {
   RuntimeRegistrationDecision,
   TakeOverProviderOperationInput,
 } from './execution-attempt-repository.js';
+import {
+  snapshotEnsureExecutionAttemptInput,
+  snapshotReadAttemptSettlementInput,
+} from './execution-attempt-owner-recovery.js';
 import type {
   ProviderOperationClaimDecision,
   ProviderOperationMutationDecision,
@@ -170,6 +178,31 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
     this.installWaiter(executionAttemptId);
 
     return record;
+  }
+
+  /**
+   * Establish or recover one durable owner-request association without creating a waiter.
+   * Unlike fresh creation, even first acceptance has no process-local dispatch side effects.
+   * Replay preserves the original attempt and never replaces an existing legacy waiter.
+   * @param input - Stable owner request and immutable portable assignment.
+   * @returns Repository creation, historical replay or instruction conflict decision.
+   */
+  public async ensureAttempt(input: EnsureExecutionAttemptInput): Promise<EnsureExecutionAttemptDecision> {
+    const request = snapshotEnsureExecutionAttemptInput(input);
+    return this.repository.ensureAttempt({
+      ...request,
+      executionAttemptId: crypto.randomUUID(),
+      bootstrapTimeoutMs: this.bootstrapTimeoutMs,
+    });
+  }
+
+  /**
+   * Read durable settlement evidence without installing, replacing or settling any waiter.
+   * @param input - Trusted owner and exact attempt, including historical attempts.
+   * @returns Coherent repository evidence; current-pointer identity is not authorization.
+   */
+  public async readAttemptSettlement(input: ReadAttemptSettlementInput): Promise<AttemptSettlementRead<TOutcome>> {
+    return this.repository.readAttemptSettlement(snapshotReadAttemptSettlementInput(input));
   }
 
   /**

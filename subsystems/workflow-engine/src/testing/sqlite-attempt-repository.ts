@@ -45,6 +45,12 @@ import {
   sameAllocationRef,
   sameDurableOutcome,
 } from '../execution-attempt-repository.js';
+import {
+  snapshotEnsureExecutionAttemptPersistenceInput,
+  snapshotReadAttemptSettlementInput,
+  replayEnsuredAttempt,
+  readAttemptSettlementSnapshot,
+} from '../execution-attempt-owner-recovery.js';
 import type {
   AdmitOperationInput,
   AllocationRecordingDecision,
@@ -58,6 +64,10 @@ import type {
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptCreate,
+  EnsureExecutionAttemptPersistenceInput,
+  EnsureExecutionAttemptDecision,
+  ReadAttemptSettlementInput,
+  AttemptSettlementRead,
   BootstrapStartState,
   ReadBootstrapStartStateInput,
   ExecutionAttemptOutcomeCommit,
@@ -104,7 +114,6 @@ import {
   createAttemptTiming,
   instantOf,
   normalizeInstant,
-  parseInstruction,
   parsePreparationResult,
   parsePreparationReceipts,
   parseAllocationLifetime,
@@ -113,6 +122,7 @@ import {
   requireAllocationRefProvider,
   toRecoverableAttempt,
 } from './attempt-record-codec.js';
+import { parseInstruction } from '../attempt-value-snapshot.js';
 
 // ─────────────────────────────────────────────────────────────
 // Schema
@@ -158,6 +168,13 @@ const SCHEMA_STATEMENTS = [
      execution_id TEXT PRIMARY KEY,
      execution_attempt_id TEXT NOT NULL
        REFERENCES test_execution_attempt(execution_attempt_id)
+   )`,
+  `CREATE TABLE IF NOT EXISTS test_execution_attempt_request (
+     execution_id TEXT NOT NULL,
+     request_key TEXT NOT NULL,
+     execution_attempt_id TEXT NOT NULL
+       REFERENCES test_execution_attempt(execution_attempt_id),
+     PRIMARY KEY (execution_id, request_key)
    )`,
   `CREATE TABLE IF NOT EXISTS test_provider_operation (
      execution_attempt_id TEXT PRIMARY KEY
@@ -1045,32 +1062,41 @@ export async function createSqliteAttemptRepository<TOutcome>(
     },
   };
 
-  return {
-    async createAttempt(input: ExecutionAttemptCreate): Promise<ExecutionAttemptRecord> {
-      const instruction = parseInstruction(input.instruction);
-      const { createdAt, bootstrapDeadlineAt } = createAttemptTiming(input.bootstrapTimeoutMs);
-      return transact(async (session) => {
-        // The primary key is what rejects a reused attempt identifier. The
-        // port makes that a caller bug precisely so no implementation has to
-        // choose between overwriting a possibly settled attempt and silently
-        // ignoring the call. Letting the store decide is the race-free way to
-        // detect it, so the constraint violation is translated into the port's
-        // own error rather than a caller having to recognize driver text.
-        try {
-          await session.run(
-            sql`INSERT INTO test_execution_attempt
+  /**
+   * Insert and fence within the caller's existing transaction.
+   * @param session - Session owning the atomic creation and optional request binding.
+   * @param input - Snapshotted creation fields.
+   * @param timing - First-acceptance timestamps, never calculated for replay.
+   * @returns The newly persisted attempt.
+   */
+  const createAttemptInSession = async (
+    session: RawSqlSession,
+    input: ExecutionAttemptCreate,
+    timing: ReturnType<typeof createAttemptTiming>,
+  ): Promise<ExecutionAttemptRecord> => {
+    const { instruction } = input;
+    const { createdAt, bootstrapDeadlineAt } = timing;
+    // The primary key is what rejects a reused attempt identifier. The
+    // port makes that a caller bug precisely so no implementation has to
+    // choose between overwriting a possibly settled attempt and silently
+    // ignoring the call. Letting the store decide is the race-free way to
+    // detect it, so the constraint violation is translated into the port's
+    // own error rather than a caller having to recognize driver text.
+    try {
+      await session.run(
+        sql`INSERT INTO test_execution_attempt
                 (execution_attempt_id, execution_id, instruction, status, claimable, created_at, bootstrap_deadline_at)
               VALUES (${input.executionAttemptId}, ${input.executionId}, ${JSON.stringify(instruction)}, ${'pending'}, ${0}, ${createdAt}, ${bootstrapDeadlineAt})`,
-          );
-        } catch (error) {
-          if (!isSqliteUniqueViolationError(error)) throw error;
-          throw new DuplicateExecutionAttemptError(input.executionAttemptId, { cause: error });
-        }
-        // The pointer moves in the same transaction as the insert. An
-        // allocated attempt it replaces loses bootstrap eligibility, but its
-        // host-owned claim expiry remains an immutable record of that window.
-        await session.run(
-          sql`UPDATE test_execution_attempt
+      );
+    } catch (error) {
+      if (!isSqliteUniqueViolationError(error)) throw error;
+      throw new DuplicateExecutionAttemptError(input.executionAttemptId, { cause: error });
+    }
+    // The pointer moves in the same transaction as the insert. An
+    // allocated attempt it replaces loses bootstrap eligibility, but its
+    // host-owned claim expiry remains an immutable record of that window.
+    await session.run(
+      sql`UPDATE test_execution_attempt
               SET claimable = ${0}
               WHERE execution_attempt_id = (
                 SELECT execution_attempt_id
@@ -1078,43 +1104,91 @@ export async function createSqliteAttemptRepository<TOutcome>(
                 WHERE execution_id = ${input.executionId}
               )
                 AND status = ${'allocated'}`,
-        );
-        // The superseded attempt's gate closes in this same transaction. One
-        // that stayed open could admit an operation between the pointer move
-        // and any later cleanup, which is work begun on an attempt nobody
-        // addresses any more.
-        await session.run(
-          sql`UPDATE test_execution_attempt
+    );
+    // The superseded attempt's gate closes in this same transaction. One
+    // that stayed open could admit an operation between the pointer move
+    // and any later cleanup, which is work begun on an attempt nobody
+    // addresses any more.
+    await session.run(
+      sql`UPDATE test_execution_attempt
               SET operation_start_gate = ${'closed'}
               WHERE execution_attempt_id = (
                 SELECT execution_attempt_id
                 FROM test_active_execution_attempt
                 WHERE execution_id = ${input.executionId}
               )`,
-        );
-        await session.run(
-          sql`INSERT INTO test_active_execution_attempt (execution_id, execution_attempt_id)
+    );
+    await session.run(
+      sql`INSERT INTO test_active_execution_attempt (execution_id, execution_attempt_id)
               VALUES (${input.executionId}, ${input.executionAttemptId})
               ON CONFLICT(execution_id)
               DO UPDATE SET execution_attempt_id = excluded.execution_attempt_id`,
+    );
+    return {
+      ...INITIAL_ATTEMPT_CONTROL_STATE,
+      executionAttemptId: input.executionAttemptId,
+      executionId: input.executionId,
+      instruction,
+      preparationReceipts: Object.freeze([]),
+      status: 'pending',
+      allocationRef: null,
+      createdAt,
+      bootstrapDeadlineAt,
+      providerId: null,
+      allocationLifetime: null,
+      provisionerIncarnationId: null,
+      settlementKind: null,
+      claimable: false,
+      claimExpiresAt: null,
+    };
+  };
+
+  return {
+    async createAttempt(input: ExecutionAttemptCreate): Promise<ExecutionAttemptRecord> {
+      const snapshot = { ...input, instruction: parseInstruction(input.instruction) };
+      const timing = createAttemptTiming(input.bootstrapTimeoutMs);
+      return transact((session) => createAttemptInSession(session, snapshot, timing));
+    },
+
+    async ensureAttempt(input: EnsureExecutionAttemptPersistenceInput): Promise<EnsureExecutionAttemptDecision> {
+      const snapshot = snapshotEnsureExecutionAttemptPersistenceInput(input);
+      return transact(async (session) => {
+        const bindings = await session.all<ActiveAttemptRow>(
+          sql`SELECT execution_attempt_id FROM test_execution_attempt_request
+              WHERE execution_id = ${snapshot.executionId} AND request_key = ${snapshot.requestKey}`,
         );
-        return {
-          ...INITIAL_ATTEMPT_CONTROL_STATE,
-          executionAttemptId: input.executionAttemptId,
-          executionId: input.executionId,
-          instruction,
-          preparationReceipts: Object.freeze([]),
-          status: 'pending',
-          allocationRef: null,
-          createdAt,
-          bootstrapDeadlineAt,
-          providerId: null,
-          allocationLifetime: null,
-          provisionerIncarnationId: null,
-          settlementKind: null,
-          claimable: false,
-          claimExpiresAt: null,
-        };
+        const binding = bindings[0];
+        if (binding !== undefined) {
+          const row = await readAttemptRow(session, binding.execution_attempt_id);
+          return replayEnsuredAttempt(snapshot, row === undefined ? null : toAttemptRecord(row));
+        }
+        const attempt = await createAttemptInSession(
+          session,
+          snapshot,
+          createAttemptTiming(snapshot.bootstrapTimeoutMs),
+        );
+        await session.run(
+          sql`INSERT INTO test_execution_attempt_request (execution_id, request_key, execution_attempt_id)
+              VALUES (${snapshot.executionId}, ${snapshot.requestKey}, ${attempt.executionAttemptId})`,
+        );
+        return { kind: 'created', attempt: structuredClone(attempt) };
+      });
+    },
+
+    async readAttemptSettlement(input: ReadAttemptSettlementInput): Promise<AttemptSettlementRead<TOutcome>> {
+      const snapshot = snapshotReadAttemptSettlementInput(input);
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, snapshot.executionAttemptId);
+        if (row === undefined || row.execution_id !== snapshot.executionId) return { kind: 'not-found' };
+        return readAttemptSettlementSnapshot(
+          snapshot,
+          {
+            attempt: toAttemptRecord(row),
+            activeAttemptId: await readActiveAttemptId(session, snapshot.executionId),
+            outcomeText: row.workflow_result,
+          },
+          codec,
+        );
       });
     },
 

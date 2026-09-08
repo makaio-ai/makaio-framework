@@ -10,6 +10,7 @@ import type {
   WorkerAllocationLifetime,
 } from '@makaio/contracts';
 import { canonicalStringify } from '@makaio/utils';
+import type { OwnerRequestRecoveryRepository } from './execution-attempt-owner-recovery.js';
 import type {
   ProcessBoundProvisionerLossProof,
   ProviderOperationClaim,
@@ -28,6 +29,14 @@ export {
   evaluateRuntimeReadiness,
 } from './execution-attempt-decisions.js';
 export type { AttemptReachability, AttemptReachabilityDecision } from './execution-attempt-decisions.js';
+export type {
+  AttemptSettlementRead,
+  AttemptSettlementSnapshot,
+  EnsureExecutionAttemptDecision,
+  EnsureExecutionAttemptInput,
+  EnsureExecutionAttemptPersistenceInput,
+  ReadAttemptSettlementInput,
+} from './execution-attempt-owner-recovery.js';
 
 // ─────────────────────────────────────────────────────────────
 // Attempt Lifecycle States
@@ -1555,7 +1564,7 @@ export type RuntimeReadinessDecision =
  * value no reload of the attempt ever yields.
  * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export interface ExecutionAttemptRepository<TOutcome> {
+export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecoveryRepository<TOutcome> {
   /**
    * Persist a new execution attempt record.
    *

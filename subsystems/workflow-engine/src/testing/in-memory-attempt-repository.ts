@@ -14,6 +14,12 @@ import {
   sameAllocationRef,
   sameDurableOutcome,
 } from '../execution-attempt-repository.js';
+import {
+  snapshotEnsureExecutionAttemptPersistenceInput,
+  snapshotReadAttemptSettlementInput,
+  replayEnsuredAttempt,
+  readAttemptSettlementSnapshot,
+} from '../execution-attempt-owner-recovery.js';
 import type {
   AdmitOperationInput,
   AllocationRecordingDecision,
@@ -22,13 +28,17 @@ import type {
   AllocationTerminationDecision,
   AttemptControlState,
   AttemptReachabilityDecision,
+  AttemptSettlementRead,
   BeginProvisioningInput,
   CompleteOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptCreate,
+  EnsureExecutionAttemptDecision,
+  EnsureExecutionAttemptPersistenceInput,
   BootstrapStartState,
   ReadBootstrapStartStateInput,
+  ReadAttemptSettlementInput,
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
@@ -72,7 +82,6 @@ import {
   compareRecoveryOrder,
   instantOf,
   normalizeInstant,
-  parseInstruction,
   parsePreparationResult,
   parsePreparationReceipts,
   parseAllocationLifetime,
@@ -82,18 +91,20 @@ import {
   toAttemptControlState,
   toRecoverableAttempt,
 } from './attempt-record-codec.js';
+import { parseInstruction } from '../attempt-value-snapshot.js';
 
 /**
  * Durable state the in-memory realization keeps.
  *
- * The four maps mirror the four durable facts the port owns: canonical attempt
+ * The maps mirror the durable facts the port owns: canonical attempt
  * state, fenced provider-operation ownership, committed outcomes, and which
- * attempt is currently active for an owner. They are exposed so a test can
- * seed state before the first call and assert against it afterwards.
+ * attempt is currently active for an owner, plus replayable request bindings.
+ * They are exposed so a test can seed state before the first call and assert
+ * against it afterwards.
  *
  * Not generic over the outcome type: the committed outcomes are held as the
  * codec's durable text, the same representation a store's column holds, so
- * none of the four maps carries an outcome-typed value.
+ * none of the maps carries an outcome-typed value.
  */
 export interface InMemoryAttemptRepositoryState {
   /** Attempt records keyed by `executionAttemptId`. */
@@ -113,6 +124,8 @@ export interface InMemoryAttemptRepositoryState {
   readonly committedOutcomes: Map<string, string>;
   /** Active attempt per `executionId`, the fence every bootstrap path reads. */
   readonly activeAttempts: Map<string, string>;
+  /** Request-to-attempt bindings, nested by owner and then opaque request key. */
+  readonly requestBindings: Map<string, Map<string, string>>;
 }
 
 /**
@@ -215,6 +228,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
     operations.get(executionAttemptId)?.obligation === 'terminal-convergence';
   const committedOutcomes = seed.committedOutcomes ?? new Map<string, string>();
   const activeAttempts = seed.activeAttempts ?? new Map<string, string>();
+  const requestBindings = seed.requestBindings ?? new Map<string, Map<string, string>>();
 
   /**
    * Read runtime reachability without touching the control-state decoder.
@@ -379,49 +393,89 @@ export function createInMemoryAttemptRepository<TOutcome>(
     },
   };
 
+  /**
+   * Insert a fresh attempt and fence its predecessor in one synchronous mutation.
+   * Both creation paths share this primitive; request association joins the same
+   * block without awaiting another public operation.
+   * @param input - Validated, snapshotted assignment, candidate identity and creation budget.
+   * @returns The new stored record.
+   */
+  const insertAttempt = (input: ExecutionAttemptCreate): ExecutionAttemptRecord => {
+    const timing = createAttemptTiming(input.bootstrapTimeoutMs);
+    // A reused identifier would resurrect a possibly settled attempt with a
+    // fresh pending record, orphan its operation, and leave any committed
+    // outcome behind. The port makes it a caller bug so no realization ever
+    // has to make that trade.
+    if (attempts.has(input.executionAttemptId)) {
+      throw new DuplicateExecutionAttemptError(input.executionAttemptId);
+    }
+    const record: ExecutionAttemptRecord = {
+      executionAttemptId: input.executionAttemptId,
+      executionId: input.executionId,
+      instruction: input.instruction,
+      preparationReceipts: Object.freeze([]),
+      status: 'pending',
+      allocationRef: null,
+      ...timing,
+      providerId: null,
+      allocationLifetime: null,
+      provisionerIncarnationId: null,
+      settlementKind: null,
+      claimable: false,
+      claimExpiresAt: null,
+      ...INITIAL_ATTEMPT_CONTROL_STATE,
+    };
+    const activeAttemptId = activeAttempts.get(input.executionId);
+    const activeAttempt = activeAttemptId === undefined ? undefined : attempts.get(activeAttemptId);
+    if (activeAttempt !== undefined) {
+      // Replacement fences bootstrap claims without changing the host-owned
+      // expiry window recorded on the allocation, and closes the superseded
+      // attempt's start gate: an attempt nobody addresses any more must not
+      // be able to admit an operation between here and any later cleanup.
+      attempts.set(activeAttempt.executionAttemptId, {
+        ...activeAttempt,
+        claimable: activeAttempt.status === 'allocated' ? false : activeAttempt.claimable,
+        operationStartGate: 'closed',
+      });
+    }
+    attempts.set(input.executionAttemptId, record);
+    activeAttempts.set(input.executionId, input.executionAttemptId);
+    return record;
+  };
+
   const repository: Omit<ExecutionAttemptRepository<TOutcome>, 'recovery'> = {
     async createAttempt(input: ExecutionAttemptCreate): Promise<ExecutionAttemptRecord> {
-      const instruction = parseInstruction(input.instruction);
-      const timing = createAttemptTiming(input.bootstrapTimeoutMs);
-      // A reused identifier would resurrect a possibly settled attempt with a
-      // fresh pending record, orphan its operation, and leave any committed
-      // outcome behind. The port makes it a caller bug so no realization ever
-      // has to make that trade.
-      if (attempts.has(input.executionAttemptId)) {
-        throw new DuplicateExecutionAttemptError(input.executionAttemptId);
+      return insertAttempt({ ...input, instruction: parseInstruction(input.instruction) });
+    },
+
+    async ensureAttempt(input: EnsureExecutionAttemptPersistenceInput): Promise<EnsureExecutionAttemptDecision> {
+      const snapshot = snapshotEnsureExecutionAttemptPersistenceInput(input);
+      const ownerBindings = requestBindings.get(snapshot.executionId);
+      const boundAttemptId = ownerBindings?.get(snapshot.requestKey);
+      if (boundAttemptId !== undefined) {
+        return replayEnsuredAttempt(snapshot, attempts.get(boundAttemptId) ?? null);
       }
-      const record: ExecutionAttemptRecord = {
-        executionAttemptId: input.executionAttemptId,
-        executionId: input.executionId,
-        instruction,
-        preparationReceipts: Object.freeze([]),
-        status: 'pending',
-        allocationRef: null,
-        ...timing,
-        providerId: null,
-        allocationLifetime: null,
-        provisionerIncarnationId: null,
-        settlementKind: null,
-        claimable: false,
-        claimExpiresAt: null,
-        ...INITIAL_ATTEMPT_CONTROL_STATE,
-      };
-      const activeAttemptId = activeAttempts.get(input.executionId);
-      const activeAttempt = activeAttemptId === undefined ? undefined : attempts.get(activeAttemptId);
-      if (activeAttempt !== undefined) {
-        // Replacement fences bootstrap claims without changing the host-owned
-        // expiry window recorded on the allocation, and closes the superseded
-        // attempt's start gate: an attempt nobody addresses any more must not
-        // be able to admit an operation between here and any later cleanup.
-        attempts.set(activeAttempt.executionAttemptId, {
-          ...activeAttempt,
-          claimable: activeAttempt.status === 'allocated' ? false : activeAttempt.claimable,
-          operationStartGate: 'closed',
-        });
-      }
-      attempts.set(input.executionAttemptId, record);
-      activeAttempts.set(input.executionId, input.executionAttemptId);
-      return record;
+
+      // Nothing below yields: failed creation leaves the key available, while
+      // successful creation and its association become visible together.
+      const attempt = insertAttempt(snapshot);
+      const bindings = ownerBindings ?? new Map<string, string>();
+      bindings.set(snapshot.requestKey, attempt.executionAttemptId);
+      requestBindings.set(snapshot.executionId, bindings);
+      return { kind: 'created', attempt: structuredClone(attempt) };
+    },
+
+    async readAttemptSettlement(input: ReadAttemptSettlementInput): Promise<AttemptSettlementRead<TOutcome>> {
+      const snapshot = snapshotReadAttemptSettlementInput(input);
+      return readAttemptSettlementSnapshot(
+        snapshot,
+        {
+          attempt: attempts.get(snapshot.executionAttemptId) ?? null,
+          activeAttemptId: activeAttempts.get(snapshot.executionId) ?? null,
+          outcomeText: committedOutcomes.get(snapshot.executionAttemptId) ?? null,
+        },
+        codec,
+      );
     },
 
     async readBootstrapStartState(input: ReadBootstrapStartStateInput): Promise<BootstrapStartState | null> {
@@ -843,5 +897,5 @@ export function createInMemoryAttemptRepository<TOutcome>(
     },
   };
 
-  return { ...repository, recovery, attempts, operations, committedOutcomes, activeAttempts };
+  return { ...repository, recovery, attempts, operations, committedOutcomes, activeAttempts, requestBindings };
 }

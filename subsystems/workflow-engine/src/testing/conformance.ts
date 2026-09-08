@@ -40,6 +40,8 @@ import { registerRecoveryOrderCases } from './conformance/recovery-order-cases.j
 import { registerSettlementReplayCases } from './conformance/settlement-replay-cases.js';
 import { registerBootstrapStartStateCases } from './conformance/bootstrap-start-state-cases.js';
 import { registerMixedAuthorityRaceCases } from './conformance/mixed-authority-race-cases.js';
+import { registerOwnerRequestCases } from './conformance/owner-request-cases.js';
+import { registerOwnerResultRecoveryCases } from './conformance/owner-result-recovery-cases.js';
 import type { ExecutionAttemptRepositoryContractFactory } from './conformance/types.js';
 
 export type {
@@ -85,6 +87,7 @@ export function runExecutionAttemptRepositoryContract(factory: ExecutionAttemptR
     registerSettlementReplayCases(getHarness);
     registerBootstrapStartStateCases(getHarness);
     registerMixedAuthorityRaceCases(getHarness);
+    registerOwnerRequestCases(getHarness);
   });
   registerOutcomeCases(factory);
   registerNormalizingCases(factory);
@@ -93,4 +96,5 @@ export function runExecutionAttemptRepositoryContract(factory: ExecutionAttemptR
   registerBytesCases(factory);
   registerCorruptionCases(factory);
   registerMemberOrderCases(factory);
+  registerOwnerResultRecoveryCases(factory);
 }
