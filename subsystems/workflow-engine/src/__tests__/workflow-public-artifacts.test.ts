@@ -163,7 +163,7 @@ describe('workflow public artifact subjects', () => {
       kind: startArtifactRef.kind,
       id: startArtifactRef.id,
       revision: 'rev-existing',
-      schemaVersion: '1',
+      schemaVersion: 1,
       scope: { level: 'global' },
       data: { status: 'existing' },
       relations: [],
@@ -194,7 +194,7 @@ describe('workflow public artifact subjects', () => {
       }),
       artifact: {
         kind: 'workflow-report',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'global' },
         resolve: '{ kind: "workflow-report", id: "definition-ref" }',
         create: '{ status: "created" }',

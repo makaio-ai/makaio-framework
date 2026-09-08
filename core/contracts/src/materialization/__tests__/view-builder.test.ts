@@ -82,7 +82,7 @@ describe('ArtifactViewParamsFor — declaration merging', () => {
         createBuilders: () => [
           defineArtifactViewBuilder({
             kind: 'github-issue',
-            schemaVersion: '1',
+            schemaVersion: 1,
             version: 1,
             async build(context) {
               expectTypeOf(context.params).toEqualTypeOf<GitHubIssueViewParams | undefined>();
@@ -102,7 +102,7 @@ describe('ArtifactViewParamsFor — declaration merging', () => {
   it('correlates each builder kind with only that kind’s params', () => {
     const githubBuilder: ArtifactViewBuilder<'github-issue'> = {
       kind: 'github-issue',
-      schemaVersion: '1',
+      schemaVersion: 1,
       version: 1,
       async build(context) {
         expectTypeOf(context.params).toEqualTypeOf<GitHubIssueViewParams | undefined>();
@@ -114,7 +114,7 @@ describe('ArtifactViewParamsFor — declaration merging', () => {
     };
     const jiraBuilder: ArtifactViewBuilder<'jira-ticket'> = {
       kind: 'jira-ticket',
-      schemaVersion: '1',
+      schemaVersion: 1,
       version: 1,
       async build(context) {
         expectTypeOf(context.params).toEqualTypeOf<{ projectKey: string; issueKey: string } | undefined>();
@@ -134,7 +134,7 @@ describe('ArtifactViewParamsFor — declaration merging', () => {
 
     const unknownBuilder: ArtifactViewBuilder<'unregistered-kind'> = {
       kind: 'unregistered-kind',
-      schemaVersion: '1',
+      schemaVersion: 1,
       version: 1,
       async build(context) {
         expectTypeOf(context.params).toEqualTypeOf<Readonly<Record<string, unknown>> | undefined>();

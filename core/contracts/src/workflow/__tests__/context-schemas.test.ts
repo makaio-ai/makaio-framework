@@ -93,11 +93,22 @@ describe('ContextSourceSchema', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('ContextPublishTargetSchema', () => {
+  it.each(['1', 0, -1, 1.5])('rejects invalid artifact schema generation %s', (schemaVersion) => {
+    expect(
+      ArtifactPublishTargetSchema.safeParse({
+        type: 'artifact',
+        kind: 'result',
+        schemaVersion,
+        scope: { level: 'global' },
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts an artifact publish target using kind and schemaVersion', () => {
     const result = ArtifactPublishTargetSchema.parse({
       type: 'artifact',
       kind: 'station-output',
-      schemaVersion: '1',
+      schemaVersion: 1,
       scope: { level: 'workspace', ids: { workspaceId: 'workspace-1' } },
       metadata: { station: 'requirements-analysis' },
     });
@@ -128,7 +139,7 @@ describe('ContextPublishTargetSchema', () => {
     expect(() =>
       ContextPublishTargetSchema.parse({
         type: 'artifact',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'workspace', ids: { workspaceId: 'workspace-1' } },
       }),
     ).toThrow();

@@ -9,7 +9,7 @@ const repoRef = { refClass: 'artifact' as const, kind: 'repo', id: 'repo-1', rev
 function artifactRevision(ref: typeof rootRef) {
   return {
     ...ref,
-    schemaVersion: '1',
+    schemaVersion: 1,
     scope: { level: 'global' },
     data: { name: ref.id },
     relations: [],

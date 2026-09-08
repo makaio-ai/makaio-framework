@@ -13,9 +13,17 @@ import {
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const SETUP_TIMEOUT_MS = 270_000;
+const BUILD_TIMEOUT_MS = 270_000;
+const PACK_TIMEOUT_MS = 60_000;
+const INSTALL_TIMEOUT_MS = 120_000;
 const ASSERTION_TIMEOUT_MS = 30_000;
 const CONFORMANCE_TIMEOUT_MS = 60_000;
+// Setup owns six sequential child operations. Its aggregate deadline must not
+// spend a later operation's allowance on the earlier declaration-bearing build.
+// Each child retains its own hard timeout; the hook adds only cleanup headroom.
+const SETUP_OPERATIONS_TIMEOUT_MS =
+  BUILD_TIMEOUT_MS + PACK_TIMEOUT_MS + INSTALL_TIMEOUT_MS + 2 * ASSERTION_TIMEOUT_MS + INSTALL_TIMEOUT_MS;
+const SETUP_TIMEOUT_MS = SETUP_OPERATIONS_TIMEOUT_MS + 5_000;
 
 let temporaryRoot: string | undefined;
 let consumerRoot: string;
@@ -32,9 +40,9 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
     root,
     consumerName: 'attempt-recovery-consumer',
     signal,
-    buildTimeoutMs: SETUP_TIMEOUT_MS,
-    packTimeoutMs: 60_000,
-    installTimeoutMs: 120_000,
+    buildTimeoutMs: BUILD_TIMEOUT_MS,
+    packTimeoutMs: PACK_TIMEOUT_MS,
+    installTimeoutMs: INSTALL_TIMEOUT_MS,
   });
   consumerRoot = installed.consumerRoot;
   await writeFile(join(consumerRoot, 'recovery.mjs'), RECOVERY_CONSUMER);
@@ -61,7 +69,7 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
     [...INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS, installed.tarball, `vitest@${vitestManifest.version}`],
     {
       cwd: consumerRoot,
-      timeout: 120_000,
+      timeout: INSTALL_TIMEOUT_MS,
       signal,
     },
   );
@@ -69,7 +77,7 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
 
 beforeAll(async () => {
   temporaryRoot = await mkdtemp(join(tmpdir(), 'attempt-owner-recovery-'));
-  await prepareConsumer(temporaryRoot, AbortSignal.timeout(SETUP_TIMEOUT_MS - 5_000));
+  await prepareConsumer(temporaryRoot, AbortSignal.timeout(SETUP_OPERATIONS_TIMEOUT_MS));
   await Promise.all([
     writeFile(join(consumerRoot, 'conformance.test.mjs'), CONFORMANCE_CONSUMER),
     writeFile(join(consumerRoot, 'consumer-types.ts'), TYPES_CONSUMER),

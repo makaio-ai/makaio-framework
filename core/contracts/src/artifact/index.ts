@@ -2,8 +2,6 @@ export {
   ArtifactActorSchema,
   ArtifactCompareRequestSchema,
   ArtifactCompareResponseSchema,
-  ArtifactConflictPolicySchema,
-  ArtifactKindRegistrationSchema,
   ArtifactObservationSchema,
   ArtifactQueryRequestSchema,
   ArtifactQueryScopeSchema,
@@ -26,8 +24,6 @@ export type {
   ArtifactActor,
   ArtifactCompareRequest,
   ArtifactCompareResponse,
-  ArtifactConflictPolicy,
-  ArtifactKindRegistration,
   ArtifactObservation,
   ArtifactQueryRequest,
   ArtifactQueryScope,
@@ -123,3 +119,25 @@ export type {
   ArtifactReviseResponse,
   ArtifactStatusChangedPayload,
 } from './namespace.js';
+
+export {
+  ARTIFACT_CATEGORY_LIFECYCLE_STATES,
+  ArtifactSchemaVersionSchema,
+  ArtifactCategorySchema,
+  ArtifactDataPathSchema,
+  ArtifactLifecycleStateSchema,
+  ArtifactRelationRequirementSchema,
+  ArtifactUniquenessSelectorSchema,
+  ArtifactUniquenessRuleSchema,
+  ArtifactEvidenceRequirementsSchema,
+  ArtifactKindRegistrationSchema,
+} from './kind-registration.js';
+export type {
+  ArtifactCategory,
+  ArtifactLifecycleState,
+  ArtifactRelationRequirement,
+  ArtifactUniquenessRule,
+  ArtifactEvidenceRequirements,
+  ArtifactKindRegistration,
+} from './kind-registration.js';
+export { readArtifactTitle } from './kind-paths.js';

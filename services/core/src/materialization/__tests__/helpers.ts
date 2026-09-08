@@ -16,7 +16,7 @@ export function makeRevision(overrides: Partial<ArtifactRevision> = {}): Artifac
     id: 'artifact-1',
     revision: 'rev-1',
     scope: { level: 'global' },
-    schemaVersion: '1',
+    schemaVersion: 1,
     data: { title: 'Test Title', status: 'active' },
     relations: [],
     actor: { kind: 'system', id: 'test' },
@@ -34,9 +34,15 @@ export function makeRegistration(overrides: Partial<ArtifactKindRegistration> = 
   return {
     kind: 'test-kind',
     description: 'Test kind',
-    schemaVersion: '1',
-    dataSchema: {},
-    conflictPolicy: 'supersedes',
+    schemaVersion: 1,
+    dataSchema: {
+      type: 'object',
+      properties: { title: { type: 'string', minLength: 1 } },
+      required: ['title'],
+      additionalProperties: false,
+    },
+    category: 'knowledge' as const,
+    titlePath: 'title',
     ...overrides,
   };
 }
@@ -51,7 +57,7 @@ export function makeRegistration(overrides: Partial<ArtifactKindRegistration> = 
  */
 export function makeBuilder(
   kind: string,
-  schemaVersion: string,
+  schemaVersion: number,
   version = 1,
   result: ArtifactViewBuilderResult = undefined,
 ): ArtifactViewBuilder {

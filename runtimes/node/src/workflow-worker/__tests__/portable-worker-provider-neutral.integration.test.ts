@@ -519,7 +519,7 @@ describe('portable provider-neutral harness', () => {
         throw new Error('Must not invoke after failed preparation');
       },
     );
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result)).toMatchObject({
       decision: 'accepted',
       outcome: {
         kind: 'technical-failure',

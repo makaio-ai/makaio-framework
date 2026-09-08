@@ -8,15 +8,13 @@ import type { ArtifactViewBuilder } from '@makaio/contracts/materialization';
 /**
  * Produce the canonical registry key for a `kind + schemaVersion` pair.
  *
- * Both `kind` and `schemaVersion` are unconstrained strings, so delimiter
- * concatenation would be ambiguous (`kind: 'a@b', version: 'c'` versus
- * `kind: 'a', version: 'b@c'`). Encoding the pair as a JSON tuple keeps
- * the key deterministic and collision-free for every string combination.
+ * Encoding the kind and numeric schema version as a tuple keeps the key
+ * explicit and independent of delimiter conventions.
  * @param kind - Artifact kind discriminator.
  * @param schemaVersion - Artifact schema version.
  * @returns A deterministic string key.
  */
-function builderKey(kind: string, schemaVersion: string): string {
+function builderKey(kind: string, schemaVersion: number): string {
   return JSON.stringify([kind, schemaVersion]);
 }
 
@@ -116,7 +114,7 @@ export class ArtifactViewBuilderRegistry implements ExtensionServiceLifecycle {
    * @param schemaVersion - Artifact schema version.
    * @returns The matching builder, or `undefined` if none is registered.
    */
-  public getBuilder(kind: string, schemaVersion: string): ArtifactViewBuilder<string> | undefined {
+  public getBuilder(kind: string, schemaVersion: number): ArtifactViewBuilder<string> | undefined {
     return this.globalIndex.get(builderKey(kind, schemaVersion))?.builder;
   }
 

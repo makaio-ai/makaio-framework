@@ -44,9 +44,10 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Implementation plan artifact kind used by lifecycle hook processor tests.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.string() }),
-            conflictPolicy: 'manual',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.string() }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
             hooks: defineArtifactLifecycleHooks({
               hooks: [{ id: 'planner.kind', event: 'afterCreate', handler: kindHook }],
             }),
@@ -61,7 +62,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
         kind: 'implementation-plan',
         id: 'artifact-1',
         revision: 'rev-1',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },
         data: { status: 'draft' },
         relations: [],
@@ -70,7 +71,6 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       },
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
 
     expect(extensionHook).toHaveBeenCalledTimes(1);
@@ -92,9 +92,10 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
           defineArtifactKind({
             kind: 'implementation-plan',
             description: 'Implementation plan artifact kind used by lifecycle hook scoping tests.',
-            schemaVersion: '1',
-            dataSchema: z.object({ status: z.string() }),
-            conflictPolicy: 'manual',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), status: z.string() }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
             hooks: defineArtifactLifecycleHooks({
               hooks: [{ id: 'planner.plan-kind', event: 'afterCreate', handler: planKindHook }],
             }),
@@ -102,15 +103,16 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
           defineArtifactKind({
             kind: 'review-findings',
             description: 'Review findings artifact kind used by lifecycle hook scoping tests.',
-            schemaVersion: '1',
-            dataSchema: z.object({ count: z.number() }),
-            conflictPolicy: 'manual',
+            schemaVersion: 1,
+            dataSchema: z.object({ title: z.string().min(1), count: z.number() }),
+            category: 'knowledge' as const,
+            titlePath: 'title',
             hooks: defineArtifactLifecycleHooks({
               hooks: [
                 {
                   id: 'planner.review-kind',
                   event: 'afterCreate',
-                  filter: { kind: '*', schemaVersion: '2' },
+                  filter: { kind: '*', schemaVersion: 2 },
                   handler: reviewKindHook,
                 },
               ],
@@ -126,7 +128,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
         kind: 'implementation-plan',
         id: 'artifact-1',
         revision: 'rev-1',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },
         data: { status: 'draft' },
         relations: [],
@@ -135,7 +137,6 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       },
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
 
     expect(planKindHook).toHaveBeenCalledTimes(1);
@@ -146,7 +147,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
         kind: 'review-findings',
         id: 'artifact-2',
         revision: 'rev-1',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },
         data: { count: 1 },
         relations: [],
@@ -155,7 +156,6 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       },
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
 
     expect(planKindHook).toHaveBeenCalledTimes(1);
@@ -185,7 +185,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
         kind: 'implementation-plan',
         id: 'artifact-1',
         revision: 'rev-1',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },
         data: { status: 'draft' },
         relations: [],
@@ -194,7 +194,6 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       },
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
 
     expect(hook).not.toHaveBeenCalled();

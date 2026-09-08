@@ -523,6 +523,14 @@ describe('ContributionManifestSchema', () => {
     }
   });
 
+  it.each(['1', 0, -1, 1.5])('rejects invalid artifact hook schema generation %s', (schemaVersion) => {
+    expect(
+      ContributionManifestSchema.safeParse({
+        artifactLifecycleHooks: [{ id: 'hook', event: 'afterCreate', kind: 'review', schemaVersion }],
+      }).success,
+    ).toBe(false);
+  });
+
   it('parses artifact lifecycle hook metadata for every lifecycle event', () => {
     const events: readonly ArtifactLifecycleHookEvent[] = [
       'beforeCreate',
@@ -538,7 +546,7 @@ describe('ContributionManifestSchema', () => {
         id: `artifact-hooks.${event}`,
         event,
         kind: 'review-finding',
-        schemaVersion: '1',
+        schemaVersion: 1,
       })),
     });
 
@@ -721,7 +729,7 @@ describe('ExtensionManifestSchema with contributions field', () => {
             id: 'github-materialization.default-projection',
             event: 'afterCreate',
             kind: 'review-finding',
-            schemaVersion: '1',
+            schemaVersion: 1,
           },
         ],
       },
@@ -734,7 +742,7 @@ describe('ExtensionManifestSchema with contributions field', () => {
           id: 'github-materialization.default-projection',
           event: 'afterCreate',
           kind: 'review-finding',
-          schemaVersion: '1',
+          schemaVersion: 1,
         },
       ]);
     }

@@ -146,7 +146,7 @@ describe('Artifact core schemas', () => {
       id: 'artifact-1',
       revision: 'rev-1',
       scope,
-      schemaVersion: '1',
+      schemaVersion: 1,
       data: { status: 'draft', topic: 'artifact redesign' },
       relations: [
         {
@@ -169,12 +169,12 @@ describe('Artifact core schemas', () => {
       ArtifactKindRegistrationSchema.parse({
         kind: 'implementation-plan',
         description: 'Minimal implementation-plan fixture for kind and relation type registration schema test.',
-        schemaVersion: '1',
+        schemaVersion: 1,
         dataSchema: { type: 'object', properties: { status: { type: 'string' } }, required: ['status'] },
-        conflictPolicy: 'supersedes',
-        status: { path: '/data/status', values: ['draft', 'approved'] },
-        indexedFields: ['/data/status'],
-        searchableFields: ['/data/topic'],
+        category: 'commitment',
+        titlePath: 'status',
+        indexedFields: ['status'],
+        searchableFields: ['status'],
       }).kind,
     ).toBe('implementation-plan');
 
@@ -193,9 +193,10 @@ describe('Artifact core schemas', () => {
       ArtifactKindRegistrationSchema.parse({
         kind: 'implementation-plan',
         description: '   ',
-        schemaVersion: '1',
+        schemaVersion: 1,
         dataSchema: { type: 'object' },
-        conflictPolicy: 'supersedes',
+        category: 'commitment',
+        titlePath: 'status',
       }),
     ).toThrow();
   });

@@ -278,7 +278,7 @@ describe('WorkLog projection service', () => {
       kind: 'implementation-plan',
       id: 'artifact-1',
       revision: 'rev-1',
-      schemaVersion: '2',
+      schemaVersion: 2,
       scope: { level: 'project', ids: { projectId: 'project-1' } },
       data: { status: 'draft' },
       relations: [],
@@ -315,7 +315,7 @@ describe('WorkLog projection service', () => {
         nodeId: 'plan',
         artifact: {
           kind: 'implementation-plan',
-          schemaVersion: '2',
+          schemaVersion: 2,
           scope: { level: 'project', ids: { projectId: 'project-1' } },
         },
         revision: 'rev-1',

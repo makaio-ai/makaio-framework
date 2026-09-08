@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ArtifactQueryRequestSchema, ArtifactScopeSchema } from '../artifact/index.js';
+import { ArtifactQueryRequestSchema, ArtifactScopeSchema, ArtifactSchemaVersionSchema } from '../artifact/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Context Source (Pull Pipeline)
@@ -69,7 +69,7 @@ export const ArtifactPublishTargetSchema = z.object({
   /** Artifact kind string (e.g. `'station-output'`, `'implementation-plan'`). */
   kind: z.string().min(1),
   /** Schema version that the artifact service will use to validate the `data` payload. */
-  schemaVersion: z.string().min(1),
+  schemaVersion: ArtifactSchemaVersionSchema,
   /** Scope at which this artifact revision is relevant. */
   scope: ArtifactScopeSchema,
   /** Additional metadata to attach to the artifact. */

@@ -461,7 +461,7 @@ describe('artifact view builder contribution extensibility', () => {
   it('activates and replaces builder contributions through the coordinator', async () => {
     const testBuilder: ArtifactViewBuilder = {
       kind: 'test-review',
-      schemaVersion: '1',
+      schemaVersion: 1,
       version: 1,
       build: async () => undefined,
     };
@@ -480,13 +480,13 @@ describe('artifact view builder contribution extensibility', () => {
       // Verify the builder is registered
       const registry = coordinator.getExtensionService(ArtifactViewBuilderRegistryToken);
       expect(registry).toBeDefined();
-      const builder = registry!.getBuilder('test-review', '1');
+      const builder = registry!.getBuilder('test-review', 1);
       expect(builder).toBeDefined();
       expect(builder!.version).toBe(1);
 
       // Disable the extension and verify the builder is removed
       await coordinator.handleSetEnabled('test-builder-ext', false);
-      expect(registry!.getBuilder('test-review', '1')).toBeUndefined();
+      expect(registry!.getBuilder('test-review', 1)).toBeUndefined();
     } finally {
       await coordinator.shutdown();
     }
@@ -498,7 +498,7 @@ describe('artifact view builder contribution extensibility', () => {
       createBuilders: () => [
         {
           kind: 'test-review',
-          schemaVersion: '1',
+          schemaVersion: 1,
           version: builderVersion,
           build: async () => undefined,
         },
@@ -514,15 +514,15 @@ describe('artifact view builder contribution extensibility', () => {
       await coordinator.startAll();
 
       const registry = coordinator.getExtensionService(ArtifactViewBuilderRegistryToken);
-      expect(registry!.getBuilder('test-review', '1')!.version).toBe(1);
+      expect(registry!.getBuilder('test-review', 1)!.version).toBe(1);
 
       // Disable and re-enable the extension with a new version
       builderVersion = 2;
       await coordinator.handleSetEnabled('test-builder-ext', false);
-      expect(registry!.getBuilder('test-review', '1')).toBeUndefined();
+      expect(registry!.getBuilder('test-review', 1)).toBeUndefined();
 
       await coordinator.handleSetEnabled('test-builder-ext', true);
-      expect(registry!.getBuilder('test-review', '1')!.version).toBe(2);
+      expect(registry!.getBuilder('test-review', 1)!.version).toBe(2);
     } finally {
       await coordinator.shutdown();
     }

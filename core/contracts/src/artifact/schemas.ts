@@ -1,8 +1,27 @@
 import { z } from 'zod';
 
-import { ArtifactContextSelectorSchema } from './context-selectors.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
-import { ArtifactProjectionPolicySchema } from '../materialization/schemas.js';
+import { ArtifactSchemaVersionSchema } from './kind-registration.js';
+export {
+  ARTIFACT_CATEGORY_LIFECYCLE_STATES,
+  ArtifactSchemaVersionSchema,
+  ArtifactCategorySchema,
+  ArtifactDataPathSchema,
+  ArtifactLifecycleStateSchema,
+  ArtifactRelationRequirementSchema,
+  ArtifactUniquenessSelectorSchema,
+  ArtifactUniquenessRuleSchema,
+  ArtifactEvidenceRequirementsSchema,
+  ArtifactKindRegistrationSchema,
+} from './kind-registration.js';
+export type {
+  ArtifactCategory,
+  ArtifactLifecycleState,
+  ArtifactRelationRequirement,
+  ArtifactUniquenessRule,
+  ArtifactEvidenceRequirements,
+  ArtifactKindRegistration,
+} from './kind-registration.js';
 
 /**
  * Identifies the actor (agent, user, system) that produced or asserted
@@ -355,8 +374,8 @@ export const ArtifactRevisionSchema = z.object({
   revision: z.string().min(1),
   /** Scope at which this revision is relevant. */
   scope: ArtifactScopeSchema,
-  /** Schema version used to interpret `data` (semver or opaque string). */
-  schemaVersion: z.string().min(1),
+  /** Positive schema generation. Historical string identifiers require explicit migration, never guessed coercion. */
+  schemaVersion: ArtifactSchemaVersionSchema,
   /** Kind-specific payload validated by the kind's `dataSchema`. */
   data: JsonObjectContractSchema,
   /** Typed links to other artifacts, sub-elements, or external evidence. */
@@ -371,80 +390,6 @@ export const ArtifactRevisionSchema = z.object({
   timestamp: z.number().int().nonnegative(),
   /** Unix epoch timestamp (milliseconds) when the artifact identity was first made current. */
   createdAt: z.number().int().nonnegative().optional(),
-});
-
-/**
- * Strategy used when two revisions of the same artifact conflict.
- *
- * - `supersedes` — newer revision wins; older is archived automatically
- * - `manual` — host must resolve the conflict explicitly
- * - `coexist` — both revisions are kept; conflict is surfaced to consumers
- */
-export const ArtifactConflictPolicySchema = z.enum(['supersedes', 'manual', 'coexist']);
-
-/**
- * Registration record for a named artifact kind.
- *
- * Kind registrations are declared by product extensions and consumed by the
- * artifact service to validate, index, and lifecycle-manage revisions of that kind.
- */
-export const ArtifactKindRegistrationSchema = z.object({
-  /** Unique kind string. Must be stable across releases. */
-  kind: z.string().min(1),
-  /** Human-readable kind description for schema discovery and agent guidance. */
-  description: z.string().trim().min(1),
-  /** Schema version that `dataSchema` validates against. */
-  schemaVersion: z.string().min(1),
-  /** JSON Schema for the kind-specific `data` payload. */
-  dataSchema: JsonObjectContractSchema,
-  /** Optional JSON Schema for scope-identifying fields. */
-  scopeSchema: JsonObjectContractSchema.optional(),
-  /** Optional JSON Schema for kind-specific observation extensions. */
-  observationSchema: JsonObjectContractSchema.optional(),
-  /**
-   * Field path(s) within `data` used to discriminate between instances
-   * when multiple revisions of the same kind exist in the same scope.
-   */
-  discriminator: z.union([z.string().min(1), z.array(z.string().min(1))]).optional(),
-  /** Conflict resolution strategy for this kind. */
-  conflictPolicy: ArtifactConflictPolicySchema,
-  /** Optional mapping from a `data` field to a set of known status values. */
-  status: z
-    .object({
-      /** Dot-separated path to the status field within `data`. */
-      path: z.string().min(1),
-      /** Enumerated allowed values (open if omitted). */
-      values: z.array(z.string().min(1)).optional(),
-    })
-    .optional(),
-  /** Optional lifecycle hints for retention and decay. */
-  lifecycle: z
-    .object({
-      /** Initial relevance classification on creation. */
-      defaultRelevance: z.enum(['active', 'fading', 'retired', 'archived']).optional(),
-      /** Opaque decay policy identifier understood by the artifact service. */
-      decayPolicy: z.string().min(1).optional(),
-    })
-    .optional(),
-  /** Field paths within `data` that should receive a secondary index. */
-  indexedFields: z.array(z.string().min(1)).optional(),
-  /** Field paths within `data` that should be included in full-text search. */
-  searchableFields: z.array(z.string().min(1)).optional(),
-  /**
-   * Optional projection policy controlling how this artifact kind surfaces on
-   * external providers (e.g. GitHub issues, Jira tickets).
-   *
-   * When absent, materialization adapters apply their own defaults.
-   */
-  projection: ArtifactProjectionPolicySchema.optional(),
-  /**
-   * Default context resolution selectors for this kind.
-   *
-   * These selectors are public kind metadata used by artifact context
-   * resolution. They describe which outbound relations should be followed
-   * when a caller does not provide an override for the relation type.
-   */
-  defaultContext: ArtifactContextSelectorSchema.optional(),
 });
 
 /**
@@ -605,12 +550,6 @@ export type ArtifactRevision<TData extends Record<string, unknown> = Record<stri
 > & {
   data: TData;
 };
-
-/** Conflict resolution strategy for an artifact kind. */
-export type ArtifactConflictPolicy = z.infer<typeof ArtifactConflictPolicySchema>;
-
-/** Registration record for a named artifact kind. */
-export type ArtifactKindRegistration = z.infer<typeof ArtifactKindRegistrationSchema>;
 
 /** Registration record for a named relation type. */
 export type RelationTypeRegistration = z.infer<typeof RelationTypeRegistrationSchema>;

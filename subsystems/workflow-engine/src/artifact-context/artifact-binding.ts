@@ -37,7 +37,7 @@ export interface ArtifactBindingState {
    * The artifact schema version declared on the workflow binding.
    * Forwarded to every `artifact.revise` call.
    */
-  readonly schemaVersion: string;
+  readonly schemaVersion: WorkflowArtifactBinding['schemaVersion'];
 
   /**
    * Optional dot-separated path to the status field within `current.data`.
@@ -189,7 +189,7 @@ function normalizeExistingArtifactRef(value: unknown): { readonly kind: string; 
 /**
  * Normalize an evaluated `create` expression into initial artifact data.
  *
- * `undefined` means the artifact starts with `{}`. Any provided value must be a
+ * `undefined` means no initial data was supplied. Any provided value must be a
  * plain object because artifact revisions store JSON object data.
  * @param value - Evaluated `create` expression result.
  * @returns Initial artifact data for `artifact.create`.
@@ -211,14 +211,14 @@ function normalizeInitialData(value: unknown): Record<string, unknown> | undefin
  * 1. If `existingArtifactRef` is provided, query the artifact store for the
  *    latest revision of that artifact.
  * 2. Otherwise, create a new artifact via `artifact.create` with `initialData`
- *    (defaulting to an empty object when absent).
+ *    supplied explicitly. Missing initial data fails before any creation request.
  *
  * The returned {@link ArtifactBindingState} is the authoritative in-memory
  * reference for subsequent `updateArtifact` calls during the execution.
  * @param options - Resolution options including the artifact bus and binding config.
  * @returns The initialised binding state, or `undefined` if the artifact could
  *   not be resolved (e.g. the existing ref points to a missing artifact).
- * @throws If the artifact creation RPC fails or returns an unexpected response.
+ * @throws If creation requires missing initial data, or the artifact creation RPC fails.
  */
 export async function resolveOrCreateArtifactBinding(
   options: ArtifactBindingResolutionOptions,
@@ -243,12 +243,17 @@ export async function resolveOrCreateArtifactBinding(
       return undefined;
     }
   } else {
+    if (initialData === undefined) {
+      throw new Error(
+        `Workflow artifact binding for '${binding.kind}' requires an existing artifact reference or explicit initial data from its create expression.`,
+      );
+    }
     // Create a new artifact with the provided initial data.
     const createResponse = await bus.request(ArtifactSubjects.create, {
       kind: binding.kind,
       schemaVersion: binding.schemaVersion,
       scope: scope ?? binding.scope,
-      data: initialData ?? {},
+      data: initialData,
       relations: [],
       actor: makeWorkflowActor(executionId),
     });

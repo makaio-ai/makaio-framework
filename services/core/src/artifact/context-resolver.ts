@@ -4,7 +4,6 @@ import {
   type ArtifactContextRefEntry,
   type ArtifactContextRelationSelector,
   type ArtifactContextSelector,
-  type ArtifactKindRegistration,
   type ArtifactRef,
   type ArtifactRelation,
   type ArtifactRelationTarget,
@@ -12,37 +11,17 @@ import {
   type ResolvedArtifactContextWire,
 } from '@makaio/contracts';
 
-type MaybePromise<T> = T | Promise<T>;
-
-/**
- * Kind registry interface for context resolution.
- *
- * Implementations must support versioned kind lookups so the resolver
- * can retrieve `defaultContext` selectors for each artifact kind.
- */
-export interface ArtifactContextKindRegistry {
-  /**
-   * Look up a kind registration by kind string and schema version.
-   * @param kind - Kind discriminator string.
-   * @param schemaVersion - Schema version string.
-   * @returns The registration record, or `undefined` if not found.
-   */
-  getKind(kind: string, schemaVersion: string): MaybePromise<ArtifactKindRegistration | undefined>;
-}
-
 /**
  * Options for {@link resolveArtifactContext}.
  */
 export interface ResolveArtifactContextOptions {
   /** Bus instance for artifact resolution RPCs. */
   readonly bus: IMakaioBus;
-  /** Kind registry for versioned defaultContext lookups. */
-  readonly kindRegistry: ArtifactContextKindRegistry;
   /** Root artifact reference to resolve from. */
   readonly ref: ArtifactRef;
   /**
-   * Optional caller selectors that override kind defaults per relation
-   * type.
+   * Explicit selectors for the relations to resolve. Unselected relations
+   * remain unresolved links.
    */
   readonly selectors?: ArtifactContextSelector;
   /** Maximum traversal depth (defaults to 5). */
@@ -51,10 +30,8 @@ export interface ResolveArtifactContextOptions {
 
 interface ResolverState {
   readonly bus: IMakaioBus;
-  readonly kindRegistry: ArtifactContextKindRegistry;
   readonly maxDepth: number;
   readonly resolvedByKey: Map<string, ArtifactRevision | null>;
-  readonly kindDefaultsCache: Map<string, ArtifactContextSelector | undefined>;
   readonly walkedByKey: Set<string>;
   readonly refIndexByKey: Map<string, number>;
   readonly refMetadataByKey: Map<string, RefMetadata>;
@@ -68,8 +45,7 @@ interface RefMetadata {
 
 /**
  * Resolve a selector-driven outbound artifact context graph.
- * @param options - Bus, schema registry, root ref, and optional
- *   selector overrides.
+ * @param options - Bus, root ref, and explicit relation selectors.
  * @returns Normalized wire context with all encountered refs visible.
  */
 export async function resolveArtifactContext(
@@ -78,10 +54,8 @@ export async function resolveArtifactContext(
   const maxDepth = options.maxDepth ?? 5;
   const state: ResolverState = {
     bus: options.bus,
-    kindRegistry: options.kindRegistry,
     maxDepth,
     resolvedByKey: new Map(),
-    kindDefaultsCache: new Map(),
     walkedByKey: new Set(),
     refIndexByKey: new Map(),
     refMetadataByKey: new Map(),
@@ -97,8 +71,7 @@ export async function resolveArtifactContext(
   }
 
   state.resolved.push(root);
-  const rootSelectors = mergeSelectors(await kindDefaultContext(state, root), options.selectors);
-  await walkArtifact(state, root, rootSelectors, 0, new Set([artifactRefKey(options.ref)]));
+  await walkArtifact(state, root, options.selectors, 0, new Set([artifactRefKey(options.ref)]));
 
   return {
     rootRef: options.ref,
@@ -209,8 +182,7 @@ async function resolveRelation(
           },
         } satisfies ArtifactContextSelector)
       : undefined;
-  const targetDefaults = await kindDefaultContext(state, target);
-  const nestedSelectors = mergeSelectors(mergeSelectors(targetDefaults, continuedSelector), selector.nested);
+  const nestedSelectors = mergeSelectors(continuedSelector, selector.nested);
   const nextPath = new Set(path);
   nextPath.add(targetKey);
   await walkArtifact(state, target, nestedSelectors, depth + 1, nextPath);
@@ -235,45 +207,26 @@ async function resolveRef(state: ResolverState, ref: ArtifactRef): Promise<Artif
 }
 
 /**
- * Retrieve default context selectors for an artifact's kind, with per-call caching.
- * @param state - Resolver state carrying the kind defaults cache.
- * @param artifact - Artifact whose kind defaults to look up.
- * @returns Default context selectors, or `undefined` if none.
- */
-async function kindDefaultContext(
-  state: ResolverState,
-  artifact: ArtifactRevision,
-): Promise<ArtifactContextSelector | undefined> {
-  const cacheKey = JSON.stringify([artifact.kind, artifact.schemaVersion]);
-  if (state.kindDefaultsCache.has(cacheKey)) {
-    return state.kindDefaultsCache.get(cacheKey);
-  }
-  const defaults = (await state.kindRegistry.getKind(artifact.kind, artifact.schemaVersion))?.defaultContext;
-  state.kindDefaultsCache.set(cacheKey, defaults);
-  return defaults;
-}
-
-/**
- * Merge kind-default selectors with caller overrides.
+ * Merge continued traversal selectors with explicit nested overrides.
  *
- * Caller overrides replace kind defaults per relation type. A caller
+ * Nested overrides replace continued selectors per relation type. An
  * override with `hint: 'omit'` suppresses that relation type during
  * resolution.
- * @param kindDefault - Kind-level default selectors.
+ * @param continued - Selectors carried forward by the requested traversal depth.
  * @param callerOverride - Caller-provided selector overrides.
  * @returns Merged selector map.
  */
 function mergeSelectors(
-  kindDefault: ArtifactContextSelector | undefined,
+  continued: ArtifactContextSelector | undefined,
   callerOverride: ArtifactContextSelector | undefined,
 ): ArtifactContextSelector | undefined {
-  if (!callerOverride) return kindDefault;
-  if (!kindDefault) {
+  if (!callerOverride) return continued;
+  if (!continued) {
     return callerOverride;
   }
 
   const result: Record<string, ArtifactContextRelationSelector> = {
-    ...kindDefault,
+    ...continued,
   };
   for (const [relationType, selector] of Object.entries(callerOverride)) {
     result[relationType] = selector;

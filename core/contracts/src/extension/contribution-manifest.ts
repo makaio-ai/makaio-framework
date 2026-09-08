@@ -26,6 +26,7 @@
  */
 
 import { z } from 'zod';
+import { ArtifactSchemaVersionSchema } from '../artifact/kind-registration.js';
 import { type ArtifactLifecycleHookEvent } from '../artifact/lifecycle-hooks.js';
 import { type ProtocolId, ProtocolIdSchema } from '../provider/definition.js';
 import { type VersionLiteral, type VersionRange, VersionRangeSchema, VersionLiteralSchema } from '../version/index.js';
@@ -490,7 +491,7 @@ export interface ArtifactLifecycleHookManifest {
    *
    * When omitted, the hook applies to all schema versions of the targeted kind.
    */
-  readonly schemaVersion?: string;
+  readonly schemaVersion?: number;
 }
 
 /** Zod schema for {@link ArtifactLifecycleHookManifest}. */
@@ -498,7 +499,7 @@ export const ArtifactLifecycleHookManifestSchema = z.object({
   id: z.string().min(1),
   event: ArtifactLifecycleHookEventSchema,
   kind: z.string().min(1).optional(),
-  schemaVersion: z.string().min(1).optional(),
+  schemaVersion: ArtifactSchemaVersionSchema.optional(),
 }) satisfies z.ZodType<ArtifactLifecycleHookManifest>;
 
 // ---------------------------------------------------------------------------

@@ -29,7 +29,45 @@ describe('Artifact namespace', () => {
     expect(ArtifactSubjects.status.changed.subject).toBe('status.changed');
   });
 
+  it('accepts caller-owned creation identities without requiring them or changing revision pins', () => {
+    const request = {
+      kind: 'review-result',
+      schemaVersion: 1,
+      scope: { level: 'global' },
+      data: { title: 'Review result' },
+      relations: [],
+      actor: { kind: 'agent', id: 'reviewer' },
+    };
+    expect(ArtifactSchemas.create.request.parse(request)).not.toHaveProperty('id');
+    expect(ArtifactSchemas.create.request.parse({ ...request, id: 'review-operation-42' }).id).toBe(
+      'review-operation-42',
+    );
+    expect(ArtifactSchemas.create.request.safeParse({ ...request, id: '' }).success).toBe(false);
+    expect(ArtifactSchemas.create.request.safeParse({ ...request, id: 42 }).success).toBe(false);
+  });
+
   describe('status contract', () => {
+    it('accepts only data-relative JSON Pointers as explicit revise observation metadata', () => {
+      const request = {
+        previous: { refClass: 'artifact', kind: 'review', id: 'review-1', revision: 'rev-1' },
+        revision: {
+          kind: 'review',
+          schemaVersion: 1,
+          scope: { level: 'global' },
+          data: { title: 'Review', phase: 'ready' },
+          relations: [],
+          actor: { kind: 'agent', id: 'reviewer' },
+        },
+      };
+      expect(ArtifactSchemas.revise.request.parse(request)).not.toHaveProperty('statusPath');
+      for (const statusPath of ['/phase', '/review/status', '/review~1result/status~0code']) {
+        expect(ArtifactSchemas.revise.request.parse({ ...request, statusPath }).statusPath).toBe(statusPath);
+      }
+      for (const statusPath of ['', 'phase', 'review.status', '/phase~', '/phase~2']) {
+        expect(ArtifactSchemas.revise.request.safeParse({ ...request, statusPath }).success).toBe(false);
+      }
+    });
+
     it('status.changed uses the correct namespace subject spelling', () => {
       // The subject string is owned by the artifact namespace — 'status.changed',
       // not 'statusChanged' or 'status_changed'. Callers must use this spelling.
@@ -37,8 +75,8 @@ describe('Artifact namespace', () => {
     });
 
     it('status.changed accepts an open string path, not a fixed enum', () => {
-      // The path field is an open string: each artifact kind declares its own
-      // status path in the kind registration schema. No global status enum exists.
+      // Observation paths belong to explicit callers, never Kind registration.
+      // The existing event contract does not introduce a global status enum.
       const schema = ArtifactSchemas['status.changed'];
       const validPayload = {
         artifact: { refClass: 'artifact', kind: 'review', id: 'art-1', revision: 'rev-1' },
@@ -74,40 +112,23 @@ describe('Artifact namespace', () => {
       expect(schema.safeParse(withoutCurrent).success).toBe(true);
     });
 
-    it('kind registration status field is schema-owned and carries an open path string', () => {
-      // Artifact kinds declare their own status path — no global status enum exists.
-      // The `status.path` is a dot-separated string defined by each kind independently.
-      const kindWithStatus = {
-        kind: 'review-artifact',
-        description: 'Minimal review-artifact fixture for open status path schema contract test.',
-        schemaVersion: '1.0.0',
-        dataSchema: { type: 'object', properties: {} },
-        conflictPolicy: 'supersedes' as const,
-        status: { path: 'review.status' },
+    it('keeps factual statuses inside data without a second kind status declaration', () => {
+      const registration = {
+        kind: 'system-description',
+        description: 'Documented operational state.',
+        schemaVersion: 1,
+        category: 'knowledge',
+        titlePath: 'name',
+        dataSchema: {
+          type: 'object',
+          properties: { name: { type: 'string' }, operationalStatus: { type: 'string' } },
+          required: ['name'],
+        },
       };
-      const parsed = ArtifactKindRegistrationSchema.safeParse(kindWithStatus);
-      expect(parsed.success).toBe(true);
-      if (parsed.success) {
-        expect(parsed.data.status?.path).toBe('review.status');
-        // values is optional — kinds may leave it open-ended
-        expect(parsed.data.status?.values).toBeUndefined();
-      }
-    });
-
-    it('kind registration accepts enumerated status values but they remain optional', () => {
-      const kindWithEnumeratedStatus = {
-        kind: 'task-artifact',
-        description: 'Minimal task-artifact fixture for enumerated status values schema contract test.',
-        schemaVersion: '1.0.0',
-        dataSchema: { type: 'object', properties: {} },
-        conflictPolicy: 'supersedes' as const,
-        status: { path: 'state', values: ['pending', 'active', 'done'] },
-      };
-      const parsed = ArtifactKindRegistrationSchema.safeParse(kindWithEnumeratedStatus);
-      expect(parsed.success).toBe(true);
-      if (parsed.success) {
-        expect(parsed.data.status?.values).toEqual(['pending', 'active', 'done']);
-      }
+      expect(ArtifactKindRegistrationSchema.safeParse(registration).success).toBe(true);
+      expect(
+        ArtifactKindRegistrationSchema.safeParse({ ...registration, status: { path: 'operationalStatus' } }).success,
+      ).toBe(false);
     });
   });
 
@@ -122,7 +143,7 @@ describe('Artifact namespace', () => {
 
     const root = {
       ...rootRef,
-      schemaVersion: '1',
+      schemaVersion: 1,
       scope: { level: 'global' },
       data: { name: 'Makaio' },
       relations: [],

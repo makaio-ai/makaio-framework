@@ -20,7 +20,7 @@ function makeArtifact(
     kind,
     id,
     revision,
-    schemaVersion: '1',
+    schemaVersion: 1,
     scope: { level: 'global' },
     data: { title: id },
     relations,

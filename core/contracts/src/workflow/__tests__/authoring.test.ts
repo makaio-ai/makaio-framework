@@ -364,7 +364,7 @@ describe('fluent builder — artifact binding', () => {
     const ArtifactSchema = z.object({ review: z.string() });
     const workflow = defineWorkflow('artifact-flow').artifact({
       kind: 'implementation-review',
-      schemaVersion: '1.0',
+      schemaVersion: 1,
       scope: { level: 'global' },
       schema: ArtifactSchema,
     });
@@ -375,19 +375,19 @@ describe('fluent builder — artifact binding', () => {
   it('writes artifact binding to definition.artifact', () => {
     const workflow = defineWorkflow('artifact-def-flow').artifact({
       kind: 'report',
-      schemaVersion: '2.0',
+      schemaVersion: 2,
       scope: { level: 'global' },
     });
 
     expect(workflow.definition.artifact).toBeDefined();
     expect(workflow.definition.artifact?.kind).toBe('report');
-    expect(workflow.definition.artifact?.schemaVersion).toBe('2.0');
+    expect(workflow.definition.artifact?.schemaVersion).toBe(2);
   });
 
   it('serializes artifact resolution and status options', () => {
     const workflow = defineWorkflow('artifact-options-flow').artifact({
       kind: 'report',
-      schemaVersion: '2.0',
+      schemaVersion: 2,
       scope: { level: 'global' },
       resolve: 'inputs.reportRef',
       create: '{ title: inputs.title, status: "draft" }',
@@ -396,7 +396,7 @@ describe('fluent builder — artifact binding', () => {
 
     expect(workflow.definition.artifact).toEqual({
       kind: 'report',
-      schemaVersion: '2.0',
+      schemaVersion: 2,
       scope: { level: 'global' },
       resolve: 'inputs.reportRef',
       create: '{ title: inputs.title, status: "draft" }',
@@ -407,7 +407,7 @@ describe('fluent builder — artifact binding', () => {
   it('does not require a Zod schema for artifact', () => {
     const workflow = defineWorkflow('artifact-no-schema').artifact({
       kind: 'summary',
-      schemaVersion: '1.0',
+      schemaVersion: 1,
       scope: { level: 'global' },
     });
 
@@ -904,7 +904,7 @@ describe('fluent builder — full chain with all node types', () => {
   const workflow = defineWorkflow('full-chain-flow')
     .input(InputSchema)
     .config(ConfigSchema)
-    .artifact({ kind: 'review', schemaVersion: '1.0', scope: { level: 'global' }, schema: ArtifactSchema })
+    .artifact({ kind: 'review', schemaVersion: 1, scope: { level: 'global' }, schema: ArtifactSchema })
     .parallel('reviews', { mode: 'all-settled' }, [
       station('spec-review', () => null),
       delegateToRole('quality-review', 'code-reviewer'),

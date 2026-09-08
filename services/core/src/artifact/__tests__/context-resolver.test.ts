@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ArtifactSubjects, type ArtifactRef, type ArtifactRevision } from '@makaio/contracts';
-import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
 import { resolveArtifactContext } from '../context-resolver.js';
 
 /**
@@ -42,7 +41,7 @@ function artifact(
     kind,
     id,
     revision,
-    schemaVersion: '1',
+    schemaVersion: 1,
     scope: {
       level: kind === 'system' ? 'global' : 'project',
       ids: kind === 'system' ? undefined : { projectId: 'p1' },
@@ -56,48 +55,17 @@ function artifact(
 
 describe('resolveArtifactContext', () => {
   let bus: IMakaioBus;
-  let registry: ArtifactSchemaRegistry;
   const cleanups: Array<() => void> = [];
 
-  beforeEach(async () => {
+  beforeEach(() => {
     bus = createBusInstance();
-    registry = new ArtifactSchemaRegistry(bus);
-    await registry.init();
-    await bus.request(ArtifactSubjects.kind.register, {
-      kind: 'system',
-      description: 'System kind.',
-      schemaVersion: '1',
-      dataSchema: { type: 'object' },
-      conflictPolicy: 'supersedes',
-      defaultContext: {
-        contains: { kinds: ['repo'], hint: 'inline' },
-      },
-    });
-    await bus.request(ArtifactSubjects.kind.register, {
-      kind: 'repo',
-      description: 'Repository kind.',
-      schemaVersion: '1',
-      dataSchema: { type: 'object' },
-      conflictPolicy: 'supersedes',
-      defaultContext: {
-        contains: { kinds: ['contributor'], hint: 'summary' },
-      },
-    });
-    await bus.request(ArtifactSubjects.kind.register, {
-      kind: 'contributor',
-      description: 'Contributor kind.',
-      schemaVersion: '1',
-      dataSchema: { type: 'object' },
-      conflictPolicy: 'coexist',
-    });
   });
 
   afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) cleanup();
-    await registry.destroy();
   });
 
-  it('walks kind default selectors across outbound artifact relations', async () => {
+  it('walks explicitly nested selectors across outbound artifact relations', async () => {
     const contributor = artifact('contributor', 'contributor-1', 'rev-contributor');
     const repo = artifact('repo', 'repo-1', 'rev-repo', [
       {
@@ -122,8 +90,14 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
+      selectors: {
+        contains: {
+          kinds: ['repo'],
+          hint: 'inline',
+          nested: { contains: { kinds: ['contributor'], hint: 'summary' } },
+        },
+      },
     });
 
     expect(context.resolved.map((entry) => entry.id)).toEqual(['system-1', 'repo-1', 'contributor-1']);
@@ -133,7 +107,7 @@ describe('resolveArtifactContext', () => {
     ]);
   });
 
-  it('uses caller selectors to override kind defaults per relation type', async () => {
+  it('selects only the explicitly requested relation types', async () => {
     const repo = artifact('repo', 'repo-1', 'rev-repo');
     const system = artifact('system', 'system-1', 'rev-system', [
       { type: 'contains', target: ref('repo', 'repo-1', 'rev-repo') },
@@ -154,7 +128,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'link' } },
     });
@@ -173,7 +146,7 @@ describe('resolveArtifactContext', () => {
     ]);
   });
 
-  it('replaces a relation default when caller selector broadens the kind filter', async () => {
+  it('resolves any artifact kind when the selector has no kind filter', async () => {
     const design = artifact('design', 'design-1', 'rev-design');
     const system = artifact('system', 'system-1', 'rev-system', [
       {
@@ -193,7 +166,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'link' } },
     });
@@ -230,7 +202,6 @@ describe('resolveArtifactContext', () => {
 
     const mismatchContext = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { evidenced_by: { kinds: ['commit'], hint: 'inline' } },
     });
@@ -244,7 +215,6 @@ describe('resolveArtifactContext', () => {
 
     const selectedContext = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { evidenced_by: { hint: 'inline' } },
     });
@@ -279,7 +249,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
     });
 
@@ -314,8 +283,8 @@ describe('resolveArtifactContext', () => {
 
     await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
+      selectors: { contains: { hint: 'inline' } },
     });
 
     expect(resolveSpy.mock.calls.filter(([target]) => target.id === 'shared-repo')).toHaveLength(1);
@@ -348,7 +317,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         contains: { kinds: ['a:b', 'a'], hint: 'inline' },
@@ -393,7 +361,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         contains: { depth: 2, hint: 'inline', kinds: ['repo', 'contributor'] },
@@ -433,7 +400,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         contains: {
@@ -448,7 +414,7 @@ describe('resolveArtifactContext', () => {
 
     expect(context.refs.map((entry) => [entry.relationType, entry.hint, entry.status, entry.reason])).toEqual([
       ['contains', 'inline', 'resolved', undefined],
-      ['contains', 'summary', 'unresolved', 'not-selected'],
+      ['contains', 'link', 'unresolved', 'not-selected'],
       ['derives_from', 'summary', 'resolved', undefined],
     ]);
   });
@@ -479,7 +445,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         contains: {
@@ -505,7 +470,7 @@ describe('resolveArtifactContext', () => {
     ]);
   });
 
-  it('omits relation types when caller overrides with hint omit', async () => {
+  it('omits relation types explicitly marked omit', async () => {
     const system = artifact('system', 'system-1', 'rev-system', [
       {
         type: 'contains',
@@ -522,7 +487,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'omit' } },
     });
@@ -560,7 +524,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         contains: { kinds: ['repo'], hint: 'inline' },
@@ -594,7 +557,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: systemRef,
       selectors: { contains: { kinds: ['system'], hint: 'inline' } },
     });
@@ -620,7 +582,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: systemRef,
       maxDepth: 0,
       selectors: { contains: { kinds: ['system'], hint: 'inline' } },
@@ -679,7 +640,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         contains: { depth: 3, kinds: ['repo', 'contributor'], hint: 'inline' },
@@ -758,7 +718,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         starts: {
@@ -810,7 +769,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'inline' } },
     });
@@ -836,7 +794,6 @@ describe('resolveArtifactContext', () => {
 
     const selected = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', system.id, system.revision),
       selectors: { contains: { hint: 'inline' } },
     });
@@ -844,7 +801,6 @@ describe('resolveArtifactContext', () => {
 
     const filtered = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', system.id, system.revision),
       selectors: { contains: { kinds: ['repo'], hint: 'inline' } },
     });
@@ -874,8 +830,8 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
+      selectors: { contains: { hint: 'inline', depth: 2 } },
       maxDepth: 1,
     });
 
@@ -907,7 +863,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
       selectors: {
@@ -960,7 +915,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
       selectors: {
@@ -1000,7 +954,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
       selectors: {
@@ -1039,7 +992,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
       selectors: {
@@ -1094,7 +1046,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
         first_path: {
@@ -1168,7 +1119,6 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
       selectors: {
@@ -1229,8 +1179,8 @@ describe('resolveArtifactContext', () => {
 
     const context = await resolveArtifactContext({
       bus,
-      kindRegistry: registry,
       ref: ref('system', 'system-1', 'rev-system'),
+      selectors: { contains: { hint: 'inline' } },
     });
 
     expect(context.refs[0]).toEqual(
@@ -1251,7 +1201,6 @@ describe('resolveArtifactContext', () => {
     await expect(
       resolveArtifactContext({
         bus,
-        kindRegistry: registry,
         ref: ref('system', 'missing', 'rev-missing'),
       }),
     ).rejects.toThrow("root artifact 'system:missing:rev-missing' not found");

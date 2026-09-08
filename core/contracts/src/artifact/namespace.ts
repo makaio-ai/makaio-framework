@@ -9,6 +9,7 @@ import {
   ArtifactRefSchema,
   ArtifactRelationSchema,
   ArtifactRevisionSchema,
+  ArtifactSchemaVersionSchema,
   RelationTypeRegistrationSchema,
 } from './schemas.js';
 import { ArtifactContextSelectorSchema } from './context-selectors.js';
@@ -56,7 +57,15 @@ export const ArtifactSchemas = {
 
   /** Create a new artifact and its first revision (RPC). */
   create: {
-    request: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }),
+    request: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }).extend({
+      /**
+       * Optional caller-assigned identity for a repeatable creation operation.
+       * Use a stable operation-scoped identity; collisions reject the create and
+       * never overwrite an existing artifact. Omission delegates identity assignment
+       * to the service. Identity follows the same nonempty-string contract as refs.
+       */
+      id: ArtifactRevisionSchema.shape.id.optional(),
+    }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
   },
 
@@ -64,6 +73,16 @@ export const ArtifactSchemas = {
   revise: {
     request: z.object({
       previous: ArtifactRefSchema,
+      /**
+       * Explicit caller-owned status observation for this write only. The JSON
+       * Pointer is relative to data (for example `/state` or `/review/status`).
+       * The writer derives changes from persisted values; callers cannot assert
+       * old/new values. This metadata is never stored in the artifact revision.
+       */
+      statusPath: z
+        .string()
+        .regex(/^(?:\/(?:[^~/]|~[01])*)+$/, 'Expected a data-relative JSON Pointer')
+        .optional(),
       revision: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }),
     }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
@@ -92,7 +111,7 @@ export const ArtifactSchemas = {
     request: z.object({
       /** Exact artifact revision to resolve from. */
       ref: ArtifactRefSchema,
-      /** Optional caller selectors. Missing relation types fall through to kind defaults. */
+      /** Optional caller selectors. Only explicitly selected relation types are followed. */
       selectors: ArtifactContextSelectorSchema.optional(),
       /** Maximum total traversal depth safety limit. */
       maxDepth: z.number().int().min(1).max(20).default(5),
@@ -134,7 +153,7 @@ export const ArtifactSchemas = {
     /** Kind string that changed. */
     kind: z.string().min(1),
     /** Schema version of the updated registration. */
-    schemaVersion: z.string().min(1),
+    schemaVersion: ArtifactSchemaVersionSchema,
   }),
 } satisfies SchemaRecord;
 

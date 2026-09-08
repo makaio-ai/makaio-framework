@@ -216,7 +216,7 @@ export interface ArtifactBindingOptions {
   /** Artifact kind string (e.g. `'implementation-review'`). */
   readonly kind: string;
   /** Schema version validated by the artifact service. */
-  readonly schemaVersion: string;
+  readonly schemaVersion: WorkflowArtifactBinding['schemaVersion'];
   /** Scope at which the artifact is stored. */
   readonly scope: WorkflowArtifactBinding['scope'];
   /** Optional Zod schema for the artifact data payload. */

@@ -10,7 +10,7 @@ const baseArtifact: ArtifactRevision = {
   kind: 'implementation-plan',
   id: 'artifact-1',
   revision: 'rev-1',
-  schemaVersion: '1',
+  schemaVersion: 1,
   scope: { level: 'project', ids: { projectId: 'project-1' } },
   data: { status: 'draft' },
   relations: [],
@@ -140,7 +140,6 @@ describe('ArtifactLifecycleHookRegistry', () => {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'comment' },
     });
 
     expect(nonDefaultFollowUp).toHaveBeenCalledTimes(1);
@@ -171,7 +170,6 @@ describe('ArtifactLifecycleHookRegistry', () => {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'comment' },
       skipDefaultProjection: true,
     });
 
@@ -206,7 +204,6 @@ describe('ArtifactLifecycleHookRegistry', () => {
         artifact: baseArtifact,
         meta: new Map(),
         kindRegistration: undefined,
-        projectionPolicy: { mode: 'none' },
       });
 
       expect(laterHook).toHaveBeenCalledTimes(1);
@@ -231,7 +228,6 @@ describe('ArtifactLifecycleHookRegistry', () => {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
 
     expect(oldHook).not.toHaveBeenCalled();
@@ -242,7 +238,6 @@ describe('ArtifactLifecycleHookRegistry', () => {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
 
     expect(newHook).toHaveBeenCalledTimes(1);
@@ -257,7 +252,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
       {
         id: 'matching',
         event: 'afterCreate',
-        filter: { kind: 'implementation-plan', schemaVersion: '1' },
+        filter: { kind: 'implementation-plan', schemaVersion: 1 },
         handler: matching,
       },
       { id: 'other', event: 'afterCreate', filter: { kind: 'review-findings' }, handler: other },
@@ -268,7 +263,6 @@ describe('ArtifactLifecycleHookRegistry', () => {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
-      projectionPolicy: { mode: 'none' },
     });
 
     expect(matching).toHaveBeenCalledTimes(1);

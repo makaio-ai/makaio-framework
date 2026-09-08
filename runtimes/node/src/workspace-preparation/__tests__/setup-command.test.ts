@@ -348,6 +348,133 @@ describe('bounded setup commands', () => {
   });
 
   it.each([
+    ['zombie-only', 'cancelled'],
+    ['disappeared', 'cancelled'],
+    ['live', 'stop-failed'],
+    ['unavailable', 'stop-failed'],
+    ['malformed', 'stop-failed'],
+    ['empty', 'stop-failed'],
+    ['unmatched zombie', 'stop-failed'],
+  ] as const)('requires quiescence proof after EPERM with %s group evidence', async (evidence, status) => {
+    const kill = process.kill.bind(process);
+    let groupPid = 0;
+    let deniedSignals = 0;
+    let deniedProbes = 0;
+    let psQueries = 0;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (typeof pid !== 'number' || pid >= 0 || signal === 'SIGTERM') return kill(pid, signal);
+      groupPid = -pid;
+      if (signal === 0 && evidence === 'disappeared' && psQueries > 0) return kill(pid, signal);
+      if (signal === 0) deniedProbes++;
+      else deniedSignals++;
+      throw Object.assign(new Error('group signal denied'), { code: 'EPERM' });
+    });
+    childProcessMocks.execFile.mockImplementation((_file, _args, _options, callback) => {
+      psQueries++;
+      const rows = {
+        'zombie-only': `${groupPid} Z\n`,
+        disappeared: '',
+        live: `${groupPid} S\n`,
+        unavailable: '',
+        malformed: 'not-a-process-row\n',
+        empty: '',
+        'unmatched zombie': `${groupPid + 1} Z\n`,
+      };
+      callback(evidence === 'unavailable' ? new Error('ps unavailable') : null, rows[evidence], '');
+      return undefined;
+    });
+    const abort = new AbortController();
+    try {
+      // A real process receives SIGTERM; only final cleanup and its host
+      // observations inject the denied-signal interleaving.
+      const running = runSetupCommand({
+        ...command("require('fs').writeFileSync('ready','yes');setInterval(()=>{},100)"),
+        signal: abort.signal,
+      });
+      await expect.poll(async () => fs.readFile(path.join(workspaceRoot, 'ready'), 'utf8')).toBe('yes');
+      abort.abort();
+      expect(await running).toMatchObject({ status });
+      expect(deniedSignals).toBe(1);
+      expect(deniedProbes).toBeGreaterThan(0);
+      expect(psQueries).toBeGreaterThan(0);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['term', 'cancelled', false],
+    ['term', 'timed-out', false],
+    ['escalation', 'cancelled', false],
+    ['escalation', 'timed-out', false],
+    ['term', 'cancelled', true],
+    ['escalation', 'cancelled', true],
+  ] as const)('verifies cleanup after %s EPERM for %s (unverifiable: %s)', async (phase, reason, unverifiable) => {
+    const kill = process.kill.bind(process);
+    let groupPid = 0;
+    let termSignals = 0;
+    let killSignals = 0;
+    let deniedSignals = 0;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (typeof pid !== 'number' || pid >= 0) return kill(pid, signal);
+      groupPid = -pid;
+      if (signal === 'SIGTERM') termSignals++;
+      if (signal === 'SIGKILL') killSignals++;
+      if (signal === 'SIGTERM' && phase === 'term') {
+        deniedSignals++;
+        throw Object.assign(new Error('TERM denied'), { code: 'EPERM' });
+      }
+      // The deadline case must reach escalation even if Node has not yet
+      // installed its SIGTERM handler when the short command deadline expires.
+      if (signal === 'SIGTERM' && reason === 'timed-out') return true;
+      if (signal === 'SIGKILL' && killSignals === 1 && phase === 'escalation') {
+        // Termination proceeds, but the host reports EPERM before close and
+        // the independent final verification, as in the exiting-group race.
+        kill(pid, signal);
+        deniedSignals++;
+        throw Object.assign(new Error('escalation denied'), { code: 'EPERM' });
+      }
+      if (signal === 0 && unverifiable) throw Object.assign(new Error('probe denied'), { code: 'EPERM' });
+      return kill(pid, signal);
+    });
+    if (unverifiable) {
+      childProcessMocks.execFile.mockImplementation((_file, _args, _options, callback) => {
+        callback(new Error('ps unavailable'), '', '');
+        return undefined;
+      });
+    }
+    const abort = new AbortController();
+    let cleanupError: unknown;
+    try {
+      const running = runSetupCommand({
+        ...command(
+          "process.on('SIGTERM',()=>{});require('fs').writeFileSync('ready','yes');setInterval(()=>{},100)",
+          reason === 'timed-out' ? 100 : 5_000,
+        ),
+        signal: abort.signal,
+      });
+      if (reason === 'cancelled') {
+        await expect.poll(async () => fs.readFile(path.join(workspaceRoot, 'ready'), 'utf8')).toBe('yes');
+        abort.abort();
+      }
+      expect(await running).toMatchObject({ status: unverifiable ? 'stop-failed' : reason });
+      expect(termSignals).toBe(1);
+      expect(killSignals).toBe(2);
+      expect(deniedSignals).toBe(1);
+    } finally {
+      killSpy.mockRestore();
+      if (groupPid !== 0) {
+        try {
+          kill(-groupPid, 'SIGKILL');
+        } catch (error) {
+          if (!['ESRCH', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) cleanupError = error;
+        }
+      }
+    }
+    if (cleanupError !== undefined) throw cleanupError;
+  });
+
+  it.each([
     ['malformed', 'not-a-process-row\n'],
     ['empty', ''],
     ['unmatched zombie', '999999 Z\n'],

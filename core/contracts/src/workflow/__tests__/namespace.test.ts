@@ -211,7 +211,7 @@ describe('WorkflowArtifactBindingSchema', () => {
   it('accepts artifact resolve, create, and status path options', () => {
     const binding = WorkflowArtifactBindingSchema.parse({
       kind: 'implementation-review',
-      schemaVersion: '1',
+      schemaVersion: 1,
       scope: { level: 'global' },
       resolve: 'inputs.reviewArtifactRef',
       create: '{ status: "draft" }',
@@ -642,7 +642,7 @@ describe('WorkflowDefinitionSchema', () => {
       outputSchema: { type: 'object', properties: { result: { type: 'string' } } },
       artifact: {
         kind: 'implementation-plan',
-        schemaVersion: '1',
+        schemaVersion: 1,
         scope: { level: 'workspace', ids: { workspaceId: 'ws-1' } },
       },
       root: {

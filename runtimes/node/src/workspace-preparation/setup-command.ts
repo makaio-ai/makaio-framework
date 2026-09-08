@@ -53,7 +53,9 @@ async function groupHasLiveProcesses(pid: number, psTimeoutMs: number): Promise<
     process.kill(-pid, 0);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-    throw error;
+    // Darwin can report EPERM for a zombie-only group. It proves neither
+    // liveness nor quiescence; require the same positive ps evidence below.
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
   }
   let stdout: string;
   try {
@@ -100,7 +102,14 @@ function readProcessGroups(timeoutMs: number): Promise<string> {
 async function stopRemainingGroup(pid: number | undefined): Promise<boolean> {
   if (pid === undefined) return true;
   try {
-    signalGroup(pid, 'SIGKILL');
+    try {
+      signalGroup(pid, 'SIGKILL');
+    } catch (error) {
+      // XNU excludes zombies from group signalling, so final cleanup can
+      // return EPERM after termination. Only the bounded proof below may
+      // establish safe release; a denied signal alone never does.
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+    }
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now();
@@ -163,16 +172,21 @@ function executeSetupCommand(options: SetupCommandOptions): Promise<SetupCommand
       if (child.pid === undefined) return;
       try {
         signalGroup(child.pid, 'SIGTERM');
-        escalation = setTimeout(() => {
-          try {
-            if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
-          } catch {
-            status = 'stop-failed';
-          }
-        }, 200);
-      } catch {
-        status = 'stop-failed';
+      } catch (error) {
+        // EPERM is inconclusive throughout termination, not just at close.
+        // Keep escalation and the final quiescence proof responsible for safety.
+        if ((error as NodeJS.ErrnoException).code !== 'EPERM') {
+          status = 'stop-failed';
+          return;
+        }
       }
+      escalation = setTimeout(() => {
+        try {
+          if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EPERM') status = 'stop-failed';
+        }
+      }, 200);
     };
     const abort = (): void => stop('cancelled');
     const timeout = setTimeout(() => stop('timed-out'), options.recipe.timeoutMs);

@@ -8,7 +8,7 @@ function makeArtifact(overrides: Partial<ArtifactRevision> = {}): ArtifactRevisi
     kind: 'implementation-plan',
     id: 'artifact-1',
     revision: 'rev-1',
-    schemaVersion: '1',
+    schemaVersion: 1,
     scope: { level: 'global' },
     data: { status: 'draft' },
     relations: [],
