@@ -32,7 +32,8 @@ import {
 // one and beneath the resolve guard; that loader is pinned to an alias-free
 // tsconfig this package ships, so a configured package name resolves through
 // its materialized link rather than through an ambient `paths` alias — see
-// `worker-entry-resolver.ts`. The built entry has no loader beneath it.
+// `worker-entry-resolver.ts`. The built entry has no process-wide entry loader
+// beneath the scoped loader.
 //
 // A per-invocation resolve guard makes the host's package map the whole truth
 // about which ordinary packages resolve: linking only the configured packages

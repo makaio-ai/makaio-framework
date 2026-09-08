@@ -10,9 +10,11 @@ import { fileURLToPath } from 'node:url';
 // Unlike a plain path resolver this also returns how the worker thread has to
 // be launched: the TypeScript source entry only runs under a TypeScript entry
 // loader and only resolves correctly once that loader is pinned to an isolated
-// tsconfig, while the built entry is plain ESM and must not pull either in.
-// Returning the entry, its Node CLI arguments, and its environment together is
-// what keeps the three from drifting apart.
+// tsconfig, while the built entry is plain ESM and must not pull either the
+// entry loader or that tsconfig in.
+// Returning the entry, its Node CLI arguments, loader environment, and loader
+// paths together is what keeps launch configuration and redaction from
+// drifting apart.
 //
 // The two layouts are held to the same resolution guarantee. Nothing about the
 // package map, the import allowlist, or which imports a submitted program can
@@ -62,11 +64,25 @@ const SOURCE_WORKER_TSCONFIG_FILE = 'worker-tsconfig.json';
  */
 const TYPESCRIPT_LOADER_TSCONFIG_ENV = 'TSX_TSCONFIG_PATH';
 
-/** Environment the built worker entry requires: none, because it loads no loader. */
-const DIST_WORKER_ENV: Readonly<Record<string, string>> = Object.freeze({});
+/** Environment variable that disables the TypeScript loader's disk transform cache. */
+const TYPESCRIPT_LOADER_DISABLE_CACHE_ENV = 'TSX_DISABLE_CACHE';
 
 /**
- * Build the environment that pins the source-mode loader to an isolated tsconfig.
+ * Environment every worker entry requires for its scoped TypeScript loader.
+ *
+ * Source mode also uses tsx as its process-wide entry loader, while both source
+ * and dist worker entries register a scoped tsx loader for submitted programs.
+ * tsx's disk cache keeps transformed-module descriptors open after Piscina
+ * destroys a worker. Its in-memory cache instead disappears with that worker,
+ * keeping repeated pool generations from exhausting host descriptors.
+ */
+const COMMON_WORKER_ENV: Readonly<Record<string, string>> = Object.freeze({
+  [TYPESCRIPT_LOADER_DISABLE_CACHE_ENV]: '1',
+});
+
+/**
+ * Build the environment that pins the source-mode entry loader to an isolated
+ * tsconfig in addition to the configuration every worker requires.
  *
  * Naming an explicit tsconfig is what keeps the host's package map the whole
  * truth about configured imports in source mode, rather than only about which
@@ -90,12 +106,13 @@ const DIST_WORKER_ENV: Readonly<Record<string, string>> = Object.freeze({});
  * before. The submitted program's own modules are unaffected either way: they
  * are transpiled by the scoped loader the worker entry registers with tsconfig
  * discovery already disabled.
- * @param moduleDir - Package source root containing the worker directory.
+ * @param tsconfigPath - Absolute path to the source worker's isolated tsconfig.
  * @returns Environment variables the source worker entry requires.
  */
-function buildSourceWorkerEnv(moduleDir: string): Readonly<Record<string, string>> {
+function buildSourceWorkerEnv(tsconfigPath: string): Readonly<Record<string, string>> {
   return Object.freeze({
-    [TYPESCRIPT_LOADER_TSCONFIG_ENV]: join(moduleDir, WORKER_DIRECTORY, SOURCE_WORKER_TSCONFIG_FILE),
+    ...COMMON_WORKER_ENV,
+    [TYPESCRIPT_LOADER_TSCONFIG_ENV]: tsconfigPath,
   });
 }
 
@@ -121,12 +138,15 @@ export interface CodeExecutionWorkerEntry {
   readonly filename: string;
   /** Node CLI arguments to pass to spawned worker threads. */
   readonly execArgv: readonly string[];
+  /** Host paths named by the loader configuration and redacted from diagnostics. */
+  readonly loaderPaths: readonly string[];
   /**
-   * Environment variables the entry's loader requires, if any.
+   * Environment variables the entry's TypeScript loaders require.
    *
-   * Provider-owned rather than host-owned: these configure the loader named by
-   * {@link execArgv}, so they belong to the same decision and must not be
-   * overridable by a host's own worker environment.
+   * Provider-owned rather than host-owned: these configure both an entry loader
+   * named by {@link execArgv}, when present, and the scoped loader the worker
+   * registers for submitted programs. They must not be overridable by a host's
+   * own worker environment.
    */
   readonly env: Readonly<Record<string, string>>;
 }
@@ -136,9 +156,9 @@ export interface CodeExecutionWorkerEntry {
  *
  * In `source` mode the TypeScript entry is returned together with the
  * TypeScript entry loader argument and the environment that pins that loader to
- * an isolated tsconfig. In `dist` mode the built ESM entry is returned with
- * neither, because the built package must not depend on a TypeScript toolchain
- * being present at runtime.
+ * an isolated tsconfig. In `dist` mode the built ESM entry has no entry loader
+ * or tsconfig, while its internal scoped loader retains the common worker
+ * configuration used for submitted TypeScript programs.
  * @param options - Package source or distribution root and the entry mode.
  * @returns Worker entry filename, Node CLI arguments, and loader environment.
  */
@@ -146,16 +166,19 @@ export function resolveCodeExecutionWorkerEntry(
   options: CodeExecutionWorkerEntryResolverOptions,
 ): CodeExecutionWorkerEntry {
   if (options.mode === 'source') {
+    const tsconfigPath = join(options.moduleDir, WORKER_DIRECTORY, SOURCE_WORKER_TSCONFIG_FILE);
     return {
       filename: join(options.moduleDir, WORKER_DIRECTORY, 'worker-entry.ts'),
       execArgv: SOURCE_WORKER_EXEC_ARGV,
-      env: buildSourceWorkerEnv(options.moduleDir),
+      env: buildSourceWorkerEnv(tsconfigPath),
+      loaderPaths: [tsconfigPath],
     };
   }
   return {
     filename: join(options.moduleDir, WORKER_DIRECTORY, 'worker-entry.mjs'),
     execArgv: DIST_WORKER_EXEC_ARGV,
-    env: DIST_WORKER_ENV,
+    env: COMMON_WORKER_ENV,
+    loaderPaths: [],
   };
 }
 

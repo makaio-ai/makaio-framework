@@ -163,14 +163,15 @@ export class PiscinaCodeExecutionProvider implements ICodeExecutionProvider {
 
   private readonly workerEntry: string;
   private readonly workerExecArgv: readonly string[];
+  private readonly workerLoaderPaths: readonly string[];
   /**
-   * Environment the resolved worker entry's own loader requires.
+   * Environment the resolved worker entry's TypeScript loaders require.
    *
    * Kept apart from the host-configured {@link environment} because the two
-   * answer to different owners: this one configures the loader named by
-   * {@link workerExecArgv}, so it travels with those arguments and is applied
-   * *after* the host's values — a host must not be able to reconfigure the
-   * loader that bounds which packages a submitted program can resolve.
+   * answer to different owners: this one travels with the entry and its
+   * {@link workerExecArgv}, configuring the source entry loader when present
+   * and the scoped loader every worker registers for submitted programs. It is
+   * applied *after* host values so the host cannot change those launch semantics.
    */
   private readonly workerLoaderEnv: Readonly<Record<string, string>>;
   private readonly environment: Readonly<Record<string, string>>;
@@ -242,6 +243,7 @@ export class PiscinaCodeExecutionProvider implements ICodeExecutionProvider {
     // that is also a leak: runtime redactions are derived from this snapshot,
     // so a value substituted afterwards would reach the worker unredacted.
     this.workerExecArgv = [...defaultEntry.execArgv];
+    this.workerLoaderPaths = [...defaultEntry.loaderPaths];
     this.workerLoaderEnv = Object.freeze({ ...defaultEntry.env });
     this.environment = Object.freeze({ ...options.environment });
     this.packageRoots = normalizePackageRoots(options.packageRoots);
@@ -832,12 +834,10 @@ export class PiscinaCodeExecutionProvider implements ICodeExecutionProvider {
    * target is a provider failure for that invocation; a retargeted symlink after
    * this snapshot cannot alter later materialization.
    *
-   * The loader environment is submitted as worker *paths* rather than as
-   * environment values, because every value in it names a host file the worker
-   * is launched against and a startup failure quotes it as a path. Passing a
-   * value that turned out not to be one costs nothing: path expansion absorbs
-   * its own failures and falls back to the value itself, which is what the
-   * environment branch would have redacted anyway.
+   * The resolved worker entry identifies which loader settings name host paths.
+   * Those paths are always redacted because startup failures can quote them;
+   * other loader settings remain ordinary configuration values and must not be
+   * interpreted as paths that can match unrelated diagnostic text.
    * @returns Pinned package targets and matching bus-diagnostic redactions.
    */
   private resolveRuntimeConfiguration(): Promise<RuntimeConfiguration> {
@@ -846,7 +846,7 @@ export class PiscinaCodeExecutionProvider implements ICodeExecutionProvider {
     const resolving = resolveConfiguredRuntime({
       environment: this.environment,
       packageRoots: this.packageRoots,
-      workerPaths: [this.workerEntry, ...Object.values(this.workerLoaderEnv)],
+      workerPaths: [this.workerEntry, ...this.workerLoaderPaths],
     });
     this.runtimeConfiguration = resolving;
     // Retain only successful snapshots; identity protects a later attempt.
@@ -865,10 +865,9 @@ export class PiscinaCodeExecutionProvider implements ICodeExecutionProvider {
    * zero because the pool's own default keeps at least one thread alive
    * forever, which would make the configured idle timeout unobservable.
    *
-   * The worker entry's own loader environment is applied last, so a host cannot
-   * reconfigure the loader through {@link PiscinaCodeExecutionProviderOptions.environment} —
-   * that loader is what holds the package map to being the whole truth about
-   * which ordinary packages a submitted program resolves.
+   * The worker entry's loader environment is applied last, so a host cannot
+   * re-enable the transform disk cache or replace the source entry loader's
+   * pinned tsconfig through {@link PiscinaCodeExecutionProviderOptions.environment}.
    *
    * Laziness is also what makes retirement cheap: a retired generation simply
    * clears this field, and the next invocation builds its successor on exactly
