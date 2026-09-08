@@ -83,6 +83,7 @@ export {
   sameAllocationRef,
   sameDurableOutcome,
   evaluateAttemptReachability,
+  evaluateProvisionerIncarnationLoss,
   evaluateRuntimeRegistration,
   evaluateOperationAdmission,
   evaluateOperationCompletion,

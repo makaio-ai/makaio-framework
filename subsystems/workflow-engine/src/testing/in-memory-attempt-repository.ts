@@ -9,6 +9,7 @@ import {
   evaluateOperationCompletion,
   evaluateRuntimeReadiness,
   evaluatePreparationReport,
+  evaluateProvisionerIncarnationLoss,
   assertRuntimeOutcomeFence,
   sameAllocationRef,
   sameDurableOutcome,
@@ -573,21 +574,8 @@ export function createInMemoryAttemptRepository<TOutcome>(
       const authorization = authorize(input.claim);
       if (authorization.kind !== 'authorized') return { kind: authorization.kind };
       const { attempt, operation } = authorization;
-      if (attempt.executionId !== input.executionId) return { kind: 'not-found' };
-      // Applicability first, ownership second: whether the proof says anything
-      // about this attempt at all is decided by the two immutable facts
-      // `beginProvisioning` bound, and only an applicable proof then has to
-      // answer for a recorded allocation.
-      if (attempt.allocationLifetime !== 'provisioner-process-bound') {
-        return { kind: 'not-process-bound', allocationLifetime: attempt.allocationLifetime };
-      }
-      if (
-        attempt.provisionerIncarnationId === null ||
-        attempt.provisionerIncarnationId !== input.proof.provisionerIncarnationId
-      ) {
-        return { kind: 'incarnation-mismatch', provisionerIncarnationId: attempt.provisionerIncarnationId };
-      }
-      if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
+      const refusal = evaluateProvisionerIncarnationLoss(attempt, input);
+      if (refusal !== null) return refusal;
 
       attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'abandoned'));
       closeOperation(operation, evidence);

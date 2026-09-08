@@ -4,10 +4,13 @@ import type {
   AttemptControlState,
   AttemptExecutionState,
   CompleteOperationInput,
+  ExecutionAttemptRecord,
   MarkRuntimeReadyInput,
   OperationAdmissionDecision,
   OperationCompletionDecision,
   OperationReportDecision,
+  ProvisionerIncarnationLossDecision,
+  RecordProvisionerIncarnationLostInput,
   RegisterRuntimeInput,
   ReportOperationInput,
   RuntimeReadinessDecision,
@@ -43,6 +46,38 @@ export function evaluateAttemptReachability(facts: AttemptReachability): Attempt
   if (facts.settled) return { kind: 'resolved' };
   if (!facts.active) return { kind: 'fenced' };
   if (!facts.allocated) return { kind: 'not-allocated' };
+  return null;
+}
+
+/**
+ * Evaluate process-loss applicability after evidence parsing and claim authorization.
+ * Owner, lifetime, and incarnation refusals precede a recorded allocation.
+ * A null result permits only the realization's existing guarded settlement.
+ * @param attempt - Coherently read immutable provider binding and allocation facts.
+ * @param input - Owner identity and process-loss proof whose evidence the realization already parsed.
+ * @returns The first applicability refusal, or null to attempt the guarded write.
+ */
+export function evaluateProvisionerIncarnationLoss(
+  attempt: Pick<
+    ExecutionAttemptRecord,
+    'executionId' | 'allocationLifetime' | 'provisionerIncarnationId' | 'allocationRef'
+  >,
+  input: Pick<RecordProvisionerIncarnationLostInput, 'executionId' | 'proof'>,
+): Extract<
+  ProvisionerIncarnationLossDecision,
+  { readonly kind: 'not-found' | 'not-process-bound' | 'incarnation-mismatch' | 'allocated' }
+> | null {
+  if (attempt.executionId !== input.executionId) return { kind: 'not-found' };
+  if (attempt.allocationLifetime !== 'provisioner-process-bound') {
+    return { kind: 'not-process-bound', allocationLifetime: attempt.allocationLifetime };
+  }
+  if (
+    attempt.provisionerIncarnationId === null ||
+    attempt.provisionerIncarnationId !== input.proof.provisionerIncarnationId
+  ) {
+    return { kind: 'incarnation-mismatch', provisionerIncarnationId: attempt.provisionerIncarnationId };
+  }
+  if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
   return null;
 }
 
