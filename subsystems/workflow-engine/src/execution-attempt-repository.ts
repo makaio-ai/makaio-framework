@@ -20,6 +20,7 @@ import type {
 
 export {
   evaluateAttemptReachability,
+  evaluateProvisionerIncarnationLoss,
   evaluateRuntimeRegistration,
   evaluateOperationAdmission,
   evaluateOperationCompletion,

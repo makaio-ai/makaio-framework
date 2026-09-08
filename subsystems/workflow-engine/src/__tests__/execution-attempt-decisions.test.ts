@@ -4,6 +4,7 @@ import {
   evaluateOperationAdmission,
   evaluateOperationCompletion,
   evaluatePreparationReport,
+  evaluateProvisionerIncarnationLoss,
   evaluateRuntimeReadiness,
   evaluateRuntimeRegistration,
   type AdmitOperationInput,
@@ -90,6 +91,89 @@ describe('attempt reachability precedence', () => {
     const before = { ...facts };
     expect(evaluateAttemptReachability(Object.freeze(facts))?.kind ?? null).toBe(expected);
     expect(facts).toEqual(before);
+  });
+});
+
+describe('provisioner incarnation loss applicability', () => {
+  const allocationRef = Object.freeze({
+    version: 1 as const,
+    providerId: 'provider',
+    providerData: Object.freeze({ id: 'allocation' }),
+  });
+  const attempt: Parameters<typeof evaluateProvisionerIncarnationLoss>[0] = Object.freeze({
+    executionId: IDS.executionId,
+    allocationLifetime: 'provisioner-process-bound',
+    provisionerIncarnationId: 'provisioner',
+    allocationRef: null,
+  });
+  const input: Parameters<typeof evaluateProvisionerIncarnationLoss>[1] = Object.freeze({
+    executionId: IDS.executionId,
+    proof: Object.freeze({
+      kind: 'provisioner-incarnation-lost',
+      provisionerIncarnationId: 'provisioner',
+      evidence: Object.freeze({ source: 'provider', summary: 'Provisioner exited', observedAt: STORED_AT }),
+    }),
+  });
+
+  it('checks owner identity before lifetime, incarnation, and allocation', () => {
+    expect(
+      evaluateProvisionerIncarnationLoss(
+        Object.freeze({
+          ...attempt,
+          executionId: 'another-owner',
+          allocationLifetime: 'provider-managed',
+          provisionerIncarnationId: 'another-provisioner',
+          allocationRef,
+        }),
+        input,
+      ),
+    ).toEqual({ kind: 'not-found' });
+  });
+
+  it.each([
+    'provider-managed',
+    null,
+  ] as const)('reports stored lifetime %s before incarnation and allocation', (allocationLifetime) => {
+    expect(
+      evaluateProvisionerIncarnationLoss(
+        Object.freeze({
+          ...attempt,
+          allocationLifetime,
+          provisionerIncarnationId: 'another-provisioner',
+          allocationRef,
+        }),
+        input,
+      ),
+    ).toEqual({ kind: 'not-process-bound', allocationLifetime });
+  });
+
+  it.each([
+    'another-provisioner',
+    null,
+  ])('reports stored incarnation %s before allocation', (provisionerIncarnationId) => {
+    expect(
+      evaluateProvisionerIncarnationLoss(
+        Object.freeze({
+          ...attempt,
+          provisionerIncarnationId,
+          allocationRef,
+        }),
+        input,
+      ),
+    ).toEqual({ kind: 'incarnation-mismatch', provisionerIncarnationId });
+  });
+
+  it('returns the stored allocation for an otherwise applicable loss proof', () => {
+    expect(evaluateProvisionerIncarnationLoss(Object.freeze({ ...attempt, allocationRef }), input)).toEqual({
+      kind: 'allocated',
+      allocationRef,
+    });
+  });
+
+  it('permits the guarded write without modifying the input or attempt', () => {
+    const before = structuredClone({ attempt, input });
+    expect(evaluateProvisionerIncarnationLoss(attempt, input)).toBeNull();
+    expect({ attempt, input }).toEqual(before);
   });
 });
 
