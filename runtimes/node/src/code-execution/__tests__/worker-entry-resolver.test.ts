@@ -10,10 +10,12 @@ describe('resolveCodeExecutionWorkerEntry', () => {
 
     expect(entry.filename).toBe(join('/pkg/src', 'code-execution', 'worker-entry.ts'));
     expect(entry.execArgv).toEqual(['--import=tsx']);
+    expect(entry.loaderPaths).toEqual([join('/pkg/src', 'code-execution', 'worker-tsconfig.json')]);
     // The loader is pinned to a tsconfig this package ships, so it applies no
     // ambient `paths` alias — without which a submitted bare specifier could be
     // expanded to a path before the import allowlist ever saw a package name.
     expect(entry.env).toEqual({
+      TSX_DISABLE_CACHE: '1',
       TSX_TSCONFIG_PATH: join('/pkg/src', 'code-execution', 'worker-tsconfig.json'),
     });
   });
@@ -23,8 +25,10 @@ describe('resolveCodeExecutionWorkerEntry', () => {
 
     expect(entry.filename).toBe(join('/pkg/dist', 'code-execution', 'worker-entry.mjs'));
     expect(entry.execArgv).toEqual([]);
-    // Nothing to configure: the built entry loads no loader at all.
-    expect(entry.env).toEqual({});
+    expect(entry.loaderPaths).toEqual([]);
+    // The built entry has no entry loader or tsconfig, but its internal scoped
+    // loader still uses an in-memory transform cache for submitted programs.
+    expect(entry.env).toEqual({ TSX_DISABLE_CACHE: '1' });
   });
 
   it('appends the worker directory to a nested distribution root without duplicating a segment', () => {
@@ -78,8 +82,6 @@ describe('resolveDefaultCodeExecutionWorkerEntry', () => {
     await expect(stat(entry.filename)).resolves.toMatchObject({});
     // The loader refuses to start when the tsconfig it is pointed at is absent,
     // so this file has to ship with the source layout rather than be assumed.
-    for (const path of Object.values(entry.env)) {
-      await expect(stat(path)).resolves.toMatchObject({});
-    }
+    await expect(stat(entry.env['TSX_TSCONFIG_PATH'] ?? '')).resolves.toMatchObject({});
   });
 });

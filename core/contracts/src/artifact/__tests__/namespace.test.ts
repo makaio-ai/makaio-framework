@@ -46,6 +46,38 @@ describe('Artifact namespace', () => {
     expect(ArtifactSchemas.create.request.safeParse({ ...request, id: 42 }).success).toBe(false);
   });
 
+  it('rejects whitespace-only coordinates across artifact creation and persisted revisions', () => {
+    const request = {
+      kind: 'review-result',
+      schemaVersion: 1,
+      scope: { level: 'global' },
+      data: { title: 'Review result' },
+      relations: [],
+      actor: { kind: 'agent', id: 'reviewer' },
+    };
+    expect(ArtifactSchemas.create.request.safeParse({ ...request, kind: ' ' }).success).toBe(false);
+    expect(ArtifactSchemas.create.request.safeParse({ ...request, id: '\t' }).success).toBe(false);
+
+    const artifact = {
+      ...request,
+      id: 'review-1',
+      revision: 'revision-1',
+      timestamp: 1700000000000,
+    };
+    for (const coordinates of [{ kind: ' ' }, { id: '\t' }, { revision: '\n' }]) {
+      expect(ArtifactSchemas.created.safeParse({ artifact: { ...artifact, ...coordinates } }).success).toBe(false);
+    }
+    const previous = {
+      refClass: 'artifact' as const,
+      kind: 'review-result',
+      id: 'review-1',
+      revision: 'revision-0',
+      mutable: true,
+    };
+
+    expect(ArtifactSchemas.revised.shape.previous.safeParse(previous).success).toBe(false);
+  });
+
   describe('status contract', () => {
     it('accepts only data-relative JSON Pointers as explicit revise observation metadata', () => {
       const request = {

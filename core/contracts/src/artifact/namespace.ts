@@ -64,7 +64,7 @@ export const ArtifactSchemas = {
        * never overwrite an existing artifact. Omission delegates identity assignment
        * to the service. Identity follows the same nonempty-string contract as refs.
        */
-      id: ArtifactRevisionSchema.shape.id.optional(),
+      id: ArtifactRefSchema.shape.id.optional(),
     }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
   },

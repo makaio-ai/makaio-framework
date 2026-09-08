@@ -20,6 +20,7 @@ export {
   LocalRefSchema,
   RelationTypeRegistrationSchema,
 } from './schemas.js';
+export { EvidenceValueSchema } from './evidence.js';
 export type {
   ArtifactActor,
   ArtifactCompareRequest,
@@ -42,6 +43,7 @@ export type {
   LocalRef,
   RelationTypeRegistration,
 } from './schemas.js';
+export type { EvidenceValue } from './evidence.js';
 export { defineArtifactKind } from './kind-definition.js';
 export type {
   AnyArtifactKindDefinition,

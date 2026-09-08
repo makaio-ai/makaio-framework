@@ -495,6 +495,26 @@ describe('PiscinaCodeExecutionProvider', () => {
     TEST_TIMEOUT_MS,
   );
 
+  // Descriptor counts require host-specific probes; this portable regression checks
+  // loader ownership, complemented by repeated-generation resource diagnostics.
+  it(
+    'keeps the TypeScript transform cache scoped to the worker when host environment conflicts',
+    async () => {
+      const provider = createProvider({ environment: { TSX_DISABLE_CACHE: 'host-value' } });
+      const outcome = assertContractOutcome(
+        await provider.execute(
+          createRequest({
+            'entry.ts': "export const handler = (): string | null => process.env['TSX_DISABLE_CACHE'] ?? null;",
+          }),
+          createContext(TEST_TIMEOUT_MS).context,
+        ),
+      );
+
+      expect(outcome).toEqual({ status: 'completed', value: '1' });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     'snapshots the configured environment at composition time',
     async () => {
@@ -1134,6 +1154,31 @@ describe('PiscinaCodeExecutionProvider', () => {
       expect(outcome.error.message).not.toContain('super-secret-token-value');
       expect(outcome.error.message).not.toContain(packageRoot);
       expect(outcome.error.message).toContain('<redacted>');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'redacts source loader paths without corrupting ordinary diagnostic digits',
+    async () => {
+      const provider = createProvider();
+      const outcome = assertContractOutcome(
+        await provider.execute(
+          createRequest({
+            'entry.ts': [
+              'export const handler = (): never => {',
+              "  throw new Error('line 1 failed at ' + (process.env['TSX_TSCONFIG_PATH'] ?? 'missing'));",
+              '};',
+            ].join('\n'),
+          }),
+          createContext(TEST_TIMEOUT_MS).context,
+        ),
+      );
+
+      expect(outcome).toMatchObject({ status: 'failed', error: { code: 'handler_failed' } });
+      if (outcome.status !== 'failed') throw new Error('unreachable');
+      expect(outcome.error.message).toContain('line 1 failed at <redacted>');
+      expect(outcome.error.message).not.toContain('worker-tsconfig.json');
     },
     TEST_TIMEOUT_MS,
   );

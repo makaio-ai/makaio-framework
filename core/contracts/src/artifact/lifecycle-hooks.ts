@@ -52,6 +52,8 @@ export interface ArtifactDraft {
   readonly data: Record<string, unknown>;
   /** Typed directional links to other artifacts or external evidence. */
   readonly relations: readonly ArtifactRelation[];
+  /** Optional direct evidence attached to this draft. */
+  readonly evidence?: ArtifactRevision['evidence'];
   /** Optional confidence metadata attached to this draft. */
   readonly confidence?: ArtifactRevision['confidence'];
   /** Optional human-readable rendering hints. */
@@ -71,6 +73,8 @@ export interface ArtifactDraftPatch {
   readonly data?: Record<string, unknown>;
   /** Replacement relation set. */
   readonly relations?: readonly ArtifactRelation[];
+  /** Replacement direct evidence. Set to `undefined` to clear it. */
+  readonly evidence?: ArtifactRevision['evidence'] | undefined;
   /** Replacement confidence metadata. Set to `undefined` to clear it. */
   readonly confidence?: ArtifactRevision['confidence'] | undefined;
   /** Replacement rendering hints. Set to `undefined` to clear them. */
