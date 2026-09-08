@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
+import { ArtifactRefSchema } from './artifact-reference.js';
+import { EvidenceValueSchema } from './evidence.js';
 import { ArtifactSchemaVersionSchema } from './kind-registration.js';
+export { ArtifactRefSchema } from './artifact-reference.js';
+export type { ArtifactRef } from './artifact-reference.js';
 export {
   ARTIFACT_CATEGORY_LIFECYCLE_STATES,
   ArtifactSchemaVersionSchema,
@@ -75,27 +79,6 @@ export const ArtifactQueryScopeSchema = z.object({
   level: z.string().min(1),
   /** Optional scope-identifying keys used to narrow the query. */
   ids: z.record(z.string().min(1), z.string().min(1)).optional(),
-});
-
-/**
- * An immutable pointer to a specific revision of an artifact.
- *
- * All three fields together uniquely identify a persisted snapshot
- * and are safe to store as foreign keys.
- *
- * `refClass` is a literal discriminant that allows {@link ArtifactRelationTargetSchema}
- * to use a discriminated union and prevents silent field-stripping when an
- * {@link EvidenceRefSchema} carrying a `locator` is parsed against this schema.
- */
-export const ArtifactRefSchema = z.object({
-  /** Literal discriminant for {@link ArtifactRelationTargetSchema}. Always `'artifact'`. */
-  refClass: z.literal('artifact').default('artifact'),
-  /** Kind discriminator, matching {@link ArtifactKindRegistrationSchema.kind}. */
-  kind: z.string().min(1),
-  /** Stable artifact identity (does not change across revisions). */
-  id: z.string().min(1),
-  /** Revision identifier (e.g. nanoid or monotone counter). */
-  revision: z.string().min(1),
 });
 
 /**
@@ -211,7 +194,7 @@ export const ArtifactRelationTargetSchema = z.preprocess(
 const ArtifactRelationQueryTargetDiscriminatedSchema = z.discriminatedUnion('refClass', [
   ArtifactRefSchema.extend({
     /** Revision identifier — optional in query context to allow identity-only lookups. */
-    revision: z.string().min(1).optional(),
+    revision: ArtifactRefSchema.shape.revision.optional(),
   }),
   LocalRefSchema,
   EvidenceRefSchema,
@@ -367,11 +350,11 @@ export const ArtifactRepresentationsSchema = z.object({
  */
 export const ArtifactRevisionSchema = z.object({
   /** Kind discriminator, matching a registered {@link ArtifactKindRegistrationSchema}. */
-  kind: z.string().min(1),
+  kind: ArtifactRefSchema.shape.kind,
   /** Stable artifact identity (unchanged across revisions). */
-  id: z.string().min(1),
+  id: ArtifactRefSchema.shape.id,
   /** Revision identifier (unique within the artifact's history). */
-  revision: z.string().min(1),
+  revision: ArtifactRefSchema.shape.revision,
   /** Scope at which this revision is relevant. */
   scope: ArtifactScopeSchema,
   /** Positive schema generation. Historical string identifiers require explicit migration, never guessed coercion. */
@@ -380,6 +363,8 @@ export const ArtifactRevisionSchema = z.object({
   data: JsonObjectContractSchema,
   /** Typed links to other artifacts, sub-elements, or external evidence. */
   relations: z.array(ArtifactRelationSchema),
+  /** Optional ordered list of direct evidence pointers. */
+  evidence: z.array(EvidenceValueSchema).optional(),
   /** Optional aggregated confidence metadata. */
   confidence: ConfidenceMetadataSchema.optional(),
   /** Optional human-readable rendering hints. */
@@ -499,9 +484,6 @@ export type ArtifactScope = z.infer<typeof ArtifactScopeSchema>;
 
 /** Scope descriptor for artifact query filters. */
 export type ArtifactQueryScope = z.infer<typeof ArtifactQueryScopeSchema>;
-
-/** Immutable pointer to a specific artifact revision. */
-export type ArtifactRef = z.infer<typeof ArtifactRefSchema>;
 
 /** Pointer to a named sub-element within a specific artifact revision. */
 export type LocalRef = z.infer<typeof LocalRefSchema>;
