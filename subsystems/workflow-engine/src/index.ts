@@ -89,6 +89,13 @@ export {
   evaluateOperationCompletion,
   evaluateRuntimeReadiness,
 } from './execution-attempt-repository.js';
+export {
+  snapshotEnsureExecutionAttemptInput,
+  snapshotEnsureExecutionAttemptPersistenceInput,
+  snapshotReadAttemptSettlementInput,
+  replayEnsuredAttempt,
+  readAttemptSettlementSnapshot,
+} from './execution-attempt-owner-recovery.js';
 export type {
   AttemptReachability,
   AttemptReachabilityDecision,
@@ -113,6 +120,12 @@ export type {
   ExecutionAttemptRecord,
   RecoverableAttemptRecord,
   ExecutionAttemptCreate,
+  EnsureExecutionAttemptInput,
+  EnsureExecutionAttemptPersistenceInput,
+  EnsureExecutionAttemptDecision,
+  ReadAttemptSettlementInput,
+  AttemptSettlementRead,
+  AttemptSettlementSnapshot,
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptStatus,
