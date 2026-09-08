@@ -17,7 +17,7 @@ import { nextIds, startAttempt } from './attempt-helpers.js';
 export function registerEvidenceCases(
   getHarness: () => ExecutionAttemptRepositoryContractHarness<WorkflowRunResult>,
 ): void {
-  it('closes pre-allocation debt only on proof naming the attempt own provisioner', async () => {
+  it('completes pre-allocation debt only on proof naming the attempt own provisioner', async () => {
     const harness = getHarness();
     const ids = nextIds();
     const claim = await startAttempt(harness.repository, ids, {
@@ -34,10 +34,11 @@ export function registerEvidenceCases(
     });
     const stillOpen = await harness.repository.recovery.getAttemptWithAllocation(ids.executionAttemptId);
 
+    const ownProof = makeProcessLossProof('provisioner-A');
     const own = await harness.repository.recordProvisionerIncarnationLost({
       claim,
       executionId: ids.executionId,
-      proof: makeProcessLossProof('provisioner-A'),
+      proof: ownProof,
     });
     const settled = await harness.repository.recovery.getAttemptWithAllocation(ids.executionAttemptId);
     const closed = await harness.repository.getProviderOperation(ids.executionAttemptId);
@@ -51,11 +52,13 @@ export function registerEvidenceCases(
     expect(settled?.settlementKind).toBe('abandoned');
     expect(settled?.allocationRef).toBeNull();
     expect(settled?.claimable ?? false).toBe(false);
-    // Settling closes the operation in the same transaction, and the proof's
-    // own evidence is what the closed record retains.
-    expect(closed?.ownerId).toBeNull();
-    expect(closed?.token).toBeNull();
-    expect(closed?.lastFailure?.summary).toBe('supervisor observed the provisioner process exit');
+    // The proof positively completes the operation. Completion retains the
+    // authorizing claim as provenance; a cleared claim would instead mean a
+    // handoff that another controller could take over.
+    expect(closed?.ownerId).toBe(claim.ownerId);
+    expect(closed?.token).toBe(claim.token);
+    expect(closed?.leaseExpiresAt).toBe(claim.leaseExpiresAt);
+    expect(closed?.completionEvidence).toEqual(ownProof.evidence);
     // Nothing was ever allocated, so the obligation never advances either.
     expect(closed?.obligation).toBe('provisioning-resolution');
   });

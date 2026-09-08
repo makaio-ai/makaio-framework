@@ -1,5 +1,6 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import {
+  captureHmacIdentitySecretCleanup,
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
   resolveHmacIdentityAllowedSubjects,
@@ -81,6 +82,72 @@ describe('registerHmacIdentitySecret with claims', () => {
 
     expect(resolveHmacIdentitySecret(attemptId)).toBeNull();
     expect(resolveHmacIdentityPeer(attemptId)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// captureHmacIdentitySecretCleanup
+// ---------------------------------------------------------------------------
+
+describe('captureHmacIdentitySecretCleanup', () => {
+  it('returns undefined when no registration exists', () => {
+    expect(captureHmacIdentitySecretCleanup('missing-attempt')).toBeUndefined();
+  });
+
+  it('captures the current cleanup when the original caller closure is unavailable', () => {
+    const attemptId = 'attempt-captured-cleanup';
+    registerHmacIdentitySecret(attemptId, 'test-secret', {
+      peerKind: 'workflow-execution-attempt',
+      claims: { executionId: 'exec-captured-cleanup' },
+    });
+
+    const capturedCleanup = captureHmacIdentitySecretCleanup(attemptId);
+    expect(capturedCleanup).toBeTypeOf('function');
+
+    capturedCleanup?.();
+
+    expect(resolveHmacIdentityPeer(attemptId)).toBeNull();
+  });
+
+  it('cannot revoke a later rotation of the captured registration', () => {
+    const attemptId = 'attempt-captured-stale';
+    registerHmacIdentitySecret(attemptId, 'test-secret', {
+      peerKind: 'workflow-execution-attempt',
+      claims: { executionId: 'exec-captured-stale' },
+    });
+    const capturedCleanup = captureHmacIdentitySecretCleanup(attemptId);
+
+    rotateHmacIdentitySecret(attemptId, 'rotated-test-secret');
+    capturedCleanup?.();
+
+    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
+      kind: 'workflow-execution-attempt',
+      id: attemptId,
+      authenticated: true,
+      claims: { executionId: 'exec-captured-stale' },
+    });
+  });
+
+  it('cannot revoke a later replacement of the captured registration', () => {
+    const attemptId = 'attempt-captured-replacement';
+    registerHmacIdentitySecret(attemptId, 'test-secret', {
+      peerKind: 'workflow-execution-attempt',
+      claims: { executionId: 'exec-before-replacement' },
+    });
+    const capturedCleanup = captureHmacIdentitySecretCleanup(attemptId);
+
+    registerHmacIdentitySecret(attemptId, 'replacement-test-secret', {
+      peerKind: 'workflow-execution-attempt',
+      claims: { executionId: 'exec-after-replacement' },
+    });
+    capturedCleanup?.();
+
+    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
+      kind: 'workflow-execution-attempt',
+      id: attemptId,
+      authenticated: true,
+      claims: { executionId: 'exec-after-replacement' },
+    });
   });
 });
 

@@ -160,11 +160,12 @@ function registerInfrastructureOutcomeCases(getHarness: HarnessAccessor): void {
       (await harness.repository.recovery.getAttemptWithAllocation(ids.executionAttemptId))?.claimable ?? false,
     ).toBe(false);
     expect(await harness.repository.getProviderOperation(ids.executionAttemptId)).toMatchObject({
-      ownerId: null,
-      token: null,
-      leaseExpiresAt: null,
+      ownerId: claim.ownerId,
+      token: claim.token,
+      leaseExpiresAt: claim.leaseExpiresAt,
       obligation: 'terminal-convergence',
       lastFailure: terminationEvidence,
+      completionEvidence: null,
     });
   });
 }
@@ -244,11 +245,11 @@ function registerProcessLossCases(getHarness: HarnessAccessor): void {
       (await harness.repository.recovery.getAttemptWithAllocation(ids.executionAttemptId))?.claimable ?? false,
     ).toBe(false);
     expect(await harness.repository.getProviderOperation(ids.executionAttemptId)).toMatchObject({
-      ownerId: null,
-      token: null,
-      leaseExpiresAt: null,
+      ownerId: claim.ownerId,
+      token: claim.token,
+      leaseExpiresAt: claim.leaseExpiresAt,
       obligation: 'provisioning-resolution',
-      lastFailure: proof.evidence,
+      completionEvidence: proof.evidence,
     });
   });
 }

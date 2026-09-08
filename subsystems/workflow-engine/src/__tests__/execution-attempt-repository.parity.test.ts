@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
+import { createRestartableTempDb, createTempDb } from '@makaio/test-utils/drizzle-harness';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
+import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import type {
   ExecutionAttemptRecord,
   ExecutionAttemptRepository,
@@ -18,6 +19,7 @@ import {
   TEST_PROVIDER_ID,
   TEST_PROVISIONER_INCARNATION_ID,
   createInMemoryAttemptRepository,
+  makeEvidence,
   makeBeginProvisioningInput,
   makeTestInstruction,
   makeTestAllocationRef,
@@ -260,6 +262,90 @@ describe('in-memory execution attempt seed contract', () => {
     expect(repository.attempts.get(report.executionAttemptId)?.settlementKind).toBe('outcome');
     expect(await repository.reportOperation(report)).toEqual({ kind: 'resolved' });
     expect(repository.attempts.get(report.executionAttemptId)?.preparationReceipts).toEqual([]);
+  });
+});
+
+describe('provider-operation completion across SQLite restart', () => {
+  it('retains early completion proof as recoverable debt until a restarted owner settles the attempt', async () => {
+    const context = await createTempDb('provider-operation-early-proof-restart');
+    let reopened: Awaited<ReturnType<typeof createDatabaseClient>> | undefined;
+    try {
+      const repository = await createSqliteAttemptRepository(context.db, workflowRunResultOutcomeCodec);
+      const ids = nextIds();
+      await repository.createAttempt({
+        ...ids,
+        instruction: makeTestInstruction(),
+        bootstrapTimeoutMs: TEST_BOOTSTRAP_TIMEOUT_MS,
+      });
+      const provisioning = await repository.beginProvisioning(
+        makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId),
+      );
+      if (provisioning.kind !== 'started') throw new Error(`Expected provisioning, got '${provisioning.kind}'`);
+      const evidence = makeEvidence({
+        source: 'provider-restart-test',
+        summary: 'provider cleanup completed before the owner persisted its answer',
+      });
+      expect(await repository.completeProviderOperation({ claim: provisioning.claim, evidence })).toEqual({
+        kind: 'evidence-recorded',
+      });
+
+      await context.close();
+      reopened = await createDatabaseClient({ url: `file:${context.dbPath}` });
+      const restarted = await createSqliteAttemptRepository(reopened.db, workflowRunResultOutcomeCodec);
+      const observedAt = new Date(Date.parse(provisioning.claim.leaseExpiresAt) + 1).toISOString();
+      await expect(restarted.recovery.listOpenProviderOperations({ observedAt, limit: 1 })).resolves.toContainEqual({
+        attempt: expect.objectContaining({ executionAttemptId: ids.executionAttemptId, settlementKind: null }),
+        operation: expect.objectContaining({ completionEvidence: evidence }),
+      });
+
+      const outcome = restarted.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId));
+      expect(await restarted.commitOutcome({ ...ids, result: outcome })).toMatchObject({ kind: 'accepted' });
+      await expect(restarted.recovery.listOpenProviderOperations({ observedAt, limit: 1 })).resolves.toEqual([]);
+    } finally {
+      await reopened?.close();
+      context.cleanup();
+    }
+  });
+
+  it('rediscovers settled but unfinished provider work after every original database handle closes', async () => {
+    const context = await createTempDb('provider-operation-completion-restart');
+    let reopened: Awaited<ReturnType<typeof createDatabaseClient>> | undefined;
+    try {
+      const repository = await createSqliteAttemptRepository(context.db, workflowRunResultOutcomeCodec);
+      const ids = nextIds();
+      await repository.createAttempt({
+        ...ids,
+        instruction: makeTestInstruction(),
+        bootstrapTimeoutMs: TEST_BOOTSTRAP_TIMEOUT_MS,
+      });
+      const provisioning = await repository.beginProvisioning(
+        makeBeginProvisioningInput(ids.executionAttemptId, ids.executionId),
+      );
+      if (provisioning.kind !== 'started') throw new Error(`Expected provisioning, got '${provisioning.kind}'`);
+      expect(
+        await repository.recordAllocation({ claim: provisioning.claim, allocationRef: makeTestAllocationRef() }),
+      ).toEqual({ kind: 'recorded' });
+      const outcome = repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId));
+      expect(await repository.commitOutcome({ ...ids, result: outcome })).toMatchObject({ kind: 'accepted' });
+
+      // This is a process restart, not a second repository wrapper around a
+      // live connection: every original client closes before the new Authority
+      // can observe the durable provider obligation.
+      await context.close();
+      reopened = await createDatabaseClient({ url: `file:${context.dbPath}` });
+      const restarted = await createSqliteAttemptRepository(reopened.db, workflowRunResultOutcomeCodec);
+      expect(
+        (
+          await restarted.recovery.listOpenProviderOperations({
+            observedAt: new Date(Date.parse(provisioning.claim.leaseExpiresAt) + 1).toISOString(),
+            limit: 1,
+          })
+        ).map(({ attempt }) => attempt.executionAttemptId),
+      ).toEqual([ids.executionAttemptId]);
+    } finally {
+      await reopened?.close();
+      context.cleanup();
+    }
   });
 });
 

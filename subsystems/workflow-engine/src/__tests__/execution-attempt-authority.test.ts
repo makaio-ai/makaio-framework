@@ -18,6 +18,7 @@ import {
   leaseAt,
   makeBeginProvisioningInput,
   makeEvidence,
+  makeProcessLossProof,
   type InMemoryAttemptRepository,
   workflowRunResultOutcomeCodec,
 } from '../testing/index.js';
@@ -206,6 +207,26 @@ describe('ExecutionAttemptAuthority', () => {
       expect(authority.waitForOutcome(id)).toBeUndefined();
       expect(repository.attempts.size).toBe(1);
       expect(repository.operations.size).toBe(0);
+    });
+
+    it('records provider completion before owner settlement without requiring a local waiter', async () => {
+      const created = await authority.ensureAttempt({
+        executionId: 'waiter-free-owner',
+        requestKey: 'initial',
+        instruction: makeTestInstruction(),
+      });
+      if (created.kind === 'conflict') throw new Error('expected request acceptance');
+      const claim = await beginTestProvisioning(authority, created.attempt.executionAttemptId, 'waiter-free-owner');
+      const evidence = makeEvidence({ summary: 'provider cleanup completed before owner convergence' });
+
+      await expect(authority.completeProviderOperation({ claim, evidence })).resolves.toEqual({
+        kind: 'evidence-recorded',
+      });
+      expect(authority.waitForOutcome(created.attempt.executionAttemptId)).toBeUndefined();
+      await expect(authority.getProviderOperation(created.attempt.executionAttemptId)).resolves.toMatchObject({
+        ...claim,
+        completionEvidence: evidence,
+      });
     });
 
     it('preserves a legacy waiter through unrelated ensure and committed settlement reads', async () => {
@@ -528,7 +549,7 @@ describe('ExecutionAttemptAuthority', () => {
       });
     });
 
-    it('reports resolved for claim operations once the attempt has settled', async () => {
+    it('keeps a settled attempt provider operation claimable until positive completion', async () => {
       const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
       const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
       const decision = await authority.commitOutcome(
@@ -538,8 +559,12 @@ describe('ExecutionAttemptAuthority', () => {
       );
       authority.settleOutcome(attempt.executionAttemptId, decision);
 
-      await expect(authority.renewProviderOperationClaim({ claim, leaseExpiresAt: leaseAt(60_000) })).resolves.toEqual({
-        kind: 'resolved',
+      const renewedLeaseExpiresAt = leaseAt(60_000);
+      await expect(
+        authority.renewProviderOperationClaim({ claim, leaseExpiresAt: renewedLeaseExpiresAt }),
+      ).resolves.toEqual({
+        kind: 'claimed',
+        claim: { ...claim, leaseExpiresAt: renewedLeaseExpiresAt },
       });
       await expect(
         authority.takeOverProviderOperation({
@@ -548,7 +573,7 @@ describe('ExecutionAttemptAuthority', () => {
           observedAt: new Date().toISOString(),
           leaseExpiresAt: leaseAt(60_000),
         }),
-      ).resolves.toEqual({ kind: 'resolved' });
+      ).resolves.toEqual({ kind: 'stale' });
     });
   });
 
@@ -735,7 +760,7 @@ describe('ExecutionAttemptAuthority', () => {
   // ─────────────────────────────────────────────────────────
 
   describe('proven provisioning absence', () => {
-    it('settles the attempt as abandoned and closes the operation with durable evidence', async () => {
+    it('settles the attempt as abandoned and completes the operation with durable evidence', async () => {
       const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
       const waiter = authority.waitForOutcome(attempt.executionAttemptId);
       const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
@@ -751,10 +776,10 @@ describe('ExecutionAttemptAuthority', () => {
       });
       await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
         obligation: 'provisioning-resolution',
-        ownerId: null,
-        token: null,
-        leaseExpiresAt: null,
-        lastFailure: evidence,
+        ownerId: claim.ownerId,
+        token: claim.token,
+        leaseExpiresAt: claim.leaseExpiresAt,
+        completionEvidence: evidence,
       });
     });
 
@@ -782,6 +807,84 @@ describe('ExecutionAttemptAuthority', () => {
         }),
       ).resolves.toEqual({ kind: 'stale' });
       expect(repository.attempts.get(attempt.executionAttemptId)?.settlementKind).toBeNull();
+    });
+
+    it.each([
+      {
+        name: 'confirmed absence',
+        provisioning: {},
+        preserveExistingEvidence: false,
+        record: async (claim: ProviderOperationClaim, evidence: ReturnType<typeof makeEvidence>) =>
+          authority.recordProvisioningAbsent({ claim, executionId: 'exec-1', evidence }),
+      },
+      {
+        name: 'matching provisioner loss',
+        provisioning: {
+          allocationLifetime: 'provisioner-process-bound' as const,
+          provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
+        },
+        preserveExistingEvidence: false,
+        record: async (claim: ProviderOperationClaim, evidence: ReturnType<typeof makeEvidence>) =>
+          authority.recordProvisionerIncarnationLost({
+            claim,
+            executionId: 'exec-1',
+            proof: makeProcessLossProof(TEST_PROVISIONER_INCARNATION_ID, evidence),
+          }),
+      },
+      {
+        name: 'confirmed absence after provider completion was already proven',
+        provisioning: {},
+        preserveExistingEvidence: true,
+        record: async (claim: ProviderOperationClaim, evidence: ReturnType<typeof makeEvidence>) =>
+          authority.recordProvisioningAbsent({ claim, executionId: 'exec-1', evidence }),
+      },
+      {
+        name: 'matching provisioner loss after provider completion was already proven',
+        provisioning: {
+          allocationLifetime: 'provisioner-process-bound' as const,
+          provisionerIncarnationId: TEST_PROVISIONER_INCARNATION_ID,
+        },
+        preserveExistingEvidence: true,
+        record: async (claim: ProviderOperationClaim, evidence: ReturnType<typeof makeEvidence>) =>
+          authority.recordProvisionerIncarnationLost({
+            claim,
+            executionId: 'exec-1',
+            proof: makeProcessLossProof(TEST_PROVISIONER_INCARNATION_ID, evidence),
+          }),
+      },
+    ])('does not reject an outcome waiter when $name arrives after commit but before settlement', async ({
+      provisioning,
+      preserveExistingEvidence,
+      record,
+    }) => {
+      const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
+      const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+      if (waiter === undefined) throw new Error('Expected an outcome waiter');
+      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1', provisioning);
+      const earlyEvidence = makeEvidence({ summary: 'provider cleanup completed before owner convergence' });
+      if (preserveExistingEvidence) {
+        await expect(authority.completeProviderOperation({ claim, evidence: earlyEvidence })).resolves.toEqual({
+          kind: 'evidence-recorded',
+        });
+      }
+      const result = makeCompletedResult('exec-1');
+      const committed = await authority.commitOutcome(
+        attempt.executionAttemptId,
+        'exec-1',
+        authority.canonicalizeOutcome(result),
+      );
+      if (committed.kind !== 'accepted') throw new Error(`Expected accepted outcome, got '${committed.kind}'`);
+
+      await expect(record(claim, makeEvidence())).resolves.toEqual({
+        kind: preserveExistingEvidence ? 'resolved' : 'completed',
+      });
+      if (preserveExistingEvidence) {
+        await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
+          completionEvidence: earlyEvidence,
+        });
+      }
+      authority.settleOutcome(attempt.executionAttemptId, committed);
+      await expect(waiter).resolves.toEqual(result);
     });
   });
 
@@ -933,7 +1036,7 @@ describe('ExecutionAttemptAuthority', () => {
       });
     });
 
-    it('closes the provider operation when the attempt settles', async () => {
+    it('keeps the provider operation open when the attempt settles', async () => {
       const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
       const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
 
@@ -945,12 +1048,13 @@ describe('ExecutionAttemptAuthority', () => {
       authority.settleOutcome(attempt.executionAttemptId, decision);
 
       await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
-        ownerId: null,
-        token: null,
-        leaseExpiresAt: null,
+        ownerId: claim.ownerId,
+        token: claim.token,
+        leaseExpiresAt: claim.leaseExpiresAt,
+        completionEvidence: null,
       });
       await expect(authority.recordProviderOperationUncertainty({ claim, evidence: makeEvidence() })).resolves.toEqual({
-        kind: 'resolved',
+        kind: 'recorded',
       });
     });
   });
@@ -1596,14 +1700,17 @@ describe('ExecutionAttemptAuthority', () => {
       expect(decision.kind).toBe('recorded');
       await expect(waiterPromise).rejects.toThrow('infrastructure failure');
 
-      // Verify the record was updated and the operation closed.
+      // Settlement updates the canonical attempt but leaves provider work open
+      // until the current controller records positive provider completion evidence.
       const stored = repository.attempts.get(attempt.executionAttemptId);
       expect(stored!.status).toBe('settled');
       expect(stored!.settlementKind).toBe('infrastructure-failure');
       expect(stored!.claimable).toBe(false);
       await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
-        ownerId: null,
-        token: null,
+        ownerId: claim.ownerId,
+        token: claim.token,
+        leaseExpiresAt: claim.leaseExpiresAt,
+        completionEvidence: null,
       });
     });
 

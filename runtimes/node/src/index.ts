@@ -82,6 +82,8 @@ export { resolveBundledMigrationsDir, type BundledMigrationsProbes } from './res
 export { BusServerTransportProvider, type BusServerTransportOptions } from './bus-server-transport.js';
 export { StoredCredentialProvider, NodeCredentialProvider, type CredentialProvider } from './credential-provider.js';
 export { readFrameworkVersion } from './read-framework-version.js';
+export { captureWorkflowExecutionBusSecretCleanup } from './workflow-execution-bus-access.js';
+export type { RotateWorkflowExecutionBusSecretParams } from './workflow-execution-bus-access.js';
 export { FileRegistryCache } from './model-registry/file-registry-cache.js';
 export {
   FilesystemDescriptorDiscovery,

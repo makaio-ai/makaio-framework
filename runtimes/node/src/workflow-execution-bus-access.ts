@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  captureHmacIdentitySecretCleanup,
   registerHmacIdentitySecret,
   resolveHmacIdentityPeer,
   resolveHmacIdentitySecret,
@@ -223,6 +224,36 @@ export function mintOrRotateWorkflowExecutionBusSecret(
     return rotateWorkflowExecutionBusSecret(params);
   }
   return mintWorkflowExecutionBusSecret(params);
+}
+
+/**
+ * Capture a cleanup handle for the current workflow-execution bus identity.
+ *
+ * Service recomposition can lose an older registration's original cleanup
+ * closure while the process-global registry remains live. This captures the
+ * current generation without exposing its secret. A later rotation remains
+ * intact if the captured cleanup is invoked afterwards.
+ *
+ * An unknown attempt has nothing to clean up. A registered identity for a
+ * different peer kind or execution is refused rather than being revoked.
+ * @param params - Attempt and execution identifiers that must match the registration.
+ * @returns A generation-fenced cleanup handle, or undefined when unregistered.
+ * @throws When the registered identity is not this workflow execution attempt.
+ */
+export function captureWorkflowExecutionBusSecretCleanup(
+  params: RotateWorkflowExecutionBusSecretParams,
+): (() => void) | undefined {
+  const { executionAttemptId, executionId } = params;
+  const peer = resolveHmacIdentityPeer(executionAttemptId);
+  if (peer === null) {
+    return undefined;
+  }
+  if (peer.kind !== 'workflow-execution-attempt' || peer.claims?.executionId !== executionId) {
+    throw new Error(
+      `Cannot capture workflow execution bus secret cleanup: attempt "${executionAttemptId}" is not registered for execution "${executionId}"`,
+    );
+  }
+  return captureHmacIdentitySecretCleanup(executionAttemptId);
 }
 
 /**

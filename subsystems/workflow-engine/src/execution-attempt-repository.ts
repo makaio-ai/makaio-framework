@@ -12,11 +12,33 @@ import type {
 import { canonicalStringify } from '@makaio/utils';
 import type { OwnerRequestRecoveryRepository } from './execution-attempt-owner-recovery.js';
 import type {
+  CompleteProviderOperationInput,
+  HandoffProviderOperationInput,
+  ListOpenProviderOperationsInput,
+  OpenProviderOperationRecord,
   ProcessBoundProvisionerLossProof,
   ProviderOperationClaim,
   ProviderOperationClaimDecision,
+  ProviderOperationCompletionDecision,
   ProviderOperationMutationDecision,
   ProviderOperationOwnershipRecord,
+  ProvisionerIncarnationLossDecision,
+  ProvisioningAbsenceDecision,
+  RecordProviderOperationUncertaintyInput,
+  RenewProviderOperationClaimInput,
+  TakeOverProviderOperationInput,
+} from './provider-operation.js';
+
+export type {
+  CompleteProviderOperationInput,
+  HandoffProviderOperationInput,
+  ListOpenProviderOperationsInput,
+  OpenProviderOperationRecord,
+  ProvisionerIncarnationLossDecision,
+  ProvisioningAbsenceDecision,
+  RecordProviderOperationUncertaintyInput,
+  RenewProviderOperationClaimInput,
+  TakeOverProviderOperationInput,
 } from './provider-operation.js';
 
 export {
@@ -763,59 +785,6 @@ export function assertRuntimeOutcomeFence(control: AttemptControlState, fence: R
   }
 }
 
-/** Input for extending the lease of a currently held provider operation. */
-export interface RenewProviderOperationClaimInput {
-  /** Claim the caller currently believes it holds. */
-  readonly claim: ProviderOperationClaim;
-  /** New ISO-8601 lease deadline. */
-  readonly leaseExpiresAt: string;
-}
-
-/**
- * Input for taking ownership of an unowned or expired provider operation.
- *
- * Takeover needs no prior claim — that is the point. It succeeds only when
- * the operation is unowned or its lease has expired relative to `observedAt`,
- * and it always increments the generation so every claim issued before it is
- * fenced immediately.
- */
-export interface TakeOverProviderOperationInput {
-  /** Attempt whose provider operation is being taken over. */
-  readonly executionAttemptId: string;
-  /** Controller process incarnation requesting ownership. */
-  readonly ownerId: string;
-  /** ISO-8601 observation time used to evaluate lease expiry. */
-  readonly observedAt: string;
-  /** ISO-8601 deadline for the new lease. */
-  readonly leaseExpiresAt: string;
-}
-
-/**
- * Input for releasing a held provider operation without resolving it.
- *
- * Handoff is a graceful release, not a failure: optional evidence explains
- * why control was released but does not count towards the failure total.
- */
-export interface HandoffProviderOperationInput {
-  /** Claim being released. */
-  readonly claim: ProviderOperationClaim;
-  /** Optional bounded evidence explaining the release. */
-  readonly evidence?: BoundedRecoveryEvidence;
-}
-
-/**
- * Input for recording that a provider observation stayed inconclusive.
- *
- * Uncertainty is the only honest record for an ambiguous provider result. It
- * retains the current obligation and never terminalizes the attempt.
- */
-export interface RecordProviderOperationUncertaintyInput {
-  /** Claim authorizing the record. */
-  readonly claim: ProviderOperationClaim;
-  /** Bounded evidence describing what blocked a conclusion. */
-  readonly evidence: BoundedRecoveryEvidence;
-}
-
 /** Input for recording an allocation reference against a held operation. */
 export interface RecordAllocationInput {
   /** Claim authorizing the record. */
@@ -1009,7 +978,7 @@ export interface MarkRuntimeReadyInput {
  * - `already-provisioning`: a begin already succeeded for this attempt. The
  *   caller must converge the existing operation instead of calling again.
  * - `allocated`: an allocation is already recorded for this attempt.
- * - `resolved`: the attempt has settled; the operation is closed.
+ * - `resolved`: the attempt has settled, so it cannot begin provisioning.
  * - `fenced`: the attempt exists but is no longer the active attempt for its
  *   execution, so it may not bootstrap a new provider call.
  * - `not-found`: no such attempt for the given execution.
@@ -1034,7 +1003,8 @@ export type ProvisioningClaimDecision =
  * - `duplicate`: a reference {@link sameAllocationRef} judges identical was
  *   already stored; this is a replay.
  * - `conflict`: a different reference is already stored for this attempt.
- * - `resolved`: the attempt has settled; the operation is closed.
+ * - `resolved`: positive provider completion evidence and attempt settlement
+ *   were already recorded.
  * - `stale`: the claim no longer matches durable ownership.
  * - `not-found`: no provider operation exists for the attempt.
  */
@@ -1056,70 +1026,14 @@ export type AllocationRecordingDecision =
 export type DiscoveredAllocationDecision = AllocationRecordingDecision;
 
 /**
- * Durable decision for recording positively proven pre-allocation absence.
- *
- * - `recorded`: absence evidence was stored, the attempt settled as
- *   `abandoned`, and the operation closed — all in one transaction.
- * - `allocated`: an allocation won the race. Absence must never terminalize
- *   an attempt that owns live infrastructure.
- * - `resolved`: the attempt has already settled; the operation is closed.
- * - `stale`: the claim no longer matches durable ownership.
- * - `not-found`: no provider operation exists for the attempt.
- */
-export type ProvisioningAbsenceDecision =
-  | { readonly kind: 'recorded' }
-  | { readonly kind: 'allocated'; readonly allocationRef: ProviderAllocationRef }
-  | { readonly kind: 'resolved' }
-  | { readonly kind: 'stale' }
-  | { readonly kind: 'not-found' };
-
-/**
- * Durable decision for closing pre-allocation debt on proven loss of the
- * provisioner process incarnation.
- *
- * The counterpart of {@link ProvisioningAbsenceDecision} for the one lifetime
- * where nothing needs to be observed to conclude: a
- * `provisioner-process-bound` allocation cannot outlive the process that
- * created it, so proof that the exact recorded incarnation is gone is proof
- * that no allocation survives. Every refusal below is a statement about why the
- * proof does not apply, and each is reported distinctly because they oblige the
- * caller to do different things.
- *
- * - `recorded`: the proof was stored, the attempt settled as `abandoned`, and
- *   the operation closed — all in one transaction.
- * - `not-process-bound`: the attempt's recorded lifetime is not
- *   `provisioner-process-bound`, so losing a process says nothing about its
- *   allocation. The reported lifetime is the stored one, `null` before
- *   provisioning began.
- * - `incarnation-mismatch`: the proof names a different provisioner
- *   incarnation, or the attempt has none recorded, so the proof says nothing
- *   about this attempt. The reported identifier is the stored one.
- * - `allocated`: an allocation is already recorded, so the attempt owes
- *   allocation control rather than pre-allocation closure. Terminate the known
- *   allocation instead of closing the attempt from a proof.
- * - `resolved`: the attempt has already settled; the operation is closed.
- * - `stale`: the claim no longer matches durable ownership.
- * - `not-found`: no provider operation exists for the attempt, or it does not
- *   belong to the named execution.
- */
-export type ProvisionerIncarnationLossDecision =
-  | { readonly kind: 'recorded' }
-  | { readonly kind: 'not-process-bound'; readonly allocationLifetime: WorkerAllocationLifetime | null }
-  | { readonly kind: 'incarnation-mismatch'; readonly provisionerIncarnationId: string | null }
-  | { readonly kind: 'allocated'; readonly allocationRef: ProviderAllocationRef }
-  | { readonly kind: 'resolved' }
-  | { readonly kind: 'stale' }
-  | { readonly kind: 'not-found' };
-
-/**
  * Durable decision for settling an allocated attempt as an infrastructure
  * failure.
  *
  * This terminal CAS competes with outcome submission; the first durable
  * transition wins and the loser observes `resolved`.
  *
- * - `recorded`: the failure was persisted, the attempt settled, and the
- *   operation closed.
+ * - `recorded`: the failure was persisted and the attempt settled. The
+ *   provider operation remains open until positive completion is recorded.
  * - `resolved`: the attempt already has a terminal settlement.
  * - `not-allocated`: the attempt owns no allocation, so it cannot have
  *   suffered an infrastructure failure. Prove absence instead.
@@ -1155,7 +1069,8 @@ export type InfrastructureFailureDecision =
  * - `not-allocated`: the claim is current, but no allocation is known for the
  *   attempt. Prove absence instead of claiming termination.
  * - `stale`: the claim no longer matches durable ownership.
- * - `resolved`: the attempt has settled, so the operation is closed.
+ * - `resolved`: positive provider completion evidence and attempt settlement
+ *   were already recorded.
  * - `not-found`: no provider operation exists for the attempt.
  */
 export type AllocationTerminationDecision = ProviderOperationMutationDecision | { readonly kind: 'not-allocated' };
@@ -1167,7 +1082,8 @@ export type AllocationTerminationDecision = ProviderOperationMutationDecision | 
  * - `stale`: the caller's view is out of date — either `currentRef` does not
  *   match the stored reference, or the claim no longer matches durable
  *   ownership. `storedRef` carries the current reference when one exists.
- * - `resolved`: the attempt has settled; the operation is closed.
+ * - `resolved`: positive provider completion evidence and attempt settlement
+ *   were already recorded.
  * - `not-allocated`: the attempt has no allocation to evolve.
  * - `not-found`: no provider operation exists for the attempt.
  */
@@ -1432,10 +1348,11 @@ export type RuntimeReadinessDecision =
  * ```text
  * begin                       => provisioning-resolution
  * record allocation/discovery => allocation-control
- * record confirmed absence    => settled(abandoned) + operation closed
- * prove provisioner loss      => settled(abandoned) + operation closed
+ * record confirmed absence    => provider completion + settle(abandoned) if unsettled
+ * prove provisioner loss      => provider completion + settle(abandoned) if unsettled
  * record termination          => terminal-convergence
- * infrastructure failure CAS  => settled(infrastructure-failure) + closed
+ * infrastructure failure CAS  => settled(infrastructure-failure)
+ * complete provider operation => durable positive evidence; resolves with settlement
  * uncertainty                 => retain current obligation
  * ```
  *
@@ -1489,7 +1406,7 @@ export type RuntimeReadinessDecision =
  *
  * An operation stays remediable after its attempt stops being the active
  * attempt for its execution. Claim-fenced discovery, absence, cleanup, and
- * terminal convergence may update such an attempt and close its operation,
+ * terminal convergence may update such an attempt and complete its operation,
  * but must never change which attempt is active, reactivate it, or make it
  * bootstrap-claimable.
  *
@@ -1672,10 +1589,10 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
   /**
    * Take ownership of an unowned or lease-expired provider operation.
    *
-   * Succeeds only when the operation is unowned or its lease has expired at
-   * `observedAt`. On success the generation increments and a fresh token is
-   * issued, which fences every previously issued claim immediately. The
-   * obligation and accumulated evidence are preserved.
+   * Succeeds only when the unresolved operation is unowned or its lease has
+   * expired at `observedAt`. On success the generation increments and a fresh
+   * token is issued, which fences every previously issued claim immediately.
+   * The obligation and accumulated evidence are preserved.
    * @param input - Attempt identity, requesting owner, observation time, and lease deadline.
    * @returns The durable claim decision.
    */
@@ -1708,6 +1625,20 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
   ): Promise<ProviderOperationMutationDecision>;
 
   /**
+   * Record positive completion evidence of a provider operation.
+   *
+   * The repository validates the current claim before it records the first
+   * immutable evidence. A current claim may persist that evidence before
+   * settlement; it does not discard a pending `terminal-convergence` duty or
+   * create a canonical attempt answer. The operation becomes resolved only
+   * when durable settlement and completion evidence are both present; until
+   * then its claim remains live and it stays eligible for recovery.
+   * @param input - Current provider-operation claim and bounded completion proof.
+   * @returns The durable completion or a fenced/idempotent refusal.
+   */
+  completeProviderOperation(input: CompleteProviderOperationInput): Promise<ProviderOperationCompletionDecision>;
+
+  /**
    * Record the provider allocation reference for a claimed operation.
    *
    * Called immediately after a provider successfully provisions a resource.
@@ -1730,10 +1661,14 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
   /**
    * Record positively proven absence of any allocation for the attempt.
    *
-   * The atomic terminal CAS for the pre-allocation case: it stores bounded
-   * absence evidence, settles the attempt as `abandoned`, and closes the
-   * operation in one transaction. It never produces `terminal-convergence` —
-   * that obligation is reserved for a known allocation whose termination was
+   * The atomic positive-proof transition for the pre-allocation case: it stores
+   * bounded absence evidence and completes the operation in one transaction.
+   * It settles an unsettled attempt as `abandoned`, but never replaces an
+   * existing canonical settlement. Its decision distinguishes a newly written
+   * abandonment (`recorded`) from preserving an existing settlement
+   * (`completed`), so an Authority can preserve an outcome waiter that still
+   * needs owner convergence. It never produces `terminal-convergence` — that
+   * obligation is reserved for a known allocation whose termination was
    * already confirmed.
    * @param input - Claim, owning execution, and bounded absence evidence.
    * @returns The durable absence decision.
@@ -1743,9 +1678,9 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
   /**
    * Close pre-allocation debt on proof that a provisioner incarnation is gone.
    *
-   * The atomic terminal CAS for an attempt whose allocation could not have
-   * outlived its provisioner. It exists because such an attempt has no other
-   * reachable terminal state: its provider need not advertise recovery, so
+   * The atomic positive-proof transition for an attempt whose allocation could
+   * not have outlived its provisioner. It exists because such an attempt has
+   * no other reachable provider conclusion: its provider need not advertise recovery, so
    * there may be nothing to discover, inspect, or terminate, and
    * {@link abandonPendingAttempt} refuses an attempt that already began
    * provisioning.
@@ -1758,9 +1693,11 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
    * statement about the attempt rather than about the caller's view of it. An
    * expired lease can never satisfy either check.
    *
-   * On success it stores the proof's bounded evidence, settles the attempt as
-   * `abandoned`, and closes the operation in one transaction. `abandoned` is
-   * the honest kind: no allocation was ever recorded for the attempt, so it
+   * On success it stores the proof's bounded evidence and completes the
+   * operation in one transaction. If the attempt is still unsettled it also
+   * settles it as `abandoned`; otherwise it preserves the existing canonical
+   * settlement and returns `completed`, not `recorded`. `abandoned` is the
+   * honest new kind: no allocation was ever recorded for the attempt, so it
    * cannot have suffered an infrastructure failure in the sense
    * {@link recordInfrastructureFailure} defines.
    * @param input - Claim, owning execution, and the provisioner loss proof.
@@ -1957,7 +1894,8 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
    *
    * Deliberately claim-independent: a worker's canonical answer never depends
    * on who currently owns the attempt's provider operation. A successful
-   * commit settles the attempt and closes its operation.
+   * commit settles the attempt but leaves provider responsibilities open until
+   * positive completion evidence is recorded separately.
    *
    * The repository makes the durable decision in exactly this precedence
    * order. An implementation that reorders it is non-conforming, because each
@@ -1984,8 +1922,9 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
    *    {@link RuntimeOutcomeFenceMismatchError} without changing the attempt.
    *    Checking this in the same write prevents owner decoding/validation awaits
    *    from committing a startup failure against a replacement runtime.
-   * 5. `accepted` — the outcome becomes canonical, the attempt settles as
-   *    `outcome`, and its operation closes.
+   * 5. `accepted` — the outcome becomes canonical and the attempt settles as
+   *    `outcome`. Its provider operation remains open until positive completion
+   *    evidence is recorded separately.
    *
    * The submission arrives already rendered, as the {@link DurableOutcome} the
    * caller obtained from {@link canonicalizeOutcome}. An implementation
@@ -2038,12 +1977,12 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
 /**
  * Coherent recovery capability of the execution attempt port.
  *
- * Recovery is one indivisible capability: a repository implements all four
- * operations or none. Partial implementation is a type error because all four
+ * Recovery is one indivisible capability: a repository implements all five
+ * operations or none. Partial implementation is a type error because all five
  * are required members of this interface, exactly as they are on the provider
  * side of the same capability.
  *
- * The four exist together because a recovery pass needs all of them: it reads
+ * The five exist together because a recovery pass needs all of them: it reads
  * a superseded attempt, records what discovery found for it, refines the
  * reference as correlation narrows it, and lists what is still outstanding. A
  * repository that answered three of them would strand the pass at whichever
@@ -2121,4 +2060,19 @@ export interface ExecutionAttemptRecoveryOperations {
    * @returns Allocated, non-settled attempts eligible for recovery, oldest first.
    */
   getRecoverableAttempts(executionId: ExecutionOwnerId): Promise<readonly RecoverableAttemptRecord[]>;
+
+  /**
+   * List open provider operations eligible for takeover, including ones whose
+   * attempts already settled.
+   *
+   * The query excludes only operations with both positive completion evidence
+   * and a settled attempt, plus those held by a lease that has not expired at
+   * the caller-supplied observation time. That filter happens before the
+   * bound, so active leases cannot hide eligible work behind a first page.
+   * Results are oldest first by the joined attempt's `createdAt` instant, ties
+   * broken by `executionAttemptId`.
+   * @param input - Explicit observation time and positive bounded result limit.
+   * @returns Joined open operations eligible for provider takeover, oldest first.
+   */
+  listOpenProviderOperations(input: ListOpenProviderOperationsInput): Promise<readonly OpenProviderOperationRecord[]>;
 }

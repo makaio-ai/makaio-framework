@@ -51,6 +51,7 @@ interface RawOperationRow extends Record<string, unknown> {
   readonly obligation: string;
   readonly failure_count: number;
   readonly last_failure: string | null;
+  readonly completion_evidence: string | null;
 }
 
 /** A raw `test_execution_attempt` row, read outside the port. */
@@ -622,10 +623,11 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     await harness.alpha.recordProviderOperationUncertainty({ claim, evidence: makeEvidence() });
     const stillOpen = await readRawAttempt(ids.executionAttemptId);
 
+    const absenceEvidence = makeEvidence({ summary: 'provider proved no allocation exists' });
     const absence = await harness.beta.recordProvisioningAbsent({
       claim,
       executionId: ids.executionId,
-      evidence: makeEvidence({ summary: 'provider proved no allocation exists' }),
+      evidence: absenceEvidence,
     });
     const settled = await readRawAttempt(ids.executionAttemptId);
     const closed = await readRawOperation(ids.executionAttemptId);
@@ -634,9 +636,15 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     expect(absence).toEqual({ kind: 'recorded' });
     expect(settled.settlement_kind).toBe('abandoned');
     expect(settled.claimable).toBe(0);
-    // Settling closes the operation in the same transaction.
-    expect(closed.owner_id).toBeNull();
-    expect(closed.token).toBeNull();
+    // Proven absence completes the operation in the same transaction. The
+    // completed row retains its authorizing claim as durable provenance;
+    // clearing it would instead make the operation look handed off.
+    expect(closed.owner_id).toBe(claim.ownerId);
+    expect(closed.token).toBe(claim.token);
+    expect(closed.lease_expires_at).toBe(claim.leaseExpiresAt);
+    expect(closed.completion_evidence === null ? null : JSON.parse(closed.completion_evidence)).toEqual(
+      absenceEvidence,
+    );
     // The obligation never becomes terminal convergence: nothing was allocated.
     expect(closed.obligation).toBe('provisioning-resolution');
   });
@@ -677,12 +685,15 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     expect(own).toEqual({ kind: 'recorded' });
     expect(settled.settlement_kind).toBe('abandoned');
     expect(settled.claimable).toBe(0);
-    // Settling closes the operation in the same transaction, and the proof's
-    // own evidence is the bounded record that survives on it.
-    expect(closed.owner_id).toBeNull();
-    expect(closed.token).toBeNull();
+    // The proof completes the operation and retains its authorizing claim as
+    // provenance, distinct from an unowned handoff.
+    expect(closed.owner_id).toBe(claim.ownerId);
+    expect(closed.token).toBe(claim.token);
+    expect(closed.lease_expires_at).toBe(claim.leaseExpiresAt);
     expect(closed.obligation).toBe('provisioning-resolution');
-    expect(closed.last_failure === null ? null : JSON.parse(closed.last_failure)).toEqual(ownProof.evidence);
+    expect(closed.completion_evidence === null ? null : JSON.parse(closed.completion_evidence)).toEqual(
+      ownProof.evidence,
+    );
   });
 
   it('lets exactly one of two racing loss proofs settle the attempt', async () => {
@@ -758,15 +769,20 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     ]);
 
     // Independent connections may reach the shared write gate in either
-    // order. The takeover either wins ownership or observes the settlement.
-    expect(['claimed', 'resolved']).toContain(takeover.kind);
+    // order. Settlement does not resolve provider work, so takeover retains
+    // its claim until positive provider completion.
+    expect(takeover.kind).toBe('claimed');
+    if (takeover.kind !== 'claimed') throw new Error(`Expected takeover, got '${takeover.kind}'`);
     expect(commit).toEqual({ kind: 'accepted', outcome: result, text: harness.alpha.canonicalizeOutcome(result).text });
     const settled = await readRawAttempt(ids.executionAttemptId);
     expect(settled.settlement_kind).toBe('outcome');
-    // A settled attempt leaves no owned operation behind, whoever took it.
+    // A settled attempt leaves provider work open until its provider proves
+    // completion; the current takeover claim remains the durable owner.
     const operation = await readRawOperation(ids.executionAttemptId);
-    expect(operation.owner_id).toBeNull();
-    expect(operation.token).toBeNull();
+    expect(operation.owner_id).toBe(takeover.claim.ownerId);
+    expect(operation.token).toBe(takeover.claim.token);
+    expect(operation.lease_expires_at).toBe(takeover.claim.leaseExpiresAt);
+    expect(operation.completion_evidence).toBeNull();
   });
 
   it('returns the canonical result for an exact replay and conflicts on a different one', async () => {

@@ -56,6 +56,28 @@ export interface HmacIdentitySecretRegistrationOptions {
 const identitySecrets = new Map<string, RegisteredHmacIdentitySecret>();
 
 /**
+ * Create an idempotent cleanup handle for one exact registry generation.
+ *
+ * A newer registration for the same identity remains intact when an older
+ * handle is released after a rotation or service recomposition.
+ * @param identityId - Transport identity that owns this registration generation.
+ * @param registration - Exact registry entry this cleanup is fenced to.
+ * @returns Idempotent cleanup for this registration generation.
+ */
+function createRegistrationCleanup(identityId: string, registration: RegisteredHmacIdentitySecret): () => void {
+  let active = true;
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    if (identitySecrets.get(identityId) === registration) {
+      identitySecrets.delete(identityId);
+    }
+  };
+}
+
+/**
  * Register an HMAC secret for a transport identity.
  *
  * The returned cleanup removes the entry only when it still points at the
@@ -89,17 +111,7 @@ export function registerHmacIdentitySecret(
   };
 
   identitySecrets.set(identityId, registration);
-
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    if (identitySecrets.get(identityId) === registration) {
-      identitySecrets.delete(identityId);
-    }
-  };
+  return createRegistrationCleanup(identityId, registration);
 }
 
 /** Options for rotating an existing HMAC identity secret. */
@@ -157,17 +169,22 @@ export function rotateHmacIdentitySecret(
   };
 
   identitySecrets.set(identityId, registration);
+  return createRegistrationCleanup(identityId, registration);
+}
 
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    if (identitySecrets.get(identityId) === registration) {
-      identitySecrets.delete(identityId);
-    }
-  };
+/**
+ * Capture a cleanup handle for the current registration of an identity.
+ *
+ * The returned handle is bound to the registration object that exists at
+ * capture time. Invoking it removes that registration only if it is still
+ * current, so it cannot revoke a secret installed by a later rotation or
+ * service recomposition. The secret itself is never exposed.
+ * @param identityId - Transport identity whose current registration to capture.
+ * @returns A generation-fenced cleanup handle, or undefined when unknown.
+ */
+export function captureHmacIdentitySecretCleanup(identityId: string): (() => void) | undefined {
+  const registration = identitySecrets.get(identityId);
+  return registration === undefined ? undefined : createRegistrationCleanup(identityId, registration);
 }
 
 /**

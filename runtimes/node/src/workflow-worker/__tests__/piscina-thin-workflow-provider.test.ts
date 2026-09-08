@@ -337,7 +337,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
     const request = makeProvisionRequest();
 
-    await provider.provision(request, new AbortController().signal);
+    const { handle } = await provider.provision(request, new AbortController().signal);
 
     // Readiness is published by the Authority from the thread's own
     // registration, so this provider has nothing left to announce.
@@ -358,6 +358,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     // thread registers itself, and only the authority publishes on
     // `execution-attempt.*`.
     expect(emittedSubjects.filter((subject) => subject.startsWith('execution-attempt.'))).toEqual([]);
+    await handle.terminate();
   });
 
   it('aborts the allocation when the runtime never becomes ready', async () => {
@@ -410,9 +411,13 @@ describe('PiscinaThinWorkflowProvider', () => {
     if (outcome.kind !== 'allocated') throw new Error(`Expected an allocation, got '${outcome.kind}'`);
 
     const conclusions: string[] = [];
+    const localObservationLoss = vi.fn();
+    const completion = vi.fn();
     outcome.handle.observeInfrastructureConclusion?.((conclusion) => {
       conclusions.push(conclusion.evidence.summary);
     });
+    outcome.handle.observeLocalObservationLoss?.(localObservationLoss);
+    outcome.handle.observeProviderCompletion?.(completion);
 
     // The refusal is terminal infrastructure evidence for the allocation...
     await vi.waitFor(() => expect(conclusions).toHaveLength(1));
@@ -423,6 +428,15 @@ describe('PiscinaThinWorkflowProvider', () => {
     // workflow that ran and failed.
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(submissions).toEqual([]);
+    // The refusal cannot later yield an acknowledged outcome. It therefore
+    // hands its open provider operation to recovery exactly once rather than
+    // retaining an impossible completion observer.
+    expect(localObservationLoss).toHaveBeenCalledOnce();
+    expect(completion).not.toHaveBeenCalled();
+    expect(resolveWorkflowExecutionBusSecret('attempt-1')).toBeUndefined();
+    const lateLossObserver = vi.fn();
+    outcome.handle.observeLocalObservationLoss?.(lateLossObserver);
+    expect(lateLossObserver).toHaveBeenCalledOnce();
   });
 
   // ── Attempt-scoped bus identity ───────────────────────────
@@ -488,15 +502,24 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect(capturedConfig?.busAuth).not.toEqual(request.workerConfig.busAuth);
 
     await handle.release();
+    await handle.terminate();
   });
 
-  it('gives up the minted bus identity when the allocation is released', async () => {
-    const runner = makeRunner({ result: () => new Promise<never>(() => {}) });
+  it('keeps the minted bus identity through a handoff release until the outcome is acknowledged', async () => {
+    let resolveResult!: (result: WorkflowRunResult) => void;
+    const result = new Promise<WorkflowRunResult>((resolve) => {
+      resolveResult = resolve;
+    });
+    const bus = createTestBus();
+    bus.on(WorkerSubjects.control.outcome.submit, (ctx) => {
+      ctx.setResult({ decision: 'accepted' });
+    });
+    const runner = makeRunner({ result: () => result });
     const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-identity',
       displayName: 'Piscina',
       runner,
-      bus: createTestBus(),
+      bus,
     });
 
     const { handle } = await provider.provision(
@@ -507,7 +530,15 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     await handle.release();
 
-    expect(resolveWorkflowExecutionBusSecret('attempt-released')).toBeUndefined();
+    // A released handle may be handed off while the running worker still
+    // needs its attempt identity to submit the outcome.
+    expect(resolveWorkflowExecutionBusSecret('attempt-released')).toBeDefined();
+
+    resolveResult({ ...COMPLETED_RESULT });
+
+    await vi.waitFor(() => {
+      expect(resolveWorkflowExecutionBusSecret('attempt-released')).toBeUndefined();
+    });
   });
 
   it('gives up the minted bus identity when the allocation is terminated', async () => {
@@ -552,6 +583,62 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     // Idempotent — second call also resolves cleanly.
     await expect(handle.release()).resolves.toBeUndefined();
+    await handle.terminate();
+  });
+
+  it('publishes provider completion only after the Authority acknowledges the settled outcome and replays it once', async () => {
+    let resolveResult!: (result: WorkflowRunResult) => void;
+    const result = new Promise<WorkflowRunResult>((resolve) => {
+      resolveResult = resolve;
+    });
+    let acknowledge!: () => void;
+    const acknowledgement = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const bus = createTestBus();
+    let submissionObserved = false;
+    bus.on(WorkerSubjects.control.outcome.submit, async (ctx) => {
+      submissionObserved = true;
+      await acknowledgement;
+      ctx.setResult({ decision: 'accepted' });
+    });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-completion',
+      displayName: 'Piscina',
+      runner: makeRunner({ result: () => result }),
+      bus,
+    });
+
+    const { handle } = await provider.provision(
+      makeProvisionRequest({ executionAttemptId: 'attempt-completion' }),
+      new AbortController().signal,
+    );
+    const earlyObserver = vi.fn();
+    const localObservationLoss = vi.fn();
+    handle.observeProviderCompletion?.(earlyObserver);
+    handle.observeLocalObservationLoss?.(localObservationLoss);
+
+    resolveResult({ ...COMPLETED_RESULT });
+    await vi.waitFor(() => expect(submissionObserved).toBe(true));
+    expect(earlyObserver).not.toHaveBeenCalled();
+    expect(resolveWorkflowExecutionBusSecret('attempt-completion')).toBeDefined();
+
+    acknowledge();
+
+    await vi.waitFor(() => expect(earlyObserver).toHaveBeenCalledOnce());
+    expect(earlyObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'outcome-acknowledged',
+        source: 'piscina-completion',
+      }),
+    );
+    expect(resolveWorkflowExecutionBusSecret('attempt-completion')).toBeUndefined();
+    expect(localObservationLoss).not.toHaveBeenCalled();
+
+    const lateObserver = vi.fn();
+    handle.observeProviderCompletion?.(lateObserver);
+    expect(lateObserver).toHaveBeenCalledOnce();
+    expect(earlyObserver).toHaveBeenCalledOnce();
   });
 
   // ── Cooperative provision cancellation ────────────────────
@@ -650,11 +737,12 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
 
     const callerController = new AbortController();
-    await provider.provision(makeProvisionRequest(), callerController.signal);
+    const { handle } = await provider.provision(makeProvisionRequest(), callerController.signal);
 
     expect(capturedSignal?.aborted).toBe(false);
     callerController.abort('caller cancel');
     expect(capturedSignal?.aborted).toBe(true);
+    await handle.terminate();
   });
 
   it('aborts a started runner when post-dispatch setup fails before a handle is returned', async () => {
@@ -704,6 +792,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     await handle.cancel('test cancel');
 
     expect(capturedSignal?.aborted).toBe(true);
+    await handle.terminate();
   });
 
   it('aborts the underlying runner when terminate is called', async () => {
@@ -745,6 +834,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     ]);
 
     await expect(cancelResult).resolves.toBe('cancelled');
+    await handle.terminate();
   });
 
   // ── Manifest forwarding ───────────────────────────────────
@@ -939,13 +1029,23 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const { handle } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { handle } = await provider.provision(
+      makeProvisionRequest({ executionAttemptId: 'attempt-submit-failed' }),
+      new AbortController().signal,
+    );
     const observerError = new Error('observer failed');
     const laterObserver = vi.fn();
+    let secretAtCompletion: ReturnType<typeof resolveWorkflowExecutionBusSecret> = undefined;
+    const completionObserver = vi.fn(() => {
+      secretAtCompletion = resolveWorkflowExecutionBusSecret('attempt-submit-failed');
+    });
+    const localObservationLoss = vi.fn();
     handle.observeInfrastructureConclusion?.(() => {
       throw observerError;
     });
     handle.observeInfrastructureConclusion?.(laterObserver);
+    handle.observeProviderCompletion?.(completionObserver);
+    handle.observeLocalObservationLoss?.(localObservationLoss);
 
     // Allow the fire-and-forget retry chain to exhaust and log.
     await vi.waitFor(
@@ -964,6 +1064,31 @@ describe('PiscinaThinWorkflowProvider', () => {
       '[PiscinaThinWorkflowProvider] Infrastructure-conclusion observer failed:',
       observerError,
     );
+    expect(laterObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        evidence: expect.objectContaining({
+          summary: expect.stringContaining('ended without an acknowledged outcome'),
+        }),
+      }),
+    );
+    // The failed delivery leaves the canonical outcome unresolved, but the
+    // runner and the bounded local delivery path both ended. That is provider
+    // completion, not outcome acknowledgement, and its cleanup precedes proof.
+    expect(completionObserver).toHaveBeenCalledOnce();
+    expect(completionObserver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'outcome-delivery-ended',
+        summary: expect.stringContaining('bounded workflow outcome delivery ended'),
+      }),
+    );
+    expect(secretAtCompletion).toBeUndefined();
+    expect(localObservationLoss).not.toHaveBeenCalled();
+    expect(resolveWorkflowExecutionBusSecret('attempt-submit-failed')).toBeUndefined();
+
+    const lateCompletionObserver = vi.fn();
+    handle.observeProviderCompletion?.(lateCompletionObserver);
+    expect(lateCompletionObserver).toHaveBeenCalledOnce();
+    expect(lateCompletionObserver).toHaveBeenCalledWith(expect.objectContaining({ code: 'outcome-delivery-ended' }));
 
     consoleSpy.mockRestore();
   });
