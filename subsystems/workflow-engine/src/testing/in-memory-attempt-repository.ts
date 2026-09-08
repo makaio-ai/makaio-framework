@@ -30,6 +30,7 @@ import type {
   AttemptReachabilityDecision,
   AttemptSettlementRead,
   BeginProvisioningInput,
+  CompleteProviderOperationInput,
   CompleteOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
@@ -49,9 +50,11 @@ import type {
   OperationReportDecision,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  ListOpenProviderOperationsInput,
   MarkRuntimeReadyInput,
   OperationAdmissionDecision,
   OperationCompletionDecision,
+  OpenProviderOperationRecord,
   OutcomeCodec,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
@@ -70,11 +73,13 @@ import type {
   RuntimeRegistrationDecision,
   TakeOverProviderOperationInput,
 } from '../execution-attempt-repository.js';
-import type {
-  ProviderOperationClaim,
-  ProviderOperationClaimDecision,
-  ProviderOperationMutationDecision,
-  ProviderOperationOwnershipRecord,
+import {
+  isProviderOperationResolved,
+  type ProviderOperationClaim,
+  type ProviderOperationClaimDecision,
+  type ProviderOperationCompletionDecision,
+  type ProviderOperationMutationDecision,
+  type ProviderOperationOwnershipRecord,
 } from '../provider-operation.js';
 import {
   INITIAL_ATTEMPT_CONTROL_STATE,
@@ -162,11 +167,11 @@ type ClaimAuthorization =
 /**
  * Settle an attempt, closing its start gate in the same write.
  *
- * A settled attempt never starts work again. The active operation is
- * deliberately left in place, so a completion that arrives after this reads
- * `resolved` rather than `not-active`. Every terminal path goes through here so
- * no realization branch can settle without closing the gate — the SQLite
- * realization has the same rule in its one shared settle statement.
+ * A settled attempt never starts work again. Its provider operation resolves
+ * only when positive provider completion evidence is also present. Every
+ * terminal path goes through here so no realization branch can settle without
+ * closing the gate — the SQLite realization has the same rule in its one
+ * shared settle statement.
  * @param attempt - Attempt record being settled.
  * @param settlementKind - How the attempt settled.
  * @returns The settled record.
@@ -259,7 +264,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
     const attempt = attempts.get(claim.executionAttemptId);
     const operation = operations.get(claim.executionAttemptId);
     if (!attempt || !operation) return { kind: 'not-found' };
-    if (attempt.settlementKind != null) return { kind: 'resolved', attempt };
+    if (isProviderOperationResolved(attempt, operation)) return { kind: 'resolved', attempt };
     if (
       operation.token === null ||
       operation.token !== claim.token ||
@@ -272,24 +277,21 @@ export function createInMemoryAttemptRepository<TOutcome>(
   };
 
   /**
-   * Close an operation whose attempt has reached a terminal settlement.
+   * Persist the first positive provider-completion evidence.
    *
-   * Ownership is cleared so no claim can mutate a resolved operation, while
-   * the generation, obligation, and accumulated evidence stay readable.
-   * @param operation - Operation record to close.
-   * @param lastFailure - Bounded evidence to retain on the closed record.
+   * Evidence may arrive before the canonical attempt outcome. It remains
+   * immutable across handoff and takeover; only settlement together with that
+   * evidence resolves the operation and freezes the final control snapshot,
+   * which may be unowned and is not proof-writer provenance.
+   * @param operation - Current claimed provider operation.
+   * @param evidence - Positive bounded proof that provider work is complete.
    */
-  const closeOperation = (
+  const recordProviderCompletionEvidence = (
     operation: ProviderOperationOwnershipRecord,
-    lastFailure: ProviderOperationOwnershipRecord['lastFailure'],
+    evidence: NonNullable<ProviderOperationOwnershipRecord['completionEvidence']>,
   ): void => {
-    operations.set(operation.executionAttemptId, {
-      ...operation,
-      ownerId: null,
-      token: null,
-      leaseExpiresAt: null,
-      lastFailure,
-    });
+    if (operation.completionEvidence !== null) return;
+    operations.set(operation.executionAttemptId, { ...operation, completionEvidence: evidence });
   };
 
   /**
@@ -325,9 +327,9 @@ export function createInMemoryAttemptRepository<TOutcome>(
     const isActiveAttempt = activeAttempts.get(attempt.executionId) === attempt.executionAttemptId;
     attempts.set(attempt.executionAttemptId, {
       ...attempt,
-      status: 'allocated',
+      status: attempt.settlementKind === null ? 'allocated' : attempt.status,
       allocationRef,
-      claimable: bootstrapClaimable && isActiveAttempt,
+      claimable: attempt.settlementKind === null && bootstrapClaimable && isActiveAttempt,
     });
     operations.set(operation.executionAttemptId, { ...operation, obligation: 'allocation-control' });
     return { kind: 'recorded' };
@@ -390,6 +392,29 @@ export function createInMemoryAttemptRepository<TOutcome>(
       // insertion order of a Map is not the port's order, so it is applied
       // explicitly.
       return results.sort(compareRecoveryOrder);
+    },
+
+    async listOpenProviderOperations(
+      input: ListOpenProviderOperationsInput,
+    ): Promise<readonly OpenProviderOperationRecord[]> {
+      if (!Number.isSafeInteger(input.limit) || input.limit <= 0) {
+        throw new RangeError('limit must be a positive safe integer');
+      }
+      const observedAt = instantOf(input.observedAt);
+      const results: OpenProviderOperationRecord[] = [];
+
+      for (const operation of operations.values()) {
+        const attempt = attempts.get(operation.executionAttemptId);
+        if (!attempt || isProviderOperationResolved(attempt, operation)) continue;
+        const held =
+          operation.ownerId !== null &&
+          operation.leaseExpiresAt !== null &&
+          instantOf(operation.leaseExpiresAt) > observedAt;
+        if (held) continue;
+        results.push({ attempt, operation });
+      }
+
+      return results.sort((left, right) => compareRecoveryOrder(left.attempt, right.attempt)).slice(0, input.limit);
     },
   };
 
@@ -524,6 +549,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
         obligation: 'provisioning-resolution',
         failureCount: 0,
         lastFailure: null,
+        completionEvidence: null,
       });
       return { kind: 'started', claim };
     },
@@ -548,7 +574,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
       const attempt = attempts.get(input.executionAttemptId);
       const operation = operations.get(input.executionAttemptId);
       if (!attempt || !operation) return { kind: 'not-found' };
-      if (attempt.settlementKind != null) return { kind: 'resolved' };
+      if (isProviderOperationResolved(attempt, operation)) return { kind: 'resolved' };
       const held =
         operation.ownerId !== null &&
         operation.leaseExpiresAt !== null &&
@@ -604,6 +630,27 @@ export function createInMemoryAttemptRepository<TOutcome>(
       return { kind: 'recorded' };
     },
 
+    async completeProviderOperation(
+      input: CompleteProviderOperationInput,
+    ): Promise<ProviderOperationCompletionDecision> {
+      const evidence = BoundedRecoveryEvidenceSchema.parse(input.evidence);
+      const attempt = attempts.get(input.claim.executionAttemptId);
+      const operation = operations.get(input.claim.executionAttemptId);
+      if (!attempt || !operation) return { kind: 'not-found' };
+      if (
+        operation.token !== input.claim.token ||
+        operation.generation !== input.claim.generation ||
+        operation.ownerId !== input.claim.ownerId
+      ) {
+        return { kind: 'stale' };
+      }
+      if (isProviderOperationResolved(attempt, operation)) return { kind: 'already-completed' };
+      if (operation.completionEvidence !== null) return { kind: 'evidence-recorded' };
+
+      recordProviderCompletionEvidence(operation, evidence);
+      return attempt.settlementKind === null ? { kind: 'evidence-recorded' } : { kind: 'completed' };
+    },
+
     async recordAllocation(input: RecordAllocationInput): Promise<AllocationRecordingDecision> {
       return applyAllocation(input, true);
     },
@@ -616,9 +663,13 @@ export function createInMemoryAttemptRepository<TOutcome>(
       if (attempt.executionId !== input.executionId) return { kind: 'not-found' };
       if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
 
-      attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'abandoned'));
-      closeOperation(operation, evidence);
-      return { kind: 'recorded' };
+      if (attempt.settlementKind === null) {
+        attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'abandoned'));
+        recordProviderCompletionEvidence(operation, evidence);
+        return { kind: 'recorded' };
+      }
+      recordProviderCompletionEvidence(operation, evidence);
+      return { kind: 'completed' };
     },
 
     async recordProvisionerIncarnationLost(
@@ -631,9 +682,13 @@ export function createInMemoryAttemptRepository<TOutcome>(
       const refusal = evaluateProvisionerIncarnationLoss(attempt, input);
       if (refusal !== null) return refusal;
 
-      attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'abandoned'));
-      closeOperation(operation, evidence);
-      return { kind: 'recorded' };
+      if (attempt.settlementKind === null) {
+        attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'abandoned'));
+        recordProviderCompletionEvidence(operation, evidence);
+        return { kind: 'recorded' };
+      }
+      recordProviderCompletionEvidence(operation, evidence);
+      return { kind: 'completed' };
     },
 
     async recordAllocationTerminated(input: RecordAllocationTerminatedInput): Promise<AllocationTerminationDecision> {
@@ -659,6 +714,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
       if (authorization.kind !== 'authorized') return { kind: authorization.kind };
       const { attempt, operation } = authorization;
       if (attempt.executionId !== input.executionId) return { kind: 'not-found' };
+      if (attempt.settlementKind !== null) return { kind: 'resolved' };
       if (attempt.allocationRef === null) return { kind: 'not-allocated' };
       // Terminal settlement is irreversible, so it may only follow the durable
       // evidence that the allocation actually ended. An operation still owing
@@ -666,7 +722,6 @@ export function createInMemoryAttemptRepository<TOutcome>(
       if (operation.obligation !== 'terminal-convergence') return { kind: 'not-terminated' };
 
       attempts.set(attempt.executionAttemptId, settleAttempt(attempt, 'infrastructure-failure'));
-      closeOperation(operation, operation.lastFailure);
       return { kind: 'recorded' };
     },
 
@@ -871,8 +926,6 @@ export function createInMemoryAttemptRepository<TOutcome>(
       // instead would let an owner converge on a value no reload ever yields.
       committedOutcomes.set(input.executionAttemptId, submission.text);
       attempts.set(input.executionAttemptId, settleAttempt(attempt, 'outcome'));
-      const operation = operations.get(input.executionAttemptId);
-      if (operation) closeOperation(operation, operation.lastFailure);
       // Decoded from the text that was just stored, not taken from
       // `submission.outcome`: the caller has held that value since before its
       // own validation, and a mutable outcome it changed there would be

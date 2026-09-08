@@ -214,9 +214,9 @@ export type AllocationState = z.infer<typeof AllocationStateSchema>;
 /**
  * Zod schema for the result of inspecting a provider allocation.
  *
- * Contains the infrastructure state, the allocation reference that was
- * inspected, and optional non-secret provider evidence (e.g. exit code,
- * timestamps, termination reason).
+ * Contains the infrastructure state, the inspected allocation's reference
+ * (possibly refined by correlation), optional non-secret provider evidence (e.g. exit code,
+ * timestamps, termination reason), and optional positive completion evidence.
  *
  * Framework code treats `evidence` as opaque; only the originating provider
  * interprets its contents.
@@ -224,7 +224,12 @@ export type AllocationState = z.infer<typeof AllocationStateSchema>;
 export const AllocationInspectionSchema = z.object({
   /** Current infrastructure lifecycle state of the allocation. */
   state: AllocationStateSchema,
-  /** The allocation reference that was inspected. */
+  /**
+   * Reference to the inspected allocation, optionally refined with newly known
+   * identity. It must name the same provider and allocation as the input, not
+   * a replacement resource. The claim-owning host persists a refinement before
+   * using it for subsequent provider control.
+   */
   allocationRef: ProviderAllocationRefSchema,
   /**
    * Optional non-secret provider evidence about the allocation.
@@ -234,6 +239,15 @@ export const AllocationInspectionSchema = z.object({
    * the originating provider assigns meaning to the contents.
    */
   evidence: JsonObjectContractSchema.optional(),
+  /**
+   * Optional positive proof that the provider completed every responsibility
+   * for this allocation.
+   *
+   * A terminal or absent {@link state} does not imply this fact. Providers add
+   * it only when their inspection can prove that their own cleanup and release
+   * duties are complete.
+   */
+  completionEvidence: BoundedRecoveryEvidenceSchema.optional(),
 });
 
 /**
@@ -241,7 +255,8 @@ export const AllocationInspectionSchema = z.object({
  *
  * Reports infrastructure evidence only. A terminal allocation without an
  * acknowledged worker outcome is an infrastructure failure, not a workflow
- * success or failure.
+ * success or failure; terminal state alone also does not prove provider
+ * completion.
  */
 export type AllocationInspection = z.infer<typeof AllocationInspectionSchema>;
 
@@ -591,8 +606,9 @@ export interface WorkerInfrastructureConclusion {
 /**
  * In-process handle for a provisioned Worker allocation.
  *
- * Returned as part of the {@link IWorkerProvider.provision} result and
- * held by the caller until the allocation is no longer needed.
+ * Returned as part of the {@link IWorkerProvider.provision} result and held
+ * only while its current host owns local observation or control resources. A
+ * handoff may release that local handle while provider-side work remains open.
  *
  * The handle controls allocation infrastructure only. It does NOT expose a
  * `ready` promise or a `waitForResult()` method. Readiness is signaled through
@@ -615,17 +631,20 @@ export interface WorkerHandle {
    */
   terminate(): Promise<void>;
   /**
-   * Release provider-owned resources associated with this allocation.
+   * Release local resources retained for this allocation.
    *
-   * Called after the workflow outcome has settled (success, failure, or
-   * cancellation) to free credentials, listeners, and other per-allocation
-   * state that should not persist for the lifetime of the host process.
+   * Releases only local, process-bound resources such as listeners or retained
+   * handles. It is safe during a host handoff: it must NOT cancel a running
+   * allocation, alter its outcome, revoke the attempt's active bus identity or
+   * credentials, or claim that provider work completed. A provider may release
+   * final allocation credentials only after its own positive completion or a
+   * definitive terminal path established that they cannot be needed for an
+   * outcome submission.
    *
-   * Release is a resource-disposal signal, distinct from infrastructure
-   * cancellation: it must NOT cancel a running allocation or alter the
-   * workflow outcome. Implementations must be idempotent — calling
-   * `release()` multiple times is safe and has no additional effect.
-   * @returns Promise that resolves when provider resources have been released.
+   * Release is a local resource-disposal signal, distinct from infrastructure
+   * cancellation. Implementations must be idempotent — calling `release()`
+   * multiple times is safe and has no additional effect.
+   * @returns Promise that resolves when local resources have been released.
    */
   release(): Promise<void>;
   /**
@@ -635,11 +654,45 @@ export interface WorkerHandle {
    * state. The callback never carries readiness or a workflow result.
    * If the provider reached a conclusion before registration, it replays that
    * same conclusion to this observer synchronously. Each observer receives at
-   * most one conclusion.
+   * most one conclusion. A terminal conclusion does not end completion
+   * observation: a controller that needs provider completion keeps its
+   * completion and observation-loss observers until one reports or it releases
+   * the handle.
    * @param observer - Callback invoked at most once for a terminal conclusion.
    * @returns Cleanup function that stops observing the provider signal.
    */
   observeInfrastructureConclusion?(observer: (conclusion: WorkerInfrastructureConclusion) => void): () => void;
+  /**
+   * Observe positive provider completion evidence for this allocation.
+   *
+   * This differs from {@link observeInfrastructureConclusion}: a terminal
+   * worker process can leave provider cleanup or retention duties open. A
+   * provider exposes this observer only when it can prove all of its
+   * allocation responsibilities are complete. If that proof was available
+   * before registration, the handle replays it synchronously. Each observer
+   * receives at most one completion proof. For one handle, a delivered proof
+   * and {@link observeLocalObservationLoss} are mutually exclusive final
+   * observation results.
+   * @param observer - Callback invoked at most once with durable completion evidence.
+   * @returns Cleanup function that stops observing the provider signal.
+   */
+  observeProviderCompletion?(observer: (evidence: BoundedRecoveryEvidence) => void): () => void;
+  /**
+   * Observe that this handle permanently lost its own local monitoring.
+   *
+   * This reports that the handle can no longer observe a completion proof; it
+   * is not remote teardown success, provider terminality, or provider
+   * completion, and it does not revoke credentials. It tells the current claim
+   * holder to hand the still-open provider operation to durable recovery. For
+   * one handle, this signal and {@link observeProviderCompletion} are mutually
+   * exclusive final observation results. If loss happened before registration,
+   * the handle replays it synchronously. Explicit release only detaches local
+   * observation; callers still fence callbacks that race that detachment with
+   * their current claim.
+   * @param observer - Callback invoked at most once when local monitoring is lost.
+   * @returns Cleanup function that stops observing the local-loss signal.
+   */
+  observeLocalObservationLoss?(observer: () => void): () => void;
   /**
    * Observe a refined allocation reference for this allocation.
    *
@@ -864,19 +917,24 @@ export interface IWorkerRecoveryCapability {
   discoverProvisioning(request: WorkerProviderContext, signal: AbortSignal): Promise<ProvisioningDiscovery>;
 
   /**
-   * Re-attach to an existing allocation for the same attempt.
+   * Re-attach to a known allocation's provider operation for the same attempt.
    *
    * Creates a fresh in-process {@link WorkerHandle} without creating a
    * new provider resource. Used after an Authority restart to regain
-   * infrastructure control of a still-running allocation.
+   * infrastructure control or finish outstanding allocation-scoped cleanup.
    *
-   * This is same-attempt controller recovery, not workflow resume. The
-   * returned handle controls the same allocation that was originally
-   * provisioned.
+   * This is same-attempt controller recovery, not workflow resume. It may
+   * attach to a terminal or already absent allocation when provider cleanup is
+   * still outstanding. Recovery of absent-resource cleanup requires a settled
+   * attempt with an unresolved provider operation. The handle refers to the
+   * known allocation; it does not assert that compute is running. Attaching
+   * never creates, resumes, restarts, or deletes a resource and never announces
+   * runtime readiness. A provider may confirm completion only after its
+   * remaining duties are fulfilled; absence alone is not completion proof.
    * @param allocationRef - Validated allocation reference from a prior provision.
    * @param request - Durable attempt context for provider-side correlation.
    * @param signal - AbortSignal for cooperative cancellation of the attach operation.
-   * @returns Fresh infrastructure handle for the existing allocation.
+   * @returns Fresh control and observation handle for the known allocation's remaining duties.
    */
   attach(
     allocationRef: ProviderAllocationRef,
@@ -891,6 +949,10 @@ export interface IWorkerRecoveryCapability {
    * acknowledged worker outcome is an infrastructure failure, not a workflow
    * success or failure. The returned {@link AllocationInspection} includes
    * the allocation state and optional non-secret provider evidence.
+   * Inspection may refine the reference as correlation identifies the same
+   * allocation more precisely. It remains read-only: the provider neither
+   * persists that refinement nor creates, restarts, or deletes infrastructure.
+   * The claim-owning host records the refinement before further control.
    * @param allocationRef - Validated allocation reference to inspect.
    * @param request - Freshly resolved provider context for the same attempt.
    * @param signal - AbortSignal for cooperative cancellation of the inspect operation.

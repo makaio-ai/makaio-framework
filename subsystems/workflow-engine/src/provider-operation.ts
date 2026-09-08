@@ -1,4 +1,5 @@
-import type { BoundedRecoveryEvidence } from '@makaio/contracts';
+import type { BoundedRecoveryEvidence, ProviderAllocationRef, WorkerAllocationLifetime } from '@makaio/contracts';
+import type { ExecutionAttemptRecord } from './execution-attempt-repository.js';
 
 /**
  * Provider-operation ownership protocol.
@@ -6,7 +7,8 @@ import type { BoundedRecoveryEvidence } from '@makaio/contracts';
  * An execution attempt owns canonical workflow state. A *provider operation*
  * is the separate, fenced record of who is currently allowed to act on that
  * attempt's provider-side infrastructure, and what remediation debt is still
- * outstanding for it.
+ * outstanding for it. Completion is a separate, positive fact: an attempt
+ * settlement cannot prove that the provider has released its allocation.
  *
  * The two records are deliberately distinct:
  * - the attempt answers "what is the canonical workflow answer?";
@@ -85,9 +87,14 @@ export interface ProviderOperationClaim {
 /**
  * Durable ownership and remediation state for one attempt's provider operation.
  *
- * `ownerId`, `token`, and `leaseExpiresAt` are all `null` when the operation
- * is unowned — either because it was handed off, or because it was closed
- * when the attempt settled. `generation` and `obligation` survive both.
+ * Until {@link isProviderOperationResolved} returns `true`, `ownerId`,
+ * `token`, and `leaseExpiresAt` describe the current claim and are all `null`
+ * when the operation is unowned. Positive completion evidence may be recorded
+ * before the attempt settles; that evidence is immutable, but it does not
+ * freeze the live claim or make the operation ineligible for recovery. Once
+ * the operation is resolved, the fields retain the final control snapshot,
+ * which may be unowned after a handoff and is not proof-writing provenance.
+ * `generation` and `obligation` survive both handoff and completion.
  *
  * All fields are JSON-safe and non-secret. `lastFailure` holds bounded
  * evidence only; plaintext credentials, stack traces, and raw provider
@@ -98,11 +105,23 @@ export interface ProviderOperationOwnershipRecord {
   readonly executionAttemptId: string;
   /** Monotonic ownership generation, incremented by every takeover. */
   readonly generation: number;
-  /** Current controller process incarnation, or `null` when unowned. */
+  /**
+   * Current controller process incarnation while unresolved, retained as the
+   * final control snapshot once {@link isProviderOperationResolved} returns
+   * `true`, or `null` when the operation is unowned.
+   */
   readonly ownerId: string | null;
-  /** Current fencing token, or `null` when unowned. */
+  /**
+   * Current fencing token while unresolved, retained as the final control
+   * snapshot once {@link isProviderOperationResolved} returns `true`, or
+   * `null` when the operation is unowned.
+   */
   readonly token: string | null;
-  /** ISO-8601 lease deadline, or `null` when unowned. */
+  /**
+   * Current lease deadline while unresolved, retained with the final control
+   * snapshot once {@link isProviderOperationResolved} returns `true`, or
+   * `null` when the operation is unowned.
+   */
   readonly leaseExpiresAt: string | null;
   /** Outstanding provider-side debt, owned by the durable repository. */
   readonly obligation: ProviderOperationObligation;
@@ -110,6 +129,34 @@ export interface ProviderOperationOwnershipRecord {
   readonly failureCount: number;
   /** Most recent bounded evidence recorded against this operation. */
   readonly lastFailure: BoundedRecoveryEvidence | null;
+  /**
+   * Positive, immutable proof that every provider-side responsibility for this
+   * operation is complete, or `null` while the proof has not been observed.
+   *
+   * This is deliberately independent of the attempt's settlement and of
+   * {@link obligation}: a settled attempt can still need provider cleanup, and
+   * an unsettled attempt with this proof stays recoverable until it has a
+   * canonical settlement.
+   */
+  readonly completionEvidence: BoundedRecoveryEvidence | null;
+}
+
+/**
+ * Whether an operation has both of the independent facts needed to resolve it.
+ *
+ * Provider evidence can arrive before an outcome. That fact must be retained,
+ * but it does not close control ownership: recovery may still need to hold or
+ * hand off the operation until the attempt settles. Conversely, settlement
+ * alone never proves provider work is complete.
+ * @param attempt - Minimal durable settlement fact from the attempt record.
+ * @param operation - Minimal positive provider-completion fact from the operation record.
+ * @returns Whether no provider-operation ownership or recovery work remains.
+ */
+export function isProviderOperationResolved(
+  attempt: Pick<ExecutionAttemptRecord, 'settlementKind'>,
+  operation: Pick<ProviderOperationOwnershipRecord, 'completionEvidence'>,
+): boolean {
+  return attempt.settlementKind !== null && operation.completionEvidence !== null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -124,8 +171,9 @@ export interface ProviderOperationOwnershipRecord {
  * - `stale`: the request does not match durable ownership — a superseded
  *   generation or token on renewal, or a lease that has not expired yet on
  *   takeover. The caller must re-read before retrying.
- * - `resolved`: the attempt has settled, so the operation is closed and
- *   there is nothing left to own.
+ * - `resolved`: positive completion evidence and attempt settlement were both
+ *   recorded, so there is nothing left to own. Neither fact alone produces
+ *   this decision.
  * - `not-found`: no provider operation exists for the attempt.
  */
 export type ProviderOperationClaimDecision =
@@ -142,7 +190,8 @@ export type ProviderOperationClaimDecision =
  *   claim no longer matches the stored generation/token, or the stored
  *   obligation cannot make the requested transition. In both cases the
  *   caller must re-read; it may not pick a different write path instead.
- * - `resolved`: the attempt has settled, so the operation is closed.
+ * - `resolved`: positive completion evidence and attempt settlement were both
+ *   recorded, so the operation is closed.
  * - `not-found`: no provider operation exists for the attempt.
  */
 export type ProviderOperationMutationDecision =
@@ -150,6 +199,172 @@ export type ProviderOperationMutationDecision =
   | { readonly kind: 'stale' }
   | { readonly kind: 'resolved' }
   | { readonly kind: 'not-found' };
+
+/**
+ * Durable decision for recording positive completion of a provider operation.
+ *
+ * Completion evidence is immutable once written. The repository validates the
+ * current claim before recording it, and no later call can replace the first
+ * proof. `evidence-recorded` means the evidence is durable but the attempt
+ * remains unsettled, so the operation stays recoverable. `completed` means
+ * the same write also resolves the operation because the attempt was already
+ * settled. Replaying after evidence exists but before settlement returns
+ * `evidence-recorded`; replaying after resolution returns `already-completed`.
+ */
+export type ProviderOperationCompletionDecision =
+  | { readonly kind: 'evidence-recorded' }
+  | { readonly kind: 'completed' }
+  | { readonly kind: 'already-completed' }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'not-found' };
+
+/**
+ * Durable decision for recording positively proven pre-allocation absence.
+ *
+ * - `recorded`: absence evidence was stored and the same positive proof
+ *   completed the operation while newly settling the attempt as `abandoned`.
+ * - `completed`: absence evidence was stored and completed the operation, but
+ *   an existing canonical settlement was preserved — all in one transaction.
+ * - `allocated`: an allocation won the race. Absence must never terminalize
+ *   an attempt that owns live infrastructure.
+ * - `resolved`: positive provider completion evidence and attempt settlement
+ *   were already recorded.
+ * - `stale`: the claim no longer matches durable ownership.
+ * - `not-found`: no provider operation exists for the attempt.
+ */
+export type ProvisioningAbsenceDecision =
+  | { readonly kind: 'recorded' }
+  | { readonly kind: 'completed' }
+  | { readonly kind: 'allocated'; readonly allocationRef: ProviderAllocationRef }
+  | { readonly kind: 'resolved' }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'not-found' };
+
+/**
+ * Durable decision for closing pre-allocation debt on proven loss of the
+ * provisioner process incarnation.
+ *
+ * The counterpart of {@link ProvisioningAbsenceDecision} for the one lifetime
+ * where nothing needs to be observed to conclude: a
+ * `provisioner-process-bound` allocation cannot outlive the process that
+ * created it, so proof that the exact recorded incarnation is gone is proof
+ * that no allocation survives. Every refusal below is a statement about why the
+ * proof does not apply, and each is reported distinctly because they oblige the
+ * caller to do different things.
+ *
+ * - `recorded`: the proof was stored and the same positive proof completed the
+ *   operation while newly settling the attempt as `abandoned`.
+ * - `completed`: the proof was stored and completed the operation, but an
+ *   existing canonical settlement was preserved — all in one transaction.
+ * - `not-process-bound`: the attempt's recorded lifetime is not
+ *   `provisioner-process-bound`, so losing a process says nothing about its
+ *   allocation. The reported lifetime is the stored one, `null` before
+ *   provisioning began.
+ * - `incarnation-mismatch`: the proof names a different provisioner
+ *   incarnation, or the attempt has none recorded, so the proof says nothing
+ *   about this attempt. The reported identifier is the stored one.
+ * - `allocated`: an allocation is already recorded, so the attempt owes
+ *   allocation control rather than pre-allocation closure. Terminate the known
+ *   allocation instead of closing the attempt from a proof.
+ * - `resolved`: positive provider completion evidence and attempt settlement
+ *   were already recorded.
+ * - `stale`: the claim no longer matches durable ownership.
+ * - `not-found`: no provider operation exists for the attempt, or it does not
+ *   belong to the named execution.
+ */
+export type ProvisionerIncarnationLossDecision =
+  | { readonly kind: 'recorded' }
+  | { readonly kind: 'completed' }
+  | { readonly kind: 'not-process-bound'; readonly allocationLifetime: WorkerAllocationLifetime | null }
+  | { readonly kind: 'incarnation-mismatch'; readonly provisionerIncarnationId: string | null }
+  | { readonly kind: 'allocated'; readonly allocationRef: ProviderAllocationRef }
+  | { readonly kind: 'resolved' }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'not-found' };
+
+/** Input for extending the lease of a currently held provider operation. */
+export interface RenewProviderOperationClaimInput {
+  /** Claim the caller currently believes it holds. */
+  readonly claim: ProviderOperationClaim;
+  /** New ISO-8601 lease deadline. */
+  readonly leaseExpiresAt: string;
+}
+
+/**
+ * Input for taking ownership of an unowned or expired provider operation.
+ *
+ * Takeover needs no prior claim — that is the point. It succeeds only when
+ * the operation is unowned or its lease has expired relative to `observedAt`,
+ * and it always increments the generation so every claim issued before it is
+ * fenced immediately.
+ */
+export interface TakeOverProviderOperationInput {
+  /** Attempt whose provider operation is being taken over. */
+  readonly executionAttemptId: string;
+  /** Controller process incarnation requesting ownership. */
+  readonly ownerId: string;
+  /** ISO-8601 observation time used to evaluate lease expiry. */
+  readonly observedAt: string;
+  /** ISO-8601 deadline for the new lease. */
+  readonly leaseExpiresAt: string;
+}
+
+/**
+ * Input for releasing a held provider operation without resolving it.
+ *
+ * Handoff is a graceful release, not a failure: optional evidence explains
+ * why control was released but does not count towards the failure total.
+ */
+export interface HandoffProviderOperationInput {
+  /** Claim being released. */
+  readonly claim: ProviderOperationClaim;
+  /** Optional bounded evidence explaining the release. */
+  readonly evidence?: BoundedRecoveryEvidence;
+}
+
+/**
+ * Input for recording that a provider observation stayed inconclusive.
+ *
+ * Uncertainty is the only honest record for an ambiguous provider result. It
+ * retains the current obligation and never terminalizes the attempt.
+ */
+export interface RecordProviderOperationUncertaintyInput {
+  /** Claim authorizing the record. */
+  readonly claim: ProviderOperationClaim;
+  /** Bounded evidence describing what blocked a conclusion. */
+  readonly evidence: BoundedRecoveryEvidence;
+}
+
+/** Input for recording positive completion evidence of a provider operation. */
+export interface CompleteProviderOperationInput {
+  /** Claim that currently owns the provider operation. */
+  readonly claim: ProviderOperationClaim;
+  /** Bounded, durable, non-secret proof that provider work is complete. */
+  readonly evidence: BoundedRecoveryEvidence;
+}
+
+/** Bounded, caller-timed selector for provider operations eligible for takeover. */
+export interface ListOpenProviderOperationsInput {
+  /** ISO-8601 instant at which the caller observed lease eligibility. */
+  readonly observedAt: string;
+  /** Positive safe-integer maximum number of records to return; no implicit default exists. */
+  readonly limit: number;
+}
+
+/**
+ * One provider operation that still needs infrastructure work.
+ *
+ * The joined shape returns the existing durable attempt and operation records
+ * rather than introducing another lifecycle ledger. The operation is open
+ * when {@link isProviderOperationResolved} returns `false`; its completion
+ * evidence and settlement may each be present independently.
+ */
+export interface OpenProviderOperationRecord {
+  /** Attempt whose provider-side infrastructure remains open. */
+  readonly attempt: ExecutionAttemptRecord;
+  /** Open provider operation, including current or expired claim facts. */
+  readonly operation: ProviderOperationOwnershipRecord;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Host-Owned Initial Claim Context

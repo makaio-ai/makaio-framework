@@ -419,22 +419,28 @@ describe('process-bound allocation lifetime', () => {
 
     // Proof about the very incarnation the attempt was bound to. This is the
     // whole convergence path for a process-bound allocation.
+    const proof = makeProcessLossProof(TEST_PROVISIONER_INCARNATION_ID);
     const decision = await repositoryA.recordProvisionerIncarnationLost({
       claim,
       executionId,
-      proof: makeProcessLossProof(TEST_PROVISIONER_INCARNATION_ID),
+      proof,
     });
     expect(decision).toEqual({ kind: 'recorded' });
 
     expect(await repositoryB.recovery.getAttemptWithAllocation(executionAttemptId)).toMatchObject({
       status: 'settled',
       settlementKind: 'abandoned',
+      allocationRef: null,
     });
-    // A settled attempt must leave no owned operation behind, or the debt it
-    // just discharged would still be claimable by someone.
+    // This is pre-allocation: the exact process-loss proof therefore proves
+    // that no provider allocation survived. It closes the operation while
+    // retaining its authorizing claim as completion provenance.
     expect(await repositoryB.getProviderOperation(executionAttemptId)).toMatchObject({
-      ownerId: null,
-      token: null,
+      ownerId: claim.ownerId,
+      token: claim.token,
+      leaseExpiresAt: claim.leaseExpiresAt,
+      completionEvidence: proof.evidence,
+      obligation: 'provisioning-resolution',
     });
   });
 

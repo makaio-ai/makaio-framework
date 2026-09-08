@@ -9,6 +9,7 @@ import type {
   AttemptControlState,
   AttemptSettlementRead,
   BeginProvisioningInput,
+  CompleteProviderOperationInput,
   CompleteOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
@@ -22,10 +23,12 @@ import type {
   GetInstructionInput,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  ListOpenProviderOperationsInput,
   MarkRuntimeReadyInput,
   OperationAdmissionDecision,
   OperationCompletionDecision,
   OperationReportDecision,
+  OpenProviderOperationRecord,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
   ProvisioningAbsenceDecision,
@@ -53,6 +56,7 @@ import {
 } from './execution-attempt-owner-recovery.js';
 import type {
   ProviderOperationClaimDecision,
+  ProviderOperationCompletionDecision,
   ProviderOperationMutationDecision,
   ProviderOperationOwnershipRecord,
 } from './provider-operation.js';
@@ -297,6 +301,22 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
   }
 
   /**
+   * Record positive provider completion evidence.
+   *
+   * This writes infrastructure evidence only. It neither creates a workflow
+   * outcome nor changes the attempt's canonical settlement. Before settlement,
+   * the durable proof leaves the provider operation claimable for recovery;
+   * once settlement exists, that same proof resolves the operation.
+   * @param input - Current provider-operation claim and bounded completion proof.
+   * @returns The durable completion decision.
+   */
+  public async completeProviderOperation(
+    input: CompleteProviderOperationInput,
+  ): Promise<ProviderOperationCompletionDecision> {
+    return this.repository.completeProviderOperation(input);
+  }
+
+  /**
    * Record the provider allocation reference for a claimed operation.
    * @param input - Claim and the validated allocation reference.
    * @returns The durable allocation ownership decision.
@@ -308,9 +328,11 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
   /**
    * Record positively proven absence of any allocation for the attempt.
    *
-   * A recorded absence settles the attempt as `abandoned`, so its waiter is
-   * rejected and removed. The bounded evidence is durable in the operation
-   * record; the local error only mirrors it for the in-process caller.
+   * Only `recorded` means this call newly settled the attempt as `abandoned`,
+   * so only that decision rejects and removes its waiter. `completed`
+   * preserves an existing outcome settlement and leaves its waiter available
+   * for owner convergence. The bounded evidence is durable in the operation
+   * record; the local error only mirrors a new abandonment in-process.
    * @param input - Claim, owning execution, and bounded absence evidence.
    * @returns The durable absence decision.
    */
@@ -332,10 +354,11 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
   /**
    * Close pre-allocation debt on proof that a provisioner incarnation is gone.
    *
-   * A recorded loss settles the attempt as `abandoned`, so its waiter is
-   * rejected and removed. The bounded proof evidence is durable in the
-   * operation record; the local error only mirrors it for the in-process
-   * caller.
+   * Only `recorded` means this call newly settled the attempt as `abandoned`,
+   * so only that decision rejects and removes its waiter. `completed`
+   * preserves an existing outcome settlement and leaves its waiter available
+   * for owner convergence. The bounded proof evidence is durable in the
+   * operation record; the local error only mirrors a new abandonment in-process.
    * @param input - Claim, owning execution, and the provisioner loss proof.
    * @returns The durable provisioner-loss decision.
    */
@@ -663,6 +686,20 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
    */
   public async getRecoverableAttempts(executionId: ExecutionOwnerId): Promise<readonly RecoverableAttemptRecord[]> {
     return this.requireRecovery('getRecoverableAttempts').getRecoverableAttempts(executionId);
+  }
+
+  /**
+   * List bounded, lease-eligible provider work that remains open.
+   *
+   * Unlike {@link getRecoverableAttempts}, this includes settled attempts: a
+   * canonical outcome does not itself prove provider-side completion.
+   * @param input - Explicit observation time and positive bounded result limit.
+   * @returns Open provider operations eligible for takeover, oldest first.
+   */
+  public async listOpenProviderOperations(
+    input: ListOpenProviderOperationsInput,
+  ): Promise<readonly OpenProviderOperationRecord[]> {
+    return this.requireRecovery('listOpenProviderOperations').listOpenProviderOperations(input);
   }
 
   /**

@@ -20,7 +20,8 @@ export function registerAtomicityCases(
 
     // Worker settlement has no provider claim. The two writes can reach the
     // durable boundary in either order, but the worker's canonical answer is
-    // still accepted and settlement closes any ownership the takeover acquired.
+    // still accepted and the operation remains owned until positive provider
+    // completion, so the takeover is never discarded by settlement.
     const [takeover, commit] = await Promise.all([
       harness.peer.takeOverProviderOperation({
         executionAttemptId: ids.executionAttemptId,
@@ -31,15 +32,17 @@ export function registerAtomicityCases(
       harness.repository.commitOutcome({ ...ids, result }),
     ]);
 
-    expect(['claimed', 'resolved']).toContain(takeover.kind);
+    expect(takeover.kind).toBe('claimed');
+    if (takeover.kind !== 'claimed') throw new Error(`Expected takeover, got '${takeover.kind}'`);
     expect(commit).toEqual({ kind: 'accepted', outcome: result.outcome, text: result.text });
     expect(await harness.repository.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
       settlementKind: 'outcome',
     });
     expect(await harness.peer.getProviderOperation(ids.executionAttemptId)).toMatchObject({
-      ownerId: null,
-      token: null,
-      leaseExpiresAt: null,
+      ownerId: takeover.claim.ownerId,
+      token: takeover.claim.token,
+      leaseExpiresAt: takeover.claim.leaseExpiresAt,
+      completionEvidence: null,
     });
   });
 

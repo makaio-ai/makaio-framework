@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearHmacIdentitySecretsForTesting,
+  registerHmacIdentitySecret,
   resolveHmacIdentityAllowedSubjects,
   resolveHmacIdentityPeer,
 } from '@makaio/bus-transport-websocket';
 import {
   buildExecutionAttemptAllowedSubjects,
+  captureWorkflowExecutionBusSecretCleanup,
   mintOrRotateWorkflowExecutionBusSecret,
   mintWorkflowExecutionBusSecret,
   registerWorkflowExecutionBusSecret,
@@ -241,6 +243,72 @@ describe('workflow execution bus access', () => {
       first.cleanup();
 
       expect(resolveWorkflowExecutionBusSecret('attempt-mor')).toBe(second.secret);
+    });
+  });
+
+  // ── Capture current cleanup ─────────────────────────────────
+
+  describe('captureWorkflowExecutionBusSecretCleanup', () => {
+    it('returns undefined for an unregistered attempt', () => {
+      expect(
+        captureWorkflowExecutionBusSecretCleanup({
+          executionAttemptId: 'missing-attempt',
+          executionId: 'missing-execution',
+        }),
+      ).toBeUndefined();
+    });
+
+    it('captures a matching cleanup when the original registration closure is unavailable', () => {
+      const executionAttemptId = 'attempt-captured-cleanup';
+      const executionId = 'exec-captured-cleanup';
+      mintWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+
+      const capturedCleanup = captureWorkflowExecutionBusSecretCleanup({ executionAttemptId, executionId });
+      expect(capturedCleanup).toBeTypeOf('function');
+
+      capturedCleanup?.();
+
+      expect(resolveWorkflowExecutionBusSecret(executionAttemptId)).toBeUndefined();
+    });
+
+    it('refuses an identity registered for another peer kind', () => {
+      registerHmacIdentitySecret('attempt-wrong-kind', 'test-secret', {
+        peerKind: 'worker-bootstrap',
+        claims: { executionId: 'exec-wrong-kind' },
+      });
+
+      expect(() =>
+        captureWorkflowExecutionBusSecretCleanup({
+          executionAttemptId: 'attempt-wrong-kind',
+          executionId: 'exec-wrong-kind',
+        }),
+      ).toThrow(/not registered for execution/);
+    });
+
+    it('refuses an identity registered for another execution', () => {
+      mintWorkflowExecutionBusSecret({
+        executionAttemptId: 'attempt-wrong-execution',
+        executionId: 'exec-original',
+      });
+
+      expect(() =>
+        captureWorkflowExecutionBusSecretCleanup({
+          executionAttemptId: 'attempt-wrong-execution',
+          executionId: 'exec-other',
+        }),
+      ).toThrow(/not registered for execution "exec-other"/);
+    });
+
+    it('does not let a captured cleanup revoke a later rotation', () => {
+      const executionAttemptId = 'attempt-captured-rotation';
+      const executionId = 'exec-captured-rotation';
+      mintWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+      const capturedCleanup = captureWorkflowExecutionBusSecretCleanup({ executionAttemptId, executionId });
+
+      const rotated = rotateWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+      capturedCleanup?.();
+
+      expect(resolveWorkflowExecutionBusSecret(executionAttemptId)).toBe(rotated.secret);
     });
   });
 

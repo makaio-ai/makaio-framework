@@ -61,6 +61,7 @@ import type {
   AttemptReachabilityDecision,
   BeginProvisioningInput,
   CompleteOperationInput,
+  CompleteProviderOperationInput,
   DiscoveredAllocationDecision,
   DurableOutcome,
   ExecutionAttemptCreate,
@@ -81,9 +82,11 @@ import type {
   ExecutionAttemptSettlementKind,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  ListOpenProviderOperationsInput,
   MarkRuntimeReadyInput,
   OperationAdmissionDecision,
   OperationCompletionDecision,
+  OpenProviderOperationRecord,
   OutcomeCodec,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
@@ -102,10 +105,11 @@ import type {
   RuntimeRegistrationDecision,
   TakeOverProviderOperationInput,
 } from '../execution-attempt-repository.js';
-import { PROVIDER_OPERATION_OBLIGATIONS } from '../provider-operation.js';
+import { isProviderOperationResolved, PROVIDER_OPERATION_OBLIGATIONS } from '../provider-operation.js';
 import type {
   ProviderOperationClaim,
   ProviderOperationClaimDecision,
+  ProviderOperationCompletionDecision,
   ProviderOperationMutationDecision,
   ProviderOperationOwnershipRecord,
 } from '../provider-operation.js';
@@ -185,7 +189,8 @@ const SCHEMA_STATEMENTS = [
      lease_expires_at TEXT,
      obligation TEXT NOT NULL,
      failure_count INTEGER NOT NULL DEFAULT 0,
-     last_failure TEXT
+     last_failure TEXT,
+     completion_evidence TEXT
    )`,
 ] as const;
 
@@ -232,6 +237,7 @@ interface OperationRow extends Record<string, unknown> {
   readonly obligation: string;
   readonly failure_count: number;
   readonly last_failure: string | null;
+  readonly completion_evidence: string | null;
 }
 
 /** One row of `test_active_execution_attempt`. */
@@ -346,6 +352,9 @@ function toOperationRecord(row: OperationRow): ProviderOperationOwnershipRecord 
     obligation: parseMember(PROVIDER_OPERATION_OBLIGATIONS, row.obligation, 'obligation'),
     failureCount: row.failure_count,
     lastFailure: parseJsonColumn<BoundedRecoveryEvidence>(row.last_failure, (value) =>
+      BoundedRecoveryEvidenceSchema.parse(value),
+    ),
+    completionEvidence: parseJsonColumn<BoundedRecoveryEvidence>(row.completion_evidence, (value) =>
       BoundedRecoveryEvidenceSchema.parse(value),
     ),
   };
@@ -538,18 +547,19 @@ type GuardedWrite = () => Promise<{ rowsAffected: number }>;
  * isolation it does not, and there the second `read` reports exactly the
  * refusal the loser of the race is owed.
  * @param read - Reads durable state and returns a refusal or the guarded write.
- * @param accepted - Decision reported when the guarded write applied.
+ * @param accepted - Decision reported when the guarded write applied. A
+ * callback may derive it from the state that the guarded write observed.
  * @returns The refusal, or `accepted` when the write applied.
  * @throws When the write applies nothing while durable state still permits it.
  * @typeParam TDecision - Decision vocabulary of the transition.
  */
 async function decideByWrite<TDecision extends { readonly kind: string }>(
   read: () => Promise<TDecision | GuardedWrite>,
-  accepted: TDecision,
+  accepted: TDecision | (() => TDecision),
 ): Promise<TDecision> {
   const first = await read();
   if (typeof first !== 'function') return first;
-  if ((await first()).rowsAffected > 0) return accepted;
+  if ((await first()).rowsAffected > 0) return typeof accepted === 'function' ? accepted() : accepted;
 
   const contended = await read();
   if (typeof contended !== 'function') return contended;
@@ -570,25 +580,36 @@ function claimHolds(claim: ProviderOperationClaim): SQL {
 }
 
 /**
- * Predicate asserting that an attempt has not settled.
- * @param executionAttemptId - Attempt to constrain.
- * @returns A predicate over the attempt's own row.
+ * Predicate asserting that an operation still needs ownership or recovery.
+ *
+ * Provider completion evidence and attempt settlement are independent durable
+ * facts. The operation resolves only after both are present.
+ * @param executionAttemptId - Attempt whose provider operation is constrained.
+ * @returns A predicate over `test_provider_operation`'s current row.
  */
-function attemptUnsettled(executionAttemptId: string): SQL {
-  return sql`EXISTS (SELECT 1 FROM test_execution_attempt
-                     WHERE execution_attempt_id = ${executionAttemptId} AND settlement_kind IS NULL)`;
+function operationIsUnresolved(executionAttemptId: string): SQL {
+  return sql`(completion_evidence IS NULL
+              OR NOT EXISTS (SELECT 1 FROM test_execution_attempt
+                             WHERE execution_attempt_id = ${executionAttemptId}
+                               AND settlement_kind IS NOT NULL))`;
 }
 
 /**
  * Predicate repeating, as part of a write, what authorization read.
  *
- * Both halves matter: the claim must still be the current one, and the
- * attempt must not have settled underneath it.
+ * A settled attempt can still owe provider-side work, and early completion
+ * evidence still needs a canonical answer. Only their combination closes an
+ * operation, so neither fact alone is an authorization guard here.
  * @param claim - Claim the write is authorized by.
  * @returns A predicate that holds exactly while the claim authorizes a write.
  */
 function claimAuthorizes(claim: ProviderOperationClaim): SQL {
-  return sql`${claimHolds(claim)} AND ${attemptUnsettled(claim.executionAttemptId)}`;
+  return sql`EXISTS (SELECT 1 FROM test_provider_operation
+                     WHERE execution_attempt_id = ${claim.executionAttemptId}
+                       AND generation = ${claim.generation}
+                       AND owner_id = ${claim.ownerId}
+                       AND token = ${claim.token}
+                       AND ${operationIsUnresolved(claim.executionAttemptId)})`;
 }
 
 /**
@@ -662,6 +683,16 @@ export async function createSqliteAttemptRepository<TOutcome>(
     const columns = await executor.all<{ name: string }>(sql.raw('PRAGMA table_info(test_execution_attempt)'));
     if (!columns.some((column) => column.name === 'bootstrap_deadline_at')) {
       await executor.run(sql.raw('ALTER TABLE test_execution_attempt ADD COLUMN bootstrap_deadline_at TEXT'));
+    }
+    // Test databases persist across repository construction in restart tests.
+    // Add the positive-completion fact separately so rows created by the
+    // earlier operation protocol remain open rather than being misread as
+    // completed or failing to decode.
+    const operationColumns = await executor.all<{ name: string }>(
+      sql.raw('PRAGMA table_info(test_provider_operation)'),
+    );
+    if (!operationColumns.some((column) => column.name === 'completion_evidence')) {
+      await executor.run(sql.raw('ALTER TABLE test_provider_operation ADD COLUMN completion_evidence TEXT'));
     }
   });
 
@@ -847,7 +878,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
     const operation = await readOperationRow(session, claim.executionAttemptId);
     if (attemptRow === undefined || operation === undefined) return { kind: 'not-found' };
     const attempt = toAttemptRecord(attemptRow);
-    if (attempt.settlementKind != null) return { kind: 'resolved', attempt };
+    if (isProviderOperationResolved(attempt, toOperationRecord(operation))) return { kind: 'resolved', attempt };
     if (
       operation.token === null ||
       operation.token !== claim.token ||
@@ -875,27 +906,27 @@ export async function createSqliteAttemptRepository<TOutcome>(
   };
 
   /**
-   * Settle an attempt and close its operation in one guarded write.
+   * Settle an attempt without inferring provider-operation completion.
    *
    * The terminal transition is the settlement itself: it applies only while
    * the attempt is unsettled and `guard` still holds, which is what makes the
    * first terminal writer the winner and every later one a loser that changes
-   * nothing. A settled attempt must never leave an owned operation behind, so
-   * the operation is closed in the same transaction, and only once the
-   * settlement actually applied.
+   * nothing. A settled attempt may still leave an owned operation behind, so
+   * the provider operation stays open until a caller records positive completion
+   * evidence. Pre-allocation absence and process-loss proofs are the narrow
+   * exceptions: their callers write both facts atomically with the dedicated
+   * helper below.
    * @param session - Session inside the current transaction.
    * @param executionAttemptId - Attempt reaching a terminal state.
    * @param settlementKind - How the attempt reached that state.
    * @param guard - Transition-specific predicate the attempt row must satisfy.
-   * @param lastFailure - Bounded evidence to retain, or `undefined` to keep what is stored.
    * @returns The settlement write's affected-row count.
    */
-  const settleAndCloseOperation = async (
+  const settleAttempt = async (
     session: RawSqlSession,
     executionAttemptId: string,
     settlementKind: NonNullable<ExecutionAttemptSettlementKind>,
     guard: SQL,
-    lastFailure?: BoundedRecoveryEvidence,
   ): Promise<{ rowsAffected: number }> => {
     const settled = await session.run(
       // The start gate closes with the settlement. The active operation is
@@ -909,16 +940,60 @@ export async function createSqliteAttemptRepository<TOutcome>(
             AND ${guard}`,
     );
     if (settled.rowsAffected === 0) return settled;
-    await session.run(
-      lastFailure === undefined
-        ? sql`UPDATE test_provider_operation
-              SET owner_id = NULL, token = NULL, lease_expires_at = NULL
-              WHERE execution_attempt_id = ${executionAttemptId}`
-        : sql`UPDATE test_provider_operation
-              SET owner_id = NULL, token = NULL, lease_expires_at = NULL, last_failure = ${JSON.stringify(lastFailure)}
-              WHERE execution_attempt_id = ${executionAttemptId}`,
-    );
     return settled;
+  };
+
+  /**
+   * Settle a pre-allocation attempt and persist its provider completion proof.
+   *
+   * Positive absence and process-bound provisioner loss prove both facts at
+   * once: no allocation exists, and no provider-side responsibility remains.
+   * An earlier positive proof is immutable, so a later abandonment preserves
+   * it rather than attempting to replace it. Resolution retains the final
+   * control snapshot rather than clearing it like a handoff; that snapshot
+   * does not identify the writer of an earlier proof.
+   * @param session - Session inside the current transaction.
+   * @param executionAttemptId - Attempt reaching abandonment.
+   * @param claim - Current claim retained as the final control snapshot.
+   * @param guard - Transition-specific predicate the attempt row must satisfy.
+   * @param evidence - Positive proof shared by settlement and completion.
+   * @param alreadySettled - Whether the proof completes an existing settlement.
+   * @returns A positive count when this invocation durably completed its
+   * transition; an existing settlement must still write the missing proof.
+   */
+  const settleAndCompletePreallocationOperation = async (
+    session: RawSqlSession,
+    executionAttemptId: string,
+    claim: ProviderOperationClaim,
+    guard: SQL,
+    evidence: BoundedRecoveryEvidence,
+    alreadySettled: boolean,
+  ): Promise<{ rowsAffected: number }> => {
+    if (!alreadySettled) {
+      const settled = await settleAttempt(session, executionAttemptId, 'abandoned', guard);
+      if (settled.rowsAffected === 0) return settled;
+      const proof = await session.run(
+        sql`UPDATE test_provider_operation
+              SET completion_evidence = ${JSON.stringify(evidence)}
+              WHERE execution_attempt_id = ${executionAttemptId}
+                AND ${claimHolds(claim)}
+                AND completion_evidence IS NULL`,
+      );
+      if (proof.rowsAffected === 0) {
+        const operation = await readOperationRow(session, executionAttemptId);
+        if (operation?.completion_evidence === null) {
+          throw new Error('Pre-allocation settlement succeeded without provider completion evidence');
+        }
+      }
+      return settled;
+    }
+    return session.run(
+      sql`UPDATE test_provider_operation
+            SET completion_evidence = ${JSON.stringify(evidence)}
+            WHERE execution_attempt_id = ${executionAttemptId}
+              AND ${claimHolds(claim)}
+              AND completion_evidence IS NULL`,
+    );
   };
 
   /**
@@ -941,7 +1016,9 @@ export async function createSqliteAttemptRepository<TOutcome>(
     // Claimability is decided by the write, correlated against the row it
     // touches, so an attempt cannot be superseded between the check and the
     // flag being set.
-    const claimable = bootstrapClaimable ? sql`CASE WHEN ${isActiveAttemptRow()} THEN 1 ELSE 0 END` : sql`${0}`;
+    const claimable = bootstrapClaimable
+      ? sql`CASE WHEN settlement_kind IS NULL AND ${isActiveAttemptRow()} THEN 1 ELSE 0 END`
+      : sql`${0}`;
     return transact((session) =>
       decideByWrite<AllocationRecordingDecision>(
         async () => {
@@ -965,7 +1042,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
           return async () => {
             const applied = await session.run(
               sql`UPDATE test_execution_attempt
-                SET status = ${'allocated'},
+                SET status = CASE WHEN settlement_kind IS NULL THEN ${'allocated'} ELSE status END,
                     allocation_ref = ${JSON.stringify(allocationRef)},
                     claimable = ${claimable}
                 WHERE execution_attempt_id = ${attempt.executionAttemptId}
@@ -1058,6 +1135,33 @@ export async function createSqliteAttemptRepository<TOutcome>(
               ORDER BY created_at ASC, execution_attempt_id ASC`,
         );
         return rows.map((row) => toRecoverableAttempt(toAttemptRecord(row)));
+      });
+    },
+
+    async listOpenProviderOperations(
+      input: ListOpenProviderOperationsInput,
+    ): Promise<readonly OpenProviderOperationRecord[]> {
+      const observedAt = normalizeInstant(input.observedAt);
+      if (!Number.isSafeInteger(input.limit) || input.limit <= 0) {
+        throw new RangeError('Provider-operation recovery limit must be a positive safe integer');
+      }
+      return transact(async (session) => {
+        const rows = await session.all<AttemptRow & OperationRow>(
+          sql`SELECT attempt.*, operation.generation, operation.owner_id, operation.token, operation.lease_expires_at,
+                     operation.obligation, operation.failure_count, operation.last_failure, operation.completion_evidence
+                FROM test_execution_attempt AS attempt
+                INNER JOIN test_provider_operation AS operation
+                  ON operation.execution_attempt_id = attempt.execution_attempt_id
+                WHERE (operation.completion_evidence IS NULL OR attempt.settlement_kind IS NULL)
+                  AND (
+                    operation.owner_id IS NULL
+                    OR operation.lease_expires_at IS NULL
+                    OR operation.lease_expires_at <= ${observedAt}
+                  )
+                ORDER BY attempt.created_at ASC, attempt.execution_attempt_id ASC
+                LIMIT ${input.limit}`,
+        );
+        return rows.map((row) => ({ attempt: toAttemptRecord(row), operation: toOperationRecord(row) }));
       });
     },
   };
@@ -1298,11 +1402,13 @@ export async function createSqliteAttemptRepository<TOutcome>(
         const attemptRow = await readAttemptRow(session, input.executionAttemptId);
         const operation = await readOperationRow(session, input.executionAttemptId);
         if (attemptRow === undefined || operation === undefined) return { kind: 'not-found' };
-        if (attemptRow.settlement_kind !== null) return { kind: 'resolved' };
+        const attempt = toAttemptRecord(attemptRow);
+        if (isProviderOperationResolved(attempt, toOperationRecord(operation))) return { kind: 'resolved' };
+        const observedAt = normalizeInstant(input.observedAt);
         const held =
           operation.owner_id !== null &&
           operation.lease_expires_at !== null &&
-          instantOf(operation.lease_expires_at) > instantOf(input.observedAt);
+          instantOf(operation.lease_expires_at) > instantOf(observedAt);
         if (held) return { kind: 'stale' };
 
         const claim: ProviderOperationClaim = {
@@ -1314,17 +1420,26 @@ export async function createSqliteAttemptRepository<TOutcome>(
         };
         // The generation guard makes takeover a compare-and-set: a second
         // taker that read the same row updates nothing and is refused. The
-        // settlement guard closes the same race against a terminal
-        // transition; a taker that loses either one is told to re-read.
+        // derived-resolution guard closes the same race against the independent
+        // settlement and evidence facts; either fact alone leaves the operation
+        // eligible for takeover.
         const { rowsAffected } = await session.run(
           sql`UPDATE test_provider_operation
               SET generation = ${claim.generation}, owner_id = ${claim.ownerId}, token = ${claim.token},
                   lease_expires_at = ${claim.leaseExpiresAt}
               WHERE execution_attempt_id = ${input.executionAttemptId}
                 AND generation = ${operation.generation}
-                AND ${attemptUnsettled(input.executionAttemptId)}`,
+                AND ${operationIsUnresolved(input.executionAttemptId)}`,
         );
-        if (rowsAffected === 0) return { kind: 'stale' };
+        if (rowsAffected === 0) {
+          const latestAttempt = await readAttemptRow(session, input.executionAttemptId);
+          const latestOperation = await readOperationRow(session, input.executionAttemptId);
+          return latestAttempt !== undefined &&
+            latestOperation !== undefined &&
+            isProviderOperationResolved(toAttemptRecord(latestAttempt), toOperationRecord(latestOperation))
+            ? { kind: 'resolved' }
+            : { kind: 'stale' };
+        }
         return { kind: 'claimed', claim };
       });
     },
@@ -1375,12 +1490,61 @@ export async function createSqliteAttemptRepository<TOutcome>(
       );
     },
 
+    async completeProviderOperation(
+      input: CompleteProviderOperationInput,
+    ): Promise<ProviderOperationCompletionDecision> {
+      const evidence = BoundedRecoveryEvidenceSchema.parse(input.evidence);
+      return transact(async (session) => {
+        const attemptRow = await readAttemptRow(session, input.claim.executionAttemptId);
+        const operation = await readOperationRow(session, input.claim.executionAttemptId);
+        if (attemptRow === undefined || operation === undefined) return { kind: 'not-found' };
+        const claimMatches =
+          operation.generation === input.claim.generation &&
+          operation.owner_id === input.claim.ownerId &&
+          operation.token === input.claim.token;
+        // Provenance fencing deliberately precedes idempotence: completion by
+        // another controller is not evidence that this controller completed it.
+        if (!claimMatches) return { kind: 'stale' };
+        const attempt = toAttemptRecord(attemptRow);
+        if (isProviderOperationResolved(attempt, toOperationRecord(operation))) return { kind: 'already-completed' };
+        if (operation.completion_evidence !== null) return { kind: 'evidence-recorded' };
+
+        const recorded = await session.run(
+          sql`UPDATE test_provider_operation
+                SET completion_evidence = ${JSON.stringify(evidence)}
+                WHERE execution_attempt_id = ${input.claim.executionAttemptId}
+                  AND ${claimHolds(input.claim)}
+                  AND completion_evidence IS NULL`,
+        );
+        if (recorded.rowsAffected > 0) {
+          const latestAttempt = await readAttemptRow(session, input.claim.executionAttemptId);
+          if (latestAttempt === undefined) return { kind: 'not-found' };
+          return latestAttempt.settlement_kind === null ? { kind: 'evidence-recorded' } : { kind: 'completed' };
+        }
+
+        const latestAttempt = await readAttemptRow(session, input.claim.executionAttemptId);
+        const latestOperation = await readOperationRow(session, input.claim.executionAttemptId);
+        if (latestAttempt === undefined || latestOperation === undefined) return { kind: 'not-found' };
+        const latestClaimMatches =
+          latestOperation.generation === input.claim.generation &&
+          latestOperation.owner_id === input.claim.ownerId &&
+          latestOperation.token === input.claim.token;
+        if (!latestClaimMatches) return { kind: 'stale' };
+        if (isProviderOperationResolved(toAttemptRecord(latestAttempt), toOperationRecord(latestOperation))) {
+          return { kind: 'already-completed' };
+        }
+        if (latestOperation.completion_evidence !== null) return { kind: 'evidence-recorded' };
+        return { kind: 'stale' };
+      });
+    },
+
     async recordAllocation(input: RecordAllocationInput): Promise<AllocationRecordingDecision> {
       return applyAllocation(input, true);
     },
 
     async recordProvisioningAbsent(input: RecordProvisioningAbsentInput): Promise<ProvisioningAbsenceDecision> {
       const evidence = BoundedRecoveryEvidenceSchema.parse(input.evidence);
+      let preservedSettlement = false;
       return transact((session) =>
         decideByWrite<ProvisioningAbsenceDecision>(
           async () => {
@@ -1389,19 +1553,21 @@ export async function createSqliteAttemptRepository<TOutcome>(
             const { attempt } = authorization;
             if (attempt.executionId !== input.executionId) return { kind: 'not-found' };
             if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
+            preservedSettlement = attempt.settlementKind !== null;
 
             return () =>
-              settleAndCloseOperation(
+              settleAndCompletePreallocationOperation(
                 session,
                 attempt.executionAttemptId,
-                'abandoned',
+                input.claim,
                 sql`execution_id = ${input.executionId}
                   AND allocation_ref IS NULL
                   AND ${claimHolds(input.claim)}`,
                 evidence,
+                preservedSettlement,
               );
           },
-          { kind: 'recorded' },
+          () => (preservedSettlement ? { kind: 'completed' } : { kind: 'recorded' }),
         ),
       );
     },
@@ -1410,6 +1576,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
       input: RecordProvisionerIncarnationLostInput,
     ): Promise<ProvisionerIncarnationLossDecision> {
       const evidence = BoundedRecoveryEvidenceSchema.parse(input.proof.evidence);
+      let preservedSettlement = false;
       return transact((session) =>
         decideByWrite<ProvisionerIncarnationLossDecision>(
           async () => {
@@ -1418,24 +1585,26 @@ export async function createSqliteAttemptRepository<TOutcome>(
             const { attempt } = authorization;
             const refusal = evaluateProvisionerIncarnationLoss(attempt, input);
             if (refusal !== null) return refusal;
+            preservedSettlement = attempt.settlementKind !== null;
 
             // Both immutable facts are repeated in the predicate, so the write
             // applies only against the very attempt the proof was judged
             // against — never against one a concurrent transition reshaped.
             return () =>
-              settleAndCloseOperation(
+              settleAndCompletePreallocationOperation(
                 session,
                 attempt.executionAttemptId,
-                'abandoned',
+                input.claim,
                 sql`execution_id = ${input.executionId}
                   AND allocation_ref IS NULL
                   AND allocation_lifetime = ${'provisioner-process-bound'}
                   AND provisioner_incarnation_id = ${input.proof.provisionerIncarnationId}
                   AND ${claimHolds(input.claim)}`,
                 evidence,
+                preservedSettlement,
               );
           },
-          { kind: 'recorded' },
+          () => (preservedSettlement ? { kind: 'completed' } : { kind: 'recorded' }),
         ),
       );
     },
@@ -1481,6 +1650,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
             if (authorization.kind !== 'authorized') return { kind: authorization.kind };
             const { attempt, operation } = authorization;
             if (attempt.executionId !== input.executionId) return { kind: 'not-found' };
+            if (attempt.settlementKind !== null) return { kind: 'resolved' };
             if (attempt.allocationRef === null) return { kind: 'not-allocated' };
             // Terminal settlement is irreversible, so it may only follow the
             // durable evidence that the allocation actually ended. An
@@ -1491,7 +1661,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
             if (obligation !== 'terminal-convergence') return { kind: 'not-terminated' };
 
             return () =>
-              settleAndCloseOperation(
+              settleAttempt(
                 session,
                 attempt.executionAttemptId,
                 'infrastructure-failure',
@@ -1846,12 +2016,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
               );
               if (committed.rowsAffected === 0) return committed;
               // Only the transaction that committed the outcome settles for it.
-              return settleAndCloseOperation(
-                session,
-                input.executionAttemptId,
-                'outcome',
-                sql`workflow_result IS NOT NULL`,
-              );
+              return settleAttempt(session, input.executionAttemptId, 'outcome', sql`workflow_result IS NOT NULL`);
             };
           },
           // The accepted outcome is what a reload of the column returns:

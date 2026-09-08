@@ -128,7 +128,7 @@ export function registerRecoveryCases(
     expect(await harness.peer.getProviderOperation(ids.executionAttemptId)).toEqual(operation);
   });
 
-  it('settles proven provisioning absence and closes ownership without allocation debt', async () => {
+  it('settles proven provisioning absence and completes its ownership without allocation debt', async () => {
     const harness = getHarness();
     const ids = nextIds();
     const claim = await startAttempt(harness.repository, ids);
@@ -141,14 +141,14 @@ export function registerRecoveryCases(
     expect(settled).toMatchObject({ status: 'settled', settlementKind: 'abandoned', allocationRef: null });
     expect(settled?.claimable ?? false).toBe(false);
     expect(await harness.repository.getProviderOperation(ids.executionAttemptId)).toMatchObject({
-      ownerId: null,
-      token: null,
-      leaseExpiresAt: null,
+      ownerId: claim.ownerId,
+      token: claim.token,
+      leaseExpiresAt: claim.leaseExpiresAt,
       obligation: 'provisioning-resolution',
-      lastFailure: evidence,
+      completionEvidence: evidence,
     });
 
-    // Closed debt cannot be reclaimed, even after the former lease expires.
+    // Completed debt cannot be reclaimed, even after the former lease expires.
     expect(
       await harness.peer.takeOverProviderOperation({
         executionAttemptId: ids.executionAttemptId,

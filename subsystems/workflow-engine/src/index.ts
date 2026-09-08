@@ -135,9 +135,12 @@ export type {
   AllocationRecordingDecision,
   AllocationTerminationDecision,
   BeginProvisioningInput,
+  CompleteProviderOperationInput,
   DiscoveredAllocationDecision,
   HandoffProviderOperationInput,
   InfrastructureFailureDecision,
+  ListOpenProviderOperationsInput,
+  OpenProviderOperationRecord,
   PendingAttemptAbandonmentDecision,
   ProvisionerIncarnationLossDecision,
   ProvisioningAbsenceDecision,
@@ -151,13 +154,14 @@ export type {
   RenewProviderOperationClaimInput,
   TakeOverProviderOperationInput,
 } from './execution-attempt-repository.js';
-export { PROVIDER_OPERATION_OBLIGATIONS } from './provider-operation.js';
+export { isProviderOperationResolved, PROVIDER_OPERATION_OBLIGATIONS } from './provider-operation.js';
 export type {
   InitialProviderOperationClaimContext,
   InitialProviderOperationClaimContextSource,
   ProcessBoundProvisionerLossProof,
   ProviderOperationClaim,
   ProviderOperationClaimDecision,
+  ProviderOperationCompletionDecision,
   ProviderOperationMutationDecision,
   ProviderOperationObligation,
   ProviderOperationOwnershipRecord,

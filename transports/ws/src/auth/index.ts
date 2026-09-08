@@ -9,6 +9,7 @@ export type { TransportAuth } from './interface.js';
 export { HmacAuth } from './hmac-auth.js';
 export type { HmacAuthOptions } from './hmac-auth.js';
 export {
+  captureHmacIdentitySecretCleanup,
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
   resolveHmacIdentityAllowedSubjects,

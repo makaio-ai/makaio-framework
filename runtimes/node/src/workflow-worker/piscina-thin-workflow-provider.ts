@@ -5,6 +5,7 @@ import type {
   NormalizedWorkerCapabilities,
   ProviderAllocationRef,
   WorkerAllocatedOutcome,
+  BoundedRecoveryEvidence,
   WorkerCapabilities,
   WorkerHandle,
   WorkerInfrastructureConclusion,
@@ -133,6 +134,97 @@ interface InfrastructureConclusionSignal {
 }
 
 /**
+ * At-most-once positive provider-completion proof with replay for late observers.
+ */
+interface ProviderCompletionSignal {
+  /** Record the first positive completion proof and notify every current observer. */
+  readonly complete: (observation: ProviderCompletionObservation) => void;
+  /** Observe the completion proof, replaying it synchronously when it already happened. */
+  readonly observe: (observer: (evidence: BoundedRecoveryEvidence) => void) => () => void;
+}
+
+/** Bounded provider-owned fact establishing that Piscina has no remaining allocation duties. */
+interface ProviderCompletionObservation {
+  /** Stable classification of the observed provider completion. */
+  readonly code: string;
+  /** Non-secret explanation of the completed provider responsibility. */
+  readonly summary: string;
+}
+
+const OUTCOME_ACKNOWLEDGED_COMPLETION: ProviderCompletionObservation = {
+  code: 'outcome-acknowledged',
+  summary: 'Piscina runner settled and the Authority acknowledged its workflow outcome',
+};
+
+const OUTCOME_DELIVERY_ENDED_COMPLETION: ProviderCompletionObservation = {
+  code: 'outcome-delivery-ended',
+  summary: 'Piscina runner settled and its bounded workflow outcome delivery ended',
+};
+
+/** At-most-once report that this handle can no longer observe an open operation. */
+interface LocalObservationLossSignal {
+  /** Report permanent loss of this handle's local observation. */
+  readonly lose: () => void;
+  /** Observe the loss, replaying it synchronously when it already happened. */
+  readonly observe: (observer: () => void) => () => void;
+}
+
+/** Mutually exclusive final observations a Piscina allocation can make. */
+interface TerminalObservationSignals {
+  /** Positive completion proof, when the Authority acknowledged the outcome. */
+  readonly completion: ProviderCompletionSignal;
+  /** Loss of local observation when positive completion is impossible. */
+  readonly localObservationLoss: LocalObservationLossSignal;
+}
+
+/** Private retained value signal shared by the provider's two terminal fact families. */
+interface ReplayOnceSignal<T extends object> {
+  /** Publish the retained value at most once. */
+  readonly publish: (createValue: () => T) => void;
+  /** Observe the retained value, replaying it after publication. */
+  readonly observe: (observer: (value: T) => void) => () => void;
+}
+
+/**
+ * Create an at-most-once signal that replays its retained value to late observers.
+ *
+ * The value producer runs before the signal becomes observable. Callers can
+ * therefore perform required local cleanup in the producer without exposing
+ * a completion or conclusion before that cleanup succeeds.
+ * @param observerFailureLabel - Stable log prefix identifying the signal's observer family.
+ * @returns Publisher and observer registration for one retained value.
+ */
+function createReplayOnceSignal<T extends object>(observerFailureLabel: string): ReplayOnceSignal<T> {
+  const observers = new Set<(value: T) => void>();
+  let value: T | undefined;
+
+  return {
+    publish: (createValue): void => {
+      if (value !== undefined) return;
+      const nextValue = createValue();
+      value = nextValue;
+      const pending = [...observers];
+      observers.clear();
+      for (const observer of pending) {
+        try {
+          observer(nextValue);
+        } catch (error) {
+          console.error(`${observerFailureLabel} observer failed:`, error);
+        }
+      }
+    },
+    observe: (observer): (() => void) => {
+      if (value !== undefined) {
+        observer(value);
+        return () => undefined;
+      }
+      observers.add(observer);
+      return () => observers.delete(observer);
+    },
+  };
+}
+
+/**
  * Create a single-shot terminal infrastructure conclusion signal.
  *
  * The first conclusion wins and is retained, so observers registered after it
@@ -147,36 +239,72 @@ interface InfrastructureConclusionSignal {
  * @returns Conclusion reporter and observer registration.
  */
 function createInfrastructureConclusionSignal(source: string): InfrastructureConclusionSignal {
-  const observers = new Set<(conclusion: WorkerInfrastructureConclusion) => void>();
-  let conclusion: WorkerInfrastructureConclusion | undefined;
+  const signal = createReplayOnceSignal<WorkerInfrastructureConclusion>(
+    '[PiscinaThinWorkflowProvider] Infrastructure-conclusion',
+  );
 
   return {
     conclude: (summary: string): void => {
-      if (conclusion !== undefined) return;
-      conclusion = {
+      signal.publish(() => ({
         evidence: BoundedRecoveryEvidenceSchema.parse({
           source: source.slice(0, RECOVERY_EVIDENCE_LIMITS.source),
           summary: summary.slice(0, RECOVERY_EVIDENCE_LIMITS.summary),
           observedAt: new Date().toISOString(),
         }),
-      };
-      const pending = [...observers];
-      observers.clear();
-      for (const observer of pending) {
-        try {
-          observer(conclusion);
-        } catch (error) {
-          console.error('[PiscinaThinWorkflowProvider] Infrastructure-conclusion observer failed:', error);
-        }
-      }
+      }));
     },
-    observe: (observer): (() => void) => {
-      if (conclusion !== undefined) {
-        observer(conclusion);
-        return () => undefined;
-      }
-      observers.add(observer);
-      return () => observers.delete(observer);
+    observe: signal.observe,
+  };
+}
+
+/**
+ * Create mutually exclusive final observation signals for one allocation.
+ *
+ * Piscina can prove provider completion once its admitted runner and bounded
+ * local outcome-delivery path both settled; Authority acknowledgement and
+ * exhausted delivery produce distinct evidence. When no admitted runner can
+ * be observed to settle, it reports loss of local observation instead. The two
+ * reports cannot both be true.
+ * @param source - Provider instance recorded as the observer of the evidence.
+ * @param releaseBusIdentity - Releases the attempt identity once no future outcome can use it.
+ * @returns Completion and local-observation-loss reporters with their observers.
+ */
+function createTerminalObservationSignals(source: string, releaseBusIdentity: () => void): TerminalObservationSignals {
+  const completionSignal = createReplayOnceSignal<BoundedRecoveryEvidence>(
+    '[PiscinaThinWorkflowProvider] Provider-completion',
+  );
+  const localObservationLossSignal = createReplayOnceSignal<Record<never, never>>(
+    '[PiscinaThinWorkflowProvider] Local-observation-loss',
+  );
+  let finalObservation: 'completion' | 'local-observation-loss' | undefined;
+
+  return {
+    completion: {
+      complete: (observation): void => {
+        if (finalObservation !== undefined) return;
+        completionSignal.publish(() => {
+          const completionEvidence = BoundedRecoveryEvidenceSchema.parse({
+            source: source.slice(0, RECOVERY_EVIDENCE_LIMITS.source),
+            code: observation.code,
+            summary: observation.summary,
+            observedAt: new Date().toISOString(),
+          });
+          releaseBusIdentity();
+          finalObservation = 'completion';
+          return completionEvidence;
+        });
+      },
+      observe: completionSignal.observe,
+    },
+    localObservationLoss: {
+      lose: (): void => {
+        if (finalObservation !== undefined) return;
+        localObservationLossSignal.publish(() => {
+          finalObservation = 'local-observation-loss';
+          return {};
+        });
+      },
+      observe: (observer): (() => void) => localObservationLossSignal.observe(() => observer()),
     },
   };
 }
@@ -187,10 +315,10 @@ function createInfrastructureConclusionSignal(source: string): InfrastructureCon
  * The handle outlives the provision call that created it — it is held until
  * the workflow outcome settles — so it deliberately holds only what allocation
  * control needs: the attempt identifier, the controller wired to the runner,
- * the caller-abort forwarder, and the conclusion signal. A handle assembled as
- * closures inside `provision` would instead share that call's scope and keep
- * the whole provision request reachable, including the worker configuration
- * with its trigger payload and the contribution manifest.
+ * the caller-abort forwarder, and terminal/completion signals. A handle
+ * assembled as closures inside `provision` would instead share that call's
+ * scope and keep the whole provision request reachable, including the worker
+ * configuration with its trigger payload and the contribution manifest.
  */
 class PiscinaAllocationHandle implements WorkerHandle {
   /**
@@ -198,6 +326,8 @@ class PiscinaAllocationHandle implements WorkerHandle {
    * @param controller - Controller wired to the runner's cancellation signal.
    * @param detachCallerAbort - Removes this allocation's forwarder from the caller's signal.
    * @param infrastructure - Single-shot terminal infrastructure conclusion signal.
+   * @param completion - Single-shot positive provider completion signal.
+   * @param localObservationLoss - Single-shot signal that this handle can no longer observe an open operation.
    * @param revokeBusIdentity - Unregisters the attempt-scoped bus secret minted for this allocation.
    */
   public constructor(
@@ -205,6 +335,8 @@ class PiscinaAllocationHandle implements WorkerHandle {
     private readonly controller: AbortController,
     private readonly detachCallerAbort: () => void,
     private readonly infrastructure: InfrastructureConclusionSignal,
+    private readonly completion: ProviderCompletionSignal,
+    private readonly localObservationLoss: LocalObservationLossSignal,
     private readonly revokeBusIdentity: () => void,
   ) {}
 
@@ -236,14 +368,15 @@ class PiscinaAllocationHandle implements WorkerHandle {
   /**
    * Release provider resources for this allocation.
    *
-   * The per-allocation resources are the caller abort forwarder and the
-   * attempt-scoped bus identity minted for the worker thread. Both are given
-   * up here; the runner and abort controller are intentionally left untouched.
+   * Release only detaches the caller's abort forwarder. It may run while the
+   * worker thread or its outcome acknowledgement is still pending, so it must
+   * not revoke the attempt-scoped bus identity: the thread still needs that
+   * identity to report its outcome. Final identity cleanup belongs to positive
+   * provider completion or an explicit terminal path instead.
    * @returns Promise that resolves immediately.
    */
   public release(): Promise<void> {
     this.detachCallerAbort();
-    this.revokeBusIdentity();
     return Promise.resolve();
   }
 
@@ -254,6 +387,24 @@ class PiscinaAllocationHandle implements WorkerHandle {
    */
   public observeInfrastructureConclusion(observer: (conclusion: WorkerInfrastructureConclusion) => void): () => void {
     return this.infrastructure.observe(observer);
+  }
+
+  /**
+   * Observe proof that this provider has no remaining allocation duties.
+   * @param observer - Callback invoked at most once after runner settlement and outcome acknowledgement.
+   * @returns Cleanup function that stops observing the provider signal.
+   */
+  public observeProviderCompletion(observer: (evidence: BoundedRecoveryEvidence) => void): () => void {
+    return this.completion.observe(observer);
+  }
+
+  /**
+   * Observe permanent loss of this handle's local monitoring.
+   * @param observer - Callback invoked at most once after local observation is lost.
+   * @returns Cleanup function that stops observing the provider signal.
+   */
+  public observeLocalObservationLoss(observer: () => void): () => void {
+    return this.localObservationLoss.observe(observer);
   }
 }
 
@@ -394,13 +545,22 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       // authenticated transport peer. Same move a remote provider makes when
       // it mints the bootstrap credentials its container connects with.
       const busIdentity = mintOrRotateWorkflowExecutionBusSecret({ executionAttemptId, executionId });
-      revokeBusIdentity = busIdentity.cleanup;
+      let busIdentityReleased = false;
+      const releaseBusIdentity = (): void => {
+        if (busIdentityReleased) return;
+        busIdentityReleased = true;
+        busIdentity.cleanup();
+      };
+      revokeBusIdentity = releaseBusIdentity;
+      const terminalObservations = createTerminalObservationSignals(this.id, releaseBusIdentity);
       const handle = new PiscinaAllocationHandle(
         executionAttemptId,
         controller,
         detachCallerAbort,
         infrastructure,
-        busIdentity.cleanup,
+        terminalObservations.completion,
+        terminalObservations.localObservationLoss,
+        releaseBusIdentity,
       );
 
       // The caller can abort after the entry check but before the forwarder is
@@ -434,15 +594,18 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
             executionAttemptId,
             workerConfig.workflowId,
             infrastructure.conclude,
+            terminalObservations.completion.complete,
           ),
         (error: unknown) => {
           controller.abort(error);
           // The result settles with the same refusal; nobody consumes it.
           void dispatch.result.catch(() => undefined);
+          revokeBusIdentity?.();
           infrastructure.conclude(
             `Piscina worker for attempt '${executionAttemptId}' was refused before its workflow run was admitted: ` +
               (error instanceof Error ? error.message : String(error)),
           );
+          terminalObservations.localObservationLoss.lose();
         },
       );
 
@@ -481,6 +644,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * @param executionAttemptId - Authority-created attempt identifier.
    * @param workflowId - Workflow definition identifier.
    * @param onInfrastructureConclusion - Reports failed durable outcome delivery as terminal infrastructure evidence.
+   * @param onProviderCompletion - Reports positive completion after outcome acknowledgement or final local delivery exhaustion.
    */
   private async submitOutcomeOnSettlement(
     resultPromise: Promise<WorkflowRunResult>,
@@ -488,6 +652,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
     executionAttemptId: string,
     workflowId: string,
     onInfrastructureConclusion: (summary: string) => void,
+    onProviderCompletion: (observation: ProviderCompletionObservation) => void,
   ): Promise<void> {
     let result: WorkflowRunResult;
     try {
@@ -544,11 +709,23 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       // durable evidence for whoever ends the allocation on it, so it states
       // what this provider observed rather than repeating a message that came
       // from wherever the submission failed.
+      // The runner settled and the bounded submit operation has stopped. That
+      // leaves the canonical workflow outcome unresolved, but no Piscina
+      // allocation duty or local delivery path remains. The separate
+      // completion fact therefore closes provider infrastructure without
+      // claiming the Authority accepted the outcome.
       onInfrastructureConclusion(
         `Piscina worker for attempt '${executionAttemptId}' ended without an acknowledged outcome ` +
           `because outcome submission could not be completed`,
       );
+      onProviderCompletion(OUTCOME_DELIVERY_ENDED_COMPLETION);
+      return;
     }
+
+    // Keep cleanup and positive evidence outside the delivery-error branch:
+    // an acknowledged outcome is not a failed submission merely because a
+    // later local cleanup were to throw.
+    onProviderCompletion(OUTCOME_ACKNOWLEDGED_COMPLETION);
   }
 
   /**

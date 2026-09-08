@@ -263,7 +263,7 @@ export function toAttemptControlState(record: ExecutionAttemptRecord): AttemptCo
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Order two recoverable attempts the way the port promises to report them.
+ * Order two attempt-backed recovery records the way the port promises to report them.
  *
  * Oldest first by `createdAt` as an instant, ties broken by ascending
  * `executionAttemptId` so two attempts created within the same millisecond
@@ -273,11 +273,14 @@ export function toAttemptControlState(record: ExecutionAttemptRecord): AttemptCo
  * two agree because the port stores `createdAt` in the canonical UTC
  * millisecond form, where a lexicographic comparison *is* the instant
  * comparison.
- * @param left - First attempt to order.
- * @param right - Second attempt to order.
+ * @param left - First attempt-backed record to order.
+ * @param right - Second attempt-backed record to order.
  * @returns Negative when `left` sorts first, positive when `right` does, zero when neither.
  */
-export function compareRecoveryOrder(left: RecoverableAttemptRecord, right: RecoverableAttemptRecord): number {
+export function compareRecoveryOrder(
+  left: Pick<ExecutionAttemptRecord, 'createdAt' | 'executionAttemptId'>,
+  right: Pick<ExecutionAttemptRecord, 'createdAt' | 'executionAttemptId'>,
+): number {
   const byInstant = instantOf(left.createdAt) - instantOf(right.createdAt);
   if (byInstant !== 0) return byInstant;
   return left.executionAttemptId < right.executionAttemptId
