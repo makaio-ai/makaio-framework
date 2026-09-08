@@ -823,6 +823,35 @@ describe('resolveArtifactContext', () => {
     );
   });
 
+  it('retains entity refs without resolving them as artifacts or matching their type as an artifact kind', async () => {
+    const target = { refClass: 'entity' as const, entityType: 'repo', id: 'core-entity-1' };
+    const system = artifact('system', 'system-1', 'rev-system', [{ type: 'contains', target }]);
+    const resolvedIds: string[] = [];
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        resolvedIds.push(ctx.payload.ref.id);
+        ctx.setResult({ artifact: ctx.payload.ref.id === system.id ? system : null });
+      }),
+    );
+
+    const selected = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', system.id, system.revision),
+      selectors: { contains: { hint: 'inline' } },
+    });
+    expect(selected.refs[0]).toMatchObject({ target, status: 'unresolved', reason: 'unsupported-ref-class' });
+
+    const filtered = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', system.id, system.revision),
+      selectors: { contains: { kinds: ['repo'], hint: 'inline' } },
+    });
+    expect(filtered.refs[0]).toMatchObject({ target, status: 'unresolved', reason: 'not-selected' });
+    expect(resolvedIds).toEqual([system.id, system.id]);
+  });
+
   it('marks relations as depth-exceeded when maxDepth is reached', async () => {
     const repo = artifact('repo', 'repo-1', 'rev-repo', [
       {

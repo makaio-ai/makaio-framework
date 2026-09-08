@@ -119,6 +119,23 @@ export const EvidenceRefSchema = z.object({
 });
 
 /**
+ * Identity reference to a core entity managed outside the artifact revision store.
+ *
+ * The owning entity service resolves this identity. It does not identify an
+ * immutable revision and must not be treated as an artifact or evidence pin.
+ * The explicit discriminator prevents legacy reference inference from silently
+ * interpreting the identity as an artifact or an external evidence source.
+ */
+export const EntityRefSchema = z.strictObject({
+  /** Explicit reference class for a separately managed entity. */
+  refClass: z.literal('entity'),
+  /** Entity type understood by the owning service. */
+  entityType: z.string().min(1),
+  /** Stable identity within that entity type. */
+  id: z.string().min(1),
+});
+
+/**
  * Discriminated union of all valid relation-target reference classes.
  *
  * Routing is keyed on the `refClass` literal field present in each variant,
@@ -129,11 +146,13 @@ export const EvidenceRefSchema = z.object({
  * - `'artifact'` → {@link ArtifactRefSchema} — whole artifact revision
  * - `'local'` → {@link LocalRefSchema} — sub-element within an artifact revision
  * - `'evidence'` → {@link EvidenceRefSchema} — external evidence source
+ * - `'entity'` → {@link EntityRefSchema} — separately managed entity identity
  */
 const ArtifactRelationTargetDiscriminatedSchema = z.discriminatedUnion('refClass', [
   ArtifactRefSchema,
   LocalRefSchema,
   EvidenceRefSchema,
+  EntityRefSchema,
 ]);
 
 /**
@@ -177,6 +196,7 @@ const ArtifactRelationQueryTargetDiscriminatedSchema = z.discriminatedUnion('ref
   }),
   LocalRefSchema,
   EvidenceRefSchema,
+  EntityRefSchema,
 ]);
 
 /**
@@ -543,6 +563,9 @@ export type LocalRef = z.infer<typeof LocalRefSchema>;
 
 /** Pointer to external evidence outside the artifact store. */
 export type EvidenceRef = z.infer<typeof EvidenceRefSchema>;
+
+/** Identity pointer to an entity managed outside the artifact revision store. */
+export type EntityRef = z.infer<typeof EntityRefSchema>;
 
 /** Union of all valid relation-target reference classes. */
 export type ArtifactRelationTarget = z.infer<typeof ArtifactRelationTargetSchema>;

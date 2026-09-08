@@ -7,10 +7,12 @@ import {
   ArtifactQueryScopeSchema,
   ArtifactRefSchema,
   ArtifactRelationTargetSchema,
+  ArtifactRelationQueryTargetSchema,
   ArtifactRevisionSchema,
   ArtifactScopeSchema,
   ConfidenceMetadataSchema,
   EvidenceRefSchema,
+  EntityRefSchema,
   LocalRefSchema,
   RelationTypeRegistrationSchema,
 } from '../schemas.js';
@@ -67,6 +69,24 @@ describe('Artifact core schemas', () => {
       revision: 'v1',
       locator: 'src/index.ts#L42',
     });
+  });
+
+  it('preserves separately managed entity identities in stored relations and query filters', () => {
+    const target = { refClass: 'entity', entityType: 'case', id: 'case-42' };
+    expect(EntityRefSchema.parse(target)).toEqual(target);
+    expect(ArtifactRelationTargetSchema.parse(target)).toEqual(target);
+    expect(ArtifactRelationQueryTargetSchema.parse(target)).toEqual(target);
+    expect(ArtifactQueryRequestSchema.parse({ relation: { target } }).relation?.target).toEqual(target);
+  });
+
+  it('does not accept an entity identity as an artifact pin or silently discard a claimed revision', () => {
+    const target = { refClass: 'entity', entityType: 'case', id: 'case-42' };
+    expect(ArtifactRefSchema.safeParse(target).success).toBe(false);
+    expect(ArtifactRelationTargetSchema.safeParse({ ...target, revision: 'revision-1' }).success).toBe(false);
+    expect(ArtifactRelationQueryTargetSchema.safeParse({ ...target, revision: 'revision-1' }).success).toBe(false);
+    expect(EntityRefSchema.safeParse({ ...target, entityType: '' }).success).toBe(false);
+    expect(EntityRefSchema.safeParse({ ...target, id: '' }).success).toBe(false);
+    expect(ArtifactRelationTargetSchema.safeParse({ entityType: 'case', id: 'case-42' }).success).toBe(false);
   });
 
   it('infers omitted refClass values before routing relation targets', () => {
