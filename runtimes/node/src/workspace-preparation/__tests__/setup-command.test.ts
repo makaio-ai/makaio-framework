@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runSetupCommand } from '../setup-command.js';
 
-const childProcessMocks = vi.hoisted(() => ({ execFile: vi.fn() }));
+const childProcessMocks = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn() }));
 
 const PROCESS_STATUS_ARGS = ['-A', '-o', 'pid=,ppid=,pgid=,uid=,stat='] as const;
 const PROCESS_STATUS_TIMEOUT_MS = 1_000;
@@ -32,6 +32,7 @@ interface ProcessGroupWitness {
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   execFile: childProcessMocks.execFile,
+  spawn: childProcessMocks.spawn,
 }));
 
 let workspaceRoot: string;
@@ -40,10 +41,12 @@ beforeEach(async () => {
   workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'setup-command-'));
   const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
   childProcessMocks.execFile.mockImplementation(actual.execFile);
+  childProcessMocks.spawn.mockImplementation(actual.spawn);
 });
 
 afterEach(async () => {
   childProcessMocks.execFile.mockReset();
+  childProcessMocks.spawn.mockReset();
   await fs.rm(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -114,6 +117,43 @@ function holdTwoGroupProbes(): { readonly probes: () => number; readonly restore
 }
 
 describe('bounded setup commands', () => {
+  it('supports the maximum Node timer duration without premature timeout', async () => {
+    const options = command("require('fs').writeFileSync('maximum-timeout','ran')", 2_147_483_647);
+    expect(await runSetupCommand(options)).toEqual({
+      status: 'completed',
+      exitCode: 0,
+    });
+    expect(await fs.readFile(path.join(workspaceRoot, 'maximum-timeout'), 'utf8')).toBe('ran');
+  });
+
+  it.each([
+    2_147_483_648,
+    0,
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    -Infinity,
+  ])('rejects invalid timeout %s before spawning a command', async (timeoutMs) => {
+    expect(await runSetupCommand(command("require('fs').writeFileSync('never','ran')", timeoutMs))).toEqual({
+      status: 'spawn-failed',
+      exitCode: null,
+      message: 'Setup timeout must be an integer between 1 and 2147483647 milliseconds',
+    });
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(workspaceRoot, 'never'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves cancellation precedence over an invalid timeout', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    expect(await runSetupCommand({ ...command('', 2_147_483_648), signal: abort.signal })).toEqual({
+      status: 'cancelled',
+      exitCode: null,
+    });
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+  });
+
   it('uses workspace cwd, explicit arguments and locally merged environment', async () => {
     const options = command("require('fs').writeFileSync('marker',process.argv[1]+process.env.SETUP_TEST_VALUE)");
     options.recipe.args.push('literal;not-a-shell');

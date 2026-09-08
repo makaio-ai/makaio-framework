@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BusAbortError, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
@@ -291,6 +292,47 @@ describe('generic workload invocation', () => {
         .reverse()
         .map((cleanup) => cleanup()),
     );
+  });
+
+  it.each(['prepare', 'invoke'] as const)('converges real Node API cancellation during %s', async (phase) => {
+    const root = await mkdtemp(join(tmpdir(), 'node-api-cancellation-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const abort = new AbortController();
+    const reason = new Error('stop local operation');
+    const harness = await createHarness(
+      instruction(
+        phase === 'prepare' ? { provisioning: 'create', custody: 'disposable', sourceRoots: [], setup: [] } : undefined,
+      ),
+    );
+    cleanups.push(harness.cleanup);
+    let invocations = 0;
+    const result = await runWorkloadInvocation(harness.bus, {
+      executionAttemptId: harness.executionAttemptId,
+      runtimeGeneration: 1,
+      signal: abort.signal,
+      workspaceRoot: join(root, 'workspace'),
+      preparation: {
+        prepare: async (input) => {
+          abort.abort(reason);
+          await readFile(import.meta.filename, { signal: input.signal });
+          throw new Error('An aborted filesystem read must reject');
+        },
+      },
+      adapters: [
+        {
+          kind: 'marker',
+          version: '1',
+          invoke: async ({ signal }) => {
+            invocations += 1;
+            const pending = delay(10_000, null, { signal });
+            abort.abort(reason);
+            return await pending;
+          },
+        },
+      ],
+    });
+    expect(result).toEqual({ decision: 'accepted', outcome: { kind: 'cancelled' } });
+    expect(invocations).toBe(phase === 'prepare' ? 0 : 1);
   });
 
   it('exposes the public Authority deadline error without invoking work before admission acknowledgement', async () => {

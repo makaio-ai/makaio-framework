@@ -99,6 +99,25 @@ describe('local workspace preparation', () => {
     await expect(fs.stat(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it.each([
+    { provisioning: 'bind', custody: 'disposable' },
+    { provisioning: 'create', custody: 'external' },
+  ] as const)('rejects unsupported acquisition with $provisioning/$custody before mutation', async (overrides) => {
+    await expect(
+      bindLocalWorkspace({
+        workspaceRoot,
+        requirement: requirement({
+          ...overrides,
+          sourceRoots: [{ id: 'source', path: '.', source: { kind: 'git', input: {} } }],
+        }),
+        realizeSource: async () => {
+          throw new Error('Must not acquire sources');
+        },
+      }),
+    ).rejects.toThrow('created disposable workspace');
+    await expect(fs.stat(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('rejects root replacement, relative locators and source path escapes', async () => {
     await fs.mkdir(workspaceRoot);
     await expect(bindLocalWorkspace({ workspaceRoot, requirement: requirement() })).rejects.toMatchObject({

@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, readFile, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -15,12 +16,21 @@ import {
   type WorkerMaterializationSpec,
   type WorkflowRunContext,
   type WorkflowRunResult,
+  type WorkspaceRequirement,
 } from '@makaio/contracts';
 import { KernelSubjects } from '@makaio/kernel';
 import { parseWorkflowAttemptInstruction } from '@makaio/subsystem-workflow-engine';
 import { registerMemorySessionStorage } from '../../../../../services/core/src/session/storage/memory-handler.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
+import { createGitFixture } from '../../__tests__/git-test-fixtures.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
+import {
+  bindLocalWorkspace,
+  type LocalWorkspaceSourceRealizer,
+} from '../../workspace-preparation/workspace-preparation.js';
+import { createLocalGitSourceRealizer } from '../../workspace-preparation/git-source.js';
+import { installOperationDeliveryEndpoint, registerWorkerRuntime } from '../runtime-registration-client.js';
+import { runWorkloadInvocation, type InstalledWorkloadAdapter } from '../workload-invocation.js';
 import {
   runHeadlessWorkflowWorker,
   type HeadlessWorkflowWorkerDeps,
@@ -249,11 +259,13 @@ interface AuthoritySide {
  * Create a full authority-side test harness.
  * @param executionId - Execution identifier.
  * @param materializationSpec - Optional materialization spec for the run context.
+ * @param workspace - Optional working-area requirement independent of executable materialization.
  * @returns Authority harness with bus, WS server, and lifecycle capture.
  */
 async function createAuthoritySide(
   executionId: string,
   materializationSpec?: WorkerMaterializationSpec,
+  workspace?: WorkspaceRequirement,
 ): Promise<AuthoritySide> {
   const authority = createBusInstance();
   authority.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
@@ -261,7 +273,7 @@ async function createAuthoritySide(
   const runContext = makeRunContext(executionId, materializationSpec);
   let state!: AuthoritySide;
   const attempt = await createAttemptAuthorityHarness(authority, executionId, {
-    instruction: freezeWorkflowInstruction(runContext),
+    instruction: freezeWorkflowInstruction(runContext, workspace),
     beforeCommit: async (_outcome, report) => {
       state.capture.outcomeSubmissions.push({
         executionAttemptId: state.attempt.executionAttemptId,
@@ -391,6 +403,77 @@ function createCompositionDeps(
   };
 }
 
+/**
+ * Run the real admitted Preparation/Invocation sequence over the authenticated provider-neutral harness.
+ * @param authority - Existing Authority and WebSocket transport.
+ * @param workspaceRoot - Explicit local workspace locator.
+ * @param realizeSource - Host-installed source strategy.
+ * @param invoke - Workload behavior observing the accepted binding.
+ * @param signal - Runtime cancellation forwarded through preparation, not captured by the source closure.
+ * @returns Authority-acknowledged outcome.
+ */
+async function invokeWithGitSource(
+  authority: AuthoritySide,
+  workspaceRoot: string,
+  realizeSource: LocalWorkspaceSourceRealizer,
+  invoke: InstalledWorkloadAdapter['invoke'],
+  signal?: AbortSignal,
+) {
+  const bus = createBusInstance();
+  bus.registerNamespaces(FrameworkContractNamespaces);
+  const transport = new WebSocketClientTransport({
+    url: `ws://127.0.0.1:${authority.port}/bus`,
+    autoReconnect: false,
+    auth: authority.attempt.createClientAuth(),
+  });
+  bus.registerTransport(transport);
+  await bus.connect();
+  const identity = { executionAttemptId: authority.attempt.executionAttemptId, runtimeIncarnationId: 'git-runtime' };
+  const endpoint = await installOperationDeliveryEndpoint(bus, identity, {});
+  try {
+    const runtimeGeneration = await registerWorkerRuntime(bus, identity);
+    endpoint.bindGeneration(runtimeGeneration);
+    const instruction = freezeWorkflowInstruction(makeRunContext(authority.attempt.executionId));
+    return await runWorkloadInvocation(bus, {
+      executionAttemptId: identity.executionAttemptId,
+      runtimeGeneration,
+      workspaceRoot,
+      signal,
+      preparation: { prepare: (input) => bindLocalWorkspace({ ...input, realizeSource }) },
+      adapters: [{ kind: instruction.workload.kind, version: instruction.workload.version, invoke }],
+    });
+  } finally {
+    endpoint.cleanup();
+    await bus.disconnect();
+  }
+}
+
+/**
+ * Select one Git source and a setup command that consumes its checked-out content.
+ * @param revision - Owner-selected Git revision.
+ * @returns Frozen requirement for the generic preparation path.
+ */
+function gitWorkspaceRequirement(revision: string): WorkspaceRequirement {
+  return {
+    provisioning: 'create',
+    custody: 'disposable',
+    sourceRoots: [
+      { id: 'primary', path: 'source', source: { kind: 'git', input: { repositoryId: 'project', revision } } },
+    ],
+    setup: [
+      {
+        command: process.execPath,
+        args: [
+          '-e',
+          "const fs=require('fs');fs.writeFileSync('ready.txt',fs.readFileSync('source/content.txt','utf8')+' prepared')",
+        ],
+        env: {},
+        timeoutMs: 5_000,
+      },
+    ],
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────
@@ -410,6 +493,104 @@ describe('portable provider-neutral harness', () => {
     }
     await rm(cwd, { recursive: true, force: true });
   });
+
+  it('prepares selected Git content, runs setup, invokes against the accepted binding and releases after ACK', async () => {
+    const { repository, revision } = await createGitFixture(cwd);
+    authoritySide = await createAuthoritySide('exec-local-git', undefined, gitWorkspaceRequirement(revision));
+    const workspaceRoot = join(cwd, 'workspace');
+    const result = await invokeWithGitSource(
+      authoritySide,
+      workspaceRoot,
+      createLocalGitSourceRealizer({ timeoutMs: 5_000, resolveRepository: async () => repository }),
+      async ({ workspace }) => {
+        expect(workspace).toEqual({
+          workspaceRoot: await realpath(workspaceRoot),
+          sourceRoots: [{ id: 'primary', path: join(await realpath(workspaceRoot), 'source') }],
+        });
+        expect(await readFile(join(workspace!.sourceRoots[0]!.path, 'content.txt'), 'utf8')).toBe('selected revision');
+        expect(await readFile(join(workspace!.workspaceRoot, 'ready.txt'), 'utf8')).toBe('selected revision prepared');
+        return { executionId: 'exec-local-git', workflowId: 'test-workflow', status: 'completed' };
+      },
+    );
+    expect(result.decision).toBe('accepted');
+    expect(workflowResult(result.outcome).status).toBe('completed');
+    expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+      'workspace-preparation',
+      'workload-invocation',
+    ]);
+    expect(authoritySide.attempt.convergedOutcomes).toHaveLength(1);
+    await expect(stat(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(repository, 'content.txt'), 'utf8')).toBe('later revision');
+  }, 20_000);
+
+  it.each([
+    'missing',
+    'tree',
+  ] as const)('settles %s Git source refusal without setup or Invocation and retains partial source files', async (type) => {
+    const { repository, revision } = await createGitFixture(cwd);
+    const selectedObject =
+      type === 'missing'
+        ? '0'.repeat(40)
+        : execFileSync('git', ['rev-parse', `${revision}^{tree}`], { cwd: repository, encoding: 'utf8' }).trim();
+    authoritySide = await createAuthoritySide('exec-bad-git', undefined, gitWorkspaceRequirement(selectedObject));
+    const workspaceRoot = join(cwd, 'workspace');
+    let invocations = 0;
+    const result = await invokeWithGitSource(
+      authoritySide,
+      workspaceRoot,
+      createLocalGitSourceRealizer({ timeoutMs: 5_000, resolveRepository: async () => repository }),
+      async () => {
+        invocations += 1;
+        throw new Error('Must not invoke after failed preparation');
+      },
+    );
+    expect(result).toMatchObject({
+      decision: 'accepted',
+      outcome: {
+        kind: 'technical-failure',
+        stage: 'workspace-preparation',
+        message: type === 'missing' ? 'Git source fetch failed' : 'Git source revision must identify a commit object',
+      },
+    });
+    expect(invocations).toBe(0);
+    expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+      'workspace-preparation',
+    ]);
+    expect(authoritySide.attempt.convergedOutcomes).toHaveLength(1);
+    expect((await stat(join(workspaceRoot, 'source/.git'))).isDirectory()).toBe(true);
+    await expect(stat(join(workspaceRoot, 'ready.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 20_000);
+
+  it('forwards Runtime cancellation into source acquisition before cloning or invoking', async () => {
+    const { repository, revision } = await createGitFixture(cwd);
+    authoritySide = await createAuthoritySide('exec-cancel-git', undefined, gitWorkspaceRequirement(revision));
+    const workspaceRoot = join(cwd, 'workspace');
+    const abort = new AbortController();
+    let observedCancellation = false;
+    const result = await invokeWithGitSource(
+      authoritySide,
+      workspaceRoot,
+      createLocalGitSourceRealizer({
+        timeoutMs: 5_000,
+        resolveRepository: async (_id, signal) => {
+          expect(signal).toBeDefined();
+          abort.abort();
+          observedCancellation = signal!.aborted;
+          return repository;
+        },
+      }),
+      async () => {
+        throw new Error('Must not invoke after cancellation');
+      },
+      abort.signal,
+    );
+    expect(observedCancellation).toBe(true);
+    expect(result).toMatchObject({ decision: 'accepted', outcome: { kind: 'cancelled' } });
+    expect(authoritySide.attempt.operationAdmittedEvents.map((event) => event.operationKind)).toEqual([
+      'workspace-preparation',
+    ]);
+    expect(await readdir(join(workspaceRoot, 'source'))).toEqual([]);
+  }, 20_000);
 
   // ─── Parameterized lifecycle tests ────────────────────────
 
