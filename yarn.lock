@@ -5877,6 +5877,8 @@ __metadata:
     "@makaio/test-utils": "workspace:*"
     "@makaio/tools-core": "workspace:*"
     "@makaio/utils": "workspace:*"
+    ajv: "npm:^8.20.0"
+    ajv-formats: "npm:^3.0.1"
     croner: "npm:^10.0.1"
     drizzle-orm: "npm:0.45.2"
     tsdown: "npm:0.22.0"

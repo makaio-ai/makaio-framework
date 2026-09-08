@@ -124,6 +124,7 @@ function combineConjuncts(
  * @param parts - Remaining object property names.
  * @param required - Whether all properties must be required.
  * @param refs - References already traversed at this position, preventing cycles.
+ * @param objectGuaranteed - Whether the Artifact data envelope guarantees an object at this location.
  * @returns All matching variant schemas, or undefined for an unsupported path.
  */
 function fieldSchemas(
@@ -132,11 +133,14 @@ function fieldSchemas(
   parts: string[],
   required: boolean,
   refs = new Set<string>(),
+  objectGuaranteed = false,
 ): Record<string, unknown>[] | undefined {
   if (typeof node.$ref === 'string') {
     if (refs.has(node.$ref)) return undefined;
     const target = resolveRef(root, node);
-    return target ? fieldSchemas(root, target, parts, required, new Set([...refs, node.$ref])) : undefined;
+    return target
+      ? fieldSchemas(root, target, parts, required, new Set([...refs, node.$ref]), objectGuaranteed)
+      : undefined;
   }
   const unionKey = Array.isArray(node.anyOf) ? 'anyOf' : 'oneOf';
   const alternatives = node[unionKey];
@@ -149,19 +153,20 @@ function fieldSchemas(
         typeof object.$ref === 'string'
           ? { allOf: [base, object] }
           : { ...object, allOf: [base, ...(Array.isArray(object.allOf) ? object.allOf : [])] };
-      return fieldSchemas(root, combined, parts, required, refs);
+      return fieldSchemas(root, combined, parts, required, refs, objectGuaranteed);
     });
     return results.every((result) => result !== undefined) ? results.flatMap((result) => result ?? []) : undefined;
   }
   if (Array.isArray(node.allOf)) {
     const combined = combineConjuncts(root, node, refs);
-    return combined ? fieldSchemas(root, combined, parts, required, refs) : undefined;
+    return combined ? fieldSchemas(root, combined, parts, required, refs, objectGuaranteed) : undefined;
   }
   if (parts.length === 0) return [node];
-  if (node.type !== 'object') return undefined;
+  if (node.type !== 'object' && !(node.type === undefined && objectGuaranteed)) return undefined;
   const [key, ...rest] = parts;
-  if (!key || (required && (!Array.isArray(node.required) || !node.required.includes(key)))) return undefined;
+  if (!key || (required && !requiredProperties(node).includes(key))) return undefined;
   const child = schemaObject(schemaObject(node.properties)?.[key]);
+  // The root envelope does not constrain the type of a nested property.
   return child ? fieldSchemas(root, child, rest, required) : undefined;
 }
 
@@ -363,7 +368,7 @@ export function validateKindDataPaths(
   ctx: z.RefinementCtx,
 ): void {
   validateSchemaCompositions(value.dataSchema, value.dataSchema, ctx);
-  const title = fieldSchemas(value.dataSchema, value.dataSchema, value.titlePath.split('.'), true);
+  const title = fieldSchemas(value.dataSchema, value.dataSchema, value.titlePath.split('.'), true, new Set(), true);
   if (!title?.length || title.some((field) => field.type !== 'string')) {
     ctx.addIssue({
       code: 'custom',
@@ -383,7 +388,7 @@ export function validateKindDataPaths(
     ),
   ];
   for (const { path, location } of paths) {
-    if (!fieldSchemas(value.dataSchema, value.dataSchema, path.split('.'), false)) {
+    if (!fieldSchemas(value.dataSchema, value.dataSchema, path.split('.'), false, new Set(), true)) {
       ctx.addIssue({ code: 'custom', path: location, message: `Data path ${path} must select a declared field` });
     }
   }

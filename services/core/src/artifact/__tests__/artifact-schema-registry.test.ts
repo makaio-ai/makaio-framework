@@ -1,6 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ArtifactSubjects, type ArtifactKindRegistration, type RelationTypeRegistration } from '@makaio/contracts';
+import {
+  ArtifactSubjects,
+  ArtifactKindRegistrationSchema,
+  type ArtifactKindRegistration,
+  type RelationTypeRegistration,
+} from '@makaio/contracts';
 import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
 
 /**
@@ -109,6 +114,76 @@ describe('ArtifactSchemaRegistry', () => {
       /Unsupported data schema dialect/,
     );
     expect(registry.getKind('current', 1)).toEqual(current);
+  });
+
+  it.each([
+    undefined,
+    'http://json-schema.org/draft-07/schema#',
+    'https://json-schema.org/draft/2020-12/schema',
+  ])('rejects malformed complete schemas before direct, bus or batch mutations (%s)', async (dialect) => {
+    const owner = { source: 'extension' as const, ownerKey: 'validated-owner' };
+    const current = makeKind('current', 2);
+    registry.registerKind(current, owner);
+    const invalid = makeKind('current', 2, {
+      ...(dialect === undefined ? {} : { $schema: dialect }),
+      properties: { optional: { type: 'string', minLength: '1' } },
+    });
+    expect(ArtifactKindRegistrationSchema.safeParse(invalid).success).toBe(true);
+    const failure = /Invalid data schema for artifact kind 'current' version '2'.*minLength/;
+    expect(() => registry.registerKind(invalid, owner)).toThrow(failure);
+    expect(registry.getKind('current', 2)).toEqual(current);
+    await expect(bus.request(ArtifactSubjects.kind.register, invalid)).rejects.toThrow(failure);
+    expect(registry.getKind('current', 2)).toEqual(current);
+    expect(() => registry.replaceKindRegistrationsForOwner(owner, [makeKind('new', 1), invalid])).toThrow(failure);
+    expect(registry.getKind('current', 2)).toEqual(current);
+    expect(registry.getKind('new', 1)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      dialect: 'http://json-schema.org/draft-07/schema#',
+      tuple: { type: 'array', items: [{ type: 'string' }], additionalItems: false },
+    },
+    {
+      dialect: 'https://json-schema.org/draft/2020-12/schema',
+      tuple: { type: 'array', prefixItems: [{ type: 'string' }], items: false },
+    },
+  ])('compiles the declared $dialect vocabulary and standard formats', ({ dialect, tuple }) => {
+    const registration = makeKind('position', 1, {
+      $schema: dialect,
+      properties: { coordinates: tuple, contact: { type: 'string', format: 'email' } },
+    });
+    registry.registerKind(registration);
+    expect(registry.getKind('position', 1)).toEqual(registration);
+  });
+
+  it.each([
+    { optional: { type: 'string', pattern: '[' } },
+    { optional: { type: 'string', format: 'not-a-supported-format' } },
+  ])('rejects schemas that cannot compile even when their keyword values have valid types', (properties) => {
+    const registration = makeKind('invalid', 1, { properties });
+    expect(ArtifactKindRegistrationSchema.safeParse(registration).success).toBe(true);
+    expect(() => registry.registerKind(registration)).toThrow(
+      /Invalid data schema for artifact kind 'invalid' version '1'/,
+    );
+    expect(registry.getKind('invalid', 1)).toBeUndefined();
+  });
+
+  it('isolates local schema identifiers across different Kind registrations', () => {
+    const first = makeKind('first', 1, { $id: 'urn:kind:local', properties: { optional: { type: 'string' } } });
+    const second = makeKind('second', 1, { $id: 'urn:kind:local', properties: { optional: { type: 'number' } } });
+    registry.replaceKindRegistrationsForOwner({ source: 'extension', ownerKey: 'isolated' }, [first, second]);
+    expect(registry.getKind('first', 1)).toEqual(first);
+    expect(registry.getKind('second', 1)).toEqual(second);
+  });
+
+  it('accepts an implicit root object schema through authoritative registration', () => {
+    const registration = {
+      ...makeKind('implicit', 1),
+      dataSchema: { properties: { title: { type: 'string' } }, required: ['title'] },
+    };
+    registry.registerKind(registration);
+    expect(registry.getKind('implicit', 1)).toEqual(registration);
   });
 
   describe('kind registration and listing', () => {
