@@ -1,4 +1,4 @@
-import { BusAbortError, isRequestCancellation, type IMakaioBus } from '@makaio/bus-core';
+import { isRequestCancellation, type IMakaioBus } from '@makaio/bus-core';
 import {
   ExecutionAttemptSchemas,
   ExecutionAttemptSubjects,
@@ -11,6 +11,7 @@ import {
   type WorkspaceRequirement,
 } from '@makaio/contracts';
 import { bindLocalWorkspace, type LocalWorkspaceHandle } from '../workspace-preparation/workspace-preparation.js';
+import { isCooperativeCancellation } from '../cooperative-cancellation.js';
 import {
   requestAuthorityWithRetry,
   submitAttemptOutcomeWithAck,
@@ -66,6 +67,7 @@ export interface WorkloadInvocationPreparation {
   prepare(input: {
     readonly requirement: WorkspaceRequirement;
     readonly workspaceRoot: string;
+    readonly signal?: AbortSignal;
   }): Promise<LocalWorkspaceHandle>;
 }
 
@@ -81,7 +83,7 @@ export interface RunWorkloadInvocationOptions {
   readonly setupEnv?: Readonly<NodeJS.ProcessEnv>;
   /** Installed workload adapters available in this Runtime. */
   readonly adapters: readonly InstalledWorkloadAdapter[];
-  /** Cancellation signal forwarded to local setup and workload execution. */
+  /** Cancellation signal forwarded to source preparation, setup and workload execution. */
   readonly signal?: AbortSignal;
   /** Reconnect hook reused for terminal outcome acknowledgement. */
   readonly reconnect?: OutcomeReconnect;
@@ -190,23 +192,6 @@ function findAdapter(
  */
 function unboundControl(signal: AbortSignal | undefined): WorkloadControlBinding {
   return { signal: signal ?? new AbortController().signal, release: () => {} };
-}
-
-/**
- * Return whether an exception represents cancellation of the supplied signal.
- * @param error - Exception raised by the local operation.
- * @param signal - Cancellation signal supplied to the operation.
- * @returns Whether the exception represents cooperative cancellation.
- */
-function isCooperativeCancellation(error: unknown, signal: AbortSignal | undefined): boolean {
-  // Bus wrappers retain provenance; the local DOM convention must not accept a foreign cause.
-  if (error instanceof BusAbortError) return isRequestCancellation(error, signal);
-  // Custom reasons thrown by throwIfAborted retain their identity. An aborted
-  // signal alone must not hide an unrelated invocation or shutdown failure.
-  return (
-    signal?.aborted === true &&
-    (error === signal.reason || (error instanceof DOMException && error.name === 'AbortError'))
-  );
 }
 
 /**
@@ -340,6 +325,7 @@ async function prepareWorkspace(
     const boundHandle = await (options.preparation ?? { prepare: bindLocalWorkspace }).prepare({
       requirement: instruction.workspace!,
       workspaceRoot: options.workspaceRoot,
+      signal,
     });
     handle = boundHandle;
     setupStatus = await boundHandle.runSetup({ signal, env: options.setupEnv });
@@ -444,9 +430,9 @@ async function runBoundWorkloadInvocation(
 /**
  * Execute the fixed generic workload sequence for an already registered Runtime.
  *
- * No Workspace is synthesized for workspace-less instructions. Source
- * acquisition remains unsupported by the local Preparation helper; workload
- * executable acquisition stays inside the admitted adapter invocation.
+ * No Workspace is synthesized for workspace-less instructions. The default
+ * Preparation installs no source strategy; an injected Preparation can supply
+ * one. Executable acquisition stays inside the admitted adapter invocation.
  * @param bus - Runtime bus authenticated as this Attempt.
  * @param options - Registered Attempt, installed adapters and optional local Workspace locator.
  * @returns The terminal outcome after canonical Authority acknowledgement.

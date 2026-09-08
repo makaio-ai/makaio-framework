@@ -20,6 +20,15 @@ export interface SetupCommandOptions {
 }
 
 /**
+ * Keep command deadlines within Node's timer range without overflow or truncation.
+ * @param timeoutMs - Requested command timeout in milliseconds.
+ * @returns Whether the timeout can be scheduled without timer coercion.
+ */
+export function isValidSetupCommandTimeoutMs(timeoutMs: number): boolean {
+  return Number.isInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 2_147_483_647;
+}
+
+/**
  * Signal the ordinary owned process group, tolerating an already-exited group.
  * @param pid - Leader of the setup process group.
  * @param signal - Signal delivered to the whole group.
@@ -114,6 +123,13 @@ async function stopRemainingGroup(pid: number | undefined): Promise<boolean> {
  */
 export async function runSetupCommand(options: SetupCommandOptions): Promise<SetupCommandResult> {
   if (options.signal?.aborted) return { status: 'cancelled', exitCode: null };
+  if (!isValidSetupCommandTimeoutMs(options.recipe.timeoutMs)) {
+    return {
+      status: 'spawn-failed',
+      exitCode: null,
+      message: 'Setup timeout must be an integer between 1 and 2147483647 milliseconds',
+    };
+  }
   if (process.platform === 'win32') {
     return { status: 'spawn-failed', exitCode: null, message: 'Setup process groups require a POSIX host' };
   }
