@@ -201,6 +201,7 @@ export type {
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
   WorkerProviderContext,
+  WorkerRuntimeConnection,
   WorkerRequirements,
 } from './worker/index.js';
 export {

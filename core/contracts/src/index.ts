@@ -515,6 +515,7 @@ export type {
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
   WorkerProviderContext,
+  WorkerRuntimeConnection,
   WorkerRequirements,
 } from './capabilities/index.js';
 export { CapabilitySubjects } from './capability/index.js';

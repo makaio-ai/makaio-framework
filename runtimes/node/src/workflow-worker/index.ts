@@ -26,6 +26,8 @@ export { WorkerRunner } from './worker-runner.js';
 export type { WorkerRunnerOptions } from './worker-runner.js';
 export { PiscinaThinWorkflowProvider } from './piscina-thin-workflow-provider.js';
 export type { PiscinaThinWorkflowProviderOptions } from './piscina-thin-workflow-provider.js';
+export { createWorkflowLaunchResolver } from './workflow-launch-resolver.js';
+export type { WorkflowAttemptInstructionReader, WorkflowLaunchResolver } from './workflow-launch-resolver.js';
 export { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
 export type { InProcessWorkflowRunnerOptions } from './in-process-workflow-runner.js';
 export {

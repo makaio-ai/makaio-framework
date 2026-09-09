@@ -47,6 +47,7 @@ import type {
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
   WorkerProviderContext,
+  WorkerRuntimeConnection,
   WorkerRequirements,
 } from '../index.js';
 
@@ -122,13 +123,40 @@ describe('worker capability contracts', () => {
 });
 
 describe('WorkerProvisionRequest uses executionAttemptId', () => {
+  it('accepts runtime inputs and an ephemeral connection without workflow source or config', () => {
+    const connection: WorkerRuntimeConnection = {
+      busAuth: { kind: 'none' },
+      env: { WORKER_MODE: 'report' },
+    };
+    const request: WorkerProvisionRequest = {
+      executionId: 'report-1',
+      executionAttemptId: 'attempt-1',
+      environment: 'process',
+      runtimeInputs: {
+        workerManifest: { contributionRefs: [] },
+        suspensionStrategy: 'wait-in-process',
+      },
+      connection,
+      provisioningStartedAt: '2026-07-23T10:00:00Z',
+      bootstrapDeadlineAt: '2026-07-23T10:01:00Z',
+    };
+
+    expect(request.runtimeInputs.workerManifest.contributionRefs).toEqual([]);
+    expect(request.connection).toBe(connection);
+    expectTypeOf<WorkerProviderContext>().not.toHaveProperty('workerConfig');
+    expectTypeOf<WorkerProviderContext>().not.toHaveProperty('workerManifest');
+  });
+
   it('requires executionAttemptId on provision requests', () => {
     const request: WorkerProvisionRequest = {
       executionId: 'exec-1',
       executionAttemptId: 'attempt-1',
       environment: 'piscina',
-      workerConfig: {} as WorkerProvisionRequest['workerConfig'],
-      workerManifest: { contributionRefs: [] },
+      runtimeInputs: {
+        workerManifest: { contributionRefs: [] },
+        suspensionStrategy: 'wait-in-process',
+      },
+      connection: { busAuth: { kind: 'none' } },
       provisioningStartedAt: '2026-07-23T10:00:00Z',
       bootstrapDeadlineAt: '2026-07-23T10:01:00Z',
     };
@@ -240,8 +268,11 @@ describe('IWorkerProvider provision contract', () => {
         executionId: 'exec-1',
         executionAttemptId: 'attempt-1',
         environment: 'test',
-        workerConfig: {} as WorkerProvisionRequest['workerConfig'],
-        workerManifest: { contributionRefs: [] },
+        runtimeInputs: {
+          workerManifest: { contributionRefs: [] },
+          suspensionStrategy: 'wait-in-process',
+        },
+        connection: { busAuth: { kind: 'none' } },
         provisioningStartedAt: '2026-07-23T10:00:00Z',
         bootstrapDeadlineAt: '2026-07-23T10:01:00Z',
       },

@@ -43,6 +43,24 @@ describe('createRestartableTempDb', () => {
     // a failure path and its hook does not close a connection twice.
     await expect(store.close()).resolves.toBeUndefined();
   });
+
+  it('closes a controller connection set without removing committed state needed by a replacement', async () => {
+    const store = createRestartableTempDb('harness-restartable-close-connections');
+    try {
+      const first = await store.connect();
+      await getRawSqlExecutor(first).run(sql`CREATE TABLE restartable_close_test (id TEXT PRIMARY KEY)`);
+      await getRawSqlExecutor(first).run(sql`INSERT INTO restartable_close_test (id) VALUES ('survives')`);
+
+      await store.closeConnections();
+      await expect(getRawSqlExecutor(first).run(sql`SELECT 1`)).rejects.toThrow();
+
+      const replacement = await store.connect();
+      const rows = await getRawSqlExecutor(replacement).all<{ id: string }>(sql`SELECT id FROM restartable_close_test`);
+      expect(rows).toEqual([{ id: 'survives' }]);
+    } finally {
+      await store.close();
+    }
+  });
 });
 
 describe('createTempDb', () => {

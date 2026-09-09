@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { WorkerContributionManifest } from '@makaio/contracts';
+import type { WorkerContributionManifest, WorkerProvisionRequest, WorkflowWorkerConfig } from '@makaio/contracts';
 import { PROVIDER_ALLOCATION_REF_VERSION, WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
 import type {
   BeginProvisioningInput,
@@ -11,7 +11,7 @@ import type {
   ProviderOperationClaim,
   WorkflowAttemptOutcome,
 } from '@makaio/subsystem-workflow-engine';
-import { workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
+import { buildWorkflowAttemptInstruction, workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
 import {
   beginTestProvisioning,
   leaseAt,
@@ -23,6 +23,7 @@ import { createSqliteAttemptRepository } from '@makaio/subsystem-workflow-engine
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
 import { PiscinaThinWorkflowProvider } from '../piscina-thin-workflow-provider.js';
 import { ThinWorkflowPiscinaRunner } from '../thin-workflow-piscina-runner.js';
+import { createWorkflowLaunchResolver } from '../workflow-launch-resolver.js';
 import { WORKFLOW_WORKER_READY_MESSAGE_TYPE } from '../worker-ready-message.js';
 import { computeContributionPackageDigest, computeDirectoryDigest } from '../local-directory-materializer.js';
 import { makeWorkerConfig } from './fixtures.js';
@@ -37,6 +38,63 @@ let tempDir: string | undefined;
  * here never dial it, so the value only has to exist.
  */
 const PROVISION_BUS_URL = 'ws://127.0.0.1:65535/bus';
+
+/**
+ * Workflow config that can be frozen without a host-side definition snapshot.
+ * @param overrides - Fields that specialize the portable workflow configuration.
+ */
+function makeProvisionableWorkflowConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWorkerConfig {
+  return makeWorkerConfig({
+    source: { kind: 'source', filename: 'workflows/example.ts', source: 'export default {};' },
+    ...overrides,
+  });
+}
+
+/**
+ * Build the generic provider request paired with a canonical workflow instruction.
+ * The test intentionally crosses the same adapter boundary production uses.
+ * @param config - Workflow semantics serialized into the canonical instruction.
+ * @param executionAttemptId - Authority-created Attempt identifier.
+ * @param manifest - Runtime-selected contribution manifest.
+ */
+function createWorkflowProvisionRequest(
+  config: WorkflowWorkerConfig,
+  executionAttemptId: string,
+  manifest: WorkerContributionManifest = { contributionRefs: [] },
+): WorkerProvisionRequest {
+  return {
+    executionId: config.executionId,
+    executionAttemptId,
+    bootstrapDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
+    environment: 'piscina',
+    runtimeInputs: {
+      workerManifest: manifest,
+      suspensionStrategy: config.suspensionStrategy,
+    },
+    connection: {
+      ...(config.busUrl !== undefined ? { busUrl: config.busUrl } : {}),
+      busAuth: config.busAuth,
+      ...(Object.keys(config.env).length > 0 ? { env: config.env } : {}),
+    },
+    provisioningStartedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Build a real workflow adapter for one canonical test configuration.
+ * @param config - Workflow semantics frozen for the provider fixture.
+ */
+function createWorkflowLaunchResolverForConfig(config: WorkflowWorkerConfig) {
+  const instruction = buildWorkflowAttemptInstruction({
+    id: `instruction-${config.executionId}`,
+    revision: '1',
+    config,
+    preservation: { required: [] },
+  });
+  return createWorkflowLaunchResolver(async ({ executionId }) =>
+    executionId === config.executionId ? instruction : null,
+  );
+}
 
 /**
  * Remove the temporary directory the current test created, if any.
@@ -180,7 +238,24 @@ function createProviderService(workerEntry: string, id: string): ProviderService
   });
 
   return {
-    provider: new PiscinaThinWorkflowProvider({ id, displayName: id, runner, bus }),
+    provider: new PiscinaThinWorkflowProvider({
+      id,
+      displayName: id,
+      runner,
+      bus,
+      launchResolver: createWorkflowLaunchResolver(async ({ executionId }) =>
+        buildWorkflowAttemptInstruction({
+          id: `instruction-${executionId}`,
+          revision: '1',
+          config: makeProvisionableWorkflowConfig({
+            executionId,
+            busUrl: PROVISION_BUS_URL,
+            cancelSubject: `workflow.${executionId}.cancel`,
+          }),
+          preservation: { required: [] },
+        }),
+      ),
+    }),
     acknowledgedAttemptId: acknowledged.promise,
     dispose: async (): Promise<void> => {
       offSubmit();
@@ -298,23 +373,19 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
       displayName: 'Piscina Integration',
       runner,
       bus,
+      launchResolver: createWorkflowLaunchResolverForConfig(
+        makeProvisionableWorkflowConfig({ busUrl: PROVISION_BUS_URL }),
+      ),
     });
     const perCallManifest: WorkerContributionManifest = { contributionRefs: [] };
 
     try {
       const outcome = await provider.provision(
-        {
-          executionId: 'wfx-1',
-          executionAttemptId: 'attempt-integration',
-          bootstrapDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
-          environment: 'piscina',
-          // The bus URL is supplied per provision, not defaulted in the shared
-          // fixture: the same fixture drives the attempt-free runner path,
-          // where a bus URL would change what those tests exercise.
-          workerConfig: makeWorkerConfig({ busUrl: PROVISION_BUS_URL }),
-          workerManifest: perCallManifest,
-          provisioningStartedAt: new Date().toISOString(),
-        },
+        createWorkflowProvisionRequest(
+          makeProvisionableWorkflowConfig({ busUrl: PROVISION_BUS_URL }),
+          'attempt-integration',
+          perCallManifest,
+        ),
         new AbortController().signal,
       );
       const { allocationRef, handle } = outcome;
@@ -543,15 +614,14 @@ describe('process-bound allocation lifetime', () => {
       });
 
       const outcome = await first.provider.provision(
-        {
-          executionId,
+        createWorkflowProvisionRequest(
+          makeProvisionableWorkflowConfig({
+            executionId,
+            busUrl: PROVISION_BUS_URL,
+            cancelSubject: `workflow.${executionId}.cancel`,
+          }),
           executionAttemptId,
-          bootstrapDeadlineAt: record.bootstrapDeadlineAt,
-          environment: 'piscina',
-          workerConfig: makeWorkerConfig({ executionId, busUrl: PROVISION_BUS_URL }),
-          workerManifest: { contributionRefs: [] },
-          provisioningStartedAt: new Date().toISOString(),
-        },
+        ),
         new AbortController().signal,
       );
       // Waiting on the acknowledged outcome rather than on elapsed time is what

@@ -3,6 +3,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import type {
   WorkerContributionManifest,
   WorkerCapabilities,
+  WorkerProvisionRequest,
   WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
@@ -14,7 +15,11 @@ import {
 } from '@makaio/contracts';
 import { resolveWorkflowExecutionBusSecret } from '../../workflow-execution-bus-access.js';
 import type { ThinWorkflowPiscinaAttemptBinding } from '../thin-workflow-piscina-runner.js';
-import { PiscinaThinWorkflowProvider, type ReadinessAwareWorkflowRunner } from '../piscina-thin-workflow-provider.js';
+import {
+  PiscinaThinWorkflowProvider,
+  type PiscinaThinWorkflowProviderOptions,
+  type ReadinessAwareWorkflowRunner,
+} from '../piscina-thin-workflow-provider.js';
 import { WORKFLOW_WORKER_READY_MESSAGE_TYPE, type WorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 import { makeWorkerConfig } from './fixtures.js';
 
@@ -34,6 +39,7 @@ function createTestBus() {
 
 /** Bus URL every provisionable worker configuration below carries. */
 const TEST_BUS_URL = 'ws://127.0.0.1:65535/bus';
+const launchConfigurations = new WeakMap<WorkerProvisionRequest, WorkflowWorkerConfig>();
 
 /**
  * Build a minimal provision request matching the current contract.
@@ -51,16 +57,49 @@ function makeProvisionRequest(
     workerManifest: WorkerContributionManifest;
     workerConfig: WorkflowWorkerConfig;
   }>,
-) {
-  return {
+): WorkerProvisionRequest {
+  const workerConfig = overrides?.workerConfig ?? makeWorkerConfig({ busUrl: TEST_BUS_URL });
+  const request: WorkerProvisionRequest = {
     executionId: overrides?.executionId ?? 'wfx-1',
     executionAttemptId: overrides?.executionAttemptId ?? 'attempt-1',
     environment: 'piscina' as const,
-    workerConfig: overrides?.workerConfig ?? makeWorkerConfig({ busUrl: TEST_BUS_URL }),
-    workerManifest: overrides?.workerManifest ?? { contributionRefs: [] },
+    runtimeInputs: {
+      workerManifest: overrides?.workerManifest ?? { contributionRefs: [] },
+      suspensionStrategy: workerConfig.suspensionStrategy,
+    },
+    connection: {
+      ...(workerConfig.busUrl !== undefined ? { busUrl: workerConfig.busUrl } : {}),
+      busAuth: workerConfig.busAuth,
+      ...(Object.keys(workerConfig.env).length > 0 ? { env: workerConfig.env } : {}),
+    },
     provisioningStartedAt: '2026-07-27T10:00:00.000Z',
     bootstrapDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
   };
+  launchConfigurations.set(request, workerConfig);
+  return request;
+}
+
+/**
+ * Build a provider with the explicit workflow adapter used by this suite.
+ * @param options - Provider dependencies excluding the explicit test resolver.
+ */
+function makeProvider(
+  options: Omit<PiscinaThinWorkflowProviderOptions, 'launchResolver'>,
+): PiscinaThinWorkflowProvider {
+  return new PiscinaThinWorkflowProvider({
+    ...options,
+    launchResolver: async (request) => testLaunchConfig(request),
+  });
+}
+
+/**
+ * Return the explicit configuration paired with a test request.
+ * @param request - Generic request paired with the test configuration.
+ */
+function testLaunchConfig(request: WorkerProvisionRequest): WorkflowWorkerConfig {
+  const config = launchConfigurations.get(request);
+  if (config === undefined) throw new Error(`Missing test workflow config for '${request.executionAttemptId}'`);
+  return config;
 }
 
 /** Terminal result the default runner fake settles with. */
@@ -134,7 +173,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('exposes the correct environment constant', () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -146,7 +185,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('uses default base capabilities when none provided', () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -161,7 +200,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('explicitly advertises supportsRecovery: false', () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -179,7 +218,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     // JavaScript, or across a config boundary — are not literals and are not
     // rejected, so the runtime pin is the only thing left holding the line.
     const overridesFromUntypedCaller: Partial<WorkerCapabilities> = { supportsRecovery: true };
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner: makeRunner(),
@@ -195,7 +234,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('does not expose a recovery property', () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -207,7 +246,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('merges custom base capability overrides onto the local defaults', () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -227,7 +266,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('returns a validated ProviderAllocationRef with the correct version and provider ID', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -250,7 +289,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('embeds the executionAttemptId in the allocation ref providerData', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -269,7 +308,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('does not start a runner that cannot return a valid allocation response', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       // The allocation-reference contract rejects empty provider IDs.
       id: '',
       displayName: 'Piscina',
@@ -286,7 +325,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('returns a handle with executionAttemptId matching the request', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -303,7 +342,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('handle exposes cancel, terminate, and release but NOT ready or waitForResult', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -329,7 +368,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       resolveReady = resolve;
     });
     const runner = makeRunner({ ready, result: () => new Promise<never>(() => {}) });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-ready',
       displayName: 'Piscina',
       runner,
@@ -344,7 +383,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     resolveReady({
       type: WORKFLOW_WORKER_READY_MESSAGE_TYPE,
       executionId: request.executionId,
-      cancelSubject: request.workerConfig.cancelSubject,
+      cancelSubject: testLaunchConfig(request).cancelSubject,
       executionAttemptId: request.executionAttemptId,
     });
     await Promise.resolve();
@@ -371,7 +410,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         return new Promise<never>(() => {});
       },
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-ready',
       displayName: 'Piscina',
       runner,
@@ -400,7 +439,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       ready: Promise.reject(refusal),
       result: () => Promise.reject(refusal),
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-refused',
       displayName: 'Piscina',
       runner,
@@ -443,7 +482,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('rejects a provision whose worker configuration carries no bus URL', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-no-bus',
       displayName: 'Piscina',
       runner,
@@ -478,7 +517,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         ready: new Promise<WorkflowWorkerReadyMessage>(() => undefined),
       };
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-identity',
       displayName: 'Piscina',
       runner,
@@ -499,7 +538,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       kind: 'hmac',
       secret: resolveWorkflowExecutionBusSecret('attempt-identity'),
     });
-    expect(capturedConfig?.busAuth).not.toEqual(request.workerConfig.busAuth);
+    expect(capturedConfig?.busAuth).not.toEqual(request.connection.busAuth);
 
     await handle.release();
     await handle.terminate();
@@ -515,7 +554,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       ctx.setResult({ decision: 'accepted' });
     });
     const runner = makeRunner({ result: () => result });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-identity',
       displayName: 'Piscina',
       runner,
@@ -543,7 +582,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('gives up the minted bus identity when the allocation is terminated', async () => {
     const runner = makeRunner({ result: () => new Promise<never>(() => {}) });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-identity',
       displayName: 'Piscina',
       runner,
@@ -569,7 +608,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         return new Promise<never>(() => {});
       },
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -602,7 +641,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       await acknowledgement;
       ctx.setResult({ decision: 'accepted' });
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-completion',
       displayName: 'Piscina',
       runner: makeRunner({ result: () => result }),
@@ -645,7 +684,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('rejects provision with the caller signal own abort reason', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -662,7 +701,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('rethrows a non-Error abort reason unchanged instead of flattening it', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -678,7 +717,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('does not start the runner when cancellation arrives as the forwarder is attached', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -699,7 +738,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('never reports cancellation as a provision outcome', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -729,7 +768,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         return new Promise<never>(() => {});
       },
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -758,7 +797,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         },
       };
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -780,7 +819,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         return new Promise<never>(() => {});
       },
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -803,7 +842,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         return new Promise<never>(() => {});
       },
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -819,7 +858,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('cancel resolves after dispatching abort without waiting for runner settlement', async () => {
     const runner = makeRunner({ result: () => new Promise<never>(() => {}) });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -847,7 +886,7 @@ describe('PiscinaThinWorkflowProvider', () => {
         return Promise.resolve(COMPLETED_RESULT);
       },
     });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -873,7 +912,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('correlates handle and allocationRef to the same executionAttemptId', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -895,7 +934,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   it('starts the underlying runner on provision', async () => {
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -918,7 +957,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
 
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -952,7 +991,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
 
     const runner = makeRunner({ result: () => Promise.reject(new Error('workflow exploded')) });
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -991,7 +1030,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
 
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
@@ -1018,7 +1057,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     // No handler registered — bus.request will reject on every attempt.
 
     const runner = makeRunner();
-    const provider = new PiscinaThinWorkflowProvider({
+    const provider = makeProvider({
       id: 'piscina-default',
       displayName: 'Piscina',
       runner,
