@@ -3073,14 +3073,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@github/copilot-sdk@npm:0.2.2":
-  version: 0.2.2
-  resolution: "@github/copilot-sdk@npm:0.2.2"
+"@github/copilot-sdk@npm:1.0.7":
+  version: 1.0.7
+  resolution: "@github/copilot-sdk@npm:1.0.7"
   dependencies:
-    "@github/copilot": "npm:^1.0.21"
+    "@github/copilot": "npm:^1.0.71"
+    koffi: "npm:^3.1.0"
     vscode-jsonrpc: "npm:^8.2.1"
     zod: "npm:^4.3.6"
-  checksum: 10c0/6d68805e9933e3f3bf1588937858a7aa54184834a7fc39e5e516702bdac4e13baf9f00ea34b0553680ef63201977026dec197487b34d42a1bd445256289ceb98
+  checksum: 10c0/ab906e0aa3f50942730ac7c3f8ee0d9ae0dc1fe9e29831e1130a856ffec935d625eecf68580e6932d781d01e1233b97b6c56cc3bf283f89b3c5e926141637469
   languageName: node
   linkType: hard
 
@@ -3916,6 +3917,111 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@koromix/koffi-darwin-arm64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-darwin-arm64@npm:3.1.1"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-darwin-x64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-darwin-x64@npm:3.1.1"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-freebsd-arm64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-freebsd-arm64@npm:3.1.1"
+  conditions: os=freebsd & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-freebsd-ia32@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-freebsd-ia32@npm:3.1.1"
+  conditions: os=freebsd & cpu=ia32
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-freebsd-x64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-freebsd-x64@npm:3.1.1"
+  conditions: os=freebsd & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-linux-arm64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-linux-arm64@npm:3.1.1"
+  conditions: os=linux & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-linux-ia32@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-linux-ia32@npm:3.1.1"
+  conditions: os=linux & cpu=ia32
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-linux-loong64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-linux-loong64@npm:3.1.1"
+  conditions: os=linux & cpu=loong64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-linux-riscv64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-linux-riscv64@npm:3.1.1"
+  conditions: os=linux & cpu=riscv64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-linux-x64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-linux-x64@npm:3.1.1"
+  conditions: os=linux & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-openbsd-ia32@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-openbsd-ia32@npm:3.1.1"
+  conditions: os=openbsd & cpu=ia32
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-openbsd-x64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-openbsd-x64@npm:3.1.1"
+  conditions: os=openbsd & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-win32-arm64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-win32-arm64@npm:3.1.1"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-win32-ia32@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-win32-ia32@npm:3.1.1"
+  conditions: os=win32 & cpu=ia32
+  languageName: node
+  linkType: hard
+
+"@koromix/koffi-win32-x64@npm:3.1.1":
+  version: 3.1.1
+  resolution: "@koromix/koffi-win32-x64@npm:3.1.1"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
 "@kwsites/file-exists@npm:^1.1.1":
   version: 1.1.1
   resolution: "@kwsites/file-exists@npm:1.1.1"
@@ -4294,7 +4400,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-github-copilot-sdk@workspace:adapters/implementations/github-copilot-sdk"
   dependencies:
-    "@github/copilot-sdk": "npm:0.2.2"
+    "@github/copilot-sdk": "npm:1.0.7"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
@@ -19444,6 +19550,60 @@ __metadata:
   version: 2.16.1
   resolution: "koffi@npm:2.16.1"
   checksum: 10c0/b8ef68b6caa1ee3f491da397048ae4721f08c64ce02a36a0520329d8d13ccff37166c4fccfcccb20741fb1cfbf24020c1cff3796b93223ba22ec1ea26a559062
+  languageName: node
+  linkType: hard
+
+"koffi@npm:^3.1.0":
+  version: 3.1.1
+  resolution: "koffi@npm:3.1.1"
+  dependencies:
+    "@koromix/koffi-darwin-arm64": "npm:3.1.1"
+    "@koromix/koffi-darwin-x64": "npm:3.1.1"
+    "@koromix/koffi-freebsd-arm64": "npm:3.1.1"
+    "@koromix/koffi-freebsd-ia32": "npm:3.1.1"
+    "@koromix/koffi-freebsd-x64": "npm:3.1.1"
+    "@koromix/koffi-linux-arm64": "npm:3.1.1"
+    "@koromix/koffi-linux-ia32": "npm:3.1.1"
+    "@koromix/koffi-linux-loong64": "npm:3.1.1"
+    "@koromix/koffi-linux-riscv64": "npm:3.1.1"
+    "@koromix/koffi-linux-x64": "npm:3.1.1"
+    "@koromix/koffi-openbsd-ia32": "npm:3.1.1"
+    "@koromix/koffi-openbsd-x64": "npm:3.1.1"
+    "@koromix/koffi-win32-arm64": "npm:3.1.1"
+    "@koromix/koffi-win32-ia32": "npm:3.1.1"
+    "@koromix/koffi-win32-x64": "npm:3.1.1"
+  dependenciesMeta:
+    "@koromix/koffi-darwin-arm64":
+      optional: true
+    "@koromix/koffi-darwin-x64":
+      optional: true
+    "@koromix/koffi-freebsd-arm64":
+      optional: true
+    "@koromix/koffi-freebsd-ia32":
+      optional: true
+    "@koromix/koffi-freebsd-x64":
+      optional: true
+    "@koromix/koffi-linux-arm64":
+      optional: true
+    "@koromix/koffi-linux-ia32":
+      optional: true
+    "@koromix/koffi-linux-loong64":
+      optional: true
+    "@koromix/koffi-linux-riscv64":
+      optional: true
+    "@koromix/koffi-linux-x64":
+      optional: true
+    "@koromix/koffi-openbsd-ia32":
+      optional: true
+    "@koromix/koffi-openbsd-x64":
+      optional: true
+    "@koromix/koffi-win32-arm64":
+      optional: true
+    "@koromix/koffi-win32-ia32":
+      optional: true
+    "@koromix/koffi-win32-x64":
+      optional: true
+  checksum: 10c0/09175453065b0ed454267e055fc212e87271e3085ab8d312ade3555182d083c84285a07f3f5cbc2af797e70b510e921844cc875f57dcbd442b36cfc747a90d76
   languageName: node
   linkType: hard
 
