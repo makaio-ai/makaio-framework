@@ -1,6 +1,7 @@
 import { type Reporter, type TestCase, type TestModule, TestRunEndReason } from 'vitest/node';
 import type { TestError } from 'vitest';
 import type { SerializedError } from '@vitest/utils';
+import { stripVTControlCharacters } from 'node:util';
 
 /**
  * Token-efficient test reporter for AI consumption.
@@ -66,12 +67,7 @@ interface ModuleTimingDiagnostic {
 }
 
 const TIMING_PROFILE_LIMIT = 10;
-const NATIVE_STACK_FRAME_LIMIT = 6;
-
-interface PrintErrorOptions {
-  /** Print the complete multi-line error message instead of the first line only. */
-  fullMessage?: boolean;
-}
+const STACK_FRAME_LIMIT = 6;
 
 /**
  * Extract bounded V8 stack frames without repeating the error's message header.
@@ -86,6 +82,43 @@ function extractNativeStackFrames(stack: string | undefined, limit: number): str
     .filter((line) => /^\s*at\s+/u.test(line))
     .slice(0, limit)
     .map((line) => line.trimStart());
+}
+
+/**
+ * Prefer parsed caller locations over dependency frames, falling back to native stacks.
+ * @param error - Vitest's serialized error and optional parsed locations.
+ * @param limit - Remaining frame budget for this part of the cause chain.
+ * @returns Bounded frames with source locations when Vitest supplied them.
+ */
+function extractStackFrames(error: SerializedError, limit: number): string[] {
+  if (!error.stacks?.length) return extractNativeStackFrames(error.stack, limit);
+  const callers = error.stacks.filter((frame) => !/(?:^|[/\\])node_modules[/\\]|^node:/u.test(frame.file));
+  return (callers.length ? callers : error.stacks)
+    .slice(0, limit)
+    .map((frame) => `at ${frame.file}:${frame.line}:${frame.column}${frame.method ? ` (${frame.method})` : ''}`);
+}
+
+/**
+ * Walk the cause chain once; Vitest serialization preserves circular references.
+ * @param error - The root diagnostic supplied by Vitest.
+ * @returns Ordered diagnostics, including a marker for a circular cause.
+ */
+function collectErrorChain(error: SerializedError): SerializedError[] {
+  const chain: SerializedError[] = [];
+  const seen = new Set<SerializedError>();
+  let current: SerializedError | undefined = error;
+  while (current !== undefined) {
+    if (seen.has(current)) {
+      chain.push({ message: '[circular cause]' });
+      break;
+    }
+    seen.add(current);
+    chain.push(current);
+    const cause: SerializedError | undefined = current.cause;
+    if (cause === undefined) break;
+    current = typeof cause === 'object' && cause !== null ? cause : { message: String(cause) };
+  }
+  return chain;
 }
 
 export default class TokenEfficientReporter implements Reporter {
@@ -183,11 +216,11 @@ export default class TokenEfficientReporter implements Reporter {
 
     const moduleErrorCount = this.printModuleAndSuiteErrors(testModules);
 
-    // Print unhandled errors collected during the run
+    // Vitest delivers unhandled diagnostics to reporters here, not through an onUnhandledError hook.
     if (unhandledErrors.length) {
       process.stderr.write(`${colors.red}UNHANDLED ERRORS:${colors.reset}\n`);
       for (const error of unhandledErrors) {
-        this.printError(error as TestError, { fullMessage: true });
+        this.printError(error);
       }
       process.stderr.write('\n');
     }
@@ -240,7 +273,7 @@ export default class TokenEfficientReporter implements Reporter {
         moduleErrorCount += errors.length;
         process.stderr.write(`${colors.red}MODULE ERROR:${colors.reset} ${label}\n`);
         for (const error of errors) {
-          this.printError(error as TestError, { fullMessage: true });
+          this.printError(error);
         }
         process.stderr.write('\n');
       }
@@ -249,36 +282,31 @@ export default class TokenEfficientReporter implements Reporter {
   }
 
   /**
-   * Prints an error with its message, cause chain, and stack location.
+   * Prints complete messages and Vitest's prepared diffs without expanding arbitrary error fields.
    * @param error - The test error to print.
-   * @param options - Formatting options for diagnostics with multi-line payloads.
    */
-  private printError(error: SerializedError, options: PrintErrorOptions = {}): void {
-    const rawMessage = error.message ?? 'Unknown error';
-    const message = options.fullMessage ? rawMessage.trimEnd() : (rawMessage.split('\n')[0] ?? 'Unknown error');
-    this.printIndented(message);
-
-    // Print cause chain if present (e.g., import errors have nested causes)
-    const cause = error.cause;
-    if (cause?.message) {
-      const causeMessage = options.fullMessage ? cause.message.trimEnd() : cause.message.split('\n')[0];
-      this.printIndented(`Caused by: ${causeMessage}`);
-    }
-
-    const stack = error.stacks?.[0];
-    if (stack) {
-      process.stderr.write(`  at ${stack.file}:${stack.line}\n`);
-      for (const frame of extractNativeStackFrames(cause?.stack, NATIVE_STACK_FRAME_LIMIT - 1)) {
-        process.stderr.write(`  ${frame}\n`);
+  private printError(error: SerializedError): void {
+    const chain = collectErrorChain(error).map((diagnostic) => ({
+      diagnostic,
+      frames: extractStackFrames(diagnostic, STACK_FRAME_LIMIT),
+      frameLimit: 0,
+    }));
+    let remainingFrames = STACK_FRAME_LIMIT;
+    // Share slots by stack depth before printing: short stacks leave their unused slots available.
+    // The first round preserves outer locations before any stack receives a second frame.
+    for (let depth = 0; depth < STACK_FRAME_LIMIT && remainingFrames > 0; depth++) {
+      for (const entry of chain) {
+        if (entry.frames.length <= depth) continue;
+        entry.frameLimit++;
+        if (--remainingFrames === 0) break;
       }
-      return;
     }
-
-    const errorFrameLimit = cause?.stack === undefined ? NATIVE_STACK_FRAME_LIMIT : NATIVE_STACK_FRAME_LIMIT / 2;
-    const errorFrames = extractNativeStackFrames(error.stack, errorFrameLimit);
-    const causeFrames = extractNativeStackFrames(cause?.stack, NATIVE_STACK_FRAME_LIMIT - errorFrames.length);
-    for (const frame of [...errorFrames, ...causeFrames]) {
-      process.stderr.write(`  ${frame}\n`);
+    for (const [index, { diagnostic, frames, frameLimit }] of chain.entries()) {
+      this.printIndented(`${index ? 'Caused by: ' : ''}${(diagnostic.message ?? 'Unknown error').trimEnd()}`);
+      if (typeof diagnostic.diff === 'string' && diagnostic.diff) {
+        this.printIndented(diagnostic.diff.trimEnd());
+      }
+      for (const frame of frames.slice(0, frameLimit)) this.printIndented(frame);
     }
   }
 
@@ -287,16 +315,10 @@ export default class TokenEfficientReporter implements Reporter {
    * @param text - Diagnostic text to write.
    */
   private printIndented(text: string): void {
-    for (const line of text.split('\n')) {
+    const diagnostic = useColors ? text : stripVTControlCharacters(text);
+    for (const line of diagnostic.split(/\r?\n/u)) {
       process.stderr.write(`  ${line}\n`);
     }
-  }
-
-  public onUnhandledError(error: unknown): void {
-    const typed = error as TestError & { type?: string };
-    const header = typed.type ? `${typed.type}: ${typed.name ?? 'Error'}` : (typed.name ?? 'Error');
-    const message = typed.message ?? String(error);
-    process.stderr.write(`${colors.red}UNHANDLED${colors.reset} ${header} - ${message}\n`);
   }
 
   /**
