@@ -403,7 +403,7 @@ export const RelationTypeRegistrationSchema = z.object({
   /** Artifact kinds valid as the target of this relation. Open if omitted. */
   targetKinds: z.array(z.string().min(1)).optional(),
   /** Reference classes valid as relation targets. Open if omitted. */
-  targetRefClasses: z.array(z.enum(['artifact', 'local', 'evidence'])).optional(),
+  targetRefClasses: z.array(z.enum(['artifact', 'local', 'evidence', 'entity'])).optional(),
 });
 
 /**
