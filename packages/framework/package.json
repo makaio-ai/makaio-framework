@@ -21,7 +21,7 @@
     "build": "bun build.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^1.14.1",
+    "@hono/node-server": "^2.0.5",
     "@libsql/client": "^0.17.4",
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
